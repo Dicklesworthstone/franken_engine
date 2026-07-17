@@ -367,9 +367,16 @@ impl GoldenVersionVector {
         vector
     }
 
+    /// The live vector after the root EOF byte-column schema correction.
+    pub fn v3() -> Self {
+        let mut vector = Self::v2();
+        vector.ast_schema = "franken-engine.parser-ast.schema.v3".into();
+        vector
+    }
+
     /// The golden vector corresponding to the currently exported constants.
     pub fn current() -> Self {
-        Self::v2()
+        Self::v3()
     }
 
     /// Compare against live constants and return mismatches.
@@ -990,12 +997,22 @@ mod tests {
         assert_eq!(mismatches.len(), 1);
         assert_eq!(mismatches[0].0, "ast_schema");
         assert_eq!(mismatches[0].1, "franken-engine.parser-ast.schema.v1");
-        assert_eq!(mismatches[0].2, "franken-engine.parser-ast.schema.v2");
+        assert_eq!(mismatches[0].2, "franken-engine.parser-ast.schema.v3");
     }
 
     #[test]
-    fn golden_v2_matches_live_constants() {
+    fn golden_v2_remains_a_historical_schema_vector() {
         let golden = GoldenVersionVector::v2();
+        let mismatches = golden.check_against_live();
+        assert_eq!(mismatches.len(), 1);
+        assert_eq!(mismatches[0].0, "ast_schema");
+        assert_eq!(mismatches[0].1, "franken-engine.parser-ast.schema.v2");
+        assert_eq!(mismatches[0].2, "franken-engine.parser-ast.schema.v3");
+    }
+
+    #[test]
+    fn golden_v3_matches_live_constants() {
+        let golden = GoldenVersionVector::v3();
         let mismatches = golden.check_against_live();
         assert!(
             mismatches.is_empty(),

@@ -10,6 +10,26 @@ The first conventional release, `v0.1.0`, was published on 2026-05-29. Current `
 
 ---
 
+## Post-Snapshot Update — Parser EOF Coordinate Schema (2026-07-17)
+
+`bd-4tt6s` corrects the canonical `SyntaxTree` root span in both parser seams.
+The root `end_column` is now the one-based UTF-8 byte column immediately after
+the original source on its final physical line, rather than a hard-coded `1`.
+This covers single-line sources, non-empty multiline tails, trailing LF/CRLF,
+and exact byte widths for non-ASCII source text.
+
+- The compatibility engine AST schema advances from v2 to v3; the native core
+  AST schema advances independently from v3 to v4.
+- The AST contract, serde shape, SHA-256 algorithm, and hash prefix are
+  unchanged, so historical tree JSON remains readable. Historical v1/v2
+  engine version vectors and pre-correction hashes remain pinned explicitly.
+- Source-backed Parse Event IR materialization recognizes only the exact
+  historical root-column defect, authenticated by its old tree hash; any other
+  span or hash mismatch continues to fail closed.
+- Parser-generated canonical hashes intentionally change when the old root
+  column was wrong. The live phase0 fixture catalog and its content-addressed
+  artifact bundle are regenerated under the new schema checkpoint.
+
 ## Post-Snapshot Update — `0.2.0` Compatibility Staging (2026-07-16)
 
 `bd-n8eta.4.6` moves only `frankenengine-core` and `frankenengine-engine` to an unreleased `0.2.0` line. This is a source-compatibility boundary, not a tag or publication: unrelated workspace packages stay at `0.1.0`, and GA/release actions remain separately gated.

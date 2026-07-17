@@ -1005,7 +1005,32 @@ impl ParseEventIr {
                     None,
                 )
             })?;
-        self.materialize_with_tree(&parsed, Some(source_text))
+        let materialization_tree = self.historical_root_span_tree(&parsed).unwrap_or(parsed);
+        self.materialize_with_tree(&materialization_tree, Some(source_text))
+    }
+
+    fn historical_root_span_tree(&self, current: &SyntaxTree) -> Option<SyntaxTree> {
+        if current.span.end_column == 1 {
+            return None;
+        }
+        let completed = self.events.last()?;
+        if completed.kind != ParseEventKind::ParseCompleted
+            || completed.payload_kind.as_deref() != Some("syntax_tree")
+        {
+            return None;
+        }
+
+        let mut historical_span = current.span.clone();
+        historical_span.end_column = 1;
+        if completed.span.as_ref() != Some(&historical_span) {
+            return None;
+        }
+
+        let mut historical_tree = current.clone();
+        historical_tree.span = historical_span;
+        let historical_hash = historical_tree.canonical_hash();
+        (completed.payload_hash.as_deref() == Some(historical_hash.as_str()))
+            .then_some(historical_tree)
     }
 
     /// Materialize a deterministic AST witness from this event stream and a canonical AST.
@@ -2656,7 +2681,8 @@ fn parse_source(
     }
 
     let source_len = to_u64(text.len(), source_label, None)?;
-    let span = SourceSpan::new(0, source_len, 1, 1, line_count(text), 1);
+    let (end_line, end_column) = source_end_position(text, source_label)?;
+    let span = SourceSpan::new(0, source_len, 1, 1, end_line, end_column);
     Ok(SyntaxTree {
         goal,
         body: statements,
@@ -2798,6 +2824,23 @@ fn line_count(source: &str) -> u64 {
         }
     }
     count
+}
+
+fn source_end_position(source: &str, source_label: &str) -> ParseResult<(u64, u64)> {
+    let final_line_start = source
+        .as_bytes()
+        .iter()
+        .rposition(|byte| *byte == b'\n')
+        .map_or(0, |index| index.saturating_add(1));
+    let end_column = to_u64(
+        source
+            .len()
+            .saturating_sub(final_line_start)
+            .saturating_add(1),
+        source_label,
+        None,
+    )?;
+    Ok((line_count(source), end_column))
 }
 
 /// Strip one or more leading `label:` prefixes from a statement segment,
@@ -12946,6 +12989,121 @@ mod tests {
     }
 
     #[test]
+    fn materialize_from_source_accepts_exact_historical_root_column_bd_4tt6s() {
+        let parser = CanonicalEs2020Parser;
+        let source = "alpha";
+        let options = ParserOptions::default();
+        let current = parser
+            .parse(source, ParseGoal::Script)
+            .expect("current source should parse");
+        assert_eq!(current.span.end_column, 6);
+
+        let mut historical = current.clone();
+        historical.span.end_column = 1;
+        let historical_hash = historical.canonical_hash();
+
+        for event_ir in [
+            ParseEventIr::from_parse_source(
+                &historical,
+                source,
+                "historical-source.js",
+                options.mode,
+            ),
+            ParseEventIr::from_syntax_tree(&historical, "historical-tree.js", options.mode),
+        ] {
+            let materialized = event_ir
+                .materialize_from_source(source, &options)
+                .expect("the exact historical root-column defect should remain readable");
+            assert_eq!(materialized.syntax_tree, historical);
+            assert_eq!(materialized.syntax_tree.canonical_hash(), historical_hash);
+        }
+
+        let trailing_source = "alpha\n";
+        let (result, current_ir) =
+            parser.parse_with_event_ir(trailing_source, ParseGoal::Script, &options);
+        let trailing_tree = result.expect("trailing-LF source should parse");
+        assert_eq!(trailing_tree.span.end_column, 1);
+        assert_eq!(
+            current_ir
+                .materialize_from_source(trailing_source, &options)
+                .expect("current trailing-LF stream should materialize")
+                .syntax_tree,
+            trailing_tree
+        );
+    }
+
+    #[test]
+    fn materialize_from_source_rejects_inexact_historical_root_column_bd_4tt6s() {
+        let parser = CanonicalEs2020Parser;
+        let source = "alpha";
+        let options = ParserOptions::default();
+        let current = parser
+            .parse(source, ParseGoal::Script)
+            .expect("current source should parse");
+        let mut historical = current.clone();
+        historical.span.end_column = 1;
+
+        let mut wrong_other_field = ParseEventIr::from_parse_source(
+            &historical,
+            source,
+            "wrong-other-field.js",
+            options.mode,
+        );
+        wrong_other_field
+            .events
+            .last_mut()
+            .and_then(|event| event.span.as_mut())
+            .expect("completed span")
+            .start_column = 2;
+        assert_eq!(
+            wrong_other_field
+                .materialize_from_source(source, &options)
+                .expect_err("a second span-field drift must not use the historical path")
+                .code,
+            ParseEventMaterializationErrorCode::AstHashMismatch
+        );
+
+        let mut current_hash_with_old_span = ParseEventIr::from_parse_source(
+            &current,
+            source,
+            "current-hash-old-span.js",
+            options.mode,
+        );
+        current_hash_with_old_span
+            .events
+            .last_mut()
+            .and_then(|event| event.span.as_mut())
+            .expect("completed span")
+            .end_column = 1;
+        assert_eq!(
+            current_hash_with_old_span
+                .materialize_from_source(source, &options)
+                .expect_err("a current hash must not authenticate a historical span")
+                .code,
+            ParseEventMaterializationErrorCode::StatementSpanMismatch
+        );
+
+        let mut old_hash_with_current_span = ParseEventIr::from_parse_source(
+            &historical,
+            source,
+            "old-hash-current-span.js",
+            options.mode,
+        );
+        old_hash_with_current_span
+            .events
+            .last_mut()
+            .expect("completed event")
+            .span = Some(current.span.clone());
+        assert_eq!(
+            old_hash_with_current_span
+                .materialize_from_source(source, &options)
+                .expect_err("a historical hash must not authenticate the current span")
+                .code,
+            ParseEventMaterializationErrorCode::AstHashMismatch
+        );
+    }
+
+    #[test]
     fn materialized_ast_node_ids_are_deterministic_for_identical_inputs() {
         let parser = CanonicalEs2020Parser;
         let source = "await work";
@@ -13299,6 +13457,29 @@ mod tests {
     #[test]
     fn line_count_trailing_newline() {
         assert_eq!(line_count("a\n"), 2);
+    }
+
+    #[test]
+    fn syntax_tree_root_span_ends_at_eof_byte_column_bd_4tt6s() {
+        let parser = CanonicalEs2020Parser;
+        let cases = [
+            ("alpha", 1, 6),
+            ("alpha\nbeta", 2, 5),
+            ("alpha\n", 2, 1),
+            ("alpha\r\nbeta", 2, 5),
+            ("alpha\r\n", 2, 1),
+            ("'é'", 1, 5),
+            ("alpha  ", 1, 8),
+        ];
+
+        for (source, expected_line, expected_column) in cases {
+            let tree = parser
+                .parse(source, ParseGoal::Script)
+                .unwrap_or_else(|error| panic!("failed to parse {source:?}: {error}"));
+            assert_eq!(tree.span.end_offset, source.len() as u64, "{source:?}");
+            assert_eq!(tree.span.end_line, expected_line, "{source:?}");
+            assert_eq!(tree.span.end_column, expected_column, "{source:?}");
+        }
     }
 
     #[test]

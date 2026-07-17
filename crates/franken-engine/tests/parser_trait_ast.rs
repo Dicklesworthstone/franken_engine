@@ -35,6 +35,11 @@ fn single_line_source_span(source: &str) -> SourceSpan {
     SourceSpan::new(0, width, 1, 1, 1, width + 1)
 }
 
+fn historical_schema_v2_root_span(mut tree: SyntaxTree) -> SyntaxTree {
+    tree.span.end_column = 1;
+    tree
+}
+
 #[test]
 fn parser_goal_and_statement_hierarchy_are_emitted_deterministically() {
     let parser = CanonicalEs2020Parser;
@@ -209,7 +214,7 @@ fn canonical_ast_contract_metadata_is_versioned_and_stable() {
     );
     assert_eq!(
         CANONICAL_AST_SCHEMA_VERSION,
-        "franken-engine.parser-ast.schema.v2"
+        "franken-engine.parser-ast.schema.v3"
     );
     assert_eq!(CANONICAL_AST_HASH_ALGORITHM, "sha256");
     assert_eq!(CANONICAL_AST_HASH_PREFIX, "sha256:");
@@ -238,10 +243,45 @@ fn canonical_ast_hash_vector_script_numeric_signed_is_stable() {
     let tree = parser
         .parse("-7", ParseGoal::Script)
         .expect("script parse should succeed");
+    let historical = historical_schema_v2_root_span(tree.clone());
     assert_eq!(
-        tree.canonical_hash(),
+        historical.canonical_hash(),
         "sha256:d959b7cbce9a409871d9a288d6feb3c043bdf3ce6ee54ff39051909db432adc4"
     );
+    let historical_json = serde_json::to_string(&historical).unwrap();
+    let historical_reader: SyntaxTree = serde_json::from_str(&historical_json).unwrap();
+    assert_eq!(historical_reader, historical);
+    assert_eq!(
+        historical_reader.canonical_hash(),
+        "sha256:d959b7cbce9a409871d9a288d6feb3c043bdf3ce6ee54ff39051909db432adc4"
+    );
+    assert_eq!(
+        tree.canonical_hash(),
+        "sha256:8fbc2bb1f3f8fbf7c6e7fc08a89dc768a0ac973390555ecae9b215d442e604c7"
+    );
+}
+
+#[test]
+fn parser_root_span_ends_at_eof_byte_column_bd_4tt6s() {
+    let parser = CanonicalEs2020Parser;
+    let cases = [
+        ("alpha", 1, 6),
+        ("alpha\nbeta", 2, 5),
+        ("alpha\n", 2, 1),
+        ("alpha\r\nbeta", 2, 5),
+        ("alpha\r\n", 2, 1),
+        ("'é'", 1, 5),
+        ("alpha  ", 1, 8),
+    ];
+
+    for (source, expected_line, expected_column) in cases {
+        let tree = parser
+            .parse(source, ParseGoal::Script)
+            .unwrap_or_else(|error| panic!("failed to parse {source:?}: {error}"));
+        assert_eq!(tree.span.end_offset, source.len() as u64, "{source:?}");
+        assert_eq!(tree.span.end_line, expected_line, "{source:?}");
+        assert_eq!(tree.span.end_column, expected_column, "{source:?}");
+    }
 }
 
 #[test]
@@ -251,8 +291,12 @@ fn canonical_ast_hash_vector_module_import_default_is_stable() {
         .parse("import dep from \"pkg\"", ParseGoal::Module)
         .expect("module parse should succeed");
     assert_eq!(
-        tree.canonical_hash(),
+        historical_schema_v2_root_span(tree.clone()).canonical_hash(),
         "sha256:184b65136745331fa73eb839c7d3e2d444cda607e80547a8a03b19e6c5779874"
+    );
+    assert_eq!(
+        tree.canonical_hash(),
+        "sha256:58af3ebe9640c16302cc30b9ac25be14d592d62ffd33595310a2cacf0a7c11be"
     );
 }
 
@@ -263,8 +307,12 @@ fn canonical_ast_hash_vector_module_export_default_is_stable() {
         .parse("export default true", ParseGoal::Module)
         .expect("module parse should succeed");
     assert_eq!(
-        tree.canonical_hash(),
+        historical_schema_v2_root_span(tree.clone()).canonical_hash(),
         "sha256:ebb993de589945a2cf22f17db58200599ae3e1e6c21cd33a0fc59eab99fd8ef6"
+    );
+    assert_eq!(
+        tree.canonical_hash(),
+        "sha256:3165b53e61ee5a66ab81a15b52e6ff84ebd4de83501dbb6e64629dbefe294b36"
     );
 }
 
@@ -305,10 +353,17 @@ fn canonical_parse_event_ir_hash_vector_script_numeric_signed_is_stable() {
     let tree = parser
         .parse("-7", ParseGoal::Script)
         .expect("script parse should succeed");
+    let historical = historical_schema_v2_root_span(tree.clone());
+    let historical_ir =
+        ParseEventIr::from_syntax_tree(&historical, "<inline>", ParserMode::ScalarReference);
+    assert_eq!(
+        historical_ir.canonical_hash(),
+        "sha256:23c6f89b4442da0d3ca21a3415901a6b19518f02f0b51b439cbb4aae0e70ea47"
+    );
     let ir = ParseEventIr::from_syntax_tree(&tree, "<inline>", ParserMode::ScalarReference);
     assert_eq!(
         ir.canonical_hash(),
-        "sha256:23c6f89b4442da0d3ca21a3415901a6b19518f02f0b51b439cbb4aae0e70ea47"
+        "sha256:522e9352308b7889660db5e62567d56f945e12db9e1018832e5f0d3360a4606a"
     );
 }
 
@@ -318,10 +373,17 @@ fn canonical_parse_event_ir_hash_vector_module_import_default_is_stable() {
     let tree = parser
         .parse("import dep from \"pkg\"", ParseGoal::Module)
         .expect("module parse should succeed");
+    let historical = historical_schema_v2_root_span(tree.clone());
+    let historical_ir =
+        ParseEventIr::from_syntax_tree(&historical, "<inline>", ParserMode::ScalarReference);
+    assert_eq!(
+        historical_ir.canonical_hash(),
+        "sha256:5f99807e7808b6fec21cb05479885b367161f1dcd1abac402cceafdc74593fea"
+    );
     let ir = ParseEventIr::from_syntax_tree(&tree, "<inline>", ParserMode::ScalarReference);
     assert_eq!(
         ir.canonical_hash(),
-        "sha256:5f99807e7808b6fec21cb05479885b367161f1dcd1abac402cceafdc74593fea"
+        "sha256:30d465df5f3fe1f9da76fd7cdd0a64efbbe1d5d8b3b33a052562f16765ede6c8"
     );
 }
 

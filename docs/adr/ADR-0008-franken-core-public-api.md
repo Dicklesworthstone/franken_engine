@@ -309,6 +309,21 @@ constant pool, and baseline string loads now preserve the same exact code
 units. UTF-8-only module-specifier metadata remains separately tracked by
 `bd-lfq44`; the schema change creates no tag or release.
 
+### Canonical root EOF coordinate checkpoint (`bd-4tt6s`)
+
+The two parser seams subsequently correct the canonical `SyntaxTree` root
+span's `end_column`: it is the one-based UTF-8 byte column immediately after
+the original source on its final physical line, not an unconditional `1`.
+Because the root span participates in canonical AST bytes and hashes, the
+engine AST schema advances independently from v2 to v3 and the core AST schema
+from v3 to v4. The AST shape and derived serde remain unchanged, so historical
+tree JSON remains readable; consumers must continue to bind cached hashes to
+the reported schema version. Parse Event IR, materializer, and executable IR
+schemas do not change because their serialized shapes do not change.
+Source-backed event materialization preserves old streams through an exact,
+hash-authenticated reconstruction of the former root-column value; it does not
+relax any other span, statement, envelope, or payload validation.
+
 ### `CopyDataProperties` IR schema checkpoint (`bd-f1ixz`)
 
 The core object-rest implementation adds the externally tagged

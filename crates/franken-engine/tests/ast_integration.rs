@@ -1487,7 +1487,7 @@ fn canonical_ast_contract_constants_are_pinned() {
     );
     assert_eq!(
         CANONICAL_AST_SCHEMA_VERSION,
-        "franken-engine.parser-ast.schema.v2"
+        "franken-engine.parser-ast.schema.v3"
     );
     assert_eq!(CANONICAL_AST_HASH_ALGORITHM, "sha256");
     assert_eq!(CANONICAL_AST_HASH_PREFIX, "sha256:");

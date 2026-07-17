@@ -7,147 +7,147 @@
       "family_id": "statement.expression",
       "goal": "script",
       "source": "alpha",
-      "expected_hash": "sha256:5a07edc8a5c638cc207bd432c9023fe49638763bdc29835f5f058064d688ff8a"
+      "expected_hash": "sha256:c9e14848d4c68f8575578c5fc3f9f82ee0dd93caf260c5c896e901fd29ee9063"
     },
     {
       "id": "script_numeric_signed",
       "family_id": "literal.numeric_signed_i64",
       "goal": "script",
       "source": "-7",
-      "expected_hash": "sha256:d959b7cbce9a409871d9a288d6feb3c043bdf3ce6ee54ff39051909db432adc4"
+      "expected_hash": "sha256:8fbc2bb1f3f8fbf7c6e7fc08a89dc768a0ac973390555ecae9b215d442e604c7"
     },
     {
       "id": "script_string",
       "family_id": "literal.string_single_double_quote",
       "goal": "script",
       "source": "\"hello\"",
-      "expected_hash": "sha256:2d22eb6cf286e1c9df2260a49d1fd7fd3d49fd78b5a768522203402fa466b125"
+      "expected_hash": "sha256:a1526419efa35a68ccb731bd388ff2166be096cb49fb3059952cf488e5165689"
     },
     {
       "id": "script_boolean",
       "family_id": "literal.boolean",
       "goal": "script",
       "source": "true",
-      "expected_hash": "sha256:e8563a21efb68e6939c9a81f736ab6009cc99ce19daca3e7bc620aba847b7855"
+      "expected_hash": "sha256:63711294db7cf4f32dd21babf5dc5a4724da1be4ac08b24eb29bca8ac129d9ac"
     },
     {
       "id": "script_null",
       "family_id": "literal.null",
       "goal": "script",
       "source": "null",
-      "expected_hash": "sha256:5a9979b7cad676cb459bd03b7c2cfa43c6b94fde2bc6a7c3e00a430b4d0a5b2a"
+      "expected_hash": "sha256:9d6accdd9fb3b211623484cbb17524ef77f5311f7949f85b0d14b3664adf72f4"
     },
     {
       "id": "script_undefined",
       "family_id": "literal.undefined",
       "goal": "script",
       "source": "undefined",
-      "expected_hash": "sha256:0c28b681a522f99cebea13bc3b803fb92c22422c05b13927f734f475008a688f"
+      "expected_hash": "sha256:f84557d8a033cabd589f0df250c7de6d836306e23af88b40b12e526036e0f743"
     },
     {
       "id": "script_await",
       "family_id": "expression.await",
       "goal": "script",
       "source": "await work",
-      "expected_hash": "sha256:b4edc109d6bcd04a494a18133607b2b4a68a707834d11228ca0a09c05ce1e8e7"
+      "expected_hash": "sha256:7dd58521c7997a65ae7296c71b876fc27c224a139dc5f9a974b7555ff968ea39"
     },
     {
       "id": "script_raw_binary",
       "family_id": "expression.binary_precedence",
       "goal": "script",
       "source": "a + b * c",
-      "expected_hash": "sha256:f205653845adafa3af4678d025ac6ca3ae45a26f90145ed05aec5e6aab8f6310"
+      "expected_hash": "sha256:53611cd9828300769c003fbc3a63c4b135c4661541744705e826588c2abc6697"
     },
     {
       "id": "module_import_default",
       "family_id": "module.import_default",
       "goal": "module",
       "source": "import dep from \"pkg\"",
-      "expected_hash": "sha256:184b65136745331fa73eb839c7d3e2d444cda607e80547a8a03b19e6c5779874"
+      "expected_hash": "sha256:58af3ebe9640c16302cc30b9ac25be14d592d62ffd33595310a2cacf0a7c11be"
     },
     {
       "id": "module_import_side_effect",
       "family_id": "module.import_side_effect",
       "goal": "module",
       "source": "import \"side-effect\"",
-      "expected_hash": "sha256:e563c46519ec5d4f44d15b49ea8370dd9b9b8154d13505f5feecedadc8f31e50"
+      "expected_hash": "sha256:dc8246e4a5cc620d226b6a46c671d3cfba95336a9e2d8854c7f8a49c2a3d973e"
     },
     {
       "id": "module_import_named_namespace",
       "family_id": "module.import_named_namespace",
       "goal": "module",
       "source": "import { run as start } from \"pkg\"",
-      "expected_hash": "sha256:801784e20ed84c4732c468dc08db731827fe1442cc30c88d9294726b8d0bf4e2"
+      "expected_hash": "sha256:938245491dd4caed944472cadb906fb67cb55a4d65a0d4f7a6e85435c2b535d8"
     },
     {
       "id": "module_export_default",
       "family_id": "module.export_default",
       "goal": "module",
       "source": "export default true",
-      "expected_hash": "sha256:ebb993de589945a2cf22f17db58200599ae3e1e6c21cd33a0fc59eab99fd8ef6"
+      "expected_hash": "sha256:3165b53e61ee5a66ab81a15b52e6ff84ebd4de83501dbb6e64629dbefe294b36"
     },
     {
       "id": "module_export_named",
       "family_id": "module.export_named_clause",
       "goal": "module",
       "source": "export { a, b }",
-      "expected_hash": "sha256:f940dbb1f8280ad3221c4876048cb6e2aacfbde2126e80209d6b0c1f1506f413"
+      "expected_hash": "sha256:7700cb4b518c6bdcc915e51ddd7e3fc0a80f9baad3a5cbb7185129c9bd3ce858"
     },
     {
       "id": "script_statement_list_triplet",
       "family_id": "program.statement_list",
       "goal": "script",
       "source": "alpha;\nbeta;\ngamma",
-      "expected_hash": "sha256:84fcbd9ea22c0519bfdf9454b0d8b79b31b430d6a8a15d382f212de8fe2a880a"
+      "expected_hash": "sha256:05fad6f5df2452d928a5a7587afd59fcc89deda66ca8f9ff767cb1d94c9be97c"
     },
     {
       "id": "script_variable_declaration_raw",
       "family_id": "statement.variable_declaration",
       "goal": "script",
       "source": "let value = 1",
-      "expected_hash": "sha256:782085aeec6df60da7a3aeeca145462401b01b6a60a427d21516b642286beed2"
+      "expected_hash": "sha256:cdb9ad5364d403198d7a492b746bb29b1adacf8148a30453f9e71fda8cab8c28"
     },
     {
       "id": "script_function_declaration_raw",
       "family_id": "statement.function_declaration",
       "goal": "script",
       "source": "function foo() {}",
-      "expected_hash": "sha256:db82bcff38e2adb06b83ad8f94fc2455779fa350a7674022b61f6ee9a416630a"
+      "expected_hash": "sha256:8d3c4b993f8d509001463b935c743cc3307675869da76c4a9210aa7199721700"
     },
     {
       "id": "script_call_member_chain_raw",
       "family_id": "expression.call_member_chain",
       "goal": "script",
       "source": "obj.method(arg)",
-      "expected_hash": "sha256:e04ce07c16ea91d29de165dfedd342186efab6e0e6ac61f21834354e2fed9d95"
+      "expected_hash": "sha256:36c21416495c9a84e7bc252e78c73439e02e2f1bf45558c9ddfc4e851863752a"
     },
     {
       "id": "script_object_literal_raw",
       "family_id": "expression.object_array_literal",
       "goal": "script",
       "source": "{ key: value }",
-      "expected_hash": "sha256:50cd5f7d07dce79e87e3376d8a94e0ab5471f7f31e7a1a64b9572f54d5cb4b5a"
+      "expected_hash": "sha256:a2a3d80842baf5e7618f59aa36b78217bd2fd8463ed3ffa47f8e0ff46b83fb83"
     },
     {
       "id": "script_template_literal_raw",
       "family_id": "expression.template_literal",
       "goal": "script",
       "source": "`hello ${name}`",
-      "expected_hash": "sha256:d5fdd2a97f7d91426261cdad8b60161e06e31e53157ec172b1191e4027de41a2"
+      "expected_hash": "sha256:51d8a96e2467edb0f76ed5602340cd797ee85cc580dc8299f5673b9f1b94e0ba"
     },
     {
       "id": "script_arrow_function_raw",
       "family_id": "expression.arrow_function",
       "goal": "script",
       "source": "(x) => x + 1",
-      "expected_hash": "sha256:6e2dd955cd63a6c7ebd47b88b3c47ccbd5c0b1e6226c573f1bcaa39e62def6b0"
+      "expected_hash": "sha256:0ad4945c447719366dec181dd297d03895f037c136b4950dc3c70a1c3baa8764"
     },
     {
       "id": "script_control_flow_raw",
       "family_id": "statement.control_flow",
       "goal": "script",
       "source": "if (flag) run()",
-      "expected_hash": "sha256:8e1e00408b1bf95d39c5edd1e220df5760a81c2735e9f0c99d5220fe27a0f9de"
+      "expected_hash": "sha256:9d49df00df9afd1d5fef7d0b957fb9acd46fd9dbdbf1fc1e2d887cb1816573cf"
     }
   ]
 }

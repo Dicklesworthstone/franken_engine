@@ -2988,28 +2988,29 @@ fn lower_destructuring_to_ir1_with_parameter_tdz(
                         )?
                     };
 
-                    // Object rest is a shallow own-property clone followed by
-                    // exclusion of every statically named property that was
-                    // consumed earlier in the pattern.
+                    // Object rest filters every statically consumed key before
+                    // reading the remaining own properties.  Keeping the
+                    // exclusions on the operand stack lets the dedicated copy
+                    // operation avoid observing excluded accessors.
                     ops.push(Ir1Op::NewObject { count: 0 });
                     ops.push(Ir1Op::LoadBinding {
                         binding_id: source_bid,
                     });
-                    ops.push(Ir1Op::SpreadIntoObject);
+                    for key in &rest_excluded_keys {
+                        ops.push(Ir1Op::LoadLiteral {
+                            value: Ir1Literal::String(key.clone().into()),
+                        });
+                    }
+                    let excluded_count = u32::try_from(rest_excluded_keys.len()).map_err(|_| {
+                        LoweringPipelineError::InvariantViolation {
+                            detail: "Object-rest exclusion count exceeds u32 capacity",
+                        }
+                    })?;
+                    ops.push(Ir1Op::CopyDataProperties { excluded_count });
                     ops.push(Ir1Op::StoreBinding {
                         binding_id: rest_bid,
                     });
                     ops.push(Ir1Op::Pop);
-
-                    for key in &rest_excluded_keys {
-                        ops.push(Ir1Op::LoadBinding {
-                            binding_id: rest_bid,
-                        });
-                        ops.push(Ir1Op::DeleteProperty {
-                            key: Ir1PropertyKey::Static(key.clone()),
-                        });
-                        ops.push(Ir1Op::Pop);
-                    }
 
                     if matches!(inner.as_ref(), BindingPattern::Identifier(_)) {
                         if let Some(state) = parameter_tdz.as_deref_mut() {
@@ -6265,6 +6266,43 @@ pub fn lower_ir2_to_ir3(
                     .push(Ir3Instruction::SpreadIntoObject { target, source });
                 value_stack.push(target);
             }
+            Ir1Op::CopyDataProperties { excluded_count } => {
+                // Stack: [..., target, source, excluded...] -> [..., target].
+                // Materialize exclusions into a contiguous range so arbitrary
+                // valid IR1 producers do not have to pre-allocate one.
+                let excluded_len = *excluded_count as usize;
+                if excluded_len
+                    .checked_add(2)
+                    .is_none_or(|needed| needed > value_stack.len())
+                {
+                    return Err(LoweringPipelineError::InvariantViolation {
+                        detail: "Value stack underflow in CopyDataProperties",
+                    });
+                }
+                let mut excluded_regs = Vec::with_capacity(excluded_len);
+                for _ in 0..excluded_len {
+                    excluded_regs.push(value_stack.pop().unwrap_or(0));
+                }
+                excluded_regs.reverse();
+                let source = value_stack.pop().unwrap_or(0);
+                let target = value_stack.pop().unwrap_or(0);
+                let excluded_start = register_cursor;
+                for src in excluded_regs {
+                    let dst = alloc_register(&mut register_cursor);
+                    ir3.instructions.push(Ir3Instruction::Move { dst, src });
+                }
+                let value_dst = alloc_register(&mut register_cursor);
+                ir3.instructions.push(Ir3Instruction::CopyDataProperties {
+                    target,
+                    source,
+                    excluded: RegRange {
+                        start: excluded_start,
+                        count: *excluded_count,
+                    },
+                    value_dst,
+                });
+                value_stack.push(target);
+            }
             Ir1Op::Throw => {
                 let value = value_stack.pop().unwrap_or(0);
                 ir3.instructions.push(Ir3Instruction::Throw { value });
@@ -7446,6 +7484,41 @@ pub fn lower_ir2_to_ir3(
                     let target = fn_value_stack.pop().unwrap_or(0);
                     ir3.instructions
                         .push(Ir3Instruction::SpreadIntoObject { target, source });
+                    fn_value_stack.push(target);
+                }
+                Ir1Op::CopyDataProperties { excluded_count } => {
+                    // Stack: [..., target, source, excluded...] -> [..., target].
+                    let excluded_len = *excluded_count as usize;
+                    if excluded_len
+                        .checked_add(2)
+                        .is_none_or(|needed| needed > fn_value_stack.len())
+                    {
+                        return Err(LoweringPipelineError::InvariantViolation {
+                            detail: "Value stack underflow in deferred CopyDataProperties",
+                        });
+                    }
+                    let mut excluded_regs = Vec::with_capacity(excluded_len);
+                    for _ in 0..excluded_len {
+                        excluded_regs.push(fn_value_stack.pop().unwrap_or(0));
+                    }
+                    excluded_regs.reverse();
+                    let source = fn_value_stack.pop().unwrap_or(0);
+                    let target = fn_value_stack.pop().unwrap_or(0);
+                    let excluded_start = fn_reg;
+                    for src in excluded_regs {
+                        let dst = alloc_register(&mut fn_reg);
+                        ir3.instructions.push(Ir3Instruction::Move { dst, src });
+                    }
+                    let value_dst = alloc_register(&mut fn_reg);
+                    ir3.instructions.push(Ir3Instruction::CopyDataProperties {
+                        target,
+                        source,
+                        excluded: RegRange {
+                            start: excluded_start,
+                            count: *excluded_count,
+                        },
+                        value_dst,
+                    });
                     fn_value_stack.push(target);
                 }
                 Ir1Op::Throw => {
@@ -11022,9 +11095,10 @@ fn classify_ir1_op(
                 declassification_required: false,
             }),
         ),
-        Ir1Op::GetProperty { .. } | Ir1Op::SetProperty { .. } | Ir1Op::DeleteProperty { .. } => {
-            (EffectBoundary::ReadEffect, None, None)
-        }
+        Ir1Op::GetProperty { .. }
+        | Ir1Op::SetProperty { .. }
+        | Ir1Op::DeleteProperty { .. }
+        | Ir1Op::CopyDataProperties { .. } => (EffectBoundary::ReadEffect, None, None),
         Ir1Op::ForInInit
         | Ir1Op::ForInNext { .. }
         | Ir1Op::ForOfInit
@@ -16156,42 +16230,63 @@ mod tests {
         assert!(
             body_ir1
                 .iter()
-                .any(|op| matches!(op, Ir1Op::SpreadIntoObject)),
-            "object-rest parameter prologue must clone the source object"
+                .any(|op| matches!(op, Ir1Op::CopyDataProperties { excluded_count: 2 })),
+            "object-rest parameter prologue must carry both exclusions into the copy"
         );
         assert_eq!(
             body_ir1
                 .iter()
                 .filter(|op| matches!(op, Ir1Op::DeleteProperty { .. }))
                 .count(),
-            2,
-            "the prologue must exclude both preceding static keys"
+            0,
+            "object rest must filter exclusions before copying, not delete afterward"
         );
         let body_ir3 = deferred_ir3_body_bd_6pvhn(&module, "project");
-        assert!(
-            body_ir3
-                .iter()
-                .any(|instruction| matches!(instruction, Ir3Instruction::SpreadIntoObject { .. }))
-        );
+        assert!(body_ir3.iter().any(|instruction| matches!(
+            instruction,
+            Ir3Instruction::CopyDataProperties {
+                excluded: RegRange { count: 2, .. },
+                ..
+            }
+        )));
         assert_eq!(
             body_ir3
                 .iter()
                 .filter(|instruction| matches!(instruction, Ir3Instruction::DeleteProperty { .. }))
                 .count(),
-            2
+            0
         );
         assert_eq!(value, Value::Int(235_304));
     }
 
     #[test]
     fn nested_and_empty_exclusion_object_rest_parameters_execute_bd_vkf78() {
-        let (_, _, value) = lower_and_execute_deferred_source_bd_6pvhn(
+        let (ir1, module, value) = lower_and_execute_deferred_source_bd_6pvhn(
             "function nested({ box: { kept, ...inside }, ...outside }) {\
                  return kept * 100 + inside.left * 10 + outside.tail;\
              }\
              function copy({ ...rest }) { return rest.a + rest.b; }\
              nested({ box: { kept: 5, left: 6 }, tail: 7 }) * 100\
                  + copy({ a: 8, b: 9 });",
+        );
+        let nested_counts = deferred_ir1_body_bd_6pvhn(&ir1, "nested")
+            .iter()
+            .filter_map(|op| match op {
+                Ir1Op::CopyDataProperties { excluded_count } => Some(*excluded_count),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(nested_counts, vec![1, 1]);
+        assert!(
+            deferred_ir3_body_bd_6pvhn(&module, "copy")
+                .iter()
+                .any(|instruction| matches!(
+                    instruction,
+                    Ir3Instruction::CopyDataProperties {
+                        excluded: RegRange { count: 0, .. },
+                        ..
+                    }
+                ))
         );
         assert_eq!(value, Value::Int(56_717));
     }
@@ -18510,21 +18605,33 @@ mod tests {
         assert_eq!(
             ir1.ops
                 .iter()
-                .filter(|op| matches!(op, Ir1Op::SpreadIntoObject))
+                .filter(|op| matches!(op, Ir1Op::CopyDataProperties { excluded_count: 2 }))
                 .count(),
             1
         );
-        let deleted_keys = ir1
-            .ops
-            .iter()
-            .filter_map(|op| match op {
-                Ir1Op::DeleteProperty {
-                    key: Ir1PropertyKey::Static(key),
-                } => Some(key.as_str()),
-                _ => None,
-            })
-            .collect::<Vec<_>>();
-        assert_eq!(deleted_keys, vec!["kept", "1.5"]);
+        assert_eq!(
+            ir1.ops
+                .iter()
+                .filter(|op| matches!(op, Ir1Op::DeleteProperty { .. }))
+                .count(),
+            0
+        );
+        let exclusion_literals = ir1.ops.windows(3).find_map(|window| match window {
+            [
+                Ir1Op::LoadLiteral {
+                    value: Ir1Literal::String(first),
+                },
+                Ir1Op::LoadLiteral {
+                    value: Ir1Literal::String(second),
+                },
+                Ir1Op::CopyDataProperties { excluded_count: 2 },
+            ] => Some((first.to_string(), second.to_string())),
+            _ => None,
+        });
+        assert_eq!(
+            exclusion_literals,
+            Some(("kept".to_string(), "1.5".to_string()))
+        );
         let scope = ir1.scopes.first().expect("root scope");
         assert!(scope.bindings.iter().any(|binding| binding.name == "rest"));
 
@@ -18534,17 +18641,19 @@ mod tests {
         )
         .expect("object-rest declaration should lower through IR3")
         .ir3;
-        assert!(
-            ir3.instructions
-                .iter()
-                .any(|instruction| matches!(instruction, Ir3Instruction::SpreadIntoObject { .. }))
-        );
+        assert!(ir3.instructions.iter().any(|instruction| matches!(
+            instruction,
+            Ir3Instruction::CopyDataProperties {
+                excluded: RegRange { count: 2, .. },
+                ..
+            }
+        )));
         assert_eq!(
             ir3.instructions
                 .iter()
                 .filter(|instruction| matches!(instruction, Ir3Instruction::DeleteProperty { .. }))
                 .count(),
-            2
+            0
         );
     }
 
@@ -18558,6 +18667,27 @@ mod tests {
              source.left * 100 + rest.left * 10 + copy.a + copy.b;",
         );
         assert_eq!(value, Value::Int(297));
+    }
+
+    #[test]
+    fn object_rest_filters_exclusions_before_accessor_reads_bd_f1ixz() {
+        let (_, _, value) = lower_and_execute_deferred_source_bd_6pvhn(
+            "let source = { marker: 7, excludedReads: 0, includedReads: 0 };\
+             source['__franken_ir_accessor_get__:excluded'] = function() {\
+                 this.excludedReads = this.excludedReads + 1; return 2;\
+             };\
+             source['__franken_ir_accessor_get__:included'] = function() {\
+                 this.includedReads = this.includedReads + 1; return this.marker;\
+             };\
+             let { excluded, ...rest } = source;\
+             source.excludedReads * 1000 + source.includedReads * 100\
+                 + excluded * 10 + rest.included;",
+        );
+        assert_eq!(
+            value,
+            Value::Int(1_127),
+            "the consumed getter runs once, the included getter runs once, and its receiver is source"
+        );
     }
 
     #[test]

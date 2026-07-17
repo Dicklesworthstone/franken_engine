@@ -37,12 +37,14 @@ pub struct IrSchemaVersion {
 }
 
 impl IrSchemaVersion {
-    /// `0.2.0` widens JavaScript literal carriers and the IR3 constant pool to
-    /// exact UTF-16 [`JsString`] values. Historical well-formed strings retain
-    /// their plain-string JSON wire shape; lone-surrogate values use `$wtf16`.
+    /// `0.3.0` adds dedicated object-rest `CopyDataProperties` operations to
+    /// IR1 and IR3. `0.2.0` widened JavaScript literal carriers and the IR3
+    /// constant pool to exact UTF-16 [`JsString`] values. Historical
+    /// well-formed strings retain their plain-string JSON wire shape;
+    /// lone-surrogate values use `$wtf16`.
     pub const CURRENT: Self = Self {
         major: 0,
-        minor: 2,
+        minor: 3,
         patch: 0,
     };
 
@@ -483,6 +485,13 @@ pub enum Ir1Op {
     /// Spread an object's properties into another object. Stack: [..., target, source] -> [..., target].
     /// Copies all enumerable own properties from source to target.
     SpreadIntoObject,
+    /// Copy enumerable own properties for object-rest binding semantics.
+    ///
+    /// Stack: `[..., target, source, excluded_0, ..., excluded_n]` ->
+    /// `[..., target]`. Excluded property keys are filtered before property
+    /// values are read; unlike object-literal spread, a nullish source is an
+    /// error.
+    CopyDataProperties { excluded_count: u32 },
     /// Throw the value on top-of-stack.
     Throw,
     /// Load `this` binding.
@@ -828,6 +837,16 @@ impl Ir1Op {
                 map.insert(
                     "op".to_string(),
                     CanonicalValue::String("spread_into_object".to_string()),
+                );
+            }
+            Self::CopyDataProperties { excluded_count } => {
+                map.insert(
+                    "op".to_string(),
+                    CanonicalValue::String("copy_data_properties".to_string()),
+                );
+                map.insert(
+                    "excluded_count".to_string(),
+                    CanonicalValue::U64(u64::from(*excluded_count)),
                 );
             }
             Self::Throw => {
@@ -1589,6 +1608,15 @@ pub enum Ir3Instruction {
     SpreadIntoArray { array: Reg, iterable: Reg },
     /// Spread an object's properties into another object: Object.assign(target, source).
     SpreadIntoObject { target: Reg, source: Reg },
+    /// Copy enumerable own properties from `source` to `target` for object-rest
+    /// binding semantics. `excluded` names keys that must be filtered before
+    /// reading values; `value_dst` is reserved for resumable property reads.
+    CopyDataProperties {
+        target: Reg,
+        source: Reg,
+        excluded: RegRange,
+        value_dst: Reg,
+    },
     /// Template literal concatenation: dst = parts[0] + parts[1] + ... + parts[N-1].
     /// Parts are interleaved quasi strings and expressions already loaded in registers.
     TemplateLiteral { parts: RegRange, dst: Reg },
@@ -2030,6 +2058,30 @@ impl Ir3Instruction {
                 map.insert(
                     "source".to_string(),
                     CanonicalValue::U64(u64::from(*source)),
+                );
+            }
+            Self::CopyDataProperties {
+                target,
+                source,
+                excluded,
+                value_dst,
+            } => {
+                map.insert(
+                    "op".to_string(),
+                    CanonicalValue::String("copy_data_properties".to_string()),
+                );
+                map.insert(
+                    "target".to_string(),
+                    CanonicalValue::U64(u64::from(*target)),
+                );
+                map.insert(
+                    "source".to_string(),
+                    CanonicalValue::U64(u64::from(*source)),
+                );
+                map.insert("excluded".to_string(), excluded.canonical_value());
+                map.insert(
+                    "value_dst".to_string(),
+                    CanonicalValue::U64(u64::from(*value_dst)),
                 );
             }
             Self::TemplateLiteral { parts, dst } => {
@@ -3390,7 +3442,7 @@ mod tests {
 
     #[test]
     fn schema_version_display() {
-        assert_eq!(IrSchemaVersion::CURRENT.to_string(), "0.2.0");
+        assert_eq!(IrSchemaVersion::CURRENT.to_string(), "0.3.0");
     }
 
     #[test]
@@ -3411,18 +3463,20 @@ mod tests {
         };
 
         assert!(verify_schema_version(&header(IrSchemaVersion::CURRENT, IrLevel::Ir3)).is_ok());
-        assert!(
-            verify_schema_version(&header(
-                IrSchemaVersion {
-                    major: IrSchemaVersion::CURRENT.major,
-                    minor: 1,
-                    patch: u32::MAX,
-                },
-                IrLevel::Ir1,
-            ))
-            .is_ok(),
-            "core 0.2 readers retain plain-string 0.1 compatibility"
-        );
+        for minor in [1, 2] {
+            assert!(
+                verify_schema_version(&header(
+                    IrSchemaVersion {
+                        major: IrSchemaVersion::CURRENT.major,
+                        minor,
+                        patch: u32::MAX,
+                    },
+                    IrLevel::Ir1,
+                ))
+                .is_ok(),
+                "core 0.3 readers retain compatibility with 0.{minor} artifacts"
+            );
+        }
 
         for (version, level, expected_message) in [
             (
@@ -3457,6 +3511,64 @@ mod tests {
         let a = IrSchemaVersion::CURRENT.canonical_value();
         let b = IrSchemaVersion::CURRENT.canonical_value();
         assert_eq!(a, b);
+    }
+
+    #[test]
+    fn copy_data_properties_wire_and_canonical_contract_bd_f1ixz() {
+        let ir1 = Ir1Op::CopyDataProperties { excluded_count: 2 };
+        let CanonicalValue::Map(ir1_canonical) = ir1.canonical_value() else {
+            panic!("IR1 CopyDataProperties canonical form should be a map");
+        };
+        assert_eq!(
+            ir1_canonical.get("op"),
+            Some(&CanonicalValue::String("copy_data_properties".to_string()))
+        );
+        assert_eq!(
+            ir1_canonical.get("excluded_count"),
+            Some(&CanonicalValue::U64(2))
+        );
+        assert_eq!(ir1_canonical.len(), 2);
+        let ir1_json = serde_json::to_string(&ir1).expect("IR1 operation should serialize");
+        assert_eq!(ir1_json, r#"{"CopyDataProperties":{"excluded_count":2}}"#);
+        assert_eq!(
+            serde_json::from_str::<Ir1Op>(&ir1_json).expect("IR1 operation should deserialize"),
+            ir1
+        );
+
+        let ir3 = Ir3Instruction::CopyDataProperties {
+            target: 1,
+            source: 2,
+            excluded: RegRange { start: 3, count: 2 },
+            value_dst: 5,
+        };
+        let CanonicalValue::Map(ir3_canonical) = ir3.canonical_value() else {
+            panic!("IR3 CopyDataProperties canonical form should be a map");
+        };
+        assert_eq!(
+            ir3_canonical.get("op"),
+            Some(&CanonicalValue::String("copy_data_properties".to_string()))
+        );
+        assert_eq!(ir3_canonical.get("target"), Some(&CanonicalValue::U64(1)));
+        assert_eq!(ir3_canonical.get("source"), Some(&CanonicalValue::U64(2)));
+        assert_eq!(
+            ir3_canonical.get("excluded"),
+            Some(&RegRange { start: 3, count: 2 }.canonical_value())
+        );
+        assert_eq!(
+            ir3_canonical.get("value_dst"),
+            Some(&CanonicalValue::U64(5))
+        );
+        assert_eq!(ir3_canonical.len(), 5);
+        let ir3_json = serde_json::to_string(&ir3).expect("IR3 instruction should serialize");
+        assert_eq!(
+            ir3_json,
+            r#"{"CopyDataProperties":{"target":1,"source":2,"excluded":{"start":3,"count":2},"value_dst":5}}"#
+        );
+        assert_eq!(
+            serde_json::from_str::<Ir3Instruction>(&ir3_json)
+                .expect("IR3 instruction should deserialize"),
+            ir3
+        );
     }
 
     #[test]
@@ -3711,6 +3823,7 @@ mod tests {
             },
             Ir1Op::Await,
             Ir1Op::ArraySlice,
+            Ir1Op::CopyDataProperties { excluded_count: 2 },
             Ir1Op::DiscardAbruptCompletion,
             Ir1Op::Nop,
         ];
@@ -3935,6 +4048,12 @@ mod tests {
                 obj: 0,
                 key: 1,
                 dst: 2,
+            },
+            Ir3Instruction::CopyDataProperties {
+                target: 0,
+                source: 1,
+                excluded: RegRange { start: 2, count: 2 },
+                value_dst: 4,
             },
             Ir3Instruction::ImportModule {
                 specifier: 0,
@@ -4922,6 +5041,7 @@ mod tests {
                 binding_id: 0,
             },
             Ir1Op::Await,
+            Ir1Op::CopyDataProperties { excluded_count: 2 },
             Ir1Op::DiscardAbruptCompletion,
             Ir1Op::Nop,
             Ir1Op::ForInInit,
@@ -5040,6 +5160,12 @@ mod tests {
                 obj: 0,
                 key: 1,
                 dst: 2,
+            },
+            Ir3Instruction::CopyDataProperties {
+                target: 0,
+                source: 1,
+                excluded: RegRange { start: 2, count: 2 },
+                value_dst: 4,
             },
             Ir3Instruction::Halt,
             // Arithmetic
@@ -5382,7 +5508,7 @@ mod tests {
     fn schema_version_current_value() {
         let v = IrSchemaVersion::CURRENT;
         assert_eq!(v.major, 0);
-        assert_eq!(v.minor, 2);
+        assert_eq!(v.minor, 3);
         assert_eq!(v.patch, 0);
     }
 
@@ -5619,6 +5745,15 @@ mod tests {
                     dst: 2,
                 },
                 "delete_property",
+            ),
+            (
+                Ir3Instruction::CopyDataProperties {
+                    target: 0,
+                    source: 1,
+                    excluded: RegRange { start: 2, count: 2 },
+                    value_dst: 4,
+                },
+                "copy_data_properties",
             ),
             (
                 Ir3Instruction::ArraySlice {

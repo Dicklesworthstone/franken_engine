@@ -49,6 +49,24 @@ Module-specifier metadata remains a separate UTF-8-only boundary tracked by
 `bd-lfq44`, while contextual legacy decimal escapes remain tracked by
 `bd-xcqzp`. This schema landing creates no tag or release.
 
+### Core `CopyDataProperties` IR schema slice (`bd-f1ixz`)
+
+The core object-rest lane advances
+`frankenengine-core::ir_contract::IrSchemaVersion::CURRENT` to `0.3.0` and
+adds `Ir1Op::CopyDataProperties { excluded_count }` plus
+`Ir3Instruction::CopyDataProperties { target, source, excluded, value_dst }`.
+The `frankenengine-core` Cargo package remains on the deliberately unreleased
+`0.2.0` compatibility-staging line; this is an IR wire revision, not a package
+release or tag.
+
+Existing IR variant names and payloads retain their prior serde and canonical
+representations. Core `0.3.0` readers accept historical `0.2.0` headers, while
+older readers reject the new externally tagged variants instead of silently
+reinterpreting them. The downstream source audit found only the engine
+differential oracle directly matching the core IR3 enum outside the core
+crate, and both matches already have fallback arms; `/data/projects/franken_node`
+has no direct imports, constructions, or matches of either core IR enum.
+
 ---
 
 ## Post-Snapshot Update — Claim-Evidence Integrity Capstone (2026-06-21)

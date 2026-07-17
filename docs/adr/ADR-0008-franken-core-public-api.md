@@ -6,7 +6,7 @@
 - Plan references: Track J, franken-core graduation contract, API parity ledger
 - Related beads: `bd-cixqu.10.6`, `bd-cixqu.10.7`, `bd-4w7h9.1`,
   `bd-4w7h9.2`, `bd-n8eta.4`, `bd-n8eta.4.1`, `bd-n8eta.4.6`,
-  `bd-b12xs`, `bd-b12xs.1`, `bd-b12xs.2`
+  `bd-b12xs`, `bd-b12xs.1`, `bd-b12xs.2`, `bd-f1ixz`
 
 ## Context
 
@@ -308,6 +308,36 @@ mirror, advancing its canonical AST schema to
 constant pool, and baseline string loads now preserve the same exact code
 units. UTF-8-only module-specifier metadata remains separately tracked by
 `bd-lfq44`; the schema change creates no tag or release.
+
+### `CopyDataProperties` IR schema checkpoint (`bd-f1ixz`)
+
+The core object-rest implementation adds the externally tagged
+`Ir1Op::CopyDataProperties { excluded_count }` and
+`Ir3Instruction::CopyDataProperties { target, source, excluded, value_dst }`
+variants. Because old readers cannot decode either new variant,
+`frankenengine-core` advances `IrSchemaVersion::CURRENT` from `0.2.0` to
+`0.3.0`. Its Cargo package remains on the unreleased `0.2.0`
+compatibility-staging line established by `bd-n8eta.4.6`; no package release,
+tag, or `Cargo.lock` version change accompanies this independently versioned
+IR wire evolution.
+
+Every pre-existing variant name, payload, serde discriminant, and canonical
+representation remains unchanged. A core `0.3.0` reader accepts historical
+`0.2.0` IR headers through the documented compatibility window, while a
+pre-`0.3.0` reader rejects the unknown new variants. The new variants have
+focused serde round-trip and canonical-field regressions and are included in
+the existing all-variant tables.
+
+The downstream source audit found one workspace file outside
+`frankenengine-core` that directly imports the core IR3 enum:
+`crates/franken-engine/src/differential_oracle.rs`. Its two match expressions
+already use fallback arms. The sibling `/data/projects/franken_node` tree has
+no direct imports, constructions, or matches of core `Ir1Op` or
+`Ir3Instruction`. In-core exhaustive matches are updated atomically across
+canonical encoding, lowering, effect classification, interpreter dispatch,
+and instruction mnemonic reporting. The separate `frankenengine-engine` IR
+mirror remains on its own `0.2.0` schema until separately versioned mirror
+work adds an equivalent operation.
 
 The descriptor object model already exposes `object_model::SymbolId`,
 `object_model::PropertyKey::{String, Symbol}`, and `JsValue::Symbol`; the

@@ -107,6 +107,8 @@ const MEMORY_ESTIMATE_CALL_FRAME_BASE_BYTES: u64 = 64;
 const MEMORY_ESTIMATE_ITERATOR_BASE_BYTES: u64 = 32;
 /// Approximate per-generator base footprint.
 const MEMORY_ESTIMATE_GENERATOR_BASE_BYTES: u64 = 48;
+/// Approximate per-resumable CopyDataProperties state footprint.
+const MEMORY_ESTIMATE_COPY_DATA_PROPERTIES_STATE_BASE_BYTES: u64 = 64;
 
 /// Canonical operator-facing label for the deterministic execution profile.
 pub const DETERMINISTIC_PROFILE_LABEL: &str = "baseline_deterministic_profile";
@@ -757,6 +759,38 @@ enum RuntimeProperty {
 enum AccessorKind {
     Get,
     Set,
+}
+
+/// Resumable state for the object-rest CopyDataProperties operation.
+///
+/// Keys and exclusions are snapshotted once. Property descriptors are looked
+/// up again immediately before each read so a preceding getter can delete a
+/// later key, while keys added after the snapshot remain absent.
+#[derive(Debug, Clone)]
+struct CopyDataPropertiesState {
+    instruction_ip: usize,
+    register_base: usize,
+    call_depth: usize,
+    target_id: ObjectId,
+    source: Value,
+    /// Exact immutable code-unit snapshot for string sources. Keeping it once
+    /// makes indexed property reads linear overall instead of rescanning the
+    /// prefix for every code-unit key.
+    string_units: Option<Vec<u16>>,
+    keys: Vec<String>,
+    excluded: BTreeSet<String>,
+    next_index: usize,
+    /// The getter return value is written to the instruction's `value_dst`.
+    /// Returning to the same instruction consumes it under this key.
+    awaiting_key: Option<String>,
+}
+
+impl CopyDataPropertiesState {
+    fn belongs_to(&self, instruction_ip: usize, register_base: usize, call_depth: usize) -> bool {
+        self.instruction_ip == instruction_ip
+            && self.register_base == register_base
+            && self.call_depth == call_depth
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1989,6 +2023,7 @@ struct ModuleExecutionSnapshot {
     suspended_abrupt_completions: Vec<AbruptCompletion>,
     finally_frames: Vec<FinallyFrame>,
     pending_finally_entry: Option<PendingFinallyEntry>,
+    copy_data_properties_states: Vec<CopyDataPropertiesState>,
     scope_chain: ScopeChain,
     pending_captures: Vec<u32>,
     current_module_specifier: Option<String>,
@@ -2100,6 +2135,10 @@ pub struct InterpreterCore {
     /// One-shot entry ownership set by an unwind edge and consumed by the
     /// exact `EnterFinally` instruction it targets.
     pending_finally_entry: Option<PendingFinallyEntry>,
+    /// Nested object-rest copies awaiting an accessor return. A stack rather
+    /// than a single slot is required because an included getter may itself
+    /// execute another object-rest copy.
+    copy_data_properties_states: Vec<CopyDataPropertiesState>,
     /// Pre-run caller-visible seed used for the most recent execute().
     last_pre_run_seed: Option<ExecutionSeed>,
     /// Caller-visible state immediately after the most recent execute().
@@ -2213,6 +2252,7 @@ impl InterpreterCore {
             suspended_abrupt_completions: Vec::new(),
             finally_frames: Vec::new(),
             pending_finally_entry: None,
+            copy_data_properties_states: Vec::new(),
             last_pre_run_seed: None,
             last_post_run_seed: None,
             scope_chain: ScopeChain::new(),
@@ -2313,6 +2353,12 @@ impl InterpreterCore {
         self.push_event("execution_started", "ok", None);
 
         let mut result = self.run_loop(module);
+        if result.is_err() {
+            // CopyDataProperties continuations are internal to this execution.
+            // A fresh execute() always restarts from its caller-visible seed,
+            // so no failed/cancelled run may retain their snapshotted keys.
+            self.discard_all_copy_data_properties_states();
+        }
 
         // Drain any pending microtasks enqueued during execution
         // (promise reactions, thenable resolutions, etc.).
@@ -2410,6 +2456,7 @@ impl InterpreterCore {
         self.suspended_abrupt_completions.clear();
         self.finally_frames.clear();
         self.pending_finally_entry = None;
+        self.copy_data_properties_states.clear();
         self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
         self.module_state = ModuleState::new();
         self.active_cjs_context = None;
@@ -2515,6 +2562,7 @@ impl InterpreterCore {
         self.suspended_abrupt_completions.clear();
         self.finally_frames.clear();
         self.pending_finally_entry = None;
+        self.copy_data_properties_states.clear();
         self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
         self.module_state = ModuleState::new();
         self.active_cjs_context = None;
@@ -2537,6 +2585,7 @@ impl InterpreterCore {
             suspended_abrupt_completions: self.suspended_abrupt_completions.clone(),
             finally_frames: self.finally_frames.clone(),
             pending_finally_entry: self.pending_finally_entry.clone(),
+            copy_data_properties_states: self.copy_data_properties_states.clone(),
             scope_chain: self.scope_chain.clone(),
             pending_captures: self.pending_captures.clone(),
             current_module_specifier: self.current_module_specifier.clone(),
@@ -2557,9 +2606,11 @@ impl InterpreterCore {
         self.suspended_abrupt_completions = snapshot.suspended_abrupt_completions;
         self.finally_frames = snapshot.finally_frames;
         self.pending_finally_entry = snapshot.pending_finally_entry;
+        self.copy_data_properties_states = snapshot.copy_data_properties_states;
         self.scope_chain = snapshot.scope_chain;
         self.pending_captures = snapshot.pending_captures;
         self.current_module_specifier = snapshot.current_module_specifier;
+        self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
     }
 
     fn prepare_module_execution(&mut self, module_specifier: &str) -> Result<(), InterpreterError> {
@@ -2576,6 +2627,7 @@ impl InterpreterCore {
         self.suspended_abrupt_completions.clear();
         self.finally_frames.clear();
         self.pending_finally_entry = None;
+        self.copy_data_properties_states.clear();
         self.scope_chain = ScopeChain::new();
         self.pending_captures.clear();
         self.current_module_specifier = Some(module_specifier.to_string());
@@ -3573,6 +3625,11 @@ impl InterpreterCore {
         if let Some(depth) = restored_suspended_abrupt_depth {
             self.suspended_abrupt_completions.truncate(depth);
         }
+        // A copy owned by the handler's frame is abandoned when control jumps
+        // to that handler. Copies owned by shallower callers remain suspended
+        // if the exception was caught inside an included getter.
+        self.copy_data_properties_states
+            .retain(|state| state.call_depth < target_depth);
         self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
         (restored_pending_exception, restored_pending_return)
     }
@@ -5650,6 +5707,19 @@ impl InterpreterCore {
                     }
                     self.ip += 1;
                 }
+                Ir3Instruction::CopyDataProperties {
+                    target,
+                    source,
+                    excluded,
+                    value_dst,
+                } => {
+                    let entered_getter = self.execute_copy_data_properties(
+                        module, target, source, excluded, value_dst,
+                    )?;
+                    if !entered_getter {
+                        self.ip += 1;
+                    }
+                }
                 Ir3Instruction::Mod { dst, lhs, rhs } => {
                     let result = self.eval_mod(lhs, rhs)?;
                     self.write_reg(dst, result)?;
@@ -6068,6 +6138,7 @@ impl InterpreterCore {
                         self.pending_exception = None;
                         self.pending_finally_entry = None;
                         self.finally_frames.clear();
+                        self.discard_all_copy_data_properties_states();
                         return Err(InterpreterError::UncaughtException { value: desc });
                     }
                 }
@@ -6136,6 +6207,7 @@ impl InterpreterCore {
                                 self.pending_exception = None;
                                 self.pending_finally_entry = None;
                                 self.finally_frames.clear();
+                                self.discard_all_copy_data_properties_states();
                                 return Err(InterpreterError::UncaughtException { value: desc });
                             }
                         }
@@ -7411,6 +7483,253 @@ impl InterpreterCore {
         match property {
             RuntimeProperty::Data(value) => Ok(value),
             RuntimeProperty::Accessor(accessor) => Ok(accessor.get.unwrap_or(Value::Undefined)),
+        }
+    }
+
+    fn copy_data_properties_object_id(&self, source: &Value) -> Option<ObjectId> {
+        match source {
+            Value::Object(object_id) => Some(*object_id),
+            _ => self.function_object_id(source),
+        }
+    }
+
+    fn copy_data_properties_keys(&self, source: &Value) -> Result<Vec<String>, InterpreterError> {
+        match source {
+            Value::Undefined | Value::Null => Err(InterpreterError::TypeError {
+                expected: "object-coercible object-rest source".to_string(),
+                got: source.type_name().to_string(),
+            }),
+            Value::Str(text) => Ok((0..text.utf16_len())
+                .map(|index| index.to_string())
+                .collect()),
+            _ => {
+                let Some(object_id) = self.copy_data_properties_object_id(source) else {
+                    // Boolean and number wrappers have no enumerable own
+                    // properties in the baseline carrier. Other exotic
+                    // object-like values likewise expose no ordinary own-key
+                    // storage here.
+                    return Ok(Vec::new());
+                };
+                let object = self
+                    .heap
+                    .get(object_id.0 as usize)
+                    .ok_or(InterpreterError::ObjectNotFound { id: object_id.0 })?;
+                Ok(object
+                    .own_property_keys()
+                    .into_iter()
+                    // Array length is a non-enumerable own data property. The
+                    // current baseline descriptor carrier has no general
+                    // enumerable bit yet, so preserve this shipped invariant
+                    // explicitly for array-backed objects.
+                    .filter(|key| !(object.is_array && key == "length"))
+                    .collect())
+            }
+        }
+    }
+
+    fn copy_data_properties_own_property(
+        &self,
+        source: &Value,
+        key: &str,
+        string_units: Option<&[u16]>,
+    ) -> Result<Option<RuntimeProperty>, InterpreterError> {
+        if let Some(units) = string_units {
+            let Ok(index) = key.parse::<usize>() else {
+                return Ok(None);
+            };
+            return Ok(units.get(index).copied().map(|unit| {
+                RuntimeProperty::Data(Value::Str(JsString::from_code_units(&[unit])))
+            }));
+        }
+
+        let Some(object_id) = self.copy_data_properties_object_id(source) else {
+            return Ok(None);
+        };
+        let object = self
+            .heap
+            .get(object_id.0 as usize)
+            .ok_or(InterpreterError::ObjectNotFound { id: object_id.0 })?;
+        if object.is_array && key == "length" {
+            return Ok(None);
+        }
+        if let Some(accessor) = object.accessors.get(key) {
+            return Ok(Some(RuntimeProperty::Accessor(accessor.clone())));
+        }
+        Ok(object
+            .properties
+            .get(key)
+            .cloned()
+            .map(RuntimeProperty::Data))
+    }
+
+    fn discard_copy_data_properties_state(&mut self, state_index: usize) {
+        if state_index < self.copy_data_properties_states.len() {
+            self.copy_data_properties_states.remove(state_index);
+        }
+        self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
+    }
+
+    fn discard_all_copy_data_properties_states(&mut self) {
+        self.copy_data_properties_states.clear();
+        self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
+    }
+
+    /// Execute or resume the CopyDataProperties operation used by object-rest
+    /// binding initialization. Returns `true` when control entered a getter;
+    /// that getter returns to this same instruction and writes `value_dst`.
+    fn execute_copy_data_properties(
+        &mut self,
+        module: &Ir3Module,
+        target: u32,
+        source: u32,
+        excluded: RegRange,
+        value_dst: u32,
+    ) -> Result<bool, InterpreterError> {
+        let instruction_ip = self.ip;
+        let register_base = self.register_base;
+        let call_depth = self.call_stack.len();
+        let state_index = if self
+            .copy_data_properties_states
+            .last()
+            .is_some_and(|state| state.belongs_to(instruction_ip, register_base, call_depth))
+        {
+            self.copy_data_properties_states.len() - 1
+        } else {
+            let target_value = self.read_reg(target)?;
+            let Value::Object(target_id) = target_value else {
+                return Err(InterpreterError::TypeError {
+                    expected: "object CopyDataProperties target".to_string(),
+                    got: target_value.type_name().to_string(),
+                });
+            };
+            let source_value = self.read_reg(source)?;
+            let keys = self.copy_data_properties_keys(&source_value)?;
+            let string_units = match &source_value {
+                Value::Str(text) => Some(text.code_units_vec()),
+                _ => None,
+            };
+            let mut excluded_keys = BTreeSet::new();
+            for offset in 0..excluded.count {
+                let register = excluded.start.checked_add(offset).ok_or(
+                    InterpreterError::RegisterOutOfBounds {
+                        register: excluded.start,
+                        max: self.config.max_registers,
+                    },
+                )?;
+                excluded_keys.insert(Self::property_key(&self.read_reg(register)?));
+            }
+            let state = CopyDataPropertiesState {
+                instruction_ip,
+                register_base,
+                call_depth,
+                target_id,
+                source: source_value,
+                string_units,
+                keys,
+                excluded: excluded_keys,
+                next_index: 0,
+                awaiting_key: None,
+            };
+            self.check_temporary_memory_budget(Self::estimate_copy_data_properties_state_bytes(
+                &state,
+            ))?;
+            self.copy_data_properties_states.push(state);
+            if let Err(err) = self.sync_estimated_memory_bytes() {
+                self.copy_data_properties_states.pop();
+                self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
+                return Err(err);
+            }
+            self.copy_data_properties_states.len() - 1
+        };
+
+        if let Some(key) = self.copy_data_properties_states[state_index]
+            .awaiting_key
+            .take()
+        {
+            let value = match self.read_reg(value_dst) {
+                Ok(value) => value,
+                Err(err) => {
+                    self.discard_copy_data_properties_state(state_index);
+                    return Err(err);
+                }
+            };
+            let target_id = self.copy_data_properties_states[state_index].target_id;
+            if let Err(err) = self.set_plain_data_property(target_id, key, value) {
+                self.discard_copy_data_properties_state(state_index);
+                return Err(err);
+            }
+        }
+
+        loop {
+            let Some(key) = ({
+                let state = &mut self.copy_data_properties_states[state_index];
+                let key = state.keys.get(state.next_index).cloned();
+                if key.is_some() {
+                    state.next_index = state.next_index.saturating_add(1);
+                }
+                key
+            }) else {
+                self.discard_copy_data_properties_state(state_index);
+                return Ok(false);
+            };
+
+            if self.copy_data_properties_states[state_index]
+                .excluded
+                .contains(&key)
+            {
+                continue;
+            }
+
+            let source_value = self.copy_data_properties_states[state_index].source.clone();
+            let string_units = self.copy_data_properties_states[state_index]
+                .string_units
+                .as_deref();
+            let property =
+                match self.copy_data_properties_own_property(&source_value, &key, string_units) {
+                    Ok(property) => property,
+                    Err(err) => {
+                        self.discard_copy_data_properties_state(state_index);
+                        return Err(err);
+                    }
+                };
+            let value = match property {
+                None => continue,
+                Some(RuntimeProperty::Data(value)) => value,
+                Some(RuntimeProperty::Accessor(accessor)) => {
+                    let Some(getter) = accessor.get else {
+                        let target_id = self.copy_data_properties_states[state_index].target_id;
+                        if let Err(err) =
+                            self.set_plain_data_property(target_id, key, Value::Undefined)
+                        {
+                            self.discard_copy_data_properties_state(state_index);
+                            return Err(err);
+                        }
+                        continue;
+                    };
+                    self.copy_data_properties_states[state_index].awaiting_key = Some(key);
+                    if let Err(err) = self.sync_estimated_memory_bytes() {
+                        self.discard_copy_data_properties_state(state_index);
+                        return Err(err);
+                    }
+                    if let Err(err) = self.enter_function_call(
+                        module,
+                        getter,
+                        source_value,
+                        Vec::new(),
+                        self.ip,
+                        Some(value_dst),
+                    ) {
+                        self.discard_copy_data_properties_state(state_index);
+                        return Err(err);
+                    }
+                    return Ok(true);
+                }
+            };
+            let target_id = self.copy_data_properties_states[state_index].target_id;
+            if let Err(err) = self.set_plain_data_property(target_id, key, value) {
+                self.discard_copy_data_properties_state(state_index);
+                return Err(err);
+            }
         }
     }
 
@@ -10423,6 +10742,35 @@ impl InterpreterCore {
         }
     }
 
+    fn estimate_copy_data_properties_state_bytes(state: &CopyDataPropertiesState) -> u64 {
+        let keys = state
+            .keys
+            .iter()
+            .map(|key| Self::estimate_string_bytes(key))
+            .sum::<u64>();
+        let excluded = state
+            .excluded
+            .iter()
+            .map(|key| Self::estimate_string_bytes(key))
+            .sum::<u64>();
+        let awaiting_key = state
+            .awaiting_key
+            .as_deref()
+            .map(Self::estimate_string_bytes)
+            .unwrap_or(0);
+        MEMORY_ESTIMATE_COPY_DATA_PROPERTIES_STATE_BASE_BYTES
+            .saturating_add(Self::estimate_value_bytes(&state.source))
+            .saturating_add(
+                state
+                    .string_units
+                    .as_ref()
+                    .map_or(0, |units| (units.len() as u64).saturating_mul(2)),
+            )
+            .saturating_add(keys)
+            .saturating_add(excluded)
+            .saturating_add(awaiting_key)
+    }
+
     fn estimate_generator_bytes(generator: &GeneratorObject) -> u64 {
         let registers = generator
             .saved_registers
@@ -10480,6 +10828,12 @@ impl InterpreterCore {
                 self.iterators
                     .iter()
                     .map(Self::estimate_iterator_bytes)
+                    .sum::<u64>(),
+            )
+            .saturating_add(
+                self.copy_data_properties_states
+                    .iter()
+                    .map(Self::estimate_copy_data_properties_state_bytes)
                     .sum::<u64>(),
             )
             .saturating_add(
@@ -19317,6 +19671,535 @@ mod tests {
             .expect("getter/setter accessors should execute through descriptor calls");
 
         assert_eq!(result.value, Value::Int(321));
+    }
+
+    #[test]
+    fn copy_data_properties_rejects_nullish_and_boxes_empty_primitives_bd_f1ixz() {
+        for source in [Value::Null, Value::Undefined] {
+            let mut core = quickjs_test_core();
+            let target = core.alloc_object_with_prototype(None).unwrap();
+            core.registers[1] = Value::Object(target);
+            core.registers[2] = source;
+            let error = core
+                .execute(&test_module(vec![
+                    Ir3Instruction::CopyDataProperties {
+                        target: 1,
+                        source: 2,
+                        excluded: RegRange { start: 3, count: 0 },
+                        value_dst: 4,
+                    },
+                    Ir3Instruction::Halt,
+                ]))
+                .unwrap_err();
+            assert!(matches!(error, InterpreterError::TypeError { .. }));
+            assert!(core.copy_data_properties_states.is_empty());
+        }
+
+        for source in [Value::Null, Value::Undefined] {
+            let mut spread = quickjs_test_core();
+            let spread_target = spread.alloc_object_with_prototype(None).unwrap();
+            spread.registers[1] = Value::Object(spread_target);
+            spread.registers[2] = source;
+            let result = spread
+                .execute(&test_module(vec![
+                    Ir3Instruction::SpreadIntoObject {
+                        target: 1,
+                        source: 2,
+                    },
+                    Ir3Instruction::Move { dst: 0, src: 1 },
+                    Ir3Instruction::Halt,
+                ]))
+                .unwrap();
+            assert_eq!(result.value, Value::Object(spread_target));
+            assert!(
+                spread.heap[spread_target.0 as usize]
+                    .own_property_keys()
+                    .is_empty()
+            );
+        }
+
+        for source in [
+            Value::Bool(true),
+            Value::Int(7),
+            Value::Float(Float64::new(1.5)),
+        ] {
+            let mut core = quickjs_test_core();
+            let target = core.alloc_object_with_prototype(None).unwrap();
+            core.registers[1] = Value::Object(target);
+            core.registers[2] = source;
+            core.execute(&test_module(vec![
+                Ir3Instruction::CopyDataProperties {
+                    target: 1,
+                    source: 2,
+                    excluded: RegRange { start: 3, count: 0 },
+                    value_dst: 4,
+                },
+                Ir3Instruction::Halt,
+            ]))
+            .unwrap();
+            assert!(core.heap[target.0 as usize].own_property_keys().is_empty());
+            assert!(core.copy_data_properties_states.is_empty());
+        }
+    }
+
+    #[test]
+    fn copy_data_properties_copies_exact_string_units_after_exclusion_bd_f1ixz() {
+        let mut core = quickjs_test_core();
+        let target = core.alloc_object_with_prototype(None).unwrap();
+        core.registers[1] = Value::Object(target);
+        core.registers[2] = Value::Str(JsString::from_code_units(&[0xD83D, 0xDE00, 0xD800]));
+        core.registers[3] = Value::str("1");
+
+        core.execute(&test_module(vec![
+            Ir3Instruction::CopyDataProperties {
+                target: 1,
+                source: 2,
+                excluded: RegRange { start: 3, count: 1 },
+                value_dst: 4,
+            },
+            Ir3Instruction::Halt,
+        ]))
+        .unwrap();
+
+        let object = &core.heap[target.0 as usize];
+        assert_eq!(object.own_property_keys(), vec!["0", "2"]);
+        for (key, expected_unit) in [("0", 0xD83D), ("2", 0xD800)] {
+            let Some(Value::Str(value)) = object.properties.get(key) else {
+                panic!("string index {key} should be copied as a data property");
+            };
+            assert_eq!(value.code_units_vec(), vec![expected_unit]);
+        }
+        assert!(core.copy_data_properties_states.is_empty());
+    }
+
+    #[test]
+    fn copy_data_properties_omits_array_length_and_uses_plain_data_writes_bd_f1ixz() {
+        let mut core = quickjs_test_core();
+        let target = core.alloc_object_with_prototype(None).unwrap();
+        let source = core.alloc_array_with_prototype(None).unwrap();
+        core.set_plain_data_property(source, "0".into(), Value::Int(1))
+            .unwrap();
+        core.set_plain_data_property(source, "length".into(), Value::Int(1))
+            .unwrap();
+        core.set_plain_data_property(source, "custom".into(), Value::Int(2))
+            .unwrap();
+        let prototype_value = core.alloc_object_with_prototype(None).unwrap();
+        core.set_plain_data_property(source, "__proto__".into(), Value::Object(prototype_value))
+            .unwrap();
+        let prefixed_key = format!("{IR_ACCESSOR_GET_PREFIX}literal");
+        core.set_plain_data_property(source, prefixed_key.clone(), Value::Int(3))
+            .unwrap();
+        core.registers[1] = Value::Object(target);
+        core.registers[2] = Value::Object(source);
+
+        core.execute(&test_module(vec![
+            Ir3Instruction::CopyDataProperties {
+                target: 1,
+                source: 2,
+                excluded: RegRange { start: 3, count: 0 },
+                value_dst: 4,
+            },
+            Ir3Instruction::Halt,
+        ]))
+        .unwrap();
+
+        let object = &core.heap[target.0 as usize];
+        assert_eq!(
+            object.own_property_keys(),
+            vec!["0", "custom", "__proto__", prefixed_key.as_str()]
+        );
+        assert!(!object.properties.contains_key("length"));
+        assert_eq!(object.prototype, None);
+        assert_eq!(
+            object.properties.get("__proto__"),
+            Some(&Value::Object(prototype_value))
+        );
+        assert_eq!(object.properties.get(&prefixed_key), Some(&Value::Int(3)));
+        assert!(object.accessors.is_empty());
+    }
+
+    #[test]
+    fn copy_data_properties_resumes_included_getter_with_source_receiver_bd_f1ixz() {
+        let mut core = quickjs_test_core();
+        let target = core.alloc_object_with_prototype(None).unwrap();
+        let source = core.alloc_object_with_prototype(None).unwrap();
+        core.set_plain_data_property(source, "calls".into(), Value::Int(0))
+            .unwrap();
+        core.set_plain_data_property(source, "marker".into(), Value::Int(41))
+            .unwrap();
+        core.set_object_property(
+            source,
+            format!("{IR_ACCESSOR_GET_PREFIX}included"),
+            Value::Function(0),
+        )
+        .unwrap();
+        core.set_object_property(
+            source,
+            format!("{IR_ACCESSOR_SET_PREFIX}setter_only"),
+            Value::Function(0),
+        )
+        .unwrap();
+        // An invalid getter is a useful tripwire: exclusion must happen before
+        // the property read, so this value must never be invoked.
+        core.set_object_property(
+            source,
+            format!("{IR_ACCESSOR_GET_PREFIX}excluded"),
+            Value::Function(99),
+        )
+        .unwrap();
+        core.registers[1] = Value::Object(target);
+        core.registers[2] = Value::Object(source);
+        core.registers[3] = Value::str("excluded");
+
+        let result = core
+            .execute(&test_module_with_pool_and_functions(
+                vec![
+                    Ir3Instruction::CopyDataProperties {
+                        target: 1,
+                        source: 2,
+                        excluded: RegRange { start: 3, count: 1 },
+                        value_dst: 4,
+                    },
+                    Ir3Instruction::Move { dst: 0, src: 1 },
+                    Ir3Instruction::Halt,
+                    Ir3Instruction::LoadThis { dst: 0 },
+                    Ir3Instruction::LoadStr {
+                        dst: 1,
+                        pool_index: 0,
+                    },
+                    Ir3Instruction::GetProperty {
+                        obj: 0,
+                        key: 1,
+                        dst: 2,
+                    },
+                    Ir3Instruction::LoadInt { dst: 3, value: 1 },
+                    Ir3Instruction::Add {
+                        dst: 4,
+                        lhs: 2,
+                        rhs: 3,
+                    },
+                    Ir3Instruction::SetProperty {
+                        obj: 0,
+                        key: 1,
+                        val: 4,
+                    },
+                    Ir3Instruction::LoadStr {
+                        dst: 5,
+                        pool_index: 1,
+                    },
+                    Ir3Instruction::GetProperty {
+                        obj: 0,
+                        key: 5,
+                        dst: 6,
+                    },
+                    Ir3Instruction::Return { value: 6 },
+                ],
+                vec!["calls".to_string(), "marker".to_string()],
+                vec![Ir3FunctionDesc {
+                    entry: 3,
+                    arity: 0,
+                    frame_size: 8,
+                    name: Some("included_getter".to_string()),
+                    is_generator: false,
+                    rest_param_index: None,
+                }],
+            ))
+            .unwrap();
+
+        assert_eq!(result.value, Value::Object(target));
+        let object = &core.heap[target.0 as usize];
+        assert_eq!(object.properties.get("marker"), Some(&Value::Int(41)));
+        assert_eq!(object.properties.get("included"), Some(&Value::Int(41)));
+        assert_eq!(
+            object.properties.get("setter_only"),
+            Some(&Value::Undefined)
+        );
+        assert!(!object.contains_own_property("excluded"));
+        assert!(object.accessors.is_empty());
+        assert_eq!(
+            core.heap[source.0 as usize].properties.get("calls"),
+            Some(&Value::Int(1))
+        );
+        assert!(core.copy_data_properties_states.is_empty());
+    }
+
+    #[test]
+    fn copy_data_properties_snapshots_keys_and_rechecks_descriptors_bd_f1ixz() {
+        let mut core = quickjs_test_core();
+        let target = core.alloc_object_with_prototype(None).unwrap();
+        let source = core.alloc_object_with_prototype(None).unwrap();
+        core.set_object_property(
+            source,
+            format!("{IR_ACCESSOR_GET_PREFIX}a"),
+            Value::Function(0),
+        )
+        .unwrap();
+        core.set_plain_data_property(source, "b".into(), Value::Int(2))
+            .unwrap();
+        core.registers[1] = Value::Object(target);
+        core.registers[2] = Value::Object(source);
+
+        core.execute(&test_module_with_pool_and_functions(
+            vec![
+                Ir3Instruction::CopyDataProperties {
+                    target: 1,
+                    source: 2,
+                    excluded: RegRange { start: 3, count: 0 },
+                    value_dst: 4,
+                },
+                Ir3Instruction::Halt,
+                Ir3Instruction::LoadThis { dst: 0 },
+                Ir3Instruction::LoadStr {
+                    dst: 1,
+                    pool_index: 0,
+                },
+                Ir3Instruction::DeleteProperty {
+                    obj: 0,
+                    key: 1,
+                    dst: 2,
+                },
+                Ir3Instruction::LoadStr {
+                    dst: 3,
+                    pool_index: 1,
+                },
+                Ir3Instruction::LoadInt { dst: 4, value: 3 },
+                Ir3Instruction::SetProperty {
+                    obj: 0,
+                    key: 3,
+                    val: 4,
+                },
+                Ir3Instruction::LoadInt { dst: 5, value: 1 },
+                Ir3Instruction::Return { value: 5 },
+            ],
+            vec!["b".to_string(), "c".to_string()],
+            vec![class_test_function(2, "mutating_getter")],
+        ))
+        .unwrap();
+
+        let object = &core.heap[target.0 as usize];
+        assert_eq!(object.own_property_keys(), vec!["a"]);
+        assert_eq!(object.properties.get("a"), Some(&Value::Int(1)));
+        assert!(!object.contains_own_property("b"));
+        assert!(!object.contains_own_property("c"));
+        assert_eq!(
+            core.heap[source.0 as usize].properties.get("c"),
+            Some(&Value::Int(3))
+        );
+        assert!(core.copy_data_properties_states.is_empty());
+    }
+
+    #[test]
+    fn copy_data_properties_nested_state_and_throw_cleanup_bd_f1ixz() {
+        let mut nested = quickjs_test_core();
+        let outer_target = nested.alloc_object_with_prototype(None).unwrap();
+        let outer_source = nested.alloc_object_with_prototype(None).unwrap();
+        let inner_target = nested.alloc_object_with_prototype(None).unwrap();
+        let inner_source = nested.alloc_object_with_prototype(None).unwrap();
+        nested
+            .set_plain_data_property(inner_source, "v".into(), Value::Int(9))
+            .unwrap();
+        nested
+            .set_plain_data_property(
+                outer_source,
+                "innerTarget".into(),
+                Value::Object(inner_target),
+            )
+            .unwrap();
+        nested
+            .set_plain_data_property(
+                outer_source,
+                "innerSource".into(),
+                Value::Object(inner_source),
+            )
+            .unwrap();
+        nested
+            .set_object_property(
+                outer_source,
+                format!("{IR_ACCESSOR_GET_PREFIX}outer"),
+                Value::Function(0),
+            )
+            .unwrap();
+        nested.registers[1] = Value::Object(outer_target);
+        nested.registers[2] = Value::Object(outer_source);
+        nested.registers[3] = Value::str("innerTarget");
+        nested.registers[4] = Value::str("innerSource");
+        nested
+            .execute(&test_module_with_pool_and_functions(
+                vec![
+                    Ir3Instruction::CopyDataProperties {
+                        target: 1,
+                        source: 2,
+                        excluded: RegRange { start: 3, count: 2 },
+                        value_dst: 5,
+                    },
+                    Ir3Instruction::Halt,
+                    Ir3Instruction::LoadThis { dst: 0 },
+                    Ir3Instruction::LoadStr {
+                        dst: 1,
+                        pool_index: 0,
+                    },
+                    Ir3Instruction::GetProperty {
+                        obj: 0,
+                        key: 1,
+                        dst: 2,
+                    },
+                    Ir3Instruction::LoadStr {
+                        dst: 3,
+                        pool_index: 1,
+                    },
+                    Ir3Instruction::GetProperty {
+                        obj: 0,
+                        key: 3,
+                        dst: 4,
+                    },
+                    Ir3Instruction::CopyDataProperties {
+                        target: 2,
+                        source: 4,
+                        excluded: RegRange { start: 8, count: 0 },
+                        value_dst: 5,
+                    },
+                    Ir3Instruction::LoadStr {
+                        dst: 6,
+                        pool_index: 2,
+                    },
+                    Ir3Instruction::GetProperty {
+                        obj: 2,
+                        key: 6,
+                        dst: 7,
+                    },
+                    Ir3Instruction::Return { value: 7 },
+                ],
+                vec![
+                    "innerTarget".to_string(),
+                    "innerSource".to_string(),
+                    "v".to_string(),
+                ],
+                vec![class_test_function(2, "nested_copy_getter")],
+            ))
+            .unwrap();
+        assert_eq!(
+            nested.heap[outer_target.0 as usize].properties.get("outer"),
+            Some(&Value::Int(9))
+        );
+        assert_eq!(
+            nested.heap[inner_target.0 as usize].properties.get("v"),
+            Some(&Value::Int(9))
+        );
+        assert!(nested.copy_data_properties_states.is_empty());
+
+        let mut throwing = quickjs_test_core();
+        let target = throwing.alloc_object_with_prototype(None).unwrap();
+        let source = throwing.alloc_object_with_prototype(None).unwrap();
+        throwing
+            .set_object_property(
+                source,
+                format!("{IR_ACCESSOR_GET_PREFIX}boom"),
+                Value::Function(0),
+            )
+            .unwrap();
+        throwing.registers[1] = Value::Object(target);
+        throwing.registers[2] = Value::Object(source);
+        let result = throwing
+            .execute(&test_module_with_pool_and_functions(
+                vec![
+                    Ir3Instruction::BeginTry {
+                        catch_target: 3,
+                        finally_target: None,
+                    },
+                    Ir3Instruction::CopyDataProperties {
+                        target: 1,
+                        source: 2,
+                        excluded: RegRange { start: 7, count: 0 },
+                        value_dst: 4,
+                    },
+                    Ir3Instruction::EndTry,
+                    Ir3Instruction::EnterCatch { dst: 6 },
+                    Ir3Instruction::LoadStr {
+                        dst: 7,
+                        pool_index: 1,
+                    },
+                    Ir3Instruction::SetProperty {
+                        obj: 1,
+                        key: 7,
+                        val: 6,
+                    },
+                    Ir3Instruction::Move { dst: 0, src: 1 },
+                    Ir3Instruction::Halt,
+                    Ir3Instruction::LoadStr {
+                        dst: 0,
+                        pool_index: 0,
+                    },
+                    Ir3Instruction::Throw { value: 0 },
+                ],
+                vec!["boom".to_string(), "caught".to_string()],
+                vec![class_test_function(8, "throwing_getter")],
+            ))
+            .unwrap();
+        assert_eq!(result.value, Value::Object(target));
+        assert_eq!(
+            throwing.heap[target.0 as usize].properties.get("caught"),
+            Some(&Value::str("boom"))
+        );
+        assert!(throwing.copy_data_properties_states.is_empty());
+    }
+
+    #[test]
+    fn copy_data_properties_state_is_budgeted_and_cleaned_on_failure_bd_f1ixz() {
+        let mut core = quickjs_test_core();
+        let target = core.alloc_object_with_prototype(None).unwrap();
+        let source = core.alloc_object_with_prototype(None).unwrap();
+        for index in 0..8 {
+            core.set_plain_data_property(
+                source,
+                format!("long-copy-key-{index}-{}", "x".repeat(32)),
+                Value::Int(index),
+            )
+            .unwrap();
+        }
+        core.registers[1] = Value::Object(target);
+        core.registers[2] = Value::Object(source);
+        core.sync_estimated_memory_bytes().unwrap();
+        let baseline_memory = core.estimated_memory_bytes();
+        let probe_state = CopyDataPropertiesState {
+            instruction_ip: 0,
+            register_base: 0,
+            call_depth: 0,
+            target_id: target,
+            source: Value::Object(source),
+            string_units: None,
+            keys: core
+                .copy_data_properties_keys(&Value::Object(source))
+                .unwrap(),
+            excluded: BTreeSet::new(),
+            next_index: 0,
+            awaiting_key: None,
+        };
+        let state_bytes = InterpreterCore::estimate_copy_data_properties_state_bytes(&probe_state);
+        core.config.max_total_memory_bytes = baseline_memory
+            .saturating_add(state_bytes)
+            .saturating_sub(1);
+
+        let error = core
+            .execute(&test_module(vec![
+                Ir3Instruction::CopyDataProperties {
+                    target: 1,
+                    source: 2,
+                    excluded: RegRange { start: 3, count: 0 },
+                    value_dst: 4,
+                },
+                Ir3Instruction::Halt,
+            ]))
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            InterpreterError::MemoryBudgetExceeded { .. }
+        ));
+        assert!(core.copy_data_properties_states.is_empty());
+        assert!(core.heap[target.0 as usize].own_property_keys().is_empty());
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
     }
 
     #[test]

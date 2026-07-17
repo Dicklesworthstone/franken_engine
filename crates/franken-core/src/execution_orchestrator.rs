@@ -1815,6 +1815,7 @@ impl ExecutionOrchestrator {
             crate::ir_contract::Ir3Instruction::ArraySlice { .. } => "array_slice",
             crate::ir_contract::Ir3Instruction::SpreadIntoArray { .. } => "spread_into_array",
             crate::ir_contract::Ir3Instruction::SpreadIntoObject { .. } => "spread_into_object",
+            crate::ir_contract::Ir3Instruction::CopyDataProperties { .. } => "copy_data_properties",
             crate::ir_contract::Ir3Instruction::Mod { .. } => "mod",
             crate::ir_contract::Ir3Instruction::Exp { .. } => "exp",
             crate::ir_contract::Ir3Instruction::Lt { .. } => "lt",

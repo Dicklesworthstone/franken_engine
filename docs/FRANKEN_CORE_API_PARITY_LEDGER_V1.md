@@ -62,6 +62,16 @@ alone.
 | `bd-nwhcp` | Timer placeholder tests replaced with executable regressions. |
 | `bd-n8eta.4` | Executable Symbol property-key parity wave; ADR/API contract, engine/core carriers, hook migration, and donor closeout are separate children. |
 | `bd-b12xs` | Exact UTF-16 property-key migration; exact lookup, ordered storage, and runtime adoption are separate children. |
+| `bd-f1ixz` | Adds the versioned core-only `CopyDataProperties` IR path for object rest; the engine mirror remains a separate parity concern. |
+
+## Active Parity Exception: `CopyDataProperties` IR
+
+`bd-f1ixz` advances the core IR schema to `0.3.0` with additive
+`Ir1Op::CopyDataProperties` and `Ir3Instruction::CopyDataProperties` variants.
+The independently owned engine IR mirror remains at schema `0.2.0` without
+those variants. The `ir_contract` row therefore stays `pending_graduation`
+with ownership unsettled: future parity work must reconcile the versioned
+wire, lowering, and execution behavior before changing that status.
 
 ## Active Parity Exception: Executable Symbol Keys
 

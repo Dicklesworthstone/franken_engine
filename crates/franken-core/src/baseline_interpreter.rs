@@ -52,8 +52,8 @@ use crate::lowering_pipeline::{
     CLASS_EXPRESSION_CONSTRUCTOR_SELF_CAPTURE_PREFIX, LoweringContext, lower_ir0_to_ir3,
 };
 use crate::object_model::{
-    BaselineSymbolProperty, OrderedStringMap, PropertyKey as TypedPropertyKey, SymbolId,
-    WellKnownSymbol, canonical_array_index,
+    BaselineStringAccessor, BaselineSymbolProperty, ExactOrderedStringMap, OrderedStringMap,
+    PropertyKey as TypedPropertyKey, SymbolId, WellKnownSymbol, canonical_array_index,
 };
 use crate::parser::{CanonicalEs2020Parser, ParserOptions, ParserSource};
 use crate::runtime_config::ExecutionConfig;
@@ -927,10 +927,17 @@ impl Serialize for HeapObject {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         use serde::ser::SerializeStruct as _;
 
-        let order = self.properties.baseline_string_key_order().map(|_| {
-            self.own_property_keys()
+        let has_exact_only_accessors = self.has_exact_only_accessors();
+        let exact_accessor_entries =
+            has_exact_only_accessors.then(|| self.exact_accessor_entries());
+        let has_accessors = !self.accessors.is_empty() || has_exact_only_accessors;
+        let needs_exact_order = self.properties.baseline_string_key_order().is_some()
+            || self.properties.exact_len() != self.properties.len()
+            || has_exact_only_accessors;
+        let order = needs_exact_order.then(|| {
+            self.own_exact_property_keys()
                 .into_iter()
-                .filter(|key| canonical_array_index(key).is_none())
+                .filter(|key| key.as_str().and_then(canonical_array_index).is_none())
                 .collect::<Vec<_>>()
         });
         let symbol_properties = self
@@ -942,13 +949,17 @@ impl Serialize for HeapObject {
             })
             .collect::<Vec<_>>();
         let field_count = 4
-            + if self.accessors.is_empty() { 0 } else { 1 }
+            + if has_accessors { 1 } else { 0 }
             + if order.is_some() { 1 } else { 0 }
             + if symbol_properties.is_empty() { 0 } else { 1 };
         let mut object = serializer.serialize_struct("HeapObject", field_count)?;
         object.serialize_field("properties", &self.properties)?;
-        if !self.accessors.is_empty() {
-            object.serialize_field("accessors", &self.accessors)?;
+        if has_accessors {
+            if let Some(exact_accessor_entries) = &exact_accessor_entries {
+                object.serialize_field("accessors", exact_accessor_entries)?;
+            } else {
+                object.serialize_field("accessors", &self.accessors)?;
+            }
         }
         object.serialize_field("prototype", &self.prototype)?;
         object.serialize_field("constructor_function", &self.constructor_function)?;
@@ -971,13 +982,13 @@ impl<'de> Deserialize<'de> for HeapObject {
         struct HeapObjectWire {
             properties: OrderedStringMap<Value>,
             #[serde(default)]
-            accessors: BTreeMap<String, AccessorProperty>,
+            accessors: ExactOrderedStringMap<AccessorProperty>,
             prototype: Option<ObjectId>,
             constructor_function: Option<u32>,
             #[serde(default)]
             is_array: bool,
             #[serde(default)]
-            own_string_key_order: Option<Vec<String>>,
+            own_string_key_order: Option<Vec<JsString>>,
             #[serde(default)]
             symbol_properties: Vec<HeapSymbolPropertyWire>,
         }
@@ -997,16 +1008,25 @@ impl<'de> Deserialize<'de> for HeapObject {
         let wire = HeapObjectWire::deserialize(deserializer)?;
         let mut object = Self {
             properties: wire.properties,
-            accessors: wire.accessors,
+            accessors: BTreeMap::new(),
             prototype: wire.prototype,
             constructor_function: wire.constructor_function,
             is_array: wire.is_array,
         };
 
+        for (key, accessor) in wire.accessors {
+            if object.properties.contains_exact_key(&key) {
+                return Err(D::Error::custom(
+                    "property key cannot be both data and accessor",
+                ));
+            }
+            object.insert_exact_accessor(key, accessor);
+        }
+
         if let Some(order) = wire.own_string_key_order {
             let mut encoded = BTreeSet::new();
             for key in &order {
-                if canonical_array_index(key).is_some() {
+                if key.as_str().and_then(canonical_array_index).is_some() {
                     return Err(D::Error::custom(
                         "canonical array index in ordinary-string key order",
                     ));
@@ -1018,11 +1038,9 @@ impl<'de> Deserialize<'de> for HeapObject {
                 }
             }
             let live = object
-                .properties
-                .keys()
-                .chain(object.accessors.keys())
-                .filter(|key| canonical_array_index(key).is_none())
-                .cloned()
+                .own_exact_property_keys()
+                .into_iter()
+                .filter(|key| key.as_str().and_then(canonical_array_index).is_none())
                 .collect::<BTreeSet<_>>();
             if encoded != live {
                 return Err(D::Error::custom(
@@ -1030,6 +1048,12 @@ impl<'de> Deserialize<'de> for HeapObject {
                 ));
             }
             object.properties.set_baseline_string_key_order(Some(order));
+        } else if object.properties.exact_len() != object.properties.len()
+            || object.has_exact_only_accessors()
+        {
+            return Err(D::Error::custom(
+                "exact string properties require own_string_key_order",
+            ));
         }
 
         let mut seen_symbols = BTreeSet::new();
@@ -1086,7 +1110,7 @@ impl PartialEq for HeapObject {
             && self.is_array == other.is_array
             && self.properties.baseline_string_key_order().is_some()
                 == other.properties.baseline_string_key_order().is_some()
-            && self.own_property_keys() == other.own_property_keys()
+            && self.own_exact_property_keys() == other.own_exact_property_keys()
             && self.properties.baseline_symbol_key_order()
                 == other.properties.baseline_symbol_key_order()
             && self
@@ -1102,7 +1126,7 @@ impl Eq for HeapObject {}
 enum PropertyOrderRollback {
     Unchanged,
     RemoveInsertedKey,
-    Restore(Option<Vec<String>>),
+    Restore(Option<Vec<JsString>>),
 }
 
 impl HeapObject {
@@ -1110,14 +1134,86 @@ impl HeapObject {
         Self::default()
     }
 
+    fn exact_accessor(&self, key: &JsString) -> Option<AccessorProperty> {
+        match key.as_str() {
+            Some(key) => self.accessors.get(key).cloned(),
+            None => self
+                .properties
+                .baseline_exact_string_accessor(key)
+                .map(|accessor| AccessorProperty {
+                    get: accessor.get.clone(),
+                    set: accessor.set.clone(),
+                }),
+        }
+    }
+
+    fn insert_exact_accessor(
+        &mut self,
+        key: JsString,
+        accessor: AccessorProperty,
+    ) -> Option<AccessorProperty> {
+        match key.as_str() {
+            Some(key) => self.accessors.insert(key.to_string(), accessor),
+            None => self
+                .properties
+                .insert_baseline_exact_string_accessor(
+                    key,
+                    BaselineStringAccessor {
+                        get: accessor.get,
+                        set: accessor.set,
+                    },
+                )
+                .map(|accessor| AccessorProperty {
+                    get: accessor.get,
+                    set: accessor.set,
+                }),
+        }
+    }
+
+    fn remove_exact_accessor(&mut self, key: &JsString) -> Option<AccessorProperty> {
+        match key.as_str() {
+            Some(key) => self.accessors.remove(key),
+            None => self
+                .properties
+                .remove_baseline_exact_string_accessor(key)
+                .map(|accessor| AccessorProperty {
+                    get: accessor.get,
+                    set: accessor.set,
+                }),
+        }
+    }
+
+    fn exact_accessor_entries(&self) -> Vec<(JsString, AccessorProperty)> {
+        self.own_exact_property_keys()
+            .into_iter()
+            .filter_map(|key| self.exact_accessor(&key).map(|accessor| (key, accessor)))
+            .collect()
+    }
+
+    fn has_exact_only_accessors(&self) -> bool {
+        self.properties
+            .baseline_exact_string_accessors()
+            .next()
+            .is_some()
+    }
+
     fn contains_own_property(&self, key: &str) -> bool {
         self.accessors.contains_key(key) || self.properties.contains_key(key)
     }
 
-    fn contains_own_typed_property(&self, key: &TypedPropertyKey) -> bool {
+    fn contains_own_runtime_property(&self, key: &RuntimePropertyKey) -> bool {
         match key {
-            TypedPropertyKey::String(key) => self.contains_own_property(key),
-            TypedPropertyKey::Symbol(symbol) => {
+            RuntimePropertyKey::String(key) => {
+                self.properties.contains_exact_key(key)
+                    || match key.as_str() {
+                        Some(key) => self.accessors.contains_key(key),
+                        None => self
+                            .properties
+                            .baseline_exact_string_accessor(key)
+                            .is_some(),
+                    }
+            }
+            RuntimePropertyKey::Symbol(symbol) => {
                 self.properties.baseline_symbol_property(*symbol).is_some()
             }
         }
@@ -1131,20 +1227,24 @@ impl HeapObject {
     /// directly through the ADR-frozen public `accessors` map before a later
     /// interpreter mutation. The returned delta restores the exact prior
     /// hidden state if the definition is rejected by the memory budget.
-    fn record_property_definition(&mut self, key: &str, existed: bool) -> PropertyOrderRollback {
-        if canonical_array_index(key).is_some() {
+    fn record_property_definition(
+        &mut self,
+        key: &JsString,
+        existed: bool,
+    ) -> PropertyOrderRollback {
+        if key.as_str().and_then(canonical_array_index).is_some() {
             return PropertyOrderRollback::Unchanged;
         }
 
         let normalized = self
-            .own_property_keys()
+            .own_exact_property_keys()
             .into_iter()
-            .filter(|candidate| canonical_array_index(candidate).is_none())
+            .filter(|candidate| candidate.as_str().and_then(canonical_array_index).is_none())
             .collect::<Vec<_>>();
         let previous = self
             .properties
             .baseline_string_key_order()
-            .map(<[String]>::to_vec);
+            .map(<[JsString]>::to_vec);
         let normalized_existing = previous.as_deref() == Some(normalized.as_slice());
         if !normalized_existing {
             self.properties
@@ -1159,7 +1259,7 @@ impl HeapObject {
             false
         } else {
             order.retain(|candidate| candidate != key);
-            order.push(key.to_string());
+            order.push(key.clone());
             true
         };
 
@@ -1172,7 +1272,11 @@ impl HeapObject {
         }
     }
 
-    fn rollback_property_definition_order(&mut self, key: &str, rollback: PropertyOrderRollback) {
+    fn rollback_property_definition_order(
+        &mut self,
+        key: &JsString,
+        rollback: PropertyOrderRollback,
+    ) {
         match rollback {
             PropertyOrderRollback::Unchanged => {}
             PropertyOrderRollback::RemoveInsertedKey => {
@@ -1186,7 +1290,7 @@ impl HeapObject {
         }
     }
 
-    fn forget_property_order(&mut self, key: &str) {
+    fn forget_property_order(&mut self, key: &JsString) {
         if let Some(order) = self.properties.baseline_string_key_order_mut() {
             order.retain(|candidate| candidate != key);
         }
@@ -1210,14 +1314,61 @@ impl HeapObject {
         let mut seen = BTreeSet::new();
         if let Some(order) = self.properties.baseline_string_key_order() {
             for key in order {
-                if self.contains_own_property(key) && seen.insert(key.clone()) {
-                    ordinary.push(key.clone());
+                let Some(key) = key.as_str() else {
+                    continue;
+                };
+                if self.contains_own_property(key) && seen.insert(key.to_string()) {
+                    ordinary.push(key.to_string());
                 }
             }
         }
         for key in self.properties.keys().chain(self.accessors.keys()) {
             if canonical_array_index(key).is_none() && seen.insert(key.clone()) {
                 ordinary.push(key.clone());
+            }
+        }
+
+        array_indices.into_values().chain(ordinary).collect()
+    }
+
+    /// Return all live exact string keys in ECMAScript string-key order.
+    fn own_exact_property_keys(&self) -> Vec<JsString> {
+        let mut array_indices = BTreeMap::<u32, JsString>::new();
+        for key in self.properties.exact_keys() {
+            if let Some(index) = key.as_str().and_then(canonical_array_index) {
+                array_indices.entry(index).or_insert(key);
+            }
+        }
+        for key in self.accessors.keys() {
+            if let Some(index) = canonical_array_index(key) {
+                array_indices
+                    .entry(index)
+                    .or_insert_with(|| JsString::from(key));
+            }
+        }
+
+        let mut ordinary = Vec::new();
+        let mut seen = BTreeSet::new();
+        if let Some(order) = self.properties.baseline_string_key_order() {
+            for key in order {
+                let runtime_key = RuntimePropertyKey::String(key.clone());
+                if self.contains_own_runtime_property(&runtime_key) && seen.insert(key.clone()) {
+                    ordinary.push(key.clone());
+                }
+            }
+        }
+        for key in self.properties.exact_keys() {
+            if key.as_str().and_then(canonical_array_index).is_none() && seen.insert(key.clone()) {
+                ordinary.push(key);
+            }
+        }
+        for key in self.accessors.keys().map(JsString::from).chain(
+            self.properties
+                .baseline_exact_string_accessors()
+                .map(|(key, _)| key.clone()),
+        ) {
+            if key.as_str().and_then(canonical_array_index).is_none() && seen.insert(key.clone()) {
+                ordinary.push(key);
             }
         }
 
@@ -1239,13 +1390,28 @@ impl HeapObject {
             )
             .collect()
     }
+
+    #[cfg(test)]
+    fn own_runtime_property_keys(&self) -> Vec<RuntimePropertyKey> {
+        self.own_exact_property_keys()
+            .into_iter()
+            .map(RuntimePropertyKey::String)
+            .chain(
+                self.properties
+                    .baseline_symbol_key_order()
+                    .iter()
+                    .copied()
+                    .map(RuntimePropertyKey::Symbol),
+            )
+            .collect()
+    }
 }
 
 fn heap_object_contains_symbols(object: &HeapObject) -> bool {
     !object.properties.baseline_symbol_key_order().is_empty()
         || object
             .properties
-            .values()
+            .all_data_values()
             .any(|value| matches!(value, Value::Symbol(_)))
         || object.accessors.values().any(|accessor| {
             accessor
@@ -1257,6 +1423,19 @@ fn heap_object_contains_symbols(object: &HeapObject) -> bool {
                     .as_ref()
                     .is_some_and(|value| matches!(value, Value::Symbol(_)))
         })
+        || object
+            .properties
+            .baseline_exact_string_accessors()
+            .any(|(_, accessor)| {
+                accessor
+                    .get
+                    .as_ref()
+                    .is_some_and(|value| matches!(value, Value::Symbol(_)))
+                    || accessor
+                        .set
+                        .as_ref()
+                        .is_some_and(|value| matches!(value, Value::Symbol(_)))
+            })
         || object
             .properties
             .baseline_symbol_properties()
@@ -1285,10 +1464,18 @@ fn validate_heap_symbol_references(
     state: &RuntimeSymbolState,
     object: &HeapObject,
 ) -> Result<(), String> {
-    for value in object.properties.values() {
+    for value in object.properties.all_data_values() {
         validate_symbol_value(state, value)?;
     }
     for accessor in object.accessors.values() {
+        if let Some(getter) = &accessor.get {
+            validate_symbol_value(state, getter)?;
+        }
+        if let Some(setter) = &accessor.set {
+            validate_symbol_value(state, setter)?;
+        }
+    }
+    for (_, accessor) in object.properties.baseline_exact_string_accessors() {
         if let Some(getter) = &accessor.get {
             validate_symbol_value(state, getter)?;
         }
@@ -1326,6 +1513,14 @@ pub struct AccessorProperty {
 enum RuntimeProperty {
     Data(Value),
     Accessor(AccessorProperty),
+}
+
+/// Private executable property key. Descriptor-model and hook-facing string
+/// keys remain `String`; the runtime string arm keeps exact UTF-16 identity.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+enum RuntimePropertyKey {
+    String(JsString),
+    Symbol(SymbolId),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -3240,7 +3435,7 @@ impl InterpreterCore {
 
         if let Some(heap_obj) = self.heap.get_mut(slot_idx) {
             let existed = heap_obj.contains_own_property("value");
-            heap_obj.record_property_definition("value", existed);
+            heap_obj.record_property_definition(&JsString::from("value"), existed);
             heap_obj.properties.insert("value".to_string(), value);
         }
     }
@@ -4211,11 +4406,11 @@ impl InterpreterCore {
         }
     }
 
-    fn symbol_property_value(&self, symbol: SymbolId, key: &TypedPropertyKey) -> Option<Value> {
-        let TypedPropertyKey::String(key) = key else {
+    fn symbol_property_value(&self, symbol: SymbolId, key: &RuntimePropertyKey) -> Option<Value> {
+        let RuntimePropertyKey::String(key) = key else {
             return None;
         };
-        match key.as_str() {
+        match key.as_str()? {
             "description" => Some(
                 self.symbol_description(symbol)
                     .map(Value::Str)
@@ -4255,6 +4450,21 @@ impl InterpreterCore {
         key: &TypedPropertyKey,
     ) -> Result<(), InterpreterError> {
         if let TypedPropertyKey::Symbol(symbol) = key
+            && !self.symbol_state.contains(*symbol)
+        {
+            return Err(InterpreterError::TypeError {
+                expected: "resolved Symbol property key".to_string(),
+                got: format!("unresolved Symbol id {}", symbol.0),
+            });
+        }
+        Ok(())
+    }
+
+    fn validate_executable_property_key(
+        &self,
+        key: &RuntimePropertyKey,
+    ) -> Result<(), InterpreterError> {
+        if let RuntimePropertyKey::Symbol(symbol) = key
             && !self.symbol_state.contains(*symbol)
         {
             return Err(InterpreterError::TypeError {
@@ -4905,6 +5115,46 @@ impl InterpreterCore {
                 })
             }
             TypedPropertyKey::Symbol(_) => Ok(()),
+        }
+    }
+
+    /// Reject runtime keys the frozen String-only hook cannot represent.
+    /// This preflight performs no callback and is safe before any allocation.
+    fn preflight_runtime_property_key_for_hook(
+        &self,
+        key: &RuntimePropertyKey,
+    ) -> Result<(), InterpreterError> {
+        if self.hook.is_none() {
+            return Ok(());
+        }
+        match key {
+            RuntimePropertyKey::String(key) if key.as_str().is_some() => Ok(()),
+            RuntimePropertyKey::String(_) => Err(InterpreterError::TypeError {
+                expected: "property key representable by legacy string hook".to_string(),
+                got: "non-well-formed ECMAScript string property key".to_string(),
+            }),
+            RuntimePropertyKey::Symbol(_) => Err(InterpreterError::TypeError {
+                expected: "typed property hook support".to_string(),
+                got: "Symbol property access with legacy string hook".to_string(),
+            }),
+        }
+    }
+
+    fn run_pre_runtime_property_access_hook(
+        &self,
+        module: &Ir3Module,
+        target: ObjectId,
+        key: &RuntimePropertyKey,
+    ) -> Result<(), InterpreterError> {
+        self.preflight_runtime_property_key_for_hook(key)?;
+        match key {
+            RuntimePropertyKey::String(key) => {
+                let Some(key) = key.as_str() else {
+                    return Ok(());
+                };
+                self.run_pre_property_access_hook(module, target, key)
+            }
+            RuntimePropertyKey::Symbol(_) => Ok(()),
         }
     }
 
@@ -6374,8 +6624,8 @@ impl InterpreterCore {
                 Ir3Instruction::GetProperty { obj, key, dst } => {
                     let obj_val = self.read_reg(obj)?;
                     let key_val = self.read_reg(key)?;
-                    let property_key = Self::property_key(&key_val);
-                    self.validate_runtime_property_key(&property_key)?;
+                    let property_key = Self::executable_property_key(&key_val);
+                    self.validate_executable_property_key(&property_key)?;
 
                     let called_accessor = match &obj_val {
                         Value::Object(oid) => self.load_object_property_or_call_accessor(
@@ -6390,25 +6640,32 @@ impl InterpreterCore {
                         // bd-2vzgi; unknown keys yield `undefined` per ES
                         // GetV semantics, matching the engine (bd-7zwar —
                         // previously a fail-closed TypeError).
-                        Value::Str(text) => match &property_key {
-                            TypedPropertyKey::String(key) => {
-                                match Self::string_property_value(text, key) {
-                                    Some(value) => {
-                                        self.write_reg(dst, value)?;
-                                        false
-                                    }
-                                    None => {
-                                        self.write_reg(dst, Value::Undefined)?;
-                                        false
+                        Value::Str(text) => {
+                            self.preflight_runtime_property_key_for_hook(&property_key)?;
+                            match &property_key {
+                                RuntimePropertyKey::String(key) => {
+                                    match key
+                                        .as_str()
+                                        .and_then(|key| Self::string_property_value(text, key))
+                                    {
+                                        Some(value) => {
+                                            self.write_reg(dst, value)?;
+                                            false
+                                        }
+                                        None => {
+                                            self.write_reg(dst, Value::Undefined)?;
+                                            false
+                                        }
                                     }
                                 }
+                                RuntimePropertyKey::Symbol(_) => {
+                                    self.write_reg(dst, Value::Undefined)?;
+                                    false
+                                }
                             }
-                            TypedPropertyKey::Symbol(_) => {
-                                self.write_reg(dst, Value::Undefined)?;
-                                false
-                            }
-                        },
+                        }
                         Value::Symbol(symbol) => {
+                            self.preflight_runtime_property_key_for_hook(&property_key)?;
                             match self.symbol_property_value(*symbol, &property_key) {
                                 Some(value) => {
                                     self.write_reg(dst, value)?;
@@ -6442,8 +6699,8 @@ impl InterpreterCore {
                     let obj_val = self.read_reg(obj)?;
                     let key_val = self.read_reg(key)?;
                     let set_val = self.read_reg(val)?;
-                    let property_key = Self::property_key(&key_val);
-                    self.validate_runtime_property_key(&property_key)?;
+                    let property_key = Self::executable_property_key(&key_val);
+                    self.validate_executable_property_key(&property_key)?;
 
                     let called_accessor = match &obj_val {
                         Value::Object(oid) => self.set_object_property_or_call_accessor(
@@ -6474,27 +6731,32 @@ impl InterpreterCore {
                 Ir3Instruction::DeleteProperty { obj, key, dst } => {
                     let obj_val = self.read_reg(obj)?;
                     let key_val = self.read_reg(key)?;
-                    let property_key = Self::property_key(&key_val);
-                    self.validate_runtime_property_key(&property_key)?;
+                    let property_key = Self::executable_property_key(&key_val);
+                    self.validate_executable_property_key(&property_key)?;
 
                     match obj_val {
                         Value::Object(oid) => {
-                            self.run_pre_typed_property_access_hook(module, oid, &property_key)?;
-                            self.remove_object_typed_property(oid, &property_key)?;
-                            if let TypedPropertyKey::String(key) = &property_key {
+                            self.run_pre_runtime_property_access_hook(module, oid, &property_key)?;
+                            self.remove_object_runtime_property(oid, &property_key)?;
+                            if let RuntimePropertyKey::String(key) = &property_key
+                                && let Some(key) = key.as_str()
+                            {
                                 self.mark_deleted_for_in_iterators(oid, key);
                             }
                             self.write_reg(dst, Value::Bool(true))?;
                         }
                         function_like if Self::function_object_key(&function_like).is_some() => {
+                            self.preflight_runtime_property_key_for_hook(&property_key)?;
                             if let Some(oid) = self.function_object_id(&function_like) {
-                                self.run_pre_typed_property_access_hook(
+                                self.run_pre_runtime_property_access_hook(
                                     module,
                                     oid,
                                     &property_key,
                                 )?;
-                                self.remove_object_typed_property(oid, &property_key)?;
-                                if let TypedPropertyKey::String(key) = &property_key {
+                                self.remove_object_runtime_property(oid, &property_key)?;
+                                if let RuntimePropertyKey::String(key) = &property_key
+                                    && let Some(key) = key.as_str()
+                                {
                                     self.mark_deleted_for_in_iterators(oid, key);
                                 }
                             }
@@ -8334,8 +8596,9 @@ impl InterpreterCore {
     }
 
     fn eval_in_operator(&self, lhs: u32, rhs: u32) -> Result<Value, InterpreterError> {
-        let key = Self::property_key(&self.read_reg(lhs)?);
-        self.validate_runtime_property_key(&key)?;
+        let key = Self::executable_property_key(&self.read_reg(lhs)?);
+        self.validate_executable_property_key(&key)?;
+        self.preflight_runtime_property_key_for_hook(&key)?;
         let target = self.read_reg(rhs)?;
         match target {
             Value::Object(object_id) => {
@@ -8343,7 +8606,7 @@ impl InterpreterCore {
                     .get(object_id.0 as usize)
                     .ok_or(InterpreterError::ObjectNotFound { id: object_id.0 })?;
                 Ok(Value::Bool(
-                    self.prototype_chain_has_typed_key(object_id, &key)?,
+                    self.prototype_chain_has_runtime_key(object_id, &key)?,
                 ))
             }
             function_like if Self::function_object_key(&function_like).is_some() => {
@@ -8354,7 +8617,7 @@ impl InterpreterCore {
                     .get(object_id.0 as usize)
                     .ok_or(InterpreterError::ObjectNotFound { id: object_id.0 })?;
                 Ok(Value::Bool(
-                    self.prototype_chain_has_typed_key(object_id, &key)?,
+                    self.prototype_chain_has_runtime_key(object_id, &key)?,
                 ))
             }
             other => Err(InterpreterError::TypeError {
@@ -8500,13 +8763,18 @@ impl InterpreterCore {
         Ok(false)
     }
 
-    fn decode_accessor_definition_key(key: &str) -> Option<(AccessorKind, String)> {
-        key.strip_prefix(IR_ACCESSOR_GET_PREFIX)
-            .map(|name| (AccessorKind::Get, name.to_string()))
-            .or_else(|| {
-                key.strip_prefix(IR_ACCESSOR_SET_PREFIX)
-                    .map(|name| (AccessorKind::Set, name.to_string()))
-            })
+    fn decode_accessor_definition_key(key: &JsString) -> Option<(AccessorKind, JsString)> {
+        let units = key.code_units_vec();
+        for (prefix, kind) in [
+            (IR_ACCESSOR_GET_PREFIX, AccessorKind::Get),
+            (IR_ACCESSOR_SET_PREFIX, AccessorKind::Set),
+        ] {
+            let prefix = prefix.encode_utf16().collect::<Vec<_>>();
+            if units.starts_with(&prefix) {
+                return Some((kind, JsString::from_code_units(&units[prefix.len()..])));
+            }
+        }
+        None
     }
 
     fn prototype_chain_lookup_property(
@@ -8525,6 +8793,20 @@ impl InterpreterCore {
         object_id: ObjectId,
         key: &TypedPropertyKey,
     ) -> Result<Option<RuntimeProperty>, InterpreterError> {
+        let key = match key {
+            TypedPropertyKey::String(key) => {
+                RuntimePropertyKey::String(JsString::from(key.as_str()))
+            }
+            TypedPropertyKey::Symbol(symbol) => RuntimePropertyKey::Symbol(*symbol),
+        };
+        self.prototype_chain_lookup_runtime_property(object_id, &key)
+    }
+
+    fn prototype_chain_lookup_runtime_property(
+        &self,
+        object_id: ObjectId,
+        key: &RuntimePropertyKey,
+    ) -> Result<Option<RuntimeProperty>, InterpreterError> {
         let mut current = Some(object_id);
         let mut depth = 0u32;
         let mut visited = BTreeSet::new();
@@ -8538,15 +8820,15 @@ impl InterpreterCore {
                 .get(id.0 as usize)
                 .ok_or(InterpreterError::ObjectNotFound { id: id.0 })?;
             match key {
-                TypedPropertyKey::String(key) => {
-                    if let Some(accessor) = object.accessors.get(key) {
-                        return Ok(Some(RuntimeProperty::Accessor(accessor.clone())));
+                RuntimePropertyKey::String(key) => {
+                    if let Some(accessor) = object.exact_accessor(key) {
+                        return Ok(Some(RuntimeProperty::Accessor(accessor)));
                     }
-                    if let Some(val) = object.properties.get(key) {
+                    if let Some(val) = object.properties.get_exact(key) {
                         return Ok(Some(RuntimeProperty::Data(val.clone())));
                     }
                 }
-                TypedPropertyKey::Symbol(symbol) => {
+                RuntimePropertyKey::Symbol(symbol) => {
                     if let Some(property) = object.properties.baseline_symbol_property(*symbol) {
                         return Ok(Some(match property {
                             BaselineSymbolProperty::Data(value) => {
@@ -9005,11 +9287,11 @@ impl InterpreterCore {
         module: &Ir3Module,
         receiver: Value,
         object_id: ObjectId,
-        key: &TypedPropertyKey,
+        key: &RuntimePropertyKey,
         dst: u32,
     ) -> Result<bool, InterpreterError> {
-        self.run_pre_typed_property_access_hook(module, object_id, key)?;
-        let property = self.prototype_chain_lookup_typed_property(object_id, key)?;
+        self.run_pre_runtime_property_access_hook(module, object_id, key)?;
+        let property = self.prototype_chain_lookup_runtime_property(object_id, key)?;
         self.load_runtime_property(module, receiver, property, dst)
     }
 
@@ -9018,11 +9300,11 @@ impl InterpreterCore {
         module: &Ir3Module,
         receiver: Value,
         object_id: ObjectId,
-        key: TypedPropertyKey,
+        key: RuntimePropertyKey,
         value: Value,
     ) -> Result<bool, InterpreterError> {
-        self.run_pre_typed_property_access_hook(module, object_id, &key)?;
-        if matches!(&key, TypedPropertyKey::String(key) if key == "__proto__") {
+        self.run_pre_runtime_property_access_hook(module, object_id, &key)?;
+        if matches!(&key, RuntimePropertyKey::String(key) if key.as_str() == Some("__proto__")) {
             let prototype = match value {
                 Value::Object(id) => Some(id),
                 Value::Null => None,
@@ -9037,7 +9319,7 @@ impl InterpreterCore {
             self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
             return Ok(false);
         }
-        match self.prototype_chain_lookup_typed_property(object_id, &key)? {
+        match self.prototype_chain_lookup_runtime_property(object_id, &key)? {
             Some(RuntimeProperty::Accessor(accessor)) => {
                 if let Some(setter) = accessor.set {
                     self.enter_function_call(
@@ -9054,7 +9336,7 @@ impl InterpreterCore {
                 }
             }
             _ => {
-                self.set_object_typed_property(object_id, key, value)?;
+                self.set_object_runtime_property(object_id, key, value)?;
                 Ok(false)
             }
         }
@@ -9064,16 +9346,18 @@ impl InterpreterCore {
         &mut self,
         module: &Ir3Module,
         receiver: Value,
-        key: &TypedPropertyKey,
+        key: &RuntimePropertyKey,
         dst: u32,
     ) -> Result<bool, InterpreterError> {
+        self.preflight_runtime_property_key_for_hook(key)?;
         if let (
             Value::BuiltinFunction(BuiltinFunction {
                 kind: BuiltinFunctionKind::Symbol,
                 ..
             }),
-            TypedPropertyKey::String(key),
+            RuntimePropertyKey::String(key),
         ) = (&receiver, key)
+            && let Some(key) = key.as_str()
             && let Some(value) = Self::symbol_constructor_property_value(key)
         {
             self.write_reg(dst, value)?;
@@ -9081,13 +9365,13 @@ impl InterpreterCore {
         }
 
         if let Some(object_id) = self.function_object_id(&receiver) {
-            self.run_pre_typed_property_access_hook(module, object_id, key)?;
-            if let Some(property) = self.prototype_chain_lookup_typed_property(object_id, key)? {
+            self.run_pre_runtime_property_access_hook(module, object_id, key)?;
+            if let Some(property) = self.prototype_chain_lookup_runtime_property(object_id, key)? {
                 return self.load_runtime_property(module, receiver, Some(property), dst);
             }
         }
 
-        if matches!(key, TypedPropertyKey::String(key) if key == "prototype")
+        if matches!(key, RuntimePropertyKey::String(key) if key.as_str() == Some("prototype"))
             && let Some(prototype) = self.function_prototype_for_value(&receiver)?
         {
             self.write_reg(dst, Value::Object(prototype))?;
@@ -9102,9 +9386,10 @@ impl InterpreterCore {
         &mut self,
         module: &Ir3Module,
         receiver: Value,
-        key: &TypedPropertyKey,
+        key: &RuntimePropertyKey,
         value: Value,
     ) -> Result<bool, InterpreterError> {
+        self.preflight_runtime_property_key_for_hook(key)?;
         let Some(object_id) = self.ensure_function_object(&receiver)? else {
             return Err(InterpreterError::TypeError {
                 expected: "function".to_string(),
@@ -9119,7 +9404,7 @@ impl InterpreterCore {
             value.clone(),
         )?;
         if !called
-            && matches!(key, TypedPropertyKey::String(key) if key == "prototype")
+            && matches!(key, RuntimePropertyKey::String(key) if key.as_str() == Some("prototype"))
             && let Value::Object(prototype) = value
             && let Some(function_key) = self.function_prototype_key_for_value(&receiver)?
         {
@@ -9128,10 +9413,25 @@ impl InterpreterCore {
         Ok(called)
     }
 
+    #[cfg(test)]
     fn prototype_chain_has_typed_key(
         &self,
         object_id: ObjectId,
         key: &TypedPropertyKey,
+    ) -> Result<bool, InterpreterError> {
+        let key = match key {
+            TypedPropertyKey::String(key) => {
+                RuntimePropertyKey::String(JsString::from(key.as_str()))
+            }
+            TypedPropertyKey::Symbol(symbol) => RuntimePropertyKey::Symbol(*symbol),
+        };
+        self.prototype_chain_has_runtime_key(object_id, &key)
+    }
+
+    fn prototype_chain_has_runtime_key(
+        &self,
+        object_id: ObjectId,
+        key: &RuntimePropertyKey,
     ) -> Result<bool, InterpreterError> {
         let mut current = Some(object_id);
         let mut depth = 0u32;
@@ -9145,7 +9445,7 @@ impl InterpreterCore {
                 .heap
                 .get(id.0 as usize)
                 .ok_or(InterpreterError::ObjectNotFound { id: id.0 })?;
-            if object.contains_own_typed_property(key) {
+            if object.contains_own_runtime_property(key) {
                 return Ok(true);
             }
             current = object.prototype;
@@ -10281,11 +10581,21 @@ impl InterpreterCore {
     fn property_key(value: &Value) -> TypedPropertyKey {
         match value {
             Value::Symbol(symbol) => TypedPropertyKey::Symbol(*symbol),
-            // Property keys remain UTF-8 `String`: a lone-surrogate key routes
-            // through the lossy projection (documented engine-parity boundary).
+            // Compatibility carrier for the deferred CopyDataProperties
+            // consumer audit (bd-b12xs.6). Dynamic property operations use
+            // executable_property_key and never pass through this projection.
             Value::Str(s) => TypedPropertyKey::String(s.to_string()),
             Value::Int(n) => TypedPropertyKey::String(n.to_string()),
             _ => TypedPropertyKey::String(value.to_string()),
+        }
+    }
+
+    fn executable_property_key(value: &Value) -> RuntimePropertyKey {
+        match value {
+            Value::Symbol(symbol) => RuntimePropertyKey::Symbol(*symbol),
+            Value::Str(text) => RuntimePropertyKey::String(text.clone()),
+            Value::Int(number) => RuntimePropertyKey::String(JsString::from(number.to_string())),
+            _ => RuntimePropertyKey::String(JsString::from(value.to_string())),
         }
     }
 
@@ -12199,9 +12509,18 @@ impl InterpreterCore {
         MEMORY_ESTIMATE_STRING_BASE_BYTES.saturating_add(text.len() as u64)
     }
 
+    fn estimate_js_string_bytes(text: &JsString) -> u64 {
+        let projected = Self::estimate_string_bytes(text.as_utf8_projection());
+        if text.is_well_formed() {
+            projected
+        } else {
+            projected.saturating_add((text.utf16_len() as u64).saturating_mul(2))
+        }
+    }
+
     fn estimate_value_bytes(value: &Value) -> u64 {
         match value {
-            Value::Str(text) => Self::estimate_string_bytes(text),
+            Value::Str(text) => Self::estimate_js_string_bytes(text),
             _ => 0,
         }
     }
@@ -12221,14 +12540,14 @@ impl InterpreterCore {
                     record
                         .description
                         .as_ref()
-                        .map(|text| Self::estimate_string_bytes(text))
+                        .map(Self::estimate_js_string_bytes)
                         .unwrap_or(0),
                 )
                 .saturating_add(
                     record
                         .registry_key
                         .as_ref()
-                        .map(|text| Self::estimate_string_bytes(text))
+                        .map(Self::estimate_js_string_bytes)
                         .unwrap_or(0),
                 )
         })
@@ -12298,7 +12617,7 @@ impl InterpreterCore {
     fn estimate_heap_object_bytes(object: &HeapObject) -> u64 {
         let properties = object
             .properties
-            .iter()
+            .well_formed_data_entries()
             .map(|(key, value)| {
                 MEMORY_ESTIMATE_MAP_ENTRY_BYTES
                     .saturating_add(Self::estimate_string_bytes(key))
@@ -12307,36 +12626,79 @@ impl InterpreterCore {
                     .saturating_add(Self::estimate_string_bytes(key))
                     .saturating_add(Self::estimate_value_bytes(value))
             })
+            .chain(
+                object
+                    .properties
+                    .exact_only_data_entries()
+                    .map(|(key, value)| {
+                        MEMORY_ESTIMATE_MAP_ENTRY_BYTES
+                            .saturating_add(Self::estimate_js_string_bytes(key))
+                            .saturating_add(Self::estimate_js_string_bytes(key))
+                            .saturating_add(Self::estimate_value_bytes(value))
+                    }),
+            )
             .sum::<u64>();
-        let accessors = object
-            .accessors
-            .iter()
-            .map(|(key, accessor)| {
-                MEMORY_ESTIMATE_MAP_ENTRY_BYTES
-                    .saturating_add(Self::estimate_string_bytes(key))
-                    .saturating_add(
-                        accessor
-                            .get
-                            .as_ref()
-                            .map(Self::estimate_value_bytes)
-                            .unwrap_or(0),
-                    )
-                    .saturating_add(
-                        accessor
-                            .set
-                            .as_ref()
-                            .map(Self::estimate_value_bytes)
-                            .unwrap_or(0),
-                    )
+        let exact_data_order_well_formed_copies = object
+            .properties
+            .exact_string_insertion_order()
+            .map(|order| {
+                order
+                    .iter()
+                    .filter(|key| key.is_well_formed())
+                    .map(Self::estimate_js_string_bytes)
+                    .sum::<u64>()
             })
-            .sum::<u64>();
+            .unwrap_or(0);
+        let accessors =
+            object
+                .accessors
+                .iter()
+                .map(|(key, accessor)| {
+                    MEMORY_ESTIMATE_MAP_ENTRY_BYTES
+                        .saturating_add(Self::estimate_string_bytes(key))
+                        .saturating_add(
+                            accessor
+                                .get
+                                .as_ref()
+                                .map(Self::estimate_value_bytes)
+                                .unwrap_or(0),
+                        )
+                        .saturating_add(
+                            accessor
+                                .set
+                                .as_ref()
+                                .map(Self::estimate_value_bytes)
+                                .unwrap_or(0),
+                        )
+                })
+                .chain(object.properties.baseline_exact_string_accessors().map(
+                    |(key, accessor)| {
+                        MEMORY_ESTIMATE_MAP_ENTRY_BYTES
+                            .saturating_add(Self::estimate_js_string_bytes(key))
+                            .saturating_add(
+                                accessor
+                                    .get
+                                    .as_ref()
+                                    .map(Self::estimate_value_bytes)
+                                    .unwrap_or(0),
+                            )
+                            .saturating_add(
+                                accessor
+                                    .set
+                                    .as_ref()
+                                    .map(Self::estimate_value_bytes)
+                                    .unwrap_or(0),
+                            )
+                    },
+                ))
+                .sum::<u64>();
         let own_string_key_order = object
             .properties
             .baseline_string_key_order()
             .map(|order| {
                 order
                     .iter()
-                    .map(|key| Self::estimate_string_bytes(key))
+                    .map(Self::estimate_js_string_bytes)
                     .sum::<u64>()
             })
             .unwrap_or(0);
@@ -12358,6 +12720,7 @@ impl InterpreterCore {
             .saturating_mul(std::mem::size_of::<SymbolId>() as u64);
         MEMORY_ESTIMATE_HEAP_OBJECT_BASE_BYTES
             .saturating_add(properties)
+            .saturating_add(exact_data_order_well_formed_copies)
             .saturating_add(accessors)
             .saturating_add(own_string_key_order)
             .saturating_add(symbol_properties)
@@ -12759,7 +13122,11 @@ impl InterpreterCore {
         key: String,
         value: Value,
     ) -> Result<(), InterpreterError> {
-        self.set_object_typed_property(object_id, TypedPropertyKey::String(key), value)
+        self.set_object_runtime_property(
+            object_id,
+            RuntimePropertyKey::String(JsString::from(key)),
+            value,
+        )
     }
 
     fn set_object_typed_property(
@@ -12769,9 +13136,25 @@ impl InterpreterCore {
         value: Value,
     ) -> Result<(), InterpreterError> {
         self.validate_runtime_property_key(&key)?;
+        let key = match key {
+            TypedPropertyKey::String(key) => RuntimePropertyKey::String(JsString::from(key)),
+            TypedPropertyKey::Symbol(symbol) => RuntimePropertyKey::Symbol(symbol),
+        };
+        self.set_object_runtime_property(object_id, key, value)
+    }
+
+    fn set_object_runtime_property(
+        &mut self,
+        object_id: ObjectId,
+        key: RuntimePropertyKey,
+        value: Value,
+    ) -> Result<(), InterpreterError> {
+        self.validate_executable_property_key(&key)?;
         match key {
-            TypedPropertyKey::String(key) => self.set_object_string_property(object_id, key, value),
-            TypedPropertyKey::Symbol(symbol) => {
+            RuntimePropertyKey::String(key) => {
+                self.set_object_string_property(object_id, key, value)
+            }
+            RuntimePropertyKey::Symbol(symbol) => {
                 self.set_symbol_property(object_id, symbol, BaselineSymbolProperty::Data(value))
             }
         }
@@ -12780,7 +13163,7 @@ impl InterpreterCore {
     fn set_object_string_property(
         &mut self,
         object_id: ObjectId,
-        key: String,
+        key: JsString,
         value: Value,
     ) -> Result<(), InterpreterError> {
         let (
@@ -12795,19 +13178,23 @@ impl InterpreterCore {
                 .get_mut(object_id.0 as usize)
                 .ok_or(InterpreterError::ObjectNotFound { id: object_id.0 })?;
             if let Some((kind, property_key)) = Self::decode_accessor_definition_key(&key) {
-                let existed = object.contains_own_property(&property_key);
+                let existed = object.contains_own_runtime_property(&RuntimePropertyKey::String(
+                    property_key.clone(),
+                ));
                 let order_rollback = object.record_property_definition(&property_key, existed);
-                let previous_data_position =
-                    object.properties.string_insertion_position(&property_key);
+                let previous_data_position = object
+                    .properties
+                    .exact_string_insertion_position(&property_key);
                 let previous_data = object
                     .properties
-                    .remove_preserving_baseline_order(&property_key);
-                let previous_accessor = object.accessors.get(&property_key).cloned();
-                let accessor = object.accessors.entry(property_key.clone()).or_default();
+                    .remove_exact_preserving_baseline_order(&property_key);
+                let previous_accessor = object.exact_accessor(&property_key);
+                let mut accessor = previous_accessor.clone().unwrap_or_default();
                 match kind {
                     AccessorKind::Get => accessor.get = Some(value),
                     AccessorKind::Set => accessor.set = Some(value),
                 }
+                object.insert_exact_accessor(property_key.clone(), accessor);
                 (
                     previous_data,
                     previous_data_position,
@@ -12816,10 +13203,11 @@ impl InterpreterCore {
                     order_rollback,
                 )
             } else {
-                let existed = object.contains_own_property(&key);
+                let existed =
+                    object.contains_own_runtime_property(&RuntimePropertyKey::String(key.clone()));
                 let order_rollback = object.record_property_definition(&key, existed);
-                let previous_accessor = object.accessors.remove(&key);
-                let previous_data = object.properties.insert(key.clone(), value);
+                let previous_accessor = object.remove_exact_accessor(&key);
+                let previous_data = object.properties.insert_exact(key.clone(), value);
                 (
                     previous_data,
                     None,
@@ -12836,23 +13224,25 @@ impl InterpreterCore {
                 .ok_or(InterpreterError::ObjectNotFound { id: object_id.0 })?;
             if let Some(previous) = previous_data {
                 if let Some(position) = previous_data_position {
-                    object.properties.insert_at_string_position(
+                    object.properties.insert_exact_at_string_position(
                         property_key.clone(),
                         previous,
                         position,
                     );
                 } else {
-                    object.properties.insert(property_key.clone(), previous);
+                    object
+                        .properties
+                        .insert_exact(property_key.clone(), previous);
                 }
             } else {
                 object
                     .properties
-                    .remove_preserving_baseline_order(&property_key);
+                    .remove_exact_preserving_baseline_order(&property_key);
             }
             if let Some(previous) = previous_accessor {
-                object.accessors.insert(property_key.clone(), previous);
+                object.insert_exact_accessor(property_key.clone(), previous);
             } else {
-                object.accessors.remove(&property_key);
+                object.remove_exact_accessor(&property_key);
             }
             object.rollback_property_definition_order(&property_key, order_rollback);
             self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
@@ -12870,7 +13260,11 @@ impl InterpreterCore {
         key: String,
         value: Value,
     ) -> Result<(), InterpreterError> {
-        self.set_plain_data_typed_property(object_id, TypedPropertyKey::String(key), value)
+        self.set_plain_data_runtime_property(
+            object_id,
+            RuntimePropertyKey::String(JsString::from(key)),
+            value,
+        )
     }
 
     fn set_plain_data_typed_property(
@@ -12880,8 +13274,22 @@ impl InterpreterCore {
         value: Value,
     ) -> Result<(), InterpreterError> {
         self.validate_runtime_property_key(&key)?;
-        let TypedPropertyKey::String(key) = key else {
-            let TypedPropertyKey::Symbol(symbol) = key else {
+        let key = match key {
+            TypedPropertyKey::String(key) => RuntimePropertyKey::String(JsString::from(key)),
+            TypedPropertyKey::Symbol(symbol) => RuntimePropertyKey::Symbol(symbol),
+        };
+        self.set_plain_data_runtime_property(object_id, key, value)
+    }
+
+    fn set_plain_data_runtime_property(
+        &mut self,
+        object_id: ObjectId,
+        key: RuntimePropertyKey,
+        value: Value,
+    ) -> Result<(), InterpreterError> {
+        self.validate_executable_property_key(&key)?;
+        let RuntimePropertyKey::String(key) = key else {
+            let RuntimePropertyKey::Symbol(symbol) = key else {
                 unreachable!();
             };
             return self.set_symbol_property(
@@ -12895,10 +13303,11 @@ impl InterpreterCore {
                 .heap
                 .get_mut(object_id.0 as usize)
                 .ok_or(InterpreterError::ObjectNotFound { id: object_id.0 })?;
-            let existed = object.contains_own_property(&key);
+            let existed =
+                object.contains_own_runtime_property(&RuntimePropertyKey::String(key.clone()));
             let order_rollback = object.record_property_definition(&key, existed);
-            let previous_accessor = object.accessors.remove(&key);
-            let previous_data = object.properties.insert(key.clone(), value);
+            let previous_accessor = object.remove_exact_accessor(&key);
+            let previous_data = object.properties.insert_exact(key.clone(), value);
             (previous_data, previous_accessor, order_rollback)
         };
         if let Err(err) = self.sync_estimated_memory_bytes() {
@@ -12907,12 +13316,16 @@ impl InterpreterCore {
                 .get_mut(object_id.0 as usize)
                 .ok_or(InterpreterError::ObjectNotFound { id: object_id.0 })?;
             if let Some(previous) = previous_data {
-                object.properties.insert(key.clone(), previous);
+                object.properties.insert_exact(key.clone(), previous);
             } else {
-                object.properties.remove_preserving_baseline_order(&key);
+                object
+                    .properties
+                    .remove_exact_preserving_baseline_order(&key);
             }
             if let Some(previous) = previous_accessor {
-                object.accessors.insert(key.clone(), previous);
+                object.insert_exact_accessor(key.clone(), previous);
+            } else {
+                object.remove_exact_accessor(&key);
             }
             object.rollback_property_definition_order(&key, order_rollback);
             self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
@@ -12968,35 +13381,54 @@ impl InterpreterCore {
         object_id: ObjectId,
         key: &str,
     ) -> Result<bool, InterpreterError> {
-        self.remove_object_typed_property(object_id, &TypedPropertyKey::String(key.to_string()))
+        self.remove_object_runtime_property(
+            object_id,
+            &RuntimePropertyKey::String(JsString::from(key)),
+        )
     }
 
-    fn remove_object_typed_property(
+    fn remove_object_runtime_property(
         &mut self,
         object_id: ObjectId,
-        key: &TypedPropertyKey,
+        key: &RuntimePropertyKey,
     ) -> Result<bool, InterpreterError> {
-        self.validate_runtime_property_key(key)?;
+        self.validate_executable_property_key(key)?;
         let object = self
             .heap
             .get_mut(object_id.0 as usize)
             .ok_or(InterpreterError::ObjectNotFound { id: object_id.0 })?;
         let removed = match key {
-            TypedPropertyKey::String(key) => {
-                let removed = object.properties.remove(key);
-                let removed_accessor = object.accessors.remove(key);
+            RuntimePropertyKey::String(key) => {
+                let removed = object.properties.remove_exact(key);
+                let removed_accessor = object.remove_exact_accessor(key);
                 if removed.is_some() || removed_accessor.is_some() {
                     object.forget_property_order(key);
                 }
                 removed.is_some() || removed_accessor.is_some()
             }
-            TypedPropertyKey::Symbol(symbol) => object
+            RuntimePropertyKey::Symbol(symbol) => object
                 .properties
                 .remove_baseline_symbol_property(*symbol)
                 .is_some(),
         };
         self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
         Ok(removed)
+    }
+
+    #[cfg(test)]
+    fn remove_object_typed_property(
+        &mut self,
+        object_id: ObjectId,
+        key: &TypedPropertyKey,
+    ) -> Result<bool, InterpreterError> {
+        self.validate_runtime_property_key(key)?;
+        let key = match key {
+            TypedPropertyKey::String(key) => {
+                RuntimePropertyKey::String(JsString::from(key.as_str()))
+            }
+            TypedPropertyKey::Symbol(symbol) => RuntimePropertyKey::Symbol(*symbol),
+        };
+        self.remove_object_runtime_property(object_id, &key)
     }
 
     #[cfg(test)]
@@ -14698,6 +15130,12 @@ mod tests {
         .ir3
     }
 
+    fn exact_accessor_definition_key(prefix: &str, name: &JsString) -> JsString {
+        let mut units = prefix.encode_utf16().collect::<Vec<_>>();
+        units.extend(name.encode_utf16());
+        JsString::from_code_units(&units)
+    }
+
     #[test]
     fn symbol_value_and_heap_wire_are_typed_and_backward_readable_bd_n8eta_4_3() {
         assert_eq!(
@@ -14851,6 +15289,353 @@ mod tests {
     }
 
     #[test]
+    fn exact_string_data_accessors_symbols_and_wire_coexist_bd_b12xs_4() {
+        let mut core = quickjs_test_core();
+        let object = core.alloc_object_with_prototype(None).unwrap();
+        let d800 = JsString::from_code_units(&[0xD800]);
+        let d801 = JsString::from_code_units(&[0xD801]);
+        let replacement = JsString::from("\u{FFFD}");
+        let symbol = core
+            .allocate_private_symbol(Some(JsString::from("exact-mixed")))
+            .unwrap();
+
+        core.set_object_property(object, "2".to_string(), Value::Int(2))
+            .unwrap();
+        core.set_object_runtime_property(
+            object,
+            RuntimePropertyKey::String(d800.clone()),
+            Value::Int(8),
+        )
+        .unwrap();
+        core.set_object_runtime_property(
+            object,
+            RuntimePropertyKey::String(replacement.clone()),
+            Value::Int(0xFFFD),
+        )
+        .unwrap();
+        core.set_object_string_property(
+            object,
+            exact_accessor_definition_key(IR_ACCESSOR_GET_PREFIX, &d801),
+            Value::Function(7),
+        )
+        .unwrap();
+        core.set_object_runtime_property(
+            object,
+            RuntimePropertyKey::Symbol(symbol),
+            Value::Int(14),
+        )
+        .unwrap();
+
+        assert_eq!(
+            core.heap[object.0 as usize].own_runtime_property_keys(),
+            vec![
+                RuntimePropertyKey::String(JsString::from("2")),
+                RuntimePropertyKey::String(d800.clone()),
+                RuntimePropertyKey::String(replacement.clone()),
+                RuntimePropertyKey::String(d801.clone()),
+                RuntimePropertyKey::Symbol(symbol),
+            ]
+        );
+        assert_eq!(
+            core.prototype_chain_lookup_runtime_property(
+                object,
+                &RuntimePropertyKey::String(d801.clone()),
+            )
+            .unwrap(),
+            Some(RuntimeProperty::Accessor(AccessorProperty {
+                get: Some(Value::Function(7)),
+                set: None,
+            }))
+        );
+
+        let accessor_wire = serde_json::to_value(&core.heap[object.0 as usize]).unwrap();
+        assert!(accessor_wire["properties"].is_array());
+        assert!(accessor_wire["accessors"].is_array());
+        assert!(accessor_wire["own_string_key_order"].is_array());
+        assert!(accessor_wire["symbol_properties"].is_array());
+        let restored: HeapObject = serde_json::from_value(accessor_wire.clone()).unwrap();
+        assert_eq!(restored, core.heap[object.0 as usize]);
+
+        let mut duplicate_accessor = accessor_wire.clone();
+        duplicate_accessor["accessors"] = serde_json::to_value(vec![
+            (
+                d801.clone(),
+                AccessorProperty {
+                    get: Some(Value::Function(7)),
+                    set: None,
+                },
+            ),
+            (
+                d801.clone(),
+                AccessorProperty {
+                    get: None,
+                    set: Some(Value::Function(8)),
+                },
+            ),
+        ])
+        .unwrap();
+        assert!(serde_json::from_value::<HeapObject>(duplicate_accessor).is_err());
+        let mut data_accessor_collision = accessor_wire.clone();
+        data_accessor_collision["accessors"] = serde_json::to_value(vec![(
+            d800.clone(),
+            AccessorProperty {
+                get: Some(Value::Function(9)),
+                set: None,
+            },
+        )])
+        .unwrap();
+        assert!(serde_json::from_value::<HeapObject>(data_accessor_collision).is_err());
+        let mut missing_order = accessor_wire;
+        missing_order
+            .as_object_mut()
+            .unwrap()
+            .remove("own_string_key_order");
+        assert!(serde_json::from_value::<HeapObject>(missing_order).is_err());
+
+        core.set_plain_data_runtime_property(
+            object,
+            RuntimePropertyKey::String(d801.clone()),
+            Value::Int(9),
+        )
+        .unwrap();
+        assert_eq!(
+            core.heap[object.0 as usize].own_runtime_property_keys(),
+            vec![
+                RuntimePropertyKey::String(JsString::from("2")),
+                RuntimePropertyKey::String(d800.clone()),
+                RuntimePropertyKey::String(replacement.clone()),
+                RuntimePropertyKey::String(d801.clone()),
+                RuntimePropertyKey::Symbol(symbol),
+            ]
+        );
+
+        let data_wire = serde_json::to_value(&core.heap[object.0 as usize]).unwrap();
+        assert!(data_wire["properties"].is_array());
+        let restored: HeapObject = serde_json::from_value(data_wire).unwrap();
+        assert_eq!(restored, core.heap[object.0 as usize]);
+
+        assert!(
+            core.remove_object_runtime_property(object, &RuntimePropertyKey::String(d800.clone()),)
+                .unwrap()
+        );
+        core.set_object_runtime_property(
+            object,
+            RuntimePropertyKey::String(d800.clone()),
+            Value::Int(18),
+        )
+        .unwrap();
+        assert_eq!(
+            core.heap[object.0 as usize].own_runtime_property_keys(),
+            vec![
+                RuntimePropertyKey::String(JsString::from("2")),
+                RuntimePropertyKey::String(replacement),
+                RuntimePropertyKey::String(d801),
+                RuntimePropertyKey::String(d800),
+                RuntimePropertyKey::Symbol(symbol),
+            ]
+        );
+
+        let seed = core.capture_execution_seed();
+        let seed_wire = serde_json::to_string(&seed).unwrap();
+        let restored_seed: ExecutionSeed = serde_json::from_str(&seed_wire).unwrap();
+        assert_eq!(restored_seed, seed);
+    }
+
+    #[test]
+    fn public_exact_property_insertion_roundtrips_heap_bd_b12xs_4() {
+        let d800 = JsString::from_code_units(&[0xD800]);
+        let mut object = HeapObject::new();
+        object.properties.insert_exact(d800.clone(), Value::Int(8));
+
+        let wire = serde_json::to_string(&object).unwrap();
+        assert!(wire.contains("$wtf16"));
+        let restored: HeapObject = serde_json::from_str(&wire).unwrap();
+        assert_eq!(restored, object);
+        assert_eq!(restored.properties.get_exact(&d800), Some(&Value::Int(8)));
+    }
+
+    #[test]
+    fn dynamic_exact_string_get_set_delete_in_and_prototype_bd_b12xs_4() {
+        let mut core = quickjs_test_core();
+        let prototype = core.alloc_object_with_prototype(None).unwrap();
+        let object = core.alloc_object_with_prototype(Some(prototype)).unwrap();
+        let d800 = JsString::from_code_units(&[0xD800]);
+        let d801 = JsString::from_code_units(&[0xD801]);
+        let replacement = JsString::from("\u{FFFD}");
+        core.set_object_runtime_property(
+            prototype,
+            RuntimePropertyKey::String(d801.clone()),
+            Value::Int(80),
+        )
+        .unwrap();
+
+        core.registers[1] = Value::Object(object);
+        core.registers[2] = Value::Str(d800.clone());
+        core.registers[3] = Value::Int(8);
+        core.registers[4] = Value::Str(d801.clone());
+        core.registers[5] = Value::Int(9);
+        core.registers[6] = Value::Str(replacement.clone());
+        core.registers[7] = Value::Int(0xFFFD);
+        core.execute(&test_module(vec![
+            Ir3Instruction::SetProperty {
+                obj: 1,
+                key: 2,
+                val: 3,
+            },
+            Ir3Instruction::SetProperty {
+                obj: 1,
+                key: 4,
+                val: 5,
+            },
+            Ir3Instruction::SetProperty {
+                obj: 1,
+                key: 6,
+                val: 7,
+            },
+            Ir3Instruction::GetProperty {
+                obj: 1,
+                key: 2,
+                dst: 8,
+            },
+            Ir3Instruction::GetProperty {
+                obj: 1,
+                key: 4,
+                dst: 9,
+            },
+            Ir3Instruction::GetProperty {
+                obj: 1,
+                key: 6,
+                dst: 10,
+            },
+            Ir3Instruction::DeleteProperty {
+                obj: 1,
+                key: 4,
+                dst: 11,
+            },
+            Ir3Instruction::GetProperty {
+                obj: 1,
+                key: 4,
+                dst: 12,
+            },
+            Ir3Instruction::InOp {
+                dst: 13,
+                lhs: 4,
+                rhs: 1,
+            },
+            Ir3Instruction::DeleteProperty {
+                obj: 1,
+                key: 2,
+                dst: 14,
+            },
+            Ir3Instruction::InOp {
+                dst: 15,
+                lhs: 2,
+                rhs: 1,
+            },
+            Ir3Instruction::Halt,
+        ]))
+        .unwrap();
+
+        assert_eq!(core.registers[8], Value::Int(8));
+        assert_eq!(core.registers[9], Value::Int(9));
+        assert_eq!(core.registers[10], Value::Int(0xFFFD));
+        assert_eq!(core.registers[11], Value::Bool(true));
+        assert_eq!(core.registers[12], Value::Int(80));
+        assert_eq!(core.registers[13], Value::Bool(true));
+        assert_eq!(core.registers[14], Value::Bool(true));
+        assert_eq!(core.registers[15], Value::Bool(false));
+        assert_eq!(
+            core.heap[object.0 as usize]
+                .properties
+                .get_exact(&replacement),
+            Some(&Value::Int(0xFFFD))
+        );
+        assert_eq!(
+            core.heap[prototype.0 as usize].properties.get_exact(&d801),
+            Some(&Value::Int(80))
+        );
+    }
+
+    #[test]
+    fn function_like_dynamic_exact_property_roundtrip_bd_b12xs_4() {
+        let mut core = quickjs_test_core();
+        let d800 = JsString::from_code_units(&[0xD800]);
+        core.registers[1] = Value::Function(0);
+        core.registers[2] = Value::Str(d800);
+        core.registers[3] = Value::Int(8);
+        core.execute(&test_module(vec![
+            Ir3Instruction::SetProperty {
+                obj: 1,
+                key: 2,
+                val: 3,
+            },
+            Ir3Instruction::GetProperty {
+                obj: 1,
+                key: 2,
+                dst: 4,
+            },
+            Ir3Instruction::InOp {
+                dst: 5,
+                lhs: 2,
+                rhs: 1,
+            },
+            Ir3Instruction::DeleteProperty {
+                obj: 1,
+                key: 2,
+                dst: 6,
+            },
+            Ir3Instruction::InOp {
+                dst: 7,
+                lhs: 2,
+                rhs: 1,
+            },
+            Ir3Instruction::Halt,
+        ]))
+        .unwrap();
+
+        assert_eq!(core.registers[4], Value::Int(8));
+        assert_eq!(core.registers[5], Value::Bool(true));
+        assert_eq!(core.registers[6], Value::Bool(true));
+        assert_eq!(core.registers[7], Value::Bool(false));
+    }
+
+    #[test]
+    fn reexecution_restores_exact_heap_seed_bd_b12xs_4() {
+        let mut core = quickjs_test_core();
+        let object = core.alloc_object_with_prototype(None).unwrap();
+        let d800 = JsString::from_code_units(&[0xD800]);
+        core.registers[1] = Value::Object(object);
+        core.registers[2] = Value::Str(d800.clone());
+        core.registers[3] = Value::Int(8);
+        let module = test_module(vec![
+            Ir3Instruction::InOp {
+                dst: 0,
+                lhs: 2,
+                rhs: 1,
+            },
+            Ir3Instruction::SetProperty {
+                obj: 1,
+                key: 2,
+                val: 3,
+            },
+            Ir3Instruction::Halt,
+        ]);
+
+        let first = core.execute(&module).unwrap();
+        assert_eq!(first.value, Value::Bool(false));
+        assert_eq!(
+            core.heap[object.0 as usize].properties.get_exact(&d800),
+            Some(&Value::Int(8))
+        );
+        let second = core.execute(&module).unwrap();
+        assert_eq!(second.value, Value::Bool(false));
+        assert_eq!(
+            core.heap[object.0 as usize].properties.get_exact(&d800),
+            Some(&Value::Int(8))
+        );
+    }
+
+    #[test]
     fn symbol_seed_wire_restore_and_registry_are_atomic_bd_n8eta_4_3() {
         let mut core = quickjs_test_core();
         let private = core
@@ -14881,6 +15666,75 @@ mod tests {
         )
         .unwrap();
         assert!(!default_wire.contains("symbol_state"));
+    }
+
+    #[test]
+    fn exact_only_values_participate_in_symbol_seed_validation_bd_b12xs_4() {
+        let mut core = quickjs_test_core();
+        let symbol = core
+            .allocate_private_symbol(Some(JsString::from("exact-seed")))
+            .unwrap();
+        let object = core.alloc_object_with_prototype(None).unwrap();
+        let d800 = JsString::from_code_units(&[0xD800]);
+        let d801 = JsString::from_code_units(&[0xD801]);
+        core.set_object_runtime_property(
+            object,
+            RuntimePropertyKey::String(d800.clone()),
+            Value::Symbol(symbol),
+        )
+        .unwrap();
+        core.set_object_string_property(
+            object,
+            exact_accessor_definition_key(IR_ACCESSOR_GET_PREFIX, &d801),
+            Value::Symbol(symbol),
+        )
+        .unwrap();
+
+        let seed = core.capture_execution_seed();
+        let wire = serde_json::to_string(&seed).unwrap();
+        assert!(wire.contains("symbol_state"));
+        let decoded: ExecutionSeed = serde_json::from_str(&wire).unwrap();
+        assert_eq!(decoded, seed);
+        core.reset_execution_state_from_seed(&decoded).unwrap();
+        assert_eq!(core.capture_execution_seed(), seed);
+
+        let stable = core.capture_execution_seed();
+        let mut unresolved_data = seed.clone();
+        *unresolved_data.heap[object.0 as usize]
+            .properties
+            .get_exact_mut(&d800)
+            .unwrap() = Value::Symbol(SymbolId(999));
+        assert!(
+            serde_json::from_value::<ExecutionSeed>(
+                serde_json::to_value(&unresolved_data).unwrap()
+            )
+            .is_err()
+        );
+        assert!(
+            core.reset_execution_state_from_seed(&unresolved_data)
+                .is_err()
+        );
+        assert_eq!(core.capture_execution_seed(), stable);
+
+        let mut unresolved_accessor = seed;
+        unresolved_accessor.heap[object.0 as usize].insert_exact_accessor(
+            d801,
+            AccessorProperty {
+                get: Some(Value::Symbol(SymbolId(999))),
+                set: None,
+            },
+        );
+        assert!(
+            serde_json::from_value::<ExecutionSeed>(
+                serde_json::to_value(&unresolved_accessor).unwrap()
+            )
+            .is_err()
+        );
+        assert!(
+            core.reset_execution_state_from_seed(&unresolved_accessor)
+                .is_err()
+        );
+        assert_eq!(core.capture_execution_seed(), stable);
     }
 
     #[test]
@@ -15793,6 +16647,128 @@ mod tests {
                 key: "secret".to_string(),
             }]
         );
+    }
+
+    #[test]
+    fn exact_keys_respect_legacy_string_callback_boundary_bd_b12xs_4() {
+        let d800 = JsString::from_code_units(&[0xD800]);
+        let module = test_module(Vec::new());
+
+        let mut unhooked = quickjs_test_core();
+        let unhooked_object = unhooked.alloc_object_with_prototype(None).unwrap();
+        unhooked
+            .set_object_property_or_call_accessor(
+                &module,
+                Value::Object(unhooked_object),
+                unhooked_object,
+                RuntimePropertyKey::String(d800.clone()),
+                Value::Int(8),
+            )
+            .unwrap();
+        assert_eq!(
+            unhooked
+                .prototype_chain_lookup_runtime_property(
+                    unhooked_object,
+                    &RuntimePropertyKey::String(d800.clone()),
+                )
+                .unwrap(),
+            Some(RuntimeProperty::Data(Value::Int(8)))
+        );
+
+        let hook = Arc::new(RecordingHook::allow_all());
+        let mut core = quickjs_test_core();
+        let object = core.alloc_object_with_prototype(None).unwrap();
+        core.set_hook(hook.clone());
+        let heap_before = serde_json::to_string(&core.heap).unwrap();
+        let memory_before = core.estimated_memory_bytes();
+
+        let error = core
+            .set_object_property_or_call_accessor(
+                &module,
+                Value::Object(object),
+                object,
+                RuntimePropertyKey::String(d800.clone()),
+                Value::Int(8),
+            )
+            .unwrap_err();
+        assert!(matches!(error, InterpreterError::TypeError { .. }));
+        assert!(hook.records().is_empty());
+        assert_eq!(serde_json::to_string(&core.heap).unwrap(), heap_before);
+        assert_eq!(core.estimated_memory_bytes(), memory_before);
+
+        assert!(matches!(
+            core.load_object_property_or_call_accessor(
+                &module,
+                Value::Object(object),
+                object,
+                &RuntimePropertyKey::String(d800.clone()),
+                0,
+            ),
+            Err(InterpreterError::TypeError { .. })
+        ));
+        assert!(hook.records().is_empty());
+        assert_eq!(serde_json::to_string(&core.heap).unwrap(), heap_before);
+
+        core.registers[1] = Value::Str(d800.clone());
+        core.registers[2] = Value::Object(object);
+        assert!(matches!(
+            core.eval_in_operator(1, 2),
+            Err(InterpreterError::TypeError { .. })
+        ));
+        assert!(hook.records().is_empty());
+        assert_eq!(serde_json::to_string(&core.heap).unwrap(), heap_before);
+
+        let function_objects_before = core.function_objects.clone();
+        assert!(matches!(
+            core.set_function_like_property_or_call_accessor(
+                &module,
+                Value::Function(0),
+                &RuntimePropertyKey::String(d800),
+                Value::Int(9),
+            ),
+            Err(InterpreterError::TypeError { .. })
+        ));
+        assert!(hook.records().is_empty());
+        assert_eq!(core.function_objects, function_objects_before);
+        assert_eq!(serde_json::to_string(&core.heap).unwrap(), heap_before);
+        assert_eq!(core.estimated_memory_bytes(), memory_before);
+
+        core.set_object_property_or_call_accessor(
+            &module,
+            Value::Object(object),
+            object,
+            RuntimePropertyKey::String(JsString::from("\u{FFFD}")),
+            Value::Int(0xFFFD),
+        )
+        .unwrap();
+        assert_eq!(hook.records().len(), 1);
+        assert!(matches!(
+            &hook.records()[0],
+            HookRecord::Property { key, .. } if key == "\u{FFFD}"
+        ));
+
+        let primitive_hook = Arc::new(RecordingHook::allow_all());
+        let mut primitive_core = quickjs_test_core();
+        primitive_core.set_hook(primitive_hook.clone());
+        primitive_core.registers[1] = Value::str("receiver");
+        primitive_core.registers[2] = Value::Str(JsString::from_code_units(&[0xD800]));
+        assert!(matches!(
+            primitive_core.execute(&test_module(vec![
+                Ir3Instruction::GetProperty {
+                    obj: 1,
+                    key: 2,
+                    dst: 3,
+                },
+                Ir3Instruction::Halt,
+            ])),
+            Err(InterpreterError::TypeError { .. })
+        ));
+        assert!(
+            primitive_hook
+                .records_without_startup_module_record()
+                .is_empty()
+        );
+        assert_eq!(primitive_core.registers[3], Value::Undefined);
     }
 
     #[test]
@@ -19476,7 +20452,7 @@ mod tests {
             .properties
             .insert("only".to_string(), Value::Int(1));
         let legacy_data_only = data_only.clone();
-        let _ = data_only.record_property_definition("only", true);
+        let _ = data_only.record_property_definition(&JsString::from("only"), true);
         assert_eq!(
             data_only.own_property_keys(),
             legacy_data_only.own_property_keys()
@@ -19738,6 +20714,8 @@ mod tests {
             .unwrap();
         core.set_object_property(object_id, "b".to_string(), Value::Int(2))
             .unwrap();
+        let object_before = core.heap[object_id.0 as usize].clone();
+        let wire_before = serde_json::to_string(&object_before).unwrap();
         let memory_before = core.estimated_memory_bytes();
         core.config.max_total_memory_bytes = memory_before;
 
@@ -19761,6 +20739,11 @@ mod tests {
             Some(&Value::Int(1))
         );
         assert!(!core.heap[object_id.0 as usize].accessors.contains_key("a"));
+        assert_eq!(core.heap[object_id.0 as usize], object_before);
+        assert_eq!(
+            serde_json::to_string(&core.heap[object_id.0 as usize]).unwrap(),
+            wire_before
+        );
         assert_eq!(core.estimated_memory_bytes(), memory_before);
     }
 
@@ -19801,6 +20784,96 @@ mod tests {
             Some(&Value::Function(1))
         );
         assert_eq!(core.estimated_memory_bytes(), memory_before);
+    }
+
+    #[test]
+    fn failed_exact_descriptor_conversions_restore_wire_and_memory_bd_b12xs_4() {
+        let mut core = quickjs_test_core();
+        let object = core.alloc_object_with_prototype(None).unwrap();
+        let d800 = JsString::from_code_units(&[0xD800]);
+        let d801 = JsString::from_code_units(&[0xD801]);
+        core.set_object_runtime_property(
+            object,
+            RuntimePropertyKey::String(d800.clone()),
+            Value::Int(8),
+        )
+        .unwrap();
+        core.set_object_string_property(
+            object,
+            exact_accessor_definition_key(IR_ACCESSOR_GET_PREFIX, &d801),
+            Value::Function(1),
+        )
+        .unwrap();
+
+        let object_before = serde_json::to_string(&core.heap[object.0 as usize]).unwrap();
+        let memory_before = core.estimated_memory_bytes();
+        core.config.max_total_memory_bytes = memory_before;
+
+        let error = core
+            .set_object_string_property(
+                object,
+                exact_accessor_definition_key(IR_ACCESSOR_GET_PREFIX, &d800),
+                Value::str("x".repeat(512)),
+            )
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            InterpreterError::MemoryBudgetExceeded { .. }
+        ));
+        assert_eq!(
+            serde_json::to_string(&core.heap[object.0 as usize]).unwrap(),
+            object_before
+        );
+        assert_eq!(core.estimated_memory_bytes(), memory_before);
+
+        let error = core
+            .set_plain_data_runtime_property(
+                object,
+                RuntimePropertyKey::String(d801),
+                Value::str("y".repeat(512)),
+            )
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            InterpreterError::MemoryBudgetExceeded { .. }
+        ));
+        assert_eq!(
+            serde_json::to_string(&core.heap[object.0 as usize]).unwrap(),
+            object_before
+        );
+        assert_eq!(core.estimated_memory_bytes(), memory_before);
+    }
+
+    #[test]
+    fn exact_data_and_accessor_memory_deltas_are_charged_bd_b12xs_4() {
+        let mut core = quickjs_test_core();
+        let object = core.alloc_object_with_prototype(None).unwrap();
+        let d800 = JsString::from_code_units(&[0xD800]);
+        let key_bytes = InterpreterCore::estimate_js_string_bytes(&d800);
+        core.sync_estimated_memory_bytes().unwrap();
+        let empty_memory = core.estimated_memory_bytes();
+
+        core.set_object_runtime_property(
+            object,
+            RuntimePropertyKey::String(d800.clone()),
+            Value::Int(8),
+        )
+        .unwrap();
+        assert_eq!(
+            core.estimated_memory_bytes() - empty_memory,
+            MEMORY_ESTIMATE_MAP_ENTRY_BYTES + key_bytes * 3
+        );
+
+        core.set_object_string_property(
+            object,
+            exact_accessor_definition_key(IR_ACCESSOR_GET_PREFIX, &d800),
+            Value::Function(1),
+        )
+        .unwrap();
+        assert_eq!(
+            core.estimated_memory_bytes() - empty_memory,
+            MEMORY_ESTIMATE_MAP_ENTRY_BYTES + key_bytes * 2
+        );
     }
 
     #[test]

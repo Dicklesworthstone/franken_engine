@@ -3304,7 +3304,8 @@ impl InterpreterCore {
 
     /// Property access on a string receiver (`GetProperty` with a
     /// `Value::Str` object): `length` is the ES UTF-16 code-unit count and
-    /// the known String.prototype methods surface as first-class
+    /// canonical indexed keys expose one exact UTF-16 code unit, and the
+    /// known String.prototype methods surface as first-class
     /// [`BuiltinFunction`] values the `CallMethod` seam dispatches with the
     /// receiver. Unknown keys return `None` (the `GetProperty` caller yields
     /// `undefined` per ES GetV semantics — bd-7zwar).
@@ -3329,7 +3330,9 @@ impl InterpreterCore {
             "toWellFormed" => Some(Value::BuiltinFunction(BuiltinFunction::string_method(
                 BuiltinFunctionKind::StringPrototypeToWellFormed,
             ))),
-            _ => None,
+            _ => canonical_array_index(key)
+                .and_then(|index| text.encode_utf16().nth(index as usize))
+                .map(|unit| Value::Str(JsString::from_code_units(&[unit]))),
         }
     }
 
@@ -17410,6 +17413,30 @@ mod tests {
             )
             .unwrap();
         assert_eq!(out_of_range, Value::Str(JsString::empty()));
+    }
+
+    #[test]
+    fn string_receiver_index_properties_preserve_exact_utf16_units_bd_pel1v() {
+        let text = JsString::from_code_units(&[0x0061, 0xD83D, 0xDE00, 0xD800]);
+
+        for (key, expected_unit) in [("0", 0x0061), ("1", 0xD83D), ("2", 0xDE00), ("3", 0xD800)] {
+            let Some(Value::Str(value)) = InterpreterCore::string_property_value(&text, key) else {
+                panic!("canonical in-range string index {key} must produce a string value");
+            };
+            assert_eq!(value.code_units_vec(), vec![expected_unit]);
+        }
+
+        assert_eq!(
+            InterpreterCore::string_property_value(&text, "length"),
+            Some(Value::Int(4))
+        );
+        for key in ["4", "01", "-1", "1.0", "4294967295"] {
+            assert_eq!(
+                InterpreterCore::string_property_value(&text, key),
+                None,
+                "non-canonical or out-of-range key {key} must stay absent"
+            );
+        }
     }
 
     // -----------------------------------------------------------------------

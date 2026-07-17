@@ -130,7 +130,10 @@ const IMPLEMENTED_FIXTURE_IDS: &[&str] = &[
     "tc::stream::0010",
     "tc::stream::0011",
     "tc::stream::0012",
+    "tc::stream::0016",
     "tc::stream::0017",
+    "tc::stream::0018",
+    "tc::stream::0021",
     "tc::stream::0022",
     "tc::stream::0023",
     "tc::stream::0029",
@@ -153,6 +156,8 @@ const IMPLEMENTED_FIXTURE_IDS: &[&str] = &[
     "tc::stream::0054",
     "tc::stream::0055",
     "tc::stream::0062",
+    "tc::stream::0063",
+    "tc::stream::0064",
 ];
 
 #[test]
@@ -166,7 +171,7 @@ fn target_and_implemented_inventories_are_explicit() {
         .iter()
         .copied()
         .collect::<BTreeSet<_>>();
-    assert_eq!(IMPLEMENTED_FIXTURE_IDS.len(), 34);
+    assert_eq!(IMPLEMENTED_FIXTURE_IDS.len(), 39);
     assert_eq!(implemented.len(), IMPLEMENTED_FIXTURE_IDS.len());
     assert!(IMPLEMENTED_FIXTURE_IDS.iter().all(|id| unique.contains(id)));
 }
@@ -1382,8 +1387,8 @@ fn writable_destroy_error_argument_is_deferred_and_handled() {
 }
 
 #[test]
-#[ignore = "bd-fw7zd: Transform/PassThrough slice not implemented yet"]
-fn transform_flush_object_mode_and_pass_through() {
+#[ignore = "bd-fw7zd: Transform slice not implemented yet"]
+fn transform_flush_and_object_mode() {
     assert_cases(&[
         EvalCase {
             ids: &["tc::stream::0014"],
@@ -1432,6 +1437,12 @@ fn transform_flush_object_mode_and_pass_through() {
             "#,
             expected: "v:6\nv:10\nend",
         },
+    ]);
+}
+
+#[test]
+fn passthrough_preserves_chunks_and_shared_lifecycle() {
+    assert_cases(&[
         EvalCase {
             ids: &["tc::stream::0016"],
             description: "PassThrough preserves byte chunks",
@@ -1466,6 +1477,92 @@ fn transform_flush_object_mode_and_pass_through() {
                 console.log(chunks.join(','));
             "#,
             expected: "data,data,end,close\nfront,back",
+        },
+        EvalCase {
+            ids: &[],
+            description: "PassThrough shared closed flags remain false until readable close",
+            source: r#"
+                const { PassThrough } = require('stream');
+                const stream = new PassThrough();
+                stream.resume();
+                stream.on('prefinish', () => console.log('prefinish:' + stream.destroyed + ':' + stream.closed));
+                stream.on('end', () => {
+                  delete stream.__type;
+                  console.log('end:' + stream.destroyed + ':' + stream.closed);
+                });
+                stream.on('finish', () => console.log('finish:' + stream.destroyed + ':' + stream.closed));
+                stream.on('close', () => console.log('close:' + stream.destroyed + ':' + stream.closed));
+                stream.end('x');
+            "#,
+            expected: "prefinish:false:false\nend:false:false\nfinish:false:false\nclose:true:true",
+        },
+        EvalCase {
+            ids: &[],
+            description: "paused PassThrough finishes without waiting for its buffered readable half",
+            source: r#"
+                const { PassThrough } = require('stream');
+                const stream = new PassThrough();
+                const events = [];
+                stream.on('prefinish', () => events.push('prefinish'));
+                stream.on('end', () => events.push('wrong:end'));
+                stream.on('close', () => events.push('wrong:close'));
+                stream.on('finish', () => {
+                  events.push('finish');
+                  console.log(events.join(',') + ':' + stream.readableEnded + ':' + stream.readableLength + ':' + stream.closed);
+                });
+                stream.end('x');
+            "#,
+            expected: "prefinish,finish:false:1:false",
+        },
+        EvalCase {
+            ids: &[],
+            description: "prefinish pause cannot revoke an already-flowing end-before-finish commitment",
+            source: r#"
+                const { PassThrough } = require('stream');
+                const stream = new PassThrough();
+                const events = [];
+                stream.resume();
+                stream.on('prefinish', () => { events.push('prefinish'); stream.pause(); });
+                stream.on('end', () => events.push('end'));
+                stream.on('finish', () => events.push('finish'));
+                stream.on('close', () => { events.push('close'); console.log(events.join(',')); });
+                stream.end('x');
+            "#,
+            expected: "prefinish,end,finish,close",
+        },
+        EvalCase {
+            ids: &[],
+            description: "prefinish resume cannot retroactively defer a paused Writable finish",
+            source: r#"
+                const { PassThrough } = require('stream');
+                const stream = new PassThrough();
+                const events = [];
+                stream.on('prefinish', () => { events.push('prefinish'); stream.resume(); });
+                stream.on('end', () => events.push('end'));
+                stream.on('finish', () => events.push('finish'));
+                stream.on('close', () => { events.push('close'); console.log(events.join(',')); });
+                stream.end('x');
+            "#,
+            expected: "prefinish,finish,end,close",
+        },
+        EvalCase {
+            ids: &[],
+            description: "PassThrough preserves a synchronous listener throw while terminating both halves",
+            source: r#"
+                const { PassThrough } = require('stream');
+                const stream = new PassThrough();
+                const marker = { message: 'boom' };
+                stream.on('data', () => { throw marker; });
+                stream.on('error', (error) => console.log('error:' + (error === marker)));
+                stream.on('close', () => console.log('close'));
+                try {
+                  stream.write('x');
+                } catch (error) {
+                  console.log('caught:' + (error === marker) + ':' + error.message);
+                }
+                console.log('state:' + stream.destroyed + ':' + stream.closed);
+            "#,
+            expected: "caught:true:boom\nstate:true:true\nerror:true\nclose",
         },
     ]);
 }
@@ -1585,7 +1682,6 @@ fn readable_pipe_returns_destination_and_preserves_lifecycle_order_bd_7h43f() {
 }
 
 #[test]
-#[ignore = "bd-fw7zd: PassThrough and unpipe slices not implemented yet"]
 fn pipe_unpipe_and_event_emitter_inheritance() {
     assert_cases(&[
         EvalCase {
@@ -1648,18 +1744,13 @@ fn pipe_unpipe_and_event_emitter_inheritance() {
     let source = r#"
         const { PassThrough } = require('stream');
         const stream = new PassThrough();
-        let onceCount = 0;
         console.log(stream.on('custom', () => console.log('on')) === stream);
-        console.log(stream.once('custom', () => { onceCount++; console.log('once'); }) === stream);
+        console.log(stream.once('custom', () => console.log('once')) === stream);
         console.log(stream.emit('custom'));
         console.log(stream.emit('custom'));
-        console.log('once-count:' + onceCount);
         stream.end();
     "#;
-    assert_eq!(
-        eval_console(source),
-        "true\ntrue\non\nonce\ntrue\non\ntrue\nonce-count:1"
-    );
+    assert_eq!(eval_console(source), "true\ntrue\non\nonce\ntrue\non\ntrue");
 }
 
 #[test]

@@ -2136,6 +2136,15 @@ pub enum BuiltinFunctionKind {
     /// Destination-bound listener that forwards the Readable `end` event
     /// through the existing Writable terminal kernel.
     StreamReadablePipeEnd,
+    /// `Readable.prototype.unpipe([destination])` for the authenticated
+    /// single-destination pipe edge (bd-fw7zd.10).
+    StreamReadableUnpipe,
+    /// Engine-owned `_write`/`_final` callbacks coupling one PassThrough's
+    /// Writable and Readable state without exposing a forgeable JS hook.
+    StreamPassThroughWrite,
+    StreamPassThroughFinal,
+    /// Composite teardown for the two authenticated halves of PassThrough.
+    StreamPassThroughDestroy,
 }
 
 impl BuiltinFunctionKind {
@@ -3364,6 +3373,7 @@ impl BuiltinFunction {
             BuiltinFunctionKind::StreamReadableRead => "read",
             BuiltinFunctionKind::StreamReadableUnshift => "unshift",
             BuiltinFunctionKind::StreamReadablePipe => "pipe",
+            BuiltinFunctionKind::StreamReadableUnpipe => "unpipe",
             BuiltinFunctionKind::StreamReadablePipeData => "ondata",
             BuiltinFunctionKind::StreamReadablePipeEnd => "onend",
             BuiltinFunctionKind::StreamReadableSetEncoding => "setEncoding",
@@ -3375,6 +3385,9 @@ impl BuiltinFunction {
             BuiltinFunctionKind::StreamWritableCork => "cork",
             BuiltinFunctionKind::StreamWritableUncork => "uncork",
             BuiltinFunctionKind::StreamWritableDestroy => "destroy",
+            BuiltinFunctionKind::StreamPassThroughWrite => "_write",
+            BuiltinFunctionKind::StreamPassThroughFinal => "_final",
+            BuiltinFunctionKind::StreamPassThroughDestroy => "destroy",
             BuiltinFunctionKind::NetServerListen => "listen",
             BuiltinFunctionKind::NetServerAddress => "address",
             BuiltinFunctionKind::NetServerClose => "close",
@@ -6342,6 +6355,11 @@ struct WritableState {
     /// Keeping it in the fixed-size, already-accounted state preserves FIFO
     /// scheduling without retaining a second allocation-owning queue.
     tick_sequence: Option<u64>,
+    /// Sequence reserved by an engine-owned PassThrough `_final` before its
+    /// synchronous `prefinish`. It is not scheduler-visible until the
+    /// authenticated final token completes immediately or after readable
+    /// `end`, so re-entrant/unrelated work cannot strand that token.
+    deferred_final_tick_sequence: Option<u64>,
     inside_write_invocation: bool,
     lifecycle_label: Label,
 }
@@ -9926,6 +9944,43 @@ impl InterpreterCore {
         self.next_writable_tick_sequence = 0;
     }
 
+    /// Readable side-table state is execution-local for the same reason as
+    /// Writable state: restoring a seeded heap can reuse an ObjectId. Cancel
+    /// every engine-owned pump before dropping its side-table owner, then
+    /// release the exact resident state/reservation charges and shared event
+    /// records keyed by those ids.
+    fn clear_readable_execution_state(&mut self) {
+        self.clear_readable_pipe_links();
+
+        let registrations: Vec<u64> = self.pending_readable_from_pumps.keys().copied().collect();
+        let previous_promise_bytes = self.promise_runtime_memory_bytes();
+        for registration in registrations {
+            self.event_loop.cancel_registration(registration);
+        }
+        let released_promise_bytes =
+            previous_promise_bytes.saturating_sub(self.promise_runtime_memory_bytes());
+        let retained_bytes =
+            self.readable_from_streams_memory_bytes()
+                .saturating_add(Self::saturating_sum(
+                    self.readable_pump_reservations
+                        .values()
+                        .map(|reservation| reservation.bytes),
+                ));
+        let targets: Vec<ObjectId> = self.readable_from_streams.keys().copied().collect();
+
+        self.readable_from_streams.clear();
+        self.pending_readable_from_pumps.clear();
+        self.readable_pump_reservations.clear();
+        for target in targets {
+            self.clear_event_listeners(target, None);
+            self.clear_event_promise_waiters_for_target(target);
+        }
+        self.estimated_memory_bytes = self
+            .estimated_memory_bytes
+            .saturating_sub(retained_bytes)
+            .saturating_sub(released_promise_bytes);
+    }
+
     fn event_name_arg(
         &self,
         args: RegRange,
@@ -10239,6 +10294,7 @@ impl InterpreterCore {
             terminal_error_emitted: false,
             tick_phase: WritableTickPhase::Callbacks,
             tick_sequence: None,
+            deferred_final_tick_sequence: None,
             inside_write_invocation: false,
             lifecycle_label,
         };
@@ -10274,13 +10330,147 @@ impl InterpreterCore {
         Ok(Value::Object(object_id))
     }
 
+    /// Allocate one authenticated object that owns both existing stream-state
+    /// kernels. The two side-table records and the heap object commit as one
+    /// memory transaction so a refused aggregate budget cannot leave a
+    /// readable-only or writable-only identity behind (bd-fw7zd.10).
+    fn construct_stream_passthrough(&mut self, args: RegRange) -> Result<Value, InterpreterError> {
+        if args.count > 0 && !matches!(self.read_reg(args.start)?, Value::Undefined | Value::Null) {
+            let lifecycle_label = self.get_register_label(args.start)?;
+            // `stream_constructor_options` materializes one owned label and
+            // the dual state needs a second owner. Admit that attacker-sized
+            // physical peak before either clone exists; the later aggregate
+            // transaction accounts both retained copies exactly.
+            self.check_temporary_memory_budget(
+                Self::estimate_label_bytes(lifecycle_label).saturating_mul(2),
+            )?;
+        }
+        let (object_mode, high_water_mark, lifecycle_label) =
+            self.stream_constructor_options(args, 65_536)?;
+        let high_water_mark_usize = usize::try_from(high_water_mark).unwrap_or(usize::MAX);
+        let readable_state = ReadableFromState {
+            source: Value::Undefined,
+            push_only: true,
+            object_mode,
+            high_water_mark: high_water_mark_usize,
+            read_callback: None,
+            buffer: VecDeque::new(),
+            buffered_length: 0,
+            eof_requested: false,
+            data_readable_pending: false,
+            eof_readable_pending: false,
+            read_callback_active: false,
+            decode_utf8: false,
+            utf8_pending: Vec::new(),
+            destroy_requested: false,
+            destroy_error: None,
+            next_index: 0,
+            phase: ReadableFromPumpPhase::Data,
+            flowing: false,
+            paused: false,
+            lifecycle_label: lifecycle_label.clone(),
+            to_array_waiter: None,
+        };
+        let writable_state = WritableState {
+            object_mode,
+            high_water_mark: high_water_mark_usize,
+            write_callback: Some(Value::BuiltinFunction(BuiltinFunction::new_kind(
+                BuiltinFunctionKind::StreamPassThroughWrite,
+            ))),
+            final_callback: Some(Value::BuiltinFunction(BuiltinFunction::new_kind(
+                BuiltinFunctionKind::StreamPassThroughFinal,
+            ))),
+            writes: WritableWriteQueue::default(),
+            buffered_length: 0,
+            cork_depth: 0,
+            end_requested: false,
+            destroy_requested: false,
+            end_callbacks: LinkedList::new(),
+            end_callback_batch_remaining: 0,
+            finished_end_callback_batch_remaining: 0,
+            final_status: WritableFinalStatus::NotStarted,
+            prefinish_emitted: false,
+            finished: false,
+            terminal_error: None,
+            terminal_error_origin: None,
+            terminal_error_emitted: false,
+            tick_phase: WritableTickPhase::Callbacks,
+            tick_sequence: None,
+            deferred_final_tick_sequence: None,
+            inside_write_invocation: false,
+            lifecycle_label,
+        };
+        let properties = [
+            ("__type", Value::str("PassThrough")),
+            ("__maxListeners", Value::Int(10)),
+            ("readable", Value::Bool(true)),
+            ("readableEnded", Value::Bool(false)),
+            ("readableFlowing", Value::Null),
+            ("readableLength", Value::Int(0)),
+            ("readableObjectMode", Value::Bool(object_mode)),
+            ("readableHighWaterMark", Value::Int(high_water_mark)),
+            ("writable", Value::Bool(true)),
+            ("writableEnded", Value::Bool(false)),
+            ("writableFinished", Value::Bool(false)),
+            ("writableLength", Value::Int(0)),
+            ("writableCorked", Value::Int(0)),
+            ("writableNeedDrain", Value::Bool(false)),
+            ("writableObjectMode", Value::Bool(object_mode)),
+            ("writableHighWaterMark", Value::Int(high_water_mark)),
+            ("destroyed", Value::Bool(false)),
+            ("closed", Value::Bool(false)),
+        ];
+        let mut projected_object = HeapObject::new();
+        for (key, value) in &properties {
+            projected_object
+                .properties
+                .insert((*key).to_string(), value.clone());
+        }
+        let readable_bytes = Self::estimate_readable_from_state_bytes(&readable_state);
+        let writable_bytes = Self::estimate_writable_state_bytes(&writable_state);
+        let object_bytes = Self::estimate_heap_object_bytes(&projected_object);
+        // The projected object exists only to make the aggregate admission
+        // exact. Release that duplicate property map before the real heap
+        // allocation clones the fixed constructor property slice.
+        drop(projected_object);
+        let requested_bytes = self
+            .estimated_memory_bytes
+            .saturating_add(readable_bytes)
+            .saturating_add(writable_bytes)
+            .saturating_add(object_bytes);
+        if Self::memory_request_exceeds_budget(requested_bytes, self.config.max_total_memory_bytes)
+        {
+            return Err(self.memory_budget_error(
+                requested_bytes,
+                self.heap_object_count_u32().saturating_add(1),
+            ));
+        }
+
+        let previous_total = self.estimated_memory_bytes;
+        let previous_heap_len = self.heap.len();
+        self.apply_memory_component_delta(0, readable_bytes.saturating_add(writable_bytes))?;
+        let object_id = match self.alloc_object_with_properties(&properties) {
+            Ok(object_id) => object_id,
+            Err(error) => {
+                self.rollback_heap_to_len(previous_heap_len);
+                self.estimated_memory_bytes = previous_total;
+                return Err(error);
+            }
+        };
+        self.readable_from_streams.insert(object_id, readable_state);
+        self.writable_streams.insert(object_id, writable_state);
+        Ok(Value::Object(object_id))
+    }
+
     /// Resolve public Writable state from engine-owned storage before ordinary
     /// heap properties. Guest writes, accessors, and deletions may mutate the
     /// compatibility mirrors, but they cannot forge these authoritative reads.
     fn writable_state_view_value(&self, object_id: ObjectId, key: &str) -> Option<Value> {
         if let Some(state) = self.writable_streams.get(&object_id) {
-            let terminal_close_observable =
-                state.destroy_requested || state.tick_phase == WritableTickPhase::Release;
+            let terminal_close_observable = self.readable_from_streams.get(&object_id).map_or_else(
+                || state.destroy_requested || state.tick_phase == WritableTickPhase::Release,
+                |readable| readable.destroy_requested,
+            );
             return match key {
                 "writable" => Some(Value::Bool(
                     !state.end_requested && !state.destroy_requested && !state.finished,
@@ -10304,6 +10494,10 @@ impl InterpreterCore {
         }
 
         let state = self.writable_terminal_states.get(&object_id)?;
+        let terminal_close_observable = self
+            .readable_from_streams
+            .get(&object_id)
+            .is_none_or(|readable| readable.destroy_requested);
         match key {
             "writable" => Some(Value::Bool(false)),
             "writableEnded" => Some(Value::Bool(state.end_requested)),
@@ -10317,7 +10511,7 @@ impl InterpreterCore {
             "writableHighWaterMark" => Some(Value::Int(
                 i64::try_from(state.high_water_mark).unwrap_or(i64::MAX),
             )),
-            "destroyed" | "closed" => Some(Value::Bool(true)),
+            "destroyed" | "closed" => Some(Value::Bool(terminal_close_observable)),
             _ => None,
         }
     }
@@ -10833,7 +11027,6 @@ impl InterpreterCore {
         receiver: Value,
         args: RegRange,
     ) -> Result<Value, InterpreterError> {
-        let object_id = self.writable_receiver_id(receiver.clone())?;
         let error_register = self.writable_completion_error_register(args)?;
         let mut trigger_label = self.writable_invocation_label(args)?;
         let error = error_register.map(|reg| &self.registers[self.register_base + reg as usize]);
@@ -10843,6 +11036,17 @@ impl InterpreterCore {
                     self.join_owned_label_with_temporary_budget(trigger_label, storage_label)?;
             }
         }
+        self.writable_destroy_with_trigger(receiver, error_register, trigger_label)
+    }
+
+    fn writable_destroy_with_trigger(
+        &mut self,
+        receiver: Value,
+        error_register: Option<u32>,
+        trigger_label: Label,
+    ) -> Result<Value, InterpreterError> {
+        let object_id = self.writable_receiver_id(receiver.clone())?;
+        let error = error_register.map(|reg| &self.registers[self.register_base + reg as usize]);
         if self.writable_terminal_states.contains_key(&object_id) {
             self.join_writable_terminal_label(object_id, trigger_label)?;
             self.detach_readable_pipes_to_destination(object_id);
@@ -10945,14 +11149,18 @@ impl InterpreterCore {
             return Err(self.memory_budget_error(requested_bytes, self.heap_object_count_u32()));
         }
         let scheduled_tick = if current.tick_sequence.is_none() {
-            let sequence = self.next_writable_tick_sequence;
-            let next_sequence =
-                sequence
-                    .checked_add(1)
-                    .ok_or_else(|| InterpreterError::InternalError {
-                        details: "Writable tick sequence space exhausted".to_string(),
-                    })?;
-            Some((sequence, next_sequence))
+            if let Some(sequence) = current.deferred_final_tick_sequence {
+                Some((sequence, None))
+            } else {
+                let sequence = self.next_writable_tick_sequence;
+                let next_sequence =
+                    sequence
+                        .checked_add(1)
+                        .ok_or_else(|| InterpreterError::InternalError {
+                            details: "Writable tick sequence space exhausted".to_string(),
+                        })?;
+                Some((sequence, Some(next_sequence)))
+            }
         } else {
             None
         };
@@ -11009,6 +11217,7 @@ impl InterpreterCore {
         };
         destroyed.finished_end_callback_batch_remaining = finished_callbacks_before_destroy_error;
         destroyed.final_status = WritableFinalStatus::Done;
+        destroyed.deferred_final_tick_sequence = None;
         destroyed.prefinish_emitted = true;
         destroyed.terminal_error = terminal_error;
         destroyed.terminal_error_origin = terminal_error_origin;
@@ -11020,7 +11229,9 @@ impl InterpreterCore {
         destroyed.inside_write_invocation = false;
         if let Some((sequence, next_sequence)) = scheduled_tick {
             destroyed.tick_sequence = Some(sequence);
-            self.next_writable_tick_sequence = next_sequence;
+            if let Some(next_sequence) = next_sequence {
+                self.next_writable_tick_sequence = next_sequence;
+            }
         }
         debug_assert_eq!(
             Self::estimate_writable_state_bytes(&destroyed),
@@ -11479,14 +11690,18 @@ impl InterpreterCore {
             return Err(self.memory_budget_error(requested_bytes, self.heap_object_count_u32()));
         }
         let scheduled_tick = if state.tick_sequence.is_none() {
-            let sequence = self.next_writable_tick_sequence;
-            let next_sequence =
-                sequence
-                    .checked_add(1)
-                    .ok_or_else(|| InterpreterError::InternalError {
-                        details: "Writable tick sequence space exhausted".to_string(),
-                    })?;
-            Some((sequence, next_sequence))
+            if let Some(sequence) = state.deferred_final_tick_sequence {
+                Some((sequence, None))
+            } else {
+                let sequence = self.next_writable_tick_sequence;
+                let next_sequence =
+                    sequence
+                        .checked_add(1)
+                        .ok_or_else(|| InterpreterError::InternalError {
+                            details: "Writable tick sequence space exhausted".to_string(),
+                        })?;
+                Some((sequence, Some(next_sequence)))
+            }
         } else {
             None
         };
@@ -11499,6 +11714,7 @@ impl InterpreterCore {
             .get_mut(&object_id)
             .expect("Writable final state survived preflight");
         state.final_status = WritableFinalStatus::Done;
+        state.deferred_final_tick_sequence = None;
         if let Some((error, error_label)) = completion_error {
             state.terminal_error = None;
             let terminal_label = if error_label > state.lifecycle_label {
@@ -11513,7 +11729,9 @@ impl InterpreterCore {
         }
         if let Some((sequence, next_sequence)) = scheduled_tick {
             state.tick_sequence = Some(sequence);
-            self.next_writable_tick_sequence = next_sequence;
+            if let Some(next_sequence) = next_sequence {
+                self.next_writable_tick_sequence = next_sequence;
+            }
         }
         self.emit_writable_prefinish(object_id, module)?;
         Ok(Value::Undefined)
@@ -11573,21 +11791,25 @@ impl InterpreterCore {
             return Err(budget_error);
         }
         let scheduled_tick = if state.tick_sequence.is_none() {
-            let sequence = self.next_writable_tick_sequence;
-            let Some(next_sequence) = sequence.checked_add(1) else {
-                if restore_pending_exception_on_refusal {
-                    self.estimated_memory_bytes = self
-                        .estimated_memory_bytes
-                        .saturating_add(Self::estimate_value_bytes(&error))
-                        .saturating_add(Self::estimate_label_bytes(&error_label));
-                    self.pending_exception = Some(error);
-                    self.pending_exception_label = error_label;
-                }
-                return Err(InterpreterError::InternalError {
-                    details: "Writable tick sequence space exhausted".to_string(),
-                });
-            };
-            Some((sequence, next_sequence))
+            if let Some(sequence) = state.deferred_final_tick_sequence {
+                Some((sequence, None))
+            } else {
+                let sequence = self.next_writable_tick_sequence;
+                let Some(next_sequence) = sequence.checked_add(1) else {
+                    if restore_pending_exception_on_refusal {
+                        self.estimated_memory_bytes = self
+                            .estimated_memory_bytes
+                            .saturating_add(Self::estimate_value_bytes(&error))
+                            .saturating_add(Self::estimate_label_bytes(&error_label));
+                        self.pending_exception = Some(error);
+                        self.pending_exception_label = error_label;
+                    }
+                    return Err(InterpreterError::InternalError {
+                        details: "Writable tick sequence space exhausted".to_string(),
+                    });
+                };
+                Some((sequence, Some(next_sequence)))
+            }
         } else {
             None
         };
@@ -11607,10 +11829,98 @@ impl InterpreterCore {
         state.terminal_error_origin = Some(origin);
         state.terminal_error_emitted = false;
         state.final_status = WritableFinalStatus::Done;
+        state.deferred_final_tick_sequence = None;
         state.inside_write_invocation = false;
         if let Some((sequence, next_sequence)) = scheduled_tick {
             state.tick_sequence = Some(sequence);
-            self.next_writable_tick_sequence = next_sequence;
+            if let Some(next_sequence) = next_sequence {
+                self.next_writable_tick_sequence = next_sequence;
+            }
+        }
+        Ok(())
+    }
+
+    /// An engine-owned PassThrough callback can fail only after the Writable
+    /// driver has authenticated and activated its completion token. Convert
+    /// that failure into one aggregate terminal transition so neither half can
+    /// remain live waiting for a callback/EOF that will never arrive.
+    fn record_passthrough_internal_failure(
+        &mut self,
+        object_id: ObjectId,
+        error: Value,
+        error_label: Label,
+        origin: WritableErrorOrigin,
+        restore_pending_exception_on_refusal: bool,
+    ) -> Result<(), InterpreterError> {
+        let readable_lifecycle_label = self
+            .readable_from_streams
+            .get(&object_id)
+            .filter(|state| !state.destroy_requested)
+            .map(|state| {
+                self.clone_dominant_label_with_temporary_budget(
+                    &state.lifecycle_label,
+                    &error_label,
+                    Self::estimate_label_bytes(&error_label),
+                )
+            })
+            .transpose()?;
+        let readable_error = readable_lifecycle_label.as_ref().map(|_| error.clone());
+        let readable_reservation = readable_lifecycle_label
+            .as_ref()
+            .and_then(|label| {
+                self.readable_destroy_memory_projection(object_id, readable_error.as_ref(), label)
+            })
+            .map(|(previous, destroyed, pump)| {
+                destroyed.saturating_add(pump).saturating_sub(previous)
+            })
+            .unwrap_or(0);
+
+        self.apply_memory_component_delta(0, readable_reservation)?;
+        if let Err(record_error) = self.record_writable_terminal_error(
+            object_id,
+            error,
+            error_label,
+            origin,
+            restore_pending_exception_on_refusal,
+        ) {
+            self.estimated_memory_bytes = self
+                .estimated_memory_bytes
+                .saturating_sub(readable_reservation);
+            return Err(record_error);
+        }
+        if let Some(state) = self.writable_streams.get_mut(&object_id) {
+            state.destroy_requested = true;
+            if origin == WritableErrorOrigin::Write {
+                for record in &mut state.writes {
+                    if matches!(
+                        record.status,
+                        WritableWriteStatus::Pending | WritableWriteStatus::Active(_)
+                    ) {
+                        record.status = WritableWriteStatus::Completed;
+                        record.completion_failed = true;
+                    }
+                }
+                state.buffered_length = 0;
+            }
+        }
+        if readable_lifecycle_label.is_some()
+            && let Some(state) = self.writable_streams.get_mut(&object_id)
+        {
+            // Readable owns the one shared EventEmitter error/close sequence.
+            state.terminal_error_emitted = true;
+        }
+        self.estimated_memory_bytes = self
+            .estimated_memory_bytes
+            .saturating_sub(readable_reservation);
+        if let (Some(readable_error), Some(lifecycle_label)) =
+            (readable_error, readable_lifecycle_label)
+        {
+            self.commit_readable_destroy(
+                object_id,
+                Value::Object(object_id),
+                Some(readable_error),
+                lifecycle_label,
+            )?;
         }
         Ok(())
     }
@@ -11620,15 +11930,29 @@ impl InterpreterCore {
         object_id: ObjectId,
         module: &Ir3Module,
     ) -> Result<(), InterpreterError> {
-        let Some(state) = self.writable_streams.get_mut(&object_id) else {
+        self.emit_writable_prefinish_with_tick(object_id, module, true)
+    }
+
+    fn emit_writable_prefinish_with_tick(
+        &mut self,
+        object_id: ObjectId,
+        module: &Ir3Module,
+        schedule_tick: bool,
+    ) -> Result<(), InterpreterError> {
+        let Some(state) = self.writable_streams.get(&object_id) else {
             return Ok(());
         };
         if state.prefinish_emitted || state.terminal_error.is_some() {
             return Ok(());
         }
-        state.prefinish_emitted = true;
         let label = state.lifecycle_label.clone();
-        self.schedule_writable_tick(object_id)?;
+        if schedule_tick {
+            self.schedule_writable_tick(object_id)?;
+        }
+        self.writable_streams
+            .get_mut(&object_id)
+            .expect("Writable prefinish state survived tick scheduling")
+            .prefinish_emitted = true;
         self.emit_event_listener_records(module, object_id, "prefinish", Vec::new(), label)?;
         Ok(())
     }
@@ -11721,6 +12045,11 @@ impl InterpreterCore {
                     self.emit_writable_prefinish(object_id, module)?;
                     return Ok(());
                 };
+                let passthrough_internal = matches!(
+                    &callback,
+                    Value::BuiltinFunction(builtin)
+                        if builtin.kind == BuiltinFunctionKind::StreamPassThroughFinal
+                );
                 let completion = Value::BuiltinFunction(BuiltinFunction::writable_completion(
                     BuiltinFunctionKind::StreamWritableFinalDone,
                     object_id,
@@ -11736,18 +12065,33 @@ impl InterpreterCore {
                 if let Err(error) = invocation {
                     let (error_value, error_label, consumes_pending_exception) =
                         self.writable_invocation_error_value(&error, label);
-                    self.record_writable_terminal_error(
-                        object_id,
-                        error_value,
-                        error_label,
-                        WritableErrorOrigin::Final,
-                        consumes_pending_exception,
-                    )?;
+                    if passthrough_internal {
+                        self.record_passthrough_internal_failure(
+                            object_id,
+                            error_value,
+                            error_label,
+                            WritableErrorOrigin::Final,
+                            consumes_pending_exception,
+                        )?;
+                    } else {
+                        self.record_writable_terminal_error(
+                            object_id,
+                            error_value,
+                            error_label,
+                            WritableErrorOrigin::Final,
+                            consumes_pending_exception,
+                        )?;
+                    }
                 }
                 return Ok(());
             }
 
             let callback = callback.expect("non-final Writable callback was preflighted");
+            let passthrough_internal = matches!(
+                &callback,
+                Value::BuiltinFunction(builtin)
+                    if builtin.kind == BuiltinFunctionKind::StreamPassThroughWrite
+            );
             let completion = Value::BuiltinFunction(BuiltinFunction::writable_completion(
                 BuiltinFunctionKind::StreamWritableWriteDone,
                 object_id,
@@ -11759,7 +12103,7 @@ impl InterpreterCore {
                     callback,
                     Value::Object(object_id),
                     vec![value, Value::str("utf8"), completion],
-                    Some(label),
+                    Some(label.clone()),
                 );
             if let Some(state) = self.writable_streams.get_mut(&object_id) {
                 state.inside_write_invocation = false;
@@ -11783,6 +12127,27 @@ impl InterpreterCore {
                         record.status = WritableWriteStatus::Pending;
                         self.next_writable_completion_token = token;
                     }
+                } else if passthrough_internal {
+                    let (error_value, error_label, consumes_pending_exception) =
+                        if matches!(&error, InterpreterError::UncaughtException { .. })
+                            && let Some(pending) = self.pending_exception.as_ref()
+                        {
+                            let pending_label = &self.pending_exception_label;
+                            self.check_temporary_memory_budget(
+                                Self::estimate_value_bytes(pending)
+                                    .saturating_add(Self::estimate_label_bytes(pending_label)),
+                            )?;
+                            (pending.clone(), pending_label.clone(), false)
+                        } else {
+                            self.writable_invocation_error_value(&error, label)
+                        };
+                    self.record_passthrough_internal_failure(
+                        object_id,
+                        error_value,
+                        error_label,
+                        WritableErrorOrigin::Write,
+                        consumes_pending_exception,
+                    )?;
                 }
                 return Err(error);
             }
@@ -12451,8 +12816,13 @@ impl InterpreterCore {
         );
         drop(state);
         self.writable_terminal_states.insert(object_id, terminal);
-        self.clear_event_listeners(object_id, None);
-        self.clear_event_promise_waiters_for_target(object_id);
+        // A PassThrough's readable half owns the shared emitter through its
+        // later end/close turn. Writable terminalization must retain those
+        // listeners and waiters instead of erasing the readable lifecycle.
+        if !self.readable_from_streams.contains_key(&object_id) {
+            self.clear_event_listeners(object_id, None);
+            self.clear_event_promise_waiters_for_target(object_id);
+        }
         Ok(())
     }
 
@@ -13102,6 +13472,14 @@ impl InterpreterCore {
                     state.tick_phase = WritableTickPhase::Release;
                 }
                 self.schedule_writable_tick(object_id)?;
+                if self.readable_from_streams.contains_key(&object_id) {
+                    // The readable half performs the sole shared close after
+                    // its EOF turn; keep compatibility mirrors open until it
+                    // does so, while the writable state advances to tombstone.
+                    self.mirror_writable_length(object_id, buffered_length);
+                    self.mirror_writable_cork_depth(object_id, cork_depth);
+                    return Ok(());
+                }
                 self.mirror_writable_bool(object_id, "destroyed", true);
                 self.mirror_writable_bool(object_id, "closed", true);
                 self.mirror_writable_length(object_id, buffered_length);
@@ -13999,6 +14377,68 @@ impl InterpreterCore {
         Ok(destination)
     }
 
+    /// Detach exactly the currently authenticated pipe edge. Teardown happens
+    /// before the destination's synchronous `unpipe` event so a re-entrant
+    /// listener may safely establish a fresh edge; the retired token makes any
+    /// retained data/end builtin from the old edge a no-op (bd-fw7zd.10).
+    fn readable_unpipe(
+        &mut self,
+        module: &Ir3Module,
+        receiver: Value,
+        args: RegRange,
+    ) -> Result<Value, InterpreterError> {
+        if args.count > 1 {
+            return Err(InterpreterError::TypeError {
+                expected: "Readable.unpipe([destination])".to_string(),
+                got: format!("{} arguments", args.count),
+            });
+        }
+        let source_id = self.readable_receiver_id(receiver.clone())?;
+        let requested_destination = match self.builtin_arg(args, 0)? {
+            None | Some(Value::Undefined) => None,
+            Some(Value::Object(object_id))
+                if self.writable_streams.contains_key(&object_id)
+                    || self.writable_terminal_states.contains_key(&object_id) =>
+            {
+                Some(object_id)
+            }
+            Some(value) => {
+                return Err(InterpreterError::TypeError {
+                    expected: "Writable unpipe destination".to_string(),
+                    got: value.type_name().to_string(),
+                });
+            }
+        };
+        let Some(link) = self.readable_pipe_links.get(&source_id).copied() else {
+            return Ok(receiver);
+        };
+        if requested_destination.is_some_and(|destination| destination != link.destination) {
+            return Ok(receiver);
+        }
+
+        let mut emission_label = self.writable_invocation_label(args)?;
+        let temporary = Self::estimate_label_bytes(&emission_label);
+        let source_label = self.stream_state_label_with_temporary_budget(source_id, temporary)?;
+        emission_label =
+            self.join_owned_label_with_temporary_budget(emission_label, &source_label)?;
+        let destination_label = self.stream_state_label_with_temporary_budget(
+            link.destination,
+            Self::estimate_label_bytes(&emission_label),
+        )?;
+        emission_label =
+            self.join_owned_label_with_temporary_budget(emission_label, &destination_label)?;
+
+        self.detach_readable_pipe(source_id, link.destination, link.token);
+        self.emit_event_listener_records(
+            module,
+            link.destination,
+            "unpipe",
+            vec![Value::Object(source_id)],
+            emission_label,
+        )?;
+        Ok(receiver)
+    }
+
     fn detach_readable_pipe(&mut self, source: ObjectId, destination: ObjectId, token: u32) {
         self.remove_readable_pipe_link(source);
         self.remove_readable_pipe_listener_records(
@@ -14420,6 +14860,15 @@ impl InterpreterCore {
         object_id: ObjectId,
         label: Label,
     ) -> Result<Value, InterpreterError> {
+        self.readable_request_eof_with_flow_commitment(object_id, label, false)
+    }
+
+    fn readable_request_eof_with_flow_commitment(
+        &mut self,
+        object_id: ObjectId,
+        label: Label,
+        flow_committed: bool,
+    ) -> Result<Value, InterpreterError> {
         let Some(mut projected) = self.clone_readable_state_with_budget(object_id)? else {
             return Ok(Value::Bool(false));
         };
@@ -14455,7 +14904,7 @@ impl InterpreterCore {
             projected.utf8_pending.clear();
         }
         projected.eof_requested = true;
-        if projected.flowing && projected.buffer.is_empty() {
+        if (projected.flowing || flow_committed) && projected.buffer.is_empty() {
             projected.phase = ReadableFromPumpPhase::End;
             projected.data_readable_pending = false;
         } else {
@@ -14490,6 +14939,289 @@ impl InterpreterCore {
             value,
             trigger_label,
         )?))
+    }
+
+    /// Internal `_write` for the bounded PassThrough identity. Forwarding is
+    /// deliberately synchronous for one readable pump turn: Node makes a
+    /// piped destination observe `source.write(chunk)` before a following
+    /// `source.unpipe(destination)` in the same turn (bd-fw7zd.10).
+    fn stream_passthrough_write(
+        &mut self,
+        module: &Ir3Module,
+        receiver: Value,
+        args: RegRange,
+    ) -> Result<Value, InterpreterError> {
+        if args.count != 3 {
+            return Err(InterpreterError::TypeError {
+                expected: "internal PassThrough._write(chunk, encoding, callback)".to_string(),
+                got: format!("{} arguments", args.count),
+            });
+        }
+        let object_id = self.readable_receiver_id(receiver.clone())?;
+        let writable_id = self.writable_receiver_id(receiver.clone())?;
+        if object_id != writable_id {
+            return Err(InterpreterError::InternalError {
+                details: "PassThrough readable/writable identity split".to_string(),
+            });
+        }
+        if self
+            .readable_from_streams
+            .get(&object_id)
+            .is_none_or(|state| state.phase != ReadableFromPumpPhase::Data || state.eof_requested)
+        {
+            return Err(InterpreterError::TypeError {
+                expected: "live PassThrough readable half before EOF".to_string(),
+                got: "closed PassThrough readable half".to_string(),
+            });
+        }
+        let chunk = self.read_reg(args.start)?;
+        let mut chunk_label = self.writable_invocation_label(RegRange {
+            start: args.start,
+            count: 1,
+        })?;
+        if let Value::Object(chunk_id) = &chunk {
+            let storage_label = self.binary_storage_label(*chunk_id);
+            chunk_label =
+                self.join_owned_label_with_temporary_budget(chunk_label, &storage_label)?;
+        }
+        let completion = self.read_reg(args.start.saturating_add(2))?;
+        let Value::BuiltinFunction(completion) = completion else {
+            return Err(InterpreterError::TypeError {
+                expected: "authenticated PassThrough write completion".to_string(),
+                got: completion.type_name().to_string(),
+            });
+        };
+        let (completion_object, token) = Self::writable_bound_completion(&completion)?;
+        if completion.kind != BuiltinFunctionKind::StreamWritableWriteDone
+            || completion_object != object_id
+            || !self.writable_streams.get(&object_id).is_some_and(|state| {
+                state
+                    .writes
+                    .iter()
+                    .any(|record| record.status == WritableWriteStatus::Active(token))
+            })
+        {
+            return Err(InterpreterError::InternalError {
+                details: "PassThrough write completion authentication failed".to_string(),
+            });
+        }
+        if self
+            .writable_streams
+            .get(&object_id)
+            .is_some_and(|state| state.tick_sequence.is_none())
+        {
+            self.next_writable_tick_sequence
+                .checked_add(1)
+                .ok_or_else(|| InterpreterError::InternalError {
+                    details: "Writable tick sequence space exhausted".to_string(),
+                })?;
+        }
+        self.readable_enqueue_value(object_id, chunk, chunk_label)?;
+        if self
+            .readable_from_streams
+            .get(&object_id)
+            .is_some_and(|state| state.flowing && !state.buffer.is_empty())
+        {
+            self.drive_readable_from_pump(object_id, Some(module))?;
+        }
+        self.writable_write_done(module, &completion, RegRange { start: 0, count: 0 })?;
+        Ok(Value::Undefined)
+    }
+
+    /// Internal `_final` requests readable EOF after authenticated `prefinish`.
+    /// The final tick is reserved before guest reentrancy; a flowing readable
+    /// defers it until `end`, while a paused readable consumes it immediately
+    /// so unread data cannot strand `finish`. The readable pump owns `close`.
+    fn stream_passthrough_final(
+        &mut self,
+        module: &Ir3Module,
+        receiver: Value,
+        args: RegRange,
+    ) -> Result<Value, InterpreterError> {
+        if args.count != 1 {
+            return Err(InterpreterError::TypeError {
+                expected: "internal PassThrough._final(callback)".to_string(),
+                got: format!("{} arguments", args.count),
+            });
+        }
+        let object_id = self.readable_receiver_id(receiver.clone())?;
+        let writable_id = self.writable_receiver_id(receiver.clone())?;
+        if object_id != writable_id {
+            return Err(InterpreterError::InternalError {
+                details: "PassThrough readable/writable identity split".to_string(),
+            });
+        }
+        if self
+            .readable_from_streams
+            .get(&object_id)
+            .is_none_or(|state| state.phase != ReadableFromPumpPhase::Data || state.eof_requested)
+        {
+            return Err(InterpreterError::TypeError {
+                expected: "live PassThrough readable half before EOF".to_string(),
+                got: "closed PassThrough readable half".to_string(),
+            });
+        }
+        let completion = self.read_reg(args.start)?;
+        let Value::BuiltinFunction(completion) = completion else {
+            return Err(InterpreterError::TypeError {
+                expected: "authenticated PassThrough final completion".to_string(),
+                got: completion.type_name().to_string(),
+            });
+        };
+        let (completion_object, token) = Self::writable_bound_completion(&completion)?;
+        if completion.kind != BuiltinFunctionKind::StreamWritableFinalDone
+            || completion_object != object_id
+            || !self
+                .writable_streams
+                .get(&object_id)
+                .is_some_and(|state| state.final_status == WritableFinalStatus::Active(token))
+        {
+            return Err(InterpreterError::InternalError {
+                details: "PassThrough final completion authentication failed".to_string(),
+            });
+        }
+        let lifecycle_label = self.writable_invocation_label(args)?;
+        let defer_final_until_end = self
+            .readable_from_streams
+            .get(&object_id)
+            .is_some_and(|state| state.flowing && !state.paused && !state.destroy_requested);
+        if self
+            .writable_streams
+            .get(&object_id)
+            .is_some_and(|state| state.deferred_final_tick_sequence.is_none())
+        {
+            let sequence = self.next_writable_tick_sequence;
+            let next_sequence =
+                sequence
+                    .checked_add(1)
+                    .ok_or_else(|| InterpreterError::InternalError {
+                        details: "Writable tick sequence space exhausted".to_string(),
+                    })?;
+            self.writable_streams
+                .get_mut(&object_id)
+                .expect("authenticated PassThrough final retained its Writable state")
+                .deferred_final_tick_sequence = Some(sequence);
+            self.next_writable_tick_sequence = next_sequence;
+        }
+        // `prefinish` is synchronous guest code and may call pause()/resume().
+        // Node commits ordering from the pre-listener flow state: pausing a
+        // draining stream does not move finish before end, while resuming a
+        // previously paused stream does not move finish after end. Reserve
+        // first and carry that commitment through EOF scheduling.
+        self.emit_writable_prefinish_with_tick(object_id, module, false)?;
+        self.readable_request_eof_with_flow_commitment(
+            object_id,
+            lifecycle_label,
+            defer_final_until_end,
+        )?;
+        if !defer_final_until_end {
+            self.writable_final_done(module, &completion, RegRange { start: 0, count: 0 })?;
+        }
+        Ok(Value::Undefined)
+    }
+
+    /// Node orders a flowing PassThrough's readable `end` before Writable
+    /// `finish`. Keep the authenticated token Active through the End pump,
+    /// then consume its reserved tick without a guest-visible wrapper.
+    fn complete_passthrough_final_after_readable_end(
+        &mut self,
+        object_id: ObjectId,
+        module: &Ir3Module,
+    ) -> Result<(), InterpreterError> {
+        let Some(token) = self.writable_streams.get(&object_id).and_then(|state| {
+            let authenticated_internal_final = matches!(
+                state.final_callback.as_ref(),
+                Some(Value::BuiltinFunction(builtin))
+                    if builtin.kind == BuiltinFunctionKind::StreamPassThroughFinal
+            );
+            match state.final_status {
+                WritableFinalStatus::Active(token) if authenticated_internal_final => Some(token),
+                _ => None,
+            }
+        }) else {
+            return Ok(());
+        };
+        let completion = BuiltinFunction::writable_completion(
+            BuiltinFunctionKind::StreamWritableFinalDone,
+            object_id,
+            token,
+        );
+        self.writable_final_done(module, &completion, RegRange { start: 0, count: 0 })?;
+        Ok(())
+    }
+
+    fn stream_passthrough_destroy(
+        &mut self,
+        receiver: Value,
+        args: RegRange,
+    ) -> Result<Value, InterpreterError> {
+        let object_id = self.readable_receiver_id(receiver.clone())?;
+        let writable_id = self.writable_receiver_id(receiver.clone())?;
+        if object_id != writable_id {
+            return Err(InterpreterError::InternalError {
+                details: "PassThrough readable/writable identity split".to_string(),
+            });
+        }
+
+        let error_register = self.writable_completion_error_register(args)?;
+        let error = match self.builtin_arg(args, 0)? {
+            None | Some(Value::Undefined | Value::Null) => None,
+            Some(error) => Some(error),
+        };
+        let mut trigger_label = self.writable_invocation_label(args)?;
+        if let Some(Value::Object(error_id)) = &error {
+            let storage_label = self.binary_storage_label(*error_id);
+            trigger_label =
+                self.join_owned_label_with_temporary_budget(trigger_label, &storage_label)?;
+        }
+        let readable_lifecycle_label = self
+            .readable_from_streams
+            .get(&object_id)
+            .filter(|state| !state.destroy_requested)
+            .map(|state| {
+                self.clone_dominant_label_with_temporary_budget(
+                    &state.lifecycle_label,
+                    &trigger_label,
+                    Self::estimate_label_bytes(&trigger_label),
+                )
+            })
+            .transpose()?;
+        let readable_reservation = readable_lifecycle_label
+            .as_ref()
+            .and_then(|label| {
+                self.readable_destroy_memory_projection(object_id, error.as_ref(), label)
+            })
+            .map(|(previous, destroyed, pump)| {
+                destroyed.saturating_add(pump).saturating_sub(previous)
+            })
+            .unwrap_or(0);
+
+        // Reserve the readable half's positive delta while the Writable
+        // teardown performs its own exact admission. This turns the two
+        // existing atomic kernels into one aggregate transaction without
+        // exposing a half-destroyed identity at a tight memory ceiling.
+        self.apply_memory_component_delta(0, readable_reservation)?;
+        let writable_result =
+            self.writable_destroy_with_trigger(receiver.clone(), error_register, trigger_label);
+        if let Err(error) = writable_result {
+            self.estimated_memory_bytes = self
+                .estimated_memory_bytes
+                .saturating_sub(readable_reservation);
+            return Err(error);
+        }
+        if let Some(state) = self.writable_streams.get_mut(&object_id) {
+            // The readable half is the sole shared EventEmitter owner. Keep
+            // the exact destroy error for pending Writable callbacks, but do
+            // not emit a second shared `error` event from the Writable phase.
+            state.terminal_error_emitted = true;
+        }
+        self.estimated_memory_bytes = self
+            .estimated_memory_bytes
+            .saturating_sub(readable_reservation);
+        if let Some(lifecycle_label) = readable_lifecycle_label {
+            self.commit_readable_destroy(object_id, receiver.clone(), error, lifecycle_label)?;
+        }
+        Ok(receiver)
     }
 
     fn readable_pull_source_chunk(
@@ -14981,14 +15713,28 @@ impl InterpreterCore {
             return Ok(receiver);
         }
 
-        let lifecycle_label = current.lifecycle_label.join(&trigger_label);
+        let lifecycle_label = self.clone_dominant_label_with_temporary_budget(
+            &current.lifecycle_label,
+            &trigger_label,
+            Self::estimate_label_bytes(&trigger_label),
+        )?;
+        self.commit_readable_destroy(object_id, receiver, error, lifecycle_label)
+    }
+
+    fn readable_destroy_memory_projection(
+        &self,
+        object_id: ObjectId,
+        error: Option<&Value>,
+        lifecycle_label: &Label,
+    ) -> Option<(u64, u64, u64)> {
+        let current = self.readable_from_streams.get(&object_id)?;
         let label_bytes = match &lifecycle_label {
             Label::Custom { name, .. } => Self::estimate_string_bytes(name),
             _ => 0,
         };
         let previous_bytes = Self::estimate_readable_from_state_bytes(current);
         let destroyed_state_bytes = MEMORY_ESTIMATE_READABLE_FROM_BASE_BYTES
-            .saturating_add(error.as_ref().map(Self::estimate_value_bytes).unwrap_or(0))
+            .saturating_add(error.map(Self::estimate_value_bytes).unwrap_or(0))
             .saturating_add(label_bytes)
             .saturating_add(
                 current
@@ -15003,6 +15749,21 @@ impl InterpreterCore {
             0
         } else {
             self.readable_pump_registration_bytes()
+        };
+        Some((previous_bytes, destroyed_state_bytes, pump_bytes))
+    }
+
+    fn commit_readable_destroy(
+        &mut self,
+        object_id: ObjectId,
+        receiver: Value,
+        error: Option<Value>,
+        lifecycle_label: Label,
+    ) -> Result<Value, InterpreterError> {
+        let Some((previous_bytes, destroyed_state_bytes, pump_bytes)) =
+            self.readable_destroy_memory_projection(object_id, error.as_ref(), &lifecycle_label)
+        else {
+            return Ok(receiver);
         };
         let requested_bytes = self
             .estimated_memory_bytes
@@ -15538,7 +16299,12 @@ impl InterpreterCore {
                     Vec::new(),
                     lifecycle_label,
                 );
-                self.finish_readable_pump_after_emission(object_id, pump_reserved, emission)?;
+                let readable_result =
+                    self.finish_readable_pump_after_emission(object_id, pump_reserved, emission);
+                let writable_result =
+                    self.complete_passthrough_final_after_readable_end(object_id, module);
+                readable_result?;
+                writable_result?;
             }
             ReadableFromPumpPhase::Close => {
                 self.mirror_readable_bool(object_id, "destroyed", true);
@@ -16039,11 +16805,12 @@ impl InterpreterCore {
         &mut self,
         seed: &std::rc::Rc<std::cell::RefCell<ExecutionSeed>>,
     ) -> Result<(), InterpreterError> {
-        // Execution-local Writable state is keyed by heap ObjectId and must
+        // Execution-local stream state is keyed by heap ObjectId and must
         // disappear at the same authoritative boundary that restores the
-        // seeded heap. Otherwise a reused id can inherit callbacks, listeners,
-        // or static `events.once` links from the preceding execution.
-        self.clear_readable_pipe_links();
+        // seeded heap. Otherwise a reused id can inherit callbacks, buffered
+        // chunks, pumps, listeners, or static `events.once` links from the
+        // preceding execution.
+        self.clear_readable_execution_state();
         self.clear_writable_execution_state();
         self.clear_loopback_execution_state();
         if let Some(context) = self.active_inline_callback_context_label.take() {
@@ -16687,6 +17454,19 @@ impl InterpreterCore {
         drop(owned);
         self.check_temporary_memory_budget(Self::estimate_label_bytes(other))?;
         Ok(other.clone())
+    }
+
+    fn clone_dominant_label_with_temporary_budget(
+        &self,
+        left: &Label,
+        right: &Label,
+        already_owned_temporary_bytes: u64,
+    ) -> Result<Label, InterpreterError> {
+        let winner = if left >= right { left } else { right };
+        self.check_temporary_memory_budget(
+            already_owned_temporary_bytes.saturating_add(Self::estimate_label_bytes(winner)),
+        )?;
+        Ok(winner.clone())
     }
 
     // ---------------------------------------------------------------------------
@@ -19029,6 +19809,9 @@ impl InterpreterCore {
             BuiltinFunctionKind::StreamReadablePipe => {
                 self.readable_pipe(module, receiver.unwrap_or(Value::Undefined), args)
             }
+            BuiltinFunctionKind::StreamReadableUnpipe => {
+                self.readable_unpipe(module, receiver.unwrap_or(Value::Undefined), args)
+            }
             BuiltinFunctionKind::StreamReadablePipeData => self.readable_pipe_data(
                 module,
                 receiver.unwrap_or(Value::Undefined),
@@ -19067,6 +19850,19 @@ impl InterpreterCore {
             }
             BuiltinFunctionKind::StreamWritableDestroy => {
                 self.writable_destroy(receiver.unwrap_or(Value::Undefined), args)
+            }
+            BuiltinFunctionKind::StreamPassThroughWrite => self.stream_passthrough_write(
+                module,
+                receiver.unwrap_or(Value::Undefined),
+                args,
+            ),
+            BuiltinFunctionKind::StreamPassThroughFinal => self.stream_passthrough_final(
+                module,
+                receiver.unwrap_or(Value::Undefined),
+                args,
+            ),
+            BuiltinFunctionKind::StreamPassThroughDestroy => {
+                self.stream_passthrough_destroy(receiver.unwrap_or(Value::Undefined), args)
             }
             BuiltinFunctionKind::NetServerListen => {
                 self.loopback_server_listen(receiver.unwrap_or(Value::Undefined), args)
@@ -27974,11 +28770,14 @@ impl InterpreterCore {
         // access (bd-juodx). Like arrays, own/inherited data properties walked
         // above win first — so `m.size` resolves to the `size` data property,
         // and a user-assigned `m.set = …` shadows the builtin.
-        let root_type_tag = if self.readable_from_streams.contains_key(&object_id) {
+        let root_has_readable = self.readable_from_streams.contains_key(&object_id);
+        let root_has_writable = self.writable_streams.contains_key(&object_id)
+            || self.writable_terminal_states.contains_key(&object_id);
+        let root_type_tag = if root_has_readable && root_has_writable {
+            Some("PassThrough".to_string())
+        } else if root_has_readable {
             Some("Readable".to_string())
-        } else if self.writable_streams.contains_key(&object_id)
-            || self.writable_terminal_states.contains_key(&object_id)
-        {
+        } else if root_has_writable {
             Some("Writable".to_string())
         } else {
             self.heap.get(object_id.0 as usize).and_then(|object| {
@@ -28066,6 +28865,18 @@ impl InterpreterCore {
     /// Resolve a Map/Set prototype method name to its receiver-aware builtin
     /// callable (bd-juodx). `.size` is a data property, not a method.
     fn collection_prototype_method(type_tag: &str, key: &str) -> Option<BuiltinFunction> {
+        if type_tag == "PassThrough" {
+            return match key {
+                "destroy" => Some(BuiltinFunction::new_kind(
+                    BuiltinFunctionKind::StreamPassThroughDestroy,
+                )),
+                "unpipe" => Some(BuiltinFunction::new_kind(
+                    BuiltinFunctionKind::StreamReadableUnpipe,
+                )),
+                _ => Self::collection_prototype_method("Readable", key)
+                    .or_else(|| Self::collection_prototype_method("Writable", key)),
+            };
+        }
         match (type_tag, key) {
             ("Map", "set") => Some(BuiltinFunction::map_set()),
             ("Map", "get") => Some(BuiltinFunction::map_get()),
@@ -28099,46 +28910,52 @@ impl InterpreterCore {
             // deferred egress.
             ("ClientRequest", "write") => Some(BuiltinFunction::client_request_write()),
             ("ClientRequest", "end") => Some(BuiltinFunction::client_request_end()),
-            ("Readable", "pause") => Some(BuiltinFunction::new_kind(
+            ("Readable" | "PassThrough", "pause") => Some(BuiltinFunction::new_kind(
                 BuiltinFunctionKind::StreamReadablePause,
             )),
-            ("Readable", "resume") => Some(BuiltinFunction::new_kind(
+            ("Readable" | "PassThrough", "resume") => Some(BuiltinFunction::new_kind(
                 BuiltinFunctionKind::StreamReadableResume,
             )),
-            ("Readable", "isPaused") => Some(BuiltinFunction::new_kind(
+            ("Readable" | "PassThrough", "isPaused") => Some(BuiltinFunction::new_kind(
                 BuiltinFunctionKind::StreamReadableIsPaused,
             )),
-            ("Readable", "push") => Some(BuiltinFunction::new_kind(
+            ("Readable" | "PassThrough", "push") => Some(BuiltinFunction::new_kind(
                 BuiltinFunctionKind::StreamReadablePush,
             )),
-            ("Readable", "toArray") => Some(BuiltinFunction::new_kind(
+            ("Readable" | "PassThrough", "toArray") => Some(BuiltinFunction::new_kind(
                 BuiltinFunctionKind::StreamReadableToArray,
             )),
-            ("Readable", "read") => Some(BuiltinFunction::new_kind(
+            ("Readable" | "PassThrough", "read") => Some(BuiltinFunction::new_kind(
                 BuiltinFunctionKind::StreamReadableRead,
             )),
-            ("Readable", "unshift") => Some(BuiltinFunction::new_kind(
+            ("Readable" | "PassThrough", "unshift") => Some(BuiltinFunction::new_kind(
                 BuiltinFunctionKind::StreamReadableUnshift,
             )),
-            ("Readable", "pipe") => Some(BuiltinFunction::new_kind(
+            ("Readable" | "PassThrough", "pipe") => Some(BuiltinFunction::new_kind(
                 BuiltinFunctionKind::StreamReadablePipe,
             )),
-            ("Readable", "setEncoding") => Some(BuiltinFunction::new_kind(
+            ("Readable" | "PassThrough", "unpipe") => Some(BuiltinFunction::new_kind(
+                BuiltinFunctionKind::StreamReadableUnpipe,
+            )),
+            ("Readable" | "PassThrough", "setEncoding") => Some(BuiltinFunction::new_kind(
                 BuiltinFunctionKind::StreamReadableSetEncoding,
             )),
             ("Readable", "destroy") => Some(BuiltinFunction::new_kind(
                 BuiltinFunctionKind::StreamReadableDestroy,
             )),
-            ("Writable", "write") => Some(BuiltinFunction::new_kind(
+            ("PassThrough", "destroy") => Some(BuiltinFunction::new_kind(
+                BuiltinFunctionKind::StreamPassThroughDestroy,
+            )),
+            ("Writable" | "PassThrough", "write") => Some(BuiltinFunction::new_kind(
                 BuiltinFunctionKind::StreamWritableWrite,
             )),
-            ("Writable", "end") => Some(BuiltinFunction::new_kind(
+            ("Writable" | "PassThrough", "end") => Some(BuiltinFunction::new_kind(
                 BuiltinFunctionKind::StreamWritableEnd,
             )),
-            ("Writable", "cork") => Some(BuiltinFunction::new_kind(
+            ("Writable" | "PassThrough", "cork") => Some(BuiltinFunction::new_kind(
                 BuiltinFunctionKind::StreamWritableCork,
             )),
-            ("Writable", "uncork") => Some(BuiltinFunction::new_kind(
+            ("Writable" | "PassThrough", "uncork") => Some(BuiltinFunction::new_kind(
                 BuiltinFunctionKind::StreamWritableUncork,
             )),
             ("Writable", "destroy") => Some(BuiltinFunction::new_kind(
@@ -37328,6 +38145,11 @@ impl InterpreterCore {
                 // bd-fw7zd: engine-owned Writable state drives deterministic
                 // write/final callbacks and terminal lifecycle checkpoints.
                 self.construct_stream_writable(args)
+            }
+            "builtin:StreamPassThrough" => {
+                // bd-fw7zd.10: one engine-owned object composes the existing
+                // Readable and Writable kernels without materializing a module.
+                self.construct_stream_passthrough(args)
             }
             "builtin:ImportMeta" => {
                 if args.count != 0 {
@@ -62984,6 +63806,203 @@ mod async_runtime_tests_current {
             core.estimated_memory_bytes(),
             core.recompute_estimated_memory_bytes()
         );
+    }
+
+    #[test]
+    fn passthrough_constructor_is_aggregate_and_seed_reset_clears_both_halves_bd_fw7zd() {
+        let mut accepted = test_interpreter();
+        let accepted_base = accepted.estimated_memory_bytes();
+        let accepted_heap_len = accepted.heap.len();
+        let Value::Object(passthrough) = accepted
+            .construct_stream_passthrough(RegRange { start: 0, count: 0 })
+            .expect("aggregate PassThrough constructor")
+        else {
+            panic!("PassThrough constructor must return an object");
+        };
+        assert!(accepted.readable_from_streams.contains_key(&passthrough));
+        assert!(accepted.writable_streams.contains_key(&passthrough));
+        assert_eq!(
+            accepted.estimated_memory_bytes(),
+            accepted.recompute_estimated_memory_bytes()
+        );
+        let aggregate_delta = accepted
+            .estimated_memory_bytes()
+            .saturating_sub(accepted_base);
+
+        let mut refused = test_interpreter();
+        let refused_base = refused.estimated_memory_bytes();
+        let refused_heap_len = refused.heap.len();
+        assert_eq!(refused_base, accepted_base);
+        refused.config.max_total_memory_bytes = refused_base
+            .saturating_add(aggregate_delta)
+            .saturating_sub(1);
+        assert!(matches!(
+            refused.construct_stream_passthrough(RegRange { start: 0, count: 0 }),
+            Err(InterpreterError::MemoryBudgetExceeded { .. })
+        ));
+        assert_eq!(refused.heap.len(), refused_heap_len);
+        assert!(refused.readable_from_streams.is_empty());
+        assert!(refused.writable_streams.is_empty());
+        assert_eq!(refused.estimated_memory_bytes(), refused_base);
+        assert_eq!(
+            refused.estimated_memory_bytes(),
+            refused.recompute_estimated_memory_bytes()
+        );
+
+        let mut reset = test_interpreter();
+        let seed = reset.capture_execution_seed();
+        let Value::Object(reused) = reset
+            .construct_stream_passthrough(RegRange { start: 0, count: 0 })
+            .expect("PassThrough before reset")
+        else {
+            panic!("PassThrough constructor must return an object");
+        };
+        reset
+            .schedule_readable_from_pump(reused)
+            .expect("pending PassThrough readable pump");
+        reset
+            .insert_event_listener(
+                reused,
+                "data",
+                EventListenerRecord {
+                    listener: Value::BuiltinFunction(BuiltinFunction::new_kind(
+                        BuiltinFunctionKind::ArrayIsArray,
+                    )),
+                    once: false,
+                },
+                false,
+            )
+            .expect("PassThrough listener before reset");
+        assert!(!reset.pending_readable_from_pumps.is_empty());
+
+        let previous_register_bytes = reset.registers_memory_bytes();
+        let previous_heap_bytes = reset.heap_memory_bytes();
+        reset
+            .reset_execution_state_from_seed(&seed)
+            .expect("PassThrough seed reset");
+        reset
+            .apply_register_heap_memory_delta(previous_register_bytes, previous_heap_bytes)
+            .expect("PassThrough reset memory delta");
+        assert_eq!(reset.heap.len(), accepted_heap_len);
+        assert!(!reset.readable_from_streams.contains_key(&reused));
+        assert!(!reset.writable_streams.contains_key(&reused));
+        assert!(reset.pending_readable_from_pumps.is_empty());
+        assert!(!reset.event_listeners.contains_key(&reused));
+        assert_eq!(
+            reset.estimated_memory_bytes(),
+            reset.recompute_estimated_memory_bytes()
+        );
+    }
+
+    #[test]
+    fn passthrough_internal_write_failure_terminalizes_both_halves_bd_fw7zd() {
+        let mut core = test_interpreter();
+        let Value::Object(passthrough) = core
+            .construct_stream_passthrough(RegRange { start: 0, count: 0 })
+            .expect("PassThrough")
+        else {
+            panic!("PassThrough constructor must return an object");
+        };
+        core.writable_enqueue(passthrough, Value::str("pending"), Label::Public, None)
+            .expect("pending PassThrough write");
+        let token = core
+            .allocate_writable_completion_token()
+            .expect("completion token");
+        let state = core
+            .writable_streams
+            .get_mut(&passthrough)
+            .expect("writable half");
+        state.writes[0].status = WritableWriteStatus::Active(token);
+        state.inside_write_invocation = true;
+
+        core.record_passthrough_internal_failure(
+            passthrough,
+            Value::str("forwarding failed"),
+            Label::Secret,
+            WritableErrorOrigin::Write,
+            false,
+        )
+        .expect("aggregate PassThrough failure");
+
+        let readable = &core.readable_from_streams[&passthrough];
+        assert!(readable.destroy_requested);
+        assert_eq!(readable.phase, ReadableFromPumpPhase::DestroyError);
+        assert_eq!(readable.lifecycle_label, Label::Secret);
+        let writable = &core.writable_streams[&passthrough];
+        assert!(writable.destroy_requested);
+        assert!(writable.terminal_error_emitted);
+        assert_eq!(writable.buffered_length, 0);
+        assert!(writable.writes.iter().all(|record| {
+            record.status == WritableWriteStatus::Completed && record.completion_failed
+        }));
+        assert!(!core.pending_readable_from_pumps.is_empty());
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+    }
+
+    #[test]
+    fn passthrough_flowing_final_reserves_its_deferred_tick_bd_fw7zd() {
+        let module = test_module_with_functions(Vec::new(), Vec::new());
+        let mut core = test_interpreter();
+        let Value::Object(passthrough) = core
+            .construct_stream_passthrough(RegRange { start: 0, count: 0 })
+            .expect("PassThrough")
+        else {
+            panic!("PassThrough constructor must return an object");
+        };
+        let Value::Object(other) = core
+            .construct_stream_writable(RegRange { start: 0, count: 0 })
+            .expect("other Writable")
+        else {
+            panic!("Writable constructor must return an object");
+        };
+        let token = core
+            .allocate_writable_completion_token()
+            .expect("final completion token");
+        core.writable_streams
+            .get_mut(&passthrough)
+            .expect("PassThrough Writable half")
+            .final_status = WritableFinalStatus::Active(token);
+        let readable = core
+            .readable_from_streams
+            .get_mut(&passthrough)
+            .expect("PassThrough Readable half");
+        readable.flowing = true;
+        readable.paused = false;
+        let completion = BuiltinFunction::writable_completion(
+            BuiltinFunctionKind::StreamWritableFinalDone,
+            passthrough,
+            token,
+        );
+        core.write_reg(0, Value::BuiltinFunction(completion))
+            .expect("final completion register");
+        core.next_writable_tick_sequence = u64::MAX - 1;
+
+        core.stream_passthrough_final(
+            &module,
+            Value::Object(passthrough),
+            RegRange { start: 0, count: 1 },
+        )
+        .expect("flowing PassThrough final");
+        let state = &core.writable_streams[&passthrough];
+        assert_eq!(state.final_status, WritableFinalStatus::Active(token));
+        assert_eq!(state.deferred_final_tick_sequence, Some(u64::MAX - 1));
+        assert_eq!(state.tick_sequence, None);
+        assert_eq!(core.next_writable_tick_sequence, u64::MAX);
+        assert!(matches!(
+            core.schedule_writable_tick(other),
+            Err(InterpreterError::InternalError { .. })
+        ));
+
+        core.complete_passthrough_final_after_readable_end(passthrough, &module)
+            .expect("reserved final tick remains usable after global exhaustion");
+        let state = &core.writable_streams[&passthrough];
+        assert_eq!(state.final_status, WritableFinalStatus::Done);
+        assert_eq!(state.deferred_final_tick_sequence, None);
+        assert_eq!(state.tick_sequence, Some(u64::MAX - 1));
+        assert_eq!(core.next_writable_tick_sequence, u64::MAX);
     }
 
     #[test]

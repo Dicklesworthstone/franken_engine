@@ -934,11 +934,18 @@ fn lower_ir0_to_ir1_with_ambient_grant(
     for local in confirmed_stream_writable_destructured_requires(&ir0.tree.body, &binding_lookup) {
         binding_lookup.insert(pending_stream_writable_binding_sentinel(&local), 0);
     }
+    for local in confirmed_stream_passthrough_destructured_requires(&ir0.tree.body, &binding_lookup)
+    {
+        binding_lookup.insert(pending_stream_passthrough_binding_sentinel(&local), 0);
+    }
     for local in confirmed_stream_readable_named_imports(&ir0.tree.body) {
         binding_lookup.insert(stream_readable_binding_sentinel(&local), 0);
     }
     for local in confirmed_stream_writable_named_imports(&ir0.tree.body) {
         binding_lookup.insert(stream_writable_binding_sentinel(&local), 0);
+    }
+    for local in confirmed_stream_passthrough_named_imports(&ir0.tree.body) {
+        binding_lookup.insert(stream_passthrough_binding_sentinel(&local), 0);
     }
     let mut synthetic_export_index = 0u32;
     let mut synthetic_import_index = 0u32;
@@ -1105,6 +1112,9 @@ fn lower_ir0_to_ir1_with_ambient_grant(
                                         ),
                                         "Writable" => binding_lookup.contains_key(
                                             &stream_writable_binding_sentinel(&spec.local_name),
+                                        ),
+                                        "PassThrough" => binding_lookup.contains_key(
+                                            &stream_passthrough_binding_sentinel(&spec.local_name),
                                         ),
                                         _ => false,
                                     });
@@ -2122,8 +2132,10 @@ fn binding_entry_snapshot(
             let origin = capture_origin_sentinel(name);
             let stream_readable = stream_readable_binding_sentinel(name);
             let stream_writable = stream_writable_binding_sentinel(name);
+            let stream_passthrough = stream_passthrough_binding_sentinel(name);
             let pending_stream_readable = pending_stream_readable_binding_sentinel(name);
             let pending_stream_writable = pending_stream_writable_binding_sentinel(name);
+            let pending_stream_passthrough = pending_stream_passthrough_binding_sentinel(name);
             let net_module = net_module_alias_sentinel(name);
             let tls_module = tls_module_alias_sentinel(name);
             [
@@ -2138,12 +2150,20 @@ fn binding_entry_snapshot(
                     binding_lookup.get(&stream_writable).copied(),
                 ),
                 (
+                    stream_passthrough.clone(),
+                    binding_lookup.get(&stream_passthrough).copied(),
+                ),
+                (
                     pending_stream_readable.clone(),
                     binding_lookup.get(&pending_stream_readable).copied(),
                 ),
                 (
                     pending_stream_writable.clone(),
                     binding_lookup.get(&pending_stream_writable).copied(),
+                ),
+                (
+                    pending_stream_passthrough.clone(),
+                    binding_lookup.get(&pending_stream_passthrough).copied(),
                 ),
                 (net_module.clone(), binding_lookup.get(&net_module).copied()),
                 (tls_module.clone(), binding_lookup.get(&tls_module).copied()),
@@ -3167,6 +3187,12 @@ fn lower_statement_to_ir1_with_flow(
                             .is_some()
                         {
                             binding_lookup.insert(stream_writable_binding_sentinel(local), 0);
+                        }
+                        if binding_lookup
+                            .remove(&pending_stream_passthrough_binding_sentinel(local))
+                            .is_some()
+                        {
+                            binding_lookup.insert(stream_passthrough_binding_sentinel(local), 0);
                         }
                         if let Some(&local_bid) = binding_lookup.get(local) {
                             ops.push(Ir1Op::LoadLiteral {
@@ -15865,6 +15891,7 @@ fn net_socket_constructor_capability(
 enum LoweringOnlyModuleAliasSurface {
     Net,
     Tls,
+    StreamConstructor,
 }
 
 fn module_alias_member_name<'a>(callee: &'a Expression, alias: &str) -> Option<&'a str> {
@@ -15927,6 +15954,7 @@ fn is_module_alias_usage(
         LoweringOnlyModuleAliasSurface::Tls => {
             is_tls_alias_call(expr, alias) || is_tls_alias_constant_read(expr, alias)
         }
+        LoweringOnlyModuleAliasSurface::StreamConstructor => is_stream_constructor_use(expr, alias),
     }
 }
 
@@ -16268,6 +16296,7 @@ fn module_alias_expr_has_rejected_use(
             LoweringOnlyModuleAliasSurface::Net => net_alias_member_name(callee, alias)
                 .is_some_and(|method| net_method_capability(method).is_some()),
             LoweringOnlyModuleAliasSurface::Tls => is_tls_alias_call(expr, alias),
+            LoweringOnlyModuleAliasSurface::StreamConstructor => false,
         } =>
         {
             arguments
@@ -16277,6 +16306,14 @@ fn module_alias_expr_has_rejected_use(
         Expression::New { callee, arguments }
             if surface == LoweringOnlyModuleAliasSurface::Net
                 && net_alias_member_name(callee, alias) == Some("Socket") =>
+        {
+            arguments
+                .iter()
+                .any(|argument| module_alias_expr_has_rejected_use(argument, alias, surface))
+        }
+        Expression::New { callee, arguments }
+            if surface == LoweringOnlyModuleAliasSurface::StreamConstructor
+                && matches!(callee.as_ref(), Expression::Identifier(name) if name == alias) =>
         {
             arguments
                 .iter()
@@ -17203,9 +17240,10 @@ fn confirmed_timers_promises_module_aliases(
 // Node `stream` builtin recognition (bd-fw7zd)
 //
 // The stream kernel is exposed only through statically proven exports. This
-// supported slices recognize `Readable.from(...)`, `new Readable(...)`, and
-// `new Writable(...)` through either a const CJS destructure or an ESM named
-// import. They do not materialize the stream module or constructor values;
+// supported slices recognize `Readable.from(...)`, `new Readable(...)`,
+// `new Writable(...)`, and `new PassThrough(...)` through either a const CJS
+// destructure or an ESM named import. They do not materialize the stream
+// module or constructor values;
 // namespace imports, computed properties, and dynamic module names remain
 // unsupported.
 
@@ -17221,6 +17259,10 @@ fn stream_writable_binding_sentinel(name: &str) -> String {
     format!("\0stream-writable\0{name}")
 }
 
+fn stream_passthrough_binding_sentinel(name: &str) -> String {
+    format!("\0stream-passthrough\0{name}")
+}
+
 fn pending_stream_readable_binding_sentinel(name: &str) -> String {
     format!("\0stream-readable-pending\0{name}")
 }
@@ -17229,11 +17271,17 @@ fn pending_stream_writable_binding_sentinel(name: &str) -> String {
     format!("\0stream-writable-pending\0{name}")
 }
 
+fn pending_stream_passthrough_binding_sentinel(name: &str) -> String {
+    format!("\0stream-passthrough-pending\0{name}")
+}
+
 fn suppress_stream_module_sentinel(binding_lookup: &mut BTreeMap<String, BindingId>, name: &str) {
     binding_lookup.remove(&stream_readable_binding_sentinel(name));
     binding_lookup.remove(&stream_writable_binding_sentinel(name));
+    binding_lookup.remove(&stream_passthrough_binding_sentinel(name));
     binding_lookup.remove(&pending_stream_readable_binding_sentinel(name));
     binding_lookup.remove(&pending_stream_writable_binding_sentinel(name));
+    binding_lookup.remove(&pending_stream_passthrough_binding_sentinel(name));
 }
 
 fn suppress_stream_module_sentinels(
@@ -17284,6 +17332,27 @@ fn is_stream_constructor_use(expr: &Expression, local: &str) -> bool {
 
 fn is_stream_readable_usage(expr: &Expression, local: &str) -> bool {
     is_stream_readable_from_direct_call(expr, local) || is_stream_constructor_use(expr, local)
+}
+
+/// A lowering-only constructor binding is safe to elide only when it has at
+/// least one supported unshadowed `new` site and every other unshadowed use is
+/// consumed by that finite surface. This prevents one valid site from
+/// authorizing an unrelated alias/escape, while nested same-named bindings do
+/// not count as either confirmation or rejection.
+fn stream_constructor_binding_is_exhaustively_supported(body: &[Statement], local: &str) -> bool {
+    body.iter().any(|statement| {
+        module_alias_statement_contains_unshadowed_usage(
+            statement,
+            local,
+            LoweringOnlyModuleAliasSurface::StreamConstructor,
+        )
+    }) && !body.iter().any(|statement| {
+        module_alias_statement_has_rejected_use(
+            statement,
+            local,
+            LoweringOnlyModuleAliasSurface::StreamConstructor,
+        )
+    })
 }
 
 fn confirmed_stream_readable_destructured_requires(
@@ -17366,11 +17435,58 @@ fn confirmed_stream_writable_destructured_requires(
 
     candidates
         .into_iter()
-        .filter(|local| {
-            body.iter().any(|stmt| {
-                timers_scan_statement_deep(stmt, &|expr| is_stream_constructor_use(expr, local))
-            })
+        .filter(|local| stream_constructor_binding_is_exhaustively_supported(body, local))
+        .collect()
+}
+
+fn confirmed_stream_passthrough_destructured_requires(
+    body: &[Statement],
+    binding_lookup: &BTreeMap<String, BindingId>,
+) -> BTreeSet<String> {
+    let mut candidates = BTreeMap::new();
+    for (statement_index, stmt) in body.iter().enumerate() {
+        if let Statement::VariableDeclaration(vd) = stmt {
+            if vd.kind != VariableDeclarationKind::Const {
+                continue;
+            }
+            for (declarator_index, declaration) in vd.declarations.iter().enumerate() {
+                let (Some(init), BindingPattern::ObjectPattern(properties)) =
+                    (&declaration.initializer, &declaration.pattern)
+                else {
+                    continue;
+                };
+                if !is_require_stream_module_initializer(init, binding_lookup) {
+                    continue;
+                }
+                for property in properties {
+                    if property.computed
+                        || !well_formed_static_name(&property.key)
+                            .is_some_and(|name| name == "PassThrough")
+                    {
+                        continue;
+                    }
+                    if let BindingPattern::Identifier(local) = &property.value {
+                        candidates.insert(local.clone(), (statement_index, declarator_index));
+                    }
+                }
+            }
+        }
+    }
+
+    candidates
+        .into_iter()
+        .filter(|(local, (statement_index, declarator_index))| {
+            stream_constructor_binding_is_exhaustively_supported(body, local)
+                && !module_alias_has_predeclaration_hazard(
+                    body,
+                    *statement_index,
+                    *declarator_index,
+                    local,
+                    LoweringOnlyModuleAliasSurface::StreamConstructor,
+                    binding_lookup,
+                )
         })
+        .map(|(local, _)| local)
         .collect()
 }
 
@@ -17416,11 +17532,28 @@ fn confirmed_stream_writable_named_imports(body: &[Statement]) -> BTreeSet<Strin
 
     candidates
         .into_iter()
-        .filter(|local| {
-            body.iter().any(|stmt| {
-                timers_scan_statement_deep(stmt, &|expr| is_stream_constructor_use(expr, local))
-            })
-        })
+        .filter(|local| stream_constructor_binding_is_exhaustively_supported(body, local))
+        .collect()
+}
+
+fn confirmed_stream_passthrough_named_imports(body: &[Statement]) -> BTreeSet<String> {
+    let mut candidates = BTreeSet::new();
+    for stmt in body {
+        if let Statement::Import(import) = stmt
+            && is_stream_module_specifier(&import.source)
+            && let ImportClause::Named { specifiers } = &import.clause
+        {
+            for specifier in specifiers {
+                if specifier.import_name == "PassThrough" {
+                    candidates.insert(specifier.local_name.clone());
+                }
+            }
+        }
+    }
+
+    candidates
+        .into_iter()
+        .filter(|local| stream_constructor_binding_is_exhaustively_supported(body, local))
         .collect()
 }
 
@@ -17452,6 +17585,9 @@ fn confirmed_stream_destructure_locals(
             "Writable" => {
                 binding_lookup.contains_key(&pending_stream_writable_binding_sentinel(local))
             }
+            "PassThrough" => {
+                binding_lookup.contains_key(&pending_stream_passthrough_binding_sentinel(local))
+            }
             _ => false,
         };
         if !confirmed {
@@ -17467,7 +17603,10 @@ fn seed_stream_module_sentinels(
     outer_lookup: &BTreeMap<String, BindingId>,
 ) {
     for key in outer_lookup.keys() {
-        if key.starts_with("\0stream-readable\0") || key.starts_with("\0stream-writable\0") {
+        if key.starts_with("\0stream-readable\0")
+            || key.starts_with("\0stream-writable\0")
+            || key.starts_with("\0stream-passthrough\0")
+        {
             body_lookup.insert(key.clone(), 0);
         }
     }
@@ -17484,6 +17623,8 @@ fn stream_constructor_capability(
         Some("builtin:StreamReadable")
     } else if binding_lookup.contains_key(&stream_writable_binding_sentinel(name)) {
         Some("builtin:StreamWritable")
+    } else if binding_lookup.contains_key(&stream_passthrough_binding_sentinel(name)) {
+        Some("builtin:StreamPassThrough")
     } else {
         None
     }
@@ -22343,18 +22484,91 @@ mod tests {
     #[test]
     fn stream_destructured_constructors_lower_to_distinct_builtins_bd_fw7zd() {
         let ops = lower_script_source_ops(
-            "const { Readable, Writable } = require('node:stream');\n\
+            "const { Readable, Writable, PassThrough } = require('node:stream');\n\
              const readable = new Readable({ highWaterMark: 4, read() {} });\n\
-             const writable = new Writable({ highWaterMark: 8, write(c, e, cb) { cb(); } });\n",
+             const writable = new Writable({ highWaterMark: 8, write(c, e, cb) { cb(); } });\n\
+             const passthrough = new PassThrough({ highWaterMark: 16 });\n",
             "stream_constructors_bd_fw7zd.js",
         );
         assert_eq!(count_hostcall_deep(&ops, "builtin:StreamReadable"), 1);
         assert_eq!(count_hostcall_deep(&ops, "builtin:StreamWritable"), 1);
+        assert_eq!(count_hostcall_deep(&ops, "builtin:StreamPassThrough"), 1);
         assert_eq!(count_hostcall_deep(&ops, "builtin:StreamReadableFrom"), 0);
         assert!(
             !ops.iter()
                 .any(|op| matches!(op, Ir1Op::ImportModule { .. }))
         );
+    }
+
+    #[test]
+    fn stream_passthrough_named_import_is_static_and_shadow_safe_bd_fw7zd() {
+        let ops = lower_esm_source_ops(
+            "import { PassThrough as Through } from 'node:stream';\n\
+             new Through();\n\
+             function shadowed(Through) { return new Through(); }\n",
+            "stream_passthrough_import_bd_fw7zd.mjs",
+        );
+        assert_eq!(count_hostcall_deep(&ops, "builtin:StreamPassThrough"), 1);
+        assert!(
+            !ops.iter()
+                .any(|op| matches!(op, Ir1Op::ImportModule { .. }))
+        );
+    }
+
+    #[test]
+    fn stream_passthrough_elision_requires_every_unshadowed_use_bd_fw7zd() {
+        for (label, source) in [
+            (
+                "shadow-only",
+                "const { PassThrough: Through } = require('stream');\n\
+                 function nested(Through) { return new Through(); }\n",
+            ),
+            (
+                "mixed-escape",
+                "const { PassThrough: Through } = require('stream');\n\
+                 new Through();\n\
+                 const escaped = Through;\n",
+            ),
+            (
+                "pre-declaration",
+                "new Through();\n\
+                 const { PassThrough: Through } = require('stream');\n",
+            ),
+        ] {
+            let tree = crate::parser_api_stability::parse_script(source).expect("parse script");
+            let ir0 = Ir0Module::from_syntax_tree(tree, format!("stream_{label}_bd_fw7zd.js"));
+            let error = lower_ir0_to_ir1(&ir0)
+                .expect_err("rejected PassThrough use must preserve ambient require denial");
+            assert!(
+                matches!(
+                    error,
+                    LoweringPipelineError::AmbientAuthorityViolation { .. }
+                ),
+                "{label} should preserve ambient denial, got {error:?}"
+            );
+        }
+
+        for (label, source) in [
+            (
+                "shadow-only",
+                "import { PassThrough as Through } from 'stream';\n\
+                 function nested(Through) { return new Through(); }\n",
+            ),
+            (
+                "mixed-escape",
+                "import { PassThrough as Through } from 'stream';\n\
+                 new Through();\n\
+                 const escaped = Through;\n",
+            ),
+        ] {
+            let ops = lower_esm_source_ops(source, &format!("stream_esm_{label}_bd_fw7zd.mjs"));
+            assert_eq!(count_hostcall_deep(&ops, "builtin:StreamPassThrough"), 0);
+            assert!(
+                ops.iter()
+                    .any(|op| matches!(op, Ir1Op::ImportModule { .. })),
+                "{label} must retain its unsupported ESM module load"
+            );
+        }
     }
 
     #[test]

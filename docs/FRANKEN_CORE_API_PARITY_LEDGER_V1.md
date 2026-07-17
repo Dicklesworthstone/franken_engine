@@ -61,7 +61,8 @@ alone.
 | `bd-la2e0` | Fail-closed async-function placeholder fix in franken-core. |
 | `bd-nwhcp` | Timer placeholder tests replaced with executable regressions. |
 | `bd-n8eta.4` | Executable Symbol property-key parity wave; ADR/API contract, engine/core carriers, hook migration, and donor closeout are separate children. |
-| `bd-b12xs` | Exact UTF-16 property-key migration; exact lookup, ordered storage, and runtime adoption are separate children. |
+| `bd-b12xs` | Exact UTF-16 property-key migration; exact lookup, ordered storage, governed runtime adoption, and consumer parity are separate children. |
+| `bd-b12xs.3` | Freezes the private `JsString` runtime-key, legacy-wire, public-field, and fail-closed hook contract before heap adoption. |
 | `bd-f1ixz` | Adds the versioned core-only `CopyDataProperties` IR path for object rest; the engine mirror remains a separate parity concern. |
 
 ## Active Parity Exception: `CopyDataProperties` IR
@@ -111,9 +112,27 @@ array indices iterate numerically first, other exact strings retain creation
 order, and borrowed and owning iterators return `JsString` keys without a lossy
 projection.
 
-The existing `OrderedStringMap` signatures and runtime heap fields remain
-unchanged. Runtime adoption and engine/core item-level parity are later
-`bd-b12xs` work, so the `js_string` and `object_model` rows remain
+`bd-b12xs.3` governs adoption without widening the stable descriptor-model
+`PropertyKey::String(String)` or replacing public executable `HeapObject`
+fields. Executable baselines instead use a private `JsString`-backed runtime
+key, and `OrderedStringMap` may delegate to the exact carrier privately while
+retaining its historical APIs as a well-formed compatibility view. Those APIs,
+including both iterator families, never project or expose exact-only keys;
+runtime semantics and artifacts use new exact APIs. Exact access proceeds with
+no hook installed. With the legacy string-only hook installed, a
+non-well-formed key fails before callback or heap access with zero callback
+invocations and no mutation; typed-hook migration remains owner-reviewed and
+outside this ordinary lane.
+
+Runtime evidence must land in dependency order:
+
+| Bead | Required evidence |
+| --- | --- |
+| `bd-b12xs.4` | Core dynamic computed keys stay exact through get/set/delete/`in`/prototype, descriptor conversion, compatibility/exact views, mixed Symbol order and wire, serde, seed, memory, and rollback. |
+| `bd-b12xs.5` | Engine mirrors the proven core carrier and wire behavior without touching the legacy hook API or inventing a core-style accessor field. |
+| `bd-b12xs.6` | Both lanes prove enumeration, JSON, Reflect/Proxy, assign/spread, static-source audit, and D800/D801/U+FFFD donor lockstep before the parent closes. |
+
+The `js_string`, `object_model`, and `baseline_interpreter` rows remain
 `pending_graduation`. Required adoption evidence must preserve all of these
 properties:
 
@@ -122,6 +141,16 @@ properties:
 - any lone-surrogate key selects an ES-ordered exact pair sequence for the
   whole map
 - decoders reject duplicate canonical keys while accepting both wire shapes
+- public `HeapObject` field names/types and all-well-formed heap bytes remain
+  unchanged
+- core exact-string adoption preserves its existing Symbol sidecars,
+  `symbol_properties` wire, mixed own-key category order, and rollback
+- legacy `OrderedStringMap` iteration/count/retain APIs are a well-formed view;
+  `clear` empties both that view and exact-only private storage
+
+`bd-n8eta.4.2` depends on the `.6` closeout so its engine Symbol work starts
+from exact string-key operations instead of introducing a temporary
+`PropertyKey::String(String)` migration.
 
 ## Fail-Closed Rules
 

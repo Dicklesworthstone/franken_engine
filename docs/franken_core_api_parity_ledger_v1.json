@@ -100,6 +100,16 @@
       "bead_id": "bd-n8eta.4",
       "role": "executable Symbol property-key parity wave",
       "rationale": "Splits the versioned API/wire contract, exhaustive-Value migration, engine/core typed-key carriers, property-hook migration, and donor closeout into separately provable children."
+    },
+    {
+      "bead_id": "bd-b12xs",
+      "role": "exact UTF-16 runtime property-key parity wave",
+      "rationale": "Separates exact lookup, ordered storage, governed runtime adoption, engine/core dynamic carriers, and full consumer/static-source parity."
+    },
+    {
+      "bead_id": "bd-b12xs.3",
+      "role": "exact runtime-key API and wire governance",
+      "rationale": "Keeps stable descriptor and HeapObject public shapes while governing a private JsString runtime key, explicit well-formed legacy views, backward-readable dual wire, conditional fail-closed legacy hook boundary, mixed Symbol coexistence, and dependency order."
     }
   ],
   "rows": [
@@ -111,9 +121,11 @@
       "engine_path": "crates/franken-engine/src/ast.rs",
       "engine_export_present": true,
       "file_relation": "different",
-      "owner_rationale": "Both crates export ast, but the source files differ and workspace membership alone does not settle canonical ownership.",
-      "test_expectation": "Future parity work must prove AST compatibility before claiming canonical ownership.",
-      "known_beads": []
+      "owner_rationale": "Both crates export ast, but the source files differ and workspace membership alone does not settle canonical ownership; bd-b12xs.6 owns the exact-key static-source audit.",
+      "test_expectation": "Future parity work must prove AST compatibility before claiming canonical ownership. bd-b12xs.6 must prove static object/member keys reach the exact runtime carrier without projection and version the AST only if that audit finds a remaining lossy field.",
+      "known_beads": [
+        "bd-b12xs.6"
+      ]
     },
     {
       "module": "baseline_interpreter",
@@ -123,8 +135,8 @@
       "engine_path": "crates/franken-engine/src/baseline_interpreter.rs",
       "engine_export_present": true,
       "file_relation": "different",
-      "owner_rationale": "This is a high-risk runtime surface with known franken-core follow-up fixes, an open engine async-generator .next body-execution gap, and a versioned typed executable Symbol-key parity wave under bd-n8eta.4; ownership needs dedicated proof.",
-      "test_expectation": "Future parity work must compare fail-closed async, timer, capability, and execution semantics before owner promotion, including proof that suspended async generator .next() executes or remains explicitly out of scope, that the exhaustive Value migration is versioned and audited, and that numeric-string/string/Symbol own-key identity, order, serde, replay, memory accounting, and consumer filtering agree across executable lanes.",
+      "owner_rationale": "This runtime surface has known franken-core follow-up fixes, an open engine async-generator .next body-execution gap, a versioned typed executable Symbol-key wave under bd-n8eta.4, and a governed exact JsString runtime-key wave under bd-b12xs; ownership needs dedicated proof.",
+      "test_expectation": "Future parity work must compare fail-closed async, timer, capability, and execution semantics before owner promotion, including proof that suspended async generator .next() executes or remains explicitly out of scope, that the exhaustive Value migration is versioned and audited, and that numeric-string/exact-JsString/Symbol own-key identity, mixed order, serde, replay, memory accounting, rollback, hook-free access, conditional legacy-hook rejection, and consumer filtering agree across executable lanes without lossy projection.",
       "known_beads": [
         "bd-yqpka",
         "bd-77ec1",
@@ -136,7 +148,12 @@
         "bd-n8eta.4.3",
         "bd-n8eta.4.4",
         "bd-n8eta.4.5",
-        "bd-n8eta.4.6"
+        "bd-n8eta.4.6",
+        "bd-b12xs",
+        "bd-b12xs.3",
+        "bd-b12xs.4",
+        "bd-b12xs.5",
+        "bd-b12xs.6"
       ]
     },
     {
@@ -422,10 +439,11 @@
       "engine_export_present": true,
       "file_relation": "different",
       "owner_rationale": "IR contract is central to parser/lowering/runtime compatibility and needs explicit parity.",
-      "test_expectation": "Core now carries IR schema 0.4.0 and the engine mirror carries schema 0.3.0 after bd-lfq44 exact module-specifier carriers. The engine mirror still lacks the additive Ir1Op and Ir3Instruction CopyDataProperties variants from bd-f1ixz. Future parity work must reconcile the versioned wire, lowering, and execution behavior before ownership or graduation status changes.",
+      "test_expectation": "Core now carries IR schema 0.4.0 and the engine mirror carries schema 0.3.0 after bd-lfq44 exact module-specifier carriers. The engine mirror still lacks the additive Ir1Op and Ir3Instruction CopyDataProperties variants from bd-f1ixz. Future parity work must reconcile the versioned wire, lowering, and execution behavior before ownership or graduation status changes; bd-b12xs.6 versions the IR only if its static-key audit proves a remaining lossy field.",
       "known_beads": [
         "bd-f1ixz",
-        "bd-lfq44"
+        "bd-lfq44",
+        "bd-b12xs.6"
       ]
     },
     {
@@ -436,13 +454,17 @@
       "engine_path": "crates/franken-engine/src/js_string.rs",
       "engine_export_present": true,
       "file_relation": "different",
-      "owner_rationale": "franken-core contains the canonical implementation and franken-engine re-exports it, but runtime property-carrier adoption and wire parity remain incomplete; export presence alone does not promote the row.",
-      "test_expectation": "Prove exact UTF-16 value and ExactPropertyMap serde behavior through the engine re-export, then complete ExactOrderedStringMap runtime integration before owner promotion.",
+      "owner_rationale": "franken-core contains the canonical exact-string implementations and franken-engine re-exports them, but governed executable property-carrier adoption and wire parity remain incomplete; export presence alone does not promote the row.",
+      "test_expectation": "Prove exact UTF-16 value and ExactPropertyMap serde behavior through the engine re-export, then complete bd-b12xs.4/.5 dynamic runtime adoption and bd-b12xs.6 consumer/static parity without changing the legacy string-only hook boundary before owner promotion.",
       "known_beads": [
         "bd-2vzgi",
         "bd-b12xs",
         "bd-b12xs.1",
-        "bd-b12xs.2"
+        "bd-b12xs.2",
+        "bd-b12xs.3",
+        "bd-b12xs.4",
+        "bd-b12xs.5",
+        "bd-b12xs.6"
       ]
     },
     {
@@ -453,10 +475,11 @@
       "engine_path": "crates/franken-engine/src/lowering_pipeline.rs",
       "engine_export_present": true,
       "file_relation": "different",
-      "owner_rationale": "Lowering behavior directly affects executable runtime semantics and must be compared.",
-      "test_expectation": "Future parity work must compare representative AST-to-IR lowering outputs.",
+      "owner_rationale": "Lowering behavior directly affects executable runtime semantics and must be compared; bd-b12xs.6 owns the exact-key static-source audit.",
+      "test_expectation": "Future parity work must compare representative AST-to-IR lowering outputs, including proof under bd-b12xs.6 that static object/member keys reach exact runtime identity without projection.",
       "known_beads": [
-        "bd-1vih6"
+        "bd-1vih6",
+        "bd-b12xs.6"
       ]
     },
     {
@@ -467,14 +490,18 @@
       "engine_path": "crates/franken-engine/src/object_model.rs",
       "engine_export_present": true,
       "file_relation": "different",
-      "owner_rationale": "object_model was one of the missing modules behind earlier workspace exclusion; its core-only OrderedStringMap and additive ExactOrderedStringMap families remain item-level parity work despite both crates exporting the module.",
-      "test_expectation": "Future parity work must compare object invariants and serde behavior, including legacy-byte/order compatibility for OrderedStringMap, exact UTF-16 identity plus ES own-key order for ExactOrderedStringMap, borrowed and owning iterator behavior for both, and the intended engine adoption boundary, before promotion.",
+      "owner_rationale": "object_model was one of the missing modules behind earlier workspace exclusion; its OrderedStringMap and additive ExactOrderedStringMap families now have a governed private runtime-adoption path, but engine/core item-level parity remains incomplete.",
+      "test_expectation": "Future parity work must compare object invariants and serde behavior, including unchanged lane-specific public HeapObject fields and well-formed bytes, an explicit well-formed view for legacy OrderedStringMap iteration/count/retain APIs, lossless exact APIs, exact UTF-16 plus existing Symbol identity and mixed ES category order, dynamic carrier adoption, rollback and memory accounting, and complete consumer/static-source parity before promotion.",
       "known_beads": [
         "bd-ucemx",
         "bd-zsais",
         "bd-dymfz",
         "bd-b12xs",
-        "bd-b12xs.2"
+        "bd-b12xs.2",
+        "bd-b12xs.3",
+        "bd-b12xs.4",
+        "bd-b12xs.5",
+        "bd-b12xs.6"
       ]
     },
     {

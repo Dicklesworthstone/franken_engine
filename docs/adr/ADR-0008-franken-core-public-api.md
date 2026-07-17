@@ -6,7 +6,8 @@
 - Plan references: Track J, franken-core graduation contract, API parity ledger
 - Related beads: `bd-cixqu.10.6`, `bd-cixqu.10.7`, `bd-4w7h9.1`,
   `bd-4w7h9.2`, `bd-n8eta.4`, `bd-n8eta.4.1`, `bd-n8eta.4.6`,
-  `bd-b12xs`, `bd-b12xs.1`, `bd-b12xs.2`, `bd-f1ixz`
+  `bd-b12xs`, `bd-b12xs.1`, `bd-b12xs.2`, `bd-b12xs.3`,
+  `bd-b12xs.4`, `bd-b12xs.5`, `bd-b12xs.6`, `bd-f1ixz`
 
 ## Context
 
@@ -583,6 +584,94 @@ Implementation ownership is deliberately split:
 This is a versioned API approval, not a premature conformance claim. The
 baseline interpreter row remains `pending_graduation` until the version,
 implementation, and parity children are green.
+
+## Approved Versioned Evolution: Exact UTF-16 Runtime Property Keys
+
+`bd-b12xs.1` and `bd-b12xs.2` established the exact lookup and ordered-storage
+primitives without changing a runtime heap. Runtime adoption is a separate
+coordinated evolution because the executable baselines still project
+`Value::Str` through UTF-8 `String` before property lookup. That projection
+aliases distinct lone UTF-16 units to the same replacement-character key.
+
+The approved source contract is:
+
+1. Keep the descriptor-model `object_model::PropertyKey::String(String)` and
+   its `JsValue` conversion posture unchanged. That lane deliberately rejects
+   a non-well-formed string instead of projecting it. Executable baselines use
+   a private isomorphic runtime key whose string arm is `JsString` and whose
+   Symbol arm is `SymbolId`; they do not widen the stable descriptor enum.
+2. Keep every public executable `HeapObject` field name, type, and visibility
+   unchanged. Both lanes retain `properties: OrderedStringMap<Value>`; the core
+   lane also retains its public `accessors: BTreeMap<String,
+   AccessorProperty>`, while the engine continues to encode accessors as
+   `Value::Accessor` property entries and does not acquire a core-style
+   accessor field. `OrderedStringMap` may use `ExactOrderedStringMap` and exact
+   accessor/order metadata privately and may add exact-key methods.
+   Historical `String` key methods plus `len`/`is_empty`, `keys`, `values`,
+   `iter`, `retain`, and borrowed or owning `IntoIterator` are explicitly the
+   well-formed compatibility view: they never expose or project an exact-only
+   key. Consuming iteration yields that view and drops any private exact-only
+   entries with the consumed container; `clear` empties both views. Runtime
+   property semantics, serde, equality, seed/replay, and memory accounting use
+   the new exact APIs whenever exact-only entries can exist.
+3. Convert a dynamic computed `Value::Str` directly to the private
+   `JsString`-backed key. Get, set, delete, `in`, prototype lookup, and
+   data/accessor conversion must compare exact units. They must never call
+   `to_string`, `as_utf8_projection`, or replacement-character normalization
+   to derive identity.
+4. Keep `baseline_interpreter::PropertyKey = String` and
+   `InterpreterHook::pre_property_access` unchanged in these ordinary
+   compatibility children. With no hook installed, exact property access
+   proceeds normally. A well-formed string reaches an installed legacy hook as
+   before. With that hook installed, a non-well-formed string, like a Symbol,
+   fails closed before the callback and before lookup or mutation because the
+   callback cannot represent its identity; tests require zero callback
+   invocations and unchanged heap state. Any typed hook migration remains a
+   separate owner-reviewed boundary.
+5. Land dynamic carrier/storage adoption before consumer and static-source
+   parity. The first two runtime children do not change AST or IR schemas.
+   `bd-b12xs.6` audits static object/member keys and versions an AST/IR wire only
+   if that audit proves a remaining projection.
+
+The heap wire remains backward-readable and canonical:
+
+- An all-well-formed string-key carrier serializes byte-for-byte as its
+  historical JSON object/map. Existing heap, seed, and replay artifacts keep
+  their bytes when they contain no exact-only key.
+- If any key in a carrier is non-well-formed, that whole carrier uses the
+  existing ES-ordered `[[JsString, value], ...]` representation. Core accessor
+  and private order metadata use the same exact `JsString` encoding rule while
+  retaining the core field names. Engine accessors remain values in the
+  property carrier, matching the engine's existing heap shape.
+- Readers accept both representations, canonicalize ordinary well-formed
+  inputs to the map form, and reject duplicate exact keys plus mixed-form
+  aliases. Lone D800, lone D801, and literal U+FFFD are three identities.
+- Canonical array indices still enumerate numerically first; other strings
+  retain creation order. Replacement and descriptor-kind conversion retain a
+  position, while delete followed by re-creation appends.
+- Seed capture, equality, full and incremental memory estimates, and rejected
+  mutation rollback include every exact key and private ordering copy. A
+  failed write cannot leave an exact key, descriptor, or order entry behind.
+- Core adoption preserves the already-shipped private Symbol sidecars and
+  `symbol_properties` wire. Mixed numeric-string, exact-string, and Symbol
+  insertion, replacement, descriptor conversion, deletion, re-creation,
+  serde, rollback, and memory tests must retain the ES category order and
+  Symbol identity without projecting either key family.
+
+Implementation ownership is deliberately ordered:
+
+| Bead | Contract ownership |
+| --- | --- |
+| `bd-b12xs.3` | this API/wire decision and dependency split |
+| `bd-b12xs.4` | franken-core dynamic computed-key carrier, compatibility/exact views, mixed Symbol storage, serde, seed, memory, and rollback |
+| `bd-b12xs.5` | franken-engine mirror after the core call shape is proven |
+| `bd-b12xs.6` | enumeration/JSON/Reflect/Proxy/assign/spread consumers, static-source audit, donor lockstep, and parent closeout |
+
+The engine Symbol migration `bd-n8eta.4.2` depends on `bd-b12xs.6`. This avoids
+first routing its string arms through `PropertyKey::String(String)` and then
+remigrating the same property operations to `JsString`. Passing carrier tests
+alone does not close the parity gap; both executable baselines and the complete
+consumer matrix must be green.
 
 ## Cross-Crate Compatibility Matrix
 

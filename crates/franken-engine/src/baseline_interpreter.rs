@@ -38696,25 +38696,23 @@ impl InterpreterCore {
         });
 
         let delegated_args = RegRange { start: 0, count };
-        let outcome = (|this: &mut Self| {
-            if cap.starts_with("promise:") {
-                this.dispatch_promise_hostcall(cap, delegated_args, module)
-            } else if cap == "module:require" {
-                this.dispatch_require_hostcall(delegated_args, module)
-            } else if matches!(cap, "module:import" | "module.import" | "module_load") {
-                this.dispatch_import_hostcall(cap, delegated_args, module)
-            } else if cap.starts_with("number:") {
-                this.dispatch_number_hostcall(cap, delegated_args)
-            } else if cap.starts_with("console:") {
-                this.dispatch_console_hostcall(cap, delegated_args)
-            } else if cap.starts_with("timer:") {
-                this.dispatch_timer_hostcall(cap, delegated_args)
-            } else if cap.starts_with("builtin:") {
-                this.dispatch_builtin_hostcall(cap, delegated_args, module)
-            } else {
-                Ok(Value::Undefined)
-            }
-        })(self);
+        let outcome = if cap.starts_with("promise:") {
+            self.dispatch_promise_hostcall(cap, delegated_args, module)
+        } else if cap == "module:require" {
+            self.dispatch_require_hostcall(delegated_args, module)
+        } else if matches!(cap, "module:import" | "module.import" | "module_load") {
+            self.dispatch_import_hostcall(cap, delegated_args, module)
+        } else if cap.starts_with("number:") {
+            self.dispatch_number_hostcall(cap, delegated_args)
+        } else if cap.starts_with("console:") {
+            self.dispatch_console_hostcall(cap, delegated_args)
+        } else if cap.starts_with("timer:") {
+            self.dispatch_timer_hostcall(cap, delegated_args)
+        } else if cap.starts_with("builtin:") {
+            self.dispatch_builtin_hostcall(cap, delegated_args, module)
+        } else {
+            Ok(Value::Undefined)
+        };
 
         self.mutate_registers(|registers| {
             if registers.len() < required_len {

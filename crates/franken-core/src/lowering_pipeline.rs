@@ -2436,55 +2436,6 @@ fn validate_rest_parameter_abi(
     Ok(Some(rest_index as u32))
 }
 
-fn contains_unsupported_parameter_nested_rest(pattern: &BindingPattern) -> bool {
-    match pattern {
-        BindingPattern::Identifier(_) => false,
-        BindingPattern::ObjectPattern(properties) => properties
-            .iter()
-            .any(|property| contains_unsupported_parameter_nested_rest(&property.value)),
-        BindingPattern::ArrayPattern(elements) => elements
-            .iter()
-            .flatten()
-            .any(contains_unsupported_parameter_nested_rest),
-        BindingPattern::Rest(inner) => {
-            inner.as_identifier().is_none() || contains_unsupported_parameter_nested_rest(inner)
-        }
-        BindingPattern::AssignmentPattern { left, .. } => {
-            contains_unsupported_parameter_nested_rest(left)
-        }
-    }
-}
-
-fn contains_object_rest(pattern: &BindingPattern) -> bool {
-    match pattern {
-        BindingPattern::Identifier(_) => false,
-        BindingPattern::ObjectPattern(properties) => properties.iter().any(|property| {
-            matches!(&property.value, BindingPattern::Rest(_))
-                || contains_object_rest(&property.value)
-        }),
-        BindingPattern::ArrayPattern(elements) => {
-            elements.iter().flatten().any(contains_object_rest)
-        }
-        BindingPattern::Rest(inner) => contains_object_rest(inner),
-        BindingPattern::AssignmentPattern { left, .. } => contains_object_rest(left),
-    }
-}
-
-fn contains_computed_destructuring_key(pattern: &BindingPattern) -> bool {
-    match pattern {
-        BindingPattern::Identifier(_) => false,
-        BindingPattern::ObjectPattern(properties) => properties.iter().any(|property| {
-            property.computed || contains_computed_destructuring_key(&property.value)
-        }),
-        BindingPattern::ArrayPattern(elements) => elements
-            .iter()
-            .flatten()
-            .any(contains_computed_destructuring_key),
-        BindingPattern::Rest(inner) => contains_computed_destructuring_key(inner),
-        BindingPattern::AssignmentPattern { left, .. } => contains_computed_destructuring_key(left),
-    }
-}
-
 /// Allocate one runtime slot per formal and every identifier introduced by a
 /// pattern. Non-identifier formals use an unforgeable synthetic source slot;
 /// their entry prologue copies/defaults/destructures that slot into user
@@ -2591,30 +2542,6 @@ fn allocate_function_parameter_bindings<'a>(
     body_scope: ScopeId,
 ) -> Result<FunctionParameterPlan<'a>, LoweringPipelineError> {
     let rest_param_index = validate_rest_parameter_abi(params)?;
-    if let Some(param) = params
-        .iter()
-        .find(|param| contains_unsupported_parameter_nested_rest(&param.pattern))
-    {
-        return Err(unsupported_frontier_expression_error(
-            "function_parameter_nested_rest",
-            "FE-LOWER-UNSUPPORTED-NESTED-REST-PARAM-0001",
-            "core.function_parameter_nested_rest",
-            "nested rest parameter targets require recursive slice destructuring",
-            Some(param.span.clone()),
-        ));
-    }
-    if let Some(param) = params
-        .iter()
-        .find(|param| contains_computed_destructuring_key(&param.pattern))
-    {
-        return Err(unsupported_frontier_expression_error(
-            "function_parameter_computed_destructuring_key",
-            "FE-LOWER-UNSUPPORTED-COMPUTED-PARAM-KEY-0001",
-            "core.function_parameter_computed_key",
-            "computed parameter-pattern keys require dynamic property-key lowering",
-            Some(param.span.clone()),
-        ));
-    }
     let mut param_names = Vec::with_capacity(params.len());
     let mut destructure_params = Vec::with_capacity(params.len());
     for (index, param) in params.iter().enumerate() {
@@ -2908,6 +2835,23 @@ fn object_pattern_static_key(
         .unwrap_or_else(|_| fallback_name.unwrap_or_default().to_string()))
 }
 
+#[derive(Clone)]
+enum DestructuringPropertyKey {
+    Static(String),
+    Dynamic(BindingId),
+}
+
+fn emit_destructuring_property_key(key: &DestructuringPropertyKey, ops: &mut Vec<Ir1Op>) {
+    match key {
+        DestructuringPropertyKey::Static(key) => ops.push(Ir1Op::LoadLiteral {
+            value: Ir1Literal::String(key.clone().into()),
+        }),
+        DestructuringPropertyKey::Dynamic(binding_id) => ops.push(Ir1Op::LoadBinding {
+            binding_id: *binding_id,
+        }),
+    }
+}
+
 /// Emit IR1 ops to destructure a value (already stored in `source_bid`) into
 /// the individual bindings declared by `pattern`. For object patterns this
 /// emits `LoadBinding(source) + GetProperty(key) + StoreBinding(target) + Pop`
@@ -2949,47 +2893,35 @@ fn lower_destructuring_to_ir1_with_parameter_tdz(
     label_counter: &mut u32,
     mut parameter_tdz: Option<&mut ParameterTdzState>,
 ) -> Result<(), LoweringPipelineError> {
-    if contains_object_rest(pattern) && contains_computed_destructuring_key(pattern) {
-        return Err(unsupported_frontier_expression_error(
-            "object_rest_computed_key",
-            "FE-LOWER-UNSUPPORTED-OBJECT-REST-COMPUTED-KEY-0001",
-            "core.object_rest_computed_key",
-            "object-rest exclusions require evaluate-once dynamic property-key lowering",
-            None,
-        ));
-    }
-
     match pattern {
         BindingPattern::Identifier(_) => {
             // Simple binding — already handled by StoreBinding above.
         }
         BindingPattern::ObjectPattern(props) => {
-            let mut rest_excluded_keys: Vec<String> = Vec::new();
+            let mut rest_excluded_keys = Vec::<DestructuringPropertyKey>::new();
             for prop in props {
                 if let BindingPattern::Rest(inner) = &prop.value {
-                    let target_names = inner.binding_names();
-                    let target_name = match target_names.first() {
-                        Some(name) => *name,
-                        None => continue,
-                    };
-
-                    let rest_bid = if matches!(inner.as_ref(), BindingPattern::Identifier(_)) {
-                        match binding_lookup.get(target_name) {
-                            Some(binding_id) => *binding_id,
-                            None => continue,
+                    let (rest_bid, target_name) = match inner.as_ref() {
+                        BindingPattern::Identifier(name) => {
+                            let Some(binding_id) = binding_lookup.get(name) else {
+                                continue;
+                            };
+                            (*binding_id, Some(name.as_str()))
                         }
-                    } else {
-                        alloc_internal_binding(
-                            bindings,
-                            binding_lookup,
-                            binding_index,
-                            scope_id,
-                            "destructure_rest",
-                        )?
+                        _ => (
+                            alloc_internal_binding(
+                                bindings,
+                                binding_lookup,
+                                binding_index,
+                                scope_id,
+                                "destructure_rest",
+                            )?,
+                            None,
+                        ),
                     };
 
-                    // Object rest filters every statically consumed key before
-                    // reading the remaining own properties.  Keeping the
+                    // Object rest filters every consumed key before reading
+                    // the remaining own properties. Keeping the
                     // exclusions on the operand stack lets the dedicated copy
                     // operation avoid observing excluded accessors.
                     ops.push(Ir1Op::NewObject { count: 0 });
@@ -2997,9 +2929,7 @@ fn lower_destructuring_to_ir1_with_parameter_tdz(
                         binding_id: source_bid,
                     });
                     for key in &rest_excluded_keys {
-                        ops.push(Ir1Op::LoadLiteral {
-                            value: Ir1Literal::String(key.clone().into()),
-                        });
+                        emit_destructuring_property_key(key, ops);
                     }
                     let excluded_count = u32::try_from(rest_excluded_keys.len()).map_err(|_| {
                         LoweringPipelineError::InvariantViolation {
@@ -3012,7 +2942,7 @@ fn lower_destructuring_to_ir1_with_parameter_tdz(
                     });
                     ops.push(Ir1Op::Pop);
 
-                    if matches!(inner.as_ref(), BindingPattern::Identifier(_)) {
+                    if let Some(target_name) = target_name {
                         if let Some(state) = parameter_tdz.as_deref_mut() {
                             state.mark_binding_initialized(target_name, binding_lookup);
                         }
@@ -3034,28 +2964,67 @@ fn lower_destructuring_to_ir1_with_parameter_tdz(
                 }
 
                 let target_names = prop.value.binding_names();
-                let key_str = object_pattern_static_key(prop, target_names.first().copied())?;
-                rest_excluded_keys.push(key_str.clone());
-
-                let target_name = match target_names.first() {
-                    Some(n) => *n,
-                    None => continue,
+                let property_key = if prop.computed {
+                    reject_known_lone_surrogate_property_key(
+                        &prop.key,
+                        "core.object_pattern_computed_lone_surrogate_key",
+                    )?;
+                    let key_expression_start = ops.len();
+                    lower_expression_to_ir1(
+                        &prop.key,
+                        ops,
+                        bindings,
+                        binding_lookup,
+                        binding_index,
+                        scope_id,
+                        label_counter,
+                    )?;
+                    if let Some(state) = parameter_tdz.as_deref() {
+                        rewrite_parameter_tdz_accesses(ops, key_expression_start, state);
+                    }
+                    let key_binding = alloc_internal_binding(
+                        bindings,
+                        binding_lookup,
+                        binding_index,
+                        scope_id,
+                        "destructure_key",
+                    )?;
+                    ops.push(Ir1Op::StoreBinding {
+                        binding_id: key_binding,
+                    });
+                    ops.push(Ir1Op::Pop);
+                    DestructuringPropertyKey::Dynamic(key_binding)
+                } else {
+                    DestructuringPropertyKey::Static(object_pattern_static_key(
+                        prop,
+                        target_names.first().copied(),
+                    )?)
                 };
-                let target_bid = match binding_lookup.get(target_name) {
-                    Some(bid) => *bid,
-                    None => continue,
-                };
+                rest_excluded_keys.push(property_key.clone());
 
                 // Load the source object, get the property, store to target binding.
                 ops.push(Ir1Op::LoadBinding {
                     binding_id: source_bid,
                 });
+                if matches!(&property_key, DestructuringPropertyKey::Dynamic(_)) {
+                    emit_destructuring_property_key(&property_key, ops);
+                }
                 ops.push(Ir1Op::GetProperty {
-                    key: Ir1PropertyKey::Static(key_str),
+                    key: match &property_key {
+                        DestructuringPropertyKey::Static(key) => {
+                            Ir1PropertyKey::Static(key.clone())
+                        }
+                        DestructuringPropertyKey::Dynamic(_) => Ir1PropertyKey::Dynamic,
+                    },
                 });
 
                 match &prop.value {
-                    BindingPattern::Identifier(_) => {
+                    BindingPattern::Identifier(target_name) => {
+                        let target_bid = *binding_lookup.get(target_name).ok_or(
+                            LoweringPipelineError::InvariantViolation {
+                                detail: "Object-pattern target binding must be allocated before lowering",
+                            },
+                        )?;
                         ops.push(Ir1Op::StoreBinding {
                             binding_id: target_bid,
                         });
@@ -3103,28 +3072,55 @@ fn lower_destructuring_to_ir1_with_parameter_tdz(
 
                 // Handle rest element: `[a, ...rest]`
                 if let BindingPattern::Rest(inner) = element {
-                    let target_names = inner.binding_names();
-                    let target_name = match target_names.first() {
-                        Some(n) => *n,
-                        None => continue,
+                    let (rest_bid, target_name) = match inner.as_ref() {
+                        BindingPattern::Identifier(name) => {
+                            let Some(binding_id) = binding_lookup.get(name) else {
+                                continue;
+                            };
+                            (*binding_id, Some(name.as_str()))
+                        }
+                        _ => (
+                            alloc_internal_binding(
+                                bindings,
+                                binding_lookup,
+                                binding_index,
+                                scope_id,
+                                "destructure_rest",
+                            )?,
+                            None,
+                        ),
                     };
-                    if let Some(&target_bid) = binding_lookup.get(target_name) {
-                        // Rest collects remaining elements by slicing the source array
-                        // from the current index to the end.
-                        ops.push(Ir1Op::LoadBinding {
-                            binding_id: source_bid,
-                        });
-                        ops.push(Ir1Op::LoadLiteral {
-                            value: Ir1Literal::Integer(index as i64),
-                        });
-                        ops.push(Ir1Op::ArraySlice);
-                        ops.push(Ir1Op::StoreBinding {
-                            binding_id: target_bid,
-                        });
-                        ops.push(Ir1Op::Pop);
+
+                    // Rest collects remaining elements by slicing the source array
+                    // from the current index to the end.
+                    ops.push(Ir1Op::LoadBinding {
+                        binding_id: source_bid,
+                    });
+                    ops.push(Ir1Op::LoadLiteral {
+                        value: Ir1Literal::Integer(index as i64),
+                    });
+                    ops.push(Ir1Op::ArraySlice);
+                    ops.push(Ir1Op::StoreBinding {
+                        binding_id: rest_bid,
+                    });
+                    ops.push(Ir1Op::Pop);
+
+                    if let Some(target_name) = target_name {
                         if let Some(state) = parameter_tdz.as_deref_mut() {
                             state.mark_binding_initialized(target_name, binding_lookup);
                         }
+                    } else {
+                        lower_destructuring_to_ir1_with_parameter_tdz(
+                            inner,
+                            rest_bid,
+                            ops,
+                            bindings,
+                            binding_lookup,
+                            binding_index,
+                            scope_id,
+                            label_counter,
+                            parameter_tdz.as_deref_mut(),
+                        )?;
                     }
                     continue;
                 }
@@ -16292,57 +16288,230 @@ mod tests {
     }
 
     #[test]
-    fn nested_rest_parameter_targets_fail_closed_bd_ur3tk_10() {
-        let error = lower_rest_source_to_ir3(
-            "function unsupported([...[value]], ...tail) { return value; }",
-        )
-        .expect_err("nested rest targets must not receive the unsplit remainder array");
-        let LoweringPipelineError::UnsupportedSyntax(diagnostic) = error else {
-            panic!("expected fail-closed nested-rest parameter diagnostic");
-        };
-        assert_eq!(
-            diagnostic.diagnostic_code,
-            "FE-LOWER-UNSUPPORTED-NESTED-REST-PARAM-0001"
+    fn nested_rest_parameter_targets_recursively_destructure_slices_bd_cjtvr() {
+        let (ir1, module, value) = lower_and_execute_deferred_source_bd_6pvhn(
+            "function unpack([...[head, ...tail]]) {\
+                 return head * 100 + tail[0] * 10 + tail[1];\
+             }\
+             unpack([2, 3, 4]);",
         );
-        assert_eq!(diagnostic.site_id, "core.function_parameter_nested_rest");
+
+        assert_eq!(
+            deferred_ir1_body_bd_6pvhn(&ir1, "unpack")
+                .iter()
+                .filter(|op| matches!(op, Ir1Op::ArraySlice))
+                .count(),
+            2,
+            "the outer and nested rest targets each require their own slice"
+        );
+        assert_eq!(
+            deferred_ir3_body_bd_6pvhn(&module, "unpack")
+                .iter()
+                .filter(|instruction| matches!(instruction, Ir3Instruction::ArraySlice { .. }))
+                .count(),
+            2
+        );
+        assert_eq!(value, Value::Int(234));
     }
 
     #[test]
-    fn computed_parameter_pattern_keys_fail_closed_bd_ur3tk_10() {
-        let error = lower_rest_source_to_ir3(
-            "function unsupported({ ['value']: picked }, ...tail) { return picked; }",
-        )
-        .expect_err("computed keys must not silently fall back to the target binding name");
-        let LoweringPipelineError::UnsupportedSyntax(diagnostic) = error else {
-            panic!("expected fail-closed computed-key parameter diagnostic");
-        };
-        assert_eq!(
-            diagnostic.diagnostic_code,
-            "FE-LOWER-UNSUPPORTED-COMPUTED-PARAM-KEY-0001"
+    fn computed_parameter_keys_evaluate_once_and_preserve_tdz_bd_cjtvr() {
+        let (ir1, module, value) = lower_and_execute_deferred_source_bd_6pvhn(
+            "let state = { calls: 0 };\
+             function key() { state.calls = state.calls + 1; return 'picked'; }\
+             function project({ [key()]: picked, ...rest }) {\
+                 return picked * 100 + rest.left * 10\
+                     + (rest.picked === undefined ? 1 : 0);\
+             }\
+             function earlier(name, { [name]: picked }) { return picked; }\
+             function samePattern({ name = 'x', [name]: picked }) { return picked; }\
+             project({ picked: 2, left: 3 }) * 100\
+                 + earlier('x', { x: 4 }) * 10 + state.calls\
+                 + samePattern({ x: 5 });",
         );
-        assert_eq!(diagnostic.site_id, "core.function_parameter_computed_key");
+
+        let project_ir1 = deferred_ir1_body_bd_6pvhn(&ir1, "project");
+        assert!(project_ir1.iter().any(|op| matches!(
+            op,
+            Ir1Op::GetProperty {
+                key: Ir1PropertyKey::Dynamic
+            }
+        )));
+        assert!(
+            project_ir1
+                .iter()
+                .any(|op| matches!(op, Ir1Op::CopyDataProperties { excluded_count: 1 }))
+        );
+        assert!(
+            deferred_ir3_body_bd_6pvhn(&module, "project")
+                .iter()
+                .any(|instruction| matches!(
+                    instruction,
+                    Ir3Instruction::CopyDataProperties {
+                        excluded: RegRange { count: 1, .. },
+                        ..
+                    }
+                ))
+        );
+        assert_eq!(value, Value::Int(23_146));
+
+        let (_, _, tdz) = lower_and_execute_deferred_source_bd_6pvhn(
+            "function target({ [later]: picked }, later) { return picked; }\
+             try { target({ x: 1 }, 'x'); 'missed'; }\
+             catch (error) { error.name + ':' + error.message; }",
+        );
+        assert_eq!(
+            tdz,
+            Value::str("ReferenceError:Cannot access 'later' before initialization")
+        );
+
+        let (_, _, same_pattern_forward_tdz) = lower_and_execute_deferred_source_bd_6pvhn(
+            "function target({ [later]: picked, later }) { return picked; }\
+             try { target({ x: 1, later: 'x' }); 'missed'; }\
+             catch (error) { error.name + ':' + error.message; }",
+        );
+        assert_eq!(
+            same_pattern_forward_tdz,
+            Value::str("ReferenceError:Cannot access 'later' before initialization")
+        );
     }
 
     #[test]
-    fn computed_object_rest_declarations_fail_closed_bd_vkf78() {
-        let tree = CanonicalEs2020Parser
-            .parse(
-                "let key = 'kept';\
-                 let { [key]: value, ...rest } = { kept: 3, left: 4 };",
-                ParseGoal::Script,
-            )
-            .expect("computed object-rest declaration should parse");
-        let ir0 = Ir0Module::from_syntax_tree(tree, "bd_vkf78_computed.js");
-        let error = lower_ir0_to_ir1(&ir0)
-            .expect_err("computed object-rest exclusions must not use a guessed static key");
-        let LoweringPipelineError::UnsupportedSyntax(diagnostic) = error else {
-            panic!("expected fail-closed computed object-rest diagnostic");
-        };
-        assert_eq!(
-            diagnostic.diagnostic_code,
-            "FE-LOWER-UNSUPPORTED-OBJECT-REST-COMPUTED-KEY-0001"
+    fn computed_object_rest_declarations_reuse_exact_saved_keys_bd_cjtvr() {
+        let (ir1, _, value) = lower_and_execute_deferred_source_bd_6pvhn(
+            "let state = { calls: 0 };\
+             function key(name) { state.calls = state.calls + 1; return name; }\
+             let source = { box: { left: 4 }, tail: 5 };\
+             let { [key('box')]: { [key('picked')]: picked = 3, ...inside },\
+                   ...outside } = source;\
+             state.calls * 10000 + picked * 1000 + inside.left * 100\
+                 + outside.tail * 10\
+                 + (inside.picked === undefined ? 1 : 0)\
+                 + (outside.box === undefined ? 1 : 0);",
         );
-        assert_eq!(diagnostic.site_id, "core.object_rest_computed_key");
+
+        assert_eq!(
+            ir1.ops
+                .iter()
+                .filter(|op| matches!(
+                    op,
+                    Ir1Op::GetProperty {
+                        key: Ir1PropertyKey::Dynamic
+                    }
+                ))
+                .count(),
+            2
+        );
+        assert_eq!(
+            ir1.ops
+                .iter()
+                .filter_map(|op| match op {
+                    Ir1Op::CopyDataProperties { excluded_count } => Some(*excluded_count),
+                    _ => None,
+                })
+                .collect::<Vec<_>>(),
+            vec![1, 1]
+        );
+        assert_eq!(value, Value::Int(23_452));
+    }
+
+    #[test]
+    fn same_level_computed_exclusions_evaluate_once_in_order_bd_cjtvr() {
+        let (ir1, module, value) = lower_and_execute_deferred_source_bd_6pvhn(
+            "let state = { calls: 0, trace: 0 };\
+             function key(name, digit) {\
+                 state.calls = state.calls + 1;\
+                 state.trace = state.trace * 10 + digit;\
+                 return name;\
+             }\
+             let { [key('first', 1)]: first, [key('second', 2)]: second,\
+                   ...rest } = { first: 1, second: 2, left: 3 };\
+             state.trace * 100000 + state.calls * 10000\
+                 + first * 1000 + second * 100 + rest.left * 10\
+                 + (rest.first === undefined ? 1 : 0)\
+                 + (rest.second === undefined ? 1 : 0);",
+        );
+
+        assert_eq!(
+            ir1.ops
+                .iter()
+                .filter(|op| matches!(op, Ir1Op::CopyDataProperties { excluded_count: 2 }))
+                .count(),
+            1
+        );
+        assert_eq!(
+            module
+                .instructions
+                .iter()
+                .filter(|instruction| matches!(
+                    instruction,
+                    Ir3Instruction::CopyDataProperties {
+                        excluded: RegRange { count: 2, .. },
+                        ..
+                    }
+                ))
+                .count(),
+            1
+        );
+        assert_eq!(value, Value::Int(1_221_232));
+    }
+
+    #[test]
+    fn nested_rest_variable_declaration_recursively_destructures_slice_bd_cjtvr() {
+        let (_, _, value) = lower_and_execute_deferred_source_bd_6pvhn(
+            "let [prefix, ...[head, ...tail]] = [1, 2, 3, 4];\
+             prefix * 1000 + head * 100 + tail[0] * 10 + tail[1];",
+        );
+        assert_eq!(value, Value::Int(1_234));
+    }
+
+    #[test]
+    fn bare_for_of_head_recomputes_dynamic_exclusion_each_iteration_bd_cjtvr() {
+        let (ir1, module, value) = lower_and_execute_deferred_source_bd_6pvhn(
+            "let state = { calls: 0 };\
+             function key() { state.calls = state.calls + 1; return 'picked'; }\
+             let picked = 0;\
+             let rest = {};\
+             let total = 0;\
+             let rows = [{ picked: 1, left: 2 }, { picked: 3, left: 4 }];\
+             for ({ [key()]: picked, ...rest } of rows) {\
+                 total = total + picked * 10 + rest.left\
+                     + (rest.picked === undefined ? 100 : 0);\
+             }\
+             state.calls * 1000 + total;",
+        );
+
+        assert!(ir1.ops.iter().any(|op| matches!(
+            op,
+            Ir1Op::GetProperty {
+                key: Ir1PropertyKey::Dynamic
+            }
+        )));
+        assert!(module.instructions.iter().any(|instruction| matches!(
+            instruction,
+            Ir3Instruction::CopyDataProperties {
+                excluded: RegRange { count: 1, .. },
+                ..
+            }
+        )));
+        assert_eq!(value, Value::Int(2_246));
+    }
+
+    #[test]
+    fn bare_for_in_head_recomputes_dynamic_exclusion_each_iteration_bd_cjtvr() {
+        let (_, _, value) = lower_and_execute_deferred_source_bd_6pvhn(
+            "let state = { calls: 0 };\
+             function key() { state.calls = state.calls + 1; return '0'; }\
+             let picked = '';\
+             let rest = {};\
+             let seen = '';\
+             for ({ [key()]: picked, ...rest } in { ab: 1, cd: 2 }) {\
+                 seen = seen + picked + rest[1];\
+             }\
+             state.calls + ':' + seen;",
+        );
+
+        assert_eq!(value, Value::str("2:abcd"));
     }
 
     fn static_property_key_cases_bd_h4esx() -> Vec<(&'static str, &'static str)> {

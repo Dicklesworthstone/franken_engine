@@ -883,6 +883,16 @@ fn lower_ir0_to_ir1_with_ambient_grant(
     for alias in confirmed_zlib_module_aliases(&ir0.tree.body, &binding_lookup) {
         binding_lookup.insert(zlib_module_alias_sentinel(&alias), 0);
     }
+    // bd-9p2v3: `cluster` is a finite, engine-owned primary-process facade.
+    // Only const aliases whose complete use stays inside the authenticated
+    // static surface are materialized; bare possession, escape, reassignment,
+    // direct member mutation, computed access, and lexical spoofing retain the
+    // ambient module-load denial. Unlike the purely syntactic zlib facade, the
+    // cluster alias receives a real heap object because `settings` is live
+    // mutable state and EventEmitter methods require receiver identity.
+    for alias in confirmed_cluster_module_aliases(&ir0.tree.body, &binding_lookup) {
+        binding_lookup.insert(cluster_module_alias_sentinel(&alias), 0);
+    }
     // bd-suwvw: same usage-gated sentinel recording for `require('timers')`
     // (member calls lower to the SAME `builtin:SetTimeout`/… hostcalls as the
     // bare globals; member reads lower to the like-named injected runtime
@@ -2105,6 +2115,7 @@ fn reserve_and_mark_source_scope_bindings(
     suppress_stream_module_sentinels(binding_lookup, &lexical_names);
     suppress_net_module_sentinels(binding_lookup, &lexical_names);
     suppress_zlib_module_sentinels(binding_lookup, &lexical_names);
+    suppress_cluster_module_sentinels(binding_lookup, &lexical_names);
     for name in reserve_root_scope_bindings(statements, binding_lookup, binding_index) {
         binding_lookup.insert(lexical_binding_sentinel(&name), 0);
         let binding_id = *binding_lookup
@@ -2123,6 +2134,7 @@ fn mark_pre_reserved_source_scope_bindings(
     suppress_stream_module_sentinels(binding_lookup, &reserved);
     suppress_net_module_sentinels(binding_lookup, &reserved);
     suppress_zlib_module_sentinels(binding_lookup, &reserved);
+    suppress_cluster_module_sentinels(binding_lookup, &reserved);
     for name in reserved {
         binding_lookup.insert(lexical_binding_sentinel(&name), 0);
         let binding_id = *binding_lookup
@@ -2362,6 +2374,7 @@ fn prepare_function_body_bindings(
         suppress_stream_module_sentinel(body_lookup, name);
         suppress_net_module_sentinel(body_lookup, name);
         suppress_zlib_module_sentinel(body_lookup, name);
+        suppress_cluster_module_sentinel(body_lookup, name);
     }
     for name in &local_names {
         body_lookup.insert(lexical_binding_sentinel(name), 0);
@@ -2373,6 +2386,7 @@ fn prepare_function_body_bindings(
         suppress_stream_module_sentinel(body_lookup, name);
         suppress_net_module_sentinel(body_lookup, name);
         suppress_zlib_module_sentinel(body_lookup, name);
+        suppress_cluster_module_sentinel(body_lookup, name);
         body_lookup.insert(lexical_binding_sentinel(name), 0);
     }
 
@@ -2874,6 +2888,7 @@ fn allocate_destructure_param_bindings(
             suppress_stream_module_sentinel(binding_lookup, inner_name);
             suppress_net_module_sentinel(binding_lookup, inner_name);
             suppress_zlib_module_sentinel(binding_lookup, inner_name);
+            suppress_cluster_module_sentinel(binding_lookup, inner_name);
         }
     }
     Ok(())
@@ -3353,6 +3368,35 @@ fn lower_statement_to_ir1_with_flow(
                     // (`builtin:Querystring*` / `builtin:Os*` hostcalls and
                     // string constants). Unused aliases stay ambient-refused.
                     if let BindingPattern::Identifier(alias) = &d.pattern
+                        && is_require_cluster_module_initializer(init, binding_lookup)
+                        && binding_lookup.contains_key(&cluster_module_alias_sentinel(alias))
+                    {
+                        // The usage-gated cluster facade is the one lowering-only
+                        // module family that must materialize receiver identity:
+                        // setupPrimary/setupMaster merge a live settings object,
+                        // while on/once/emit share EventEmitter's listener table.
+                        if let Some(&singleton_binding) =
+                            binding_lookup.get(cluster_singleton_binding_sentinel())
+                        {
+                            ops.push(Ir1Op::LoadBinding {
+                                binding_id: singleton_binding,
+                            });
+                        } else {
+                            ops.push(Ir1Op::HostCall {
+                                capability: "builtin:ClusterFacade".to_string(),
+                                arg_count: 0,
+                            });
+                            // Publish the singleton binding id only after all
+                            // facade-producing ops have been emitted. The first
+                            // declaration stores immediately below; later aliases
+                            // load the same binding, avoiding an ObjectId cache
+                            // across heap reset/GC boundaries.
+                            binding_lookup.insert(
+                                cluster_singleton_binding_sentinel().to_string(),
+                                primary_bid,
+                            );
+                        }
+                    } else if let BindingPattern::Identifier(alias) = &d.pattern
                         && ((is_require_fs_module_initializer(init, binding_lookup)
                             && binding_lookup.contains_key(&fs_module_alias_sentinel(alias)))
                             || ((is_require_fs_promises_module_initializer(init, binding_lookup)
@@ -3653,6 +3697,7 @@ fn lower_statement_to_ir1_with_flow(
             suppress_stream_module_sentinels(binding_lookup, &lexical_names);
             suppress_net_module_sentinels(binding_lookup, &lexical_names);
             suppress_zlib_module_sentinels(binding_lookup, &lexical_names);
+            suppress_cluster_module_sentinels(binding_lookup, &lexical_names);
             for name in for_in_stmt.binding.binding_names() {
                 let binding_id = if for_in_stmt.binding_kind == Some(VariableDeclarationKind::Var) {
                     reserve_binding_id(binding_lookup, binding_index, name)
@@ -3785,6 +3830,7 @@ fn lower_statement_to_ir1_with_flow(
             suppress_stream_module_sentinels(binding_lookup, &lexical_names);
             suppress_net_module_sentinels(binding_lookup, &lexical_names);
             suppress_zlib_module_sentinels(binding_lookup, &lexical_names);
+            suppress_cluster_module_sentinels(binding_lookup, &lexical_names);
             for name in for_of_stmt.binding.binding_names() {
                 let binding_id = if for_of_stmt.binding_kind == Some(VariableDeclarationKind::Var) {
                     reserve_binding_id(binding_lookup, binding_index, name)
@@ -4239,6 +4285,7 @@ fn lower_statement_to_ir1_with_flow(
                     suppress_stream_module_sentinels(binding_lookup, &catch_lexical_names);
                     suppress_net_module_sentinels(binding_lookup, &catch_lexical_names);
                     suppress_zlib_module_sentinels(binding_lookup, &catch_lexical_names);
+                    suppress_cluster_module_sentinels(binding_lookup, &catch_lexical_names);
                     reserve_and_mark_source_scope_bindings(
                         &handler.body.body,
                         binding_lookup,
@@ -4615,6 +4662,7 @@ fn lower_statement_to_ir1_with_flow(
             // `seed_timers_module_alias_sentinels`).
             seed_timers_module_alias_sentinels(&mut body_lookup, binding_lookup);
             seed_zlib_module_alias_sentinels(&mut body_lookup, binding_lookup);
+            seed_cluster_module_alias_sentinels(&mut body_lookup, binding_lookup);
             seed_fs_module_alias_sentinels(&mut body_lookup, binding_lookup);
             seed_events_module_sentinels(&mut body_lookup, binding_lookup);
             seed_stream_module_sentinels(&mut body_lookup, binding_lookup);
@@ -4637,6 +4685,7 @@ fn lower_statement_to_ir1_with_flow(
                 suppress_stream_module_sentinel(&mut body_lookup, pname);
                 suppress_net_module_sentinel(&mut body_lookup, pname);
                 suppress_zlib_module_sentinel(&mut body_lookup, pname);
+                suppress_cluster_module_sentinel(&mut body_lookup, pname);
             }
             // For destructuring-pattern params, allocate inner identifier
             // bindings and emit destructuring ops that copy from each
@@ -4769,6 +4818,7 @@ fn lower_statement_to_ir1_with_flow(
             // `seed_timers_module_alias_sentinels`).
             seed_timers_module_alias_sentinels(&mut body_lookup, binding_lookup);
             seed_zlib_module_alias_sentinels(&mut body_lookup, binding_lookup);
+            seed_cluster_module_alias_sentinels(&mut body_lookup, binding_lookup);
             seed_fs_module_alias_sentinels(&mut body_lookup, binding_lookup);
             seed_events_module_sentinels(&mut body_lookup, binding_lookup);
             seed_stream_module_sentinels(&mut body_lookup, binding_lookup);
@@ -4790,6 +4840,7 @@ fn lower_statement_to_ir1_with_flow(
                 suppress_stream_module_sentinel(&mut body_lookup, pname);
                 suppress_net_module_sentinel(&mut body_lookup, pname);
                 suppress_zlib_module_sentinel(&mut body_lookup, pname);
+                suppress_cluster_module_sentinel(&mut body_lookup, pname);
             }
             // Destructure non-identifier ctor params (applies defaults) before the body.
             allocate_destructure_param_bindings(
@@ -4966,6 +5017,7 @@ fn lower_statement_to_ir1_with_flow(
                 // bd-suwvw: see the body_lookup seeding above.
                 seed_timers_module_alias_sentinels(&mut m_lookup, binding_lookup);
                 seed_zlib_module_alias_sentinels(&mut m_lookup, binding_lookup);
+                seed_cluster_module_alias_sentinels(&mut m_lookup, binding_lookup);
                 seed_fs_module_alias_sentinels(&mut m_lookup, binding_lookup);
                 seed_events_module_sentinels(&mut m_lookup, binding_lookup);
                 seed_stream_module_sentinels(&mut m_lookup, binding_lookup);
@@ -4987,6 +5039,7 @@ fn lower_statement_to_ir1_with_flow(
                     suppress_stream_module_sentinel(&mut m_lookup, pname);
                     suppress_net_module_sentinel(&mut m_lookup, pname);
                     suppress_zlib_module_sentinel(&mut m_lookup, pname);
+                    suppress_cluster_module_sentinel(&mut m_lookup, pname);
                 }
                 // Destructure non-identifier params (applies defaults) before the body.
                 allocate_destructure_param_bindings(
@@ -5151,6 +5204,7 @@ fn lower_switch_to_ir1(
     suppress_stream_module_sentinels(binding_lookup, &lexical_names);
     suppress_net_module_sentinels(binding_lookup, &lexical_names);
     suppress_zlib_module_sentinels(binding_lookup, &lexical_names);
+    suppress_cluster_module_sentinels(binding_lookup, &lexical_names);
     for name in &lexical_names {
         let binding_id = reserve_fresh_binding_id(binding_lookup, binding_index, name);
         binding_lookup.insert(lexical_binding_sentinel(name), 0);
@@ -13102,6 +13156,7 @@ fn lower_expression_to_ir1_inner(
             // `seed_timers_module_alias_sentinels`).
             seed_timers_module_alias_sentinels(&mut body_lookup, binding_lookup);
             seed_zlib_module_alias_sentinels(&mut body_lookup, binding_lookup);
+            seed_cluster_module_alias_sentinels(&mut body_lookup, binding_lookup);
             seed_fs_module_alias_sentinels(&mut body_lookup, binding_lookup);
             seed_events_module_sentinels(&mut body_lookup, binding_lookup);
             seed_stream_module_sentinels(&mut body_lookup, binding_lookup);
@@ -13137,6 +13192,7 @@ fn lower_expression_to_ir1_inner(
                 suppress_stream_module_sentinel(&mut body_lookup, pname);
                 suppress_net_module_sentinel(&mut body_lookup, pname);
                 suppress_zlib_module_sentinel(&mut body_lookup, pname);
+                suppress_cluster_module_sentinel(&mut body_lookup, pname);
             }
             // Destructure non-identifier params (applies defaults) before the body.
             allocate_destructure_param_bindings(
@@ -13263,6 +13319,7 @@ fn lower_expression_to_ir1_inner(
             // `seed_timers_module_alias_sentinels`).
             seed_timers_module_alias_sentinels(&mut body_lookup, binding_lookup);
             seed_zlib_module_alias_sentinels(&mut body_lookup, binding_lookup);
+            seed_cluster_module_alias_sentinels(&mut body_lookup, binding_lookup);
             seed_fs_module_alias_sentinels(&mut body_lookup, binding_lookup);
             seed_events_module_sentinels(&mut body_lookup, binding_lookup);
             seed_stream_module_sentinels(&mut body_lookup, binding_lookup);
@@ -13272,6 +13329,7 @@ fn lower_expression_to_ir1_inner(
                 suppress_stream_module_sentinel(&mut body_lookup, self_name);
                 suppress_net_module_sentinel(&mut body_lookup, self_name);
                 suppress_zlib_module_sentinel(&mut body_lookup, self_name);
+                suppress_cluster_module_sentinel(&mut body_lookup, self_name);
             }
             let mut body_binding_index: BindingId = 0;
             let body_scope = ScopeId { depth: 0, index: 0 };
@@ -13301,6 +13359,7 @@ fn lower_expression_to_ir1_inner(
                 suppress_stream_module_sentinel(&mut body_lookup, pname);
                 suppress_net_module_sentinel(&mut body_lookup, pname);
                 suppress_zlib_module_sentinel(&mut body_lookup, pname);
+                suppress_cluster_module_sentinel(&mut body_lookup, pname);
             }
             allocate_destructure_param_bindings(
                 &destructure_params,
@@ -13874,6 +13933,7 @@ fn lower_expression_to_ir1_inner(
             // `seed_timers_module_alias_sentinels`).
             seed_timers_module_alias_sentinels(&mut body_lookup, binding_lookup);
             seed_zlib_module_alias_sentinels(&mut body_lookup, binding_lookup);
+            seed_cluster_module_alias_sentinels(&mut body_lookup, binding_lookup);
             seed_fs_module_alias_sentinels(&mut body_lookup, binding_lookup);
             seed_events_module_sentinels(&mut body_lookup, binding_lookup);
             seed_stream_module_sentinels(&mut body_lookup, binding_lookup);
@@ -13883,6 +13943,7 @@ fn lower_expression_to_ir1_inner(
                 suppress_stream_module_sentinel(&mut body_lookup, self_name);
                 suppress_net_module_sentinel(&mut body_lookup, self_name);
                 suppress_zlib_module_sentinel(&mut body_lookup, self_name);
+                suppress_cluster_module_sentinel(&mut body_lookup, self_name);
             }
             let mut body_binding_index: BindingId = 0;
             let body_scope = ScopeId { depth: 0, index: 0 };
@@ -13900,6 +13961,7 @@ fn lower_expression_to_ir1_inner(
                 suppress_stream_module_sentinel(&mut body_lookup, pname);
                 suppress_net_module_sentinel(&mut body_lookup, pname);
                 suppress_zlib_module_sentinel(&mut body_lookup, pname);
+                suppress_cluster_module_sentinel(&mut body_lookup, pname);
             }
             // Destructure non-identifier ctor params (applies defaults) before the body.
             allocate_destructure_param_bindings(
@@ -14076,6 +14138,7 @@ fn lower_expression_to_ir1_inner(
                 // bd-suwvw: see the body_lookup seeding above.
                 seed_timers_module_alias_sentinels(&mut m_lookup, binding_lookup);
                 seed_zlib_module_alias_sentinels(&mut m_lookup, binding_lookup);
+                seed_cluster_module_alias_sentinels(&mut m_lookup, binding_lookup);
                 seed_fs_module_alias_sentinels(&mut m_lookup, binding_lookup);
                 seed_events_module_sentinels(&mut m_lookup, binding_lookup);
                 seed_stream_module_sentinels(&mut m_lookup, binding_lookup);
@@ -14085,6 +14148,7 @@ fn lower_expression_to_ir1_inner(
                     suppress_stream_module_sentinel(&mut m_lookup, self_name);
                     suppress_net_module_sentinel(&mut m_lookup, self_name);
                     suppress_zlib_module_sentinel(&mut m_lookup, self_name);
+                    suppress_cluster_module_sentinel(&mut m_lookup, self_name);
                 }
                 let method_self_snapshot = name.as_deref().map(|self_name| {
                     expose_class_expression_self_binding(binding_lookup, self_name, bid)
@@ -14105,6 +14169,7 @@ fn lower_expression_to_ir1_inner(
                     suppress_stream_module_sentinel(&mut m_lookup, pname);
                     suppress_net_module_sentinel(&mut m_lookup, pname);
                     suppress_zlib_module_sentinel(&mut m_lookup, pname);
+                    suppress_cluster_module_sentinel(&mut m_lookup, pname);
                 }
                 // Destructure non-identifier params (applies defaults) before the body.
                 allocate_destructure_param_bindings(
@@ -15787,6 +15852,145 @@ fn confirmed_zlib_module_aliases(
         .collect()
 }
 
+// ---------------------------------------------------------------------------
+// Node `cluster` primary-process facade recognition (bd-9p2v3)
+// ---------------------------------------------------------------------------
+
+fn is_cluster_module_specifier(specifier: &str) -> bool {
+    specifier == "cluster" || specifier == "node:cluster"
+}
+
+fn cluster_module_alias_sentinel(name: &str) -> String {
+    format!("\0clustermod\0{name}")
+}
+
+fn cluster_singleton_binding_sentinel() -> &'static str {
+    "\0cluster-singleton-binding"
+}
+
+fn is_require_cluster_module_initializer(
+    expr: &Expression,
+    binding_lookup: &BTreeMap<String, BindingId>,
+) -> bool {
+    let Expression::Call {
+        callee, arguments, ..
+    } = expr
+    else {
+        return false;
+    };
+    matches!(callee.as_ref(), Expression::Identifier(name)
+        if name == "require" && !is_lexically_shadowed(binding_lookup, name))
+        && matches!(arguments.as_slice(), [specifier]
+            if well_formed_string_literal(specifier).is_some_and(is_cluster_module_specifier))
+}
+
+/// Closed facade surface. Reads are materialized on one engine-owned object;
+/// calls resolve to first-class builtins or the shared EventEmitter table.
+/// Keeping a single list for the provenance scan prevents an accepted alias
+/// from exposing any property the runtime did not intentionally model.
+fn cluster_property_is_supported(property: &str) -> bool {
+    matches!(
+        property,
+        "isPrimary"
+            | "isMaster"
+            | "isWorker"
+            | "worker"
+            | "workers"
+            | "settings"
+            | "schedulingPolicy"
+            | "SCHED_RR"
+            | "SCHED_NONE"
+            | "Worker"
+            | "fork"
+            | "setupPrimary"
+            | "setupMaster"
+            | "disconnect"
+            | "on"
+            | "once"
+            | "emit"
+    )
+}
+
+fn cluster_method_is_supported(method: &str) -> bool {
+    matches!(
+        method,
+        "setupPrimary" | "setupMaster" | "disconnect" | "fork" | "Worker" | "on" | "once" | "emit"
+    )
+}
+
+/// `EventEmitter.on`/`once` return their receiver. Keep that fluent receiver
+/// inside the lowering-only cluster surface by admitting it only when the
+/// entire expression statement discards the returned facade. Every consumed
+/// occurrence is handled by the ordinary rejected-use scanner below.
+fn is_discarded_cluster_listener_registration(expr: &Expression, alias: &str) -> bool {
+    matches!(
+        expr,
+        Expression::Call { callee, .. }
+            if matches!(module_alias_member_name(callee, alias), Some("on" | "once"))
+    )
+}
+
+fn is_cluster_alias_usage(expr: &Expression, alias: &str) -> bool {
+    match expr {
+        Expression::Call { callee, .. } => {
+            module_alias_member_name(callee, alias).is_some_and(cluster_method_is_supported)
+        }
+        Expression::Member { .. } => {
+            module_alias_member_name(expr, alias).is_some_and(cluster_property_is_supported)
+        }
+        _ => false,
+    }
+}
+
+fn confirmed_cluster_module_aliases(
+    body: &[Statement],
+    binding_lookup: &BTreeMap<String, BindingId>,
+) -> BTreeSet<String> {
+    let mut candidates = BTreeMap::new();
+    for (statement_index, statement) in body.iter().enumerate() {
+        if let Statement::VariableDeclaration(declaration) = statement {
+            if declaration.kind != VariableDeclarationKind::Const {
+                continue;
+            }
+            for (declarator_index, declarator) in declaration.declarations.iter().enumerate() {
+                if let (BindingPattern::Identifier(name), Some(initializer)) =
+                    (&declarator.pattern, &declarator.initializer)
+                    && is_require_cluster_module_initializer(initializer, binding_lookup)
+                {
+                    candidates.insert(name.clone(), (statement_index, declarator_index));
+                }
+            }
+        }
+    }
+
+    candidates
+        .into_iter()
+        .filter(|(alias, (statement_index, declarator_index))| {
+            !module_alias_has_predeclaration_hazard(
+                body,
+                *statement_index,
+                *declarator_index,
+                alias,
+                LoweringOnlyModuleAliasSurface::Cluster,
+                binding_lookup,
+            ) && body.iter().any(|statement| {
+                module_alias_statement_contains_unshadowed_usage(
+                    statement,
+                    alias,
+                    LoweringOnlyModuleAliasSurface::Cluster,
+                )
+            }) && !body.iter().any(|statement| {
+                module_alias_statement_has_rejected_use(
+                    statement,
+                    alias,
+                    LoweringOnlyModuleAliasSurface::Cluster,
+                )
+            })
+        })
+        .map(|(alias, _)| alias)
+        .collect()
+}
+
 /// bd-suwvw: true when `specifier` names the Node timers module — `timers`
 /// or `node:timers`.
 fn is_timers_module_specifier(specifier: &str) -> bool {
@@ -16120,6 +16324,33 @@ fn suppress_zlib_module_sentinels(
     }
 }
 
+/// Carry authenticated cluster provenance into nested functions. The facade
+/// itself is a captured runtime binding, but the sentinel is still required so
+/// lexical shadows suppress rather than spoof the pre-scan's finite surface.
+fn seed_cluster_module_alias_sentinels(
+    body_lookup: &mut BTreeMap<String, BindingId>,
+    outer_lookup: &BTreeMap<String, BindingId>,
+) {
+    for key in outer_lookup.keys() {
+        if key.starts_with("\0clustermod\0") {
+            body_lookup.insert(key.clone(), 0);
+        }
+    }
+}
+
+fn suppress_cluster_module_sentinel(binding_lookup: &mut BTreeMap<String, BindingId>, name: &str) {
+    binding_lookup.remove(&cluster_module_alias_sentinel(name));
+}
+
+fn suppress_cluster_module_sentinels(
+    binding_lookup: &mut BTreeMap<String, BindingId>,
+    names: &BTreeSet<String>,
+) {
+    for name in names {
+        suppress_cluster_module_sentinel(binding_lookup, name);
+    }
+}
+
 /// bd-8u1t5: carry confirmed fs and fs/promises provenance into every fresh
 /// function/method lookup. This makes the deep pre-scan actionable inside
 /// callbacks, try/catch bodies, and promise arrows without creating a runtime
@@ -16262,6 +16493,7 @@ enum LoweringOnlyModuleAliasSurface {
     Net,
     Tls,
     Zlib,
+    Cluster,
     StreamConstructor,
     StreamPipeline,
     StreamPromises,
@@ -16328,6 +16560,7 @@ fn is_module_alias_usage(
             is_tls_alias_call(expr, alias) || is_tls_alias_constant_read(expr, alias)
         }
         LoweringOnlyModuleAliasSurface::Zlib => is_zlib_alias_usage(expr, alias),
+        LoweringOnlyModuleAliasSurface::Cluster => is_cluster_alias_usage(expr, alias),
         LoweringOnlyModuleAliasSurface::StreamConstructor => is_stream_constructor_use(expr, alias),
         LoweringOnlyModuleAliasSurface::StreamPipeline => {
             is_stream_pipeline_direct_call(expr, alias)
@@ -16654,6 +16887,8 @@ fn module_alias_write_target_has_rejected_use(
             module_alias_member_name(target, alias).is_some()
                 || (surface == LoweringOnlyModuleAliasSurface::Zlib
                     && module_alias_expr_contains_unshadowed_usage(target, alias, surface))
+                || (surface == LoweringOnlyModuleAliasSurface::Cluster
+                    && module_alias_expr_contains_unshadowed_usage(target, alias, surface))
                 || module_alias_expr_has_rejected_use(object, alias, surface)
                 || (*computed && module_alias_expr_has_rejected_use(property, alias, surface))
         }
@@ -16680,6 +16915,10 @@ fn module_alias_expr_has_rejected_use(
             LoweringOnlyModuleAliasSurface::Tls => is_tls_alias_call(expr, alias),
             LoweringOnlyModuleAliasSurface::Zlib => module_alias_member_name(callee, alias)
                 .is_some_and(|method| zlib_method_capability(method).is_some()),
+            LoweringOnlyModuleAliasSurface::Cluster => module_alias_member_name(callee, alias)
+                .is_some_and(|method| {
+                    cluster_method_is_supported(method) && !matches!(method, "on" | "once")
+                }),
             LoweringOnlyModuleAliasSurface::StreamConstructor => false,
             LoweringOnlyModuleAliasSurface::StreamPipeline => {
                 is_stream_pipeline_direct_call(expr, alias)
@@ -16727,6 +16966,13 @@ fn module_alias_expr_has_rejected_use(
         Expression::Member { .. }
             if surface == LoweringOnlyModuleAliasSurface::Zlib
                 && module_alias_member_name(expr, alias) == Some("constants") =>
+        {
+            false
+        }
+        Expression::Member { .. }
+            if surface == LoweringOnlyModuleAliasSurface::Cluster
+                && module_alias_member_name(expr, alias)
+                    .is_some_and(cluster_property_is_supported) =>
         {
             false
         }
@@ -17093,6 +17339,17 @@ fn module_alias_statement_has_rejected_use(
     surface: LoweringOnlyModuleAliasSurface,
 ) -> bool {
     match statement {
+        Statement::Expression(expression)
+            if surface == LoweringOnlyModuleAliasSurface::Cluster
+                && is_discarded_cluster_listener_registration(&expression.expression, alias) =>
+        {
+            let Expression::Call { arguments, .. } = &expression.expression else {
+                unreachable!("discarded cluster listener registration is a call")
+            };
+            arguments
+                .iter()
+                .any(|argument| module_alias_expr_has_rejected_use(argument, alias, surface))
+        }
         Statement::Expression(expression) => {
             module_alias_expr_has_rejected_use(&expression.expression, alias, surface)
         }
@@ -17255,6 +17512,7 @@ fn module_alias_expression_is_predeclaration_call_hazard(
         && !is_require_net_module_initializer(expression, binding_lookup)
         && !is_require_tls_module_initializer(expression, binding_lookup)
         && !is_require_zlib_module_initializer(expression, binding_lookup)
+        && !is_require_cluster_module_initializer(expression, binding_lookup)
 }
 
 fn module_alias_expression_has_predeclaration_call_hazard(

@@ -215,6 +215,9 @@ const MEMORY_ESTIMATE_STRING_BASE_BYTES: u64 = 24;
 const MEMORY_ESTIMATE_HEAP_OBJECT_BASE_BYTES: u64 = 64;
 /// Approximate per-map-entry footprint.
 const MEMORY_ESTIMATE_MAP_ENTRY_BYTES: u64 = 48;
+/// Fixed instruction charge for authenticating and publishing one
+/// `cluster.setupPrimary` replacement in addition to every property visited.
+const CLUSTER_SETUP_FIXED_WORK: usize = 1;
 /// Approximate per-scope-frame base footprint.
 const MEMORY_ESTIMATE_SCOPE_FRAME_BASE_BYTES: u64 = 32;
 /// Approximate per-scope-binding base footprint.
@@ -2217,6 +2220,20 @@ pub enum BuiltinFunctionKind {
     UrlSearchParamsDelete,
     UrlSearchParamsSet,
     UrlSearchParamsToString,
+    /// `cluster.setupPrimary` / legacy `setupMaster`: merge own enumerable
+    /// option fields into the authenticated live settings object (bd-9p2v3).
+    /// Cluster variants stay at the true enum tail because the discriminant
+    /// participates in deterministic register hashing.
+    ClusterSetup,
+    /// Empty-primary `cluster.disconnect(callback)`: defer the callback onto
+    /// the I/O completion lane without consulting host process state.
+    ClusterDisconnect,
+    /// Function-shaped `cluster.fork` and `cluster.Worker`; invocation always
+    /// fails closed because the hermetic facade grants no process authority.
+    ClusterFork,
+    /// Function-shaped `cluster.Worker`, distinct from `fork` so callable
+    /// identity and the observable function name are not forged.
+    ClusterWorker,
 }
 
 impl BuiltinFunctionKind {
@@ -3637,6 +3654,10 @@ impl BuiltinFunction {
             BuiltinFunctionKind::EmitterGetMaxListeners => "getMaxListeners",
             BuiltinFunctionKind::EmitterSetMaxListeners => "setMaxListeners",
             BuiltinFunctionKind::EmitterListeners => "listeners",
+            BuiltinFunctionKind::ClusterSetup => "setupPrimary",
+            BuiltinFunctionKind::ClusterDisconnect => "disconnect",
+            BuiltinFunctionKind::ClusterFork => "fork",
+            BuiltinFunctionKind::ClusterWorker => "Worker",
         }
     }
 }
@@ -6190,6 +6211,16 @@ struct UrlSearchParamsRuntimeState {
     lifecycle_label: Label,
 }
 
+/// Authenticated execution-local state for the hermetic primary-process
+/// `cluster` facade. The key is the facade object id; retaining the current
+/// settings id here makes both objects non-forgeable provenance carriers even
+/// though the guest-visible `settings` property is an ordinary heap mirror.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ClusterRuntimeState {
+    settings: ObjectId,
+    lifecycle_label: Label,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum UrlSearchParamsMutation {
     Append(String, String),
@@ -6796,6 +6827,9 @@ pub struct InterpreterCore {
     /// execution-local and are cleared before a seed can reuse heap ObjectIds.
     url_objects: BTreeMap<ObjectId, UrlRuntimeState>,
     url_search_params: BTreeMap<ObjectId, UrlSearchParamsRuntimeState>,
+    /// One authenticated facade/settings pair per execution. Repeated bare or
+    /// `node:` cluster hostcalls return this same facade identity.
+    cluster_facades: BTreeMap<ObjectId, ClusterRuntimeState>,
     stream_pipelines: BTreeMap<u32, StreamPipelineState>,
     next_stream_pipeline_token: u32,
     /// bd-3894s slice (2d): deferred readable-stream emissions (`'data'`/`'end'`),
@@ -7018,6 +7052,7 @@ impl InterpreterCore {
             next_event_promise_waiter_id: 0,
             url_objects: BTreeMap::new(),
             url_search_params: BTreeMap::new(),
+            cluster_facades: BTreeMap::new(),
             stream_pipelines: BTreeMap::new(),
             next_stream_pipeline_token: 0,
             pending_stream_emissions: BTreeMap::new(),
@@ -10132,6 +10167,12 @@ impl InterpreterCore {
             .saturating_add(self.url_search_params_memory_bytes());
         self.url_objects.clear();
         self.url_search_params.clear();
+        self.estimated_memory_bytes = self.estimated_memory_bytes.saturating_sub(released_bytes);
+    }
+
+    fn clear_cluster_execution_state(&mut self) {
+        let released_bytes = self.cluster_facades_memory_bytes();
+        self.cluster_facades.clear();
         self.estimated_memory_bytes = self.estimated_memory_bytes.saturating_sub(released_bytes);
     }
 
@@ -18011,6 +18052,7 @@ impl InterpreterCore {
         // chunks, pumps, listeners, or static `events.once` links from the
         // preceding execution.
         self.clear_url_execution_state();
+        self.clear_cluster_execution_state();
         self.clear_stream_pipeline_execution_state();
         self.clear_readable_execution_state();
         self.clear_writable_execution_state();
@@ -18182,6 +18224,24 @@ impl InterpreterCore {
 
     fn url_state_label(&self, object_id: ObjectId) -> Label {
         self.url_state_label_ref(object_id)
+            .cloned()
+            .unwrap_or(Label::Public)
+    }
+
+    fn cluster_state_label_ref(&self, object_id: ObjectId) -> Option<&Label> {
+        self.cluster_facades
+            .get(&object_id)
+            .map(|state| &state.lifecycle_label)
+            .or_else(|| {
+                self.cluster_facades
+                    .values()
+                    .find(|state| state.settings == object_id)
+                    .map(|state| &state.lifecycle_label)
+            })
+    }
+
+    fn cluster_state_label(&self, object_id: ObjectId) -> Label {
+        self.cluster_state_label_ref(object_id)
             .cloned()
             .unwrap_or(Label::Public)
     }
@@ -23063,6 +23123,36 @@ impl InterpreterCore {
                     .unwrap_or_default();
                 Ok(Value::Object(self.alloc_array_from_values(&listeners)?))
             }
+            BuiltinFunctionKind::ClusterSetup => {
+                self.cluster_setup(receiver, builtin.bound_object, args)
+            }
+            BuiltinFunctionKind::ClusterDisconnect => {
+                self.cluster_receiver_id(receiver, builtin.bound_object, "disconnect")?;
+                let callback = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
+                match callback {
+                    Value::Undefined => Ok(Value::Undefined),
+                    Value::Closure(closure_id) => {
+                        let callback_label = self.writable_invocation_label(args)?;
+                        self.schedule_io_callback_with_label(
+                            closure_id,
+                            Vec::new(),
+                            callback_label,
+                        )?;
+                        Ok(Value::Undefined)
+                    }
+                    other => Err(InterpreterError::TypeError {
+                        expected: "cluster.disconnect callback function".to_string(),
+                        got: other.type_name().to_string(),
+                    }),
+                }
+            }
+            BuiltinFunctionKind::ClusterFork | BuiltinFunctionKind::ClusterWorker => {
+                Err(InterpreterError::CapabilityDenied {
+                    capability:
+                        "process_spawn (cluster.fork/Worker unavailable in hermetic primary facade)"
+                            .to_string(),
+                })
+            }
             BuiltinFunctionKind::PerformanceNow => {
                 self.dispatch_builtin_hostcall("builtin:PerformanceNow", args, Some(module))
             }
@@ -25881,12 +25971,17 @@ impl InterpreterCore {
                             Value::Object(object_id) => self.url_state_label(*object_id),
                             _ => Label::Public,
                         };
+                        let cluster_state_label = match &receiver_val {
+                            Value::Object(object_id) => self.cluster_state_label(*object_id),
+                            _ => Label::Public,
+                        };
                         let result_label = self
                             .join_arg_range_label(args)?
                             .join(self.get_register_label(receiver)?)
                             .join(&binary_storage_label)
                             .join(&stream_state_label)
                             .join(&url_state_label)
+                            .join(&cluster_state_label)
                             .join(&callback_result_label);
                         self.propagate_builtin_binary_mutation_label(
                             builtin,
@@ -26400,6 +26495,14 @@ impl InterpreterCore {
                         result_label = self.join_owned_label_with_temporary_budget(
                             result_label,
                             url_state_label,
+                        )?;
+                    }
+                    if let Some(cluster_state_label) =
+                        object_id.and_then(|id| self.cluster_state_label_ref(id))
+                    {
+                        result_label = self.join_owned_label_with_temporary_budget(
+                            result_label,
+                            cluster_state_label,
                         )?;
                     }
                     let stream_state_label = if let Some(object_id) = object_id {
@@ -30485,69 +30588,69 @@ impl InterpreterCore {
             // surface and one listener side table.
             (
                 "ClientRequest" | "IncomingMessage" | "EventEmitter" | "Readable" | "Writable"
-                | "NetServer" | "NetSocket" | "TlsServer" | "TlsSocket",
+                | "NetServer" | "NetSocket" | "TlsServer" | "TlsSocket" | "Cluster",
                 "on" | "addListener",
             ) => Some(BuiltinFunction::emitter_on()),
             (
                 "ClientRequest" | "IncomingMessage" | "EventEmitter" | "Readable" | "Writable"
-                | "NetServer" | "NetSocket" | "TlsServer" | "TlsSocket",
+                | "NetServer" | "NetSocket" | "TlsServer" | "TlsSocket" | "Cluster",
                 "once",
             ) => Some(BuiltinFunction::new_kind(BuiltinFunctionKind::EmitterOnce)),
             (
                 "ClientRequest" | "IncomingMessage" | "EventEmitter" | "Readable" | "Writable"
-                | "NetServer" | "NetSocket" | "TlsServer" | "TlsSocket",
+                | "NetServer" | "NetSocket" | "TlsServer" | "TlsSocket" | "Cluster",
                 "off" | "removeListener",
             ) => Some(BuiltinFunction::new_kind(BuiltinFunctionKind::EmitterOff)),
             (
                 "ClientRequest" | "IncomingMessage" | "EventEmitter" | "Readable" | "Writable"
-                | "NetServer" | "NetSocket" | "TlsServer" | "TlsSocket",
+                | "NetServer" | "NetSocket" | "TlsServer" | "TlsSocket" | "Cluster",
                 "removeAllListeners",
             ) => Some(BuiltinFunction::new_kind(
                 BuiltinFunctionKind::EmitterRemoveAllListeners,
             )),
             (
                 "ClientRequest" | "IncomingMessage" | "EventEmitter" | "Readable" | "Writable"
-                | "NetServer" | "NetSocket" | "TlsServer" | "TlsSocket",
+                | "NetServer" | "NetSocket" | "TlsServer" | "TlsSocket" | "Cluster",
                 "listenerCount",
             ) => Some(BuiltinFunction::new_kind(
                 BuiltinFunctionKind::EmitterListenerCount,
             )),
             (
                 "ClientRequest" | "IncomingMessage" | "EventEmitter" | "Readable" | "Writable"
-                | "NetServer" | "NetSocket" | "TlsServer" | "TlsSocket",
+                | "NetServer" | "NetSocket" | "TlsServer" | "TlsSocket" | "Cluster",
                 "eventNames",
             ) => Some(BuiltinFunction::new_kind(
                 BuiltinFunctionKind::EmitterEventNames,
             )),
             (
                 "ClientRequest" | "IncomingMessage" | "EventEmitter" | "Readable" | "Writable"
-                | "NetServer" | "NetSocket" | "TlsServer" | "TlsSocket",
+                | "NetServer" | "NetSocket" | "TlsServer" | "TlsSocket" | "Cluster",
                 "prependListener",
             ) => Some(BuiltinFunction::new_kind(
                 BuiltinFunctionKind::EmitterPrependListener,
             )),
             (
                 "ClientRequest" | "IncomingMessage" | "EventEmitter" | "Readable" | "Writable"
-                | "NetServer" | "NetSocket" | "TlsServer" | "TlsSocket",
+                | "NetServer" | "NetSocket" | "TlsServer" | "TlsSocket" | "Cluster",
                 "prependOnceListener",
             ) => Some(BuiltinFunction::new_kind(
                 BuiltinFunctionKind::EmitterPrependOnceListener,
             )),
             (
                 "ClientRequest" | "IncomingMessage" | "EventEmitter" | "Readable" | "Writable"
-                | "NetServer" | "NetSocket" | "TlsServer" | "TlsSocket",
+                | "NetServer" | "NetSocket" | "TlsServer" | "TlsSocket" | "Cluster",
                 "emit",
             ) => Some(BuiltinFunction::new_kind(BuiltinFunctionKind::EmitterEmit)),
             (
                 "ClientRequest" | "IncomingMessage" | "EventEmitter" | "Readable" | "Writable"
-                | "NetServer" | "NetSocket" | "TlsServer" | "TlsSocket",
+                | "NetServer" | "NetSocket" | "TlsServer" | "TlsSocket" | "Cluster",
                 "getMaxListeners",
             ) => Some(BuiltinFunction::new_kind(
                 BuiltinFunctionKind::EmitterGetMaxListeners,
             )),
             (
                 "ClientRequest" | "IncomingMessage" | "EventEmitter" | "Readable" | "Writable"
-                | "NetServer" | "NetSocket" | "TlsServer" | "TlsSocket",
+                | "NetServer" | "NetSocket" | "TlsServer" | "TlsSocket" | "Cluster",
                 "setMaxListeners",
             ) => Some(BuiltinFunction::new_kind(
                 BuiltinFunctionKind::EmitterSetMaxListeners,
@@ -40707,6 +40810,260 @@ impl InterpreterCore {
         Ok(Value::Object(self.alloc_object_with_properties(&props)?))
     }
 
+    /// bd-9p2v3: allocate the hermetic primary-process `cluster` facade as one
+    /// atomic heap transaction. It deliberately contains no PID, IPC handle,
+    /// environment, or spawn authority: workers/settings start empty, primary
+    /// flags and scheduling constants are deterministic, and fork/Worker are
+    /// function-shaped fail-closed sentinels.
+    fn construct_cluster_facade(&mut self) -> Result<Value, InterpreterError> {
+        if let Some(facade) = self.cluster_facades.keys().next().copied() {
+            return Ok(Value::Object(facade));
+        }
+
+        let previous_heap_len = self.heap.len();
+        let previous_estimated_bytes = self.estimated_memory_bytes;
+        let result = (|| {
+            let workers = self.alloc_object_with_properties(&[])?;
+            let settings = self.alloc_object_with_properties(&[])?;
+            let facade = self.alloc_object_with_properties(&[])?;
+            let bound = |kind| {
+                let mut builtin = BuiltinFunction::new_kind(kind);
+                builtin.bound_object = Some(facade.0);
+                Value::BuiltinFunction(builtin)
+            };
+            for (key, value) in [
+                ("__type", Value::str("Cluster")),
+                ("__maxListeners", Value::Int(10)),
+                ("isPrimary", Value::Bool(true)),
+                ("isMaster", Value::Bool(true)),
+                ("isWorker", Value::Bool(false)),
+                ("workers", Value::Object(workers)),
+                ("settings", Value::Object(settings)),
+                ("schedulingPolicy", Value::Int(2)),
+                ("SCHED_RR", Value::Int(2)),
+                ("SCHED_NONE", Value::Int(1)),
+                ("Worker", bound(BuiltinFunctionKind::ClusterWorker)),
+                ("fork", bound(BuiltinFunctionKind::ClusterFork)),
+                ("setupPrimary", bound(BuiltinFunctionKind::ClusterSetup)),
+                ("setupMaster", bound(BuiltinFunctionKind::ClusterSetup)),
+                ("disconnect", bound(BuiltinFunctionKind::ClusterDisconnect)),
+            ] {
+                self.set_object_property(facade, key.to_string(), value)?;
+            }
+            let state = ClusterRuntimeState {
+                settings,
+                lifecycle_label: Label::Public,
+            };
+            self.apply_memory_component_delta(
+                0,
+                Self::estimate_cluster_runtime_state_bytes(&state),
+            )?;
+            self.cluster_facades.insert(facade, state);
+            Ok(Value::Object(facade))
+        })();
+        if result.is_err() {
+            self.cluster_facades.clear();
+            self.rollback_heap_to_len(previous_heap_len);
+            self.estimated_memory_bytes = previous_estimated_bytes;
+        }
+        result
+    }
+
+    fn cluster_receiver_id(
+        &self,
+        receiver: Option<Value>,
+        bound_object: Option<u32>,
+        method: &str,
+    ) -> Result<ObjectId, InterpreterError> {
+        let receiver = receiver.unwrap_or(Value::Undefined);
+        let Value::Object(object_id) = receiver else {
+            return Err(InterpreterError::TypeError {
+                expected: format!("cluster receiver for cluster.{method}"),
+                got: receiver.type_name().to_string(),
+            });
+        };
+        if bound_object != Some(object_id.0) {
+            return Err(InterpreterError::TypeError {
+                expected: format!("bound cluster receiver for cluster.{method}"),
+                got: "detached or forged receiver".to_string(),
+            });
+        }
+        let authenticated = self.cluster_facades.contains_key(&object_id)
+            && matches!(
+                self.heap
+                    .get(object_id.0 as usize)
+                    .and_then(|object| object.properties.get("__type")),
+                Some(Value::Str(tag)) if tag.as_ref() == "Cluster"
+            );
+        if !authenticated {
+            return Err(InterpreterError::TypeError {
+                expected: format!("authenticated cluster receiver for cluster.{method}"),
+                got: "unbranded object".to_string(),
+            });
+        }
+        Ok(object_id)
+    }
+
+    fn charge_cluster_work(&mut self, work: usize) -> Result<(), InterpreterError> {
+        let work = u64::try_from(work).unwrap_or(u64::MAX);
+        let next_executed = self.instructions_executed.saturating_add(work);
+        if next_executed > self.config.instruction_budget {
+            return Err(InterpreterError::BudgetExhausted {
+                executed: self.instructions_executed,
+                budget: self.config.instruction_budget,
+            });
+        }
+        self.instructions_executed = next_executed;
+        Ok(())
+    }
+
+    /// Replace `cluster.settings` with one newly allocated shallow merge.
+    /// Existing keys survive, supplied arrays/objects retain identity, and the
+    /// old settings object remains untouched until the new object is complete.
+    /// Every property visited costs one instruction in addition to a fixed
+    /// authentication/publication charge; heap publication and GC remembered-
+    /// set changes roll back together on any memory refusal.
+    fn cluster_setup(
+        &mut self,
+        receiver: Option<Value>,
+        bound_object: Option<u32>,
+        args: RegRange,
+    ) -> Result<Value, InterpreterError> {
+        let cluster_id = self.cluster_receiver_id(receiver, bound_object, "setupPrimary")?;
+        let Some(options) = self.builtin_arg(args, 0)? else {
+            return Ok(Value::Undefined);
+        };
+        if matches!(options, Value::Undefined) {
+            return Ok(Value::Undefined);
+        }
+        let Value::Object(options_id) = options else {
+            return Err(InterpreterError::TypeError {
+                expected: "cluster setup options object".to_string(),
+                got: options.type_name().to_string(),
+            });
+        };
+        let settings_id = self
+            .cluster_facades
+            .get(&cluster_id)
+            .map(|state| state.settings)
+            .ok_or_else(|| InterpreterError::TypeError {
+                expected: "authenticated cluster settings object".to_string(),
+                got: "missing cluster runtime state".to_string(),
+            })?;
+        if !matches!(
+            self.heap
+                .get(cluster_id.0 as usize)
+                .and_then(|cluster| cluster.properties.get("settings")),
+            Some(Value::Object(mirrored_id)) if *mirrored_id == settings_id
+        ) {
+            return Err(InterpreterError::TypeError {
+                expected: "authenticated cluster settings object".to_string(),
+                got: "forged settings mirror".to_string(),
+            });
+        }
+        let option_property_count = self
+            .heap
+            .get(options_id.0 as usize)
+            .ok_or(InterpreterError::ObjectNotFound { id: options_id.0 })?
+            .properties
+            .len();
+        let existing_property_count = self
+            .heap
+            .get(settings_id.0 as usize)
+            .ok_or(InterpreterError::ObjectNotFound { id: settings_id.0 })?
+            .properties
+            .len();
+        self.charge_cluster_work(
+            CLUSTER_SETUP_FIXED_WORK
+                .saturating_add(existing_property_count)
+                .saturating_add(option_property_count),
+        )?;
+
+        let setup_label = self.writable_invocation_label(args)?;
+        let next_lifecycle_label = self.join_owned_label_with_temporary_budget(
+            setup_label,
+            &self.cluster_facades[&cluster_id].lifecycle_label,
+        )?;
+        let previous_state_bytes =
+            Self::estimate_cluster_runtime_state_bytes(&self.cluster_facades[&cluster_id]);
+        let next_state_bytes = previous_state_bytes
+            .saturating_sub(Self::estimate_label_bytes(
+                &self.cluster_facades[&cluster_id].lifecycle_label,
+            ))
+            .saturating_add(Self::estimate_label_bytes(&next_lifecycle_label));
+
+        let options_bytes = self
+            .heap
+            .get(options_id.0 as usize)
+            .map(Self::estimate_heap_object_bytes)
+            .unwrap_or(u64::MAX);
+        let settings_bytes = self
+            .heap
+            .get(settings_id.0 as usize)
+            .map(Self::estimate_heap_object_bytes)
+            .unwrap_or(u64::MAX);
+        // The two property Vec clones remain physically live while the
+        // replacement object is allocated and populated. Conservatively reserve
+        // a second clone-sized envelope for that unpublished merged object;
+        // per-property retained-memory checks alone cannot see the live Vecs.
+        let clone_and_replacement_peak = options_bytes
+            .saturating_add(settings_bytes)
+            .saturating_mul(2)
+            .saturating_add(Self::estimate_label_bytes(&next_lifecycle_label));
+        self.check_temporary_memory_budget(clone_and_replacement_peak)?;
+
+        let existing: Vec<(String, Value)> = self
+            .heap
+            .get(settings_id.0 as usize)
+            .expect("settings object was authenticated")
+            .properties
+            .iter()
+            .map(|(key, value)| (key.clone(), value.clone()))
+            .collect();
+        let updates: Vec<(String, Value)> = self
+            .heap
+            .get(options_id.0 as usize)
+            .expect("options object was validated")
+            .properties
+            .iter()
+            .map(|(key, value)| (key.clone(), value.clone()))
+            .collect();
+        let previous_heap_len = self.heap.len();
+        let previous_estimated_bytes = self.estimated_memory_bytes;
+
+        let merge_result = (|| -> Result<ObjectId, InterpreterError> {
+            let replacement = self.alloc_object_with_properties(&[])?;
+            for (key, value) in existing {
+                self.set_object_property(replacement, key, value)?;
+            }
+            for (key, value) in updates {
+                self.set_object_property(replacement, key, value)?;
+            }
+            self.apply_memory_component_delta(previous_state_bytes, next_state_bytes)?;
+            self.set_object_property(
+                cluster_id,
+                "settings".to_string(),
+                Value::Object(replacement),
+            )?;
+            Ok(replacement)
+        })();
+        let replacement = match merge_result {
+            Ok(replacement) => replacement,
+            Err(error) => {
+                self.rollback_heap_to_len(previous_heap_len);
+                self.estimated_memory_bytes = previous_estimated_bytes;
+                return Err(error);
+            }
+        };
+        let state = self
+            .cluster_facades
+            .get_mut(&cluster_id)
+            .expect("cluster receiver was authenticated");
+        state.settings = replacement;
+        state.lifecycle_label = next_lifecycle_label;
+        Ok(Value::Undefined)
+    }
+
     fn dispatch_builtin_hostcall_inner(
         &mut self,
         cap: &str,
@@ -40754,6 +41111,24 @@ impl InterpreterCore {
             }
             "builtin:Url" => self.construct_url(args),
             "builtin:UrlSearchParams" => self.construct_url_search_params(args),
+            "builtin:ClusterFacade" => {
+                if args.count != 0 {
+                    return Err(InterpreterError::TypeError {
+                        expected: "zero cluster facade hostcall arguments".to_string(),
+                        got: format!("{} argument(s)", args.count),
+                    });
+                }
+                let facade = self.construct_cluster_facade()?;
+                if let Value::Object(object_id) = facade {
+                    let lifecycle_label = self.cluster_state_label(object_id);
+                    if lifecycle_label != Label::Public {
+                        self.replace_pending_hostcall_result_label(Some(lifecycle_label))?;
+                    }
+                    Ok(Value::Object(object_id))
+                } else {
+                    unreachable!("cluster facade constructor returned a non-object")
+                }
+            }
             "builtin:EventEmitter" => {
                 // bd-2dmnn: both `EventEmitter()` and `new EventEmitter()` lower
                 // to this pure-compute constructor. Methods are resolved lazily
@@ -50983,6 +51358,20 @@ impl InterpreterCore {
         )
     }
 
+    fn estimate_cluster_runtime_state_bytes(state: &ClusterRuntimeState) -> u64 {
+        MEMORY_ESTIMATE_MAP_ENTRY_BYTES
+            .saturating_add(std::mem::size_of::<ClusterRuntimeState>() as u64)
+            .saturating_add(Self::estimate_label_bytes(&state.lifecycle_label))
+    }
+
+    fn cluster_facades_memory_bytes(&self) -> u64 {
+        Self::saturating_sum(
+            self.cluster_facades
+                .values()
+                .map(Self::estimate_cluster_runtime_state_bytes),
+        )
+    }
+
     fn readable_from_streams_memory_bytes(&self) -> u64 {
         Self::saturating_sum(
             self.readable_from_streams
@@ -51087,6 +51476,7 @@ impl InterpreterCore {
             .saturating_add(self.event_promise_waiters_memory_bytes())
             .saturating_add(self.url_objects_memory_bytes())
             .saturating_add(self.url_search_params_memory_bytes())
+            .saturating_add(self.cluster_facades_memory_bytes())
             .saturating_add(self.stream_pipelines_memory_bytes())
             .saturating_add(self.readable_from_streams_memory_bytes())
             .saturating_add(Self::saturating_sum(
@@ -70103,6 +70493,408 @@ mod async_runtime_tests_current {
             .next()
             .expect("pending zlib callback args");
         assert_eq!(callback_args.len(), 1);
+    }
+
+    #[test]
+    fn cluster_facade_allocation_is_atomic_under_final_byte_refusal_bd_9p2v3() {
+        let mut core = test_interpreter();
+        let baseline = core.sync_estimated_memory_bytes().expect("memory baseline");
+        let heap_before = core.heap.len();
+
+        let Value::Object(probe_id) = core
+            .construct_cluster_facade()
+            .expect("probe cluster facade")
+        else {
+            panic!("cluster facade must be an object");
+        };
+        assert!(
+            !core.heap[probe_id.0 as usize]
+                .properties
+                .contains_key("worker"),
+            "primary facade must not forge an own worker key"
+        );
+        let facade_delta = core.estimated_memory_bytes.saturating_sub(baseline);
+        assert!(facade_delta > 0);
+        core.clear_cluster_execution_state();
+        core.rollback_heap_to_len(heap_before);
+        core.estimated_memory_bytes = baseline;
+        core.config.max_total_memory_bytes =
+            baseline.saturating_add(facade_delta).saturating_sub(1);
+
+        assert!(matches!(
+            core.construct_cluster_facade(),
+            Err(InterpreterError::MemoryBudgetExceeded { .. })
+        ));
+        assert_eq!(core.heap.len(), heap_before);
+        assert_eq!(core.estimated_memory_bytes, baseline);
+        assert!(core.cluster_facades.is_empty());
+    }
+
+    #[test]
+    fn cluster_hostcalls_share_identity_and_seed_reset_clears_authenticated_state_bd_9p2v3() {
+        let mut core = test_interpreter();
+        let seed = core.capture_execution_seed();
+        let first = core
+            .dispatch_builtin_hostcall_inner(
+                "builtin:ClusterFacade",
+                RegRange { start: 0, count: 0 },
+                None,
+            )
+            .expect("first cluster hostcall");
+        let second = core
+            .dispatch_builtin_hostcall_inner(
+                "builtin:ClusterFacade",
+                RegRange { start: 0, count: 0 },
+                None,
+            )
+            .expect("second cluster hostcall");
+        assert_eq!(first, second, "one execution owns one cluster facade");
+        let Value::Object(first_id) = first else {
+            panic!("cluster facade must be an object");
+        };
+        assert!(core.cluster_facades.contains_key(&first_id));
+        core.cluster_facades
+            .get_mut(&first_id)
+            .expect("authenticated facade state")
+            .lifecycle_label = Label::Secret;
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+
+        let previous_register_bytes = core.registers_memory_bytes();
+        let previous_heap_bytes = core.heap_memory_bytes();
+        core.reset_execution_state_from_seed(&seed)
+            .expect("restore pre-cluster seed");
+        core.apply_register_heap_memory_delta(previous_register_bytes, previous_heap_bytes)
+            .expect("account restored register and heap state");
+        assert!(core.cluster_facades.is_empty());
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+
+        let Value::Object(reused_id) = core
+            .dispatch_builtin_hostcall_inner(
+                "builtin:ClusterFacade",
+                RegRange { start: 0, count: 0 },
+                None,
+            )
+            .expect("post-reset cluster hostcall")
+        else {
+            panic!("cluster facade must be an object");
+        };
+        assert_eq!(
+            core.cluster_facades[&reused_id].lifecycle_label,
+            Label::Public,
+            "a reused heap id must never inherit prior execution provenance"
+        );
+    }
+
+    #[test]
+    fn cluster_setup_precharges_work_and_never_publishes_partial_settings_bd_9p2v3() {
+        let mut core = test_interpreter();
+        let Value::Object(cluster_id) = core.construct_cluster_facade().expect("cluster facade")
+        else {
+            panic!("cluster facade must be an object");
+        };
+        let original_settings = match core.heap[cluster_id.0 as usize].properties.get("settings") {
+            Some(Value::Object(settings_id)) => *settings_id,
+            other => panic!("missing settings object: {other:?}"),
+        };
+        let args_array = core
+            .alloc_array_from_values(&[Value::str("--one"), Value::str("--two")])
+            .expect("args array");
+        let options = core
+            .alloc_object_with_properties(&[
+                ("exec", Value::str("worker.js")),
+                ("args", Value::Object(args_array)),
+            ])
+            .expect("setup options");
+        core.write_reg(0, Value::Object(options))
+            .expect("options register");
+        let heap_before = core.heap.len();
+        let memory_before = core.sync_estimated_memory_bytes().expect("memory baseline");
+        let instructions_before = core.instructions_executed;
+
+        core.config.instruction_budget = instructions_before.saturating_add(1);
+        assert!(matches!(
+            core.cluster_setup(
+                Some(Value::Object(cluster_id)),
+                Some(cluster_id.0),
+                RegRange { start: 0, count: 1 },
+            ),
+            Err(InterpreterError::BudgetExhausted { .. })
+        ));
+        assert_eq!(core.heap.len(), heap_before);
+        assert_eq!(core.estimated_memory_bytes, memory_before);
+        assert_eq!(core.instructions_executed, instructions_before);
+        assert_eq!(
+            core.heap[cluster_id.0 as usize].properties.get("settings"),
+            Some(&Value::Object(original_settings))
+        );
+
+        core.config.instruction_budget = u64::MAX;
+        let options_bytes =
+            InterpreterCore::estimate_heap_object_bytes(&core.heap[options.0 as usize]);
+        let settings_bytes =
+            InterpreterCore::estimate_heap_object_bytes(&core.heap[original_settings.0 as usize]);
+        core.config.max_total_memory_bytes = memory_before
+            .saturating_add(
+                options_bytes
+                    .saturating_add(settings_bytes)
+                    .saturating_mul(2),
+            )
+            .saturating_sub(1);
+        assert!(matches!(
+            core.cluster_setup(
+                Some(Value::Object(cluster_id)),
+                Some(cluster_id.0),
+                RegRange { start: 0, count: 1 },
+            ),
+            Err(InterpreterError::MemoryBudgetExceeded { .. })
+        ));
+        assert_eq!(core.heap.len(), heap_before);
+        assert_eq!(core.estimated_memory_bytes, memory_before);
+        assert_eq!(
+            core.heap[cluster_id.0 as usize].properties.get("settings"),
+            Some(&Value::Object(original_settings))
+        );
+
+        core.config.max_total_memory_bytes = DEFAULT_QUICKJS_MAX_TOTAL_MEMORY_BYTES;
+        core.cluster_setup(
+            Some(Value::Object(cluster_id)),
+            Some(cluster_id.0),
+            RegRange { start: 0, count: 1 },
+        )
+        .expect("successful setup merge");
+        let replacement = match core.heap[cluster_id.0 as usize].properties.get("settings") {
+            Some(Value::Object(settings_id)) => *settings_id,
+            other => panic!("missing replacement settings: {other:?}"),
+        };
+        assert_ne!(replacement, original_settings);
+        assert_eq!(
+            core.heap[replacement.0 as usize].properties.get("exec"),
+            Some(&Value::str("worker.js"))
+        );
+        assert_eq!(
+            core.heap[replacement.0 as usize].properties.get("args"),
+            Some(&Value::Object(args_array)),
+            "setup merge must retain supplied array identity"
+        );
+        assert!(
+            core.heap[original_settings.0 as usize]
+                .properties
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn cluster_setup_charges_reserved_keys_before_traversal_bd_9p2v3() {
+        let mut core = test_interpreter();
+        let Value::Object(cluster_id) = core.construct_cluster_facade().expect("cluster facade")
+        else {
+            panic!("cluster facade must be an object");
+        };
+        let options = core
+            .alloc_object_with_properties(&[
+                ("__a", Value::Int(1)),
+                ("__b", Value::Int(2)),
+                ("__c", Value::Int(3)),
+                ("__d", Value::Int(4)),
+                ("__e", Value::Int(5)),
+                ("__f", Value::Int(6)),
+                ("__g", Value::Int(7)),
+                ("__h", Value::Int(8)),
+            ])
+            .expect("reserved-key options");
+        core.write_reg(0, Value::Object(options))
+            .expect("options register");
+        let heap_before = core.heap.len();
+        let memory_before = core.estimated_memory_bytes();
+        let instructions_before = core.instructions_executed;
+        core.config.instruction_budget = instructions_before
+            .saturating_add(CLUSTER_SETUP_FIXED_WORK as u64)
+            .saturating_add(8)
+            .saturating_sub(1);
+
+        assert!(matches!(
+            core.cluster_setup(
+                Some(Value::Object(cluster_id)),
+                Some(cluster_id.0),
+                RegRange { start: 0, count: 1 },
+            ),
+            Err(InterpreterError::BudgetExhausted { .. })
+        ));
+        assert_eq!(core.instructions_executed, instructions_before);
+        assert_eq!(core.heap.len(), heap_before);
+        assert_eq!(core.estimated_memory_bytes(), memory_before);
+    }
+
+    #[test]
+    fn cluster_setup_lifecycle_taints_settings_nested_reads_and_methods_bd_9p2v3() {
+        let mut core = test_interpreter();
+        let Value::Object(cluster_id) = core.construct_cluster_facade().expect("cluster facade")
+        else {
+            panic!("cluster facade must be an object");
+        };
+        let options = core
+            .alloc_object_with_properties(&[("exec", Value::str("classified-worker.js"))])
+            .expect("setup options");
+        core.write_reg(0, Value::Object(options))
+            .expect("options register");
+        core.set_register_label(0, Label::Secret)
+            .expect("classified setup options");
+        core.cluster_setup(
+            Some(Value::Object(cluster_id)),
+            Some(cluster_id.0),
+            RegRange { start: 0, count: 1 },
+        )
+        .expect("classified setup");
+        let settings_id = core.cluster_facades[&cluster_id].settings;
+        assert_eq!(
+            core.cluster_state_label_ref(cluster_id),
+            Some(&Label::Secret)
+        );
+        assert_eq!(
+            core.cluster_state_label_ref(settings_id),
+            Some(&Label::Secret)
+        );
+        assert_eq!(
+            core.dispatch_builtin_hostcall_inner(
+                "builtin:ClusterFacade",
+                RegRange { start: 0, count: 0 },
+                None,
+            ),
+            Ok(Value::Object(cluster_id))
+        );
+        assert_eq!(core.pending_hostcall_result_label, Some(Label::Secret));
+        core.clear_pending_hostcall_result_label();
+
+        core.write_reg(1, Value::Object(cluster_id))
+            .expect("cluster register");
+        core.write_reg(2, Value::str("settings"))
+            .expect("settings key");
+        core.write_reg(3, Value::str("exec")).expect("exec key");
+        core.write_reg(6, Value::str("emit")).expect("emit key");
+        core.write_reg(8, Value::str("missing"))
+            .expect("event name");
+        let module = test_module_with_functions(
+            vec![
+                Ir3Instruction::GetProperty {
+                    obj: 1,
+                    key: 2,
+                    dst: 4,
+                },
+                Ir3Instruction::GetProperty {
+                    obj: 4,
+                    key: 3,
+                    dst: 5,
+                },
+                Ir3Instruction::GetProperty {
+                    obj: 1,
+                    key: 6,
+                    dst: 7,
+                },
+                Ir3Instruction::CallMethod {
+                    receiver: 1,
+                    callee: 7,
+                    args: RegRange { start: 8, count: 1 },
+                    dst: 9,
+                },
+                Ir3Instruction::Halt,
+            ],
+            vec![],
+        );
+        core.run_loop(&module).expect("labeled cluster reads");
+        assert_eq!(core.get_register_label(4), Ok(&Label::Secret));
+        assert_eq!(core.get_register_label(5), Ok(&Label::Secret));
+        assert_eq!(core.get_register_label(9), Ok(&Label::Secret));
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+    }
+
+    #[test]
+    fn cluster_disconnect_preserves_ifc_label_and_rolls_back_failed_schedule_bd_9p2v3() {
+        let mut refused = test_interpreter();
+        let Value::Object(refused_cluster) = refused
+            .construct_cluster_facade()
+            .expect("refused cluster facade")
+        else {
+            panic!("cluster facade must be an object");
+        };
+        refused
+            .write_reg(0, Value::Closure(7))
+            .expect("callback register");
+        refused
+            .set_register_label(0, Label::Secret)
+            .expect("classified callback");
+        let refused_baseline = refused
+            .sync_estimated_memory_bytes()
+            .expect("refused memory baseline");
+        refused.config.max_total_memory_bytes = refused_baseline;
+        let module = test_module_with_functions(vec![], vec![]);
+        let disconnect = match refused.heap[refused_cluster.0 as usize]
+            .properties
+            .get("disconnect")
+        {
+            Some(Value::BuiltinFunction(disconnect)) => disconnect.clone(),
+            other => panic!("missing bound disconnect builtin: {other:?}"),
+        };
+        assert!(matches!(
+            refused.dispatch_builtin_function(
+                &module,
+                &disconnect,
+                RegRange { start: 0, count: 1 },
+                Some(Value::Object(refused_cluster)),
+            ),
+            Err(InterpreterError::MemoryBudgetExceeded { .. })
+        ));
+        assert!(refused.pending_io_callbacks.is_empty());
+        assert!(!refused.event_loop.has_pending_work());
+        assert_eq!(refused.estimated_memory_bytes, refused_baseline);
+
+        let mut accepted = test_interpreter();
+        let Value::Object(accepted_cluster) = accepted
+            .construct_cluster_facade()
+            .expect("accepted cluster facade")
+        else {
+            panic!("cluster facade must be an object");
+        };
+        accepted
+            .write_reg(0, Value::Closure(9))
+            .expect("callback register");
+        accepted
+            .set_register_label(0, Label::Secret)
+            .expect("classified callback");
+        let accepted_disconnect = match accepted.heap[accepted_cluster.0 as usize]
+            .properties
+            .get("disconnect")
+        {
+            Some(Value::BuiltinFunction(disconnect)) => disconnect.clone(),
+            other => panic!("missing bound disconnect builtin: {other:?}"),
+        };
+        accepted
+            .dispatch_builtin_function(
+                &module,
+                &accepted_disconnect,
+                RegRange { start: 0, count: 1 },
+                Some(Value::Object(accepted_cluster)),
+            )
+            .expect("disconnect schedule");
+        let task = accepted
+            .event_loop
+            .turn()
+            .macrotask
+            .expect("disconnect callback task");
+        assert_eq!(task.label, Label::Secret);
+        assert_eq!(
+            accepted.pending_io_callbacks.get(&task.registration_seq),
+            Some(&Vec::new()),
+            "disconnect callback receives zero arguments"
+        );
     }
 }
 

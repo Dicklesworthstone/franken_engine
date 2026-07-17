@@ -22867,13 +22867,19 @@ mod tests {
             crate::parser_api_stability::parse_script(source).expect("parse stream pipeline CJS");
         let ir0 = Ir0Module::from_syntax_tree(tree, "stream_pipeline_bd_fw7zd_12.js");
         let ir1 = lower_ir0_to_ir1(&ir0).expect("lower stream pipeline CJS");
-        assert_eq!(count_hostcall_deep(&ir1.ops, "builtin:StreamTransform"), 1);
-        assert_eq!(count_hostcall_deep(&ir1.ops, "builtin:StreamPipeline"), 1);
         assert_eq!(
-            count_hostcall_deep(&ir1.ops, "builtin:StreamPromisesPipeline"),
+            count_hostcall_deep(&ir1.module.ops, "builtin:StreamTransform"),
             1
         );
-        assert_eq!(count_hostcall_deep(&ir1.ops, "module:require"), 0);
+        assert_eq!(
+            count_hostcall_deep(&ir1.module.ops, "builtin:StreamPipeline"),
+            1
+        );
+        assert_eq!(
+            count_hostcall_deep(&ir1.module.ops, "builtin:StreamPromisesPipeline"),
+            1
+        );
+        assert_eq!(count_hostcall_deep(&ir1.module.ops, "module:require"), 0);
 
         let ops = lower_esm_source_ops(
             "import { Readable, Writable, Transform } from 'node:stream';\n\

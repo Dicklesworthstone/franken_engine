@@ -3973,6 +3973,58 @@ impl DataViewIntegerKind {
 // HeapObject — simplified object model
 // ---------------------------------------------------------------------------
 
+/// Private executable property key for dynamic IR operations.
+///
+/// Public compatibility and hook APIs remain `String`/`&str`; this carrier is
+/// deliberately private so a `Value::Str` can retain exact UTF-16 identity at
+/// the heap boundary without widening those frozen surfaces. Engine Symbols
+/// remain on their existing object-backed compatibility path until the typed
+/// Symbol-key lane owns that separate migration.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+enum RuntimePropertyKey {
+    String(JsString),
+}
+
+impl RuntimePropertyKey {
+    fn string(&self) -> &JsString {
+        match self {
+            Self::String(key) => key,
+        }
+    }
+
+    fn as_str(&self) -> Option<&str> {
+        self.string().as_str()
+    }
+
+    fn into_string(self) -> JsString {
+        match self {
+            Self::String(key) => key,
+        }
+    }
+
+    fn diagnostic(&self) -> String {
+        if let Some(key) = self.as_str() {
+            if key.starts_with("~pk~") {
+                let mut diagnostic = String::with_capacity(6 + key.len().saturating_mul(2));
+                diagnostic.push_str("~pk~u:");
+                for byte in key.as_bytes() {
+                    fmt::Write::write_fmt(&mut diagnostic, format_args!("{byte:02X}"))
+                        .expect("writing hexadecimal bytes to String cannot fail");
+                }
+                return diagnostic;
+            }
+            return key.to_string();
+        }
+        let mut diagnostic = String::with_capacity(6 + self.string().utf16_len().saturating_mul(4));
+        diagnostic.push_str("~pk~x:");
+        for unit in self.string().encode_utf16() {
+            fmt::Write::write_fmt(&mut diagnostic, format_args!("{unit:04X}"))
+                .expect("writing hexadecimal code units to String cannot fail");
+        }
+        diagnostic
+    }
+}
+
 /// A heap-allocated object with string-keyed properties.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct HeapObject {
@@ -19112,7 +19164,7 @@ impl InterpreterCore {
                     heap_label_sources[object_index] = Some(register_index);
                 }
                 let object = &self.heap[object_index];
-                for property_value in object.properties.values() {
+                for property_value in object.properties.all_data_values() {
                     Self::queue_object_id_from_value(property_value, &mut frontier, &mut queued);
                 }
                 if let Some(prototype) = object.prototype {
@@ -22396,7 +22448,7 @@ impl InterpreterCore {
                     "Map",
                     "__entries",
                     &key,
-                )))
+                )?))
             }
             BuiltinFunctionKind::SetAdd => {
                 let receiver = receiver.unwrap_or(Value::Undefined);
@@ -22425,23 +22477,23 @@ impl InterpreterCore {
                     return Ok(Value::Bool(false));
                 };
                 let value = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
-                Ok(Value::Bool(
-                    self.collection_delete(set_id, "Set", "__values", &value),
-                ))
+                Ok(Value::Bool(self.collection_delete(
+                    set_id, "Set", "__values", &value,
+                )?))
             }
             BuiltinFunctionKind::MapClear => {
                 let receiver = receiver.unwrap_or(Value::Undefined);
                 let Value::Object(map_id) = receiver else {
                     return Ok(Value::Undefined);
                 };
-                Ok(self.collection_clear(map_id, "Map", "__entries"))
+                self.collection_clear(map_id, "Map", "__entries")
             }
             BuiltinFunctionKind::SetClear => {
                 let receiver = receiver.unwrap_or(Value::Undefined);
                 let Value::Object(set_id) = receiver else {
                     return Ok(Value::Undefined);
                 };
-                Ok(self.collection_clear(set_id, "Set", "__values"))
+                self.collection_clear(set_id, "Set", "__values")
             }
             BuiltinFunctionKind::DateGetTime => {
                 // `Date.prototype.getTime()` — read the receiver Date object's
@@ -24644,6 +24696,35 @@ impl InterpreterCore {
         self.enforce_hook_action(hook.pre_property_access(&ctx, &target, &property_key))
     }
 
+    /// Reject an executable string key that the frozen String-only hook
+    /// boundary cannot represent. This check deliberately performs neither a
+    /// callback nor a heap lookup, so failed exact access is side-effect free.
+    fn preflight_runtime_property_key_for_hook(
+        &self,
+        key: &RuntimePropertyKey,
+    ) -> Result<(), InterpreterError> {
+        if self.hook.is_none() || key.as_str().is_some() {
+            return Ok(());
+        }
+        Err(InterpreterError::TypeError {
+            expected: "property key representable by legacy string hook".to_string(),
+            got: "non-well-formed ECMAScript string property key".to_string(),
+        })
+    }
+
+    fn run_pre_runtime_property_access_hook(
+        &self,
+        module: &Ir3Module,
+        target: ObjectId,
+        key: &RuntimePropertyKey,
+    ) -> Result<(), InterpreterError> {
+        self.preflight_runtime_property_key_for_hook(key)?;
+        let Some(key) = key.as_str() else {
+            return Ok(());
+        };
+        self.run_pre_property_access_hook(module, target, key)
+    }
+
     fn run_pre_call_hook(
         &self,
         module: &Ir3Module,
@@ -26494,12 +26575,13 @@ impl InterpreterCore {
                 }
                 Ir3Instruction::GetProperty { obj, key, dst } => {
                     let obj_val = self.read_reg(obj)?;
+                    let key_val = self.read_reg(key)?;
+                    let property_key = self.executable_property_key_from_value(&key_val);
+                    self.preflight_runtime_property_key_for_hook(&property_key)?;
                     let object_id = match &obj_val {
                         Value::Object(object_id) => Some(*object_id),
                         _ => None,
                     };
-                    let key_val = self.read_reg(key)?;
-                    let key_str = self.property_key_from_value(&key_val);
 
                     let mut result_label = self.binary_operation_label(dst, obj)?;
                     if let Some(binary_storage_label) =
@@ -26542,8 +26624,8 @@ impl InterpreterCore {
 
                     let prop = match obj_val {
                         Value::Object(oid) => {
-                            self.run_pre_property_access_hook(module, oid, &key_str)?;
-                            if key_str == "__proto__" {
+                            self.run_pre_runtime_property_access_hook(module, oid, &property_key)?;
+                            if property_key.as_str() == Some("__proto__") {
                                 // `__proto__` reads the internal prototype link
                                 // (set by class `extends` and `o.__proto__ = p`),
                                 // not a data property (bd-ppfds).
@@ -26553,33 +26635,48 @@ impl InterpreterCore {
                                     .map(Value::Object)
                                     .unwrap_or(Value::Null)
                             } else {
-                                self.proxy_aware_get_property(
+                                self.proxy_aware_get_runtime_property(
                                     Some(module),
                                     oid,
-                                    &key_str,
+                                    &property_key,
                                     Value::Object(oid),
                                     0,
                                 )?
                             }
                         }
                         Value::Iterator(iterator_handle) => {
-                            self.iterator_property_value(iterator_handle, &key_str)
+                            property_key.as_str().map_or(Value::Undefined, |key| {
+                                self.iterator_property_value(iterator_handle, key)
+                            })
                         }
-                        Value::Str(s) => Self::string_property_value(&s, &key_str),
-                        Value::Int(_) | Value::Float(_) => {
+                        Value::Str(s) => property_key
+                            .as_str()
+                            .map_or(Value::Undefined, |key| Self::string_property_value(&s, key)),
+                        Value::Int(_) | Value::Float(_) => property_key.as_str().map_or(
+                            Value::Undefined,
                             // Member access on a number primitive resolves
                             // Number.prototype methods, else undefined (bd-i08nh).
-                            Self::number_property_value(&key_str)
-                        }
+                            Self::number_property_value,
+                        ),
                         // Functions are objects: reading `fn.prototype` returns the
                         // function's prototype object (where class instance methods
                         // live), matching what `Construct` links instances to so
                         // `new C().m()` resolves up the chain (bd-62un6).
                         Value::Closure(closure_id) => {
-                            let func_idx = self.closure_function_index(closure_id)?;
-                            self.function_property_value(func_idx, &key_str)?
+                            if let Some(key) = property_key.as_str() {
+                                let func_idx = self.closure_function_index(closure_id)?;
+                                self.function_property_value(func_idx, key)?
+                            } else {
+                                Value::Undefined
+                            }
                         }
-                        Value::Function(idx) => self.function_property_value(idx, &key_str)?,
+                        Value::Function(idx) => {
+                            if let Some(key) = property_key.as_str() {
+                                self.function_property_value(idx, key)?
+                            } else {
+                                Value::Undefined
+                            }
+                        }
                         Value::Generator(gen_id) => {
                             // Generator iterator-protocol member access (bd-v6cv1).
                             // Previously a generator had no arm here, so `it.next`
@@ -26592,12 +26689,14 @@ impl InterpreterCore {
                             // exposing `.next` AS the generator itself routes
                             // `it.next()` through that existing path. Unknown
                             // members resolve to `undefined`.
-                            match key_str.as_str() {
-                                "next" => Value::Generator(gen_id),
+                            match property_key.as_str() {
+                                Some("next") => Value::Generator(gen_id),
                                 _ => Value::Undefined,
                             }
                         }
-                        Value::Promise(_) => Self::promise_property_value(&key_str),
+                        Value::Promise(_) => property_key
+                            .as_str()
+                            .map_or(Value::Undefined, Self::promise_property_value),
                         other => {
                             return Err(InterpreterError::TypeError {
                                 expected: "object".to_string(),
@@ -26620,33 +26719,38 @@ impl InterpreterCore {
                 }
                 Ir3Instruction::SetProperty { obj, key, val } => {
                     let obj_val = self.read_reg(obj)?;
+                    let key_val = self.read_reg(key)?;
+                    let property_key = self.executable_property_key_from_value(&key_val);
+                    self.preflight_runtime_property_key_for_hook(&property_key)?;
                     let binary_object_id = match &obj_val {
                         Value::Object(object_id) => self
                             .array_buffer_id_for_object(*object_id)
                             .map(|_| *object_id),
                         _ => None,
                     };
-                    let key_val = self.read_reg(key)?;
                     let set_val = self.read_reg(val)?;
-                    let key_str = self.property_key_from_value(&key_val);
 
                     match obj_val {
                         Value::Object(oid) => {
-                            self.run_pre_property_access_hook(module, oid, &key_str)?;
+                            self.run_pre_runtime_property_access_hook(module, oid, &property_key)?;
                             let mutation_label = self
                                 .get_register_label(obj)?
                                 .join(self.get_register_label(key)?)
                                 .join(self.get_register_label(val)?);
-                            if self.set_url_object_property(
-                                oid,
-                                &key_str,
-                                &set_val,
-                                &mutation_label,
-                            )? {
+                            let handled_url = match property_key.as_str() {
+                                Some(key) => self.set_url_object_property(
+                                    oid,
+                                    key,
+                                    &set_val,
+                                    &mutation_label,
+                                )?,
+                                None => false,
+                            };
+                            if handled_url {
                                 // Native URL setter committed through its
                                 // authenticated side table; no guest-writable
                                 // mirror property is created.
-                            } else if key_str == "__proto__" {
+                            } else if property_key.as_str() == Some("__proto__") {
                                 // `__proto__` sets the internal prototype link so
                                 // prototype-chain lookups (incl. class `extends`,
                                 // which lowers to `Child.prototype.__proto__ =
@@ -26666,10 +26770,10 @@ impl InterpreterCore {
                                         }
                                     });
                                 }
-                            } else if !self.proxy_aware_set_property(
+                            } else if !self.proxy_aware_set_runtime_property(
                                 Some(module),
                                 oid,
-                                &key_str,
+                                &property_key,
                                 set_val,
                                 Value::Object(oid),
                                 0,
@@ -26678,7 +26782,10 @@ impl InterpreterCore {
                                     expected: "successful Proxy set trap".to_string(),
                                     got: "falsy set trap result".to_string(),
                                 });
-                            } else if let Some(index) = Self::canonical_array_index_key(&key_str) {
+                            } else if let Some(index) = property_key
+                                .as_str()
+                                .and_then(Self::canonical_array_index_key)
+                            {
                                 // `arr[i] = x`: grow the ES array length and the
                                 // dense-length cache the `ArrayPush` fast path
                                 // trusts. A no-op for non-arrays / proxies (the
@@ -26712,11 +26819,12 @@ impl InterpreterCore {
                     let obj_val = self.read_reg(obj)?;
                     let key_val = self.read_reg(key)?;
                     let func_val = self.read_reg(func)?;
-                    let key_str = self.property_key_from_value(&key_val);
+                    let property_key = self.executable_property_key_from_value(&key_val);
+                    self.preflight_runtime_property_key_for_hook(&property_key)?;
 
                     match obj_val {
                         Value::Object(oid) => {
-                            self.define_accessor_property(oid, key_str, func_val, kind)?;
+                            self.define_accessor_property(oid, property_key, func_val, kind)?;
                         }
                         _ => {
                             return Err(InterpreterError::TypeError {
@@ -26730,15 +26838,20 @@ impl InterpreterCore {
                 Ir3Instruction::DeleteProperty { obj, key, dst } => {
                     let obj_val = self.read_reg(obj)?;
                     let key_val = self.read_reg(key)?;
-                    let key_str = self.property_key_from_value(&key_val);
+                    let property_key = self.executable_property_key_from_value(&key_val);
+                    self.preflight_runtime_property_key_for_hook(&property_key)?;
 
                     match obj_val {
                         Value::Object(oid) => {
-                            self.run_pre_property_access_hook(module, oid, &key_str)?;
-                            let deleted =
-                                self.proxy_aware_delete_property(Some(module), oid, &key_str, 0)?;
-                            if deleted {
-                                self.mark_deleted_for_in_iterators(oid, &key_str);
+                            self.run_pre_runtime_property_access_hook(module, oid, &property_key)?;
+                            let deleted = self.proxy_aware_delete_runtime_property(
+                                Some(module),
+                                oid,
+                                &property_key,
+                                0,
+                            )?;
+                            if deleted && let Some(key) = property_key.as_str() {
+                                self.mark_deleted_for_in_iterators(oid, key);
                             }
                             self.write_reg(dst, Value::Bool(deleted))?;
                         }
@@ -28514,14 +28627,15 @@ impl InterpreterCore {
         lhs: u32,
         rhs: u32,
     ) -> Result<Value, InterpreterError> {
-        let key = self.property_key_from_value(&self.read_reg(lhs)?);
+        let key = self.executable_property_key_from_value(&self.read_reg(lhs)?);
+        self.preflight_runtime_property_key_for_hook(&key)?;
         let target = self.read_reg(rhs)?;
         match target {
             Value::Object(object_id) => {
                 self.heap
                     .get(object_id.0 as usize)
                     .ok_or(InterpreterError::ObjectNotFound { id: object_id.0 })?;
-                Ok(Value::Bool(self.proxy_aware_has_property(
+                Ok(Value::Bool(self.proxy_aware_has_runtime_property(
                     Some(module),
                     object_id,
                     &key,
@@ -30243,11 +30357,28 @@ impl InterpreterCore {
         key: &str,
         receiver: Value,
     ) -> Result<Value, InterpreterError> {
-        if let Some(value) = self.writable_state_view_value(object_id, key) {
-            return Ok(value);
-        }
-        if let Some(value) = self.typed_array_indexed_get_property(object_id, key)? {
-            return Ok(value);
+        self.prototype_chain_get_with_receiver_runtime(
+            module,
+            object_id,
+            &RuntimePropertyKey::String(JsString::from(key)),
+            receiver,
+        )
+    }
+
+    fn prototype_chain_get_with_receiver_runtime(
+        &mut self,
+        module: Option<&Ir3Module>,
+        object_id: ObjectId,
+        key: &RuntimePropertyKey,
+        receiver: Value,
+    ) -> Result<Value, InterpreterError> {
+        if let Some(key) = key.as_str() {
+            if let Some(value) = self.writable_state_view_value(object_id, key) {
+                return Ok(value);
+            }
+            if let Some(value) = self.typed_array_indexed_get_property(object_id, key)? {
+                return Ok(value);
+            }
         }
 
         let mut current = Some(object_id);
@@ -30259,13 +30390,20 @@ impl InterpreterCore {
                 // Capture property resolution decision for deterministic replay
                 self.nondeterminism_trace.capture(
                     NondeterminismSource::PropertyResolution,
-                    format!("chain_limit_reached:key={},depth={}", key, depth).into_bytes(),
+                    format!(
+                        "chain_limit_reached:key={},depth={}",
+                        key.diagnostic(),
+                        depth
+                    )
+                    .into_bytes(),
                     self.instructions_executed,
                     "baseline_interpreter",
                 );
                 return Ok(Value::Undefined);
             }
-            if let Some(value) = self.writable_state_view_value(id, key) {
+            if let Some(key) = key.as_str()
+                && let Some(value) = self.writable_state_view_value(id, key)
+            {
                 return Ok(value);
             }
             let (property_value, next_prototype) = {
@@ -30273,7 +30411,10 @@ impl InterpreterCore {
                     .heap
                     .get(id.0 as usize)
                     .ok_or(InterpreterError::ObjectNotFound { id: id.0 })?;
-                (object.properties.get(key).cloned(), object.prototype)
+                (
+                    object.properties.get_exact(key.string()).cloned(),
+                    object.prototype,
+                )
             };
             if let Some(val) = property_value {
                 // Capture property resolution success for deterministic replay
@@ -30281,7 +30422,9 @@ impl InterpreterCore {
                     NondeterminismSource::PropertyResolution,
                     format!(
                         "property_found:key={},object_id={},depth={}",
-                        key, id.0, depth
+                        key.diagnostic(),
+                        id.0,
+                        depth
                     )
                     .into_bytes(),
                     self.instructions_executed,
@@ -30297,7 +30440,21 @@ impl InterpreterCore {
         // Consult them only after ordinary own/inherited properties have had a
         // chance to shadow the accessor, and never trust guest heap metadata as
         // a brand (bd-8y0gs).
-        if let Some(value) = self.url_object_property_value(object_id, key)? {
+        let Some(key_text) = key.as_str() else {
+            self.nondeterminism_trace.capture(
+                NondeterminismSource::PropertyResolution,
+                format!(
+                    "property_not_found:key={},final_depth={}",
+                    key.diagnostic(),
+                    depth
+                )
+                .into_bytes(),
+                self.instructions_executed,
+                "baseline_interpreter",
+            );
+            return Ok(Value::Undefined);
+        };
+        if let Some(value) = self.url_object_property_value(object_id, key_text)? {
             return Ok(value);
         }
 
@@ -30311,7 +30468,7 @@ impl InterpreterCore {
             .get(object_id.0 as usize)
             .map(|object| object.is_array)
             .unwrap_or(false);
-        if root_is_array && let Some(builtin) = Self::array_prototype_method(key) {
+        if root_is_array && let Some(builtin) = Self::array_prototype_method(key_text) {
             return Ok(Value::BuiltinFunction(builtin));
         }
 
@@ -30354,24 +30511,29 @@ impl InterpreterCore {
                 .as_ref()
                 .is_some_and(|view| view.is_buffer)
         });
-        if root_is_buffer && let Some(builtin) = Self::buffer_prototype_method(key) {
+        if root_is_buffer && let Some(builtin) = Self::buffer_prototype_method(key_text) {
             return Ok(Value::BuiltinFunction(builtin));
         }
         if let Some(tag) = root_type_tag.as_deref()
             && (tag != "URLSearchParams" || self.url_search_params.contains_key(&object_id))
-            && let Some(builtin) = Self::collection_prototype_method(tag, key)
+            && let Some(builtin) = Self::collection_prototype_method(tag, key_text)
         {
             return Ok(Value::BuiltinFunction(builtin));
         }
 
-        if let Some(builtin) = Self::object_prototype_method(key) {
+        if let Some(builtin) = Self::object_prototype_method(key_text) {
             return Ok(Value::BuiltinFunction(builtin));
         }
 
         // Capture property resolution failure for deterministic replay
         self.nondeterminism_trace.capture(
             NondeterminismSource::PropertyResolution,
-            format!("property_not_found:key={},final_depth={}", key, depth).into_bytes(),
+            format!(
+                "property_not_found:key={},final_depth={}",
+                key.diagnostic(),
+                depth
+            )
+            .into_bytes(),
             self.instructions_executed,
             "baseline_interpreter",
         );
@@ -30853,29 +31015,14 @@ impl InterpreterCore {
     ) -> Result<Value, InterpreterError> {
         if let Some(entries_id) = self.collection_storage_id(map_id, "Map", "__entries") {
             let repr = Self::collection_key_repr(&key);
-            let entries_index = entries_id.0 as usize;
             let map_index = map_id.0 as usize;
-            // Incremental memory accounting (bd-s8u37): delta vs any existing
-            // entry, checked+applied before the mutation. The size bump is
-            // Int -> Int (zero delta).
-            let previous_bytes = self
-                .heap
-                .get(entries_index)
-                .and_then(|e| e.properties.get(&repr))
-                .map_or(0, |existing| {
-                    Self::estimate_property_entry_bytes(&repr, existing)
-                });
             let is_new = self
                 .heap
-                .get(entries_index)
+                .get(entries_id.0 as usize)
                 .map(|e| !e.properties.contains_key(&repr))
                 .unwrap_or(false);
-            let new_bytes = Self::estimate_property_entry_bytes(&repr, &value);
-            self.apply_memory_component_delta(previous_bytes, new_bytes)?;
+            self.set_object_property(entries_id, repr, value)?;
             self.mutate_heap(|heap| {
-                if let Some(entries) = heap.get_mut(entries_index) {
-                    entries.properties.insert(repr, value);
-                }
                 if is_new
                     && let Some(map_obj) = heap.get_mut(map_index)
                     && let Some(Value::Int(size)) = map_obj.properties.get_mut("size")
@@ -30894,28 +31041,14 @@ impl InterpreterCore {
     ) -> Result<Value, InterpreterError> {
         if let Some(values_id) = self.collection_storage_id(set_id, "Set", "__values") {
             let repr = Self::collection_key_repr(&value);
-            let values_index = values_id.0 as usize;
             let set_index = set_id.0 as usize;
-            // Incremental memory accounting (bd-s8u37): delta vs any existing
-            // entry, checked+applied before the mutation.
-            let previous_bytes = self
-                .heap
-                .get(values_index)
-                .and_then(|v| v.properties.get(&repr))
-                .map_or(0, |existing| {
-                    Self::estimate_property_entry_bytes(&repr, existing)
-                });
             let is_new = self
                 .heap
-                .get(values_index)
+                .get(values_id.0 as usize)
                 .map(|v| !v.properties.contains_key(&repr))
                 .unwrap_or(false);
-            let new_bytes = Self::estimate_property_entry_bytes(&repr, &value);
-            self.apply_memory_component_delta(previous_bytes, new_bytes)?;
+            self.set_object_property(values_id, repr, value)?;
             self.mutate_heap(|heap| {
-                if let Some(values) = heap.get_mut(values_index) {
-                    values.properties.insert(repr, value);
-                }
                 if is_new
                     && let Some(set_obj) = heap.get_mut(set_index)
                     && let Some(Value::Int(size)) = set_obj.properties.get_mut("size")
@@ -30966,71 +31099,47 @@ impl InterpreterCore {
         type_tag: &str,
         storage_prop: &str,
         key: &Value,
-    ) -> bool {
+    ) -> Result<bool, InterpreterError> {
         let Some(storage_id) = self.collection_storage_id(obj_id, type_tag, storage_prop) else {
-            return false;
+            return Ok(false);
         };
         let repr = Self::collection_key_repr(key);
-        let existed = self
-            .heap
-            .get(storage_id.0 as usize)
-            .map(|s| s.properties.contains_key(&repr))
-            .unwrap_or(false);
-        if existed {
-            let storage_index = storage_id.0 as usize;
+        let removed = self.remove_object_property(storage_id, &repr)?;
+        if removed {
             let obj_index = obj_id.0 as usize;
-            // Incremental memory accounting (bd-s8u37): release the removed
-            // entry's bytes (removal only shrinks; no budget check needed).
-            let removed_bytes = self
-                .heap
-                .get(storage_index)
-                .and_then(|s| s.properties.get(&repr))
-                .map_or(0, |value| Self::estimate_property_entry_bytes(&repr, value));
             self.mutate_heap(|heap| {
-                if let Some(storage) = heap.get_mut(storage_index) {
-                    storage.properties.remove(&repr);
-                }
                 if let Some(obj) = heap.get_mut(obj_index)
                     && let Some(Value::Int(size)) = obj.properties.get_mut("size")
                 {
                     *size = size.saturating_sub(1);
                 }
             });
-            self.estimated_memory_bytes = self.estimated_memory_bytes.saturating_sub(removed_bytes);
         }
-        existed
+        Ok(removed)
     }
 
     /// `Map.prototype.clear` / `Set.prototype.clear` (bd-juodx): empties the
     /// internal storage object and resets `size` to 0; returns `undefined`. The
     /// storage object holds only entries, so clearing all its properties is
     /// exactly the contents reset.
-    fn collection_clear(&mut self, obj_id: ObjectId, type_tag: &str, storage_prop: &str) -> Value {
+    fn collection_clear(
+        &mut self,
+        obj_id: ObjectId,
+        type_tag: &str,
+        storage_prop: &str,
+    ) -> Result<Value, InterpreterError> {
         if let Some(storage_id) = self.collection_storage_id(obj_id, type_tag, storage_prop) {
-            let storage_index = storage_id.0 as usize;
             let obj_index = obj_id.0 as usize;
-            // Incremental memory accounting (bd-s8u37): release every cleared
-            // entry's bytes (removal only shrinks; no budget check needed).
-            let removed_bytes = self.heap.get(storage_index).map_or(0, |storage| {
-                storage
-                    .properties
-                    .iter()
-                    .map(|(k, v)| Self::estimate_property_entry_bytes(k, v))
-                    .sum::<u64>()
-            });
+            self.clear_object_properties(storage_id)?;
             self.mutate_heap(|heap| {
-                if let Some(storage) = heap.get_mut(storage_index) {
-                    storage.properties.clear();
-                }
                 if let Some(obj) = heap.get_mut(obj_index)
                     && let Some(Value::Int(size)) = obj.properties.get_mut("size")
                 {
                     *size = 0;
                 }
             });
-            self.estimated_memory_bytes = self.estimated_memory_bytes.saturating_sub(removed_bytes);
         }
-        Value::Undefined
+        Ok(Value::Undefined)
     }
 
     /// Walk the prototype chain to find a property descriptor.
@@ -31125,12 +31234,14 @@ impl InterpreterCore {
         Ok(Value::Undefined)
     }
 
-    fn prototype_chain_has_key(
+    fn prototype_chain_has_runtime_key(
         &self,
         object_id: ObjectId,
-        key: &str,
+        key: &RuntimePropertyKey,
     ) -> Result<bool, InterpreterError> {
-        if self.writable_state_view_value(object_id, key).is_some() {
+        if let Some(key) = key.as_str()
+            && self.writable_state_view_value(object_id, key).is_some()
+        {
             return Ok(true);
         }
         let mut current = Some(object_id);
@@ -31141,14 +31252,16 @@ impl InterpreterCore {
             if depth >= MAX_PROTOTYPE_CHAIN_DEPTH || !visited.insert(id) {
                 return Ok(false);
             }
-            if self.writable_state_view_value(id, key).is_some() {
+            if let Some(key) = key.as_str()
+                && self.writable_state_view_value(id, key).is_some()
+            {
                 return Ok(true);
             }
             let object = self
                 .heap
                 .get(id.0 as usize)
                 .ok_or(InterpreterError::ObjectNotFound { id: id.0 })?;
-            if object.properties.contains_key(key) {
+            if object.properties.contains_exact_key(key.string()) {
                 return Ok(true);
             }
             current = object.prototype;
@@ -31351,6 +31464,23 @@ impl InterpreterCore {
         receiver: Value,
         depth: u32,
     ) -> Result<Value, InterpreterError> {
+        self.proxy_aware_get_runtime_property(
+            module,
+            object_id,
+            &RuntimePropertyKey::String(JsString::from(key)),
+            receiver,
+            depth,
+        )
+    }
+
+    fn proxy_aware_get_runtime_property(
+        &mut self,
+        module: Option<&Ir3Module>,
+        object_id: ObjectId,
+        key: &RuntimePropertyKey,
+        receiver: Value,
+        depth: u32,
+    ) -> Result<Value, InterpreterError> {
         if depth >= MAX_PROTOTYPE_CHAIN_DEPTH {
             return Err(InterpreterError::TypeError {
                 expected: "bounded Proxy get recursion".to_string(),
@@ -31358,22 +31488,33 @@ impl InterpreterCore {
             });
         }
         if self.is_import_meta_object(object_id)? {
+            let Some(key) = key.as_str() else {
+                return Err(InterpreterError::TypeError {
+                    expected: "well-formed import.meta contract field (url, dirname)".to_string(),
+                    got: key.diagnostic(),
+                });
+            };
             return self.import_meta_property_value(key);
         }
         let Some((target, handler)) = self.active_proxy_record(object_id)? else {
-            return self.prototype_chain_get_with_receiver(module, object_id, key, receiver);
+            return self
+                .prototype_chain_get_with_receiver_runtime(module, object_id, key, receiver);
         };
 
         if let Some(value) = self.invoke_proxy_trap(
             module,
             handler,
             "get",
-            vec![Value::Object(target), Value::str(key), receiver],
+            vec![
+                Value::Object(target),
+                Value::Str(key.string().clone()),
+                receiver,
+            ],
         )? {
             return Ok(value);
         }
 
-        self.proxy_aware_get_property(module, target, key, Value::Object(target), depth + 1)
+        self.proxy_aware_get_runtime_property(module, target, key, Value::Object(target), depth + 1)
     }
 
     fn proxy_aware_set_property(
@@ -31385,6 +31526,25 @@ impl InterpreterCore {
         receiver: Value,
         depth: u32,
     ) -> Result<bool, InterpreterError> {
+        self.proxy_aware_set_runtime_property(
+            module,
+            object_id,
+            &RuntimePropertyKey::String(JsString::from(key)),
+            value,
+            receiver,
+            depth,
+        )
+    }
+
+    fn proxy_aware_set_runtime_property(
+        &mut self,
+        module: Option<&Ir3Module>,
+        object_id: ObjectId,
+        key: &RuntimePropertyKey,
+        value: Value,
+        receiver: Value,
+        depth: u32,
+    ) -> Result<bool, InterpreterError> {
         if depth >= MAX_PROTOTYPE_CHAIN_DEPTH {
             return Err(InterpreterError::TypeError {
                 expected: "bounded Proxy set recursion".to_string(),
@@ -31392,22 +31552,29 @@ impl InterpreterCore {
             });
         }
         if self.is_import_meta_object(object_id)? {
-            self.record_import_meta_contract_access(key, false);
+            if let Some(key) = key.as_str() {
+                self.record_import_meta_contract_access(key, false);
+            }
             return Err(InterpreterError::TypeError {
                 expected: "read-only import.meta contract field".to_string(),
-                got: format!("import.meta.{key}"),
+                got: key
+                    .as_str()
+                    .map_or_else(|| key.diagnostic(), |key| format!("import.meta.{key}")),
             });
         }
         let Some((target, handler)) = self.active_proxy_record(object_id)? else {
-            if let Some(success) = self.typed_array_indexed_set_property(object_id, key, &value)? {
+            if let Some(key) = key.as_str()
+                && let Some(success) =
+                    self.typed_array_indexed_set_property(object_id, key, &value)?
+            {
                 return Ok(success);
             }
-            if let Some(accessor) = self.prototype_chain_find_property(object_id, key)?
+            if let Some(accessor) = self.prototype_chain_find_runtime_property(object_id, key)?
                 && self.resolve_accessor_set(module, accessor, receiver, value.clone())?
             {
                 return Ok(true);
             }
-            self.set_object_property(object_id, key.to_string(), value)?;
+            self.set_object_runtime_property(object_id, key.clone(), value)?;
             return Ok(true);
         };
 
@@ -31417,7 +31584,7 @@ impl InterpreterCore {
             "set",
             vec![
                 Value::Object(target),
-                Value::str(key),
+                Value::Str(key.string().clone()),
                 value.clone(),
                 receiver,
             ],
@@ -31425,7 +31592,14 @@ impl InterpreterCore {
             return Ok(result.is_truthy());
         }
 
-        self.proxy_aware_set_property(module, target, key, value, Value::Object(target), depth + 1)
+        self.proxy_aware_set_runtime_property(
+            module,
+            target,
+            key,
+            value,
+            Value::Object(target),
+            depth + 1,
+        )
     }
 
     fn proxy_aware_has_property(
@@ -31435,6 +31609,21 @@ impl InterpreterCore {
         key: &str,
         depth: u32,
     ) -> Result<bool, InterpreterError> {
+        self.proxy_aware_has_runtime_property(
+            module,
+            object_id,
+            &RuntimePropertyKey::String(JsString::from(key)),
+            depth,
+        )
+    }
+
+    fn proxy_aware_has_runtime_property(
+        &mut self,
+        module: Option<&Ir3Module>,
+        object_id: ObjectId,
+        key: &RuntimePropertyKey,
+        depth: u32,
+    ) -> Result<bool, InterpreterError> {
         if depth >= MAX_PROTOTYPE_CHAIN_DEPTH {
             return Err(InterpreterError::TypeError {
                 expected: "bounded Proxy has recursion".to_string(),
@@ -31442,19 +31631,19 @@ impl InterpreterCore {
             });
         }
         let Some((target, handler)) = self.active_proxy_record(object_id)? else {
-            return self.prototype_chain_has_key(object_id, key);
+            return self.prototype_chain_has_runtime_key(object_id, key);
         };
 
         if let Some(result) = self.invoke_proxy_trap(
             module,
             handler,
             "has",
-            vec![Value::Object(target), Value::str(key)],
+            vec![Value::Object(target), Value::Str(key.string().clone())],
         )? {
             return Ok(result.is_truthy());
         }
 
-        self.proxy_aware_has_property(module, target, key, depth + 1)
+        self.proxy_aware_has_runtime_property(module, target, key, depth + 1)
     }
 
     fn proxy_aware_delete_property(
@@ -31464,6 +31653,21 @@ impl InterpreterCore {
         key: &str,
         depth: u32,
     ) -> Result<bool, InterpreterError> {
+        self.proxy_aware_delete_runtime_property(
+            module,
+            object_id,
+            &RuntimePropertyKey::String(JsString::from(key)),
+            depth,
+        )
+    }
+
+    fn proxy_aware_delete_runtime_property(
+        &mut self,
+        module: Option<&Ir3Module>,
+        object_id: ObjectId,
+        key: &RuntimePropertyKey,
+        depth: u32,
+    ) -> Result<bool, InterpreterError> {
         if depth >= MAX_PROTOTYPE_CHAIN_DEPTH {
             return Err(InterpreterError::TypeError {
                 expected: "bounded Proxy delete recursion".to_string(),
@@ -31471,19 +31675,19 @@ impl InterpreterCore {
             });
         }
         let Some((target, handler)) = self.active_proxy_record(object_id)? else {
-            return self.remove_object_property(object_id, key);
+            return self.remove_object_runtime_property(object_id, key);
         };
 
         if let Some(result) = self.invoke_proxy_trap(
             module,
             handler,
             "deleteProperty",
-            vec![Value::Object(target), Value::str(key)],
+            vec![Value::Object(target), Value::Str(key.string().clone())],
         )? {
             return Ok(result.is_truthy());
         }
 
-        self.proxy_aware_delete_property(module, target, key, depth + 1)
+        self.proxy_aware_delete_runtime_property(module, target, key, depth + 1)
     }
 
     fn ordinary_own_property_key_values(
@@ -33835,6 +34039,30 @@ impl InterpreterCore {
         }
 
         Self::property_key(value)
+    }
+
+    /// Convert a dynamic IR value to the private exact string-key carrier.
+    /// Compatibility consumers intentionally continue to use
+    /// `property_key_from_value` until bd-b12xs.6 audits them as a group.
+    fn executable_property_key_from_value(&self, value: &Value) -> RuntimePropertyKey {
+        if let Value::Object(object_id) = value
+            && let Some(object) = self.heap.get(object_id.0 as usize)
+        {
+            let is_symbol = matches!(
+                object.properties.get("__type"),
+                Some(Value::Str(kind)) if kind.as_ref() == "Symbol"
+            );
+            if is_symbol && let Some(Value::Str(key)) = object.properties.get("__key") {
+                return RuntimePropertyKey::String(key.clone());
+            }
+        }
+
+        let key = match value {
+            Value::Str(key) => key.clone(),
+            Value::Int(number) => JsString::from(number.to_string()),
+            _ => JsString::from(Self::property_key(value)),
+        };
+        RuntimePropertyKey::String(key)
     }
 
     #[allow(dead_code)] // Kept for potential integer-only operations; tested below
@@ -36789,12 +37017,11 @@ impl InterpreterCore {
     ) -> Result<(), InterpreterError> {
         let arr_index = array_id.0 as usize;
 
-        // Compute the length-entry accounting delta BEFORE mutating the heap,
-        // mirroring `set_object_property`: the first index assignment on an
-        // array without a `length` entry creates one here, and skipping the
-        // incremental update leaves `estimated_memory_bytes` under-counting
-        // by exactly that entry (found by the H8.4 integration test,
-        // bd-o4cbn.13.4).
+        // Compute the grown length before mutating the heap. The first index
+        // assignment on an array without a `length` entry creates one here.
+        // Route that insertion through the ordinary property setter so an
+        // exact-active carrier accounts both hidden order sidecars as well as
+        // the visible entry (bd-b12xs.5).
         let grown_length = match self.heap.get(arr_index) {
             Some(object) if object.is_array => {
                 let current_len = match object.properties.get("length") {
@@ -36804,12 +37031,7 @@ impl InterpreterCore {
                 if u64::from(index) >= current_len {
                     let grown =
                         i64::try_from(u64::from(index).saturating_add(1)).unwrap_or(i64::MAX);
-                    let previous_bytes = object.properties.get("length").map_or(0, |value| {
-                        Self::estimate_property_entry_bytes("length", value)
-                    });
-                    let new_bytes =
-                        Self::estimate_property_entry_bytes("length", &Value::Int(grown));
-                    Some((grown, previous_bytes, new_bytes))
+                    Some(grown)
                 } else {
                     None
                 }
@@ -36817,25 +37039,15 @@ impl InterpreterCore {
             _ => return Ok(()),
         };
 
-        if let Some((grown, previous_bytes, new_bytes)) = grown_length {
-            let requested_bytes = self
-                .estimated_memory_bytes
-                .saturating_sub(previous_bytes)
-                .saturating_add(new_bytes);
-            if Self::memory_request_exceeds_budget(
-                requested_bytes,
-                self.config.max_total_memory_bytes,
-            ) {
-                return Err(self.memory_budget_error(requested_bytes, self.heap_object_count_u32()));
-            }
+        if let Some(grown) = grown_length {
+            // Setting `length` normally refreshes the dense cache. Preserve
+            // the state established by the preceding index write so a sparse
+            // gap stays sparse; the update below then advances a dense append.
+            let cached_dense_length = self.heap[arr_index].cached_dense_length;
+            self.set_object_property(array_id, "length".to_string(), Value::Int(grown))?;
             self.mutate_heap(|heap| {
-                if let Some(object) = heap.get_mut(arr_index) {
-                    object
-                        .properties
-                        .insert("length".to_string(), Value::Int(grown));
-                }
+                heap[arr_index].cached_dense_length = cached_dense_length;
             });
-            self.estimated_memory_bytes = requested_bytes;
         }
 
         self.mutate_heap(|heap| {
@@ -37214,6 +37426,73 @@ impl InterpreterCore {
         Ok(number as u32 as i64)
     }
 
+    /// Property subset used by the two isolated callback mini-interpreters.
+    /// Preserve their historical own-property-only behavior while keeping
+    /// dynamic string identity exact and honoring the legacy-hook boundary.
+    fn simple_callback_get_property(
+        &mut self,
+        object_value: Value,
+        key_value: &Value,
+    ) -> Result<Value, InterpreterError> {
+        let key = self.executable_property_key_from_value(key_value);
+        self.preflight_runtime_property_key_for_hook(&key)?;
+        match object_value {
+            Value::Object(object_id) => {
+                if let Some(key) = key.as_str() {
+                    if let Some(value) = self.writable_state_view_value(object_id, key) {
+                        return Ok(value);
+                    }
+                    if let Some(value) = self.typed_array_indexed_get_property(object_id, key)? {
+                        return Ok(value);
+                    }
+                }
+                Ok(self
+                    .heap
+                    .get(object_id.0 as usize)
+                    .and_then(|object| object.properties.get_exact(key.string()))
+                    .cloned()
+                    .unwrap_or(Value::Undefined))
+            }
+            Value::Iterator(iterator_handle) => Ok(key.as_str().map_or(Value::Undefined, |key| {
+                self.iterator_property_value(iterator_handle, key)
+            })),
+            Value::Str(text) => Ok(key.as_str().map_or(Value::Undefined, |key| {
+                Self::string_property_value(&text, key)
+            })),
+            Value::Int(_) | Value::Float(_) => Ok(key
+                .as_str()
+                .map_or(Value::Undefined, Self::number_property_value)),
+            other => Err(InterpreterError::TypeError {
+                expected: "object".to_string(),
+                got: other.type_name().to_string(),
+            }),
+        }
+    }
+
+    fn simple_callback_set_property(
+        &mut self,
+        object_value: Value,
+        key_value: &Value,
+        property_value: Value,
+    ) -> Result<(), InterpreterError> {
+        let key = self.executable_property_key_from_value(key_value);
+        self.preflight_runtime_property_key_for_hook(&key)?;
+        let Value::Object(object_id) = object_value else {
+            return Err(InterpreterError::TypeError {
+                expected: "object".to_string(),
+                got: object_value.type_name().to_string(),
+            });
+        };
+        if let Some(key) = key.as_str()
+            && self
+                .typed_array_indexed_set_property(object_id, key, &property_value)?
+                .is_some()
+        {
+            return Ok(());
+        }
+        self.set_object_runtime_property(object_id, key, property_value)
+    }
+
     fn invoke_simple_reduce_callback(
         &mut self,
         module: Option<&Ir3Module>,
@@ -37371,40 +37650,7 @@ impl InterpreterCore {
                 Ir3Instruction::GetProperty { obj, key, dst } => {
                     let object_value = Self::read_local_register(&local_registers, obj)?;
                     let key_value = Self::read_local_register(&local_registers, key)?;
-                    let key_string = self.property_key_from_value(&key_value);
-                    let value = match object_value {
-                        Value::Object(object_id) => {
-                            if let Some(value) =
-                                self.writable_state_view_value(object_id, &key_string)
-                            {
-                                value
-                            } else if let Some(value) =
-                                self.typed_array_indexed_get_property(object_id, &key_string)?
-                            {
-                                value
-                            } else {
-                                self.heap
-                                    .get(object_id.0 as usize)
-                                    .and_then(|object| object.properties.get(&key_string))
-                                    .cloned()
-                                    .unwrap_or(Value::Undefined)
-                            }
-                        }
-                        Value::Iterator(iterator_handle) => {
-                            self.iterator_property_value(iterator_handle, &key_string)
-                        }
-                        Value::Str(s) => Self::string_property_value(&s, &key_string),
-                        Value::Int(_) | Value::Float(_) => {
-                            // Number.prototype member access (bd-i08nh).
-                            Self::number_property_value(&key_string)
-                        }
-                        other => {
-                            return Err(InterpreterError::TypeError {
-                                expected: "object".to_string(),
-                                got: other.type_name().to_string(),
-                            });
-                        }
-                    };
+                    let value = self.simple_callback_get_property(object_value, &key_value)?;
                     Self::write_local_register(&mut local_registers, dst, value)?;
                     instruction_pointer += 1;
                 }
@@ -37412,27 +37658,7 @@ impl InterpreterCore {
                     let object_value = Self::read_local_register(&local_registers, obj)?;
                     let key_value = Self::read_local_register(&local_registers, key)?;
                     let property_value = Self::read_local_register(&local_registers, val)?;
-                    match object_value {
-                        Value::Object(object_id) => {
-                            let property_key = self.property_key_from_value(&key_value);
-                            if self
-                                .typed_array_indexed_set_property(
-                                    object_id,
-                                    &property_key,
-                                    &property_value,
-                                )?
-                                .is_none()
-                            {
-                                self.set_object_property(object_id, property_key, property_value)?;
-                            }
-                        }
-                        other => {
-                            return Err(InterpreterError::TypeError {
-                                expected: "object".to_string(),
-                                got: other.type_name().to_string(),
-                            });
-                        }
-                    }
+                    self.simple_callback_set_property(object_value, &key_value, property_value)?;
                     instruction_pointer += 1;
                 }
                 Ir3Instruction::Jump { target } => {
@@ -37634,40 +37860,7 @@ impl InterpreterCore {
                 Ir3Instruction::GetProperty { obj, key, dst } => {
                     let object_value = Self::read_local_register(&local_registers, obj)?;
                     let key_value = Self::read_local_register(&local_registers, key)?;
-                    let key_string = self.property_key_from_value(&key_value);
-                    let value = match object_value {
-                        Value::Object(object_id) => {
-                            if let Some(value) =
-                                self.writable_state_view_value(object_id, &key_string)
-                            {
-                                value
-                            } else if let Some(value) =
-                                self.typed_array_indexed_get_property(object_id, &key_string)?
-                            {
-                                value
-                            } else {
-                                self.heap
-                                    .get(object_id.0 as usize)
-                                    .and_then(|object| object.properties.get(&key_string))
-                                    .cloned()
-                                    .unwrap_or(Value::Undefined)
-                            }
-                        }
-                        Value::Iterator(iterator_handle) => {
-                            self.iterator_property_value(iterator_handle, &key_string)
-                        }
-                        Value::Str(s) => Self::string_property_value(&s, &key_string),
-                        Value::Int(_) | Value::Float(_) => {
-                            // Number.prototype member access (bd-i08nh).
-                            Self::number_property_value(&key_string)
-                        }
-                        other => {
-                            return Err(InterpreterError::TypeError {
-                                expected: "object".to_string(),
-                                got: other.type_name().to_string(),
-                            });
-                        }
-                    };
+                    let value = self.simple_callback_get_property(object_value, &key_value)?;
                     Self::write_local_register(&mut local_registers, dst, value)?;
                     instruction_pointer += 1;
                 }
@@ -37675,27 +37868,7 @@ impl InterpreterCore {
                     let object_value = Self::read_local_register(&local_registers, obj)?;
                     let key_value = Self::read_local_register(&local_registers, key)?;
                     let property_value = Self::read_local_register(&local_registers, val)?;
-                    match object_value {
-                        Value::Object(object_id) => {
-                            let property_key = self.property_key_from_value(&key_value);
-                            if self
-                                .typed_array_indexed_set_property(
-                                    object_id,
-                                    &property_key,
-                                    &property_value,
-                                )?
-                                .is_none()
-                            {
-                                self.set_object_property(object_id, property_key, property_value)?;
-                            }
-                        }
-                        other => {
-                            return Err(InterpreterError::TypeError {
-                                expected: "object".to_string(),
-                                got: other.type_name().to_string(),
-                            });
-                        }
-                    }
+                    self.simple_callback_set_property(object_value, &key_value, property_value)?;
                     instruction_pointer += 1;
                 }
                 Ir3Instruction::Jump { target } => {
@@ -38686,10 +38859,10 @@ impl InterpreterCore {
         Ok(Value::Undefined)
     }
 
-    fn prototype_chain_find_property(
+    fn prototype_chain_find_runtime_property(
         &self,
         object_id: ObjectId,
-        key: &str,
+        key: &RuntimePropertyKey,
     ) -> Result<Option<Value>, InterpreterError> {
         let mut current = Some(object_id);
         let mut depth = 0u32;
@@ -38703,7 +38876,7 @@ impl InterpreterCore {
                 .heap
                 .get(id.0 as usize)
                 .ok_or(InterpreterError::ObjectNotFound { id: id.0 })?;
-            if let Some(value) = object.properties.get(key) {
+            if let Some(value) = object.properties.get_exact(key.string()) {
                 return Ok(Some(value.clone()));
             }
             current = object.prototype;
@@ -38753,16 +38926,24 @@ impl InterpreterCore {
     fn define_accessor_property(
         &mut self,
         object_id: ObjectId,
-        key: String,
+        key: RuntimePropertyKey,
         func: Value,
         kind: AccessorKind,
     ) -> Result<(), InterpreterError> {
+        if self.is_import_meta_object(object_id)? {
+            return Err(InterpreterError::TypeError {
+                expected: "read-only import.meta contract field".to_string(),
+                got: key
+                    .as_str()
+                    .map_or_else(|| key.diagnostic(), |key| format!("import.meta.{key}")),
+            });
+        }
         let existing = self
             .heap
             .get(object_id.0 as usize)
             .ok_or(InterpreterError::ObjectNotFound { id: object_id.0 })?
             .properties
-            .get(&key)
+            .get_exact(key.string())
             .cloned();
         let (get, set) = match existing {
             Some(Value::Accessor { get, set }) => (get, set),
@@ -38778,7 +38959,7 @@ impl InterpreterCore {
                 set: Some(Arc::new(func)),
             },
         };
-        self.set_object_property(object_id, key, accessor)
+        self.set_object_runtime_property(object_id, key, accessor)
     }
 
     fn dispatch_timer_hostcall(
@@ -44417,23 +44598,7 @@ impl InterpreterCore {
                         .unwrap_or(Value::Undefined),
                     other => other,
                 };
-                let heap_index = obj_id.0 as usize;
-                // Incremental memory accounting (bd-s8u37): delta vs any
-                // existing entry under the defined name.
-                let previous_bytes = self
-                    .heap
-                    .get(heap_index)
-                    .and_then(|obj| obj.properties.get(&prop_name))
-                    .map_or(0, |existing| {
-                        Self::estimate_property_entry_bytes(&prop_name, existing)
-                    });
-                let new_bytes = Self::estimate_property_entry_bytes(&prop_name, &effective_value);
-                self.apply_memory_component_delta(previous_bytes, new_bytes)?;
-                self.mutate_heap(|heap| {
-                    if let Some(obj) = heap.get_mut(heap_index) {
-                        obj.properties.insert(prop_name, effective_value);
-                    }
-                });
+                self.set_object_property(obj_id, prop_name, effective_value)?;
 
                 Ok(obj_val) // Return the original object
             }
@@ -44688,63 +44853,7 @@ impl InterpreterCore {
 
                 let key = self.read_reg(args.start + 1)?;
                 let value = self.read_reg(args.start + 2)?;
-
-                // Resolve the internal entries ObjectId under an immutable
-                // borrow, then insert into entries and update size under
-                // separate mutable borrows.
-                let entries_id_opt: Option<ObjectId> = self
-                    .heap
-                    .get(map_id.0 as usize)
-                    .and_then(|m| m.properties.get("__entries").cloned())
-                    .and_then(|v| match v {
-                        Value::Object(id) => Some(id),
-                        _ => None,
-                    });
-
-                if let Some(entries_id) = entries_id_opt {
-                    // Use a simple key representation (simplified)
-                    let key_str = match key {
-                        Value::Str(s) => format!("s:{}", s),
-                        Value::Int(i) => format!("n:{}", i),
-                        Value::Float(f) => format!("n:{}", f.inner()),
-                        Value::Bool(b) => format!("b:{}", b),
-                        Value::Null => "null".to_string(),
-                        Value::Undefined => "undefined".to_string(),
-                        Value::Object(id) => format!("o:{}", id.0),
-                        _ => "other".to_string(),
-                    };
-
-                    let entries_index = entries_id.0 as usize;
-                    let map_index = map_id.0 as usize;
-                    // Incremental memory accounting (bd-s8u37): delta vs any
-                    // existing entry under this key representation.
-                    let previous_bytes = self
-                        .heap
-                        .get(entries_index)
-                        .and_then(|e| e.properties.get(&key_str))
-                        .map_or(0, |existing| {
-                            Self::estimate_property_entry_bytes(&key_str, existing)
-                        });
-                    let new_bytes = Self::estimate_property_entry_bytes(&key_str, &value);
-                    self.apply_memory_component_delta(previous_bytes, new_bytes)?;
-                    self.mutate_heap(|heap| {
-                        // Insert into entries
-                        if let Some(entries_obj) = heap.get_mut(entries_index) {
-                            entries_obj.properties.insert(key_str, value.clone());
-                        }
-
-                        // Update map size
-                        if let Some(map_obj) = heap.get_mut(map_index) {
-                            if let Some(size_slot) = map_obj.properties.get_mut("size") {
-                                if let Value::Int(size) = size_slot {
-                                    *size = size.saturating_add(1);
-                                }
-                            }
-                        }
-                    });
-                }
-
-                Ok(this_val) // Return the Map object for chaining
+                self.map_collection_set(map_id, key, value)
             }
             "builtin:MapPrototypeGet" => {
                 // Map.prototype.get(key) implementation
@@ -44814,72 +44923,7 @@ impl InterpreterCore {
                 }
 
                 let value = self.read_reg(args.start + 1)?;
-
-                // Resolve the internal values ObjectId under an immutable
-                // borrow, then insert into values and update size under
-                // separate mutable borrows.
-                let values_id_opt: Option<ObjectId> = self
-                    .heap
-                    .get(set_id.0 as usize)
-                    .and_then(|s| s.properties.get("__values").cloned())
-                    .and_then(|v| match v {
-                        Value::Object(id) => Some(id),
-                        _ => None,
-                    });
-
-                if let Some(values_id) = values_id_opt {
-                    // Use a simple value representation (simplified)
-                    let value_str = match value {
-                        Value::Str(s) => format!("s:{}", s),
-                        Value::Int(i) => format!("n:{}", i),
-                        Value::Float(f) => format!("n:{}", f.inner()),
-                        Value::Bool(b) => format!("b:{}", b),
-                        Value::Null => "null".to_string(),
-                        Value::Undefined => "undefined".to_string(),
-                        Value::Object(id) => format!("o:{}", id.0),
-                        _ => "other".to_string(),
-                    };
-
-                    let values_index = values_id.0 as usize;
-                    let set_index = set_id.0 as usize;
-
-                    // Incremental memory accounting (bd-s8u37): the value is
-                    // inserted only when absent, so account exactly then.
-                    let will_insert = self
-                        .heap
-                        .get(values_index)
-                        .map(|v| !v.properties.contains_key(&value_str))
-                        .unwrap_or(false);
-                    if will_insert {
-                        let new_bytes =
-                            Self::estimate_property_entry_bytes(&value_str, &Value::Bool(true));
-                        self.apply_memory_component_delta(0, new_bytes)?;
-                    }
-                    let mut inserted = false;
-
-                    self.mutate_heap(|heap| {
-                        // Check and insert into values
-                        if let Some(values_obj) = heap.get_mut(values_index) {
-                            if !values_obj.properties.contains_key(&value_str) {
-                                values_obj.properties.insert(value_str, Value::Bool(true));
-                                inserted = true;
-                            }
-                        }
-
-                        // Update set size if inserted
-                        if inserted {
-                            if let Some(set_obj) = heap.get_mut(set_index) {
-                                if let Some(size_slot) = set_obj.properties.get_mut("size") {
-                                    if let Value::Int(size) = size_slot {
-                                        *size = size.saturating_add(1);
-                                    }
-                                }
-                            }
-                        }
-                    });
-                }
-
-                Ok(this_val) // Return the Set object for chaining
+                self.set_collection_add(set_id, value)
             }
             "builtin:SetPrototypeHas" => {
                 // Set.prototype.has(value) implementation
@@ -45000,72 +45044,12 @@ impl InterpreterCore {
                 }
 
                 let key = self.read_reg(args.start + 1)?;
-
-                // Resolve entries_id under an immutable borrow, then do the
-                // mutable removal + size update under separate mutable borrows.
-                let entries_id_opt: Option<ObjectId> = self
-                    .heap
-                    .get(map_id.0 as usize)
-                    .and_then(|m| m.properties.get("__entries").cloned())
-                    .and_then(|v| match v {
-                        Value::Object(id) => Some(id),
-                        _ => None,
-                    });
-
-                if let Some(entries_id) = entries_id_opt {
-                    // Use the same key representation as set()
-                    let key_str = match key {
-                        Value::Str(s) => format!("s:{}", s),
-                        Value::Int(i) => format!("n:{}", i),
-                        Value::Float(f) => format!("n:{}", f.inner()),
-                        Value::Bool(b) => format!("b:{}", b),
-                        Value::Null => "null".to_string(),
-                        Value::Undefined => "undefined".to_string(),
-                        Value::Object(id) => format!("o:{}", id.0),
-                        _ => "other".to_string(),
-                    };
-
-                    let entries_index = entries_id.0 as usize;
-                    let map_index = map_id.0 as usize;
-                    let mut removed = false;
-
-                    // Incremental memory accounting (bd-s8u37): release the
-                    // removed entry's bytes (removal only shrinks).
-                    let removed_bytes = self
-                        .heap
-                        .get(entries_index)
-                        .and_then(|e| e.properties.get(&key_str))
-                        .map_or(0, |value| {
-                            Self::estimate_property_entry_bytes(&key_str, value)
-                        });
-
-                    self.mutate_heap(|heap| {
-                        // Remove from entries
-                        if let Some(entries_obj) = heap.get_mut(entries_index) {
-                            removed = entries_obj.properties.remove(&key_str).is_some();
-                        }
-
-                        // Update map size if removed
-                        if removed {
-                            if let Some(map_obj) = heap.get_mut(map_index) {
-                                if let Some(Value::Int(size)) = map_obj.properties.get("size") {
-                                    let new_size = size.saturating_sub(1);
-                                    map_obj
-                                        .properties
-                                        .insert("size".to_string(), Value::Int(new_size));
-                                }
-                            }
-                        }
-                    });
-
-                    if removed {
-                        self.estimated_memory_bytes =
-                            self.estimated_memory_bytes.saturating_sub(removed_bytes);
-                        return Ok(Value::Bool(true));
-                    }
-                }
-
-                Ok(Value::Bool(false))
+                Ok(Value::Bool(self.collection_delete(
+                    map_id,
+                    "Map",
+                    "__entries",
+                    &key,
+                )?))
             }
 
             "builtin:SetPrototypeDelete" => {
@@ -45091,72 +45075,9 @@ impl InterpreterCore {
                 }
 
                 let value = self.read_reg(args.start + 1)?;
-
-                // Resolve values_id under an immutable borrow, then do the
-                // mutable removal + size update under separate borrows.
-                let values_id_opt: Option<ObjectId> = self
-                    .heap
-                    .get(set_id.0 as usize)
-                    .and_then(|s| s.properties.get("__values").cloned())
-                    .and_then(|v| match v {
-                        Value::Object(id) => Some(id),
-                        _ => None,
-                    });
-
-                if let Some(values_id) = values_id_opt {
-                    // Use the same value representation as add()
-                    let value_str = match value {
-                        Value::Str(s) => format!("s:{}", s),
-                        Value::Int(i) => format!("n:{}", i),
-                        Value::Float(f) => format!("n:{}", f.inner()),
-                        Value::Bool(b) => format!("b:{}", b),
-                        Value::Null => "null".to_string(),
-                        Value::Undefined => "undefined".to_string(),
-                        Value::Object(id) => format!("o:{}", id.0),
-                        _ => "other".to_string(),
-                    };
-
-                    let values_index = values_id.0 as usize;
-                    let set_index = set_id.0 as usize;
-                    let mut removed = false;
-
-                    // Incremental memory accounting (bd-s8u37): release the
-                    // removed entry's bytes (removal only shrinks).
-                    let removed_bytes = self
-                        .heap
-                        .get(values_index)
-                        .and_then(|v| v.properties.get(&value_str))
-                        .map_or(0, |value| {
-                            Self::estimate_property_entry_bytes(&value_str, value)
-                        });
-
-                    self.mutate_heap(|heap| {
-                        // Remove from values
-                        if let Some(values_obj) = heap.get_mut(values_index) {
-                            removed = values_obj.properties.remove(&value_str).is_some();
-                        }
-
-                        // Update set size if removed
-                        if removed {
-                            if let Some(set_obj) = heap.get_mut(set_index) {
-                                if let Some(Value::Int(size)) = set_obj.properties.get("size") {
-                                    let new_size = size.saturating_sub(1);
-                                    set_obj
-                                        .properties
-                                        .insert("size".to_string(), Value::Int(new_size));
-                                }
-                            }
-                        }
-                    });
-
-                    if removed {
-                        self.estimated_memory_bytes =
-                            self.estimated_memory_bytes.saturating_sub(removed_bytes);
-                        return Ok(Value::Bool(true));
-                    }
-                }
-
-                Ok(Value::Bool(false))
+                Ok(Value::Bool(
+                    self.collection_delete(set_id, "Set", "__values", &value)?,
+                ))
             }
 
             "builtin:SetPrototypeClear" => {
@@ -45177,60 +45098,7 @@ impl InterpreterCore {
                     return Ok(Value::Undefined);
                 }
 
-                // Clear all values from the set. Resolve values_id under an
-                // immutable borrow first, then clear + zero size under
-                // separate mutable borrows.
-                let values_id_opt: Option<ObjectId> = self
-                    .heap
-                    .get(set_id.0 as usize)
-                    .and_then(|s| s.properties.get("__values").cloned())
-                    .and_then(|v| match v {
-                        Value::Object(id) => Some(id),
-                        _ => None,
-                    });
-
-                let set_index = set_id.0 as usize;
-
-                // Incremental memory accounting (bd-s8u37): clearing the
-                // backing storage releases every entry's bytes (the estimate
-                // would otherwise stay permanently inflated). The size reset
-                // overwrites Int -> Int (zero delta) or creates a new entry.
-                let removed_bytes = values_id_opt
-                    .and_then(|values_id| self.heap.get(values_id.0 as usize))
-                    .map_or(0, |values_obj| {
-                        values_obj
-                            .properties
-                            .iter()
-                            .map(|(k, v)| Self::estimate_property_entry_bytes(k, v))
-                            .sum::<u64>()
-                    });
-                let previous_size_bytes = self
-                    .heap
-                    .get(set_index)
-                    .and_then(|s| s.properties.get("size"))
-                    .map_or(0, |existing| {
-                        Self::estimate_property_entry_bytes("size", existing)
-                    });
-                let new_size_bytes = Self::estimate_property_entry_bytes("size", &Value::Int(0));
-                self.apply_memory_component_delta(
-                    removed_bytes.saturating_add(previous_size_bytes),
-                    new_size_bytes,
-                )?;
-                self.mutate_heap(|heap| {
-                    // Clear values if exists
-                    if let Some(values_id) = values_id_opt {
-                        if let Some(values_obj) = heap.get_mut(values_id.0 as usize) {
-                            values_obj.properties.clear();
-                        }
-                    }
-
-                    // Reset size to 0
-                    if let Some(set_obj) = heap.get_mut(set_index) {
-                        set_obj.properties.insert("size".to_string(), Value::Int(0));
-                    }
-                });
-
-                Ok(Value::Undefined)
+                self.collection_clear(set_id, "Set", "__values")
             }
 
             "builtin:ArrayPrototypeLastIndexOf" => {
@@ -50305,6 +50173,20 @@ impl InterpreterCore {
     }
 
     fn estimate_value_bytes(value: &Value) -> u64 {
+        // Keep the overwhelmingly common non-accessor path allocation-free.
+        // Only accessor graphs need the iterative worklist/memo machinery
+        // below; constructing it for every integer/object/function property
+        // made exact-carrier preflight allocate before its own peak gate.
+        match value {
+            Value::BigInt(digits) => return Self::estimate_string_bytes(digits),
+            Value::Str(text) => return Self::estimate_js_string_bytes(text),
+            Value::BuiltinFunction(builtin) => {
+                return Self::estimate_string_bytes(&builtin.module_specifier);
+            }
+            Value::Accessor { .. } => {}
+            _ => return 0,
+        }
+
         // Accessors form an immutable `Arc<Value>` graph. Walk that graph
         // iteratively so an embedder-supplied chain cannot exhaust the host
         // stack, and memoize each shared node so a compact diamond/DAG cannot
@@ -50374,6 +50256,34 @@ impl InterpreterCore {
             // OrderedStringMap owns a second key for its ES-order
             // index/vector spine in addition to the lookup-map key.
             .saturating_add(Self::estimate_string_bytes(key))
+    }
+
+    /// Estimate the complete property carrier, including exact-key order
+    /// sidecars activated only after a non-well-formed key is inserted.
+    fn estimate_ordered_property_map_bytes(properties: &OrderedStringMap<Value>) -> u64 {
+        let exact_order_is_active = properties.exact_len() != properties.len();
+        Self::saturating_sum(properties.well_formed_data_entries().map(|(key, value)| {
+            let owned_key_copies =
+                if exact_order_is_active && Self::canonical_array_index_key(key).is_none() {
+                    // Lookup key + legacy insertion order + exact order + the
+                    // frozen core-baseline chronology embedded in this carrier.
+                    4
+                } else {
+                    // Lookup key + legacy numeric/string order spine.
+                    2
+                };
+            MEMORY_ESTIMATE_MAP_ENTRY_BYTES
+                .saturating_add(Self::estimate_string_bytes(key).saturating_mul(owned_key_copies))
+                .saturating_add(Self::estimate_value_bytes(value))
+        }))
+        .saturating_add(Self::saturating_sum(
+            properties.exact_only_data_entries().map(|(key, value)| {
+                MEMORY_ESTIMATE_MAP_ENTRY_BYTES
+                    // Exact lookup key + exact order + baseline chronology.
+                    .saturating_add(Self::estimate_js_string_bytes(key).saturating_mul(3))
+                    .saturating_add(Self::estimate_value_bytes(value))
+            }),
+        ))
     }
 
     fn estimate_event_listener_record_bytes(event: &str, record: &EventListenerRecord) -> u64 {
@@ -51167,12 +51077,7 @@ impl InterpreterCore {
     }
 
     fn estimate_heap_object_bytes(object: &HeapObject) -> u64 {
-        let properties = Self::saturating_sum(
-            object
-                .properties
-                .iter()
-                .map(|(key, value)| Self::estimate_property_entry_bytes(key, value)),
-        );
+        let properties = Self::estimate_ordered_property_map_bytes(&object.properties);
         let array_buffer_bytes = object
             .array_buffer
             .as_ref()
@@ -52497,6 +52402,150 @@ impl InterpreterCore {
         }
     }
 
+    fn set_object_runtime_property(
+        &mut self,
+        object_id: ObjectId,
+        key: RuntimePropertyKey,
+        value: Value,
+    ) -> Result<(), InterpreterError> {
+        let key = key.into_string();
+        let has_exact_only_properties = self
+            .heap
+            .get(object_id.0 as usize)
+            .ok_or(InterpreterError::ObjectNotFound { id: object_id.0 })?
+            .properties
+            .exact_len()
+            != self.heap[object_id.0 as usize].properties.len();
+        if let Some(key) = key.as_str()
+            && !has_exact_only_properties
+        {
+            return self.set_object_property(object_id, key.to_string(), value);
+        }
+        self.set_object_projected_property(object_id, key, value)
+    }
+
+    /// Clear a descriptor-as-value property carrier without allocating a
+    /// replacement order spine. Internal collection backing objects use this
+    /// path so an exact-only guest key cannot be omitted from release
+    /// accounting or leave stale exact metadata behind.
+    fn clear_object_properties(&mut self, object_id: ObjectId) -> Result<(), InterpreterError> {
+        let heap_index = object_id.0 as usize;
+        let object = self
+            .heap
+            .get(heap_index)
+            .ok_or(InterpreterError::ObjectNotFound { id: object_id.0 })?;
+        if object.is_frozen {
+            return Err(InterpreterError::TypeError {
+                expected: "mutable object".to_string(),
+                got: "frozen object".to_string(),
+            });
+        }
+        let released_bytes = Self::estimate_ordered_property_map_bytes(&object.properties);
+        self.mutate_heap(|heap| {
+            heap[heap_index].properties = OrderedStringMap::new();
+        });
+        self.estimated_memory_bytes = self.estimated_memory_bytes.saturating_sub(released_bytes);
+        self.gc_write_barrier(object_id);
+        Ok(())
+    }
+
+    fn set_object_projected_property(
+        &mut self,
+        object_id: ObjectId,
+        key: JsString,
+        value: Value,
+    ) -> Result<(), InterpreterError> {
+        let heap_index = object_id.0 as usize;
+        let object = self
+            .heap
+            .get(heap_index)
+            .ok_or(InterpreterError::ObjectNotFound { id: object_id.0 })?;
+        if object.is_frozen {
+            return Err(InterpreterError::TypeError {
+                expected: "mutable object".to_string(),
+                got: "frozen object".to_string(),
+            });
+        }
+
+        let array_length_assignment = if object.is_array && key.as_str() == Some("length") {
+            Some(Self::normalize_array_length_assignment(&value)?)
+        } else {
+            None
+        };
+        let deleted_index_keys = if let Some(new_length) = array_length_assignment {
+            let new_length = new_length as u64;
+            object
+                .properties
+                .keys()
+                .filter(|candidate| {
+                    Self::canonical_array_index_key(candidate)
+                        .is_some_and(|index| u64::from(index) >= new_length)
+                })
+                .cloned()
+                .collect::<Vec<_>>()
+        } else {
+            Vec::new()
+        };
+        let projected_value = array_length_assignment.map_or(value, Value::Int);
+        let mut projected_cached_dense_length = object.cached_dense_length;
+        if object.is_array
+            && key.as_str() != Some("length")
+            && projected_cached_dense_length.is_some()
+        {
+            if let Some(index) = key.as_str().and_then(Self::canonical_array_index_key) {
+                if index > projected_cached_dense_length.unwrap_or(0) {
+                    projected_cached_dense_length = None;
+                }
+            } else {
+                projected_cached_dense_length = None;
+            }
+        }
+        if let Some(new_length) = array_length_assignment {
+            projected_cached_dense_length = u32::try_from(new_length).ok();
+        }
+
+        // Exact-only keys are rare. Projecting the private carrier first lets
+        // the budget gate include activation of every hidden order sidecar and
+        // reject without any heap or seed-surface mutation.
+        let previous_property_bytes = Self::estimate_ordered_property_map_bytes(&object.properties);
+        let temporary_bytes = self
+            .estimated_memory_bytes
+            .saturating_add(previous_property_bytes);
+        if Self::memory_request_exceeds_budget(temporary_bytes, self.config.max_total_memory_bytes)
+        {
+            return Err(self.memory_budget_error(temporary_bytes, self.heap_object_count_u32()));
+        }
+        let mut projected_properties = object.properties.clone();
+        for deleted_key in &deleted_index_keys {
+            projected_properties.remove(deleted_key);
+        }
+        projected_properties.insert_exact(key, projected_value);
+        let next_property_bytes = Self::estimate_ordered_property_map_bytes(&projected_properties);
+        let projected_temporary_bytes = self
+            .estimated_memory_bytes
+            .saturating_add(next_property_bytes);
+        if Self::memory_request_exceeds_budget(
+            projected_temporary_bytes,
+            self.config.max_total_memory_bytes,
+        ) {
+            return Err(
+                self.memory_budget_error(projected_temporary_bytes, self.heap_object_count_u32())
+            );
+        }
+        self.apply_memory_component_delta(previous_property_bytes, next_property_bytes)?;
+
+        self.mutate_heap(|heap| {
+            let object = &mut heap[heap_index];
+            object.properties = projected_properties;
+            object.cached_dense_length = projected_cached_dense_length;
+        });
+        for deleted_key in &deleted_index_keys {
+            self.mark_deleted_for_in_iterators(object_id, deleted_key);
+        }
+        self.gc_write_barrier(object_id);
+        Ok(())
+    }
+
     pub fn set_object_property(
         &mut self,
         object_id: ObjectId,
@@ -52504,6 +52553,16 @@ impl InterpreterCore {
         value: Value,
     ) -> Result<(), InterpreterError> {
         let heap_index = object_id.0 as usize;
+        let has_exact_only_properties = self
+            .heap
+            .get(heap_index)
+            .ok_or(InterpreterError::ObjectNotFound { id: object_id.0 })?
+            .properties
+            .exact_len()
+            != self.heap[heap_index].properties.len();
+        if has_exact_only_properties {
+            return self.set_object_projected_property(object_id, JsString::from(key), value);
+        }
         let object = self
             .heap
             .get(heap_index)
@@ -52600,6 +52659,16 @@ impl InterpreterCore {
         key: &str,
     ) -> Result<bool, InterpreterError> {
         let heap_index = object_id.0 as usize;
+        let has_exact_only_properties = self
+            .heap
+            .get(heap_index)
+            .ok_or(InterpreterError::ObjectNotFound { id: object_id.0 })?
+            .properties
+            .exact_len()
+            != self.heap[heap_index].properties.len();
+        if has_exact_only_properties {
+            return self.remove_object_carrier_property(object_id, &JsString::from(key));
+        }
 
         // Check if object exists and is not frozen
         if let Some(object) = self.heap.get(heap_index) {
@@ -52632,6 +52701,64 @@ impl InterpreterCore {
             self.estimated_memory_bytes = self.estimated_memory_bytes.saturating_sub(removed_bytes);
         }
         Ok(removed.is_some())
+    }
+
+    fn remove_object_runtime_property(
+        &mut self,
+        object_id: ObjectId,
+        key: &RuntimePropertyKey,
+    ) -> Result<bool, InterpreterError> {
+        let has_exact_only_properties = self
+            .heap
+            .get(object_id.0 as usize)
+            .ok_or(InterpreterError::ObjectNotFound { id: object_id.0 })?
+            .properties
+            .exact_len()
+            != self.heap[object_id.0 as usize].properties.len();
+        if let Some(key) = key.as_str()
+            && !has_exact_only_properties
+        {
+            return self.remove_object_property(object_id, key);
+        }
+        self.remove_object_carrier_property(object_id, key.string())
+    }
+
+    fn remove_object_carrier_property(
+        &mut self,
+        object_id: ObjectId,
+        key: &JsString,
+    ) -> Result<bool, InterpreterError> {
+        let heap_index = object_id.0 as usize;
+        let object = self
+            .heap
+            .get(heap_index)
+            .ok_or(InterpreterError::ObjectNotFound { id: object_id.0 })?;
+        if object.is_frozen {
+            return Ok(false);
+        }
+        if !object.properties.contains_exact_key(key) {
+            return Ok(false);
+        }
+        let previous_property_bytes = Self::estimate_ordered_property_map_bytes(&object.properties);
+        let key_is_array_index = key.as_str().is_some_and(|key| key.parse::<u32>().is_ok());
+        self.mutate_heap(|heap| {
+            let object = &mut heap[heap_index];
+            object.properties.remove_exact(key);
+            if object.properties.exact_len() == object.properties.len() {
+                // Engine accessors are ordinary map values, so once the final
+                // exact-only key is gone we can normalize away carrier metadata
+                // that exists solely for the core baseline's frozen struct shape.
+                let normalized = object.properties.normalize_data_only_exact_sidecars();
+                debug_assert!(normalized);
+            }
+            if object.is_array && object.cached_dense_length.is_some() && key_is_array_index {
+                object.cached_dense_length = None;
+            }
+        });
+        let next_property_bytes =
+            Self::estimate_ordered_property_map_bytes(&self.heap[heap_index].properties);
+        self.apply_memory_component_delta(previous_property_bytes, next_property_bytes)?;
+        Ok(true)
     }
 
     fn ensure_function_prototype(&mut self, func_idx: u32) -> Result<ObjectId, InterpreterError> {
@@ -72660,6 +72787,92 @@ mod tests {
     }
 
     #[test]
+    fn exact_keys_respect_legacy_hook_boundary_bd_b12xs_5() {
+        fn assert_exact_instruction_rejected(instruction: Ir3Instruction) {
+            let hook = Arc::new(RecordingHook::allow_all());
+            let mut core = InterpreterCore::new(test_quickjs_config(), "exact-hook-boundary");
+            prime_entry_module_record(&mut core);
+            let object = core
+                .alloc_object_with_prototype(None)
+                .expect("object allocation should succeed");
+            core.set_reg(1, Value::Object(object));
+            core.set_reg(2, Value::Str(JsString::from_code_units(&[0xD800])));
+            core.set_reg(3, Value::Int(8));
+            core.set_reg(4, Value::Function(0));
+            core.set_hook(hook.clone());
+            let heap_before =
+                serde_json::to_string(&*core.heap).expect("hook-boundary heap should serialize");
+            let memory_before = core.estimated_memory_bytes();
+
+            let error = core
+                .run_loop(&test_module(vec![instruction]))
+                .expect_err("legacy hook must reject a non-well-formed key");
+            assert!(matches!(error, InterpreterError::TypeError { .. }));
+            assert!(
+                hook.records().is_empty(),
+                "representability rejection must not invoke the legacy callback"
+            );
+            assert_eq!(
+                serde_json::to_string(&*core.heap)
+                    .expect("hook-boundary heap should serialize after rejection"),
+                heap_before
+            );
+            assert_eq!(core.estimated_memory_bytes(), memory_before);
+        }
+
+        assert_exact_instruction_rejected(Ir3Instruction::GetProperty {
+            obj: 1,
+            key: 2,
+            dst: 0,
+        });
+        assert_exact_instruction_rejected(Ir3Instruction::SetProperty {
+            obj: 1,
+            key: 2,
+            val: 3,
+        });
+        assert_exact_instruction_rejected(Ir3Instruction::DeleteProperty {
+            obj: 1,
+            key: 2,
+            dst: 0,
+        });
+        assert_exact_instruction_rejected(Ir3Instruction::InOp {
+            dst: 0,
+            lhs: 2,
+            rhs: 1,
+        });
+        assert_exact_instruction_rejected(Ir3Instruction::DefineAccessor {
+            obj: 1,
+            key: 2,
+            func: 4,
+            kind: AccessorKind::Get,
+        });
+
+        let hook = Arc::new(RecordingHook::allow_all());
+        let mut core = InterpreterCore::new(test_quickjs_config(), "well-formed-hook");
+        prime_entry_module_record(&mut core);
+        let object = core
+            .alloc_object_with_prototype(None)
+            .expect("object allocation should succeed");
+        core.set_object_property(object, "\u{FFFD}".to_string(), Value::Int(0xFFFD))
+            .expect("well-formed replacement property should fit");
+        core.set_reg(1, Value::Object(object));
+        core.set_reg(2, Value::str("\u{FFFD}"));
+        core.set_hook(hook.clone());
+        let result = core
+            .run_loop(&test_module(vec![Ir3Instruction::GetProperty {
+                obj: 1,
+                key: 2,
+                dst: 0,
+            }]))
+            .expect("well-formed hook key should proceed");
+        assert_eq!(result, Value::Int(0xFFFD));
+        assert!(matches!(
+            hook.records().as_slice(),
+            [HookRecord::Property { key, .. }] if key == "\u{FFFD}"
+        ));
+    }
+
+    #[test]
     fn interpreter_hook_called_on_call() {
         let hook = Arc::new(RecordingHook::allow_all());
         let config = test_quickjs_config();
@@ -73907,6 +74120,67 @@ mod tests {
     }
 
     #[test]
+    fn materialized_seed_restores_exact_identity_and_order_bd_b12xs_5() {
+        let mut core = quickjs_test_core();
+        let object = core
+            .alloc_object_with_prototype(None)
+            .expect("object allocation should succeed");
+        let d800 = JsString::from_code_units(&[0xD800]);
+        let d801 = JsString::from_code_units(&[0xD801]);
+        let replacement = JsString::from("\u{FFFD}");
+        for (key, value) in [
+            (d800.clone(), Value::Int(8)),
+            (d801.clone(), Value::Int(9)),
+            (replacement.clone(), Value::Int(0xFFFD)),
+        ] {
+            core.set_object_runtime_property(object, RuntimePropertyKey::String(key), value)
+                .expect("seed property should fit");
+        }
+        let initial_order = core.heap[object.0 as usize].properties.exact_keys();
+        let seed = core.capture_execution_seed();
+
+        core.set_object_runtime_property(
+            object,
+            RuntimePropertyKey::String(d800.clone()),
+            Value::Int(80),
+        )
+        .expect("seed mutation should fit");
+        assert!(
+            core.remove_object_runtime_property(object, &RuntimePropertyKey::String(d801.clone()),)
+                .expect("seed deletion should succeed")
+        );
+        core.set_object_runtime_property(
+            object,
+            RuntimePropertyKey::String(d801.clone()),
+            Value::Int(81),
+        )
+        .expect("seed reinsertion should fit");
+        assert_ne!(
+            core.heap[object.0 as usize].properties.exact_keys(),
+            initial_order
+        );
+
+        let previous_register_bytes = core.registers_memory_bytes();
+        let previous_heap_bytes = core.heap_memory_bytes();
+        core.reset_execution_state_from_seed(&seed)
+            .expect("materialized exact heap seed should restore");
+        core.apply_register_heap_memory_delta(previous_register_bytes, previous_heap_bytes)
+            .expect("restored exact heap should fit its original memory budget");
+        let properties = &core.heap[object.0 as usize].properties;
+        assert_eq!(properties.exact_keys(), initial_order);
+        assert_eq!(properties.get_exact(&d800), Some(&Value::Int(8)));
+        assert_eq!(properties.get_exact(&d801), Some(&Value::Int(9)));
+        assert_eq!(
+            properties.get_exact(&replacement),
+            Some(&Value::Int(0xFFFD))
+        );
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+    }
+
+    #[test]
     fn stack_overflow() {
         // Recursive function that calls itself.
         let m = test_module_with_functions(
@@ -75106,6 +75380,774 @@ mod tests {
         assert!(
             !core.heap[oid.0 as usize].properties.contains_key(&key),
             "rejected property write must not mutate the object"
+        );
+    }
+
+    #[test]
+    fn exact_dynamic_string_keys_remain_distinct_and_inherit_bd_b12xs_5() {
+        let mut core = quickjs_test_core();
+        let prototype = core
+            .alloc_object_with_prototype(None)
+            .expect("prototype allocation should succeed");
+        let object = core
+            .alloc_object_with_prototype(Some(prototype))
+            .expect("object allocation should succeed");
+        let d800 = JsString::from_code_units(&[0xD800]);
+        let d801 = JsString::from_code_units(&[0xD801]);
+        let replacement = JsString::from("\u{FFFD}");
+        core.set_object_runtime_property(
+            prototype,
+            RuntimePropertyKey::String(d801.clone()),
+            Value::Int(80),
+        )
+        .expect("exact prototype property should fit");
+
+        core.set_reg(1, Value::Object(object));
+        core.set_reg(2, Value::Str(d800.clone()));
+        core.set_reg(3, Value::Int(8));
+        core.set_reg(4, Value::Str(d801.clone()));
+        core.set_reg(5, Value::Int(9));
+        core.set_reg(6, Value::Str(replacement.clone()));
+        core.set_reg(7, Value::Int(0xFFFD));
+        core.execute(&test_module(vec![
+            Ir3Instruction::SetProperty {
+                obj: 1,
+                key: 2,
+                val: 3,
+            },
+            Ir3Instruction::SetProperty {
+                obj: 1,
+                key: 4,
+                val: 5,
+            },
+            Ir3Instruction::SetProperty {
+                obj: 1,
+                key: 6,
+                val: 7,
+            },
+            Ir3Instruction::GetProperty {
+                obj: 1,
+                key: 2,
+                dst: 8,
+            },
+            Ir3Instruction::GetProperty {
+                obj: 1,
+                key: 4,
+                dst: 9,
+            },
+            Ir3Instruction::GetProperty {
+                obj: 1,
+                key: 6,
+                dst: 10,
+            },
+            Ir3Instruction::DeleteProperty {
+                obj: 1,
+                key: 4,
+                dst: 11,
+            },
+            Ir3Instruction::GetProperty {
+                obj: 1,
+                key: 4,
+                dst: 12,
+            },
+            Ir3Instruction::InOp {
+                dst: 13,
+                lhs: 4,
+                rhs: 1,
+            },
+            Ir3Instruction::DeleteProperty {
+                obj: 1,
+                key: 2,
+                dst: 14,
+            },
+            Ir3Instruction::InOp {
+                dst: 15,
+                lhs: 2,
+                rhs: 1,
+            },
+            Ir3Instruction::Halt,
+        ]))
+        .expect("exact dynamic property program should execute");
+
+        assert_eq!(core.registers[8], Value::Int(8));
+        assert_eq!(core.registers[9], Value::Int(9));
+        assert_eq!(core.registers[10], Value::Int(0xFFFD));
+        assert_eq!(core.registers[11], Value::Bool(true));
+        assert_eq!(core.registers[12], Value::Int(80));
+        assert_eq!(core.registers[13], Value::Bool(true));
+        assert_eq!(core.registers[14], Value::Bool(true));
+        assert_eq!(core.registers[15], Value::Bool(false));
+        assert_eq!(
+            core.heap[object.0 as usize]
+                .properties
+                .get_exact(&replacement),
+            Some(&Value::Int(0xFFFD))
+        );
+        assert_eq!(
+            core.heap[prototype.0 as usize].properties.get_exact(&d801),
+            Some(&Value::Int(80))
+        );
+    }
+
+    #[test]
+    fn exact_dynamic_key_executes_accessor_getter_bd_b12xs_5() {
+        let module = test_module_with_functions(
+            vec![
+                Ir3Instruction::GetProperty {
+                    obj: 5,
+                    key: 6,
+                    dst: 7,
+                },
+                Ir3Instruction::Return { value: 7 },
+                Ir3Instruction::LoadInt { dst: 0, value: 42 },
+                Ir3Instruction::Return { value: 0 },
+            ],
+            vec![Ir3FunctionDesc {
+                entry: 2,
+                arity: 0,
+                frame_size: 1,
+                name: Some("exact_getter".to_string()),
+                is_generator: false,
+                rest_param_index: None,
+            }],
+        );
+        let mut core = quickjs_test_core();
+        let object = core
+            .alloc_object_with_prototype(None)
+            .expect("object allocation should succeed");
+        let exact = JsString::from_code_units(&[0xD800]);
+        core.set_object_runtime_property(
+            object,
+            RuntimePropertyKey::String(exact.clone()),
+            Value::Int(8),
+        )
+        .expect("exact data property should fit");
+        let order_before = core.heap[object.0 as usize].properties.exact_keys();
+        core.define_accessor_property(
+            object,
+            RuntimePropertyKey::String(exact.clone()),
+            Value::Function(0),
+            AccessorKind::Get,
+        )
+        .expect("data-to-accessor conversion should fit");
+        assert_eq!(
+            core.heap[object.0 as usize].properties.exact_keys(),
+            order_before,
+            "data-to-accessor conversion must preserve creation order"
+        );
+        core.mutate_registers(|registers| {
+            registers[5] = Value::Object(object);
+            registers[6] = Value::Str(exact);
+        });
+
+        assert_eq!(
+            core.run_loop(&module)
+                .expect("exact getter should execute through GetProperty"),
+            Value::Int(42)
+        );
+    }
+
+    #[test]
+    fn exact_proxy_get_trap_receives_exact_key_bd_b12xs_5() {
+        let module = test_module_with_functions(
+            vec![
+                Ir3Instruction::GetProperty {
+                    obj: 5,
+                    key: 6,
+                    dst: 7,
+                },
+                Ir3Instruction::Return { value: 7 },
+                Ir3Instruction::Return { value: 1 },
+            ],
+            vec![Ir3FunctionDesc {
+                entry: 2,
+                arity: 3,
+                frame_size: 3,
+                name: Some("exact_proxy_get_trap".to_string()),
+                is_generator: false,
+                rest_param_index: None,
+            }],
+        );
+        let mut core = quickjs_test_core();
+        let target = core
+            .alloc_object_with_prototype(None)
+            .expect("target allocation should succeed");
+        let handler = core
+            .alloc_object_with_prototype(None)
+            .expect("handler allocation should succeed");
+        core.set_object_property(handler, "get".to_string(), Value::Function(0))
+            .expect("handler get trap should fit");
+        core.mutate_registers(|registers| {
+            registers[0] = Value::Object(target);
+            registers[1] = Value::Object(handler);
+        });
+        let proxy = core
+            .dispatch_builtin_hostcall("builtin:Proxy", RegRange { start: 0, count: 2 }, None)
+            .expect("Proxy constructor should allocate proxy");
+        let Value::Object(proxy_id) = proxy else {
+            panic!("Proxy constructor should return an object");
+        };
+        let exact = JsString::from_code_units(&[0xD800]);
+        core.mutate_registers(|registers| {
+            registers[5] = Value::Object(proxy_id);
+            registers[6] = Value::Str(exact.clone());
+        });
+
+        assert_eq!(
+            core.run_loop(&module)
+                .expect("Proxy get trap should receive the exact property key"),
+            Value::Str(exact)
+        );
+    }
+
+    #[test]
+    fn callback_mini_interpreters_preserve_exact_dynamic_keys_bd_b12xs_5() {
+        let mut core = quickjs_test_core();
+        let object = core
+            .alloc_object_with_prototype(None)
+            .expect("object allocation should succeed");
+        let keys = [
+            JsString::from_code_units(&[0xD800]),
+            JsString::from_code_units(&[0xD801]),
+            JsString::from("\u{FFFD}"),
+        ];
+        for (index, key) in keys.iter().enumerate() {
+            core.simple_callback_set_property(
+                Value::Object(object),
+                &Value::Str(key.clone()),
+                Value::Int(index as i64),
+            )
+            .expect("callback property write should preserve the exact key");
+        }
+        for (index, key) in keys.iter().enumerate() {
+            assert_eq!(
+                core.simple_callback_get_property(Value::Object(object), &Value::Str(key.clone()),)
+                    .expect("callback property read should preserve the exact key"),
+                Value::Int(index as i64)
+            );
+        }
+    }
+
+    #[test]
+    fn runtime_property_diagnostics_are_injective_bd_b12xs_5() {
+        let ordinary = RuntimePropertyKey::String(JsString::from("answer"));
+        let reserved_literal = RuntimePropertyKey::String(JsString::from("~pk~x:D800"));
+        let d800 = RuntimePropertyKey::String(JsString::from_code_units(&[0xD800]));
+        let d801 = RuntimePropertyKey::String(JsString::from_code_units(&[0xD801]));
+
+        assert_eq!(ordinary.diagnostic(), "answer");
+        assert_ne!(d800.diagnostic(), d801.diagnostic());
+        assert_ne!(d800.diagnostic(), reserved_literal.diagnostic());
+        assert!(reserved_literal.diagnostic().starts_with("~pk~u:"));
+    }
+
+    #[test]
+    fn exact_import_meta_key_is_rejected_without_mutation_bd_b12xs_5() {
+        let mut core = quickjs_test_core();
+        let Value::Object(import_meta) = core
+            .alloc_import_meta_object()
+            .expect("import.meta allocation should succeed")
+        else {
+            panic!("import.meta allocation should return an object");
+        };
+        let exact_key = RuntimePropertyKey::String(JsString::from_code_units(&[0xD800]));
+        let heap_before = serde_json::to_string(&*core.heap)
+            .expect("import.meta heap should serialize before rejection");
+        let memory_before = core.estimated_memory_bytes();
+
+        let get_error = core
+            .proxy_aware_get_runtime_property(
+                None,
+                import_meta,
+                &exact_key,
+                Value::Object(import_meta),
+                0,
+            )
+            .expect_err("exact-only import.meta reads must stay outside generic heap lookup");
+        assert!(matches!(get_error, InterpreterError::TypeError { .. }));
+        let set_error = core
+            .proxy_aware_set_runtime_property(
+                None,
+                import_meta,
+                &exact_key,
+                Value::Int(8),
+                Value::Object(import_meta),
+                0,
+            )
+            .expect_err("exact-only import.meta writes must stay read-only");
+        assert!(matches!(set_error, InterpreterError::TypeError { .. }));
+        let accessor_error = core
+            .define_accessor_property(
+                import_meta,
+                exact_key,
+                Value::Function(0),
+                AccessorKind::Get,
+            )
+            .expect_err("exact-only import.meta accessors must stay read-only");
+        assert!(matches!(accessor_error, InterpreterError::TypeError { .. }));
+        assert_eq!(
+            serde_json::to_string(&*core.heap)
+                .expect("import.meta heap should serialize after rejection"),
+            heap_before
+        );
+        assert_eq!(core.estimated_memory_bytes(), memory_before);
+    }
+
+    #[test]
+    fn exact_property_views_accessors_order_and_wire_bd_b12xs_5() {
+        let mut core = quickjs_test_core();
+        let object = core
+            .alloc_object_with_prototype(None)
+            .expect("object allocation should succeed");
+        let d800 = JsString::from_code_units(&[0xD800]);
+        let d801 = JsString::from_code_units(&[0xD801]);
+
+        core.set_object_property(object, "2".to_string(), Value::Int(2))
+            .expect("numeric property should fit");
+        core.set_object_property(object, "ordinary".to_string(), Value::Int(1))
+            .expect("ordinary property should fit");
+        core.set_object_runtime_property(
+            object,
+            RuntimePropertyKey::String(d800.clone()),
+            Value::Int(8),
+        )
+        .expect("first exact property should fit");
+        core.define_accessor_property(
+            object,
+            RuntimePropertyKey::String(d801.clone()),
+            Value::Function(1),
+            AccessorKind::Get,
+        )
+        .expect("exact getter should fit");
+        core.define_accessor_property(
+            object,
+            RuntimePropertyKey::String(d801.clone()),
+            Value::Function(2),
+            AccessorKind::Set,
+        )
+        .expect("exact setter should merge");
+
+        let properties = &core.heap[object.0 as usize].properties;
+        assert_eq!(properties.len(), 2, "compatibility length hides exact keys");
+        assert_eq!(
+            properties.keys().cloned().collect::<Vec<_>>(),
+            vec!["2".to_string(), "ordinary".to_string()]
+        );
+        assert_eq!(
+            properties.exact_keys(),
+            vec![
+                JsString::from("2"),
+                JsString::from("ordinary"),
+                d800.clone(),
+                d801.clone(),
+            ]
+        );
+        assert_eq!(
+            properties.get_exact(&d801),
+            Some(&Value::Accessor {
+                get: Some(Arc::new(Value::Function(1))),
+                set: Some(Arc::new(Value::Function(2))),
+            })
+        );
+
+        let wire = serde_json::to_string(&core.heap[object.0 as usize])
+            .expect("exact heap object should serialize");
+        assert!(wire.contains("$wtf16"));
+        assert!(!wire.contains("accessors"));
+        let restored: HeapObject =
+            serde_json::from_str(&wire).expect("exact heap object should deserialize");
+        assert_eq!(restored, core.heap[object.0 as usize]);
+
+        core.set_object_runtime_property(
+            object,
+            RuntimePropertyKey::String(d801.clone()),
+            Value::Int(81),
+        )
+        .expect("accessor-to-data conversion should fit");
+        assert_eq!(
+            core.heap[object.0 as usize].properties.exact_keys(),
+            vec![
+                JsString::from("2"),
+                JsString::from("ordinary"),
+                d800.clone(),
+                d801.clone(),
+            ],
+            "replacement must retain exact creation position"
+        );
+        assert!(
+            core.remove_object_runtime_property(object, &RuntimePropertyKey::String(d800.clone()))
+                .expect("exact removal should succeed")
+        );
+        core.set_object_runtime_property(
+            object,
+            RuntimePropertyKey::String(d800.clone()),
+            Value::Int(18),
+        )
+        .expect("exact reinsertion should fit");
+        assert_eq!(
+            core.heap[object.0 as usize].properties.exact_keys(),
+            vec![
+                JsString::from("2"),
+                JsString::from("ordinary"),
+                d801.clone(),
+                d800.clone(),
+            ],
+            "delete then recreate must append an ordinary exact key"
+        );
+
+        let duplicate_wire =
+            serde_json::to_string(&vec![(d800.clone(), Value::Int(1)), (d800, Value::Int(2))])
+                .expect("duplicate fixture should serialize");
+        assert!(serde_json::from_str::<OrderedStringMap<Value>>(&duplicate_wire).is_err());
+
+        let mut legacy = HeapObject::new();
+        legacy
+            .properties
+            .insert("answer".to_string(), Value::Int(42));
+        assert_eq!(
+            serde_json::to_value(&legacy).expect("legacy heap object should serialize")["properties"],
+            serde_json::json!({"answer": {"Int": 42}}),
+            "all-well-formed property wire must remain map-shaped"
+        );
+    }
+
+    #[test]
+    fn exact_property_memory_and_budget_rollback_are_atomic_bd_b12xs_5() {
+        let mut core = quickjs_test_core();
+        let object = core
+            .alloc_object_with_prototype(None)
+            .expect("object allocation should succeed");
+        core.set_object_property(object, "ordinary".to_string(), Value::Int(1))
+            .expect("ordinary setup property should fit");
+        let d800 = JsString::from_code_units(&[0xD800]);
+        let d801 = JsString::from_code_units(&[0xD801]);
+        let before_exact = core.estimated_memory_bytes();
+        core.set_object_runtime_property(
+            object,
+            RuntimePropertyKey::String(d800.clone()),
+            Value::Int(8),
+        )
+        .expect("exact property should fit");
+        assert!(core.estimated_memory_bytes() > before_exact);
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes(),
+            "exact insertion delta must match eager recomputation"
+        );
+        core.set_object_property(object, "after-exact".to_string(), Value::Int(2))
+            .expect("ordinary property after exact activation should fit");
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes(),
+            "ordinary insertion must account both active exact-order sidecars"
+        );
+        assert!(
+            core.remove_object_property(object, "after-exact")
+                .expect("ordinary removal after exact activation should succeed")
+        );
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes(),
+            "ordinary removal must account both active exact-order sidecars"
+        );
+
+        let wire_before = serde_json::to_string(&core.heap[object.0 as usize])
+            .expect("heap object should serialize");
+        let order_before = core.heap[object.0 as usize].properties.exact_keys();
+        let memory_before = core.estimated_memory_bytes();
+        core.config.max_total_memory_bytes = memory_before;
+        let error = core
+            .set_object_runtime_property(
+                object,
+                RuntimePropertyKey::String(d801),
+                Value::str("x".repeat(512)),
+            )
+            .expect_err("oversized exact property must be refused");
+        assert!(matches!(
+            error,
+            InterpreterError::MemoryBudgetExceeded { .. }
+        ));
+        assert_eq!(core.estimated_memory_bytes(), memory_before);
+        assert_eq!(
+            serde_json::to_string(&core.heap[object.0 as usize])
+                .expect("heap object should serialize after refusal"),
+            wire_before
+        );
+        assert_eq!(
+            core.heap[object.0 as usize].properties.exact_keys(),
+            order_before
+        );
+
+        let error = core
+            .define_accessor_property(
+                object,
+                RuntimePropertyKey::String(d800.clone()),
+                Value::str("y".repeat(512)),
+                AccessorKind::Get,
+            )
+            .expect_err("oversized exact descriptor conversion must be refused");
+        assert!(matches!(
+            error,
+            InterpreterError::MemoryBudgetExceeded { .. }
+        ));
+        assert_eq!(core.estimated_memory_bytes(), memory_before);
+        assert_eq!(
+            serde_json::to_string(&core.heap[object.0 as usize])
+                .expect("heap object should serialize after conversion refusal"),
+            wire_before
+        );
+
+        let mut peak_core = quickjs_test_core();
+        let peak_object = peak_core
+            .alloc_object_with_prototype(None)
+            .expect("peak-budget object allocation should succeed");
+        peak_core
+            .set_object_property(peak_object, "ordinary".to_string(), Value::Int(1))
+            .expect("peak-budget ordinary setup should fit");
+        let peak_d800 = JsString::from_code_units(&[0xD800]);
+        peak_core
+            .set_object_runtime_property(
+                peak_object,
+                RuntimePropertyKey::String(peak_d800),
+                Value::Int(8),
+            )
+            .expect("peak-budget exact setup should fit");
+        let peak_d801 = JsString::from_code_units(&[0xD801]);
+        let peak_value = Value::str("z".repeat(256));
+        let previous_map_bytes = InterpreterCore::estimate_ordered_property_map_bytes(
+            &peak_core.heap[peak_object.0 as usize].properties,
+        );
+        let mut projected = peak_core.heap[peak_object.0 as usize].properties.clone();
+        projected.insert_exact(peak_d801.clone(), peak_value.clone());
+        let next_map_bytes = InterpreterCore::estimate_ordered_property_map_bytes(&projected);
+        let retained = peak_core
+            .estimated_memory_bytes()
+            .saturating_sub(previous_map_bytes)
+            .saturating_add(next_map_bytes);
+        let current_clone_peak = peak_core
+            .estimated_memory_bytes()
+            .saturating_add(previous_map_bytes);
+        let projected_peak = peak_core
+            .estimated_memory_bytes()
+            .saturating_add(next_map_bytes);
+        peak_core.config.max_total_memory_bytes = retained.max(current_clone_peak);
+        assert!(peak_core.config.max_total_memory_bytes < projected_peak);
+        let peak_wire_before = serde_json::to_string(&peak_core.heap[peak_object.0 as usize])
+            .expect("peak-budget heap object should serialize");
+        let error = peak_core
+            .set_object_runtime_property(
+                peak_object,
+                RuntimePropertyKey::String(peak_d801),
+                peak_value,
+            )
+            .expect_err("projected clone peak above the ceiling must be refused");
+        assert!(matches!(
+            error,
+            InterpreterError::MemoryBudgetExceeded { .. }
+        ));
+        assert_eq!(
+            serde_json::to_string(&peak_core.heap[peak_object.0 as usize])
+                .expect("peak-budget heap should remain serializable"),
+            peak_wire_before
+        );
+
+        let mut normalized_core = quickjs_test_core();
+        let normalized_object = normalized_core
+            .alloc_object_with_prototype(None)
+            .expect("normalization object allocation should succeed");
+        normalized_core
+            .set_object_property(normalized_object, "ordinary".to_string(), Value::Int(1))
+            .expect("normalization ordinary property should fit");
+        let legacy_wire = serde_json::to_value(&normalized_core.heap[normalized_object.0 as usize])
+            .expect("ordinary-only heap object should serialize");
+        let normalized_exact = JsString::from_code_units(&[0xD800]);
+        normalized_core
+            .set_object_runtime_property(
+                normalized_object,
+                RuntimePropertyKey::String(normalized_exact.clone()),
+                Value::Int(8),
+            )
+            .expect("temporary exact property should fit");
+        assert!(
+            normalized_core
+                .remove_object_runtime_property(
+                    normalized_object,
+                    &RuntimePropertyKey::String(normalized_exact),
+                )
+                .expect("final exact property should be removable")
+        );
+        let normalized_properties = &normalized_core.heap[normalized_object.0 as usize].properties;
+        assert_eq!(
+            normalized_properties.exact_len(),
+            normalized_properties.len()
+        );
+        assert_eq!(
+            serde_json::to_value(&normalized_core.heap[normalized_object.0 as usize])
+                .expect("normalized heap object should serialize"),
+            legacy_wire,
+            "removing the final exact-only key must restore legacy wire shape"
+        );
+        assert_eq!(
+            normalized_core.estimated_memory_bytes(),
+            normalized_core.recompute_estimated_memory_bytes(),
+            "final exact-key removal must leave eager memory accounting exact"
+        );
+    }
+
+    #[test]
+    fn exact_active_empty_array_length_growth_is_memory_exact_bd_b12xs_5() {
+        let mut core = quickjs_test_core();
+        let array = core
+            .alloc_array_with_prototype(None)
+            .expect("empty array allocation should succeed");
+        let exact = JsString::from_code_units(&[0xD800]);
+        core.set_object_runtime_property(array, RuntimePropertyKey::String(exact), Value::Int(8))
+            .expect("exact array property should fit");
+        core.set_object_runtime_property(
+            array,
+            RuntimePropertyKey::String(JsString::from("0")),
+            Value::Int(1),
+        )
+        .expect("first array index should fit");
+        core.maintain_array_index_assignment(array, 0)
+            .expect("first array index should grow length");
+
+        assert_eq!(
+            core.heap[array.0 as usize].properties.get("length"),
+            Some(&Value::Int(1))
+        );
+        assert_eq!(core.heap[array.0 as usize].cached_dense_length, None);
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes(),
+            "exact-active length insertion must account both order sidecars"
+        );
+    }
+
+    #[test]
+    fn exact_active_collection_backing_stays_memory_exact_bd_b12xs_5() {
+        let mut core = quickjs_test_core();
+        let entries = core
+            .alloc_object_with_prototype(None)
+            .expect("Map backing allocation should succeed");
+        let map = core
+            .alloc_object_with_prototype(None)
+            .expect("Map allocation should succeed");
+        core.set_object_property(map, "__type".to_string(), Value::str("Map"))
+            .expect("Map type tag should fit");
+        core.set_object_property(map, "__entries".to_string(), Value::Object(entries))
+            .expect("Map backing link should fit");
+        core.set_object_property(map, "size".to_string(), Value::Int(0))
+            .expect("Map size should fit");
+        let exact = JsString::from_code_units(&[0xD800]);
+        core.set_object_runtime_property(
+            entries,
+            RuntimePropertyKey::String(exact.clone()),
+            Value::Int(8),
+        )
+        .expect("exact backing property should fit");
+
+        core.map_collection_set(map, Value::str("direct"), Value::Int(1))
+            .expect("receiver-aware Map.set should fit");
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+        core.mutate_heap(|heap| heap[entries.0 as usize].is_frozen = true);
+        assert!(
+            !core
+                .collection_delete(map, "Map", "__entries", &Value::str("direct"))
+                .expect("frozen backing deletion should fail closed")
+        );
+        assert_eq!(
+            core.heap[map.0 as usize].properties.get("size"),
+            Some(&Value::Int(1))
+        );
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+        core.mutate_heap(|heap| heap[entries.0 as usize].is_frozen = false);
+        assert!(
+            core.collection_delete(map, "Map", "__entries", &Value::str("direct"))
+                .expect("unfrozen backing deletion should succeed")
+        );
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+
+        core.write_reg(0, Value::Object(map))
+            .expect("legacy Map receiver register should fit");
+        core.write_reg(1, Value::str("legacy"))
+            .expect("legacy Map key register should fit");
+        core.write_reg(2, Value::Int(2))
+            .expect("legacy Map value register should fit");
+        core.dispatch_builtin_hostcall(
+            "builtin:MapPrototypeSet",
+            RegRange { start: 0, count: 3 },
+            None,
+        )
+        .expect("legacy Map.set dispatch should share exact-aware accounting");
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+        assert_eq!(
+            core.dispatch_builtin_hostcall(
+                "builtin:MapPrototypeDelete",
+                RegRange { start: 0, count: 2 },
+                None,
+            )
+            .expect("legacy Map.delete dispatch should share exact-aware accounting"),
+            Value::Bool(true)
+        );
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+
+        core.map_collection_set(map, Value::str("clear-me"), Value::Int(3))
+            .expect("ordinary entry before exact-aware clear should fit");
+        core.collection_clear(map, "Map", "__entries")
+            .expect("Map.clear should release ordinary and exact backing keys");
+        assert!(core.heap[entries.0 as usize].properties.exact_is_empty());
+        assert_eq!(
+            core.heap[map.0 as usize].properties.get("size"),
+            Some(&Value::Int(0))
+        );
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+    }
+
+    #[test]
+    fn exact_property_edges_participate_in_state_capture_bd_b12xs_5() {
+        let mut core = quickjs_test_core();
+        let root = core
+            .alloc_object_with_prototype(None)
+            .expect("root allocation should succeed");
+        let child = core
+            .alloc_object_with_prototype(None)
+            .expect("child allocation should succeed");
+        core.set_object_runtime_property(
+            root,
+            RuntimePropertyKey::String(JsString::from_code_units(&[0xD800])),
+            Value::Object(child),
+        )
+        .expect("exact object edge should fit");
+        core.write_reg(0, Value::Object(root))
+            .expect("root register should fit");
+        core.set_register_label(0, Label::Secret)
+            .expect("root label should fit");
+
+        let sources = core.capture_heap_label_sources();
+        assert_eq!(sources[root.0 as usize], Some(0));
+        assert_eq!(
+            sources[child.0 as usize],
+            Some(0),
+            "state capture must traverse object references stored under exact-only keys"
         );
     }
 

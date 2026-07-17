@@ -270,18 +270,37 @@ impl<V> OrderedStringMap<V> {
 
     /// Borrow every data value without allocating or imposing observable
     /// property order. Used by seed validation and other whole-carrier scans.
-    pub(crate) fn all_data_values(&self) -> impl Iterator<Item = &V> {
+    pub fn all_data_values(&self) -> impl Iterator<Item = &V> {
         self.by_key.values().chain(self.exact_only_by_key.values())
     }
 
     /// Borrow well-formed data entries in deterministic storage order.
-    pub(crate) fn well_formed_data_entries(&self) -> impl Iterator<Item = (&String, &V)> {
+    pub fn well_formed_data_entries(&self) -> impl Iterator<Item = (&String, &V)> {
         self.by_key.iter()
     }
 
     /// Borrow exact-only data entries in deterministic storage order.
-    pub(crate) fn exact_only_data_entries(&self) -> impl Iterator<Item = (&JsString, &V)> {
+    pub fn exact_only_data_entries(&self) -> impl Iterator<Item = (&JsString, &V)> {
         self.exact_only_by_key.iter()
+    }
+
+    /// Drop exact-key ordering metadata in place after the final exact-only
+    /// data key is removed from a descriptor-as-value carrier.
+    ///
+    /// This allocation-free normalization is for consumers that store
+    /// accessors directly as map values. It refuses to discard chronology
+    /// while the executable core baseline's private accessor or Symbol
+    /// sidecars are populated.
+    pub fn normalize_data_only_exact_sidecars(&mut self) -> bool {
+        if !self.exact_only_by_key.is_empty()
+            || !self.baseline_exact_string_accessors.is_empty()
+            || !self.baseline_symbol_properties.is_empty()
+        {
+            return false;
+        }
+        self.exact_string_insertion_order = None;
+        self.baseline_string_key_order = None;
+        true
     }
 
     pub(crate) fn exact_string_insertion_order(&self) -> Option<&[JsString]> {

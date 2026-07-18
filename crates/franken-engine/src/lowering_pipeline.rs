@@ -12307,16 +12307,13 @@ fn lower_expression_to_ir1_inner(
             }
 
             // Detect method calls: obj.method(args) → CallMethod with receiver
-            let is_method = matches!(
-                callee.as_ref(),
-                Expression::Member {
-                    computed: false,
-                    ..
-                }
-            );
+            let is_method = matches!(callee.as_ref(), Expression::Member { .. });
             if is_method {
                 if let Expression::Member {
-                    object, property, ..
+                    object,
+                    property,
+                    computed,
+                    ..
                 } = callee.as_ref()
                 {
                     // Push receiver (object) first
@@ -12347,7 +12344,7 @@ fn lower_expression_to_ir1_inner(
                     // GetProperty pops object and pushes property value
                     let key = lower_member_property_key_to_ir1(
                         property,
-                        false,
+                        *computed,
                         ops,
                         bindings,
                         binding_lookup,
@@ -12357,7 +12354,8 @@ fn lower_expression_to_ir1_inner(
                         span_table,
                     )?;
                     ops.push(Ir1Op::GetProperty { key });
-                    // Now stack has: [... receiver_binding_val, method_val]
+                    // GetProperty consumed the receiver; the stack now holds
+                    // only the resolved method value for this call.
                     // Push receiver again for CallMethod
                     ops.push(Ir1Op::LoadBinding {
                         binding_id: receiver_binding,
@@ -12642,20 +12640,17 @@ fn lower_expression_to_ir1_inner(
                 });
                 return Ok(());
             }
-            // `Symbol.iterator` resolves to the engine's canonical
-            // well-known-iterator key string `"@@iterator"` (bd-bg9l1.27.3 /
-            // DISC-003). There is no global `Symbol` binding in the eval scope —
-            // like `Math.*`, it is recognized here at lowering — so a user object
-            // literal `{ [Symbol.iterator]() { ... } }` lowers its computed key to
-            // the same `"@@iterator"` string used by the Array `@@iterator` install,
-            // `BuiltinFunctionKind::IteratorSelf`, and the for-of dispatch's
-            // `lookup_symbol_iterator_method` (strategy 1). Custom-iterator dispatch
-            // and iterator closure state already work; this Symbol.iterator
-            // resolution was the sole remaining gap. (Full `Symbol(description)`
-            // construction + unique-symbol identity remain out of scope.)
+            // `Symbol.iterator` resolves to the engine's canonical typed
+            // well-known Symbol value (id 1). There is no global `Symbol` binding
+            // in the eval scope — like `Math.*`, it is recognized here at
+            // lowering. Emitting the builtin rather than the legacy
+            // `"@@iterator"` string keeps computed object keys and member reads on
+            // the same Symbol identity used by the runtime property sidecar
+            // (bd-n8eta.4.2).
             if symbol_iterator_member(object, property, *computed, binding_lookup) {
-                ops.push(Ir1Op::LoadLiteral {
-                    value: Ir1Literal::String("@@iterator".into()),
+                ops.push(Ir1Op::HostCall {
+                    capability: "builtin:SymbolIterator".to_string(),
+                    arg_count: 0,
                 });
                 return Ok(());
             }
@@ -14586,6 +14581,7 @@ fn known_constructor_typeof_name(name: &str) -> bool {
     matches!(
         name,
         "Date"
+            | "Symbol"
             | "URL"
             | "URLSearchParams"
             | "ArrayBuffer"
@@ -20525,6 +20521,7 @@ fn object_json_builtin_call_capability(
         ("Object", "setPrototypeOf") => Some("builtin:ObjectSetPrototypeOf"),
         ("Object", "defineProperty") => Some("builtin:ObjectDefineProperty"),
         ("Object", "getOwnPropertyNames") => Some("builtin:ObjectGetOwnPropertyNames"),
+        ("Object", "getOwnPropertySymbols") => Some("builtin:ObjectGetOwnPropertySymbols"),
         ("Object", "getOwnPropertyDescriptor") => Some("builtin:ObjectGetOwnPropertyDescriptor"),
         ("Object", "fromEntries") => Some("builtin:ObjectFromEntries"),
         // NOTE: Object.is / Object.isExtensible use the RECEIVER-PLACEHOLDER
@@ -22968,6 +22965,58 @@ mod tests {
                 _ => 0,
             })
             .sum()
+    }
+
+    #[test]
+    fn object_get_own_property_symbols_lowers_to_builtin_bd_n8eta_4_2() {
+        let ops = lower_script_source_ops(
+            "Object.getOwnPropertySymbols({});",
+            "object_get_own_property_symbols_bd_n8eta_4_2.js",
+        );
+
+        assert_eq!(
+            count_hostcall_deep(&ops, "builtin:ObjectGetOwnPropertySymbols"),
+            1
+        );
+        assert!(ops_deep_match(&ops, &|op| matches!(
+            op,
+            Ir1Op::HostCall {
+                capability,
+                arg_count: 1
+            } if capability == "builtin:ObjectGetOwnPropertySymbols"
+        )));
+    }
+
+    #[test]
+    fn symbol_iterator_computed_keys_lower_to_typed_builtin_bd_n8eta_4_2() {
+        let ops = lower_script_source_ops(
+            "const object = { [Symbol.iterator]: 1 };\n\
+             object[Symbol.iterator];\n\
+             object[Symbol.iterator]();",
+            "symbol_iterator_computed_keys_bd_n8eta_4_2.js",
+        );
+
+        assert_eq!(count_hostcall_deep(&ops, "builtin:SymbolIterator"), 3);
+        assert!(ops_deep_match(&ops, &|op| matches!(
+            op,
+            Ir1Op::HostCall {
+                capability,
+                arg_count: 0
+            } if capability == "builtin:SymbolIterator"
+        )));
+        assert!(ops_deep_match(&ops, &|op| matches!(
+            op,
+            Ir1Op::CallMethod { arg_count: 0 }
+        )));
+        assert!(
+            !ops_deep_match(&ops, &|op| matches!(
+                op,
+                Ir1Op::LoadLiteral {
+                    value: Ir1Literal::String(value)
+                } if value.as_str() == Some("@@iterator")
+            )),
+            "Symbol.iterator must not collapse to the legacy string key"
+        );
     }
 
     #[test]

@@ -71,10 +71,16 @@ pub struct OrderedStringMap<V> {
     baseline_symbol_key_order: Vec<SymbolId>,
 }
 
-/// Private descriptor carrier used by the executable baseline heap while its
+/// Descriptor carrier used by the executable baseline heaps while their
 /// public `HeapObject` fields remain frozen to string-keyed maps.
+///
+/// This is public only so the `frankenengine-engine` mirror can reuse the
+/// canonical ordered sidecar instead of defining a second Symbol-key store.
+/// It is not part of the general-purpose `OrderedStringMap` compatibility
+/// view or its standalone serde representation.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum BaselineSymbolProperty<V> {
+#[doc(hidden)]
+pub enum BaselineSymbolProperty<V> {
     Data(V),
     Accessor { get: Option<V>, set: Option<V> },
 }
@@ -288,14 +294,12 @@ impl<V> OrderedStringMap<V> {
     /// data key is removed from a descriptor-as-value carrier.
     ///
     /// This allocation-free normalization is for consumers that store
-    /// accessors directly as map values. It refuses to discard chronology
-    /// while the executable core baseline's private accessor or Symbol
-    /// sidecars are populated.
+    /// accessors directly as map values. Symbol properties have their own
+    /// independent chronology, so they do not require the ordinary-string
+    /// sidecars to remain allocated after the final exact-only string leaves.
+    /// Exact string accessors still do require that chronology.
     pub fn normalize_data_only_exact_sidecars(&mut self) -> bool {
-        if !self.exact_only_by_key.is_empty()
-            || !self.baseline_exact_string_accessors.is_empty()
-            || !self.baseline_symbol_properties.is_empty()
-        {
+        if !self.exact_only_by_key.is_empty() || !self.baseline_exact_string_accessors.is_empty() {
             return false;
         }
         self.exact_string_insertion_order = None;
@@ -542,14 +546,15 @@ impl<V> OrderedStringMap<V> {
         self.baseline_exact_string_accessors.remove(key)
     }
 
-    pub(crate) fn baseline_symbol_property(
-        &self,
-        symbol: SymbolId,
-    ) -> Option<&BaselineSymbolProperty<V>> {
+    /// Return one executable-baseline Symbol property by exact identity.
+    #[doc(hidden)]
+    pub fn baseline_symbol_property(&self, symbol: SymbolId) -> Option<&BaselineSymbolProperty<V>> {
         self.baseline_symbol_properties.get(&symbol)
     }
 
-    pub(crate) fn baseline_symbol_properties(
+    /// Iterate executable-baseline Symbol properties in creation order.
+    #[doc(hidden)]
+    pub fn baseline_symbol_properties(
         &self,
     ) -> impl Iterator<Item = (SymbolId, &BaselineSymbolProperty<V>)> {
         self.baseline_symbol_key_order.iter().filter_map(|symbol| {
@@ -559,14 +564,17 @@ impl<V> OrderedStringMap<V> {
         })
     }
 
-    pub(crate) fn baseline_symbol_key_order(&self) -> &[SymbolId] {
+    /// Return executable-baseline Symbol identities in creation order.
+    #[doc(hidden)]
+    pub fn baseline_symbol_key_order(&self) -> &[SymbolId] {
         &self.baseline_symbol_key_order
     }
 
     /// Insert or replace a typed Symbol property. Replacing an existing
     /// descriptor retains its creation position; deleting and re-inserting
     /// appends it.
-    pub(crate) fn insert_baseline_symbol_property(
+    #[doc(hidden)]
+    pub fn insert_baseline_symbol_property(
         &mut self,
         symbol: SymbolId,
         property: BaselineSymbolProperty<V>,
@@ -577,7 +585,9 @@ impl<V> OrderedStringMap<V> {
         self.baseline_symbol_properties.insert(symbol, property)
     }
 
-    pub(crate) fn remove_baseline_symbol_property(
+    /// Remove one executable-baseline Symbol property by exact identity.
+    #[doc(hidden)]
+    pub fn remove_baseline_symbol_property(
         &mut self,
         symbol: SymbolId,
     ) -> Option<BaselineSymbolProperty<V>> {
@@ -589,7 +599,9 @@ impl<V> OrderedStringMap<V> {
         removed
     }
 
-    pub(crate) fn restore_baseline_symbol_property(
+    /// Restore a removed Symbol property at its prior creation-order position.
+    #[doc(hidden)]
+    pub fn restore_baseline_symbol_property(
         &mut self,
         symbol: SymbolId,
         property: BaselineSymbolProperty<V>,

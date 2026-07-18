@@ -2,8 +2,8 @@
 source: crates/franken-engine/tests/baseline_interpreter_conformance.rs
 expression: actual
 ---
-total=306
-unique=306
+total=307
+unique=307
 duplicates=0
 
 builtin:ApplyHostCall
@@ -143,6 +143,7 @@ builtin:ObjectFreeze
 builtin:ObjectFromEntries
 builtin:ObjectGetOwnPropertyDescriptor
 builtin:ObjectGetOwnPropertyNames
+builtin:ObjectGetOwnPropertySymbols
 builtin:ObjectGetPropertyDescriptor
 builtin:ObjectGetPrototypeOf
 builtin:ObjectHasOwnProperty

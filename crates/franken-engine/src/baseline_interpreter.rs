@@ -54,7 +54,9 @@ use sha2::Sha256;
 use subtle::ConstantTimeEq;
 use url::{Url, form_urlencoded};
 
-use frankenengine_core::object_model::OrderedStringMap;
+use frankenengine_core::object_model::{
+    BaselineSymbolProperty, OrderedStringMap, SymbolId as CoreSymbolId,
+};
 use frankenengine_extension_host::host_io::{
     FsDirEntry, FsMetaResult, FsMetadata, FsOperation, HostIoProvider, HostIoRecorder,
 };
@@ -89,6 +91,7 @@ use crate::iterator_protocol::{
 };
 use crate::js_string::JsString;
 use crate::lowering_pipeline::{LoweringContext, lower_ir0_to_ir3};
+use crate::object_model::{SymbolId, WellKnownSymbol};
 use crate::parser::{CanonicalEs2020Parser, ParserOptions, ParserSource};
 use crate::runtime_config::ExecutionConfig;
 use crate::runtime_observability::{
@@ -209,6 +212,8 @@ const PROXY_TYPE_TAG: &str = "Proxy";
 const PROXY_TARGET_SLOT: &str = "__proxy_target";
 const PROXY_HANDLER_SLOT: &str = "__proxy_handler";
 const PROXY_REVOKED_SLOT: &str = "__proxy_revoked";
+const WELL_KNOWN_SYMBOL_SCHEMA: &str = "es2020-symbol-ids-1-13-v1";
+const FIRST_DYNAMIC_SYMBOL_ID: u32 = 14;
 /// Approximate per-string heap footprint used for fail-closed budgeting.
 const MEMORY_ESTIMATE_STRING_BASE_BYTES: u64 = 24;
 /// Approximate per-heap-object base footprint.
@@ -1648,6 +1653,354 @@ pub enum Value {
         get: Option<Arc<Value>>,
         set: Option<Arc<Value>>,
     },
+    /// ECMAScript Symbol primitive identity. This tail variant preserves all
+    /// historical externally tagged serde discriminants.
+    Symbol(SymbolId),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum RuntimeSymbolKind {
+    Private,
+    Global,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RuntimeSymbolRecord {
+    symbol_id: SymbolId,
+    kind: RuntimeSymbolKind,
+    description: Option<JsString>,
+    registry_key: Option<JsString>,
+}
+
+struct RuntimeSymbolRecordRef<'a>(&'a RuntimeSymbolRecord);
+
+impl Serialize for RuntimeSymbolRecordRef<'_> {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeStruct as _;
+
+        let record = self.0;
+        let mut wire = serializer.serialize_struct(
+            "RuntimeSymbolRecord",
+            if matches!(record.kind, RuntimeSymbolKind::Global) {
+                4
+            } else {
+                3
+            },
+        )?;
+        wire.serialize_field("symbol_id", &record.symbol_id.0)?;
+        wire.serialize_field(
+            "kind",
+            match record.kind {
+                RuntimeSymbolKind::Private => "private",
+                RuntimeSymbolKind::Global => "global",
+            },
+        )?;
+        wire.serialize_field("description", &record.description)?;
+        if matches!(record.kind, RuntimeSymbolKind::Global) {
+            wire.serialize_field("registry_key", &record.registry_key)?;
+        }
+        wire.end()
+    }
+}
+
+/// Distinguishes a missing field from a present JSON `null` field.
+#[derive(Debug)]
+struct PresentNullable<T>(Option<T>);
+
+impl<'de, T: Deserialize<'de>> Deserialize<'de> for PresentNullable<T> {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        Option::<T>::deserialize(deserializer).map(Self)
+    }
+}
+
+fn deserialize_present_nullable<'de, D, T>(
+    deserializer: D,
+) -> Result<Option<PresentNullable<T>>, D::Error>
+where
+    D: Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    PresentNullable::<T>::deserialize(deserializer).map(Some)
+}
+
+/// Distinguishes an absent optional field from a present non-null value.
+#[derive(Debug)]
+struct PresentValue<T>(T);
+
+impl<'de, T: Deserialize<'de>> Deserialize<'de> for PresentValue<T> {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        T::deserialize(deserializer).map(Self)
+    }
+}
+
+fn deserialize_present_value<'de, D, T>(
+    deserializer: D,
+) -> Result<Option<PresentValue<T>>, D::Error>
+where
+    D: Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    PresentValue::<T>::deserialize(deserializer).map(Some)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[doc(hidden)]
+pub struct RuntimeSymbolState {
+    next_symbol_id: u32,
+    symbols: BTreeMap<SymbolId, RuntimeSymbolRecord>,
+}
+
+impl Default for RuntimeSymbolState {
+    fn default() -> Self {
+        Self {
+            next_symbol_id: FIRST_DYNAMIC_SYMBOL_ID,
+            symbols: BTreeMap::new(),
+        }
+    }
+}
+
+impl Serialize for RuntimeSymbolState {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeStruct as _;
+
+        let records = self
+            .symbols
+            .values()
+            .map(RuntimeSymbolRecordRef)
+            .collect::<Vec<_>>();
+        let mut state = serializer.serialize_struct("RuntimeSymbolState", 3)?;
+        state.serialize_field("well_known_schema", WELL_KNOWN_SYMBOL_SCHEMA)?;
+        state.serialize_field("next_symbol_id", &self.next_symbol_id)?;
+        state.serialize_field("symbols", &records)?;
+        state.end()
+    }
+}
+
+impl<'de> Deserialize<'de> for RuntimeSymbolState {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        use serde::de::Error as _;
+
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct SymbolStateWire {
+            well_known_schema: String,
+            next_symbol_id: u32,
+            symbols: Vec<SymbolRecordWire>,
+        }
+
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct SymbolRecordWire {
+            symbol_id: u32,
+            kind: String,
+            #[serde(default, deserialize_with = "deserialize_present_nullable")]
+            description: Option<PresentNullable<JsString>>,
+            #[serde(default, deserialize_with = "deserialize_present_nullable")]
+            registry_key: Option<PresentNullable<JsString>>,
+        }
+
+        let wire = SymbolStateWire::deserialize(deserializer)?;
+        if wire.well_known_schema != WELL_KNOWN_SYMBOL_SCHEMA {
+            return Err(D::Error::custom("unknown well-known Symbol schema"));
+        }
+        let mut symbols = BTreeMap::new();
+        let mut previous_id = None;
+        for record in wire.symbols {
+            let id = SymbolId(record.symbol_id);
+            if let Some(previous) = previous_id
+                && id <= previous
+            {
+                return Err(D::Error::custom(
+                    "dynamic Symbol records must be strictly increasing",
+                ));
+            }
+            previous_id = Some(id);
+            let description = record
+                .description
+                .ok_or_else(|| D::Error::custom("Symbol description field is required"))?
+                .0;
+            let (kind, registry_key) = match record.kind.as_str() {
+                "private" => {
+                    if record.registry_key.is_some() {
+                        return Err(D::Error::custom(
+                            "private Symbol record forbids registry_key",
+                        ));
+                    }
+                    (RuntimeSymbolKind::Private, None)
+                }
+                "global" => {
+                    let registry_key = record
+                        .registry_key
+                        .ok_or_else(|| {
+                            D::Error::custom("global Symbol record requires registry_key")
+                        })?
+                        .0
+                        .ok_or_else(|| {
+                            D::Error::custom("global Symbol registry_key cannot be null")
+                        })?;
+                    if description.as_ref() != Some(&registry_key) {
+                        return Err(D::Error::custom(
+                            "global Symbol description must equal registry_key",
+                        ));
+                    }
+                    (RuntimeSymbolKind::Global, Some(registry_key))
+                }
+                _ => return Err(D::Error::custom("unknown dynamic Symbol kind")),
+            };
+            if symbols
+                .insert(
+                    id,
+                    RuntimeSymbolRecord {
+                        symbol_id: id,
+                        kind,
+                        description,
+                        registry_key,
+                    },
+                )
+                .is_some()
+            {
+                return Err(D::Error::custom("duplicate dynamic Symbol id"));
+            }
+        }
+        let state = Self {
+            next_symbol_id: wire.next_symbol_id,
+            symbols,
+        };
+        state.validate().map_err(D::Error::custom)?;
+        Ok(state)
+    }
+}
+
+impl RuntimeSymbolState {
+    fn is_default(&self) -> bool {
+        self.next_symbol_id == FIRST_DYNAMIC_SYMBOL_ID && self.symbols.is_empty()
+    }
+
+    fn validate(&self) -> Result<(), String> {
+        if self.next_symbol_id < FIRST_DYNAMIC_SYMBOL_ID {
+            return Err("next_symbol_id overlaps reserved well-known Symbols".to_string());
+        }
+        let mut registry_keys = BTreeSet::new();
+        for (id, record) in &self.symbols {
+            if id.0 < FIRST_DYNAMIC_SYMBOL_ID || id.0 == u32::MAX {
+                return Err(format!("invalid dynamic Symbol id {}", id.0));
+            }
+            if record.symbol_id != *id {
+                return Err("dynamic Symbol record id mismatch".to_string());
+            }
+            if id.0 >= self.next_symbol_id {
+                return Err(format!(
+                    "dynamic Symbol id {} is not below next_symbol_id {}",
+                    id.0, self.next_symbol_id
+                ));
+            }
+            match record.kind {
+                RuntimeSymbolKind::Private => {
+                    if record.registry_key.is_some() {
+                        return Err("private Symbol has a registry key".to_string());
+                    }
+                }
+                RuntimeSymbolKind::Global => {
+                    let key = record
+                        .registry_key
+                        .as_ref()
+                        .ok_or_else(|| "global Symbol lacks a registry key".to_string())?;
+                    if record.description.as_ref() != Some(key) {
+                        return Err("global Symbol description/registry mismatch".to_string());
+                    }
+                    if !registry_keys.insert(key.clone()) {
+                        return Err("duplicate global Symbol registry key".to_string());
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn contains(&self, id: SymbolId) -> bool {
+        (1..FIRST_DYNAMIC_SYMBOL_ID).contains(&id.0) || self.symbols.contains_key(&id)
+    }
+
+    fn allocate_private(
+        &mut self,
+        description: Option<JsString>,
+    ) -> Result<SymbolId, InterpreterError> {
+        self.allocate(RuntimeSymbolKind::Private, description, None)
+    }
+
+    fn intern_global(&mut self, key: JsString) -> Result<SymbolId, InterpreterError> {
+        if let Some(symbol) = self.global_symbol(&key) {
+            return Ok(symbol);
+        }
+        self.allocate(RuntimeSymbolKind::Global, Some(key.clone()), Some(key))
+    }
+
+    fn global_symbol(&self, key: &JsString) -> Option<SymbolId> {
+        self.symbols.values().find_map(|record| {
+            (matches!(record.kind, RuntimeSymbolKind::Global)
+                && record.registry_key.as_ref() == Some(key))
+            .then_some(record.symbol_id)
+        })
+    }
+
+    fn allocate(
+        &mut self,
+        kind: RuntimeSymbolKind,
+        description: Option<JsString>,
+        registry_key: Option<JsString>,
+    ) -> Result<SymbolId, InterpreterError> {
+        if self.next_symbol_id == u32::MAX {
+            return Err(InterpreterError::TypeError {
+                expected: "available Symbol identity".to_string(),
+                got: "Symbol identity space exhausted".to_string(),
+            });
+        }
+        let symbol_id = SymbolId(self.next_symbol_id);
+        self.next_symbol_id += 1;
+        self.symbols.insert(
+            symbol_id,
+            RuntimeSymbolRecord {
+                symbol_id,
+                kind,
+                description,
+                registry_key,
+            },
+        );
+        Ok(symbol_id)
+    }
+
+    fn key_for(&self, id: SymbolId) -> Option<&JsString> {
+        self.symbols.get(&id).and_then(|record| {
+            matches!(record.kind, RuntimeSymbolKind::Global)
+                .then_some(record.registry_key.as_ref())
+                .flatten()
+        })
+    }
+
+    fn description(&self, id: SymbolId) -> Option<&JsString> {
+        self.symbols
+            .get(&id)
+            .and_then(|record| record.description.as_ref())
+    }
+}
+
+fn well_known_symbol_description(id: SymbolId) -> Option<&'static str> {
+    match id.0 {
+        1 => Some("Symbol.iterator"),
+        2 => Some("Symbol.toPrimitive"),
+        3 => Some("Symbol.hasInstance"),
+        4 => Some("Symbol.toStringTag"),
+        5 => Some("Symbol.species"),
+        6 => Some("Symbol.isConcatSpreadable"),
+        7 => Some("Symbol.unscopables"),
+        8 => Some("Symbol.asyncIterator"),
+        9 => Some("Symbol.match"),
+        10 => Some("Symbol.matchAll"),
+        11 => Some("Symbol.replace"),
+        12 => Some("Symbol.search"),
+        13 => Some("Symbol.split"),
+        _ => None,
+    }
 }
 
 /// Small set of builtin callable kinds the baseline interpreter exposes as
@@ -2234,6 +2587,15 @@ pub enum BuiltinFunctionKind {
     /// Function-shaped `cluster.Worker`, distinct from `fork` so callable
     /// identity and the observable function name are not forged.
     ClusterWorker,
+    /// `Symbol.prototype.toString` bound to a primitive Symbol receiver.
+    /// Kept at the true enum tail so existing deterministic discriminants stay
+    /// stable when older replay payloads are decoded.
+    SymbolPrototypeToString,
+    /// `%StringIteratorPrototype%` factory exposed through the typed
+    /// `Symbol.iterator` primitive lookup.
+    StringIterator,
+    /// Generator `Symbol.iterator` identity method.
+    GeneratorIteratorSelf,
 }
 
 impl BuiltinFunctionKind {
@@ -2273,6 +2635,18 @@ impl BuiltinFunction {
             iterator_handle: None,
             bound_object: None,
         }
+    }
+
+    fn symbol_to_string() -> Self {
+        Self::new_kind(BuiltinFunctionKind::SymbolPrototypeToString)
+    }
+
+    fn string_iterator() -> Self {
+        Self::new_kind(BuiltinFunctionKind::StringIterator)
+    }
+
+    fn generator_iterator_self() -> Self {
+        Self::new_kind(BuiltinFunctionKind::GeneratorIteratorSelf)
     }
 
     fn require(module_specifier: impl AsRef<str>) -> Self {
@@ -3465,6 +3839,10 @@ impl BuiltinFunction {
             BuiltinFunctionKind::NumberToFixed => "toFixed",
             BuiltinFunctionKind::NumberToString => "toString",
             BuiltinFunctionKind::NumberValueOf => "valueOf",
+            BuiltinFunctionKind::SymbolPrototypeToString => "toString",
+            BuiltinFunctionKind::StringIterator | BuiltinFunctionKind::GeneratorIteratorSelf => {
+                "@@iterator"
+            }
             BuiltinFunctionKind::ProxyRevoke => "revoke",
             BuiltinFunctionKind::ArrayIsArray => "isArray",
             BuiltinFunctionKind::StreamReadablePause => "pause",
@@ -3676,6 +4054,7 @@ impl Value {
             Self::BigInt(n) => n.as_ref() != "0",
             Self::Float(f) => !f.is_nan() && f.inner() != 0.0,
             Self::Str(s) => !s.is_empty(),
+            Self::Symbol(_) => true,
             Self::Object(_)
             | Self::Function(_)
             | Self::Closure(_)
@@ -3711,7 +4090,8 @@ impl Value {
             | Self::Int(_)
             | Self::BigInt(_)
             | Self::Float(_)
-            | Self::Str(_) => false,
+            | Self::Str(_)
+            | Self::Symbol(_) => false,
             Self::Object(_)
             | Self::Function(_)
             | Self::Closure(_)
@@ -3749,6 +4129,7 @@ impl Value {
             Self::Int(_) | Self::Float(_) => "number",
             Self::BigInt(_) => "bigint",
             Self::Str(_) => "string",
+            Self::Symbol(_) => "symbol",
             Self::Object(_) => "object",
             Self::Function(_)
             | Self::Closure(_)
@@ -3773,6 +4154,7 @@ impl Value {
             Self::Int(_) | Self::Float(_) => "number",
             Self::BigInt(_) => "bigint",
             Self::Str(_) => "string",
+            Self::Symbol(_) => "symbol",
             Self::Function(_)
             | Self::Closure(_)
             | Self::GeneratorFunction(_)
@@ -3799,6 +4181,7 @@ impl fmt::Display for Value {
             Self::BigInt(n) => write!(f, "{n}"),
             Self::Float(fv) => write!(f, "{fv}"),
             Self::Str(s) => write!(f, "{s}"),
+            Self::Symbol(id) => write!(f, "Symbol({})", id.0),
             Self::Object(id) => write!(f, "[object#{}]", id.0),
             Self::Function(idx) => write!(f, "[function#{idx}]"),
             Self::Closure(idx) => write!(f, "[closure#{idx}]"),
@@ -3976,33 +4359,48 @@ impl DataViewIntegerKind {
 /// Private executable property key for dynamic IR operations.
 ///
 /// Public compatibility and hook APIs remain `String`/`&str`; this carrier is
-/// deliberately private so a `Value::Str` can retain exact UTF-16 identity at
-/// the heap boundary without widening those frozen surfaces. Engine Symbols
-/// remain on their existing object-backed compatibility path until the typed
-/// Symbol-key lane owns that separate migration.
+/// deliberately private so exact UTF-16 strings and Symbol identities reach
+/// the heap without widening those frozen surfaces.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 enum RuntimePropertyKey {
     String(JsString),
+    Symbol(SymbolId),
+}
+
+fn core_symbol_id(symbol: SymbolId) -> CoreSymbolId {
+    CoreSymbolId(symbol.0)
+}
+
+fn engine_symbol_id(symbol: CoreSymbolId) -> SymbolId {
+    SymbolId(symbol.0)
 }
 
 impl RuntimePropertyKey {
-    fn string(&self) -> &JsString {
+    fn string(&self) -> Option<&JsString> {
         match self {
-            Self::String(key) => key,
+            Self::String(key) => Some(key),
+            Self::Symbol(_) => None,
         }
     }
 
     fn as_str(&self) -> Option<&str> {
-        self.string().as_str()
+        self.string().and_then(JsString::as_str)
     }
 
-    fn into_string(self) -> JsString {
+    fn value(&self) -> Value {
         match self {
-            Self::String(key) => key,
+            Self::String(key) => Value::Str(key.clone()),
+            Self::Symbol(symbol) => Value::Symbol(*symbol),
         }
     }
 
     fn diagnostic(&self) -> String {
+        let Self::String(string) = self else {
+            let Self::Symbol(symbol) = self else {
+                unreachable!("RuntimePropertyKey variants are exhaustive")
+            };
+            return format!("~pk~s:{}", symbol.0);
+        };
         if let Some(key) = self.as_str() {
             if key.starts_with("~pk~") {
                 let mut diagnostic = String::with_capacity(6 + key.len().saturating_mul(2));
@@ -4015,9 +4413,9 @@ impl RuntimePropertyKey {
             }
             return key.to_string();
         }
-        let mut diagnostic = String::with_capacity(6 + self.string().utf16_len().saturating_mul(4));
+        let mut diagnostic = String::with_capacity(6 + string.utf16_len().saturating_mul(4));
         diagnostic.push_str("~pk~x:");
-        for unit in self.string().encode_utf16() {
+        for unit in string.encode_utf16() {
             fmt::Write::write_fmt(&mut diagnostic, format_args!("{unit:04X}"))
                 .expect("writing hexadecimal code units to String cannot fail");
         }
@@ -4026,7 +4424,7 @@ impl RuntimePropertyKey {
 }
 
 /// A heap-allocated object with string-keyed properties.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct HeapObject {
     /// Data properties in ECMAScript own-key order with deterministic lookup.
     pub properties: OrderedStringMap<Value>,
@@ -4047,13 +4445,321 @@ pub struct HeapObject {
     /// Whether this object has been frozen via Object.freeze().
     pub is_frozen: bool,
     /// Whether this object is the engine-owned `import.meta` contract object.
-    #[serde(default)]
     pub is_import_meta: bool,
+}
+
+struct HeapSymbolPropertyRef<'a> {
+    symbol_id: SymbolId,
+    property: &'a BaselineSymbolProperty<Value>,
+}
+
+impl Serialize for HeapSymbolPropertyRef<'_> {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeStruct as _;
+
+        match self.property {
+            BaselineSymbolProperty::Data(value) => {
+                let mut record = serializer.serialize_struct("SymbolProperty", 3)?;
+                record.serialize_field("symbol_id", &self.symbol_id.0)?;
+                record.serialize_field("kind", "data")?;
+                record.serialize_field("value", value)?;
+                record.end()
+            }
+            BaselineSymbolProperty::Accessor { get, set } => {
+                let mut record = serializer.serialize_struct("SymbolProperty", 4)?;
+                record.serialize_field("symbol_id", &self.symbol_id.0)?;
+                record.serialize_field("kind", "accessor")?;
+                record.serialize_field("get", get)?;
+                record.serialize_field("set", set)?;
+                record.end()
+            }
+        }
+    }
+}
+
+impl Serialize for HeapObject {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeStruct as _;
+
+        let symbol_properties = self
+            .properties
+            .baseline_symbol_properties()
+            .map(|(symbol_id, property)| HeapSymbolPropertyRef {
+                symbol_id: engine_symbol_id(symbol_id),
+                property,
+            })
+            .collect::<Vec<_>>();
+        let mut object = serializer.serialize_struct(
+            "HeapObject",
+            10 + usize::from(!symbol_properties.is_empty()),
+        )?;
+        object.serialize_field("properties", &self.properties)?;
+        object.serialize_field("prototype", &self.prototype)?;
+        object.serialize_field("constructor_function", &self.constructor_function)?;
+        object.serialize_field("is_array", &self.is_array)?;
+        object.serialize_field("cached_dense_length", &self.cached_dense_length)?;
+        object.serialize_field("array_buffer", &self.array_buffer)?;
+        object.serialize_field("typed_array", &self.typed_array)?;
+        object.serialize_field("data_view", &self.data_view)?;
+        object.serialize_field("is_frozen", &self.is_frozen)?;
+        object.serialize_field("is_import_meta", &self.is_import_meta)?;
+        if !symbol_properties.is_empty() {
+            object.serialize_field("symbol_properties", &symbol_properties)?;
+        }
+        object.end()
+    }
+}
+
+impl<'de> Deserialize<'de> for HeapObject {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        use serde::de::Error as _;
+
+        #[derive(Deserialize)]
+        struct HeapObjectWire {
+            properties: OrderedStringMap<Value>,
+            prototype: Option<ObjectId>,
+            constructor_function: Option<u32>,
+            is_array: bool,
+            cached_dense_length: Option<u32>,
+            array_buffer: Option<ArrayBufferBacking>,
+            typed_array: Option<TypedArrayView>,
+            data_view: Option<DataViewView>,
+            is_frozen: bool,
+            #[serde(default)]
+            is_import_meta: bool,
+            #[serde(default)]
+            symbol_properties: Vec<HeapSymbolPropertyWire>,
+        }
+
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct HeapSymbolPropertyWire {
+            symbol_id: u32,
+            kind: String,
+            #[serde(default, deserialize_with = "deserialize_present_value")]
+            value: Option<PresentValue<Value>>,
+            #[serde(default, deserialize_with = "deserialize_present_nullable")]
+            get: Option<PresentNullable<Value>>,
+            #[serde(default, deserialize_with = "deserialize_present_nullable")]
+            set: Option<PresentNullable<Value>>,
+        }
+
+        let wire = HeapObjectWire::deserialize(deserializer)?;
+        let mut object = Self {
+            properties: wire.properties,
+            prototype: wire.prototype,
+            constructor_function: wire.constructor_function,
+            is_array: wire.is_array,
+            cached_dense_length: wire.cached_dense_length,
+            array_buffer: wire.array_buffer,
+            typed_array: wire.typed_array,
+            data_view: wire.data_view,
+            is_frozen: wire.is_frozen,
+            is_import_meta: wire.is_import_meta,
+        };
+        for record in wire.symbol_properties {
+            let symbol = SymbolId(record.symbol_id);
+            if symbol.0 == 0 {
+                return Err(D::Error::custom("Symbol property id must be nonzero"));
+            }
+            let property = match record.kind.as_str() {
+                "data" => {
+                    if record.get.is_some() || record.set.is_some() {
+                        return Err(D::Error::custom(
+                            "data Symbol property forbids accessor endpoints",
+                        ));
+                    }
+                    BaselineSymbolProperty::Data(
+                        record
+                            .value
+                            .ok_or_else(|| D::Error::custom("data Symbol property requires value"))?
+                            .0,
+                    )
+                }
+                "accessor" => {
+                    if record.value.is_some() {
+                        return Err(D::Error::custom(
+                            "accessor Symbol property forbids data value",
+                        ));
+                    }
+                    BaselineSymbolProperty::Accessor {
+                        get: record
+                            .get
+                            .ok_or_else(|| {
+                                D::Error::custom("accessor Symbol property requires get")
+                            })?
+                            .0,
+                        set: record
+                            .set
+                            .ok_or_else(|| {
+                                D::Error::custom("accessor Symbol property requires set")
+                            })?
+                            .0,
+                    }
+                }
+                _ => return Err(D::Error::custom("unknown Symbol property kind")),
+            };
+            if object
+                .properties
+                .insert_baseline_symbol_property(core_symbol_id(symbol), property)
+                .is_some()
+            {
+                return Err(D::Error::custom("duplicate Symbol property id"));
+            }
+        }
+        Ok(object)
+    }
+}
+
+fn heap_object_contains_symbols(object: &HeapObject) -> bool {
+    !object.properties.baseline_symbol_key_order().is_empty()
+        || object
+            .properties
+            .all_data_values()
+            .any(value_contains_symbol)
+        || object
+            .properties
+            .baseline_symbol_properties()
+            .any(|(_, property)| match property {
+                BaselineSymbolProperty::Data(value) => value_contains_symbol(value),
+                BaselineSymbolProperty::Accessor { get, set } => {
+                    get.as_ref().is_some_and(value_contains_symbol)
+                        || set.as_ref().is_some_and(value_contains_symbol)
+                }
+            })
+}
+
+fn value_contains_symbol(value: &Value) -> bool {
+    let mut stack = vec![value];
+    let mut visited = BTreeSet::new();
+    while let Some(value) = stack.pop() {
+        match value {
+            Value::Symbol(_) => return true,
+            Value::Accessor { get, set } => {
+                for endpoint in [get.as_deref(), set.as_deref()].into_iter().flatten() {
+                    if visited.insert(endpoint as *const Value) {
+                        stack.push(endpoint);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    false
+}
+
+fn validate_symbol_value(state: &RuntimeSymbolState, value: &Value) -> Result<(), String> {
+    let mut stack = vec![value];
+    let mut visited = BTreeSet::new();
+    while let Some(value) = stack.pop() {
+        match value {
+            Value::Symbol(id) if !state.contains(*id) => {
+                return Err(format!("unresolved Symbol id {}", id.0));
+            }
+            Value::Accessor { get, set } => {
+                for endpoint in [get.as_deref(), set.as_deref()].into_iter().flatten() {
+                    if visited.insert(endpoint as *const Value) {
+                        stack.push(endpoint);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+fn validate_heap_symbol_references(
+    state: &RuntimeSymbolState,
+    object: &HeapObject,
+) -> Result<(), String> {
+    for value in object.properties.all_data_values() {
+        validate_symbol_value(state, value)?;
+    }
+    for (id, property) in object.properties.baseline_symbol_properties() {
+        let id = engine_symbol_id(id);
+        if !state.contains(id) {
+            return Err(format!("unresolved Symbol property id {}", id.0));
+        }
+        match property {
+            BaselineSymbolProperty::Data(value) => validate_symbol_value(state, value)?,
+            BaselineSymbolProperty::Accessor { get, set } => {
+                if let Some(getter) = get {
+                    validate_symbol_value(state, getter)?;
+                }
+                if let Some(setter) = set {
+                    validate_symbol_value(state, setter)?;
+                }
+            }
+        }
+    }
+    Ok(())
 }
 
 impl HeapObject {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    fn own_runtime_property_descriptor(
+        &self,
+        key: &RuntimePropertyKey,
+    ) -> Option<BaselineSymbolProperty<Value>> {
+        match key {
+            RuntimePropertyKey::String(key) => {
+                self.properties.get_exact(key).cloned().map(|value| {
+                    if let Value::Accessor { get, set } = value {
+                        BaselineSymbolProperty::Accessor {
+                            get: get.map(|value| value.as_ref().clone()),
+                            set: set.map(|value| value.as_ref().clone()),
+                        }
+                    } else {
+                        BaselineSymbolProperty::Data(value)
+                    }
+                })
+            }
+            RuntimePropertyKey::Symbol(symbol) => self
+                .properties
+                .baseline_symbol_property(core_symbol_id(*symbol))
+                .cloned(),
+        }
+    }
+
+    fn own_runtime_property_value(&self, key: &RuntimePropertyKey) -> Option<Value> {
+        self.own_runtime_property_descriptor(key)
+            .map(|property| match property {
+                BaselineSymbolProperty::Data(value) => value,
+                BaselineSymbolProperty::Accessor { get, set } => Value::Accessor {
+                    get: get.map(Arc::new),
+                    set: set.map(Arc::new),
+                },
+            })
+    }
+
+    fn contains_own_runtime_property(&self, key: &RuntimePropertyKey) -> bool {
+        match key {
+            RuntimePropertyKey::String(key) => self.properties.contains_exact_key(key),
+            RuntimePropertyKey::Symbol(symbol) => self
+                .properties
+                .baseline_symbol_property(core_symbol_id(*symbol))
+                .is_some(),
+        }
+    }
+
+    fn own_runtime_property_keys(&self) -> Vec<RuntimePropertyKey> {
+        self.properties
+            .exact_keys()
+            .into_iter()
+            .map(RuntimePropertyKey::String)
+            .chain(
+                self.properties
+                    .baseline_symbol_key_order()
+                    .iter()
+                    .copied()
+                    .map(engine_symbol_id)
+                    .map(RuntimePropertyKey::Symbol),
+            )
+            .collect()
     }
 }
 
@@ -4100,6 +4806,7 @@ struct RuntimeForOfInit {
     iterator_object: Option<ObjectId>,
     next_method: Option<Value>,
     timers_interval: Option<(u64, Value)>,
+    existing_handle: Option<u32>,
 }
 
 impl RuntimeForOfInit {
@@ -4110,6 +4817,7 @@ impl RuntimeForOfInit {
             iterator_object: None,
             next_method: None,
             timers_interval: None,
+            existing_handle: None,
         }
     }
 
@@ -4120,6 +4828,18 @@ impl RuntimeForOfInit {
             iterator_object: Some(iterator_object),
             next_method: Some(next_method),
             timers_interval: None,
+            existing_handle: None,
+        }
+    }
+
+    fn from_existing(handle: u32) -> Self {
+        Self {
+            values: Vec::new(),
+            typed_array: None,
+            iterator_object: None,
+            next_method: None,
+            timers_interval: None,
+            existing_handle: Some(handle),
         }
     }
 
@@ -4131,6 +4851,7 @@ impl RuntimeForOfInit {
             iterator_object: None,
             next_method: None,
             timers_interval: Some((delay_ms, value)),
+            existing_handle: None,
         }
     }
 }
@@ -4999,6 +5720,7 @@ impl EvidenceLog {
                         .wrapping_add(get_hash.wrapping_mul(31))
                         .wrapping_add(set_hash)
                 }
+                Value::Symbol(symbol) => 20 + u64::from(symbol.0),
             };
             hasher_state = hasher_state.wrapping_mul(31).wrapping_add(value_hash);
         }
@@ -5048,6 +5770,7 @@ impl EvidenceLog {
                     .wrapping_add(get_hash.wrapping_mul(31))
                     .wrapping_add(set_hash)
             }
+            Value::Symbol(symbol) => 20 + u64::from(symbol.0),
         }
     }
 }
@@ -6082,6 +6805,7 @@ pub enum ExecutionSeed {
         heap: Vec<HeapObject>,
         function_prototypes: BTreeMap<u32, ObjectId>,
         builtin_prototypes: BTreeMap<String, ObjectId>,
+        symbol_state: RuntimeSymbolState,
     },
 }
 
@@ -6671,12 +7395,82 @@ pub struct CapturedHeapState {
 /// tick boundary for the time-travel debugger (bd-fqlfw.3.5.5 / E3.T5d).
 /// Identical module + config + requested tick yields an identical
 /// observation, because execution itself is deterministic.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CapturedInterpreterState {
     /// The nondeterminism tick (trace event count) the capture landed on.
     pub tick: u64,
     pub registers: Vec<CapturedRegisterState>,
     pub heap: Vec<CapturedHeapState>,
+    symbol_state: RuntimeSymbolState,
+}
+
+impl CapturedInterpreterState {
+    fn contains_symbol_values(&self) -> bool {
+        self.registers
+            .iter()
+            .any(|entry| value_contains_symbol(&entry.value))
+            || self
+                .heap
+                .iter()
+                .any(|entry| heap_object_contains_symbols(&entry.object))
+    }
+}
+
+impl Serialize for CapturedInterpreterState {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeStruct as _;
+
+        let include_symbol_state = !self.symbol_state.is_default() || self.contains_symbol_values();
+        let mut state = serializer.serialize_struct(
+            "CapturedInterpreterState",
+            if include_symbol_state { 4 } else { 3 },
+        )?;
+        state.serialize_field("tick", &self.tick)?;
+        state.serialize_field("registers", &self.registers)?;
+        state.serialize_field("heap", &self.heap)?;
+        if include_symbol_state {
+            state.serialize_field("symbol_state", &self.symbol_state)?;
+        }
+        state.end()
+    }
+}
+
+impl<'de> Deserialize<'de> for CapturedInterpreterState {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        use serde::de::Error as _;
+
+        #[derive(Deserialize)]
+        struct CapturedInterpreterStateWire {
+            tick: u64,
+            registers: Vec<CapturedRegisterState>,
+            heap: Vec<CapturedHeapState>,
+            #[serde(default, deserialize_with = "deserialize_present_value")]
+            symbol_state: Option<PresentValue<RuntimeSymbolState>>,
+        }
+
+        let wire = CapturedInterpreterStateWire::deserialize(deserializer)?;
+        let symbol_state_was_present = wire.symbol_state.is_some();
+        let state = Self {
+            tick: wire.tick,
+            registers: wire.registers,
+            heap: wire.heap,
+            symbol_state: wire.symbol_state.map(|state| state.0).unwrap_or_default(),
+        };
+        if !symbol_state_was_present && state.contains_symbol_values() {
+            return Err(D::Error::custom(
+                "captured state with Symbol values or keys requires symbol_state",
+            ));
+        }
+        state.symbol_state.validate().map_err(D::Error::custom)?;
+        for entry in &state.registers {
+            validate_symbol_value(&state.symbol_state, &entry.value).map_err(D::Error::custom)?;
+        }
+        for entry in &state.heap {
+            validate_heap_symbol_references(&state.symbol_state, &entry.object)
+                .map_err(D::Error::custom)?;
+        }
+        Ok(state)
+    }
 }
 
 pub struct InterpreterCore {
@@ -7004,10 +7798,8 @@ pub struct InterpreterCore {
     inline_callback_start_probes: Vec<bool>,
     /// WeakMap storage with weak reference semantics.
     weakmap_storage: BTreeMap<ObjectId, WeakMapStorage>,
-    /// Global Symbol registry for `Symbol.for(key)` / `Symbol.keyFor(sym)`
-    /// (bd-hitj1): interns one symbol per string key so `Symbol.for('x') ===
-    /// Symbol.for('x')`.
-    symbol_registry: BTreeMap<String, ObjectId>,
+    /// Exact Symbol identities, descriptions, and global registry state.
+    symbol_state: SeedTrackedField<RuntimeSymbolState>,
     /// GC remembered set for tracking old->young generation references.
     gc_remembered_set: BTreeSet<ObjectId>,
     /// JIT hot path detection counters for function calls.
@@ -7149,7 +7941,7 @@ impl InterpreterCore {
             active_inline_callback_context_label: None,
             inline_callback_start_probes: Vec::new(),
             weakmap_storage: BTreeMap::new(),
-            symbol_registry: BTreeMap::new(),
+            symbol_state: SeedTrackedField::new(RuntimeSymbolState::default()),
             gc_remembered_set: BTreeSet::new(),
             jit_function_call_counts: BTreeMap::new(),
             jit_loop_iteration_counts: LoopIterationCounters::default(),
@@ -18074,6 +18866,11 @@ impl InterpreterCore {
         f(&mut self.builtin_prototypes.value)
     }
 
+    fn mutate_symbol_state<R>(&mut self, f: impl FnOnce(&mut RuntimeSymbolState) -> R) -> R {
+        self.before_seed_surface_write();
+        f(&mut self.symbol_state.value)
+    }
+
     fn before_seed_surface_write(&mut self) {
         self.materialize_pending_lazy_seeds_with_current_state();
         self.seed_epoch = self.seed_epoch.wrapping_add(1);
@@ -18092,6 +18889,7 @@ impl InterpreterCore {
                     heap: self.heap.value.clone(),
                     function_prototypes: self.function_prototypes.value.clone(),
                     builtin_prototypes: self.builtin_prototypes.value.clone(),
+                    symbol_state: self.symbol_state.value.clone(),
                 };
             }
             keepers.push(std::rc::Rc::downgrade(&strong));
@@ -18149,20 +18947,39 @@ impl InterpreterCore {
                     heap,
                     function_prototypes,
                     builtin_prototypes,
+                    symbol_state,
                 } => Some((
                     registers.clone(),
                     heap.clone(),
                     function_prototypes.clone(),
                     builtin_prototypes.clone(),
+                    symbol_state.clone(),
                 )),
             }
         };
 
-        if let Some((registers, heap, function_prototypes, builtin_prototypes)) = restore {
+        if let Some((registers, heap, _, _, symbol_state)) = &restore {
+            symbol_state
+                .validate()
+                .map_err(|details| InterpreterError::InternalError { details })?;
+            for value in registers {
+                validate_symbol_value(symbol_state, value)
+                    .map_err(|details| InterpreterError::InternalError { details })?;
+            }
+            for object in heap {
+                validate_heap_symbol_references(symbol_state, object)
+                    .map_err(|details| InterpreterError::InternalError { details })?;
+            }
+        }
+
+        if let Some((registers, heap, function_prototypes, builtin_prototypes, symbol_state)) =
+            restore
+        {
             self.mutate_registers(|r| *r = registers);
             self.mutate_heap(|h| *h = heap);
             self.mutate_function_prototypes(|fp| *fp = function_prototypes);
             self.mutate_builtin_prototypes(|bp| *bp = builtin_prototypes);
+            self.mutate_symbol_state(|state| *state = symbol_state);
         }
         Ok(())
     }
@@ -18979,6 +19796,12 @@ impl InterpreterCore {
                 max: self.config.max_registers,
             });
         }
+        validate_symbol_value(&self.symbol_state, &value).map_err(|details| {
+            InterpreterError::TypeError {
+                expected: "resolved Symbol seed value".to_string(),
+                got: details,
+            }
+        })?;
 
         self.mutate_registers(|r| r[reg as usize] = value);
         self.last_pre_run_seed = None;
@@ -19235,6 +20058,7 @@ impl InterpreterCore {
                     )
                 },
             )))
+            .saturating_add(Self::estimate_symbol_state_bytes(&self.symbol_state))
     }
 
     fn capture_interpreter_state(
@@ -19278,6 +20102,7 @@ impl InterpreterCore {
             tick,
             registers,
             heap,
+            symbol_state: self.symbol_state.value.clone(),
         }
     }
 
@@ -19343,10 +20168,12 @@ impl InterpreterCore {
         self.last_pre_run_seed = Some(seed.clone());
         self.top_level_await_resumption_contexts.clear();
         self.clear_top_level_await_outcome();
-        let previous_register_bytes = self.registers_memory_bytes();
-        let previous_heap_bytes = self.heap_memory_bytes();
+        let previous_seed_surface_bytes = self
+            .registers_memory_bytes()
+            .saturating_add(self.heap_memory_bytes())
+            .saturating_add(self.symbol_state_memory_bytes());
         self.reset_execution_state_from_seed(&seed)?;
-        self.apply_register_heap_memory_delta(previous_register_bytes, previous_heap_bytes)?;
+        self.apply_seed_surface_memory_delta(previous_seed_surface_bytes)?;
         // perf: hot path - avoid double clone of source_label
         let entry_specifier = module.header.source_label.clone();
         self.ensure_module_record(module, &entry_specifier)?;
@@ -23476,6 +24303,35 @@ impl InterpreterCore {
                 let receiver = receiver.unwrap_or(Value::Undefined);
                 Ok(self.object_prototype_to_string_value(&receiver))
             }
+            BuiltinFunctionKind::SymbolPrototypeToString => {
+                let Value::Symbol(symbol) = receiver.unwrap_or(Value::Undefined) else {
+                    return Err(InterpreterError::TypeError {
+                        expected: "Symbol receiver".to_string(),
+                        got: "non-Symbol receiver".to_string(),
+                    });
+                };
+                Ok(Value::Str(self.symbol_to_string(symbol)))
+            }
+            BuiltinFunctionKind::StringIterator => {
+                let receiver = receiver.unwrap_or(Value::Undefined);
+                if !matches!(receiver, Value::Str(_)) {
+                    return Err(InterpreterError::TypeError {
+                        expected: "string iterator receiver".to_string(),
+                        got: receiver.type_name().to_string(),
+                    });
+                }
+                self.init_for_of_iterator(None, receiver)
+            }
+            BuiltinFunctionKind::GeneratorIteratorSelf => {
+                let receiver = receiver.unwrap_or(Value::Undefined);
+                if !matches!(receiver, Value::Generator(_)) {
+                    return Err(InterpreterError::TypeError {
+                        expected: "generator iterator receiver".to_string(),
+                        got: receiver.type_name().to_string(),
+                    });
+                }
+                Ok(receiver)
+            }
             BuiltinFunctionKind::ConsoleLog => self.dispatch_console_hostcall("console:log", args),
             BuiltinFunctionKind::ConsoleError => {
                 self.dispatch_console_hostcall("console:error", args)
@@ -26666,13 +27522,21 @@ impl InterpreterCore {
                             }
                         }
                         Value::Iterator(iterator_handle) => {
-                            property_key.as_str().map_or(Value::Undefined, |key| {
-                                self.iterator_property_value(iterator_handle, key)
-                            })
+                            self.iterator_runtime_property_value(iterator_handle, &property_key)
                         }
-                        Value::Str(s) => property_key
-                            .as_str()
-                            .map_or(Value::Undefined, |key| Self::string_property_value(&s, key)),
+                        Value::Str(s) => {
+                            if matches!(
+                                &property_key,
+                                RuntimePropertyKey::Symbol(symbol)
+                                    if *symbol == WellKnownSymbol::Iterator.id()
+                            ) {
+                                Value::BuiltinFunction(BuiltinFunction::string_iterator())
+                            } else {
+                                property_key.as_str().map_or(Value::Undefined, |key| {
+                                    Self::string_property_value(&s, key)
+                                })
+                            }
+                        }
                         Value::Int(_) | Value::Float(_) => property_key.as_str().map_or(
                             Value::Undefined,
                             // Member access on a number primitive resolves
@@ -26710,14 +27574,35 @@ impl InterpreterCore {
                             // exposing `.next` AS the generator itself routes
                             // `it.next()` through that existing path. Unknown
                             // members resolve to `undefined`.
-                            match property_key.as_str() {
-                                Some("next") => Value::Generator(gen_id),
+                            match property_key {
+                                RuntimePropertyKey::String(ref key)
+                                    if key.as_str() == Some("next") =>
+                                {
+                                    Value::Generator(gen_id)
+                                }
+                                RuntimePropertyKey::Symbol(symbol)
+                                    if symbol == WellKnownSymbol::Iterator.id() =>
+                                {
+                                    Value::BuiltinFunction(
+                                        BuiltinFunction::generator_iterator_self(),
+                                    )
+                                }
                                 _ => Value::Undefined,
                             }
                         }
                         Value::Promise(_) => property_key
                             .as_str()
                             .map_or(Value::Undefined, Self::promise_property_value),
+                        Value::Symbol(symbol) => match property_key.as_str() {
+                            Some("description") => self
+                                .symbol_description(symbol)
+                                .map(Value::Str)
+                                .unwrap_or(Value::Undefined),
+                            Some("toString") => {
+                                Value::BuiltinFunction(BuiltinFunction::symbol_to_string())
+                            }
+                            _ => Value::Undefined,
+                        },
                         other => {
                             return Err(InterpreterError::TypeError {
                                 expected: "object".to_string(),
@@ -26871,8 +27756,8 @@ impl InterpreterCore {
                                 &property_key,
                                 0,
                             )?;
-                            if deleted {
-                                self.mark_deleted_for_in_iterators(oid, property_key.string());
+                            if deleted && let Some(property_key) = property_key.string() {
+                                self.mark_deleted_for_in_iterators(oid, property_key);
                             }
                             self.write_reg(dst, Value::Bool(deleted))?;
                         }
@@ -27048,31 +27933,12 @@ impl InterpreterCore {
                     if let (Value::Object(target_id), Value::Object(source_id)) =
                         (target_val, source_val)
                     {
-                        // Collect source properties
-                        let properties: Vec<(JsString, Value)> = {
-                            if let Some(obj) = self.heap.get(source_id.0 as usize) {
-                                obj.properties
-                                    .exact_entries()
-                                    .into_iter()
-                                    .filter(|(key, _)| {
-                                        self.writable_own_runtime_property_visible(source_id, key)
-                                    })
-                                    .map(|(key, value)| (key, value.clone()))
-                                    .collect()
-                            } else {
-                                Vec::new()
-                            }
-                        };
-                        // Copy to target
-                        if self.heap.get(target_id.0 as usize).is_some() {
-                            for (key, val) in properties {
-                                self.set_object_runtime_property(
-                                    target_id,
-                                    RuntimePropertyKey::String(key),
-                                    val,
-                                )?;
-                            }
-                        }
+                        self.copy_own_runtime_properties(
+                            Some(module),
+                            target_id,
+                            source_id,
+                            false,
+                        )?;
                     }
                     self.ip += 1;
                 }
@@ -27115,25 +27981,7 @@ impl InterpreterCore {
                 Ir3Instruction::TypeOf { dst, src } => {
                     let result_label = self.unary_operation_label(src)?;
                     let val = self.read_reg(src)?;
-                    // A symbol value is represented as a heap object tagged
-                    // `__type:"symbol"` (builtin:Symbol); JS `typeof` of it must be
-                    // "symbol" (bd-bn1z7), which `val.typeof_name()` cannot determine
-                    // without heap access (it would report the generic "object").
-                    let name = match &val {
-                        Value::Object(id) => match self.heap.get(id.0 as usize) {
-                            Some(obj)
-                                if matches!(
-                                    obj.properties.get("__type"),
-                                    Some(Value::Str(t)) if t.as_ref() == "symbol"
-                                ) =>
-                            {
-                                "symbol"
-                            }
-                            _ => val.typeof_name(),
-                        },
-                        _ => val.typeof_name(),
-                    };
-                    self.write_reg_with_label(dst, Value::str(name), result_label)?;
+                    self.write_reg_with_label(dst, Value::str(val.typeof_name()), result_label)?;
                     self.ip += 1;
                 }
                 Ir3Instruction::Void { dst, src } => {
@@ -27492,6 +28340,13 @@ impl InterpreterCore {
                             Value::Bool(b) => JsString::from(if b { "true" } else { "false" }),
                             Value::Null => JsString::from("null"),
                             Value::Undefined => JsString::from("undefined"),
+                            Value::Symbol(_) => {
+                                return Err(InterpreterError::TypeError {
+                                    expected: "template literal substitution coercible to string"
+                                        .to_string(),
+                                    got: "symbol".to_string(),
+                                });
+                            }
                             Value::Object(id) => JsString::from(self.object_to_coerced_string(id)),
                             Value::Iterator(_) | Value::Generator(_) | Value::Accessor { .. } => {
                                 JsString::from("[object Object]")
@@ -28187,6 +29042,12 @@ impl InterpreterCore {
             (Value::Str(x), Value::Str(y)) => {
                 self.check_string_limit(x.len().saturating_add(y.len()))?;
                 Ok(Value::Str(x.concat(y)))
+            }
+            (Value::Str(_), Value::Symbol(_)) | (Value::Symbol(_), Value::Str(_)) => {
+                Err(InterpreterError::TypeError {
+                    expected: "string-concatenable value".to_string(),
+                    got: "symbol".to_string(),
+                })
             }
             (Value::Str(x), other) => {
                 let other_str = match other {
@@ -28906,76 +29767,33 @@ impl InterpreterCore {
             return Ok(init);
         }
 
+        if let (Some(module), Value::Object(object_id)) = (module, iterable) {
+            let iterator_key = RuntimePropertyKey::Symbol(WellKnownSymbol::Iterator.id());
+            if self.proxy_aware_has_runtime_property(Some(module), *object_id, &iterator_key, 0)? {
+                return Err(InterpreterError::TypeError {
+                    expected: "callable Symbol.iterator method".to_string(),
+                    got: "null or undefined Symbol.iterator".to_string(),
+                });
+            }
+        }
+
         Ok(RuntimeForOfInit::from_values(
             self.collect_for_of_values(iterable)?,
         ))
     }
 
-    /// Look up Symbol.iterator method using multiple representation strategies
-    /// to handle various ways the symbol property might be stored.
+    /// Look up the exact typed `Symbol.iterator` property. Ordinary strings
+    /// such as `"@@iterator"` and `"Symbol(1)"` remain ordinary string keys;
+    /// treating them as Symbols would reintroduce the identity collision this
+    /// migration removes.
     fn lookup_symbol_iterator_method(
         &mut self,
         module: Option<&Ir3Module>,
         object_id: ObjectId,
         receiver: Value,
     ) -> Result<Option<Value>, InterpreterError> {
-        // Strategy 1: Try "@@iterator" (spec notation)
-        if let Some(method) =
-            self.optional_callable_property(module, object_id, "@@iterator", receiver.clone())?
-        {
-            return Ok(Some(method));
-        }
-
-        // Strategy 2: Try "Symbol.iterator" (string representation)
-        if let Some(method) =
-            self.optional_callable_property(module, object_id, "Symbol.iterator", receiver.clone())?
-        {
-            return Ok(Some(method));
-        }
-
-        // Strategy 3: Try numeric representation of well-known symbol ID
-        // Symbol.iterator is WellKnownSymbol::Iterator which has id 1
-        if let Some(method) =
-            self.optional_callable_property(module, object_id, "Symbol(1)", receiver.clone())?
-        {
-            return Ok(Some(method));
-        }
-
-        // Strategy 4: Try direct symbol property access through heap
-        // This handles cases where [Symbol.iterator] is used as computed property key
-        if let Some(method) = self.lookup_iterator_via_heap_scan(object_id)? {
-            return Ok(Some(method));
-        }
-
-        Ok(None)
-    }
-
-    /// Scan object properties in heap for iterator-like symbol properties
-    fn lookup_iterator_via_heap_scan(
-        &mut self,
-        object_id: ObjectId,
-    ) -> Result<Option<Value>, InterpreterError> {
-        let object = self
-            .heap
-            .get(object_id.0 as usize)
-            .ok_or(InterpreterError::ObjectNotFound { id: object_id.0 })?;
-
-        // Look for properties that might be Symbol.iterator
-        for (key, value) in &object.properties {
-            // Check for various iterator symbol representations
-            if key == "@@iterator"
-                || key == "Symbol.iterator"
-                || key == "Symbol(1)"
-                || key.contains("iterator")
-                || key.starts_with("Symbol(")
-            {
-                if value.is_callable() {
-                    return Ok(Some(value.clone()));
-                }
-            }
-        }
-
-        Ok(None)
+        let iterator_key = RuntimePropertyKey::Symbol(WellKnownSymbol::Iterator.id());
+        self.optional_callable_runtime_property(module, object_id, &iterator_key, receiver)
     }
 
     fn prepare_custom_for_of_state(
@@ -28988,7 +29806,6 @@ impl InterpreterCore {
         };
         let receiver = Value::Object(*iterable_id);
 
-        // Try multiple representations of Symbol.iterator for compatibility
         let iterator_method =
             self.lookup_symbol_iterator_method(Some(module), *iterable_id, receiver.clone())?;
 
@@ -28998,11 +29815,17 @@ impl InterpreterCore {
 
         let iterator_value =
             self.invoke_inline_method_call(Some(module), iterator_method, receiver, Vec::new())?;
-        let Value::Object(iterator_object) = iterator_value else {
-            return Err(InterpreterError::TypeError {
-                expected: "object returned by @@iterator".to_string(),
-                got: iterator_value.type_name().to_string(),
-            });
+        let iterator_object = match iterator_value {
+            Value::Iterator(handle) => {
+                return Ok(Some(RuntimeForOfInit::from_existing(handle)));
+            }
+            Value::Object(iterator_object) => iterator_object,
+            other => {
+                return Err(InterpreterError::TypeError {
+                    expected: "object returned by @@iterator".to_string(),
+                    got: other.type_name().to_string(),
+                });
+            }
         };
         let iterator_receiver = Value::Object(iterator_object);
         let Some(next_method) = self.optional_callable_property(
@@ -29031,12 +29854,27 @@ impl InterpreterCore {
         key: &str,
         receiver: Value,
     ) -> Result<Option<Value>, InterpreterError> {
-        let value = self.proxy_aware_get_property(module, object_id, key, receiver, 0)?;
+        self.optional_callable_runtime_property(
+            module,
+            object_id,
+            &RuntimePropertyKey::String(JsString::from(key)),
+            receiver,
+        )
+    }
+
+    fn optional_callable_runtime_property(
+        &mut self,
+        module: Option<&Ir3Module>,
+        object_id: ObjectId,
+        key: &RuntimePropertyKey,
+        receiver: Value,
+    ) -> Result<Option<Value>, InterpreterError> {
+        let value = self.proxy_aware_get_runtime_property(module, object_id, key, receiver, 0)?;
         match value {
             Value::Undefined | Value::Null => Ok(None),
             value if value.is_callable() => Ok(Some(value)),
             other => Err(InterpreterError::TypeError {
-                expected: format!("callable property '{key}' or undefined"),
+                expected: format!("callable property '{}' or undefined", key.diagnostic()),
                 got: other.type_name().to_string(),
             }),
         }
@@ -29086,6 +29924,9 @@ impl InterpreterCore {
 
         let iterable_ref = self.iteration_ref_for_value(&value);
         let init = self.prepare_for_of_state(module, &value)?;
+        if let Some(handle) = init.existing_handle {
+            return Ok(Value::Iterator(handle));
+        }
         let trace_index = self.start_iteration_trace(
             IterationKind::ForOf,
             format!("iterable:{}|{}", value.type_name(), value),
@@ -29344,10 +30185,23 @@ impl InterpreterCore {
     fn iterator_property_value(&self, iterator_handle: u32, key: &str) -> Value {
         match key {
             "next" => Value::BuiltinFunction(BuiltinFunction::iterator_next(iterator_handle)),
-            "@@iterator" | "Symbol.iterator" => {
+            _ => Value::Undefined,
+        }
+    }
+
+    fn iterator_runtime_property_value(
+        &self,
+        iterator_handle: u32,
+        key: &RuntimePropertyKey,
+    ) -> Value {
+        match key {
+            RuntimePropertyKey::String(key) => key.as_str().map_or(Value::Undefined, |key| {
+                self.iterator_property_value(iterator_handle, key)
+            }),
+            RuntimePropertyKey::Symbol(symbol) if *symbol == WellKnownSymbol::Iterator.id() => {
                 Value::BuiltinFunction(BuiltinFunction::iterator_self(iterator_handle))
             }
-            _ => Value::Undefined,
+            RuntimePropertyKey::Symbol(_) => Value::Undefined,
         }
     }
 
@@ -30421,6 +31275,7 @@ impl InterpreterCore {
         key: &RuntimePropertyKey,
         receiver: Value,
     ) -> Result<Value, InterpreterError> {
+        self.validate_executable_property_key(key)?;
         if let Some(key) = key.as_str() {
             if let Some(value) = self.writable_state_view_value(object_id, key) {
                 return Ok(value);
@@ -30460,10 +31315,7 @@ impl InterpreterCore {
                     .heap
                     .get(id.0 as usize)
                     .ok_or(InterpreterError::ObjectNotFound { id: id.0 })?;
-                (
-                    object.properties.get_exact(key.string()).cloned(),
-                    object.prototype,
-                )
+                (object.own_runtime_property_value(key), object.prototype)
             };
             if let Some(val) = property_value {
                 // Capture property resolution success for deterministic replay
@@ -30489,6 +31341,22 @@ impl InterpreterCore {
         // Consult them only after ordinary own/inherited properties have had a
         // chance to shadow the accessor, and never trust guest heap metadata as
         // a brand (bd-8y0gs).
+        if matches!(
+            key,
+            RuntimePropertyKey::Symbol(symbol)
+                if *symbol == WellKnownSymbol::Iterator.id()
+        ) {
+            let root = self
+                .heap
+                .get(object_id.0 as usize)
+                .ok_or(InterpreterError::ObjectNotFound { id: object_id.0 })?;
+            if root.is_array {
+                return Ok(Value::BuiltinFunction(BuiltinFunction::array_values()));
+            }
+            if root.typed_array.is_some() {
+                return Ok(Value::BuiltinFunction(BuiltinFunction::typed_array_values()));
+            }
+        }
         let Some(key_text) = key.as_str() else {
             self.nondeterminism_trace.capture(
                 NondeterminismSource::PropertyResolution,
@@ -30916,9 +31784,7 @@ impl InterpreterCore {
             "copyWithin" => Some(BuiltinFunction::typed_array_copy_within()),
             "entries" => Some(BuiltinFunction::typed_array_entries()),
             "keys" => Some(BuiltinFunction::typed_array_keys()),
-            "values" | "@@iterator" | "Symbol.iterator" => {
-                Some(BuiltinFunction::typed_array_values())
-            }
+            "values" => Some(BuiltinFunction::typed_array_values()),
             "map" | "filter" | "reduce" | "reduceRight" | "forEach" | "find" | "findIndex"
             | "includes" | "indexOf" | "lastIndexOf" | "reverse" | "sort" | "join" | "toString" => {
                 Some(BuiltinFunction::typed_array_unsupported_method())
@@ -30974,12 +31840,20 @@ impl InterpreterCore {
             return false;
         };
         let property_key = self.executable_property_key_from_value(property);
-        if !self.writable_own_runtime_property_visible(*object_id, property_key.string()) {
+        if self
+            .validate_executable_property_key(&property_key)
+            .is_err()
+        {
+            return false;
+        }
+        if let RuntimePropertyKey::String(key) = &property_key
+            && !self.writable_own_runtime_property_visible(*object_id, key)
+        {
             return false;
         }
         self.heap
             .get(object_id.0 as usize)
-            .map(|object| object.properties.contains_exact_key(property_key.string()))
+            .map(|object| object.contains_own_runtime_property(&property_key))
             .unwrap_or(false)
     }
 
@@ -31195,6 +32069,7 @@ impl InterpreterCore {
         object_id: ObjectId,
         key: &RuntimePropertyKey,
     ) -> Result<Value, InterpreterError> {
+        self.validate_executable_property_key(key)?;
         let mut current = Some(object_id);
         let mut depth = 0u32;
         let mut visited = BTreeSet::new();
@@ -31221,9 +32096,15 @@ impl InterpreterCore {
                     .heap
                     .get(id.0 as usize)
                     .ok_or(InterpreterError::ObjectNotFound { id: id.0 })?;
+                let visible = match key {
+                    RuntimePropertyKey::String(key) => {
+                        self.writable_own_runtime_property_visible(id, key)
+                    }
+                    RuntimePropertyKey::Symbol(_) => true,
+                };
                 (
-                    self.writable_own_runtime_property_visible(id, key.string())
-                        .then(|| object.properties.get_exact(key.string()).cloned())
+                    visible
+                        .then(|| object.own_runtime_property_value(key))
                         .flatten()
                         .map(|value| (value, object.is_frozen)),
                     object.prototype,
@@ -31293,6 +32174,7 @@ impl InterpreterCore {
         object_id: ObjectId,
         key: &RuntimePropertyKey,
     ) -> Result<bool, InterpreterError> {
+        self.validate_executable_property_key(key)?;
         if let Some(key) = key.as_str()
             && self.writable_state_view_value(object_id, key).is_some()
         {
@@ -31315,7 +32197,7 @@ impl InterpreterCore {
                 .heap
                 .get(id.0 as usize)
                 .ok_or(InterpreterError::ObjectNotFound { id: id.0 })?;
-            if object.properties.contains_exact_key(key.string()) {
+            if object.contains_own_runtime_property(key) {
                 return Ok(true);
             }
             current = object.prototype;
@@ -31564,16 +32446,12 @@ impl InterpreterCore {
             module,
             handler,
             "get",
-            vec![
-                Value::Object(target),
-                Value::Str(key.string().clone()),
-                receiver,
-            ],
+            vec![Value::Object(target), key.value(), receiver.clone()],
         )? {
             return Ok(value);
         }
 
-        self.proxy_aware_get_runtime_property(module, target, key, Value::Object(target), depth + 1)
+        self.proxy_aware_get_runtime_property(module, target, key, receiver, depth + 1)
     }
 
     #[cfg(test)]
@@ -31629,12 +32507,15 @@ impl InterpreterCore {
             {
                 return Ok(success);
             }
-            if let Some(accessor) = self.prototype_chain_find_runtime_property(object_id, key)?
-                && self.resolve_accessor_set(module, accessor, receiver, value.clone())?
+            if let Some(property) = self.prototype_chain_find_runtime_property(object_id, key)?
+                && matches!(&property, Value::Accessor { .. })
             {
-                return Ok(true);
+                return self.resolve_accessor_set(module, property, receiver, value);
             }
-            self.set_object_runtime_property(object_id, key.clone(), value)?;
+            let Some(receiver_id) = self.proxy_set_receiver_object(&receiver)? else {
+                return Ok(false);
+            };
+            self.set_object_runtime_property(receiver_id, key.clone(), value)?;
             return Ok(true);
         };
 
@@ -31644,22 +32525,41 @@ impl InterpreterCore {
             "set",
             vec![
                 Value::Object(target),
-                Value::Str(key.string().clone()),
+                key.value(),
                 value.clone(),
-                receiver,
+                receiver.clone(),
             ],
         )? {
             return Ok(result.is_truthy());
         }
 
-        self.proxy_aware_set_runtime_property(
-            module,
-            target,
-            key,
-            value,
-            Value::Object(target),
-            depth + 1,
-        )
+        self.proxy_aware_set_runtime_property(module, target, key, value, receiver, depth + 1)
+    }
+
+    /// Resolve the object on which ordinary `[[Set]]` creates/replaces a data
+    /// property. A transparent Proxy receiver forwards that define step to its
+    /// target in this baseline model, which has no separate defineProperty
+    /// trap carrier; a distinct ordinary Reflect receiver keeps its identity.
+    fn proxy_set_receiver_object(
+        &self,
+        receiver: &Value,
+    ) -> Result<Option<ObjectId>, InterpreterError> {
+        let Value::Object(object_id) = receiver else {
+            return Ok(None);
+        };
+        let mut object_id = *object_id;
+        let mut depth = 0u32;
+        while depth < MAX_PROTOTYPE_CHAIN_DEPTH {
+            let Some((target, _handler)) = self.active_proxy_record(object_id)? else {
+                return Ok(Some(object_id));
+            };
+            object_id = target;
+            depth += 1;
+        }
+        Err(InterpreterError::TypeError {
+            expected: "bounded Proxy receiver recursion".to_string(),
+            got: format!("depth {depth}"),
+        })
     }
 
     fn proxy_aware_has_runtime_property(
@@ -31683,7 +32583,7 @@ impl InterpreterCore {
             module,
             handler,
             "has",
-            vec![Value::Object(target), Value::Str(key.string().clone())],
+            vec![Value::Object(target), key.value()],
         )? {
             return Ok(result.is_truthy());
         }
@@ -31712,7 +32612,7 @@ impl InterpreterCore {
             module,
             handler,
             "deleteProperty",
-            vec![Value::Object(target), Value::Str(key.string().clone())],
+            vec![Value::Object(target), key.value()],
         )? {
             return Ok(result.is_truthy());
         }
@@ -31729,11 +32629,17 @@ impl InterpreterCore {
             .get(object_id.0 as usize)
             .ok_or(InterpreterError::ObjectNotFound { id: object_id.0 })?;
         Ok(object
-            .properties
-            .exact_keys()
+            .own_runtime_property_keys()
             .into_iter()
-            .filter(|key| self.writable_own_runtime_property_visible(object_id, key))
-            .map(Value::Str)
+            .filter_map(|key| match key {
+                RuntimePropertyKey::String(key)
+                    if self.writable_own_runtime_property_visible(object_id, &key) =>
+                {
+                    Some(Value::Str(key))
+                }
+                RuntimePropertyKey::Symbol(symbol) => Some(Value::Symbol(symbol)),
+                RuntimePropertyKey::String(_) => None,
+            })
             .collect())
     }
 
@@ -31769,7 +32675,14 @@ impl InterpreterCore {
             };
             let mut seen = BTreeSet::new();
             for key_value in &key_values {
+                if !matches!(key_value, Value::Str(_) | Value::Symbol(_)) {
+                    return Err(InterpreterError::TypeError {
+                        expected: "string or Symbol Proxy.ownKeys result key".to_string(),
+                        got: key_value.type_name().to_string(),
+                    });
+                }
                 let key = self.executable_property_key_from_value(key_value);
+                self.validate_executable_property_key(&key)?;
                 if !seen.insert(key.clone()) {
                     return Err(InterpreterError::TypeError {
                         expected: "unique Proxy.ownKeys result keys".to_string(),
@@ -31781,6 +32694,53 @@ impl InterpreterCore {
         }
 
         self.proxy_aware_own_property_keys(module, target, depth + 1)
+    }
+
+    /// Snapshot a source object's typed own-key order, read each value through
+    /// ordinary `[[Get]]` (so Symbol accessors and Proxy traps execute), and
+    /// copy it to the target. Object spread defines plain data properties;
+    /// `Object.assign` uses ordinary `[[Set]]` and therefore honors target
+    /// setters and Proxy `set` traps.
+    fn copy_own_runtime_properties(
+        &mut self,
+        module: Option<&Ir3Module>,
+        target_id: ObjectId,
+        source_id: ObjectId,
+        use_target_set: bool,
+    ) -> Result<(), InterpreterError> {
+        let keys = self
+            .proxy_aware_own_property_keys(module, source_id, 0)?
+            .into_iter()
+            .map(|key| self.executable_property_key_from_value(&key))
+            .collect::<Vec<_>>();
+
+        for key in keys {
+            let value = self.proxy_aware_get_runtime_property(
+                module,
+                source_id,
+                &key,
+                Value::Object(source_id),
+                0,
+            )?;
+            if use_target_set {
+                if !self.proxy_aware_set_runtime_property(
+                    module,
+                    target_id,
+                    &key,
+                    value,
+                    Value::Object(target_id),
+                    0,
+                )? {
+                    return Err(InterpreterError::TypeError {
+                        expected: "successful Object.assign property write".to_string(),
+                        got: key.diagnostic(),
+                    });
+                }
+            } else {
+                self.set_object_runtime_property(target_id, key, value)?;
+            }
+        }
+        Ok(())
     }
 
     // -- Promise hostcall dispatch ------------------------------------------
@@ -31795,6 +32755,7 @@ impl InterpreterCore {
             Value::Int(n) => crate::object_model::JsValue::Int(*n),
             Value::Float(f) => crate::object_model::JsValue::Float(f.inner().to_bits()),
             Value::Str(s) => crate::object_model::JsValue::Str(s.to_string()),
+            Value::Symbol(symbol) => crate::object_model::JsValue::Symbol(*symbol),
             Value::Object(id) => {
                 crate::object_model::JsValue::Object(crate::object_model::ObjectHandle(id.0))
             }
@@ -31817,7 +32778,7 @@ impl InterpreterCore {
             }
             crate::object_model::JsValue::Object(handle) => Value::Object(ObjectId(handle.0)),
             crate::object_model::JsValue::Function(idx) => Value::Function(*idx),
-            crate::object_model::JsValue::Symbol(sym) => Value::str(format!("Symbol({})", sym.0)),
+            crate::object_model::JsValue::Symbol(symbol) => Value::Symbol(*symbol),
         }
     }
 
@@ -34054,38 +35015,111 @@ impl InterpreterCore {
         }
     }
 
-    #[cfg(test)]
-    fn property_key_from_value(&self, value: &Value) -> String {
-        if let Value::Object(object_id) = value {
-            if let Some(object) = self.heap.get(object_id.0 as usize) {
-                let is_symbol = matches!(
-                    object.properties.get("__type"),
-                    Some(Value::Str(kind)) if kind.as_ref() == "Symbol"
-                );
-                if is_symbol {
-                    if let Some(Value::Str(key)) = object.properties.get("__key") {
-                        return key.to_string();
-                    }
-                }
-            }
+    fn symbol_description_argument(
+        &self,
+        value: Option<Value>,
+    ) -> Result<Option<JsString>, InterpreterError> {
+        match value {
+            None | Some(Value::Undefined) => Ok(None),
+            Some(Value::Str(text)) => Ok(Some(text)),
+            Some(Value::Symbol(_)) => Err(InterpreterError::TypeError {
+                expected: "Symbol description coercible to string".to_string(),
+                got: "symbol".to_string(),
+            }),
+            Some(value) => Ok(Some(JsString::from(self.value_to_string(&value)))),
         }
+    }
 
-        Self::property_key(value)
+    fn symbol_registry_key_argument(&self, value: Value) -> Result<JsString, InterpreterError> {
+        match value {
+            Value::Str(text) => Ok(text),
+            Value::Symbol(_) => Err(InterpreterError::TypeError {
+                expected: "Symbol.for key coercible to string".to_string(),
+                got: "symbol".to_string(),
+            }),
+            value => Ok(JsString::from(self.value_to_string(&value))),
+        }
+    }
+
+    fn allocate_private_symbol(
+        &mut self,
+        description: Option<JsString>,
+    ) -> Result<SymbolId, InterpreterError> {
+        let previous_symbol_bytes = Self::estimate_symbol_state_bytes(&self.symbol_state);
+        let temporary_bytes = self
+            .estimated_memory_bytes
+            .saturating_add(previous_symbol_bytes);
+        if Self::memory_request_exceeds_budget(temporary_bytes, self.config.max_total_memory_bytes)
+        {
+            return Err(self.memory_budget_error(temporary_bytes, self.heap_object_count_u32()));
+        }
+        let mut projected = self.symbol_state.value.clone();
+        let symbol = projected.allocate_private(description)?;
+        let next_symbol_bytes = Self::estimate_symbol_state_bytes(&projected);
+        let peak_bytes = self
+            .estimated_memory_bytes
+            .saturating_add(next_symbol_bytes);
+        if Self::memory_request_exceeds_budget(peak_bytes, self.config.max_total_memory_bytes) {
+            return Err(self.memory_budget_error(peak_bytes, self.heap_object_count_u32()));
+        }
+        self.apply_memory_component_delta(previous_symbol_bytes, next_symbol_bytes)?;
+        self.mutate_symbol_state(|state| *state = projected);
+        Ok(symbol)
+    }
+
+    fn intern_global_symbol(&mut self, key: JsString) -> Result<SymbolId, InterpreterError> {
+        if let Some(symbol) = self.symbol_state.global_symbol(&key) {
+            return Ok(symbol);
+        }
+        let previous_symbol_bytes = Self::estimate_symbol_state_bytes(&self.symbol_state);
+        let temporary_bytes = self
+            .estimated_memory_bytes
+            .saturating_add(previous_symbol_bytes);
+        if Self::memory_request_exceeds_budget(temporary_bytes, self.config.max_total_memory_bytes)
+        {
+            return Err(self.memory_budget_error(temporary_bytes, self.heap_object_count_u32()));
+        }
+        let mut projected = self.symbol_state.value.clone();
+        let symbol = projected.intern_global(key)?;
+        let next_symbol_bytes = Self::estimate_symbol_state_bytes(&projected);
+        let peak_bytes = self
+            .estimated_memory_bytes
+            .saturating_add(next_symbol_bytes);
+        if Self::memory_request_exceeds_budget(peak_bytes, self.config.max_total_memory_bytes) {
+            return Err(self.memory_budget_error(peak_bytes, self.heap_object_count_u32()));
+        }
+        self.apply_memory_component_delta(previous_symbol_bytes, next_symbol_bytes)?;
+        self.mutate_symbol_state(|state| *state = projected);
+        Ok(symbol)
+    }
+
+    fn symbol_description(&self, id: SymbolId) -> Option<JsString> {
+        well_known_symbol_description(id)
+            .map(JsString::from)
+            .or_else(|| self.symbol_state.description(id).cloned())
+    }
+
+    fn symbol_display_string(&self, id: SymbolId) -> String {
+        self.symbol_description(id).map_or_else(
+            || "Symbol()".to_string(),
+            |description| format!("Symbol({description})"),
+        )
+    }
+
+    fn symbol_to_string(&self, id: SymbolId) -> JsString {
+        let prefix = JsString::from("Symbol(");
+        let suffix = JsString::from(")");
+        self.symbol_description(id).map_or_else(
+            || prefix.concat(&suffix),
+            |description| prefix.concat(&description).concat(&suffix),
+        )
     }
 
     /// Convert a dynamic IR value to the private exact string-key carrier.
     /// This is the executable key path for dynamic and builtin consumers.
     fn executable_property_key_from_value(&self, value: &Value) -> RuntimePropertyKey {
-        if let Value::Object(object_id) = value
-            && let Some(object) = self.heap.get(object_id.0 as usize)
-        {
-            let is_symbol = matches!(
-                object.properties.get("__type"),
-                Some(Value::Str(kind)) if kind.as_ref() == "Symbol"
-            );
-            if is_symbol && let Some(Value::Str(key)) = object.properties.get("__key") {
-                return RuntimePropertyKey::String(key.clone());
-            }
+        if let Value::Symbol(symbol) = value {
+            return RuntimePropertyKey::Symbol(*symbol);
         }
 
         let key = match value {
@@ -34096,11 +35130,26 @@ impl InterpreterCore {
         RuntimePropertyKey::String(key)
     }
 
+    fn validate_executable_property_key(
+        &self,
+        key: &RuntimePropertyKey,
+    ) -> Result<(), InterpreterError> {
+        if let RuntimePropertyKey::Symbol(symbol) = key
+            && !self.symbol_state.contains(*symbol)
+        {
+            return Err(InterpreterError::TypeError {
+                expected: "resolved Symbol property key".to_string(),
+                got: format!("unresolved Symbol id {}", symbol.0),
+            });
+        }
+        Ok(())
+    }
+
     #[allow(dead_code)] // Kept for potential integer-only operations; tested below
     fn coerce_to_number(value: &Value) -> Option<i64> {
         match value {
             Value::Int(n) => Some(*n),
-            Value::BigInt(_) => None,
+            Value::BigInt(_) | Value::Symbol(_) => None,
             Value::Float(f) => {
                 let v = f.inner();
                 if v.is_nan() || v.is_infinite() {
@@ -36433,7 +37482,7 @@ impl InterpreterCore {
     fn coerce_to_float(value: &Value) -> Option<f64> {
         match value {
             Value::Int(n) => Some(*n as f64),
-            Value::BigInt(_) => None,
+            Value::BigInt(_) | Value::Symbol(_) => None,
             Value::Float(f) => Some(f.inner()),
             Value::Bool(b) => Some(if *b { 1.0 } else { 0.0 }),
             Value::Null => Some(0.0),
@@ -36493,6 +37542,7 @@ impl InterpreterCore {
             Value::AsyncGeneratorObject(_) => "[object AsyncGenerator]".to_string(),
             Value::Promise(_) => "[object Promise]".to_string(),
             Value::BuiltinFunction(_) => "[object Function]".to_string(),
+            Value::Symbol(symbol) => format!("Symbol({})", symbol.0),
         }
     }
 
@@ -36503,6 +37553,7 @@ impl InterpreterCore {
             Value::Bool(_) => "[object Boolean]".to_string(),
             Value::Int(_) | Value::Float(_) => "[object Number]".to_string(),
             Value::BigInt(_) => "[object BigInt]".to_string(),
+            Value::Symbol(_) => "[object Symbol]".to_string(),
             Value::Str(_) => "[object String]".to_string(),
             Value::Object(_) => "[object Object]".to_string(),
             Value::Accessor { .. } => "[object Object]".to_string(),
@@ -37480,8 +38531,7 @@ impl InterpreterCore {
                 Ok(self
                     .heap
                     .get(object_id.0 as usize)
-                    .and_then(|object| object.properties.get_exact(key.string()))
-                    .cloned()
+                    .and_then(|object| object.own_runtime_property_value(&key))
                     .unwrap_or(Value::Undefined))
             }
             Value::Iterator(iterator_handle) => Ok(key.as_str().map_or(Value::Undefined, |key| {
@@ -38482,6 +39532,12 @@ impl InterpreterCore {
                 // Exact-code-unit concat heals split surrogate pairs (bd-neika).
                 Ok(Value::Str(left_string.concat(right_string)))
             }
+            (Value::Str(_), Value::Symbol(_)) | (Value::Symbol(_), Value::Str(_)) => {
+                Err(InterpreterError::TypeError {
+                    expected: "string-concatenable value".to_string(),
+                    got: "symbol".to_string(),
+                })
+            }
             (Value::Str(left_string), other) => {
                 let other_string = self.value_to_string(other);
                 self.check_string_limit(left_string.len().saturating_add(other_string.len()))?;
@@ -38682,6 +39738,7 @@ impl InterpreterCore {
             | (Value::Int(_), Value::Int(_))
             | (Value::BigInt(_), Value::BigInt(_))
             | (Value::Str(_), Value::Str(_))
+            | (Value::Symbol(_), Value::Symbol(_))
             | (Value::Object(_), Value::Object(_))
             | (Value::Function(_), Value::Function(_))
             | (Value::Closure(_), Value::Closure(_))
@@ -38895,6 +39952,7 @@ impl InterpreterCore {
         object_id: ObjectId,
         key: &RuntimePropertyKey,
     ) -> Result<Option<Value>, InterpreterError> {
+        self.validate_executable_property_key(key)?;
         let mut current = Some(object_id);
         let mut depth = 0u32;
         let mut visited = BTreeSet::new();
@@ -38907,8 +39965,8 @@ impl InterpreterCore {
                 .heap
                 .get(id.0 as usize)
                 .ok_or(InterpreterError::ObjectNotFound { id: id.0 })?;
-            if let Some(value) = object.properties.get_exact(key.string()) {
-                return Ok(Some(value.clone()));
+            if let Some(value) = object.own_runtime_property_value(key) {
+                return Ok(Some(value));
             }
             current = object.prototype;
             depth += 1;
@@ -38949,7 +40007,7 @@ impl InterpreterCore {
                 )?;
                 Ok(true)
             }
-            Value::Accessor { set: None, .. } => Ok(true),
+            Value::Accessor { set: None, .. } => Ok(false),
             _ => Ok(false),
         }
     }
@@ -38961,6 +40019,7 @@ impl InterpreterCore {
         func: Value,
         kind: AccessorKind,
     ) -> Result<(), InterpreterError> {
+        self.validate_executable_property_key(&key)?;
         if self.is_import_meta_object(object_id)? {
             return Err(InterpreterError::TypeError {
                 expected: "read-only import.meta contract field".to_string(),
@@ -38973,9 +40032,7 @@ impl InterpreterCore {
             .heap
             .get(object_id.0 as usize)
             .ok_or(InterpreterError::ObjectNotFound { id: object_id.0 })?
-            .properties
-            .get_exact(key.string())
-            .cloned();
+            .own_runtime_property_value(&key);
         let (get, set) = match existing {
             Some(Value::Accessor { get, set }) => (get, set),
             _ => (None, None),
@@ -39172,6 +40229,7 @@ impl InterpreterCore {
     fn json_stringify_value(&self, value: &Value, visited: &mut Vec<ObjectId>) -> Option<String> {
         let rendered = match value {
             Value::Undefined => return None,
+            Value::Symbol(_) => return None,
             Value::Null => "null".to_string(),
             Value::Bool(b) => {
                 if *b {
@@ -41375,10 +42433,12 @@ impl InterpreterCore {
                 // arguments are ignored. `new String` remains a separate boxed
                 // constructor surface and is not routed here (bd-wgezf).
                 let converted = match self.builtin_arg(args, 0)? {
-                    Some(value) => self.value_to_string(&value),
-                    None => String::new(),
+                    Some(Value::Str(value)) => value,
+                    Some(Value::Symbol(symbol)) => self.symbol_to_string(symbol),
+                    Some(value) => JsString::from(self.value_to_string(&value)),
+                    None => JsString::from(""),
                 };
-                Ok(Value::str(converted))
+                Ok(Value::Str(converted))
             }
             "builtin:Url" => self.construct_url(args),
             "builtin:UrlSearchParams" => self.construct_url_search_params(args),
@@ -41887,6 +42947,7 @@ impl InterpreterCore {
                                             (Value::Bool(a), Value::Bool(b)) => a == b,
                                             (Value::Null, Value::Null) => true,
                                             (Value::Undefined, Value::Undefined) => true,
+                                            (Value::Symbol(a), Value::Symbol(b)) => a == b,
                                             (Value::Object(a), Value::Object(b)) => a == b,
                                             _ => false, // Different types don't match in strict equality
                                         };
@@ -41978,6 +43039,7 @@ impl InterpreterCore {
                                             (Value::Bool(a), Value::Bool(b)) => a == b,
                                             (Value::Null, Value::Null) => true,
                                             (Value::Undefined, Value::Undefined) => true,
+                                            (Value::Symbol(a), Value::Symbol(b)) => a == b,
                                             (Value::Object(a), Value::Object(b)) => a == b,
                                             _ => false, // Different types don't match in strict equality
                                         };
@@ -42248,30 +43310,13 @@ impl InterpreterCore {
                 for i in 1..args.count {
                     let source_val = self.read_reg(args.start + i)?;
                     if let Value::Object(source_obj_id) = source_val {
-                        let properties_to_copy = self
-                            .heap
-                            .get(source_obj_id.0 as usize)
-                            .ok_or(InterpreterError::ObjectNotFound {
-                                id: source_obj_id.0,
-                            })?
-                            .properties
-                            .exact_entries()
-                            .into_iter()
-                            .filter(|(key, _)| {
-                                self.writable_own_runtime_property_visible(source_obj_id, key)
-                            })
-                            .map(|(key, value)| (key, value.clone()))
-                            .collect::<Vec<_>>();
                         self.join_pending_hostcall_stream_label(source_obj_id)?;
-
-                        // Copy each property to target object
-                        for (key, value) in properties_to_copy {
-                            self.set_object_runtime_property(
-                                target_obj_id,
-                                RuntimePropertyKey::String(key),
-                                value,
-                            )?;
-                        }
+                        self.copy_own_runtime_properties(
+                            module,
+                            target_obj_id,
+                            source_obj_id,
+                            true,
+                        )?;
                     }
                     // Skip non-object sources (null, undefined, primitives)
                 }
@@ -44325,99 +45370,40 @@ impl InterpreterCore {
                 self.string_match_value(&this_str, &pattern_val)
             }
             "builtin:Symbol" => {
-                // Symbol(description) implementation (simplified)
                 let description = if args.count > 0 {
-                    let desc_val = self.read_reg(args.start)?;
-                    match desc_val {
-                        Value::Str(s) => Some(s.to_string()),
-                        Value::Int(i) => Some(i.to_string()),
-                        Value::Float(f) => Some(f.inner().to_string()),
-                        Value::Bool(b) => Some(b.to_string()),
-                        Value::Null => Some("null".to_string()),
-                        Value::Undefined => None,
-                        _ => Some("Symbol".to_string()),
-                    }
+                    self.symbol_description_argument(Some(self.read_reg(args.start)?))?
                 } else {
                     None
                 };
-
-                // Create a unique symbol object (simplified representation)
-                let symbol_id = self.alloc_object_with_prototype(None)?;
-
-                // Store symbol metadata
-                self.set_object_property(symbol_id, "__type".to_string(), Value::str("symbol"))?;
-                if let Some(desc) = description {
-                    self.set_object_property(
-                        symbol_id,
-                        "__description".to_string(),
-                        Value::str(desc),
-                    )?;
-                }
-                self.set_object_property(
-                    symbol_id,
-                    "__id".to_string(),
-                    Value::Int(symbol_id.0 as i64),
-                )?;
-                Ok(Value::Object(symbol_id))
+                self.allocate_private_symbol(description).map(Value::Symbol)
             }
             "builtin:SymbolFor" => {
-                // Symbol.for(key): intern one symbol per string key in the global
-                // registry, so Symbol.for('x') === Symbol.for('x') (bd-hitj1).
-                // A fresh Symbol() is never registry-interned, so it is distinct.
-                let key_val = if args.count > 0 {
+                let value = if args.count > 0 {
                     self.read_reg(args.start)?
                 } else {
                     Value::Undefined
                 };
-                let key = match key_val {
-                    Value::Str(s) => s.to_string(),
-                    Value::Int(i) => i.to_string(),
-                    Value::Float(f) => f.inner().to_string(),
-                    Value::Bool(b) => b.to_string(),
-                    Value::Null => "null".to_string(),
-                    Value::Undefined => "undefined".to_string(),
-                    other => other.type_name().to_string(),
-                };
-                if let Some(existing) = self.symbol_registry.get(&key) {
-                    return Ok(Value::Object(*existing));
-                }
-                let symbol_id = self.alloc_object_with_prototype(None)?;
-                self.set_object_property(symbol_id, "__type".to_string(), Value::str("symbol"))?;
-                self.set_object_property(
-                    symbol_id,
-                    "__description".to_string(),
-                    Value::str(key.clone()),
-                )?;
-                self.set_object_property(
-                    symbol_id,
-                    "__id".to_string(),
-                    Value::Int(symbol_id.0 as i64),
-                )?;
-                // Mark as a registry symbol + record its key for Symbol.keyFor.
-                self.set_object_property(
-                    symbol_id,
-                    "__registry_key".to_string(),
-                    Value::str(key.clone()),
-                )?;
-                self.symbol_registry.insert(key, symbol_id);
-                Ok(Value::Object(symbol_id))
+                let key = self.symbol_registry_key_argument(value)?;
+                self.intern_global_symbol(key).map(Value::Symbol)
             }
             "builtin:SymbolKeyFor" => {
-                // Symbol.keyFor(sym): the registry key for a registered symbol,
-                // else undefined (a non-registry Symbol() returns undefined).
-                let sym_val = if args.count > 0 {
+                let value = if args.count > 0 {
                     self.read_reg(args.start)?
                 } else {
                     Value::Undefined
                 };
-                if let Value::Object(id) = sym_val
-                    && let Some(obj) = self.heap.get(id.0 as usize)
-                    && matches!(obj.properties.get("__type"), Some(Value::Str(s)) if s.as_ref() == "symbol")
-                    && let Some(Value::Str(key)) = obj.properties.get("__registry_key")
-                {
-                    return Ok(Value::str(key.to_string()));
-                }
-                Ok(Value::Undefined)
+                let Value::Symbol(symbol) = value else {
+                    return Err(InterpreterError::TypeError {
+                        expected: "Symbol".to_string(),
+                        got: value.type_name().to_string(),
+                    });
+                };
+                Ok(self
+                    .symbol_state
+                    .key_for(symbol)
+                    .cloned()
+                    .map(Value::Str)
+                    .unwrap_or(Value::Undefined))
             }
             "builtin:typeof" => {
                 // typeof operator implementation
@@ -44432,6 +45418,7 @@ impl InterpreterCore {
                     Value::Bool(_) => "boolean",
                     Value::Int(_) | Value::Float(_) => "number",
                     Value::BigInt(_) => "bigint",
+                    Value::Symbol(_) => "symbol",
                     Value::Str(_) => "string",
                     Value::Object(id) => {
                         // Check if it's a function-like object
@@ -44645,18 +45632,49 @@ impl InterpreterCore {
                 let prop_val = self.read_reg(args.start + 1)?;
                 let prop_name = self.executable_property_key_from_value(&prop_val);
 
-                // Get descriptor object (simplified - just use the value directly)
                 let descriptor_val = self.read_reg(args.start + 2)?;
-
-                // In a full implementation, we would parse the descriptor object.
-                // Resolve the effective value under an immutable borrow first,
-                // then apply it with a fresh mutable borrow to avoid aliasing.
                 let effective_value = match descriptor_val {
-                    Value::Object(desc_id) => self
-                        .heap
-                        .get(desc_id.0 as usize)
-                        .and_then(|desc_obj| desc_obj.properties.get("value").cloned())
-                        .unwrap_or(Value::Undefined),
+                    Value::Object(desc_id) => {
+                        let descriptor = self
+                            .heap
+                            .get(desc_id.0 as usize)
+                            .ok_or(InterpreterError::ObjectNotFound { id: desc_id.0 })?;
+                        let has_get = descriptor.properties.contains_key("get");
+                        let has_set = descriptor.properties.contains_key("set");
+                        let has_value = descriptor.properties.contains_key("value");
+                        let get = descriptor.properties.get("get").cloned();
+                        let set = descriptor.properties.get("set").cloned();
+                        let value = descriptor.properties.get("value").cloned();
+                        if has_get || has_set {
+                            if has_value {
+                                return Err(InterpreterError::TypeError {
+                                    expected: "either data or accessor property descriptor"
+                                        .to_string(),
+                                    got: "descriptor mixes value with get/set".to_string(),
+                                });
+                            }
+                            let endpoint = |name: &str,
+                                            value: Option<Value>|
+                             -> Result<Option<Arc<Value>>, InterpreterError> {
+                                match value.unwrap_or(Value::Undefined) {
+                                    Value::Undefined => Ok(None),
+                                    callable if callable.is_callable() => {
+                                        Ok(Some(Arc::new(callable)))
+                                    }
+                                    other => Err(InterpreterError::TypeError {
+                                        expected: format!("callable or undefined descriptor.{name}"),
+                                        got: other.type_name().to_string(),
+                                    }),
+                                }
+                            };
+                            Value::Accessor {
+                                get: endpoint("get", get)?,
+                                set: endpoint("set", set)?,
+                            }
+                        } else {
+                            value.unwrap_or(Value::Undefined)
+                        }
+                    }
                     other => other,
                 };
                 self.set_object_runtime_property(obj_id, prop_name, effective_value)?;
@@ -44754,8 +45772,8 @@ impl InterpreterCore {
                 let key_value = self.read_reg(args.start + 1)?;
                 let key = self.executable_property_key_from_value(&key_value);
                 let deleted = self.proxy_aware_delete_runtime_property(module, target, &key, 0)?;
-                if deleted {
-                    self.mark_deleted_for_in_iterators(target, key.string());
+                if deleted && let Some(key) = key.string() {
+                    self.mark_deleted_for_in_iterators(target, key);
                 }
                 Ok(Value::Bool(deleted))
             }
@@ -45372,6 +46390,21 @@ impl InterpreterCore {
                         Ok(Value::Object(empty_array_id))
                     }
                 }
+            }
+
+            "builtin:ObjectGetOwnPropertySymbols" => {
+                if args.count == 0 {
+                    return Ok(Value::Undefined);
+                }
+                let values = match self.read_reg(args.start)? {
+                    Value::Object(object_id) => self
+                        .proxy_aware_own_property_keys(module, object_id, 0)?
+                        .into_iter()
+                        .filter(|key| matches!(key, Value::Symbol(_)))
+                        .collect::<Vec<_>>(),
+                    _ => Vec::new(),
+                };
+                Ok(Value::Object(self.alloc_array_from_values(&values)?))
             }
 
             "builtin:ObjectGetPrototypeOf" => {
@@ -46101,32 +47134,52 @@ impl InterpreterCore {
                     .get(obj_id.0 as usize)
                     .map(|obj| obj.is_frozen)
                     .unwrap_or(false);
-                let descriptor_source = self
-                    .writable_own_runtime_property_visible(obj_id, prop_name.string())
+                let visible = match &prop_name {
+                    RuntimePropertyKey::String(key) => {
+                        self.writable_own_runtime_property_visible(obj_id, key)
+                    }
+                    RuntimePropertyKey::Symbol(_) => true,
+                };
+                let descriptor_source = visible
                     .then(|| {
                         self.heap
                             .get(obj_id.0 as usize)
-                            .and_then(|obj| obj.properties.get_exact(prop_name.string()).cloned())
+                            .and_then(|obj| obj.own_runtime_property_descriptor(&prop_name))
                     })
                     .flatten()
-                    .map(|value| (value, is_frozen));
+                    .map(|property| (property, is_frozen));
                 self.join_pending_hostcall_stream_label(obj_id)?;
-                if let Some((value, is_frozen)) = descriptor_source {
+                if let Some((property, is_frozen)) = descriptor_source {
                     {
                         // Create property descriptor object
                         let descriptor_id = self.alloc_object_with_prototype(None)?;
 
-                        // Set descriptor properties (simplified - all properties are data properties)
-                        self.set_object_property(
-                            descriptor_id,
-                            "value".to_string(),
-                            value.clone(),
-                        )?;
-                        self.set_object_property(
-                            descriptor_id,
-                            "writable".to_string(),
-                            Value::Bool(!is_frozen),
-                        )?;
+                        match property {
+                            BaselineSymbolProperty::Data(value) => {
+                                self.set_object_property(
+                                    descriptor_id,
+                                    "value".to_string(),
+                                    value,
+                                )?;
+                                self.set_object_property(
+                                    descriptor_id,
+                                    "writable".to_string(),
+                                    Value::Bool(!is_frozen),
+                                )?;
+                            }
+                            BaselineSymbolProperty::Accessor { get, set } => {
+                                self.set_object_property(
+                                    descriptor_id,
+                                    "get".to_string(),
+                                    get.unwrap_or(Value::Undefined),
+                                )?;
+                                self.set_object_property(
+                                    descriptor_id,
+                                    "set".to_string(),
+                                    set.unwrap_or(Value::Undefined),
+                                )?;
+                            }
+                        }
                         self.set_object_property(
                             descriptor_id,
                             "enumerable".to_string(),
@@ -46204,23 +47257,7 @@ impl InterpreterCore {
                 Ok(Value::Object(obj_id))
             }
 
-            "builtin:SymbolIterator" => {
-                // Symbol.iterator implementation - well-known symbol for iteration protocol
-                // Create a special symbol object for the iterator symbol
-                let symbol_id = self.alloc_object_with_prototype(None)?;
-
-                // Set symbol metadata
-                self.set_object_property(symbol_id, "__type".to_string(), Value::str("Symbol"))?;
-                self.set_object_property(
-                    symbol_id,
-                    "__description".to_string(),
-                    Value::str("Symbol.iterator"),
-                )?;
-                self.set_object_property(symbol_id, "__wellKnown".to_string(), Value::Bool(true))?;
-                self.set_object_property(symbol_id, "__key".to_string(), Value::str("@@iterator"))?;
-
-                Ok(Value::Object(symbol_id))
-            }
+            "builtin:SymbolIterator" => Ok(Value::Symbol(WellKnownSymbol::Iterator.id())),
 
             "builtin:StringPrototypeNormalize" => {
                 // String.prototype.normalize(form) implementation - Unicode normalization
@@ -46982,6 +48019,7 @@ impl InterpreterCore {
                         }
                     }
                     (Value::Str(a), Value::Str(b)) => a == b,
+                    (Value::Symbol(a), Value::Symbol(b)) => a == b,
                     (Value::Object(a), Value::Object(b)) => a.0 == b.0,
                     _ => false,
                 };
@@ -49866,6 +50904,7 @@ impl InterpreterCore {
             }
             (Value::Str(a), Value::Str(b)) => a == b,
             (Value::BigInt(a), Value::BigInt(b)) => a == b,
+            (Value::Symbol(a), Value::Symbol(b)) => a == b,
             (Value::Object(a), Value::Object(b)) => a.0 == b.0, // Object identity comparison
             _ => false,                                         // Different types are not equal
         }
@@ -49921,6 +50960,7 @@ impl InterpreterCore {
                 format!("[Function: builtin {}]", builtin.display_name())
             }
             Value::Accessor { .. } => "[object Object]".to_string(),
+            Value::Symbol(symbol) => self.symbol_display_string(*symbol),
         }
     }
 
@@ -50337,6 +51377,50 @@ impl InterpreterCore {
                     .saturating_add(Self::estimate_value_bytes(value))
             }),
         ))
+        .saturating_add(Self::saturating_sum(
+            properties
+                .baseline_symbol_properties()
+                .map(|(_, property)| {
+                    MEMORY_ESTIMATE_MAP_ENTRY_BYTES
+                        .saturating_add((std::mem::size_of::<SymbolId>() as u64).saturating_mul(2))
+                        .saturating_add(match property {
+                            BaselineSymbolProperty::Data(value) => {
+                                Self::estimate_value_bytes(value)
+                            }
+                            BaselineSymbolProperty::Accessor { get, set } => get
+                                .as_ref()
+                                .map(Self::estimate_value_bytes)
+                                .unwrap_or(0)
+                                .saturating_add(
+                                    set.as_ref().map(Self::estimate_value_bytes).unwrap_or(0),
+                                ),
+                        })
+                }),
+        ))
+    }
+
+    fn estimate_symbol_state_bytes(state: &RuntimeSymbolState) -> u64 {
+        Self::saturating_sum(state.symbols.values().map(|record| {
+            MEMORY_ESTIMATE_MAP_ENTRY_BYTES
+                .saturating_add(
+                    record
+                        .description
+                        .as_ref()
+                        .map(Self::estimate_js_string_bytes)
+                        .unwrap_or(0),
+                )
+                .saturating_add(
+                    record
+                        .registry_key
+                        .as_ref()
+                        .map(Self::estimate_js_string_bytes)
+                        .unwrap_or(0),
+                )
+        }))
+    }
+
+    fn symbol_state_memory_bytes(&self) -> u64 {
+        Self::estimate_symbol_state_bytes(&self.symbol_state)
     }
 
     fn estimate_event_listener_record_bytes(event: &str, record: &EventListenerRecord) -> u64 {
@@ -50867,6 +51951,7 @@ impl InterpreterCore {
                 Self::estimate_heap_object_bytes(&entry.object)
                     .saturating_add(Self::estimate_label_bytes(&entry.label))
             })))
+            .saturating_add(Self::estimate_symbol_state_bytes(&state.symbol_state))
     }
 
     fn state_capture_memory_bytes(&self) -> u64 {
@@ -51428,7 +52513,10 @@ impl InterpreterCore {
     /// it against `estimated_memory_bytes()` to prove the incremental
     /// accumulator has not drifted (bd-o4cbn.13.4).
     pub fn recompute_estimated_memory_bytes(&self) -> u64 {
-        Self::saturating_sum(self.heap.iter().map(Self::estimate_heap_object_bytes))
+        self.symbol_state_memory_bytes()
+            .saturating_add(Self::saturating_sum(
+                self.heap.iter().map(Self::estimate_heap_object_bytes),
+            ))
             .saturating_add(Self::saturating_sum(
                 self.registers.iter().map(Self::estimate_value_bytes),
             ))
@@ -51509,6 +52597,19 @@ impl InterpreterCore {
         self.apply_memory_component_delta(previous_scope_bytes, self.scope_chain_memory_bytes())
     }
 
+    fn apply_seed_surface_memory_delta(
+        &mut self,
+        previous_seed_surface_bytes: u64,
+    ) -> Result<u64, InterpreterError> {
+        self.apply_memory_component_delta(
+            previous_seed_surface_bytes,
+            self.registers_memory_bytes()
+                .saturating_add(self.heap_memory_bytes())
+                .saturating_add(self.symbol_state_memory_bytes()),
+        )
+    }
+
+    #[cfg(test)]
     fn apply_register_heap_memory_delta(
         &mut self,
         previous_register_bytes: u64,
@@ -52458,7 +53559,26 @@ impl InterpreterCore {
         key: RuntimePropertyKey,
         value: Value,
     ) -> Result<(), InterpreterError> {
-        let key = key.into_string();
+        self.validate_executable_property_key(&key)?;
+        validate_symbol_value(&self.symbol_state, &value).map_err(|got| {
+            InterpreterError::TypeError {
+                expected: "resolved Symbol value".to_string(),
+                got,
+            }
+        })?;
+        let RuntimePropertyKey::String(key) = key else {
+            let RuntimePropertyKey::Symbol(symbol) = key else {
+                unreachable!("RuntimePropertyKey variants are exhaustive")
+            };
+            let property = match value {
+                Value::Accessor { get, set } => BaselineSymbolProperty::Accessor {
+                    get: get.map(|value| value.as_ref().clone()),
+                    set: set.map(|value| value.as_ref().clone()),
+                },
+                value => BaselineSymbolProperty::Data(value),
+            };
+            return self.set_symbol_property(object_id, symbol, property);
+        };
         let has_exact_only_properties = self
             .heap
             .get(object_id.0 as usize)
@@ -52472,6 +53592,66 @@ impl InterpreterCore {
             return self.set_object_property(object_id, key.to_string(), value);
         }
         self.set_object_projected_property(object_id, key, value)
+    }
+
+    fn set_symbol_property(
+        &mut self,
+        object_id: ObjectId,
+        symbol: SymbolId,
+        property: BaselineSymbolProperty<Value>,
+    ) -> Result<(), InterpreterError> {
+        let heap_index = object_id.0 as usize;
+        let object = self
+            .heap
+            .get(heap_index)
+            .ok_or(InterpreterError::ObjectNotFound { id: object_id.0 })?;
+        if object.is_frozen {
+            return Err(InterpreterError::TypeError {
+                expected: "mutable object".to_string(),
+                got: "frozen object".to_string(),
+            });
+        }
+        let validate_property_value = |value: &Value| {
+            validate_symbol_value(&self.symbol_state, value).map_err(|got| {
+                InterpreterError::TypeError {
+                    expected: "resolved Symbol value".to_string(),
+                    got,
+                }
+            })
+        };
+        match &property {
+            BaselineSymbolProperty::Data(value) => validate_property_value(value)?,
+            BaselineSymbolProperty::Accessor { get, set } => {
+                if let Some(getter) = get {
+                    validate_property_value(getter)?;
+                }
+                if let Some(setter) = set {
+                    validate_property_value(setter)?;
+                }
+            }
+        }
+
+        let previous_property_bytes = Self::estimate_ordered_property_map_bytes(&object.properties);
+        let temporary_bytes = self
+            .estimated_memory_bytes
+            .saturating_add(previous_property_bytes);
+        if Self::memory_request_exceeds_budget(temporary_bytes, self.config.max_total_memory_bytes)
+        {
+            return Err(self.memory_budget_error(temporary_bytes, self.heap_object_count_u32()));
+        }
+        let mut projected_properties = object.properties.clone();
+        projected_properties.insert_baseline_symbol_property(core_symbol_id(symbol), property);
+        let next_property_bytes = Self::estimate_ordered_property_map_bytes(&projected_properties);
+        let peak_bytes = self
+            .estimated_memory_bytes
+            .saturating_add(next_property_bytes);
+        if Self::memory_request_exceeds_budget(peak_bytes, self.config.max_total_memory_bytes) {
+            return Err(self.memory_budget_error(peak_bytes, self.heap_object_count_u32()));
+        }
+        self.apply_memory_component_delta(previous_property_bytes, next_property_bytes)?;
+        self.mutate_heap(|heap| heap[heap_index].properties = projected_properties);
+        self.gc_write_barrier(object_id);
+        Ok(())
     }
 
     /// Clear a descriptor-as-value property carrier without allocating a
@@ -52505,6 +53685,12 @@ impl InterpreterCore {
         key: JsString,
         value: Value,
     ) -> Result<(), InterpreterError> {
+        validate_symbol_value(&self.symbol_state, &value).map_err(|got| {
+            InterpreterError::TypeError {
+                expected: "resolved Symbol value".to_string(),
+                got,
+            }
+        })?;
         let heap_index = object_id.0 as usize;
         let object = self
             .heap
@@ -52602,6 +53788,12 @@ impl InterpreterCore {
         key: String,
         value: Value,
     ) -> Result<(), InterpreterError> {
+        validate_symbol_value(&self.symbol_state, &value).map_err(|got| {
+            InterpreterError::TypeError {
+                expected: "resolved Symbol value".to_string(),
+                got,
+            }
+        })?;
         let heap_index = object_id.0 as usize;
         let has_exact_only_properties = self
             .heap
@@ -52758,6 +53950,10 @@ impl InterpreterCore {
         object_id: ObjectId,
         key: &RuntimePropertyKey,
     ) -> Result<bool, InterpreterError> {
+        self.validate_executable_property_key(key)?;
+        if let RuntimePropertyKey::Symbol(symbol) = key {
+            return self.remove_symbol_property(object_id, *symbol);
+        }
         let has_exact_only_properties = self
             .heap
             .get(object_id.0 as usize)
@@ -52770,7 +53966,45 @@ impl InterpreterCore {
         {
             return self.remove_object_property(object_id, key);
         }
-        self.remove_object_carrier_property(object_id, key.string())
+        let RuntimePropertyKey::String(key) = key else {
+            unreachable!("Symbol keys returned above")
+        };
+        self.remove_object_carrier_property(object_id, key)
+    }
+
+    fn remove_symbol_property(
+        &mut self,
+        object_id: ObjectId,
+        symbol: SymbolId,
+    ) -> Result<bool, InterpreterError> {
+        let heap_index = object_id.0 as usize;
+        let object = self
+            .heap
+            .get(heap_index)
+            .ok_or(InterpreterError::ObjectNotFound { id: object_id.0 })?;
+        if object.is_frozen {
+            return Ok(false);
+        }
+        if object
+            .properties
+            .baseline_symbol_property(core_symbol_id(symbol))
+            .is_none()
+        {
+            return Ok(false);
+        }
+        let previous_property_bytes = Self::estimate_ordered_property_map_bytes(&object.properties);
+        self.mutate_heap(|heap| {
+            let properties = &mut heap[heap_index].properties;
+            properties.remove_baseline_symbol_property(core_symbol_id(symbol));
+            if properties.exact_len() == properties.len() {
+                let normalized = properties.normalize_data_only_exact_sidecars();
+                debug_assert!(normalized);
+            }
+        });
+        let next_property_bytes =
+            Self::estimate_ordered_property_map_bytes(&self.heap[heap_index].properties);
+        self.apply_memory_component_delta(previous_property_bytes, next_property_bytes)?;
+        Ok(true)
     }
 
     fn remove_object_carrier_property(
@@ -52796,8 +54030,8 @@ impl InterpreterCore {
             object.properties.remove_exact(key);
             if object.properties.exact_len() == object.properties.len() {
                 // Engine accessors are ordinary map values, so once the final
-                // exact-only key is gone we can normalize away carrier metadata
-                // that exists solely for the core baseline's frozen struct shape.
+                // exact-only key is gone we can normalize away ordinary-string
+                // carrier metadata. Symbol chronology is stored independently.
                 let normalized = object.properties.normalize_data_only_exact_sidecars();
                 debug_assert!(normalized);
             }
@@ -72107,6 +73341,29 @@ mod tests {
         InterpreterCore::new(test_quickjs_config(), "test-trace")
     }
 
+    fn lower_symbol_source_bd_n8eta_4_2(source: &str) -> Ir3Module {
+        let syntax_tree = CanonicalEs2020Parser
+            .parse_with_options(
+                ParserSource {
+                    label: "bd_n8eta_4_2.js".to_string(),
+                    text: source.to_string(),
+                },
+                ParseGoal::Script,
+                &ParserOptions::default(),
+            )
+            .expect("Symbol regression source should parse");
+        lower_ir0_to_ir3(
+            &Ir0Module::from_syntax_tree(syntax_tree, "bd_n8eta_4_2.js"),
+            &LoweringContext::new(
+                "trace-bd-n8eta-4-2",
+                "decision-bd-n8eta-4-2",
+                "policy-bd-n8eta-4-2",
+            ),
+        )
+        .expect("Symbol regression source should lower")
+        .ir3
+    }
+
     fn array_reduce_module(
         args_count: u32,
         reducer_instructions: Vec<Ir3Instruction>,
@@ -72186,10 +73443,8 @@ mod tests {
             Value::Iterator(handle) => *handle,
             other => panic!("expected iterator value, got {other:?}"),
         };
-        // `GetProperty` computes the lookup key with `property_key_from_value`
-        // (well-known symbols resolve to their `__key`, e.g. "@@iterator").
-        let key_str = core.property_key_from_value(&key);
-        let method = core.iterator_property_value(handle, &key_str);
+        let key = core.executable_property_key_from_value(&key);
+        let method = core.iterator_runtime_property_value(handle, &key);
         let module = test_module(Vec::new());
         core.invoke_inline_method_call(Some(&module), method, iterator, Vec::new())
             .expect("iterator property method call should execute")
@@ -73957,8 +75212,12 @@ mod tests {
             .expect("iterator result done write should succeed");
         core.set_object_property(result_id, "value".to_string(), Value::Int(42))
             .expect("iterator result value write should succeed");
-        core.set_object_property(iterable_id, "@@iterator".to_string(), Value::Function(0))
-            .expect("custom iterator method write should succeed");
+        core.set_object_runtime_property(
+            iterable_id,
+            RuntimePropertyKey::Symbol(WellKnownSymbol::Iterator.id()),
+            Value::Function(0),
+        )
+        .expect("custom iterator method write should succeed");
         core.set_object_property(iterable_id, "next".to_string(), Value::Function(1))
             .expect("custom next method write should succeed");
         core.set_object_property(iterable_id, "result".to_string(), Value::Object(result_id))
@@ -73974,6 +75233,17 @@ mod tests {
                 .expect("custom iterator.next should advance"),
             Some(Value::Int(42))
         );
+
+        core.set_object_runtime_property(
+            iterable_id,
+            RuntimePropertyKey::Symbol(WellKnownSymbol::Iterator.id()),
+            Value::Null,
+        )
+        .expect("null Symbol.iterator shadow should install");
+        assert!(matches!(
+            core.init_for_of_iterator(Some(&module), Value::Object(iterable_id)),
+            Err(InterpreterError::TypeError { .. })
+        ));
     }
 
     #[test]
@@ -74170,12 +75440,18 @@ mod tests {
             iterator_method_via_property(&mut core, iterator.clone(), symbol_iterator),
             iterator
         );
+        let Value::Iterator(iterator_handle) = iterator else {
+            panic!("array values must return an iterator")
+        };
         assert_eq!(
-            iterator_method_via_property(&mut core, iterator.clone(), Value::str("@@iterator")),
-            iterator
+            core.iterator_runtime_property_value(
+                iterator_handle,
+                &RuntimePropertyKey::String(JsString::from("@@iterator")),
+            ),
+            Value::Undefined
         );
 
-        let first_result = iterator_next_via_property(&mut core, iterator);
+        let first_result = iterator_next_via_property(&mut core, Value::Iterator(iterator_handle));
         assert_iterator_result(&core, first_result, false, Value::Int(7));
     }
 
@@ -74305,6 +75581,885 @@ mod tests {
             properties.get_exact(&replacement),
             Some(&Value::Int(0xFFFD))
         );
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+    }
+
+    #[test]
+    fn symbol_value_heap_and_state_wire_are_typed_bd_n8eta_4_2() {
+        assert_eq!(
+            serde_json::to_string(&Value::Symbol(SymbolId(14))).unwrap(),
+            r#"{"Symbol":14}"#
+        );
+
+        let legacy = HeapObject::new();
+        let legacy_wire = serde_json::to_string(&legacy).unwrap();
+        assert!(!legacy_wire.contains("symbol_properties"));
+        assert_eq!(
+            serde_json::to_string(&serde_json::from_str::<HeapObject>(&legacy_wire).unwrap())
+                .unwrap(),
+            legacy_wire
+        );
+
+        let mut object = HeapObject::new();
+        object
+            .properties
+            .insert("Symbol(14)".to_string(), Value::Int(9));
+        object.properties.insert_baseline_symbol_property(
+            CoreSymbolId(14),
+            BaselineSymbolProperty::Data(Value::Int(2)),
+        );
+        object.properties.insert_baseline_symbol_property(
+            CoreSymbolId(15),
+            BaselineSymbolProperty::Accessor {
+                get: None,
+                set: Some(Value::Function(7)),
+            },
+        );
+        let wire = serde_json::to_string(&object).unwrap();
+        assert!(wire.contains(r#""Symbol(14)":{"Int":9}"#));
+        assert!(wire.contains(
+            r#""symbol_properties":[{"symbol_id":14,"kind":"data","value":{"Int":2}},{"symbol_id":15,"kind":"accessor","get":null,"set":{"Function":7}}]"#
+        ));
+        assert_eq!(serde_json::from_str::<HeapObject>(&wire).unwrap(), object);
+
+        let mut malformed = serde_json::to_value(&legacy).unwrap();
+        malformed["symbol_properties"] = serde_json::json!([
+            {"symbol_id": 0, "kind": "data", "value": {"Int": 1}}
+        ]);
+        assert!(serde_json::from_value::<HeapObject>(malformed).is_err());
+
+        let malformed_state = r#"{"well_known_schema":"es2020-symbol-ids-1-13-v1","next_symbol_id":15,"symbols":[{"symbol_id":14,"kind":"global","description":"x","registry_key":"y"}]}"#;
+        assert!(serde_json::from_str::<RuntimeSymbolState>(malformed_state).is_err());
+    }
+
+    #[test]
+    fn symbol_keys_stay_distinct_ordered_and_prototyped_bd_n8eta_4_2() {
+        let mut core = quickjs_test_core();
+        let first = core
+            .allocate_private_symbol(Some(JsString::from("first")))
+            .unwrap();
+        let second = core
+            .allocate_private_symbol(Some(JsString::from("second")))
+            .unwrap();
+        let prototype = core.alloc_object_with_prototype(None).unwrap();
+        let object = core.alloc_object_with_prototype(Some(prototype)).unwrap();
+
+        core.set_object_property(object, "2".to_string(), Value::Int(2))
+            .unwrap();
+        core.set_object_property(object, "a".to_string(), Value::Int(1))
+            .unwrap();
+        core.set_object_property(object, "Symbol(14)".to_string(), Value::Int(9))
+            .unwrap();
+        core.set_object_runtime_property(object, RuntimePropertyKey::Symbol(first), Value::Int(7))
+            .unwrap();
+        core.set_object_runtime_property(
+            prototype,
+            RuntimePropertyKey::Symbol(second),
+            Value::Int(8),
+        )
+        .unwrap();
+
+        assert_eq!(
+            core.prototype_chain_get_with_receiver_runtime(
+                None,
+                object,
+                &RuntimePropertyKey::Symbol(first),
+                Value::Object(object),
+            )
+            .unwrap(),
+            Value::Int(7)
+        );
+        assert_eq!(
+            core.prototype_chain_get_with_receiver_runtime(
+                None,
+                object,
+                &RuntimePropertyKey::Symbol(second),
+                Value::Object(object),
+            )
+            .unwrap(),
+            Value::Int(8)
+        );
+        assert!(
+            core.prototype_chain_has_runtime_key(object, &RuntimePropertyKey::Symbol(second))
+                .unwrap()
+        );
+        assert_eq!(
+            core.heap[object.0 as usize].own_runtime_property_keys(),
+            vec![
+                RuntimePropertyKey::String(JsString::from("2")),
+                RuntimePropertyKey::String(JsString::from("a")),
+                RuntimePropertyKey::String(JsString::from("Symbol(14)")),
+                RuntimePropertyKey::Symbol(first),
+            ]
+        );
+
+        core.set_symbol_property(
+            object,
+            first,
+            BaselineSymbolProperty::Accessor {
+                get: Some(Value::Function(3)),
+                set: None,
+            },
+        )
+        .unwrap();
+        assert!(matches!(
+            core.heap[object.0 as usize]
+                .properties
+                .baseline_symbol_property(core_symbol_id(first)),
+            Some(BaselineSymbolProperty::Accessor { .. })
+        ));
+        assert_eq!(
+            core.heap[object.0 as usize]
+                .properties
+                .baseline_symbol_key_order(),
+            &[core_symbol_id(first)]
+        );
+
+        assert!(
+            core.remove_object_runtime_property(object, &RuntimePropertyKey::Symbol(first))
+                .unwrap()
+        );
+        core.set_object_runtime_property(
+            object,
+            RuntimePropertyKey::Symbol(second),
+            Value::Int(10),
+        )
+        .unwrap();
+        core.set_object_runtime_property(object, RuntimePropertyKey::Symbol(first), Value::Int(11))
+            .unwrap();
+        assert_eq!(
+            core.heap[object.0 as usize]
+                .properties
+                .baseline_symbol_key_order(),
+            &[core_symbol_id(second), core_symbol_id(first)]
+        );
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+    }
+
+    #[test]
+    fn symbol_stringification_preserves_exact_description_units_bd_n8eta_4_2() {
+        let mut core = quickjs_test_core();
+        let description = JsString::from_code_units(&[0xD800]);
+        let symbol = core
+            .allocate_private_symbol(Some(description.clone()))
+            .unwrap();
+        let expected = JsString::from("Symbol(")
+            .concat(&description)
+            .concat(&JsString::from(")"));
+        let module = test_module(Vec::new());
+        assert_eq!(
+            core.dispatch_builtin_function(
+                &module,
+                &BuiltinFunction::symbol_to_string(),
+                RegRange { start: 0, count: 0 },
+                Some(Value::Symbol(symbol)),
+            )
+            .unwrap(),
+            Value::Str(expected.clone())
+        );
+        core.set_reg(0, Value::Symbol(symbol));
+        assert_eq!(
+            core.dispatch_builtin_hostcall(
+                "builtin:String",
+                RegRange { start: 0, count: 1 },
+                None,
+            )
+            .unwrap(),
+            Value::Str(expected)
+        );
+    }
+
+    #[test]
+    fn symbol_global_registry_uses_exact_code_units_bd_n8eta_4_2() {
+        let mut core = quickjs_test_core();
+        let d800 = JsString::from_code_units(&[0xD800]);
+        let d801 = JsString::from_code_units(&[0xD801]);
+        let replacement = JsString::from("\u{FFFD}");
+        assert_eq!(d800.as_utf8_projection(), d801.as_utf8_projection());
+
+        let first = core.intern_global_symbol(d800.clone()).unwrap();
+        let second = core.intern_global_symbol(d801.clone()).unwrap();
+        let third = core.intern_global_symbol(replacement.clone()).unwrap();
+        assert_eq!(core.intern_global_symbol(d800.clone()).unwrap(), first);
+        assert_ne!(first, second);
+        assert_ne!(first, third);
+        assert_ne!(second, third);
+        assert_eq!(core.symbol_state.key_for(first), Some(&d800));
+        assert_eq!(core.symbol_state.key_for(second), Some(&d801));
+        assert_eq!(core.symbol_state.key_for(third), Some(&replacement));
+
+        let wire = serde_json::to_string(&core.symbol_state.value).unwrap();
+        assert_eq!(
+            serde_json::from_str::<RuntimeSymbolState>(&wire).unwrap(),
+            core.symbol_state.value
+        );
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+    }
+
+    #[test]
+    fn symbol_mixed_exact_carrier_normalizes_string_sidecars_bd_n8eta_4_2() {
+        let mut core = quickjs_test_core();
+        let symbol = core.allocate_private_symbol(None).unwrap();
+        let object = core.alloc_object_with_prototype(None).unwrap();
+        let exact_only = JsString::from_code_units(&[0xD800]);
+        core.set_object_property(object, "ordinary".to_string(), Value::Int(1))
+            .unwrap();
+        core.set_object_runtime_property(
+            object,
+            RuntimePropertyKey::String(exact_only.clone()),
+            Value::Int(2),
+        )
+        .unwrap();
+        core.set_object_runtime_property(object, RuntimePropertyKey::Symbol(symbol), Value::Int(3))
+            .unwrap();
+        let before_map_bytes = InterpreterCore::estimate_ordered_property_map_bytes(
+            &core.heap[object.0 as usize].properties,
+        );
+
+        assert!(
+            core.remove_object_runtime_property(object, &RuntimePropertyKey::String(exact_only),)
+                .unwrap()
+        );
+        let after_map_bytes = InterpreterCore::estimate_ordered_property_map_bytes(
+            &core.heap[object.0 as usize].properties,
+        );
+        assert!(after_map_bytes < before_map_bytes);
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+        let mut normalization_probe = core.heap[object.0 as usize].properties.clone();
+        assert!(normalization_probe.normalize_data_only_exact_sidecars());
+        let mixed_wire = serde_json::to_string(&core.heap[object.0 as usize]).unwrap();
+        assert_eq!(
+            serde_json::from_str::<HeapObject>(&mixed_wire).unwrap(),
+            core.heap[object.0 as usize]
+        );
+
+        core.set_object_runtime_property(object, RuntimePropertyKey::Symbol(symbol), Value::Int(4))
+            .unwrap();
+        assert!(
+            core.remove_object_runtime_property(object, &RuntimePropertyKey::Symbol(symbol))
+                .unwrap()
+        );
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+    }
+
+    #[test]
+    fn symbol_consumers_filter_reflect_and_copy_typed_keys_bd_n8eta_4_2() {
+        let mut core = quickjs_test_core();
+        let symbol = core
+            .allocate_private_symbol(Some(JsString::from("key")))
+            .unwrap();
+        let source = core.alloc_object_with_prototype(None).unwrap();
+        core.set_object_property(source, "stored".to_string(), Value::Symbol(symbol))
+            .unwrap();
+        core.set_object_runtime_property(source, RuntimePropertyKey::Symbol(symbol), Value::Int(7))
+            .unwrap();
+        core.set_reg(0, Value::Object(source));
+
+        let object_keys = core
+            .dispatch_builtin_hostcall("builtin:ObjectKeys", RegRange { start: 0, count: 1 }, None)
+            .unwrap();
+        let Value::Object(object_keys) = object_keys else {
+            panic!("Object.keys must return an array")
+        };
+        assert_eq!(
+            core.read_array_like_values(object_keys),
+            vec![Value::str("stored")]
+        );
+
+        let own_symbols = core
+            .dispatch_builtin_hostcall(
+                "builtin:ObjectGetOwnPropertySymbols",
+                RegRange { start: 0, count: 1 },
+                None,
+            )
+            .unwrap();
+        let Value::Object(own_symbols) = own_symbols else {
+            panic!("Object.getOwnPropertySymbols must return an array")
+        };
+        assert_eq!(
+            core.read_array_like_values(own_symbols),
+            vec![Value::Symbol(symbol)]
+        );
+
+        let reflected = core
+            .dispatch_builtin_hostcall(
+                "builtin:ReflectOwnKeys",
+                RegRange { start: 0, count: 1 },
+                None,
+            )
+            .unwrap();
+        let Value::Object(reflected) = reflected else {
+            panic!("Reflect.ownKeys must return an array")
+        };
+        assert_eq!(
+            core.read_array_like_values(reflected),
+            vec![Value::str("stored"), Value::Symbol(symbol)]
+        );
+        assert_eq!(
+            core.json_stringify_value(&Value::Object(source), &mut Vec::new()),
+            Some("{}".to_string())
+        );
+
+        let assigned = core.alloc_object_with_prototype(None).unwrap();
+        core.set_reg(1, Value::Object(assigned));
+        core.set_reg(2, Value::Object(source));
+        assert_eq!(
+            core.dispatch_builtin_hostcall(
+                "builtin:ObjectAssign",
+                RegRange { start: 1, count: 2 },
+                None,
+            )
+            .unwrap(),
+            Value::Object(assigned)
+        );
+        assert_eq!(
+            core.heap[assigned.0 as usize]
+                .own_runtime_property_value(&RuntimePropertyKey::Symbol(symbol)),
+            Some(Value::Int(7))
+        );
+        assert_eq!(
+            core.heap[assigned.0 as usize].properties.get("stored"),
+            Some(&Value::Symbol(symbol))
+        );
+    }
+
+    #[test]
+    fn proxy_symbol_own_keys_get_and_copy_stay_typed_bd_n8eta_4_2() {
+        let mut module = test_module_with_functions(
+            vec![
+                Ir3Instruction::SpreadIntoObject {
+                    target: 1,
+                    source: 2,
+                },
+                Ir3Instruction::Move { dst: 0, src: 1 },
+                Ir3Instruction::Halt,
+                Ir3Instruction::LoadThis { dst: 0 },
+                Ir3Instruction::LoadStr {
+                    dst: 1,
+                    pool_index: 0,
+                },
+                Ir3Instruction::GetProperty {
+                    obj: 0,
+                    key: 1,
+                    dst: 2,
+                },
+                Ir3Instruction::Return { value: 2 },
+                Ir3Instruction::LoadInt { dst: 0, value: 41 },
+                Ir3Instruction::Return { value: 0 },
+            ],
+            vec![
+                Ir3FunctionDesc {
+                    entry: 3,
+                    arity: 1,
+                    frame_size: 3,
+                    name: Some("symbol_proxy_own_keys".to_string()),
+                    is_generator: false,
+                    rest_param_index: None,
+                },
+                Ir3FunctionDesc {
+                    entry: 7,
+                    arity: 3,
+                    frame_size: 1,
+                    name: Some("symbol_proxy_get".to_string()),
+                    is_generator: false,
+                    rest_param_index: None,
+                },
+            ],
+        );
+        module.constant_pool.push("keys".into());
+
+        let mut core = quickjs_test_core();
+        let symbol = core.allocate_private_symbol(None).unwrap();
+        let proxy_target = core.alloc_object_with_prototype(None).unwrap();
+        core.set_object_runtime_property(
+            proxy_target,
+            RuntimePropertyKey::Symbol(symbol),
+            Value::Int(7),
+        )
+        .unwrap();
+        let handler = core.alloc_object_with_prototype(None).unwrap();
+        let trap_keys = core
+            .alloc_array_from_values(&[Value::Symbol(symbol)])
+            .unwrap();
+        core.set_object_property(handler, "keys".to_string(), Value::Object(trap_keys))
+            .unwrap();
+        core.set_object_property(handler, "ownKeys".to_string(), Value::Function(0))
+            .unwrap();
+        core.set_object_property(handler, "get".to_string(), Value::Function(1))
+            .unwrap();
+        let proxy = core.create_proxy_object(proxy_target, handler).unwrap();
+
+        let spread_target = core.alloc_object_with_prototype(None).unwrap();
+        core.set_reg(1, Value::Object(spread_target));
+        core.set_reg(2, Value::Object(proxy));
+        assert_eq!(
+            core.execute(&module).unwrap().value,
+            Value::Object(spread_target)
+        );
+        assert_eq!(
+            core.heap[spread_target.0 as usize]
+                .own_runtime_property_value(&RuntimePropertyKey::Symbol(symbol)),
+            Some(Value::Int(41))
+        );
+
+        core.set_reg(0, Value::Object(proxy));
+        let own_symbols = core
+            .dispatch_builtin_hostcall(
+                "builtin:ObjectGetOwnPropertySymbols",
+                RegRange { start: 0, count: 1 },
+                Some(&module),
+            )
+            .unwrap();
+        let Value::Object(own_symbols) = own_symbols else {
+            panic!("Object.getOwnPropertySymbols(proxy) must return an array")
+        };
+        assert_eq!(
+            core.read_array_like_values(own_symbols),
+            vec![Value::Symbol(symbol)]
+        );
+
+        let assigned = core.alloc_object_with_prototype(None).unwrap();
+        core.set_reg(0, Value::Object(assigned));
+        core.set_reg(1, Value::Object(proxy));
+        assert_eq!(
+            core.dispatch_builtin_hostcall(
+                "builtin:ObjectAssign",
+                RegRange { start: 0, count: 2 },
+                Some(&module),
+            )
+            .unwrap(),
+            Value::Object(assigned)
+        );
+        assert_eq!(
+            core.heap[assigned.0 as usize]
+                .own_runtime_property_value(&RuntimePropertyKey::Symbol(symbol)),
+            Some(Value::Int(41))
+        );
+
+        let duplicate_keys = core
+            .alloc_array_from_values(&[Value::Symbol(symbol), Value::Symbol(symbol)])
+            .unwrap();
+        core.set_object_property(handler, "keys".to_string(), Value::Object(duplicate_keys))
+            .unwrap();
+        core.set_reg(0, Value::Object(proxy));
+        assert!(matches!(
+            core.dispatch_builtin_hostcall(
+                "builtin:ObjectGetOwnPropertySymbols",
+                RegRange { start: 0, count: 1 },
+                Some(&module),
+            ),
+            Err(InterpreterError::TypeError { .. })
+        ));
+    }
+
+    #[test]
+    fn reflect_symbol_get_set_preserve_receiver_bd_n8eta_4_2() {
+        let mut module = test_module_with_functions(
+            vec![
+                Ir3Instruction::LoadThis { dst: 0 },
+                Ir3Instruction::LoadStr {
+                    dst: 1,
+                    pool_index: 0,
+                },
+                Ir3Instruction::GetProperty {
+                    obj: 0,
+                    key: 1,
+                    dst: 2,
+                },
+                Ir3Instruction::Return { value: 2 },
+            ],
+            vec![Ir3FunctionDesc {
+                entry: 0,
+                arity: 0,
+                frame_size: 3,
+                name: Some("symbol_receiver_getter".to_string()),
+                is_generator: false,
+                rest_param_index: None,
+            }],
+        );
+        module.constant_pool.push("marker".into());
+
+        let mut core = quickjs_test_core();
+        let getter_symbol = core.allocate_private_symbol(None).unwrap();
+        let data_symbol = core.allocate_private_symbol(None).unwrap();
+        let target = core.alloc_object_with_prototype(None).unwrap();
+        let receiver = core.alloc_object_with_prototype(None).unwrap();
+        core.set_object_property(receiver, "marker".to_string(), Value::Int(41))
+            .unwrap();
+        core.set_symbol_property(
+            target,
+            getter_symbol,
+            BaselineSymbolProperty::Accessor {
+                get: Some(Value::Function(0)),
+                set: None,
+            },
+        )
+        .unwrap();
+        core.set_object_runtime_property(
+            target,
+            RuntimePropertyKey::Symbol(data_symbol),
+            Value::Int(1),
+        )
+        .unwrap();
+
+        core.set_reg(0, Value::Object(target));
+        core.set_reg(1, Value::Symbol(getter_symbol));
+        let descriptor = core
+            .dispatch_builtin_hostcall(
+                "builtin:ObjectGetOwnPropertyDescriptor",
+                RegRange { start: 0, count: 2 },
+                Some(&module),
+            )
+            .unwrap();
+        let Value::Object(descriptor) = descriptor else {
+            panic!("Symbol accessor descriptor must be an object")
+        };
+        assert_eq!(
+            core.heap[descriptor.0 as usize].properties.get("get"),
+            Some(&Value::Function(0))
+        );
+        assert_eq!(
+            core.heap[descriptor.0 as usize].properties.get("set"),
+            Some(&Value::Undefined)
+        );
+        assert!(
+            !core.heap[descriptor.0 as usize]
+                .properties
+                .contains_key("value")
+        );
+
+        let defined = core.alloc_object_with_prototype(None).unwrap();
+        let accessor_descriptor = core
+            .alloc_object_with_properties(&[("get", Value::Function(0))])
+            .unwrap();
+        core.set_reg(0, Value::Object(defined));
+        core.set_reg(1, Value::Symbol(getter_symbol));
+        core.set_reg(2, Value::Object(accessor_descriptor));
+        assert_eq!(
+            core.dispatch_builtin_hostcall(
+                "builtin:ObjectDefineProperty",
+                RegRange { start: 0, count: 3 },
+                Some(&module),
+            )
+            .unwrap(),
+            Value::Object(defined)
+        );
+        assert!(matches!(
+            core.heap[defined.0 as usize]
+                .properties
+                .baseline_symbol_property(core_symbol_id(getter_symbol)),
+            Some(BaselineSymbolProperty::Accessor {
+                get: Some(Value::Function(0)),
+                set: None,
+            })
+        ));
+        core.set_reg(0, Value::Object(defined));
+        core.set_reg(1, Value::Symbol(getter_symbol));
+        core.set_reg(2, Value::Object(receiver));
+        assert_eq!(
+            core.dispatch_builtin_hostcall(
+                "builtin:ReflectGet",
+                RegRange { start: 0, count: 3 },
+                Some(&module),
+            )
+            .unwrap(),
+            Value::Int(41)
+        );
+
+        core.set_reg(0, Value::Object(target));
+        core.set_reg(1, Value::Symbol(getter_symbol));
+        core.set_reg(2, Value::Object(receiver));
+        assert_eq!(
+            core.dispatch_builtin_hostcall(
+                "builtin:ReflectGet",
+                RegRange { start: 0, count: 3 },
+                Some(&module),
+            )
+            .unwrap(),
+            Value::Int(41)
+        );
+
+        core.set_reg(0, Value::Object(target));
+        core.set_reg(1, Value::Symbol(data_symbol));
+        core.set_reg(2, Value::Int(9));
+        core.set_reg(3, Value::Object(receiver));
+        assert_eq!(
+            core.dispatch_builtin_hostcall(
+                "builtin:ReflectSet",
+                RegRange { start: 0, count: 4 },
+                Some(&module),
+            )
+            .unwrap(),
+            Value::Bool(true)
+        );
+        assert_eq!(
+            core.heap[target.0 as usize]
+                .own_runtime_property_value(&RuntimePropertyKey::Symbol(data_symbol)),
+            Some(Value::Int(1))
+        );
+        assert_eq!(
+            core.heap[receiver.0 as usize]
+                .own_runtime_property_value(&RuntimePropertyKey::Symbol(data_symbol)),
+            Some(Value::Int(9))
+        );
+
+        let transparent_handler = core.alloc_object_with_prototype(None).unwrap();
+        let proxy = core
+            .create_proxy_object(target, transparent_handler)
+            .unwrap();
+        core.set_reg(0, Value::Object(proxy));
+        core.set_reg(1, Value::Symbol(getter_symbol));
+        core.set_reg(2, Value::Object(receiver));
+        assert_eq!(
+            core.dispatch_builtin_hostcall(
+                "builtin:ReflectGet",
+                RegRange { start: 0, count: 3 },
+                Some(&module),
+            )
+            .unwrap(),
+            Value::Int(41)
+        );
+        core.set_reg(0, Value::Object(proxy));
+        core.set_reg(1, Value::Symbol(data_symbol));
+        core.set_reg(2, Value::Int(10));
+        core.set_reg(3, Value::Object(receiver));
+        assert_eq!(
+            core.dispatch_builtin_hostcall(
+                "builtin:ReflectSet",
+                RegRange { start: 0, count: 4 },
+                Some(&module),
+            )
+            .unwrap(),
+            Value::Bool(true)
+        );
+        assert_eq!(
+            core.heap[target.0 as usize]
+                .own_runtime_property_value(&RuntimePropertyKey::Symbol(data_symbol)),
+            Some(Value::Int(1))
+        );
+        assert_eq!(
+            core.heap[receiver.0 as usize]
+                .own_runtime_property_value(&RuntimePropertyKey::Symbol(data_symbol)),
+            Some(Value::Int(10))
+        );
+    }
+
+    #[test]
+    fn symbol_source_identity_keys_and_reflection_match_lanes_bd_n8eta_4_2() {
+        let sources = [
+            "const first = Symbol('same');\
+             const second = Symbol('same');\
+             (typeof Symbol === 'function' && typeof first === 'symbol' && first !== second)\
+                 ? 1 : 0;",
+            "const value = Symbol('same');\
+             (value.description === 'same' && value.toString() === 'Symbol(same)' &&\
+              Symbol().description === undefined) ? 1 : 0;",
+            "const local = Symbol('local');\
+             const global = Symbol.for('shared');\
+             (global === Symbol.for('shared') && Symbol.keyFor(global) === 'shared' &&\
+              Symbol.keyFor(local) === undefined && Symbol.keyFor(Symbol.iterator) === undefined)\
+                 ? 1 : 0;",
+            "const key = Symbol('key');\
+             const object = { 'Symbol(14)': 9 };\
+             object[key] = 8;\
+             const setWorked = object[key] === 8;\
+             delete object[key];\
+             const deleteWorked = !(key in object);\
+             object[key] = 7;\
+             (setWorked && deleteWorked && object[key] === 7 &&\
+              object['Symbol(14)'] === 9 && key in object) ? 1 : 0;",
+            "const key = Symbol('copy');\
+             const object = { [key]: 7 };\
+             const spread = { ...object };\
+             const assigned = Object.assign({}, object);\
+             (spread[key] === 7 && assigned[key] === 7) ? 1 : 0;",
+            "const key = Symbol('reflect');\
+             const object = { ordinary: 1, [key]: 2 };\
+             (Object.keys(object).length === 1 &&\
+              Object.getOwnPropertySymbols(object)[0] === key &&\
+              Reflect.ownKeys(object).length === 2) ? 1 : 0;",
+            "const wellKnown = { [Symbol.iterator]: 3, '@@iterator': 4 };\
+             (wellKnown[Symbol.iterator] === 3 && wellKnown['@@iterator'] === 4 &&\
+              Object.keys(wellKnown).length === 1 &&\
+              Object.getOwnPropertySymbols(wellKnown)[0] === Symbol.iterator) ? 1 : 0;",
+            "const array = [1];\
+             (typeof array[Symbol.iterator] === 'function' && array['@@iterator'] === undefined &&\
+              typeof 'x'[Symbol.iterator] === 'function') ? 1 : 0;",
+            "function* values() { yield 1; }\
+             const generator = values();\
+             (typeof generator[Symbol.iterator] === 'function' &&\
+              generator[Symbol.iterator]() === generator) ? 1 : 0;",
+        ];
+
+        for source in sources {
+            let module = lower_symbol_source_bd_n8eta_4_2(source);
+            assert_eq!(quickjs_execute(&module).unwrap().value, Value::Int(1));
+            assert_eq!(v8_execute(&module).unwrap().value, Value::Int(1));
+        }
+    }
+
+    #[test]
+    fn symbol_accessor_copy_invokes_getter_and_assign_setter_bd_n8eta_4_2() {
+        let module = lower_symbol_source_bd_n8eta_4_2(
+            "const key = Symbol('accessor');\
+             const state = { getterCalls: 0, setterCalls: 0, received: 0 };\
+             const source = { get [key]() {\
+                 state.getterCalls = state.getterCalls + 1; return 41;\
+             } };\
+             const target = { set [key](value) {\
+                 state.setterCalls = state.setterCalls + 1; state.received = value;\
+             } };\
+             const filteredBeforeCopy = Object.values(source).length === 0 &&\
+                 Object.entries(source).length === 0 && JSON.stringify(source) === '{}';\
+             const spread = { ...source };\
+             Object.assign(target, source);\
+             (filteredBeforeCopy && state.getterCalls === 2 && spread[key] === 41 &&\
+              state.setterCalls === 1 && state.received === 41 &&\
+              Object.getOwnPropertySymbols(source)[0] === key) ? 1 : 0;",
+        );
+        assert_eq!(quickjs_execute(&module).unwrap().value, Value::Int(1));
+        assert_eq!(v8_execute(&module).unwrap().value, Value::Int(1));
+    }
+
+    #[test]
+    fn native_array_for_of_uses_typed_symbol_iterator_bd_n8eta_4_2() {
+        let module = test_module(Vec::new());
+        let mut core = quickjs_test_core();
+        let array = seed_array(&mut core, 2, &[(0, Value::Int(7)), (1, Value::Int(9))]);
+
+        let iterator = core
+            .init_for_of_iterator(Some(&module), Value::Object(array))
+            .expect("native array Symbol.iterator should initialize for..of");
+        assert_eq!(
+            core.advance_for_of_iterator(Some(&module), iterator.clone())
+                .expect("native array iterator should yield its first value"),
+            Some(Value::Int(7))
+        );
+        assert_eq!(
+            core.advance_for_of_iterator(Some(&module), iterator.clone())
+                .expect("native array iterator should yield its second value"),
+            Some(Value::Int(9))
+        );
+        assert_eq!(
+            core.advance_for_of_iterator(Some(&module), iterator)
+                .expect("native array iterator should finish"),
+            None
+        );
+    }
+
+    #[test]
+    fn symbol_seed_registry_and_budget_rollback_are_atomic_bd_n8eta_4_2() {
+        let mut core = quickjs_test_core();
+        let private = core
+            .allocate_private_symbol(Some(JsString::from("private")))
+            .unwrap();
+        let global = core.intern_global_symbol(JsString::from("shared")).unwrap();
+        assert_eq!(
+            core.intern_global_symbol(JsString::from("shared")).unwrap(),
+            global
+        );
+        core.seed_register(0, Value::Symbol(private)).unwrap();
+        let seed = core.capture_execution_seed();
+        let later = core.allocate_private_symbol(None).unwrap();
+        assert_eq!(later, SymbolId(16));
+        let previous_seed_surface_bytes = core
+            .registers_memory_bytes()
+            .saturating_add(core.heap_memory_bytes())
+            .saturating_add(core.symbol_state_memory_bytes());
+        core.reset_execution_state_from_seed(&seed).unwrap();
+        core.apply_seed_surface_memory_delta(previous_seed_surface_bytes)
+            .unwrap();
+        assert_eq!(
+            core.symbol_state.key_for(global),
+            Some(&JsString::from("shared"))
+        );
+        assert_eq!(core.allocate_private_symbol(None).unwrap(), SymbolId(16));
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+
+        let before_state = core.symbol_state.value.clone();
+        let before_memory = core.estimated_memory_bytes();
+        core.config.max_total_memory_bytes = before_memory;
+        assert_eq!(
+            core.intern_global_symbol(JsString::from("shared")).unwrap(),
+            global
+        );
+        assert!(matches!(
+            core.allocate_private_symbol(Some(JsString::from("too-large"))),
+            Err(InterpreterError::MemoryBudgetExceeded { .. })
+        ));
+        assert_eq!(core.symbol_state.value, before_state);
+        assert_eq!(core.estimated_memory_bytes(), before_memory);
+
+        core.config.max_total_memory_bytes = u64::MAX;
+        let object = core.alloc_object_with_prototype(None).unwrap();
+        let before_properties = core.heap[object.0 as usize].properties.clone();
+        let before_memory = core.estimated_memory_bytes();
+        core.config.max_total_memory_bytes = before_memory.saturating_add(1);
+        assert!(matches!(
+            core.set_object_runtime_property(
+                object,
+                RuntimePropertyKey::Symbol(private),
+                Value::str("x".repeat(512)),
+            ),
+            Err(InterpreterError::MemoryBudgetExceeded { .. })
+        ));
+        assert_eq!(core.heap[object.0 as usize].properties, before_properties);
+        assert_eq!(core.estimated_memory_bytes(), before_memory);
+
+        core.config.max_total_memory_bytes = u64::MAX;
+        core.set_object_runtime_property(
+            object,
+            RuntimePropertyKey::Symbol(private),
+            Value::str("x".repeat(512)),
+        )
+        .unwrap();
+        let before_properties = core.heap[object.0 as usize].properties.clone();
+        let before_memory = core.estimated_memory_bytes();
+        let previous_property_bytes =
+            InterpreterCore::estimate_ordered_property_map_bytes(&before_properties);
+        let mut projected = before_properties.clone();
+        projected.insert_baseline_symbol_property(
+            core_symbol_id(private),
+            BaselineSymbolProperty::Data(Value::Int(1)),
+        );
+        let next_property_bytes = InterpreterCore::estimate_ordered_property_map_bytes(&projected);
+        assert!(previous_property_bytes > next_property_bytes);
+        core.config.max_total_memory_bytes = before_memory.saturating_add(next_property_bytes);
+        assert!(matches!(
+            core.set_object_runtime_property(
+                object,
+                RuntimePropertyKey::Symbol(private),
+                Value::Int(1),
+            ),
+            Err(InterpreterError::MemoryBudgetExceeded { .. })
+        ));
+        assert_eq!(core.heap[object.0 as usize].properties, before_properties);
+        assert_eq!(core.estimated_memory_bytes(), before_memory);
+
+        core.config.max_total_memory_bytes = before_memory;
+        assert!(
+            core.remove_object_runtime_property(object, &RuntimePropertyKey::Symbol(private))
+                .unwrap()
+        );
+        assert!(core.estimated_memory_bytes() < before_memory);
         assert_eq!(
             core.estimated_memory_bytes(),
             core.recompute_estimated_memory_bytes()
@@ -83935,6 +86090,7 @@ mod lazy_seed_tests {
             heap: core.heap.value.clone(),
             function_prototypes: core.function_prototypes.value.clone(),
             builtin_prototypes: core.builtin_prototypes.value.clone(),
+            symbol_state: core.symbol_state.value.clone(),
         }))
     }
 

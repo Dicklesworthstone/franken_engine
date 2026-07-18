@@ -12,7 +12,7 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
-use crate::gc::GcEvent;
+use crate::gc::{GcEvent, GcPhase};
 
 // ---------------------------------------------------------------------------
 // PauseBudget — latency budget thresholds
@@ -363,8 +363,21 @@ impl PauseTracker {
         }
     }
 
-    /// Record a GC pause from a `GcEvent`.
+    /// Record a completed GC pause from a `GcEvent`.
+    ///
+    /// Phase-marker events are ignored because they do not represent an
+    /// independently measured collection pause.
     pub fn record(&mut self, event: &GcEvent) {
+        // Only a completed collection is a pause sample. Throttle events
+        // are observability markers and carry the deterministic pause
+        // sentinel even though no collection has completed; counting them
+        // would double-count a throttled collection and skew percentiles.
+        // Mark/Sweep remain phase markers rather than independently measured
+        // stop-the-world intervals.
+        if event.phase != GcPhase::Complete {
+            return;
+        }
+
         let pause = PauseRecord::from_gc_event(event);
         self.per_extension
             .entry(event.extension_id.clone())
@@ -968,6 +981,28 @@ mod tests {
         assert_eq!(snap.count, 1);
         assert_eq!(snap.p50_ns, 1000); // deterministic mode sentinel
         assert!(tracker.within_budget()); // 1000 ns < 500_000 ns p50 budget
+    }
+
+    #[test]
+    fn tracker_ignores_non_complete_gc_phase_markers() {
+        let mut tracker = PauseTracker::with_capacity(PauseBudget::default(), 1);
+        tracker.record(&make_event(1, "retained", 100, 2, 64));
+
+        for (sequence, phase) in [GcPhase::Mark, GcPhase::Sweep, GcPhase::Throttle]
+            .into_iter()
+            .enumerate()
+        {
+            let mut marker = make_event(sequence as u64 + 2, "ignored", 900, 0, 0);
+            marker.phase = phase;
+            tracker.record(&marker);
+        }
+
+        assert_eq!(tracker.count(), 1);
+        assert_eq!(tracker.records()[0].sequence, 1);
+        assert_eq!(tracker.extension_count("retained"), 1);
+        assert_eq!(tracker.extension_count("ignored"), 0);
+        assert_eq!(tracker.extensions(), vec!["retained"]);
+        assert_eq!(tracker.global_percentiles().p50_ns, 100);
     }
 
     // -- Enrichment: PauseBudget --

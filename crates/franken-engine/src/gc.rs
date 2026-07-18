@@ -289,6 +289,13 @@ impl ExtensionHeap {
         if self.objects.contains_key(&id) {
             return Err(self.allocation_failed(size_bytes, "object ID cursor collision"));
         }
+        if self
+            .objects
+            .last_key_value()
+            .is_some_and(|(&max_id, _)| id < max_id)
+        {
+            return Err(self.allocation_failed(size_bytes, "object ID cursor regression"));
+        }
         let total_bytes = self
             .total_bytes
             .checked_add(size_bytes)
@@ -309,7 +316,8 @@ impl ExtensionHeap {
     /// # Errors
     ///
     /// Returns [`GcError::AllocationFailed`] if the object-ID cursor is
-    /// exhausted or occupied, or if the exact live-byte total would overflow.
+    /// exhausted, occupied, or behind a live ID, or if the exact live-byte
+    /// total would overflow.
     pub fn allocate(&mut self, size_bytes: u64) -> Result<GcObjectId, GcError> {
         let (id, next_id, total_bytes) = self.preflight_allocation(size_bytes)?;
         let extension_id = &self.extension_id;
@@ -2329,6 +2337,41 @@ mod tests {
         ));
         assert_eq!(restored.object_count(), 1);
         assert_eq!(restored.get(id).map(|object| object.size_bytes), Some(10));
+        assert_eq!(
+            serde_json::to_value(&restored).expect("heap should serialize"),
+            before
+        );
+    }
+
+    #[test]
+    fn bd_wl9l9_extension_heap_restored_vacant_cursor_regression_is_failure_atomic() {
+        let mut heap = ExtensionHeap::new("ext-hole".into());
+        let first = heap.allocate(10).expect("first allocation should succeed");
+        let middle = heap.allocate(20).expect("middle allocation should succeed");
+        let last = heap.allocate(30).expect("last allocation should succeed");
+        heap.unroot(middle).expect("middle unroot should succeed");
+        let stats = heap.collect_mark_sweep();
+        assert_eq!(stats.swept_count, 1);
+        assert!(heap.contains(first));
+        assert!(!heap.contains(middle));
+        assert!(heap.contains(last));
+
+        let mut encoded = serde_json::to_value(&heap).expect("heap should serialize");
+        encoded["next_id"] = serde_json::Value::from(1);
+        let mut restored: ExtensionHeap =
+            serde_json::from_value(encoded).expect("mutated fixture should deserialize");
+        let before = serde_json::to_value(&restored).expect("heap should serialize");
+
+        let error = restored
+            .allocate(40)
+            .expect_err("vacant cursor below a live ID must be rejected");
+        assert!(matches!(
+            error,
+            GcError::AllocationFailed {
+                reason: Some(reason),
+                ..
+            } if reason == "object ID cursor regression"
+        ));
         assert_eq!(
             serde_json::to_value(&restored).expect("heap should serialize"),
             before

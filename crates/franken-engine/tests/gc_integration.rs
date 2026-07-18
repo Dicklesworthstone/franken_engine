@@ -63,7 +63,7 @@ fn make_registry(max_bytes: u64) -> DomainRegistry {
 #[test]
 fn gc_object_id_display_format() {
     let mut heap = ExtensionHeap::new("ext-a".into());
-    let id = heap.allocate(10);
+    let id = heap.allocate(10).expect("allocation should succeed");
     assert_eq!(id.to_string(), "obj-0");
     assert_eq!(id.as_u64(), 0);
 }
@@ -72,9 +72,9 @@ fn gc_object_id_display_format() {
 fn gc_object_id_display_large_value() {
     // Allocate many objects to get a high ID
     let mut heap = ExtensionHeap::new("ext".into());
-    let mut last = heap.allocate(1);
+    let mut last = heap.allocate(1).expect("allocation should succeed");
     for _ in 0..99 {
-        last = heap.allocate(1);
+        last = heap.allocate(1).expect("allocation should succeed");
     }
     assert_eq!(last.as_u64(), 99);
     assert_eq!(last.to_string(), "obj-99");
@@ -83,9 +83,9 @@ fn gc_object_id_display_large_value() {
 #[test]
 fn gc_object_id_ordering_is_deterministic() {
     let mut heap = ExtensionHeap::new("ext".into());
-    let a = heap.allocate(1);
-    let b = heap.allocate(1);
-    let c = heap.allocate(1);
+    let a = heap.allocate(1).expect("allocation should succeed");
+    let b = heap.allocate(1).expect("allocation should succeed");
+    let c = heap.allocate(1).expect("allocation should succeed");
     assert!(a < b);
     assert!(b < c);
 }
@@ -93,7 +93,7 @@ fn gc_object_id_ordering_is_deterministic() {
 #[test]
 fn gc_object_id_serde_round_trip() {
     let mut heap = ExtensionHeap::new("ext".into());
-    let id = heap.allocate(10);
+    let id = heap.allocate(10).expect("allocation should succeed");
     let json = serde_json::to_string(&id).unwrap();
     let decoded: GcObjectId = serde_json::from_str(&json).unwrap();
     assert_eq!(decoded, id);
@@ -103,7 +103,7 @@ fn gc_object_id_serde_round_trip() {
 #[test]
 fn gc_object_id_clone_eq() {
     let mut heap = ExtensionHeap::new("ext".into());
-    let id = heap.allocate(5);
+    let id = heap.allocate(5).expect("allocation should succeed");
     let id2 = id;
     assert_eq!(id, id2);
 }
@@ -115,7 +115,7 @@ fn gc_object_id_clone_eq() {
 #[test]
 fn gc_object_fields_accessible() {
     let mut heap = ExtensionHeap::new("ext".into());
-    let id = heap.allocate(256);
+    let id = heap.allocate(256).expect("allocation should succeed");
     let obj = heap.get(id).expect("object exists");
     assert_eq!(obj.id, id);
     assert_eq!(obj.size_bytes, 256);
@@ -126,9 +126,9 @@ fn gc_object_fields_accessible() {
 #[test]
 fn gc_object_references_are_btreeset() {
     let mut heap = ExtensionHeap::new("ext".into());
-    let a = heap.allocate(10);
-    let b = heap.allocate(20);
-    let c = heap.allocate(30);
+    let a = heap.allocate(10).expect("allocation should succeed");
+    let b = heap.allocate(20).expect("allocation should succeed");
+    let c = heap.allocate(30).expect("allocation should succeed");
     heap.add_reference(a, b).unwrap();
     heap.add_reference(a, c).unwrap();
     let obj = heap.get(a).unwrap();
@@ -141,7 +141,7 @@ fn gc_object_references_are_btreeset() {
 #[test]
 fn gc_object_serde_round_trip() {
     let mut heap = ExtensionHeap::new("ext".into());
-    let id = heap.allocate(128);
+    let id = heap.allocate(128).expect("allocation should succeed");
     let obj = heap.get(id).unwrap().clone();
     let json = serde_json::to_string(&obj).unwrap();
     let decoded: frankenengine_engine::gc::GcObject = serde_json::from_str(&json).unwrap();
@@ -313,7 +313,7 @@ fn gc_error_duplicate_heap_display() {
 #[test]
 fn gc_error_object_not_found_display() {
     let mut heap = ExtensionHeap::new("ext-a".into());
-    let id = heap.allocate(10);
+    let id = heap.allocate(10).expect("allocation should succeed");
     let err = GcError::ObjectNotFound {
         extension_id: "ext-a".into(),
         object_id: id,
@@ -354,7 +354,7 @@ fn gc_error_from_alloc_domain_error() {
 #[test]
 fn gc_error_serde_round_trip_all_variants() {
     let mut heap = ExtensionHeap::new("ext".into());
-    let id = heap.allocate(10);
+    let id = heap.allocate(10).expect("allocation should succeed");
 
     let errors: Vec<GcError> = vec![
         GcError::HeapNotFound {
@@ -429,13 +429,13 @@ fn extension_heap_new() {
 #[test]
 fn extension_heap_allocate_increments_stats() {
     let mut heap = ExtensionHeap::new("ext".into());
-    let id1 = heap.allocate(100);
+    let id1 = heap.allocate(100).expect("allocation should succeed");
     assert_eq!(heap.object_count(), 1);
     assert_eq!(heap.total_bytes(), 100);
     assert!(heap.contains(id1));
     assert!(heap.get(id1).is_some());
 
-    let id2 = heap.allocate(200);
+    let id2 = heap.allocate(200).expect("allocation should succeed");
     assert_eq!(heap.object_count(), 2);
     assert_eq!(heap.total_bytes(), 300);
     assert!(heap.contains(id2));
@@ -444,9 +444,9 @@ fn extension_heap_allocate_increments_stats() {
 #[test]
 fn extension_heap_allocate_assigns_monotonic_ids() {
     let mut heap = ExtensionHeap::new("ext".into());
-    let id1 = heap.allocate(10);
-    let id2 = heap.allocate(20);
-    let id3 = heap.allocate(30);
+    let id1 = heap.allocate(10).expect("allocation should succeed");
+    let id2 = heap.allocate(20).expect("allocation should succeed");
+    let id3 = heap.allocate(30).expect("allocation should succeed");
     assert_eq!(id1.as_u64(), 0);
     assert_eq!(id2.as_u64(), 1);
     assert_eq!(id3.as_u64(), 2);
@@ -455,7 +455,7 @@ fn extension_heap_allocate_assigns_monotonic_ids() {
 #[test]
 fn extension_heap_allocate_zero_size() {
     let mut heap = ExtensionHeap::new("ext".into());
-    let id = heap.allocate(0);
+    let id = heap.allocate(0).expect("allocation should succeed");
     assert_eq!(heap.object_count(), 1);
     assert_eq!(heap.total_bytes(), 0);
     assert!(heap.contains(id));
@@ -464,8 +464,8 @@ fn extension_heap_allocate_zero_size() {
 #[test]
 fn extension_heap_add_reference_ok() {
     let mut heap = ExtensionHeap::new("ext".into());
-    let a = heap.allocate(10);
-    let b = heap.allocate(20);
+    let a = heap.allocate(10).expect("allocation should succeed");
+    let b = heap.allocate(20).expect("allocation should succeed");
     heap.add_reference(a, b).unwrap();
     let obj = heap.get(a).unwrap();
     assert!(obj.references.contains(&b));
@@ -474,14 +474,15 @@ fn extension_heap_add_reference_ok() {
 #[test]
 fn extension_heap_add_reference_nonexistent_from() {
     let mut heap = ExtensionHeap::new("ext".into());
-    let _a = heap.allocate(10);
-    let b = heap.allocate(20);
+    let _a = heap.allocate(10).expect("allocation should succeed");
+    let b = heap.allocate(20).expect("allocation should succeed");
     // Create a fake ID that doesn't exist in this heap
     let mut other = ExtensionHeap::new("other".into());
     for _ in 0..5 {
-        other.allocate(1);
+        other.allocate(1).expect("allocation should succeed");
     }
-    let fake_from = other.allocate(1); // obj-5, doesn't exist in "ext" which only has obj-0, obj-1
+    let fake_from = other.allocate(1).expect("allocation should succeed");
+    // obj-5 doesn't exist in "ext", which only has obj-0 and obj-1.
     let result = heap.add_reference(fake_from, b);
     assert!(matches!(result, Err(GcError::ObjectNotFound { .. })));
 }
@@ -489,7 +490,7 @@ fn extension_heap_add_reference_nonexistent_from() {
 #[test]
 fn extension_heap_unroot_and_root() {
     let mut heap = ExtensionHeap::new("ext".into());
-    let id = heap.allocate(50);
+    let id = heap.allocate(50).expect("allocation should succeed");
     assert!(heap.get(id).unwrap().rooted);
 
     heap.unroot(id).unwrap();
@@ -502,12 +503,12 @@ fn extension_heap_unroot_and_root() {
 #[test]
 fn extension_heap_unroot_nonexistent() {
     let mut heap = ExtensionHeap::new("ext".into());
-    let _ = heap.allocate(10);
-    let _ = heap.allocate(10);
+    let _ = heap.allocate(10).expect("allocation should succeed");
+    let _ = heap.allocate(10).expect("allocation should succeed");
     let mut other = ExtensionHeap::new("other".into());
-    let _ = other.allocate(1);
-    let _ = other.allocate(1);
-    let nonexistent = other.allocate(1);
+    let _ = other.allocate(1).expect("allocation should succeed");
+    let _ = other.allocate(1).expect("allocation should succeed");
+    let nonexistent = other.allocate(1).expect("allocation should succeed");
     let result = heap.unroot(nonexistent);
     assert!(matches!(result, Err(GcError::ObjectNotFound { .. })));
 }
@@ -515,12 +516,12 @@ fn extension_heap_unroot_nonexistent() {
 #[test]
 fn extension_heap_root_nonexistent() {
     let mut heap = ExtensionHeap::new("ext".into());
-    let _ = heap.allocate(10);
-    let _ = heap.allocate(10);
+    let _ = heap.allocate(10).expect("allocation should succeed");
+    let _ = heap.allocate(10).expect("allocation should succeed");
     let mut other = ExtensionHeap::new("other".into());
-    let _ = other.allocate(1);
-    let _ = other.allocate(1);
-    let nonexistent = other.allocate(1);
+    let _ = other.allocate(1).expect("allocation should succeed");
+    let _ = other.allocate(1).expect("allocation should succeed");
+    let nonexistent = other.allocate(1).expect("allocation should succeed");
     let result = heap.root(nonexistent);
     assert!(matches!(result, Err(GcError::ObjectNotFound { .. })));
 }
@@ -529,7 +530,7 @@ fn extension_heap_root_nonexistent() {
 fn extension_heap_contains_false_for_missing() {
     let heap = ExtensionHeap::new("ext".into());
     let mut other = ExtensionHeap::new("other".into());
-    let id = other.allocate(10);
+    let id = other.allocate(10).expect("allocation should succeed");
     assert!(!heap.contains(id));
 }
 
@@ -537,15 +538,15 @@ fn extension_heap_contains_false_for_missing() {
 fn extension_heap_get_none_for_missing() {
     let heap = ExtensionHeap::new("ext".into());
     let mut other = ExtensionHeap::new("other".into());
-    let id = other.allocate(10);
+    let id = other.allocate(10).expect("allocation should succeed");
     assert!(heap.get(id).is_none());
 }
 
 #[test]
 fn extension_heap_serde_round_trip() {
     let mut heap = ExtensionHeap::new("ext-a".into());
-    let a = heap.allocate(100);
-    let b = heap.allocate(200);
+    let a = heap.allocate(100).expect("allocation should succeed");
+    let b = heap.allocate(200).expect("allocation should succeed");
     heap.add_reference(a, b).unwrap();
 
     let json = serde_json::to_string(&heap).unwrap();
@@ -621,7 +622,7 @@ fn gc_collector_get_heap_mut() {
     let mut gc = det_collector();
     gc.register_heap("ext-a".into()).unwrap();
     let heap = gc.get_heap_mut("ext-a").unwrap();
-    let id = heap.allocate(50);
+    let id = heap.allocate(50).expect("allocation should succeed");
     assert!(heap.contains(id));
 }
 
@@ -688,8 +689,8 @@ fn gc_collector_add_reference() {
 fn gc_collector_add_reference_nonexistent_heap() {
     let mut gc = det_collector();
     let mut other_heap = ExtensionHeap::new("tmp".into());
-    let a = other_heap.allocate(10);
-    let b = other_heap.allocate(20);
+    let a = other_heap.allocate(10).expect("allocation should succeed");
+    let b = other_heap.allocate(20).expect("allocation should succeed");
     let result = gc.add_reference("nonexistent", a, b);
     assert!(matches!(result, Err(GcError::HeapNotFound { .. })));
 }
@@ -702,9 +703,9 @@ fn gc_collector_add_reference_nonexistent_from_object() {
     // Create a fake "from" ID that doesn't exist in the heap
     let mut other_heap = ExtensionHeap::new("tmp".into());
     for _ in 0..5 {
-        other_heap.allocate(1);
+        other_heap.allocate(1).expect("allocation should succeed");
     }
-    let fake_from = other_heap.allocate(1); // obj-5, doesn't exist in ext-a
+    let fake_from = other_heap.allocate(1).expect("allocation should succeed"); // obj-5, doesn't exist in ext-a
     let result = gc.add_reference("ext-a", fake_from, b);
     assert!(matches!(result, Err(GcError::ObjectNotFound { .. })));
 }
@@ -727,7 +728,7 @@ fn gc_collector_unroot() {
 fn gc_collector_unroot_nonexistent_heap() {
     let mut gc = det_collector();
     let mut other_heap = ExtensionHeap::new("tmp".into());
-    let id = other_heap.allocate(10);
+    let id = other_heap.allocate(10).expect("allocation should succeed");
     let result = gc.unroot("nonexistent", id);
     assert!(matches!(result, Err(GcError::HeapNotFound { .. })));
 }
@@ -915,9 +916,10 @@ fn dangling_reference_does_not_crash() {
     let heap = gc.get_heap_mut("ext").unwrap();
     let mut other = ExtensionHeap::new("tmp".into());
     for _ in 0..100 {
-        other.allocate(1);
+        other.allocate(1).expect("allocation should succeed");
     }
-    let phantom_id = other.allocate(1); // obj-100, doesn't exist in "ext"
+    // obj-100 doesn't exist in "ext".
+    let phantom_id = other.allocate(1).expect("allocation should succeed");
     heap.add_reference(obj, phantom_id).unwrap();
 
     let event = gc.collect("ext").unwrap();
@@ -937,9 +939,9 @@ fn dangling_reference_in_chain_does_not_crash() {
     let heap = gc.get_heap_mut("ext").unwrap();
     let mut other = ExtensionHeap::new("tmp".into());
     for _ in 0..100 {
-        other.allocate(1);
+        other.allocate(1).expect("allocation should succeed");
     }
-    let phantom_id = other.allocate(1);
+    let phantom_id = other.allocate(1).expect("allocation should succeed");
     heap.add_reference(b, phantom_id).unwrap();
 
     gc.unroot("ext", b).unwrap();
@@ -1902,7 +1904,7 @@ fn gc_config_custom_threshold() {
 #[test]
 fn gc_object_zero_references_set() {
     let mut heap = ExtensionHeap::new("ext".into());
-    let id = heap.allocate(10);
+    let id = heap.allocate(10).expect("allocation should succeed");
     let obj = heap.get(id).unwrap();
     let empty_set: BTreeSet<GcObjectId> = BTreeSet::new();
     assert_eq!(obj.references, empty_set);

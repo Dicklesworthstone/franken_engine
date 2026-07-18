@@ -7,6 +7,7 @@
 //! Plan references: Section 10.3 item 2, 9A.3/9F.3 (deterministic replay),
 //! 9A.8 (per-extension resource budgets), 9B.4 (allocator strategy).
 
+use std::collections::btree_map::Entry;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
@@ -156,7 +157,7 @@ pub enum GcError {
         extension_id: String,
         object_id: GcObjectId,
     },
-    /// Allocation failed due to budget constraints.
+    /// Allocation failed due to budget or heap-structure constraints.
     AllocationFailed {
         extension_id: String,
         size: u64,
@@ -278,21 +279,58 @@ impl ExtensionHeap {
         &self.extension_id
     }
 
-    /// Allocate a new rooted object, returning its ID.
-    pub fn allocate(&mut self, size_bytes: u64) -> GcObjectId {
+    /// Validate an allocation without mutating heap state.
+    fn preflight_allocation(&self, size_bytes: u64) -> Result<(GcObjectId, u64, u64), GcError> {
         let id = GcObjectId(self.next_id);
-        self.next_id = self.next_id.saturating_add(1);
-        self.objects.insert(
-            id,
-            GcObject {
-                id,
-                size_bytes,
-                references: BTreeSet::new(),
-                rooted: true,
-            },
-        );
-        self.total_bytes = self.total_bytes.saturating_add(size_bytes);
-        id
+        let next_id = self
+            .next_id
+            .checked_add(1)
+            .ok_or_else(|| self.allocation_failed(size_bytes, "object ID space exhausted"))?;
+        if self.objects.contains_key(&id) {
+            return Err(self.allocation_failed(size_bytes, "object ID cursor collision"));
+        }
+        let total_bytes = self
+            .total_bytes
+            .checked_add(size_bytes)
+            .ok_or_else(|| self.allocation_failed(size_bytes, "live-byte total overflow"))?;
+        Ok((id, next_id, total_bytes))
+    }
+
+    fn allocation_failed(&self, size_bytes: u64, reason: &'static str) -> GcError {
+        GcError::AllocationFailed {
+            extension_id: self.extension_id.clone(),
+            size: size_bytes,
+            reason: Some(reason.to_string()),
+        }
+    }
+
+    /// Allocate a new rooted object, returning its ID.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`GcError::AllocationFailed`] if the object-ID cursor is
+    /// exhausted or occupied, or if the exact live-byte total would overflow.
+    pub fn allocate(&mut self, size_bytes: u64) -> Result<GcObjectId, GcError> {
+        let (id, next_id, total_bytes) = self.preflight_allocation(size_bytes)?;
+        let extension_id = &self.extension_id;
+        match self.objects.entry(id) {
+            Entry::Occupied(_) => Err(GcError::AllocationFailed {
+                extension_id: extension_id.clone(),
+                size: size_bytes,
+                reason: Some("object ID cursor collision".to_string()),
+            }),
+            Entry::Vacant(slot) => {
+                slot.insert(GcObject {
+                    id,
+                    size_bytes,
+                    references: BTreeSet::new(),
+                    rooted: true,
+                });
+                self.next_id = next_id;
+                self.total_bytes = total_bytes;
+                Ok(id)
+            }
+        }
     }
 
     /// Add a reference from one object to another within this heap.
@@ -397,7 +435,10 @@ impl ExtensionHeap {
             if marked.contains(id) {
                 true
             } else {
-                bytes_reclaimed += obj.size_bytes;
+                // Checked allocation keeps every well-formed heap's exact
+                // object-size sum within u64, so this is exact for valid
+                // state and remains panic-free for malformed restored state.
+                bytes_reclaimed = bytes_reclaimed.saturating_add(obj.size_bytes);
                 false
             }
         });
@@ -487,13 +528,16 @@ impl GcCollector {
 
     /// Allocate an object in the specified extension's heap.
     pub fn allocate(&mut self, extension_id: &str, size_bytes: u64) -> Result<GcObjectId, GcError> {
-        if !self.heaps.contains_key(extension_id) {
-            return Err(GcError::HeapNotFound {
+        self.heaps
+            .get(extension_id)
+            .ok_or_else(|| GcError::HeapNotFound {
                 extension_id: extension_id.to_string(),
-            });
-        }
+            })?
+            .preflight_allocation(size_bytes)?;
 
-        // Check budget enforcement before allocation
+        // Structural exhaustion must preempt enforcement side effects: a
+        // failed heap allocation cannot consume usage, emit a receipt, or
+        // append a throttle event.
         if let Some(enforcer) = self.budget_enforcer.as_ref() {
             // Safely convert size_bytes to i64, capping at i64::MAX to prevent overflow
             let size_i64 = if size_bytes > i64::MAX as u64 {
@@ -550,7 +594,7 @@ impl GcCollector {
             .ok_or_else(|| GcError::HeapNotFound {
                 extension_id: extension_id.to_string(),
             })?;
-        Ok(heap.allocate(size_bytes))
+        heap.allocate(size_bytes)
     }
 
     /// Allocate an object, charging the allocation against a `DomainRegistry`.
@@ -562,11 +606,12 @@ impl GcCollector {
         size_bytes: u64,
         registry: &mut DomainRegistry,
     ) -> Result<(GcObjectId, u64), GcError> {
-        if !self.heaps.contains_key(extension_id) {
-            return Err(GcError::HeapNotFound {
+        self.heaps
+            .get(extension_id)
+            .ok_or_else(|| GcError::HeapNotFound {
                 extension_id: extension_id.to_string(),
-            });
-        }
+            })?
+            .preflight_allocation(size_bytes)?;
         let seq = registry.allocate(AllocationDomain::ExtensionHeap, size_bytes)?;
         match self.allocate(extension_id, size_bytes) {
             Ok(id) => Ok((id, seq)),
@@ -1399,6 +1444,97 @@ mod tests {
     }
 
     #[test]
+    fn bd_wl9l9_structural_allocation_failure_preempts_budget_and_event_side_effects() {
+        let mut gc = deterministic_collector();
+        gc.register_heap("ext-a".into())
+            .expect("heap registration should succeed");
+        gc.get_heap_mut("ext-a").expect("heap should exist").next_id = u64::MAX;
+        gc.set_budget_enforcer(heap_budget_enforcer("ext-a", 1_000));
+
+        let heap_before = serde_json::to_value(gc.get_heap("ext-a").expect("heap should exist"))
+            .expect("heap should serialize");
+        let enforcer_before = {
+            let guard = gc
+                .budget_enforcer
+                .as_ref()
+                .expect("enforcer should exist")
+                .read();
+            serde_json::to_value(&*guard).expect("enforcer should serialize")
+        };
+
+        let error = gc
+            .allocate("ext-a", 1)
+            .expect_err("exhausted cursor must reject allocation");
+        assert!(matches!(
+            error,
+            GcError::AllocationFailed {
+                reason: Some(reason),
+                ..
+            } if reason == "object ID space exhausted"
+        ));
+        assert_eq!(
+            serde_json::to_value(gc.get_heap("ext-a").expect("heap should exist"))
+                .expect("heap should serialize"),
+            heap_before
+        );
+        let enforcer_after = {
+            let guard = gc
+                .budget_enforcer
+                .as_ref()
+                .expect("enforcer should exist")
+                .read();
+            serde_json::to_value(&*guard).expect("enforcer should serialize")
+        };
+        assert_eq!(enforcer_after, enforcer_before);
+        assert!(gc.events().is_empty());
+        assert_eq!(gc.event_sequence(), 0);
+    }
+
+    #[test]
+    fn bd_wl9l9_tracked_structural_failure_preempts_domain_accounting() {
+        let mut gc = deterministic_collector();
+        gc.register_heap("ext-a".into())
+            .expect("heap registration should succeed");
+        gc.get_heap_mut("ext-a").expect("heap should exist").next_id = u64::MAX;
+
+        let mut registry = DomainRegistry::new();
+        registry
+            .register(
+                AllocationDomain::ExtensionHeap,
+                crate::alloc_domain::LifetimeClass::SessionScoped,
+                1_000,
+            )
+            .expect("domain registration should succeed");
+        let sequence_before = registry.allocation_sequence();
+        let heap_before = serde_json::to_value(gc.get_heap("ext-a").expect("heap should exist"))
+            .expect("heap should serialize");
+        let used_before = registry
+            .get(&AllocationDomain::ExtensionHeap)
+            .expect("domain should exist")
+            .budget
+            .used_bytes;
+
+        let error = gc
+            .allocate_tracked("ext-a", 1, &mut registry)
+            .expect_err("exhausted cursor must reject tracked allocation");
+        assert!(matches!(error, GcError::AllocationFailed { .. }));
+        assert_eq!(
+            serde_json::to_value(gc.get_heap("ext-a").expect("heap should exist"))
+                .expect("heap should serialize"),
+            heap_before
+        );
+        assert_eq!(registry.allocation_sequence(), sequence_before);
+        assert_eq!(
+            registry
+                .get(&AllocationDomain::ExtensionHeap)
+                .expect("domain should exist")
+                .budget
+                .used_bytes,
+            used_before
+        );
+    }
+
+    #[test]
     fn collect_releases_reclaimed_bytes_back_to_budget_enforcer() {
         // Regression for the cumulative-HeapMemory monotonic-growth bug
         // (bd-1f4rc): a single allocate→unroot→collect→re-allocate cycle
@@ -1777,6 +1913,51 @@ mod tests {
         assert_eq!(id3.as_u64(), 2);
     }
 
+    #[test]
+    fn bd_wl9l9_collector_rejects_live_byte_overflow_and_collects_maximum_heap_exactly() {
+        let mut gc = deterministic_collector();
+        gc.register_heap("ext-max".into())
+            .expect("heap registration should succeed");
+        let first = gc
+            .allocate("ext-max", u64::MAX - 1)
+            .expect("first boundary allocation should succeed");
+        let second = gc
+            .allocate("ext-max", 1)
+            .expect("exact live-byte maximum should succeed");
+        let before = serde_json::to_value(gc.get_heap("ext-max").expect("heap should exist"))
+            .expect("heap should serialize");
+
+        let error = gc
+            .allocate("ext-max", 1)
+            .expect_err("live-byte overflow must be rejected");
+        assert!(matches!(
+            error,
+            GcError::AllocationFailed {
+                reason: Some(reason),
+                ..
+            } if reason == "live-byte total overflow"
+        ));
+        assert_eq!(
+            serde_json::to_value(gc.get_heap("ext-max").expect("heap should exist"))
+                .expect("heap should serialize"),
+            before
+        );
+        assert!(gc.events().is_empty());
+        assert_eq!(gc.event_sequence(), 0);
+
+        gc.unroot("ext-max", first)
+            .expect("first unroot should succeed");
+        gc.unroot("ext-max", second)
+            .expect("second unroot should succeed");
+        let event = gc.collect("ext-max").expect("collection should succeed");
+        assert_eq!(event.swept_count, 2);
+        assert_eq!(event.bytes_reclaimed, u64::MAX);
+        let heap = gc.get_heap("ext-max").expect("heap should exist");
+        assert_eq!(heap.object_count(), 0);
+        assert_eq!(heap.total_bytes(), 0);
+        assert_eq!(heap.total_reclaimed(), u64::MAX);
+    }
+
     // -----------------------------------------------------------------------
     // Allocate on nonexistent heap
     // -----------------------------------------------------------------------
@@ -2095,11 +2276,63 @@ mod tests {
     #[test]
     fn extension_heap_contains_and_get() {
         let mut heap = ExtensionHeap::new("ext-a".into());
-        let id = heap.allocate(64);
+        let id = heap.allocate(64).expect("allocation should succeed");
         assert!(heap.contains(id));
         assert!(heap.get(id).is_some());
         assert!(!heap.contains(GcObjectId(999)));
         assert!(heap.get(GcObjectId(999)).is_none());
+    }
+
+    #[test]
+    fn bd_wl9l9_extension_heap_exhausted_cursor_is_failure_atomic() {
+        let mut heap = ExtensionHeap::new("ext-exhausted".into());
+        heap.next_id = u64::MAX;
+        let before = serde_json::to_value(&heap).expect("heap should serialize");
+
+        let error = heap
+            .allocate(1)
+            .expect_err("exhausted cursor must reject allocation");
+        assert!(matches!(
+            error,
+            GcError::AllocationFailed {
+                reason: Some(reason),
+                ..
+            } if reason == "object ID space exhausted"
+        ));
+        assert_eq!(
+            serde_json::to_value(&heap).expect("heap should serialize"),
+            before
+        );
+    }
+
+    #[test]
+    fn bd_wl9l9_extension_heap_restored_colliding_cursor_is_failure_atomic() {
+        let mut heap = ExtensionHeap::new("ext-collision".into());
+        let id = heap.allocate(10).expect("allocation should succeed");
+        assert_eq!(id, GcObjectId(0));
+
+        let mut encoded = serde_json::to_value(&heap).expect("heap should serialize");
+        encoded["next_id"] = serde_json::Value::from(0);
+        let mut restored: ExtensionHeap =
+            serde_json::from_value(encoded).expect("mutated fixture should deserialize");
+        let before = serde_json::to_value(&restored).expect("heap should serialize");
+
+        let error = restored
+            .allocate(20)
+            .expect_err("occupied restored cursor must reject allocation");
+        assert!(matches!(
+            error,
+            GcError::AllocationFailed {
+                reason: Some(reason),
+                ..
+            } if reason == "object ID cursor collision"
+        ));
+        assert_eq!(restored.object_count(), 1);
+        assert_eq!(restored.get(id).map(|object| object.size_bytes), Some(10));
+        assert_eq!(
+            serde_json::to_value(&restored).expect("heap should serialize"),
+            before
+        );
     }
 
     #[test]
@@ -2111,8 +2344,8 @@ mod tests {
     #[test]
     fn extension_heap_add_reference_idempotent() {
         let mut heap = ExtensionHeap::new("ext".into());
-        let a = heap.allocate(10);
-        let b = heap.allocate(20);
+        let a = heap.allocate(10).expect("allocation should succeed");
+        let b = heap.allocate(20).expect("allocation should succeed");
         heap.add_reference(a, b)
             .expect("operation should succeed for valid inputs");
         heap.add_reference(a, b)
@@ -2126,7 +2359,7 @@ mod tests {
     #[test]
     fn extension_heap_root_already_rooted_object() {
         let mut heap = ExtensionHeap::new("ext".into());
-        let id = heap.allocate(10); // starts rooted
+        let id = heap.allocate(10).expect("allocation should succeed"); // starts rooted
         heap.root(id)
             .expect("operation should succeed for valid inputs"); // re-root is no-op
         let obj = heap
@@ -2138,8 +2371,8 @@ mod tests {
     #[test]
     fn extension_heap_serde_roundtrip() {
         let mut heap = ExtensionHeap::new("serde-ext".into());
-        let a = heap.allocate(100);
-        let b = heap.allocate(200);
+        let a = heap.allocate(100).expect("allocation should succeed");
+        let b = heap.allocate(200).expect("allocation should succeed");
         heap.add_reference(a, b)
             .expect("operation should succeed for valid inputs");
         heap.unroot(b)

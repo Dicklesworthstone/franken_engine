@@ -41,6 +41,11 @@ use crate::security_epoch::SecurityEpoch;
 
 const TELEMETRY_SCHEMA_DEF: &[u8] = b"hostcall-telemetry-schema-v1";
 
+/// Domain separator for completeness evidence mixed into recorder and
+/// snapshot hashes. The suffix is omitted entirely for a clean stream so
+/// hashes produced before drop accounting remain byte-for-byte stable.
+const TELEMETRY_DROP_COUNTS_HASH_DOMAIN: &[u8] = b"telemetry-drop-counts-v1";
+
 /// Default bounded channel capacity.
 const DEFAULT_CHANNEL_CAPACITY: usize = 8192;
 
@@ -414,10 +419,17 @@ pub struct TelemetrySnapshot {
     pub record_id_at_snapshot: Option<u64>,
     /// Number of records in the log at snapshot time.
     pub record_count: u64,
-    /// Content hash of all records up to this point (rolling hash).
+    /// Content hash of all retained records up to this point and, when any
+    /// submissions were refused, the per-reason drop counts. Zero-drop
+    /// snapshots retain the historical retained-record rolling hash.
     pub rolling_hash: ContentHash,
     /// Security epoch at snapshot time.
     pub epoch: SecurityEpoch,
+    /// Per-reason counts of records refused before snapshot time. The default
+    /// preserves compatibility with snapshots persisted before this field
+    /// existed (bd-7sn6n).
+    #[serde(default)]
+    pub drop_counts: TelemetryDropCounts,
 }
 
 // ---------------------------------------------------------------------------
@@ -624,8 +636,9 @@ impl TelemetryRecorder {
                 None
             },
             record_count: self.records.len() as u64,
-            rolling_hash: self.rolling_hash,
+            rolling_hash: rolling_hash_with_drop_counts(self.rolling_hash, self.dropped),
             epoch: self.current_epoch,
+            drop_counts: self.dropped,
         };
         self.snapshots.push(snap.clone());
         snap
@@ -716,10 +729,7 @@ impl TelemetryRecorder {
             buf.extend_from_slice(record.content_hash.as_bytes());
         }
         if self.dropped.any() {
-            buf.extend_from_slice(b"telemetry-drop-counts-v1");
-            buf.extend_from_slice(&self.dropped.channel_full.to_le_bytes());
-            buf.extend_from_slice(&self.dropped.monotonicity_violation.to_le_bytes());
-            buf.extend_from_slice(&self.dropped.empty_extension_id.to_le_bytes());
+            append_drop_counts_hash_suffix(&mut buf, self.dropped);
         }
         ContentHash::compute(&buf)
     }
@@ -734,6 +744,31 @@ impl TelemetryRecorder {
         }
         tampered
     }
+}
+
+fn append_drop_counts_hash_suffix(buf: &mut Vec<u8>, drop_counts: TelemetryDropCounts) {
+    buf.extend_from_slice(TELEMETRY_DROP_COUNTS_HASH_DOMAIN);
+    buf.extend_from_slice(&drop_counts.channel_full.to_le_bytes());
+    buf.extend_from_slice(&drop_counts.monotonicity_violation.to_le_bytes());
+    buf.extend_from_slice(&drop_counts.empty_extension_id.to_le_bytes());
+}
+
+fn rolling_hash_with_drop_counts(
+    retained_records_hash: ContentHash,
+    drop_counts: TelemetryDropCounts,
+) -> ContentHash {
+    if !drop_counts.any() {
+        return retained_records_hash;
+    }
+
+    let mut buf = Vec::with_capacity(
+        retained_records_hash.as_bytes().len()
+            + TELEMETRY_DROP_COUNTS_HASH_DOMAIN.len()
+            + 3 * std::mem::size_of::<u64>(),
+    );
+    buf.extend_from_slice(retained_records_hash.as_bytes());
+    append_drop_counts_hash_suffix(&mut buf, drop_counts);
+    ContentHash::compute(&buf)
 }
 
 // ---------------------------------------------------------------------------
@@ -1551,6 +1586,70 @@ mod tests {
         let restored: TelemetrySnapshot =
             serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(snap, restored);
+    }
+
+    #[test]
+    fn clean_snapshot_preserves_legacy_rolling_hash() {
+        let mut recorder = test_recorder();
+        recorder
+            .record(1000, test_input("ext-001", HostcallType::FsRead))
+            .expect("operation should succeed for valid inputs");
+        let legacy_rolling_hash = *recorder.rolling_hash();
+
+        let snapshot = recorder.snapshot();
+
+        assert_eq!(snapshot.rolling_hash, legacy_rolling_hash);
+        assert_eq!(snapshot.drop_counts, TelemetryDropCounts::default());
+    }
+
+    #[test]
+    fn overflow_snapshot_persists_drop_counts_and_hashes_them() {
+        let mut recorder = small_recorder(1);
+        recorder
+            .record(1, test_input("ext-001", HostcallType::FsRead))
+            .expect("first record fits");
+        let clean_snapshot = recorder.snapshot();
+        assert!(matches!(
+            recorder.record(2, test_input("ext-001", HostcallType::FsWrite)),
+            Err(TelemetryError::ChannelFull)
+        ));
+
+        let incomplete_snapshot = recorder.snapshot();
+        assert_eq!(
+            incomplete_snapshot.record_count,
+            clean_snapshot.record_count
+        );
+        assert_eq!(incomplete_snapshot.drop_counts.channel_full, 1);
+        assert_ne!(
+            incomplete_snapshot.rolling_hash,
+            clean_snapshot.rolling_hash
+        );
+
+        let json = serde_json::to_string(&incomplete_snapshot).expect("serialize snapshot");
+        let restored: TelemetrySnapshot =
+            serde_json::from_str(&json).expect("deserialize snapshot");
+        assert_eq!(restored, incomplete_snapshot);
+    }
+
+    #[test]
+    fn legacy_snapshot_without_drop_counts_defaults_to_clean() {
+        let mut recorder = test_recorder();
+        recorder
+            .record(1000, test_input("ext-001", HostcallType::FsRead))
+            .expect("operation should succeed for valid inputs");
+        let snapshot = recorder.snapshot();
+        let mut value = serde_json::to_value(&snapshot).expect("serialize snapshot");
+        value
+            .as_object_mut()
+            .expect("snapshot serializes as a JSON object")
+            .remove("drop_counts");
+
+        let restored: TelemetrySnapshot =
+            serde_json::from_value(value).expect("legacy snapshot must deserialize");
+
+        assert_eq!(restored.drop_counts, TelemetryDropCounts::default());
+        assert_eq!(restored.rolling_hash, snapshot.rolling_hash);
+        assert_eq!(restored.record_count, snapshot.record_count);
     }
 
     // -----------------------------------------------------------------------

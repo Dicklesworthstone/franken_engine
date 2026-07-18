@@ -246,6 +246,52 @@ fn enrichment_snapshot_serde_on_empty() {
     assert_eq!(restored.record_id_at_snapshot, None);
 }
 
+#[test]
+fn enrichment_snapshot_hash_distinguishes_equal_total_drop_reasons() {
+    let mut channel_full = small_recorder(1);
+    channel_full
+        .record(100, make_input("ext-a", HostcallType::FsRead))
+        .unwrap();
+    let _ = channel_full.record(200, make_input("ext-a", HostcallType::FsWrite));
+    let channel_full_snapshot = channel_full.snapshot();
+
+    let mut monotonicity = small_recorder(1);
+    monotonicity
+        .record(100, make_input("ext-a", HostcallType::FsRead))
+        .unwrap();
+    let _ = monotonicity.record(50, make_input("ext-a", HostcallType::FsWrite));
+    let monotonicity_snapshot = monotonicity.snapshot();
+
+    let mut empty_extension = small_recorder(1);
+    empty_extension
+        .record(100, make_input("ext-a", HostcallType::FsRead))
+        .unwrap();
+    let _ = empty_extension.record(200, make_input("", HostcallType::FsWrite));
+    let empty_extension_snapshot = empty_extension.snapshot();
+
+    assert_eq!(channel_full_snapshot.record_count, 1);
+    assert_eq!(monotonicity_snapshot.record_count, 1);
+    assert_eq!(empty_extension_snapshot.record_count, 1);
+    assert_eq!(channel_full_snapshot.drop_counts.total(), 1);
+    assert_eq!(monotonicity_snapshot.drop_counts.total(), 1);
+    assert_eq!(empty_extension_snapshot.drop_counts.total(), 1);
+    assert_eq!(channel_full_snapshot.drop_counts.channel_full, 1);
+    assert_eq!(monotonicity_snapshot.drop_counts.monotonicity_violation, 1);
+    assert_eq!(empty_extension_snapshot.drop_counts.empty_extension_id, 1);
+    assert_ne!(
+        channel_full_snapshot.rolling_hash, monotonicity_snapshot.rolling_hash,
+        "the snapshot hash must commit to each reason, not only the total"
+    );
+    assert_ne!(
+        channel_full_snapshot.rolling_hash, empty_extension_snapshot.rolling_hash,
+        "the snapshot hash must commit to each reason, not only the total"
+    );
+    assert_ne!(
+        monotonicity_snapshot.rolling_hash, empty_extension_snapshot.rolling_hash,
+        "the snapshot hash must commit to each reason, not only the total"
+    );
+}
+
 // =========================================================================
 // E. Query time-window boundary conditions
 // =========================================================================

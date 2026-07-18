@@ -26,7 +26,8 @@ use frankenengine_engine::capability::RuntimeCapability;
 use frankenengine_engine::hash_tiers::ContentHash;
 use frankenengine_engine::hostcall_telemetry::{
     ExtensionSummary, FlowLabel, HostcallResult, HostcallType, RecordInput, RecorderConfig,
-    ResourceDelta, TelemetryError, TelemetryQuery, TelemetryRecorder, TelemetrySnapshot,
+    ResourceDelta, TelemetryDropCounts, TelemetryError, TelemetryQuery, TelemetryRecorder,
+    TelemetrySnapshot,
 };
 use frankenengine_engine::security_epoch::SecurityEpoch;
 
@@ -394,6 +395,34 @@ fn multiple_snapshots_have_different_record_counts() {
     assert_eq!(rec.snapshots().len(), 2);
 }
 
+#[test]
+fn overflow_snapshot_roundtrip_preserves_completeness_evidence() {
+    let mut rec = small_recorder(1);
+    rec.record(100, make_input("ext-a", HostcallType::FsRead))
+        .unwrap();
+    let clean_snapshot = rec.snapshot();
+    assert_eq!(clean_snapshot.rolling_hash, *rec.rolling_hash());
+    assert_eq!(clean_snapshot.drop_counts, TelemetryDropCounts::default());
+
+    let overflow = rec.record(200, make_input("ext-a", HostcallType::FsWrite));
+    assert_eq!(overflow.unwrap_err(), TelemetryError::ChannelFull);
+    let incomplete_snapshot = rec.snapshot();
+
+    assert_eq!(
+        incomplete_snapshot.record_count,
+        clean_snapshot.record_count
+    );
+    assert_eq!(incomplete_snapshot.drop_counts.channel_full, 1);
+    assert_ne!(
+        incomplete_snapshot.rolling_hash,
+        clean_snapshot.rolling_hash
+    );
+
+    let json = serde_json::to_string(&incomplete_snapshot).unwrap();
+    let restored: TelemetrySnapshot = serde_json::from_str(&json).unwrap();
+    assert_eq!(restored, incomplete_snapshot);
+}
+
 // ===========================================================================
 // 7. set_epoch
 // ===========================================================================
@@ -743,6 +772,21 @@ fn serde_telemetry_snapshot() {
     let json = serde_json::to_string(&snap).unwrap();
     let restored: TelemetrySnapshot = serde_json::from_str(&json).unwrap();
     assert_eq!(snap, restored);
+}
+
+#[test]
+fn serde_legacy_clean_snapshot_defaults_missing_drop_counts() {
+    let mut rec = default_recorder();
+    rec.record(1000, make_input("ext-a", HostcallType::FsRead))
+        .unwrap();
+    let snapshot = rec.snapshot();
+    let legacy_hash = snapshot.rolling_hash;
+    let mut json = serde_json::to_value(snapshot).unwrap();
+    json.as_object_mut().unwrap().remove("drop_counts");
+
+    let restored: TelemetrySnapshot = serde_json::from_value(json).unwrap();
+    assert_eq!(restored.drop_counts, TelemetryDropCounts::default());
+    assert_eq!(restored.rolling_hash, legacy_hash);
 }
 
 #[test]

@@ -589,7 +589,7 @@ implementation, and parity children are green.
 
 `bd-b12xs.1` and `bd-b12xs.2` established the exact lookup and ordered-storage
 primitives without changing a runtime heap. Runtime adoption is a separate
-coordinated evolution because the executable baselines still project
+coordinated evolution because, at approval time, the executable baselines projected
 `Value::Str` through UTF-8 `String` before property lookup. That projection
 aliases distinct lone UTF-16 units to the same replacement-character key.
 
@@ -630,8 +630,10 @@ The approved source contract is:
    separate owner-reviewed boundary.
 5. Land dynamic carrier/storage adoption before consumer and static-source
    parity. The first two runtime children do not change AST or IR schemas.
-   `bd-b12xs.6` audits static object/member keys and versions an AST/IR wire only
-   if that audit proves a remaining projection.
+   `bd-b12xs.6` found no remaining AST projection, so both canonical AST schemas
+   stay unchanged. It did find the downstream `Ir1PropertyKey::Static(String)`
+   projection, widened that field to `Static(JsString)`, and advanced core IR to
+   `0.5.0` and engine IR to `0.4.0`.
 
 The heap wire remains backward-readable and canonical:
 
@@ -665,13 +667,33 @@ Implementation ownership is deliberately ordered:
 | `bd-b12xs.3` | this API/wire decision and dependency split |
 | `bd-b12xs.4` | franken-core dynamic computed-key carrier, compatibility/exact views, mixed Symbol storage, serde, seed, memory, and rollback |
 | `bd-b12xs.5` | franken-engine mirror after the core call shape is proven |
-| `bd-b12xs.6` | enumeration/JSON/Reflect/Proxy/assign/spread consumers, static-source audit, donor lockstep, and parent closeout |
+| `bd-b12xs.6` | landed enumeration/JSON/Reflect/Proxy/assign/spread consumers, static-source audit, donor lockstep, and parent closeout evidence |
 
 The engine Symbol migration `bd-n8eta.4.2` depends on `bd-b12xs.6`. This avoids
 first routing its string arms through `PropertyKey::String(String)` and then
 remigrating the same property operations to `JsString`. Passing carrier tests
 alone does not close the parity gap; both executable baselines and the complete
 consumer matrix must be green.
+
+### Exact static-property IR schema checkpoint (`bd-b12xs.6`)
+
+The static-source audit found no lossy AST field: both public ASTs already
+carry quoted property names as `Expression::StringLiteral(JsString)`, so
+neither canonical AST schema changes. The remaining projection was
+`Ir1PropertyKey::Static(String)`, now widened to `Static(JsString)`.
+
+Core advances IR `0.4.0` to `0.5.0`; engine advances IR `0.3.0` to `0.4.0`.
+Ordinary static keys retain the historical `{"Static":"name"}` wire and
+canonical leaf. Exact-only keys use `{"Static":{"$wtf16":[...]}}`; older
+readers must reject the newer header rather than reinterpret that value. This
+IR change does not advance either Cargo package beyond the already-unreleased
+`0.2.0` line.
+
+Parser and lowering preserve exact units for object literals/patterns,
+members, methods, accessors, classes, and destructuring. Class accessor
+prefixes concatenate UTF-16 units losslessly, while function display names
+remain diagnostic strings. Well-formed-only builtin recognition does not
+determine property identity.
 
 ## Cross-Crate Compatibility Matrix
 

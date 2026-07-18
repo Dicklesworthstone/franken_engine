@@ -265,7 +265,7 @@ test reports, not buried in const sets (see DISC-005 below).
 
 ### DISC-013: Own-property enumeration carriers require explicit ECMAScript order
 
-- **Status:** PARTIALLY RESOLVED; ACCEPTED only for the remaining baseline Symbol-key gap
+- **Status:** PARTIALLY RESOLVED; ACCEPTED only for the remaining engine-baseline Symbol-key gap and later cross-lane closeout
 - **ES2020 ref:** §9.1.11 (`[[OwnPropertyKeys]]`), plus callers such as
   `Object.keys`, `Object.values`, `Object.entries`, `Reflect.ownKeys`,
   `for...in`, and `JSON.stringify`
@@ -293,25 +293,44 @@ test reports, not buried in const sets (see DISC-005 below).
   deterministic order their historical shape retained (ordered data keys,
   then lexical accessor-only keys). Rejected conversions restore the prior
   maps, chronology shape, and memory estimate exactly.
-- **Remaining symptom:** The string-key-only executable baseline carrier still
-  does not model Symbol keys; the descriptor object model does. Invoking
-  accessor getters from value-consuming builtins such as `Object.values` is a
-  separate continuation/descriptor-execution gap rather than an own-key order
-  carrier gap.
+- **Exact-string evidence:** `bd-b12xs.4/.5/.6` replace ordinary executable
+  string-key identity with exact `JsString` identity in both baselines. D800,
+  D801, and literal U+FFFD remain distinct through static lowering, for-in,
+  Object key/value/entry/name consumers, ordinary Reflect/Proxy fallback and
+  duplicate detection, assign/spread, JSON, querystring, and the project's
+  CommonJS namespace projection. Core IR `0.5.0` and engine IR `0.4.0` carry
+  exact IR1 static keys while preserving historical well-formed wire.
+- **Remaining symptom:** The engine's string-key-only executable baseline
+  carrier still does not model executable Symbol keys; core already carries
+  typed `Value::Symbol` / `RuntimePropertyKey::Symbol` identities, and the
+  descriptor object model does as well.
+  Invoking accessor getters from value-consuming builtins such as
+  `Object.values` is a separate continuation/descriptor-execution gap rather
+  than an own-key order carrier gap. Legacy string-only hooks and the stable
+  descriptor model's fail-closed rejection of non-well-formed strings are
+  intentional scoped boundaries, not unresolved ordinary-key projection.
 - **Test verdict expression:** Descriptor and baseline carrier tests prove
   canonical index boundaries, donor order `b,a`, update stability,
   delete/re-create append, map-shaped serde recovery, and failed-write rollback.
   Product-path querystring fixtures 0010/0013/0020 now assert Node/Bun insertion
-  order rather than the former lexical divergence pin.
+  order rather than the former lexical divergence pin. Direct probes on Node
+  v20.19.4 (`/usr/bin/node`) and Bun 1.3.14 keep three
+  distinct ordinary keys, reject only actual duplicate Proxy own keys, and
+  emit well-formed JSON. Both engine and core
+  reject lone-surrogate querystring components before lossy encoding: engine
+  exposes donor-compatible `URIError`/`ERR_INVALID_URI`, while core retains
+  `InterpreterError::TypeError`; U+FFFD percent-encodes normally in both.
 - **Rationale for the remaining ACCEPTED scope:** Complete `[[OwnPropertyKeys]]`
-  coverage now needs an explicit executable-baseline Symbol-key representation
-  and compatible wire semantics. Keeping that residual explicit avoids
-  overstating string-key order as full Symbol conformance.
+  coverage still needs the engine's explicit executable Symbol-key
+  representation and compatible wire semantics, followed by cross-lane donor
+  closeout. Keeping that residual explicit avoids overstating string-key order
+  as full Symbol conformance.
 - **Tracking beads:** bd-qporw (original decision), bd-n8eta (runtime repair),
   bd-n8eta.1 (descriptor-model slice), bd-n8eta.2 (baseline data-property slice),
-  bd-n8eta.3 (core mixed data/accessor order), bd-n8eta.4 (baseline Symbol keys)
-- **Reviewed:** 2026-07-16
-- **Next review:** 2026-08-15
+  bd-n8eta.3 (core mixed data/accessor order), bd-n8eta.4 (baseline Symbol keys),
+  bd-b12xs, bd-b12xs.4, bd-b12xs.5, bd-b12xs.6
+- **Reviewed:** 2026-07-17
+- **Next review:** 2026-10-15
 
 ## Resolved divergences
 

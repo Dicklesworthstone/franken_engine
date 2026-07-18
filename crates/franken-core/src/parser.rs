@@ -7949,10 +7949,9 @@ fn parse_static_property_name(
     };
 
     if matches!(source.as_bytes().first(), Some(b'\'' | b'"')) {
-        let cooked =
-            parse_binding_property_string_literal(source, legacy_decimal_escape_mode(context))
-                .ok_or_else(&invalid_key)?;
-        return Ok(Expression::StringLiteral(cooked.into()));
+        let cooked = parse_quoted_expression_string(source, legacy_decimal_escape_mode(context))
+            .ok_or_else(&invalid_key)?;
+        return Ok(Expression::StringLiteral(cooked));
     }
 
     if source.ends_with('n') && binding_numeric_key_starts_like_literal(source) {
@@ -8175,88 +8174,6 @@ fn decode_binding_unicode_escape_value(
         }
         Some(code)
     }
-}
-
-fn parse_binding_property_string_literal(
-    source: &str,
-    legacy_mode: LegacyDecimalEscapeMode,
-) -> Option<String> {
-    if source.len() < 2 {
-        return None;
-    }
-    let delimiter = source.chars().next()?;
-    if !matches!(delimiter, '\'' | '"') || source.chars().next_back()? != delimiter {
-        return None;
-    }
-    unescape_binding_property_string(&source[1..source.len() - 1], delimiter, legacy_mode)
-}
-
-fn unescape_binding_property_string(
-    inner: &str,
-    delimiter: char,
-    legacy_mode: LegacyDecimalEscapeMode,
-) -> Option<String> {
-    if !inner.contains('\\') {
-        return (!inner.contains(delimiter) && !inner.contains('\n') && !inner.contains('\r'))
-            .then(|| inner.to_string());
-    }
-    let mut out = String::with_capacity(inner.len());
-    let mut chars = inner.chars().peekable();
-    while let Some(ch) = chars.next() {
-        if ch != '\\' {
-            if ch == delimiter || matches!(ch, '\n' | '\r') {
-                return None;
-            }
-            out.push(ch);
-            continue;
-        }
-        match chars.next()? {
-            'n' => out.push('\n'),
-            't' => out.push('\t'),
-            'r' => out.push('\r'),
-            'b' => out.push('\u{0008}'),
-            'f' => out.push('\u{000C}'),
-            'v' => out.push('\u{000B}'),
-            '0' if !chars.peek().is_some_and(char::is_ascii_digit) => out.push('\0'),
-            decimal @ '0'..='9' => out.push(char::from_u32(u32::from(
-                decode_legacy_decimal_escape(decimal, &mut chars, legacy_mode)?,
-            ))?),
-            '\\' => out.push('\\'),
-            '\'' => out.push('\''),
-            '"' => out.push('"'),
-            '`' => out.push('`'),
-            '\n' => {}
-            '\r' => {
-                if chars.peek() == Some(&'\n') {
-                    chars.next();
-                }
-            }
-            '\u{2028}' | '\u{2029}' => {}
-            'x' => {
-                let high = chars.next()?.to_digit(16)?;
-                let low = chars.next()?.to_digit(16)?;
-                out.push(char::from_u32(high * 16 + low)?);
-            }
-            'u' => {
-                let first = decode_binding_unicode_escape_value(&mut chars)?;
-                let decoded = if (0xD800..=0xDBFF).contains(&first) {
-                    if chars.next()? != '\\' || chars.next()? != 'u' {
-                        return None;
-                    }
-                    let low = decode_binding_unicode_escape_value(&mut chars)?;
-                    if !(0xDC00..=0xDFFF).contains(&low) {
-                        return None;
-                    }
-                    char::from_u32(0x10000 + ((first - 0xD800) << 10) + (low - 0xDC00))?
-                } else {
-                    char::from_u32(first)?
-                };
-                out.push(decoded);
-            }
-            other => out.push(other),
-        }
-    }
-    Some(out)
 }
 
 fn decode_binding_property_identifier_escapes(source: &str) -> Option<String> {
@@ -18447,6 +18364,41 @@ strict"; var static = 1; }"#,
         assert!(matches!(
             &properties[3].key,
             Expression::Identifier(key) if key == "π"
+        ));
+    }
+
+    #[test]
+    fn static_property_keys_preserve_exact_utf16_bd_b12xs_6() {
+        let expected = [0xD800];
+
+        let object_tree = parse_script(r#"({"\uD800": 1})"#);
+        let Expression::ObjectLiteral(properties) = first_expr(&object_tree) else {
+            panic!("expected object literal");
+        };
+        assert!(matches!(
+            &properties[0].key,
+            Expression::StringLiteral(key) if key.code_units_vec() == expected
+        ));
+
+        let binding_tree = parse_script(r#"let {"\uD800": value} = source;"#);
+        let Statement::VariableDeclaration(declaration) = &binding_tree.body[0] else {
+            panic!("expected object-binding declaration");
+        };
+        let BindingPattern::ObjectPattern(properties) = &declaration.declarations[0].pattern else {
+            panic!("expected object-binding pattern");
+        };
+        assert!(matches!(
+            &properties[0].key,
+            Expression::StringLiteral(key) if key.code_units_vec() == expected
+        ));
+
+        let class_tree = parse_script(r#"class Exact { "\uD800"() {} }"#);
+        let Statement::ClassDeclaration(class) = &class_tree.body[0] else {
+            panic!("expected class declaration");
+        };
+        assert!(matches!(
+            &class.body[0].key,
+            Expression::StringLiteral(key) if key.code_units_vec() == expected
         ));
     }
 

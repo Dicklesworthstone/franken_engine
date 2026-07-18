@@ -69,9 +69,11 @@ alone.
 
 `bd-f1ixz` advanced the core IR schema to `0.3.0` with additive
 `Ir1Op::CopyDataProperties` and `Ir3Instruction::CopyDataProperties` variants.
-`bd-lfq44` subsequently advances the core schema to `0.4.0` and the engine
-mirror to `0.3.0` for exact module-specifier carriers. The engine mirror still
-lacks the `CopyDataProperties` variants, so the `ir_contract` row remains
+`bd-lfq44` subsequently advanced the core schema to `0.4.0` and the engine
+mirror to `0.3.0` for exact module-specifier carriers. `bd-b12xs.6` advances
+core to `0.5.0` and engine to `0.4.0` because `Ir1PropertyKey::Static` now
+carries exact `JsString`. The engine mirror still lacks the
+`CopyDataProperties` variants, so the `ir_contract` row remains
 `pending_graduation` with ownership unsettled: future parity work must
 reconcile the versioned wire, lowering, and execution behavior before changing
 that status.
@@ -103,7 +105,7 @@ executable parity gap is closed. Legacy object-backed engine Symbols may be
 canonicalized only by the versioned whole-artifact migration specified in
 ADR-0008, never by guessing from an arbitrary heap object.
 
-## Active Parity Exception: Exact UTF-16 String Keys
+## Exact UTF-16 String-Key Parity Evidence
 
 `bd-b12xs.1` added `js_string::ExactPropertyMap`, which keeps lone-surrogate
 keys exact and uses a dual JSON wire shape. `bd-b12xs.2` adds the corresponding
@@ -130,7 +132,22 @@ Runtime evidence must land in dependency order:
 | --- | --- |
 | `bd-b12xs.4` | Core dynamic computed keys stay exact through get/set/delete/`in`/prototype, descriptor conversion, compatibility/exact views, mixed Symbol order and wire, serde, seed, memory, and rollback. |
 | `bd-b12xs.5` | Engine mirrors the proven core carrier and wire behavior without touching the legacy hook API or inventing a core-style accessor field. |
-| `bd-b12xs.6` | Both lanes prove enumeration, JSON, Reflect/Proxy, assign/spread, static-source audit, and D800/D801/U+FFFD donor lockstep before the parent closes. |
+| `bd-b12xs.6` | Both lanes preserve exact static and dynamic string keys through parser/AST/IR/lowering, enumeration, JSON, ordinary Reflect/Proxy fallback, assign/spread, querystring, and the project-defined CommonJS named-export projection; D800, D801, and U+FFFD remain distinct. The engine exposes donor-compatible malformed-querystring error identity while core retains its typed interpreter error. |
+
+`bd-b12xs.6` closes the ordinary exact-string consumer/static-source wave.
+Well-formed IR1 static keys retain their historical string wire; exact-only
+keys use the established `$wtf16` form. Node/Bun donor evidence keeps D800,
+D801, and U+FFFD distinct in ordinary own-key consumers and JSON. Both lanes
+reject lone-surrogate querystring components before lossy encoding: the engine
+exposes donor-compatible `URIError`/`ERR_INVALID_URI`, while core retains
+`InterpreterError::TypeError`; U+FFFD encodes normally in both. CommonJS
+coverage proves the engine/core namespace contract, not Node's static
+named-export lexer.
+
+Independent engine executable Symbol-key and later cross-lane Symbol closeout,
+typed-hook, accessor-continuation, and engine `CopyDataProperties` parity work
+remains. The stable descriptor-model `PropertyKey::String(String)` still
+deliberately rejects non-well-formed strings.
 
 The `js_string`, `object_model`, and `baseline_interpreter` rows remain
 `pending_graduation`. Required adoption evidence must preserve all of these

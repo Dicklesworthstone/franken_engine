@@ -182,13 +182,13 @@ fn build_full_pipeline() -> (Ir0Module, Ir1Module, Ir2Module, Ir3Module, Ir4Modu
 fn schema_version_current_values() {
     let v = IrSchemaVersion::CURRENT;
     assert_eq!(v.major, 0);
-    assert_eq!(v.minor, 3);
+    assert_eq!(v.minor, 4);
     assert_eq!(v.patch, 0);
 }
 
 #[test]
 fn schema_version_display() {
-    assert_eq!(IrSchemaVersion::CURRENT.to_string(), "0.3.0");
+    assert_eq!(IrSchemaVersion::CURRENT.to_string(), "0.4.0");
     let custom = IrSchemaVersion {
         major: 2,
         minor: 3,
@@ -246,7 +246,7 @@ fn schema_version_ordering() {
 }
 
 #[test]
-fn schema_version_030_retains_historical_minor_compatibility_bd_lfq44() {
+fn schema_version_040_retains_historical_minor_compatibility_bd_b12xs_6() {
     let header = |minor| IrHeader {
         schema_version: IrSchemaVersion {
             major: 0,
@@ -261,9 +261,10 @@ fn schema_version_030_retains_historical_minor_compatibility_bd_lfq44() {
     assert!(verify_schema_version(&header(1)).is_ok());
     assert!(verify_schema_version(&header(2)).is_ok());
     assert!(verify_schema_version(&header(3)).is_ok());
-    let error = verify_schema_version(&header(4)).expect_err("future minor must be rejected");
+    verify_schema_version(&header(4)).expect("current minor must be accepted");
+    let error = verify_schema_version(&header(5)).expect_err("future minor must be rejected");
     assert_eq!(error.code, IrErrorCode::SchemaVersionMismatch);
-    assert!(error.message.contains("0.3.0"));
+    assert!(error.message.contains("0.4.0"));
 }
 
 // ============================================================================

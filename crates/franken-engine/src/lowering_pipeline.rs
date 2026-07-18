@@ -1108,7 +1108,7 @@ fn lower_ir0_to_ir1_with_ambient_grant(
                         } else {
                             ir1.ops.push(Ir1Op::ImportModule { specifier });
                             ir1.ops.push(Ir1Op::GetProperty {
-                                key: Ir1PropertyKey::Static("default".to_string()),
+                                key: Ir1PropertyKey::Static("default".into()),
                             });
                         }
                         let binding_id = alloc_import_binding(
@@ -1267,7 +1267,7 @@ fn lower_ir0_to_ir1_with_ambient_grant(
                                     binding_id: temp_binding_id,
                                 });
                                 ir1.ops.push(Ir1Op::GetProperty {
-                                    key: Ir1PropertyKey::Static(spec.import_name.clone()),
+                                    key: Ir1PropertyKey::Static(spec.import_name.clone().into()),
                                 });
                                 let binding_id = alloc_import_binding(
                                     &spec.local_name,
@@ -1300,7 +1300,7 @@ fn lower_ir0_to_ir1_with_ambient_grant(
                             binding_id: temp_binding_id,
                         });
                         ir1.ops.push(Ir1Op::GetProperty {
-                            key: Ir1PropertyKey::Static("default".to_string()),
+                            key: Ir1PropertyKey::Static("default".into()),
                         });
                         let default_binding_id = alloc_import_binding(
                             default,
@@ -1318,7 +1318,7 @@ fn lower_ir0_to_ir1_with_ambient_grant(
                                 binding_id: temp_binding_id,
                             });
                             ir1.ops.push(Ir1Op::GetProperty {
-                                key: Ir1PropertyKey::Static(spec.import_name.clone()),
+                                key: Ir1PropertyKey::Static(spec.import_name.clone().into()),
                             });
                             let binding_id = alloc_import_binding(
                                 &spec.local_name,
@@ -1347,7 +1347,7 @@ fn lower_ir0_to_ir1_with_ambient_grant(
                             binding_id: temp_binding_id,
                         });
                         ir1.ops.push(Ir1Op::GetProperty {
-                            key: Ir1PropertyKey::Static("default".to_string()),
+                            key: Ir1PropertyKey::Static("default".into()),
                         });
                         let default_binding_id = alloc_import_binding(
                             default,
@@ -1445,7 +1445,7 @@ fn lower_ir0_to_ir1_with_ambient_grant(
                                     binding_id: temp_binding_id,
                                 });
                                 ir1.ops.push(Ir1Op::GetProperty {
-                                    key: Ir1PropertyKey::Static(import_name),
+                                    key: Ir1PropertyKey::Static(import_name.into()),
                                 });
                                 let export_binding_name = make_internal_binding_name(
                                     "reexport_binding",
@@ -2483,13 +2483,9 @@ fn alloc_pattern_primary_binding(
 fn object_pattern_static_key(
     prop: &ObjectPatternProperty,
     fallback_name: Option<&str>,
-) -> Result<String, LoweringPipelineError> {
-    reject_known_lone_surrogate_property_key(
-        &prop.key,
-        "engine.object_pattern_lone_surrogate_key",
-    )?;
+) -> Result<JsString, LoweringPipelineError> {
     Ok(canonical_static_object_property_key(&prop.key)
-        .unwrap_or_else(|_| fallback_name.unwrap_or_default().to_string()))
+        .unwrap_or_else(|_| fallback_name.unwrap_or_default().into()))
 }
 
 /// Emit IR1 ops to destructure a value (already stored in `source_bid`) into
@@ -2514,7 +2510,7 @@ fn lower_destructuring_to_ir1(
             // Simple binding — already handled by StoreBinding above.
         }
         BindingPattern::ObjectPattern(props) => {
-            let mut rest_excluded_keys: Vec<String> = Vec::new();
+            let mut rest_excluded_keys: Vec<JsString> = Vec::new();
             for prop in props {
                 if let BindingPattern::Rest(inner) = &prop.value {
                     let target_names = inner.binding_names();
@@ -2690,7 +2686,7 @@ fn lower_destructuring_to_ir1(
                     binding_id: source_bid,
                 });
                 ops.push(Ir1Op::GetProperty {
-                    key: Ir1PropertyKey::Static(index.to_string()),
+                    key: Ir1PropertyKey::Static(index.to_string().into()),
                 });
                 match element {
                     BindingPattern::Identifier(_) => {
@@ -4949,7 +4945,7 @@ fn lower_statement_to_ir1_with_flow(
                 // Load child constructor (our class)
                 ops.push(Ir1Op::LoadBinding { binding_id: bid });
                 ops.push(Ir1Op::GetProperty {
-                    key: Ir1PropertyKey::Static("prototype".to_string()),
+                    key: Ir1PropertyKey::Static("prototype".into()),
                 });
 
                 if let Some(capability) = builtin_prototype_capability(super_class, binding_lookup)
@@ -4971,13 +4967,13 @@ fn lower_statement_to_ir1_with_flow(
                         span_table,
                     )?;
                     ops.push(Ir1Op::GetProperty {
-                        key: Ir1PropertyKey::Static("prototype".to_string()),
+                        key: Ir1PropertyKey::Static("prototype".into()),
                     });
                 }
 
                 // Set Child.prototype.__proto__ = Parent.prototype
                 ops.push(Ir1Op::SetProperty {
-                    key: Ir1PropertyKey::Static("__proto__".to_string()),
+                    key: Ir1PropertyKey::Static("__proto__".into()),
                 });
                 ops.push(Ir1Op::Discard);
             }
@@ -4989,12 +4985,9 @@ fn lower_statement_to_ir1_with_flow(
                 .iter()
                 .filter(|m| m.kind != MethodKind::Constructor)
             {
-                reject_known_lone_surrogate_property_key(
-                    &method.key,
-                    "engine.class_method_lone_surrogate_key",
-                )?;
-                let method_name = canonical_static_object_property_key(&method.key)
-                    .unwrap_or_else(|_| "anonymous_method".to_string());
+                let method_key = canonical_static_object_property_key(&method.key)
+                    .unwrap_or_else(|_| "anonymous_method".into());
+                let method_name = property_key_function_display_name(&method_key);
 
                 // Lower method body with its own scope.
                 // Identifier params keep their name; non-identifier patterns
@@ -5089,7 +5082,7 @@ fn lower_statement_to_ir1_with_flow(
                 ops.push(Ir1Op::LoadBinding { binding_id: bid });
                 if !method.is_static {
                     ops.push(Ir1Op::GetProperty {
-                        key: Ir1PropertyKey::Static("prototype".to_string()),
+                        key: Ir1PropertyKey::Static("prototype".into()),
                     });
                 }
 
@@ -5138,7 +5131,7 @@ fn lower_statement_to_ir1_with_flow(
                     rest_param_index: m_rest_param_index,
                 });
 
-                let property_key = Ir1PropertyKey::Static(method_name);
+                let property_key = Ir1PropertyKey::Static(method_key);
                 match method.kind {
                     MethodKind::Get => ops.push(Ir1Op::DefineAccessor {
                         key: property_key,
@@ -6453,7 +6446,7 @@ pub fn lower_ir2_to_ir3(
                     Ir1PropertyKey::Static(key) => {
                         let obj = pop_lowering_value(&mut value_stack)?;
                         let key_reg = alloc_register(&mut register_cursor);
-                        let pool_index = push_constant_optimized(&mut constant_pool, key);
+                        let pool_index = push_constant_optimized(&mut constant_pool, key.clone());
                         ir3.instructions.push(Ir3Instruction::LoadStr {
                             dst: key_reg,
                             pool_index,
@@ -6480,7 +6473,7 @@ pub fn lower_ir2_to_ir3(
                     Ir1PropertyKey::Static(key) => {
                         let obj = pop_lowering_value(&mut value_stack)?;
                         let key_reg = alloc_register(&mut register_cursor);
-                        let pool_index = push_constant_optimized(&mut constant_pool, key);
+                        let pool_index = push_constant_optimized(&mut constant_pool, key.clone());
                         ir3.instructions.push(Ir3Instruction::LoadStr {
                             dst: key_reg,
                             pool_index,
@@ -6506,7 +6499,7 @@ pub fn lower_ir2_to_ir3(
                     Ir1PropertyKey::Static(key) => {
                         let obj = pop_lowering_value(&mut value_stack)?;
                         let key_reg = alloc_register(&mut register_cursor);
-                        let pool_index = push_constant_optimized(&mut constant_pool, key);
+                        let pool_index = push_constant_optimized(&mut constant_pool, key.clone());
                         ir3.instructions.push(Ir3Instruction::LoadStr {
                             dst: key_reg,
                             pool_index,
@@ -6532,7 +6525,7 @@ pub fn lower_ir2_to_ir3(
                     Ir1PropertyKey::Static(key) => {
                         let obj = pop_lowering_value(&mut value_stack)?;
                         let key_reg = alloc_register(&mut register_cursor);
-                        let pool_index = push_constant_optimized(&mut constant_pool, key);
+                        let pool_index = push_constant_optimized(&mut constant_pool, key.clone());
                         ir3.instructions.push(Ir3Instruction::LoadStr {
                             dst: key_reg,
                             pool_index,
@@ -7634,7 +7627,7 @@ pub fn lower_ir2_to_ir3(
                         Ir1PropertyKey::Static(k) => {
                             let obj = pop_lowering_value(&mut fn_value_stack)?;
                             let kr = alloc_register(&mut fn_reg);
-                            let pool_index = push_constant_optimized(&mut constant_pool, k);
+                            let pool_index = push_constant_optimized(&mut constant_pool, k.clone());
                             ir3.instructions.push(Ir3Instruction::LoadStr {
                                 dst: kr,
                                 pool_index,
@@ -7661,7 +7654,7 @@ pub fn lower_ir2_to_ir3(
                         Ir1PropertyKey::Static(k) => {
                             let obj = pop_lowering_value(&mut fn_value_stack)?;
                             let kr = alloc_register(&mut fn_reg);
-                            let pool_index = push_constant_optimized(&mut constant_pool, k);
+                            let pool_index = push_constant_optimized(&mut constant_pool, k.clone());
                             ir3.instructions.push(Ir3Instruction::LoadStr {
                                 dst: kr,
                                 pool_index,
@@ -7687,7 +7680,7 @@ pub fn lower_ir2_to_ir3(
                         Ir1PropertyKey::Static(k) => {
                             let obj = pop_lowering_value(&mut fn_value_stack)?;
                             let kr = alloc_register(&mut fn_reg);
-                            let pool_index = push_constant_optimized(&mut constant_pool, k);
+                            let pool_index = push_constant_optimized(&mut constant_pool, k.clone());
                             ir3.instructions.push(Ir3Instruction::LoadStr {
                                 dst: kr,
                                 pool_index,
@@ -8040,7 +8033,8 @@ pub fn lower_ir2_to_ir3(
                         Ir1PropertyKey::Static(key) => {
                             let obj = pop_lowering_value(&mut fn_value_stack)?;
                             let key_reg = alloc_register(&mut fn_reg);
-                            let pool_index = push_constant_optimized(&mut constant_pool, key);
+                            let pool_index =
+                                push_constant_optimized(&mut constant_pool, key.clone());
                             ir3.instructions.push(Ir3Instruction::LoadStr {
                                 dst: key_reg,
                                 pool_index,
@@ -12485,7 +12479,7 @@ fn lower_expression_to_ir1_inner(
                     binding_id: process_binding,
                 });
                 ops.push(Ir1Op::GetProperty {
-                    key: Ir1PropertyKey::Static(prop_name.clone()),
+                    key: Ir1PropertyKey::Static(prop_name.clone().into()),
                 });
                 return Ok(());
             }
@@ -13010,10 +13004,6 @@ fn lower_expression_to_ir1_inner(
                             ObjectPropertyKind::Data => {
                                 // Normal property - emit key and value, then set.
                                 if prop.computed {
-                                    reject_known_lone_surrogate_property_key(
-                                        &prop.key,
-                                        "engine.object_literal_computed_lone_surrogate_key",
-                                    )?;
                                     lower_expression_to_ir1(
                                         &prop.key,
                                         ops,
@@ -13027,7 +13017,7 @@ fn lower_expression_to_ir1_inner(
                                 } else {
                                     let key_str = canonical_static_object_property_key(&prop.key)?;
                                     ops.push(Ir1Op::LoadLiteral {
-                                        value: Ir1Literal::String(key_str.into()),
+                                        value: Ir1Literal::String(key_str),
                                     });
                                 }
                                 lower_expression_to_ir1(
@@ -13057,10 +13047,6 @@ fn lower_expression_to_ir1_inner(
                             }
                             ObjectPropertyKind::Get | ObjectPropertyKind::Set => {
                                 let property_key = if prop.computed {
-                                    reject_known_lone_surrogate_property_key(
-                                        &prop.key,
-                                        "engine.object_accessor_computed_lone_surrogate_key",
-                                    )?;
                                     lower_expression_to_ir1(
                                         &prop.key,
                                         ops,
@@ -13103,10 +13089,6 @@ fn lower_expression_to_ir1_inner(
                 // No spreads - use original batch approach
                 for prop in properties {
                     if prop.computed {
-                        reject_known_lone_surrogate_property_key(
-                            &prop.key,
-                            "engine.object_literal_computed_lone_surrogate_key",
-                        )?;
                         lower_expression_to_ir1(
                             &prop.key,
                             ops,
@@ -13120,7 +13102,7 @@ fn lower_expression_to_ir1_inner(
                     } else {
                         let key_str = canonical_static_object_property_key(&prop.key)?;
                         ops.push(Ir1Op::LoadLiteral {
-                            value: Ir1Literal::String(key_str.into()),
+                            value: Ir1Literal::String(key_str),
                         });
                     }
                     lower_expression_to_ir1(
@@ -14082,7 +14064,7 @@ fn lower_expression_to_ir1_inner(
             if let Some(super_class) = super_class {
                 ops.push(Ir1Op::LoadBinding { binding_id: bid });
                 ops.push(Ir1Op::GetProperty {
-                    key: Ir1PropertyKey::Static("prototype".to_string()),
+                    key: Ir1PropertyKey::Static("prototype".into()),
                 });
                 if let Some(capability) = builtin_prototype_capability(super_class, binding_lookup)
                 {
@@ -14102,22 +14084,19 @@ fn lower_expression_to_ir1_inner(
                         span_table,
                     )?;
                     ops.push(Ir1Op::GetProperty {
-                        key: Ir1PropertyKey::Static("prototype".to_string()),
+                        key: Ir1PropertyKey::Static("prototype".into()),
                     });
                 }
                 ops.push(Ir1Op::SetProperty {
-                    key: Ir1PropertyKey::Static("__proto__".to_string()),
+                    key: Ir1PropertyKey::Static("__proto__".into()),
                 });
                 ops.push(Ir1Op::Discard);
             }
 
             for method in body.iter().filter(|m| m.kind != MethodKind::Constructor) {
-                reject_known_lone_surrogate_property_key(
-                    &method.key,
-                    "engine.class_expression_method_lone_surrogate_key",
-                )?;
-                let method_name = canonical_static_object_property_key(&method.key)
-                    .unwrap_or_else(|_| "anonymous_method".to_string());
+                let method_key = canonical_static_object_property_key(&method.key)
+                    .unwrap_or_else(|_| "anonymous_method".into());
+                let method_name = property_key_function_display_name(&method_key);
                 // Identifier params keep their name; non-identifier patterns
                 // (default `x = v` / destructuring) get a synthetic `__param_N`
                 // slot destructured at body entry (bd-7yrmf, class-expression-
@@ -14217,7 +14196,7 @@ fn lower_expression_to_ir1_inner(
                 ops.push(Ir1Op::LoadBinding { binding_id: bid });
                 if !method.is_static {
                     ops.push(Ir1Op::GetProperty {
-                        key: Ir1PropertyKey::Static("prototype".to_string()),
+                        key: Ir1PropertyKey::Static("prototype".into()),
                     });
                 }
                 let (mut method_free_vars, mut method_free_var_ids) = collect_free_vars(
@@ -14285,7 +14264,7 @@ fn lower_expression_to_ir1_inner(
                     is_async: false,
                     rest_param_index: m_rest_param_index,
                 });
-                let property_key = Ir1PropertyKey::Static(method_name);
+                let property_key = Ir1PropertyKey::Static(method_key);
                 match method.kind {
                     MethodKind::Get => ops.push(Ir1Op::DefineAccessor {
                         key: property_key,
@@ -14327,16 +14306,17 @@ fn well_formed_string_literal(expression: &Expression) -> Option<&str> {
     }
 }
 
-fn canonical_static_object_property_key(key: &Expression) -> Result<String, LoweringPipelineError> {
-    if let Some(name) = well_formed_static_name(key) {
-        return Ok(name.to_string());
-    }
+fn canonical_static_object_property_key(
+    key: &Expression,
+) -> Result<JsString, LoweringPipelineError> {
     match key {
-        Expression::NumericLiteral(value) => Ok(value.to_string()),
-        Expression::BigIntLiteral(value) => Ok(value.clone()),
+        Expression::Identifier(name) => Ok(name.clone().into()),
+        Expression::StringLiteral(value) => Ok(value.clone()),
+        Expression::NumericLiteral(value) => Ok(value.to_string().into()),
+        Expression::BigIntLiteral(value) => Ok(value.clone().into()),
         Expression::FloatLiteral(bits) => {
             let mut buffer = ryu_js::Buffer::new();
-            Ok(buffer.format(f64::from_bits(*bits)).to_string())
+            Ok(buffer.format(f64::from_bits(*bits)).into())
         }
         _ => Err(unsupported_frontier_expression_error(
             "object_literal_static_property_key",
@@ -14348,20 +14328,24 @@ fn canonical_static_object_property_key(key: &Expression) -> Result<String, Lowe
     }
 }
 
-fn reject_known_lone_surrogate_property_key(
-    key: &Expression,
-    site_id: &str,
-) -> Result<(), LoweringPipelineError> {
-    if matches!(key, Expression::StringLiteral(value) if value.as_str().is_none()) {
-        return Err(unsupported_frontier_expression_error(
-            "lone_surrogate_property_key",
-            "FE-LOWER-UNSUPPORTED-STATIC-OBJECT-KEY-0001",
-            site_id,
-            "property keys containing lone surrogates require exact property-key support",
-            None,
-        ));
+/// Produce the legacy UTF-8 function-name carrier without reusing it as the
+/// property identity. Exact property keys use an unambiguous code-unit label
+/// for display metadata while the IR key retains its original `JsString`.
+fn property_key_function_display_name(key: &JsString) -> String {
+    if let Some(name) = key.as_str() {
+        return name.to_string();
     }
-    Ok(())
+
+    let mut display = String::from("[property:");
+    for (index, unit) in key.encode_utf16().enumerate() {
+        if index != 0 {
+            display.push('_');
+        }
+        std::fmt::Write::write_fmt(&mut display, format_args!("{unit:04X}"))
+            .expect("writing property-key code units to a String cannot fail");
+    }
+    display.push(']');
+    display
 }
 
 fn math_object_property_name<'a>(
@@ -20743,10 +20727,6 @@ fn lower_member_property_key_to_ir1(
     span_table: &mut Vec<Ir1OpSpanEntry>,
 ) -> Result<Ir1PropertyKey, LoweringPipelineError> {
     if computed {
-        reject_known_lone_surrogate_property_key(
-            property,
-            "engine.member_computed_lone_surrogate_key",
-        )?;
         lower_expression_to_ir1(
             property,
             ops,
@@ -20761,21 +20741,11 @@ fn lower_member_property_key_to_ir1(
     }
 
     let key = match property {
-        Expression::Identifier(name) => name.clone(),
-        Expression::StringLiteral(value) => {
-            value.as_str().map(str::to_string).ok_or_else(|| {
-                unsupported_frontier_expression_error(
-                    "member_lone_surrogate_key",
-                    "FE-LOWER-UNSUPPORTED-STATIC-OBJECT-KEY-0001",
-                    "engine.member_lone_surrogate_key",
-                    "member keys containing lone surrogates require exact property-key support",
-                    None,
-                )
-            })?
-        }
-        Expression::NumericLiteral(value) => value.to_string(),
-        Expression::BigIntLiteral(value) => value.clone(),
-        _ => "unknown".to_string(),
+        Expression::Identifier(name) => name.clone().into(),
+        Expression::StringLiteral(value) => value.clone(),
+        Expression::NumericLiteral(value) => value.to_string().into(),
+        Expression::BigIntLiteral(value) => value.clone().into(),
+        _ => "unknown".into(),
     };
     Ok(Ir1PropertyKey::Static(key))
 }
@@ -25918,6 +25888,34 @@ mod tests {
     }
 
     #[test]
+    fn lower_static_member_preserves_exact_property_key_units_bd_b12xs_6() {
+        let exact = JsString::from_code_units(&[0xD800]);
+        let ir0 = expr_ir0(Expression::Member {
+            object: Box::new(Expression::Identifier("obj".into())),
+            property: Box::new(Expression::StringLiteral(exact.clone())),
+            computed: false,
+            span: None,
+        });
+
+        let ir1 = lower_ir0_to_ir1(&ir0).expect("exact static member key should lower");
+        assert!(ir1.module.ops.iter().any(|op| matches!(
+            op,
+            Ir1Op::GetProperty {
+                key: Ir1PropertyKey::Static(key)
+            } if key == &exact
+        )));
+
+        let context = LoweringContext::new(
+            "trace-exact-static-key",
+            "decision-exact-static-key",
+            "policy-exact-static-key",
+        );
+        let output = lower_ir0_to_ir3(&ir0, &context)
+            .expect("exact static member key should reach the IR3 constant pool");
+        assert!(output.ir3.constant_pool.contains(&exact));
+    }
+
+    #[test]
     fn lower_computed_member_expression_uses_dynamic_key() {
         let ir0 = expr_ir0(Expression::Member {
             object: Box::new(Expression::Identifier("obj".into())),
@@ -25926,6 +25924,31 @@ mod tests {
             span: None,
         });
         let result = lower_ir0_to_ir1(&ir0).expect("computed member should lower");
+        assert!(result.module.ops.iter().any(|op| matches!(
+            op,
+            Ir1Op::GetProperty {
+                key: Ir1PropertyKey::Dynamic
+            }
+        )));
+    }
+
+    #[test]
+    fn lower_computed_member_preserves_exact_dynamic_literal_bd_b12xs_6() {
+        let exact = JsString::from_code_units(&[0xD801]);
+        let ir0 = expr_ir0(Expression::Member {
+            object: Box::new(Expression::Identifier("obj".into())),
+            property: Box::new(Expression::StringLiteral(exact.clone())),
+            computed: true,
+            span: None,
+        });
+
+        let result = lower_ir0_to_ir1(&ir0).expect("exact computed member key should lower");
+        assert!(result.module.ops.iter().any(|op| matches!(
+            op,
+            Ir1Op::LoadLiteral {
+                value: Ir1Literal::String(value)
+            } if value == &exact
+        )));
         assert!(result.module.ops.iter().any(|op| matches!(
             op,
             Ir1Op::GetProperty {
@@ -26195,6 +26218,77 @@ mod tests {
             }),
             "object getter literal must lower to DefineAccessor"
         );
+    }
+
+    #[test]
+    fn lower_object_literal_accessor_preserves_exact_static_key_bd_b12xs_6() {
+        let exact = JsString::from_code_units(&[0xD800]);
+        let getter = Expression::Function {
+            name: None,
+            params: Vec::new(),
+            body: BlockStatement {
+                body: vec![Statement::Return(ReturnStatement {
+                    argument: Some(Expression::NumericLiteral(11)),
+                    span: span(),
+                })],
+                span: span(),
+            },
+            is_async: false,
+            is_generator: false,
+        };
+        let ir0 = expr_ir0(Expression::ObjectLiteral(vec![ObjectProperty {
+            key: Expression::StringLiteral(exact.clone()),
+            value: getter,
+            computed: false,
+            shorthand: false,
+            kind: ObjectPropertyKind::Get,
+        }]));
+
+        let result = lower_ir0_to_ir1(&ir0).expect("exact object accessor key should lower");
+        assert!(result.module.ops.iter().any(|op| matches!(
+            op,
+            Ir1Op::DefineAccessor {
+                key: Ir1PropertyKey::Static(key),
+                kind: AccessorKind::Get,
+            } if key == &exact
+        )));
+    }
+
+    #[test]
+    fn lower_computed_object_accessor_preserves_exact_dynamic_key_bd_b12xs_6() {
+        let exact = JsString::from_code_units(&[0xD801]);
+        let getter = Expression::Function {
+            name: None,
+            params: Vec::new(),
+            body: BlockStatement {
+                body: Vec::new(),
+                span: span(),
+            },
+            is_async: false,
+            is_generator: false,
+        };
+        let ir0 = expr_ir0(Expression::ObjectLiteral(vec![ObjectProperty {
+            key: Expression::StringLiteral(exact.clone()),
+            value: getter,
+            computed: true,
+            shorthand: false,
+            kind: ObjectPropertyKind::Get,
+        }]));
+
+        let result = lower_ir0_to_ir1(&ir0).expect("exact computed accessor key should lower");
+        assert!(result.module.ops.iter().any(|op| matches!(
+            op,
+            Ir1Op::LoadLiteral {
+                value: Ir1Literal::String(value)
+            } if value == &exact
+        )));
+        assert!(result.module.ops.iter().any(|op| matches!(
+            op,
+            Ir1Op::DefineAccessor {
+                key: Ir1PropertyKey::Dynamic,
+                kind: AccessorKind::Get,
+            }
+        )));
     }
 
     #[test]
@@ -26555,6 +26649,45 @@ mod tests {
                 .iter()
                 .any(|binding| binding.name == "Widget"),
             "named class expressions must not leak their name into outer scope"
+        );
+    }
+
+    #[test]
+    fn lower_class_method_separates_exact_key_from_function_display_name_bd_b12xs_6() {
+        let exact = JsString::from_code_units(&[0xD800]);
+        let ir0 = expr_ir0(Expression::ClassExpression {
+            name: None,
+            super_class: None,
+            body: vec![MethodDefinition {
+                key: Expression::StringLiteral(exact.clone()),
+                kind: MethodKind::Method,
+                params: Vec::new(),
+                body: BlockStatement {
+                    body: Vec::new(),
+                    span: span(),
+                },
+                is_static: false,
+                computed: false,
+                span: span(),
+            }],
+        });
+
+        let result = lower_ir0_to_ir1(&ir0).expect("exact class method key should lower");
+        assert!(result.module.ops.iter().any(|op| matches!(
+            op,
+            Ir1Op::CreateFunction {
+                name: Some(name), ..
+            } if name == "[property:D800]"
+        )));
+        assert!(result.module.ops.iter().any(|op| matches!(
+            op,
+            Ir1Op::SetProperty {
+                key: Ir1PropertyKey::Static(key)
+            } if key == &exact
+        )));
+        assert_ne!(
+            property_key_function_display_name(&exact),
+            property_key_function_display_name(&JsString::from_code_units(&[0xD801]))
         );
     }
 
@@ -28442,7 +28575,7 @@ mod tests {
                     key: Ir1PropertyKey::Static(k),
                 } = op
                 {
-                    Some(k.as_str())
+                    k.as_str()
                 } else {
                     None
                 }
@@ -28492,12 +28625,39 @@ mod tests {
             })
             .collect();
         assert!(
-            get_props.contains(&"a".to_string()),
+            get_props.iter().any(|key| key == "a"),
             "should emit GetProperty for key 'a', got: {get_props:?}"
         );
         // Verify binding "x" exists.
         let scope = result.module.scopes.first().expect("root scope");
         assert!(scope.bindings.iter().any(|b| b.name == "x"));
+    }
+
+    #[test]
+    fn object_destructuring_preserves_exact_static_key_bd_b12xs_6() {
+        let exact = JsString::from_code_units(&[0xD800]);
+        let ir0 = stmt_ir0(vec![Statement::VariableDeclaration(VariableDeclaration {
+            kind: VariableDeclarationKind::Const,
+            declarations: vec![VariableDeclarator {
+                pattern: BindingPattern::ObjectPattern(vec![ObjectPatternProperty {
+                    key: Expression::StringLiteral(exact.clone()),
+                    value: BindingPattern::Identifier("value".into()),
+                    computed: false,
+                    shorthand: false,
+                }]),
+                initializer: Some(Expression::Identifier("source".into())),
+                span: span(),
+            }],
+            span: span(),
+        })]);
+
+        let result = lower_ir0_to_ir1(&ir0).expect("exact object pattern key should lower");
+        assert!(result.module.ops.iter().any(|op| matches!(
+            op,
+            Ir1Op::GetProperty {
+                key: Ir1PropertyKey::Static(key)
+            } if key == &exact
+        )));
     }
 
     #[test]
@@ -28532,11 +28692,11 @@ mod tests {
             })
             .collect();
         assert!(
-            get_props.contains(&"0".to_string()),
+            get_props.iter().any(|key| key == "0"),
             "should emit GetProperty for index '0'"
         );
         assert!(
-            get_props.contains(&"1".to_string()),
+            get_props.iter().any(|key| key == "1"),
             "should emit GetProperty for index '1'"
         );
     }
@@ -28574,11 +28734,11 @@ mod tests {
             .collect();
         // Should only have index "1" (skipping hole at 0).
         assert!(
-            get_props.contains(&"1".to_string()),
+            get_props.iter().any(|key| key == "1"),
             "should emit GetProperty for index '1', got: {get_props:?}"
         );
         assert!(
-            !get_props.contains(&"0".to_string()),
+            !get_props.iter().any(|key| key == "0"),
             "should NOT emit GetProperty for hole at index '0'"
         );
     }
@@ -28622,11 +28782,11 @@ mod tests {
             })
             .collect();
         assert!(
-            get_props.contains(&"a".to_string()),
+            get_props.iter().any(|key| key == "a"),
             "should emit GetProperty for outer key 'a'"
         );
         assert!(
-            get_props.contains(&"b".to_string()),
+            get_props.iter().any(|key| key == "b"),
             "should emit GetProperty for nested key 'b'"
         );
     }

@@ -37,15 +37,16 @@ pub struct IrSchemaVersion {
 }
 
 impl IrSchemaVersion {
-    /// `0.4.0` widens IR1 module specifiers to exact UTF-16 [`JsString`]
-    /// values. `0.3.0` adds dedicated object-rest `CopyDataProperties`
+    /// `0.5.0` widens IR1 static property keys to exact UTF-16 [`JsString`]
+    /// values. `0.4.0` widened IR1 module specifiers to exact UTF-16
+    /// [`JsString`] values. `0.3.0` adds dedicated object-rest `CopyDataProperties`
     /// operations to IR1 and IR3. `0.2.0` widened JavaScript literal carriers and the IR3
     /// constant pool to exact UTF-16 [`JsString`] values. Historical
     /// well-formed strings retain their plain-string JSON wire shape;
     /// lone-surrogate values use `$wtf16`.
     pub const CURRENT: Self = Self {
         major: 0,
-        minor: 4,
+        minor: 5,
         patch: 0,
     };
 
@@ -355,7 +356,7 @@ impl ScopeKind {
 /// computed members preserve the key on the value stack.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Ir1PropertyKey {
-    Static(String),
+    Static(JsString),
     Dynamic,
 }
 
@@ -379,7 +380,7 @@ impl Ir1PropertyKey {
                     "kind".to_string(),
                     CanonicalValue::String("static".to_string()),
                 );
-                map.insert("value".to_string(), CanonicalValue::String(key.clone()));
+                map.insert("value".to_string(), key.canonical_value());
             }
             Self::Dynamic => {
                 map.insert(
@@ -3440,7 +3441,7 @@ mod tests {
 
     #[test]
     fn schema_version_display() {
-        assert_eq!(IrSchemaVersion::CURRENT.to_string(), "0.4.0");
+        assert_eq!(IrSchemaVersion::CURRENT.to_string(), "0.5.0");
     }
 
     #[test]
@@ -3461,7 +3462,7 @@ mod tests {
         };
 
         assert!(verify_schema_version(&header(IrSchemaVersion::CURRENT, IrLevel::Ir3)).is_ok());
-        for minor in [1, 2, 3] {
+        for minor in [1, 2, 3, 4] {
             assert!(
                 verify_schema_version(&header(
                     IrSchemaVersion {
@@ -3472,7 +3473,7 @@ mod tests {
                     IrLevel::Ir1,
                 ))
                 .is_ok(),
-                "core 0.4 readers retain compatibility with 0.{minor} artifacts"
+                "core 0.5 readers retain compatibility with 0.{minor} artifacts"
             );
         }
 
@@ -3548,6 +3549,38 @@ mod tests {
         assert_eq!(
             serde_json::from_str::<Ir1Op>(&dc00_json).expect("read DC00 module import"),
             dc00
+        );
+    }
+
+    #[test]
+    fn ir1_static_property_key_preserves_ordinary_wire_bd_b12xs_6() {
+        let key = Ir1PropertyKey::Static("ordinary".into());
+        let json = serde_json::to_string(&key).expect("serialize ordinary static key");
+        assert_eq!(json, r#"{"Static":"ordinary"}"#);
+        assert_eq!(
+            serde_json::from_str::<Ir1PropertyKey>(&json)
+                .expect("read historical String static-key wire"),
+            key
+        );
+    }
+
+    #[test]
+    fn ir1_static_property_keys_keep_exact_units_distinct_bd_b12xs_6() {
+        let make = |unit| Ir1PropertyKey::Static(JsString::from_code_units(&[unit]));
+        let d800 = make(0xD800);
+        let d801 = make(0xD801);
+        let replacement = Ir1PropertyKey::Static("\u{FFFD}".into());
+
+        assert_ne!(d800, d801);
+        assert_ne!(d800, replacement);
+        assert_ne!(d800.canonical_value(), d801.canonical_value());
+        assert_ne!(d800.canonical_value(), replacement.canonical_value());
+
+        let d800_json = serde_json::to_string(&d800).expect("serialize D800 static key");
+        assert_eq!(d800_json, r#"{"Static":{"$wtf16":[55296]}}"#);
+        assert_eq!(
+            serde_json::from_str::<Ir1PropertyKey>(&d800_json).expect("round-trip D800 static key"),
+            d800
         );
     }
 
@@ -5546,7 +5579,7 @@ mod tests {
     fn schema_version_current_value() {
         let v = IrSchemaVersion::CURRENT;
         assert_eq!(v.major, 0);
-        assert_eq!(v.minor, 4);
+        assert_eq!(v.minor, 5);
         assert_eq!(v.patch, 0);
     }
 

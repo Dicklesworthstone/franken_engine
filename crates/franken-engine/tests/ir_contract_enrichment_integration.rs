@@ -196,13 +196,13 @@ fn enrichment_verifier_emits_error_events_on_failure() {
 fn enrichment_schema_version_current() {
     let v = IrSchemaVersion::CURRENT;
     assert_eq!(v.major, 0);
-    assert_eq!(v.minor, 3);
+    assert_eq!(v.minor, 4);
     assert_eq!(v.patch, 0);
 }
 
 #[test]
 fn enrichment_schema_version_display() {
-    assert_eq!(IrSchemaVersion::CURRENT.to_string(), "0.3.0");
+    assert_eq!(IrSchemaVersion::CURRENT.to_string(), "0.4.0");
     let custom = IrSchemaVersion {
         major: 2,
         minor: 3,
@@ -445,7 +445,7 @@ fn enrichment_scope_kind_as_str_all_unique() {
 
 #[test]
 fn enrichment_ir1_property_key_serde() {
-    let static_key = Ir1PropertyKey::Static("name".to_string());
+    let static_key = Ir1PropertyKey::Static("name".into());
     let dynamic_key = Ir1PropertyKey::Dynamic;
     for key in &[static_key, dynamic_key] {
         let json = serde_json::to_string(key).unwrap();
@@ -537,13 +537,13 @@ fn enrichment_ir1_op_all_variants_serde_sample() {
         Ir1Op::JumpIfTruthy { label_id: 3 },
         Ir1Op::JumpIfNullish { label_id: 4 },
         Ir1Op::GetProperty {
-            key: Ir1PropertyKey::Static("x".to_string()),
+            key: Ir1PropertyKey::Static("x".into()),
         },
         Ir1Op::SetProperty {
             key: Ir1PropertyKey::Dynamic,
         },
         Ir1Op::DeleteProperty {
-            key: Ir1PropertyKey::Static("y".to_string()),
+            key: Ir1PropertyKey::Static("y".into()),
         },
         Ir1Op::NewArray { count: 3 },
         Ir1Op::NewObject { count: 2 },

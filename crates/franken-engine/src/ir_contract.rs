@@ -31,12 +31,14 @@ pub struct IrSchemaVersion {
 }
 
 impl IrSchemaVersion {
-    /// `0.3.0` extends the exact UTF-16 carrier introduced in `0.2.0` to IR1
-    /// module specifiers. Historical well-formed strings retain their plain-
-    /// string JSON wire shape; lone-surrogate values use `$wtf16`.
+    /// `0.4.0` widens IR1 static property keys to exact UTF-16 [`JsString`].
+    /// `0.3.0` widened IR1 module specifiers, after `0.2.0` widened JavaScript
+    /// literals and the IR3 constant pool. Historical well-formed strings
+    /// retain their plain-string JSON wire shape; lone-surrogate values use
+    /// `$wtf16`.
     pub const CURRENT: Self = Self {
         major: 0,
-        minor: 3,
+        minor: 4,
         patch: 0,
     };
 
@@ -312,11 +314,11 @@ impl ScopeKind {
     }
 }
 
-/// IR1 property-key operand. Static keys can be carried directly, while
-/// computed members preserve the key on the value stack.
+/// IR1 property-key operand. Static keys retain their exact UTF-16 code units,
+/// while computed members preserve the key on the value stack.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Ir1PropertyKey {
-    Static(String),
+    Static(JsString),
     Dynamic,
 }
 
@@ -325,7 +327,7 @@ impl Ir1PropertyKey {
         match self {
             Self::Static(key) => CanonicalValue::map_from_entries([
                 ("kind", CanonicalValue::str("static")),
-                ("value", CanonicalValue::str(key.clone())),
+                ("value", canonical_js_string_value(key)),
             ]),
             Self::Dynamic => {
                 CanonicalValue::map_from_entries([("kind", CanonicalValue::str("dynamic"))])
@@ -2923,7 +2925,7 @@ mod tests {
 
     #[test]
     fn schema_version_display() {
-        assert_eq!(IrSchemaVersion::CURRENT.to_string(), "0.3.0");
+        assert_eq!(IrSchemaVersion::CURRENT.to_string(), "0.4.0");
     }
 
     #[test]
@@ -3680,7 +3682,7 @@ mod tests {
     fn ir_error_display() {
         let err = IrError::new(
             IrErrorCode::SchemaVersionMismatch,
-            "expected 0.3.0, got 0.4.0",
+            "expected 0.4.0, got 0.5.0",
             IrLevel::Ir1,
         );
         let display = err.to_string();
@@ -4069,6 +4071,41 @@ mod tests {
             serde_json::to_vec(&exact).expect("serialize exact IR1 string"),
             br#"{"String":{"$wtf16":[55296]}}"#
         );
+    }
+
+    #[test]
+    fn ir1_static_property_key_json_preserves_ordinary_and_exact_shapes_bd_b12xs_6() {
+        let ordinary = Ir1PropertyKey::Static("hello".into());
+        let exact = Ir1PropertyKey::Static(JsString::from_code_units(&[0xD800]));
+
+        assert_eq!(
+            serde_json::to_vec(&ordinary).expect("serialize ordinary IR1 property key"),
+            br#"{"Static":"hello"}"#
+        );
+        assert_eq!(
+            serde_json::to_vec(&exact).expect("serialize exact IR1 property key"),
+            br#"{"Static":{"$wtf16":[55296]}}"#
+        );
+        assert_eq!(
+            serde_json::from_slice::<Ir1PropertyKey>(br#"{"Static":"hello"}"#)
+                .expect("deserialize historical ordinary IR1 property-key wire"),
+            ordinary
+        );
+        assert_eq!(
+            serde_json::from_slice::<Ir1PropertyKey>(br#"{"Static":{"$wtf16":[55296]}}"#)
+                .expect("deserialize exact IR1 property-key wire"),
+            exact
+        );
+    }
+
+    #[test]
+    fn ir1_static_property_key_canonical_value_distinguishes_exact_units_bd_b12xs_6() {
+        let d800 = Ir1PropertyKey::Static(JsString::from_code_units(&[0xD800]));
+        let d801 = Ir1PropertyKey::Static(JsString::from_code_units(&[0xD801]));
+        let replacement = Ir1PropertyKey::Static("\u{FFFD}".into());
+
+        assert_ne!(d800.canonical_value(), d801.canonical_value());
+        assert_ne!(d800.canonical_value(), replacement.canonical_value());
     }
 
     // -----------------------------------------------------------------------
@@ -4900,7 +4937,7 @@ mod tests {
     fn schema_version_current_value() {
         let v = IrSchemaVersion::CURRENT;
         assert_eq!(v.major, 0);
-        assert_eq!(v.minor, 3);
+        assert_eq!(v.minor, 4);
         assert_eq!(v.patch, 0);
     }
 
@@ -5739,7 +5776,7 @@ mod tests {
 
     #[test]
     fn verify_schema_version_accepts_historical_minor_versions_bd_lfq44() {
-        for minor in [1, 2] {
+        for minor in [1, 2, 3] {
             let header = IrHeader {
                 schema_version: IrSchemaVersion {
                     major: IrSchemaVersion::CURRENT.major,
@@ -5753,7 +5790,7 @@ mod tests {
 
             assert!(
                 verify_schema_version(&header).is_ok(),
-                "engine 0.3 readers retain compatibility with 0.{minor} artifacts"
+                "engine 0.4 readers retain compatibility with 0.{minor} artifacts"
             );
         }
     }
@@ -5821,7 +5858,7 @@ mod tests {
 
         // Verify error message contains specific version numbers
         assert!(err.message.contains("99.88.77"));
-        assert!(err.message.contains("0.3.0")); // current version
+        assert!(err.message.contains("0.4.0")); // current version
 
         // Verify error can be displayed and contains IR level
         let display = err.to_string();

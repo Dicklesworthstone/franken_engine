@@ -206,6 +206,20 @@ Runtime execution retains that exact value until the explicit UTF-8 filesystem
 path boundary, where a non-well-formed value is rejected without a lossy
 lookup.
 
+## Exact Static-Property IR Checkpoint
+
+`bd-b12xs.6` found no additional AST projection: quoted property names already
+use `Expression::StringLiteral(JsString)` in both lanes, so the engine v4 and
+core v5 canonical AST schemas remain unchanged. The lossy field was downstream
+`Ir1PropertyKey::Static(String)`, now `Static(JsString)`. This advances engine
+IR `0.3.0` to `0.4.0` and core IR `0.4.0` to `0.5.0`.
+
+Ordinary static keys retain their historical scalar wire and canonical leaf;
+exact-only keys use `$wtf16`. Object literals/patterns, members, methods,
+accessors, classes, and destructuring retain exact property identity into the
+IR3 constant pool. Diagnostic function display names and well-formed-only
+builtin recognition remain separate from property-key identity.
+
 ## Compatibility Checks
 
 Pinned by tests:

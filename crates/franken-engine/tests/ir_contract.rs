@@ -749,7 +749,7 @@ fn scope_kind_serde_round_trip() {
 fn ir_schema_version_current_is_stable() {
     let v = IrSchemaVersion::CURRENT;
     assert_eq!(v.major, 0);
-    assert_eq!(v.minor, 3);
+    assert_eq!(v.minor, 4);
 }
 
 #[test]
@@ -1306,13 +1306,13 @@ fn enrichment_ir1_all_ops_serde_roundtrip() {
         Ir1Op::JumpIfTruthy { label_id: 4 },
         Ir1Op::JumpIfNullish { label_id: 5 },
         Ir1Op::GetProperty {
-            key: Ir1PropertyKey::Static("prop".to_string()),
+            key: Ir1PropertyKey::Static("prop".into()),
         },
         Ir1Op::GetProperty {
             key: Ir1PropertyKey::Dynamic,
         },
         Ir1Op::SetProperty {
-            key: Ir1PropertyKey::Static("val".to_string()),
+            key: Ir1PropertyKey::Static("val".into()),
         },
         Ir1Op::DeleteProperty {
             key: Ir1PropertyKey::Dynamic,
@@ -1787,7 +1787,7 @@ fn enrichment_ir1_literal_all_variants_serde() {
 
 #[test]
 fn enrichment_ir1_property_key_static_serde() {
-    let key = Ir1PropertyKey::Static("myProp".to_string());
+    let key = Ir1PropertyKey::Static("myProp".into());
     let json = serde_json::to_string(&key).unwrap();
     let recovered: Ir1PropertyKey = serde_json::from_str(&json).unwrap();
     assert_eq!(key, recovered);

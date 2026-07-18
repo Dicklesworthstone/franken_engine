@@ -4065,9 +4065,9 @@ pub type Object = HeapObject;
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct RuntimeForInState {
     object_id: ObjectId,
-    keys: Vec<String>,
+    keys: Vec<JsString>,
     next_index: usize,
-    deleted_keys: BTreeSet<String>,
+    deleted_keys: BTreeSet<JsString>,
     done: bool,
     closed: bool,
     trace_index: usize,
@@ -4169,7 +4169,7 @@ enum ModuleRuntimeStatus {
 struct ModuleRuntimeRecord {
     status: ModuleRuntimeStatus,
     namespace_object: ObjectId,
-    exports: BTreeMap<String, Value>,
+    exports: BTreeMap<JsString, Value>,
     cjs_module_object: Option<ObjectId>,
     /// The executable program that owns every closure created while this
     /// module is evaluated. Imported closures carry only an index into this
@@ -11016,6 +11016,11 @@ impl InterpreterCore {
         !((self.writable_streams.contains_key(&object_id)
             || self.writable_terminal_states.contains_key(&object_id))
             && Self::is_writable_state_view_key(key))
+    }
+
+    fn writable_own_runtime_property_visible(&self, object_id: ObjectId, key: &JsString) -> bool {
+        key.as_str()
+            .is_none_or(|key| self.writable_own_property_visible(object_id, key))
     }
 
     fn join_pending_hostcall_stream_label(
@@ -20312,12 +20317,15 @@ impl InterpreterCore {
                 .get(object_id.0 as usize)
                 .ok_or(InterpreterError::ObjectNotFound { id: object_id.0 })?
                 .properties
-                .clone();
+                .exact_entries()
+                .into_iter()
+                .map(|(key, value)| (key, value.clone()))
+                .collect::<Vec<_>>();
             for (key, value) in properties {
-                if key == "default" {
+                if key.as_str() == Some("default") {
                     continue;
                 }
-                self.register_module_export(&key, value)?;
+                self.register_module_export_exact(key, value)?;
             }
         }
         Ok(())
@@ -23648,23 +23656,32 @@ impl InterpreterCore {
     }
 
     fn register_module_export(&mut self, name: &str, value: Value) -> Result<(), InterpreterError> {
+        self.register_module_export_exact(JsString::from(name), value)
+    }
+
+    fn register_module_export_exact(
+        &mut self,
+        name: JsString,
+        value: Value,
+    ) -> Result<(), InterpreterError> {
+        let diagnostic_name = name.to_string();
         let Some(specifier) = self.current_module_specifier.clone() else {
             return Err(InterpreterError::ExportOutsideModule {
-                name: name.to_string(),
+                name: diagnostic_name,
             });
         };
         let record = self.module_state.modules.get(&specifier).ok_or_else(|| {
             InterpreterError::ExportOutsideModule {
-                name: name.to_string(),
+                name: diagnostic_name.clone(),
             }
         })?;
         let namespace_object = record.namespace_object;
         let previous_export_bytes = record
             .exports
-            .get(name)
-            .map(|previous| Self::estimate_plain_string_map_entry_bytes(name, previous))
+            .get(&name)
+            .map(|previous| Self::estimate_js_string_map_entry_bytes(&name, previous))
             .unwrap_or(0);
-        let next_export_bytes = Self::estimate_plain_string_map_entry_bytes(name, &value);
+        let next_export_bytes = Self::estimate_js_string_map_entry_bytes(&name, &value);
         self.apply_memory_component_delta(previous_export_bytes, next_export_bytes)?;
         let previous_export = {
             let record = self
@@ -23672,9 +23689,13 @@ impl InterpreterCore {
                 .modules
                 .get_mut(&specifier)
                 .expect("module record was validated before export preflight");
-            record.exports.insert(name.to_string(), value.clone())
+            record.exports.insert(name.clone(), value.clone())
         };
-        match self.set_object_property(namespace_object, name.to_string(), value) {
+        match self.set_object_runtime_property(
+            namespace_object,
+            RuntimePropertyKey::String(name.clone()),
+            value,
+        ) {
             Ok(()) => Ok(()),
             Err(error) => {
                 let record = self
@@ -23684,10 +23705,10 @@ impl InterpreterCore {
                     .expect("module export record existed before namespace update");
                 match previous_export {
                     Some(previous) => {
-                        record.exports.insert(name.to_string(), previous);
+                        record.exports.insert(name.clone(), previous);
                     }
                     None => {
-                        record.exports.remove(name);
+                        record.exports.remove(&name);
                     }
                 }
                 self.estimated_memory_bytes = self
@@ -26850,8 +26871,8 @@ impl InterpreterCore {
                                 &property_key,
                                 0,
                             )?;
-                            if deleted && let Some(key) = property_key.as_str() {
-                                self.mark_deleted_for_in_iterators(oid, key);
+                            if deleted {
+                                self.mark_deleted_for_in_iterators(oid, property_key.string());
                             }
                             self.write_reg(dst, Value::Bool(deleted))?;
                         }
@@ -27028,11 +27049,15 @@ impl InterpreterCore {
                         (target_val, source_val)
                     {
                         // Collect source properties
-                        let properties: Vec<(String, Value)> = {
+                        let properties: Vec<(JsString, Value)> = {
                             if let Some(obj) = self.heap.get(source_id.0 as usize) {
                                 obj.properties
-                                    .iter()
-                                    .map(|(k, v)| (k.clone(), v.clone()))
+                                    .exact_entries()
+                                    .into_iter()
+                                    .filter(|(key, _)| {
+                                        self.writable_own_runtime_property_visible(source_id, key)
+                                    })
+                                    .map(|(key, value)| (key, value.clone()))
                                     .collect()
                             } else {
                                 Vec::new()
@@ -27041,7 +27066,11 @@ impl InterpreterCore {
                         // Copy to target
                         if self.heap.get(target_id.0 as usize).is_some() {
                             for (key, val) in properties {
-                                self.set_object_property(target_id, key, val)?;
+                                self.set_object_runtime_property(
+                                    target_id,
+                                    RuntimePropertyKey::String(key),
+                                    val,
+                                )?;
                             }
                         }
                     }
@@ -28721,7 +28750,23 @@ impl InterpreterCore {
     }
 
     fn record_iteration_next_result(&mut self, trace_index: usize, value: Option<Value>) {
+        self.record_iteration_next_result_impl(trace_index, value, false);
+    }
+
+    fn record_for_in_iteration_next_result(&mut self, trace_index: usize, value: Option<Value>) {
+        self.record_iteration_next_result_impl(trace_index, value, true);
+    }
+
+    fn record_iteration_next_result_impl(
+        &mut self,
+        trace_index: usize,
+        value: Option<Value>,
+        exact_for_in_key: bool,
+    ) {
         let result = match value.as_ref() {
+            Some(Value::Str(value)) if exact_for_in_key => IteratorResult::value(
+                IteratorValue::String(RuntimePropertyKey::String(value.clone()).diagnostic()),
+            ),
             Some(value) => IteratorResult::value(self.iterator_value_from_runtime(value)),
             None => IteratorResult::done(),
         };
@@ -28769,7 +28814,11 @@ impl InterpreterCore {
         let trace_index =
             self.start_iteration_trace(IterationKind::ForIn, format!("object:{}", object_id.0));
         let object_ref = self.iteration_ref_for_object(object_id);
-        let event_keys = keys.clone();
+        let event_keys = keys
+            .iter()
+            .cloned()
+            .map(|key| RuntimePropertyKey::String(key).diagnostic())
+            .collect();
         self.record_iteration_event(trace_index, |record_id, step_index| {
             make_enumerate_event(record_id, step_index, object_ref, event_keys)
         });
@@ -28801,7 +28850,7 @@ impl InterpreterCore {
                         let key = state.keys[state.next_index].clone();
                         state.next_index += 1;
                         if !state.deleted_keys.contains(&key) {
-                            next_value = Some(Value::str(key));
+                            next_value = Some(Value::Str(key));
                             break;
                         }
                     }
@@ -28818,7 +28867,7 @@ impl InterpreterCore {
                 });
             }
         };
-        self.record_iteration_next_result(trace_index, next_value.clone());
+        self.record_for_in_iteration_next_result(trace_index, next_value.clone());
         Ok(next_value)
     }
 
@@ -30924,16 +30973,13 @@ impl InterpreterCore {
         let Value::Object(object_id) = receiver else {
             return false;
         };
-        let property_key = self.property_key_from_value(property);
-        if (self.writable_streams.contains_key(object_id)
-            || self.writable_terminal_states.contains_key(object_id))
-            && Self::is_writable_state_view_key(&property_key)
-        {
+        let property_key = self.executable_property_key_from_value(property);
+        if !self.writable_own_runtime_property_visible(*object_id, property_key.string()) {
             return false;
         }
         self.heap
             .get(object_id.0 as usize)
-            .map(|object| object.properties.contains_key(&property_key))
+            .map(|object| object.properties.contains_exact_key(property_key.string()))
             .unwrap_or(false)
     }
 
@@ -31147,7 +31193,7 @@ impl InterpreterCore {
     fn prototype_chain_get_property_descriptor(
         &mut self,
         object_id: ObjectId,
-        key: &str,
+        key: &RuntimePropertyKey,
     ) -> Result<Value, InterpreterError> {
         let mut current = Some(object_id);
         let mut depth = 0u32;
@@ -31158,25 +31204,26 @@ impl InterpreterCore {
                 // Capture descriptor resolution decision for deterministic replay
                 self.nondeterminism_trace.capture(
                     NondeterminismSource::PropertyResolution,
-                    format!("descriptor_chain_limit_reached:key={},depth={}", key, depth)
-                        .into_bytes(),
+                    format!(
+                        "descriptor_chain_limit_reached:key={},depth={}",
+                        key.diagnostic(),
+                        depth
+                    )
+                    .into_bytes(),
                     self.instructions_executed,
                     "baseline_interpreter",
                 );
                 return Ok(Value::Undefined);
             }
 
-            let hides_writable_mirror = (self.writable_streams.contains_key(&id)
-                || self.writable_terminal_states.contains_key(&id))
-                && Self::is_writable_state_view_key(key);
             let (descriptor_source, next_prototype) = {
                 let object = self
                     .heap
                     .get(id.0 as usize)
                     .ok_or(InterpreterError::ObjectNotFound { id: id.0 })?;
                 (
-                    (!hides_writable_mirror)
-                        .then(|| object.properties.get(key).cloned())
+                    self.writable_own_runtime_property_visible(id, key.string())
+                        .then(|| object.properties.get_exact(key.string()).cloned())
                         .flatten()
                         .map(|value| (value, object.is_frozen)),
                     object.prototype,
@@ -31210,7 +31257,9 @@ impl InterpreterCore {
                     NondeterminismSource::PropertyResolution,
                     format!(
                         "descriptor_found:key={},object_id={},depth={}",
-                        key, id.0, depth
+                        key.diagnostic(),
+                        id.0,
+                        depth
                     )
                     .into_bytes(),
                     self.instructions_executed,
@@ -31227,7 +31276,12 @@ impl InterpreterCore {
         // Property not found in the entire prototype chain
         self.nondeterminism_trace.capture(
             NondeterminismSource::PropertyResolution,
-            format!("descriptor_not_found:key={},final_depth={}", key, depth).into_bytes(),
+            format!(
+                "descriptor_not_found:key={},final_depth={}",
+                key.diagnostic(),
+                depth
+            )
+            .into_bytes(),
             self.instructions_executed,
             "baseline_interpreter",
         );
@@ -31289,8 +31343,9 @@ impl InterpreterCore {
             )?;
             properties_object
                 .properties
-                .iter()
-                .map(|(key, descriptor)| (key.clone(), descriptor.clone()))
+                .exact_entries()
+                .into_iter()
+                .map(|(key, descriptor)| (key, descriptor.clone()))
                 .collect::<Vec<_>>()
         };
 
@@ -31305,7 +31360,11 @@ impl InterpreterCore {
                     .unwrap_or(Value::Undefined),
                 _ => Value::Undefined,
             };
-            self.set_object_property(target_id, key, effective_value)?;
+            self.set_object_runtime_property(
+                target_id,
+                RuntimePropertyKey::String(key),
+                effective_value,
+            )?;
         }
 
         Ok(())
@@ -31517,6 +31576,7 @@ impl InterpreterCore {
         self.proxy_aware_get_runtime_property(module, target, key, Value::Object(target), depth + 1)
     }
 
+    #[cfg(test)]
     fn proxy_aware_set_property(
         &mut self,
         module: Option<&Ir3Module>,
@@ -31602,21 +31662,6 @@ impl InterpreterCore {
         )
     }
 
-    fn proxy_aware_has_property(
-        &mut self,
-        module: Option<&Ir3Module>,
-        object_id: ObjectId,
-        key: &str,
-        depth: u32,
-    ) -> Result<bool, InterpreterError> {
-        self.proxy_aware_has_runtime_property(
-            module,
-            object_id,
-            &RuntimePropertyKey::String(JsString::from(key)),
-            depth,
-        )
-    }
-
     fn proxy_aware_has_runtime_property(
         &mut self,
         module: Option<&Ir3Module>,
@@ -31644,21 +31689,6 @@ impl InterpreterCore {
         }
 
         self.proxy_aware_has_runtime_property(module, target, key, depth + 1)
-    }
-
-    fn proxy_aware_delete_property(
-        &mut self,
-        module: Option<&Ir3Module>,
-        object_id: ObjectId,
-        key: &str,
-        depth: u32,
-    ) -> Result<bool, InterpreterError> {
-        self.proxy_aware_delete_runtime_property(
-            module,
-            object_id,
-            &RuntimePropertyKey::String(JsString::from(key)),
-            depth,
-        )
     }
 
     fn proxy_aware_delete_runtime_property(
@@ -31700,9 +31730,10 @@ impl InterpreterCore {
             .ok_or(InterpreterError::ObjectNotFound { id: object_id.0 })?;
         Ok(object
             .properties
-            .keys()
-            .filter(|key| self.writable_own_property_visible(object_id, key))
-            .map(|key| Value::str(key.as_str()))
+            .exact_keys()
+            .into_iter()
+            .filter(|key| self.writable_own_runtime_property_visible(object_id, key))
+            .map(Value::Str)
             .collect())
     }
 
@@ -31738,11 +31769,11 @@ impl InterpreterCore {
             };
             let mut seen = BTreeSet::new();
             for key_value in &key_values {
-                let key = self.property_key_from_value(key_value);
+                let key = self.executable_property_key_from_value(key_value);
                 if !seen.insert(key.clone()) {
                     return Err(InterpreterError::TypeError {
                         expected: "unique Proxy.ownKeys result keys".to_string(),
-                        got: format!("duplicate key {key}"),
+                        got: format!("duplicate key {}", key.diagnostic()),
                     });
                 }
             }
@@ -34023,6 +34054,7 @@ impl InterpreterCore {
         }
     }
 
+    #[cfg(test)]
     fn property_key_from_value(&self, value: &Value) -> String {
         if let Value::Object(object_id) = value {
             if let Some(object) = self.heap.get(object_id.0 as usize) {
@@ -34042,8 +34074,7 @@ impl InterpreterCore {
     }
 
     /// Convert a dynamic IR value to the private exact string-key carrier.
-    /// Compatibility consumers intentionally continue to use
-    /// `property_key_from_value` until bd-b12xs.6 audits them as a group.
+    /// This is the executable key path for dynamic and builtin consumers.
     fn executable_property_key_from_value(&self, value: &Value) -> RuntimePropertyKey {
         if let Value::Object(object_id) = value
             && let Some(object) = self.heap.get(object_id.0 as usize)
@@ -36892,8 +36923,8 @@ impl InterpreterCore {
         let value = self
             .array_index_value(entry_id, 1)?
             .unwrap_or(Value::Undefined);
-        let key = self.property_key_from_value(&key_value);
-        self.set_object_property(target_id, key, value)
+        let key = self.executable_property_key_from_value(&key_value);
+        self.set_object_runtime_property(target_id, key, value)
     }
 
     fn object_from_entries_value(
@@ -39116,14 +39147,18 @@ impl InterpreterCore {
     /// The backslash is escaped before the quote: the reverse order
     /// re-escaped the backslash inserted for `"` and emitted invalid JSON.
     fn json_quote_js_string(s: &JsString) -> String {
-        if let Some(text) = s.as_str() {
-            return format!("\"{}\"", text.replace('\\', "\\\\").replace('"', "\\\""));
-        }
-        let mut out = String::from("\"");
+        let mut out = String::with_capacity(s.len().saturating_add(2));
+        out.push('"');
         for decoded in char::decode_utf16(s.encode_utf16()) {
             match decoded {
                 Ok('"') => out.push_str("\\\""),
                 Ok('\\') => out.push_str("\\\\"),
+                Ok('\u{0008}') => out.push_str("\\b"),
+                Ok('\u{000c}') => out.push_str("\\f"),
+                Ok('\n') => out.push_str("\\n"),
+                Ok('\r') => out.push_str("\\r"),
+                Ok('\t') => out.push_str("\\t"),
+                Ok(c) if c <= '\u{001f}' => out.push_str(&format!("\\u{:04x}", c as u32)),
                 Ok(c) => out.push(c),
                 Err(err) => {
                     out.push_str(&format!("\\u{:04x}", err.unpaired_surrogate()));
@@ -39186,18 +39221,19 @@ impl InterpreterCore {
                     format!("[{}]", items.join(","))
                 } else {
                     let mut members = Vec::new();
-                    for (key, val) in &object.properties {
+                    for (key, val) in object.properties.exact_entries() {
                         // Engine-internal metadata (e.g. Symbol __type/__key) is
                         // not a real enumerable JS property — do not serialize it.
-                        if key.starts_with("__") || !self.writable_own_property_visible(*id, key) {
+                        if key.as_str().is_some_and(|key| key.starts_with("__"))
+                            || !self.writable_own_runtime_property_visible(*id, &key)
+                        {
                             continue;
                         }
                         if let Some(rendered_val) = self.json_stringify_value(val, visited) {
-                            // Escape the backslash FIRST: the reverse order
-                            // re-escaped the backslash inserted for `"` and
-                            // emitted invalid JSON for quote-bearing keys.
-                            let escaped_key = key.replace('\\', "\\\\").replace('"', "\\\"");
-                            members.push(format!("\"{escaped_key}\":{rendered_val}"));
+                            members.push(format!(
+                                "{}:{rendered_val}",
+                                Self::json_quote_js_string(&key)
+                            ));
                         }
                     }
                     format!("{{{}}}", members.join(","))
@@ -40869,15 +40905,41 @@ impl InterpreterCore {
     /// values and array elements: strings pass through, finite numbers and
     /// bigints stringify, booleans map to `true`/`false`, and EVERYTHING else
     /// (undefined, null, NaN, Infinity, objects, functions) becomes `''`.
-    fn qs_stringify_primitive(&self, value: &Value) -> String {
+    fn qs_stringify_primitive(&self, value: &Value) -> JsString {
         match value {
-            Value::Str(s) => s.to_string(),
-            Value::Int(n) => n.to_string(),
-            Value::Float(f) if f.inner().is_finite() => self.value_to_string(value),
-            Value::BigInt(digits) => digits.to_string(),
-            Value::Bool(b) => if *b { "true" } else { "false" }.to_string(),
-            _ => String::new(),
+            Value::Str(s) => s.clone(),
+            Value::Int(n) => JsString::from(n.to_string()),
+            Value::Float(f) if f.inner().is_finite() => JsString::from(self.value_to_string(value)),
+            Value::BigInt(digits) => JsString::from(digits.to_string()),
+            Value::Bool(b) => JsString::from(if *b { "true" } else { "false" }),
+            _ => JsString::from(""),
         }
+    }
+
+    fn throw_querystring_invalid_uri_error(&mut self) -> InterpreterError {
+        let thrown = (|| {
+            let prototype = self.ensure_builtin_prototype("URIError")?;
+            let error_id = self.alloc_object_with_prototype(Some(prototype))?;
+            self.initialize_error_like_object(error_id, "URIError", "URI malformed".to_string())?;
+            self.set_object_property(error_id, "code".to_string(), Value::str("ERR_INVALID_URI"))?;
+            Ok::<Value, InterpreterError>(Value::Object(error_id))
+        })();
+        let thrown = match thrown {
+            Ok(value) => value,
+            Err(error) => return error,
+        };
+        self.pending_exception = Some(thrown.clone());
+        self.pending_exception_label = Label::Public;
+        InterpreterError::UncaughtException {
+            value: Self::uncaught_exception_description(&thrown),
+        }
+    }
+
+    fn qs_escape_js_string(&mut self, input: &JsString) -> Result<String, InterpreterError> {
+        let Some(input) = input.as_str() else {
+            return Err(self.throw_querystring_invalid_uri_error());
+        };
+        Ok(node_qs_escape(input))
     }
 
     /// bd-qmy52: `querystring.stringify` body over a heap object: own
@@ -40888,22 +40950,31 @@ impl InterpreterCore {
     /// [`Self::qs_stringify_primitive`]; keys and values escape with
     /// [`node_qs_escape`]. An array receiver's `length` property is skipped
     /// (approximates its non-enumerability).
-    fn qs_stringify_object(&self, object_id: ObjectId, sep: &str, eq: &str) -> String {
-        let entries: Vec<(String, Value)> = self
+    fn qs_stringify_object(
+        &mut self,
+        object_id: ObjectId,
+        sep: &str,
+        eq: &str,
+    ) -> Result<String, InterpreterError> {
+        let entries: Vec<(JsString, Value)> = self
             .heap
             .get(object_id.0 as usize)
             .map(|object| {
                 object
                     .properties
-                    .iter()
-                    .filter(|(key, _)| !(object.is_array && key.as_str() == "length"))
-                    .map(|(key, value)| (key.clone(), value.clone()))
+                    .exact_entries()
+                    .into_iter()
+                    .filter(|(key, _)| {
+                        !(object.is_array && key.as_str() == Some("length"))
+                            && self.writable_own_runtime_property_visible(object_id, key)
+                    })
+                    .map(|(key, value)| (key, value.clone()))
                     .collect()
             })
             .unwrap_or_default();
         let mut pieces: Vec<String> = Vec::new();
         for (key, value) in entries {
-            let key_prefix = format!("{}{eq}", node_qs_escape(&key));
+            let key_prefix = format!("{}{eq}", self.qs_escape_js_string(&key)?);
             if let Value::Object(id) = value
                 && self
                     .heap
@@ -40911,19 +40982,17 @@ impl InterpreterCore {
                     .is_some_and(|object| object.is_array)
             {
                 for element in self.read_array_like_values(id) {
-                    pieces.push(format!(
-                        "{key_prefix}{}",
-                        node_qs_escape(&self.qs_stringify_primitive(&element))
-                    ));
+                    let component = self.qs_stringify_primitive(&element);
+                    let escaped = self.qs_escape_js_string(&component)?;
+                    pieces.push(format!("{key_prefix}{escaped}"));
                 }
                 continue;
             }
-            pieces.push(format!(
-                "{key_prefix}{}",
-                node_qs_escape(&self.qs_stringify_primitive(&value))
-            ));
+            let component = self.qs_stringify_primitive(&value);
+            let escaped = self.qs_escape_js_string(&component)?;
+            pieces.push(format!("{key_prefix}{escaped}"));
         }
-        pieces.join(sep)
+        Ok(pieces.join(sep))
     }
 
     /// bd-qmy52: build and ARM a JS-catchable `RangeError` carrying Node's
@@ -42065,9 +42134,10 @@ impl InterpreterCore {
                             .get(obj_id.0 as usize)
                             .ok_or(InterpreterError::ObjectNotFound { id: obj_id.0 })?
                             .properties
-                            .keys()
-                            .filter(|key| self.writable_own_property_visible(obj_id, key))
-                            .map(|key| Value::str(key.as_str()))
+                            .exact_keys()
+                            .into_iter()
+                            .filter(|key| self.writable_own_runtime_property_visible(obj_id, key))
+                            .map(Value::Str)
                             .collect::<Vec<_>>();
                         self.join_pending_hostcall_stream_label(obj_id)?;
                         let array_id = self.alloc_array_from_values(&key_values)?;
@@ -42094,8 +42164,11 @@ impl InterpreterCore {
                             .get(obj_id.0 as usize)
                             .ok_or(InterpreterError::ObjectNotFound { id: obj_id.0 })?
                             .properties
-                            .iter()
-                            .filter(|(key, _)| self.writable_own_property_visible(obj_id, key))
+                            .exact_entries()
+                            .into_iter()
+                            .filter(|(key, _)| {
+                                self.writable_own_runtime_property_visible(obj_id, key)
+                            })
                             .map(|(_, value)| value.clone())
                             .collect::<Vec<_>>();
                         self.join_pending_hostcall_stream_label(obj_id)?;
@@ -42123,9 +42196,12 @@ impl InterpreterCore {
                             .get(obj_id.0 as usize)
                             .ok_or(InterpreterError::ObjectNotFound { id: obj_id.0 })?
                             .properties
-                            .iter()
-                            .filter(|(key, _)| self.writable_own_property_visible(obj_id, key))
-                            .map(|(key, value)| (key.clone(), value.clone()))
+                            .exact_entries()
+                            .into_iter()
+                            .filter(|(key, _)| {
+                                self.writable_own_runtime_property_visible(obj_id, key)
+                            })
+                            .map(|(key, value)| (key, value.clone()))
                             .collect::<Vec<_>>();
                         self.join_pending_hostcall_stream_label(obj_id)?;
                         let mut entry_values = Vec::with_capacity(entries.len());
@@ -42133,7 +42209,7 @@ impl InterpreterCore {
                         // Set array elements as numeric properties, each containing a [key, value] pair
                         for (key, value) in entries {
                             let entry_array_id =
-                                self.alloc_array_from_values(&[Value::str(key), value])?;
+                                self.alloc_array_from_values(&[Value::Str(key), value])?;
                             entry_values.push(Value::Object(entry_array_id));
                         }
                         let array_id = self.alloc_array_from_values(&entry_values)?;
@@ -42179,17 +42255,22 @@ impl InterpreterCore {
                                 id: source_obj_id.0,
                             })?
                             .properties
-                            .iter()
+                            .exact_entries()
+                            .into_iter()
                             .filter(|(key, _)| {
-                                self.writable_own_property_visible(source_obj_id, key)
+                                self.writable_own_runtime_property_visible(source_obj_id, key)
                             })
-                            .map(|(key, value)| (key.clone(), value.clone()))
+                            .map(|(key, value)| (key, value.clone()))
                             .collect::<Vec<_>>();
                         self.join_pending_hostcall_stream_label(source_obj_id)?;
 
                         // Copy each property to target object
                         for (key, value) in properties_to_copy {
-                            self.set_object_property(target_obj_id, key, value)?;
+                            self.set_object_runtime_property(
+                                target_obj_id,
+                                RuntimePropertyKey::String(key),
+                                value,
+                            )?;
                         }
                     }
                     // Skip non-object sources (null, undefined, primitives)
@@ -42594,7 +42675,7 @@ impl InterpreterCore {
                 let Value::Object(object_id) = value else {
                     return Ok(Value::str(""));
                 };
-                Ok(Value::str(self.qs_stringify_object(object_id, &sep, &eq)))
+                Ok(Value::str(self.qs_stringify_object(object_id, &sep, &eq)?))
             }
             "builtin:QuerystringEscape" => {
                 // Node coerces the argument with String() before escaping
@@ -42602,11 +42683,11 @@ impl InterpreterCore {
                 let value = self
                     .builtin_optional_arg(args, 0)?
                     .unwrap_or(Value::Undefined);
-                let coerced = match &value {
-                    Value::Str(s) => s.to_string(),
-                    other => self.value_to_string(other),
+                let coerced = match value {
+                    Value::Str(s) => s,
+                    other => JsString::from(self.value_to_string(&other)),
                 };
-                Ok(Value::str(node_qs_escape(&coerced)))
+                Ok(Value::str(self.qs_escape_js_string(&coerced)?))
             }
             "builtin:QuerystringUnescape" => {
                 let value = self
@@ -43792,22 +43873,11 @@ impl InterpreterCore {
                     _ => return Ok(Value::Bool(false)), // Non-objects return false
                 };
 
-                // Get property name
                 let prop_val = self.read_reg(args.start + 1)?;
-                let prop_name = match prop_val {
-                    Value::Str(s) => s.to_string(),
-                    Value::Int(i) => i.to_string(),
-                    Value::Float(f) => f.inner().to_string(),
-                    Value::Bool(b) => b.to_string(),
-                    Value::Null => "null".to_string(),
-                    Value::Undefined => "undefined".to_string(),
-                    _ => return Ok(Value::Bool(false)),
-                };
-
                 self.join_pending_hostcall_stream_label(obj_id)?;
                 Ok(Value::Bool(self.object_own_property_contains(
                     &Value::Object(obj_id),
-                    &Value::str(prop_name),
+                    &prop_val,
                 )))
             }
             "builtin:ArrayPrototypeSort" => {
@@ -44572,17 +44642,8 @@ impl InterpreterCore {
                     _ => return Ok(Value::Undefined), // Non-objects can't have properties defined
                 };
 
-                // Get property name
                 let prop_val = self.read_reg(args.start + 1)?;
-                let prop_name = match prop_val {
-                    Value::Str(s) => s.to_string(),
-                    Value::Int(i) => i.to_string(),
-                    Value::Float(f) => f.inner().to_string(),
-                    Value::Bool(b) => b.to_string(),
-                    Value::Null => "null".to_string(),
-                    Value::Undefined => "undefined".to_string(),
-                    _ => return Ok(Value::Undefined),
-                };
+                let prop_name = self.executable_property_key_from_value(&prop_val);
 
                 // Get descriptor object (simplified - just use the value directly)
                 let descriptor_val = self.read_reg(args.start + 2)?;
@@ -44598,7 +44659,7 @@ impl InterpreterCore {
                         .unwrap_or(Value::Undefined),
                     other => other,
                 };
-                self.set_object_property(obj_id, prop_name, effective_value)?;
+                self.set_object_runtime_property(obj_id, prop_name, effective_value)?;
 
                 Ok(obj_val) // Return the original object
             }
@@ -44630,14 +44691,14 @@ impl InterpreterCore {
                     });
                 }
                 let key_value = self.read_reg(args.start + 1)?;
-                let key = self.property_key_from_value(&key_value);
+                let key = self.executable_property_key_from_value(&key_value);
                 let receiver = if args.count > 2 {
                     self.read_reg(args.start + 2)?
                 } else {
                     Value::Object(target)
                 };
                 self.join_pending_hostcall_stream_label(target)?;
-                self.proxy_aware_get_property(module, target, &key, receiver, 0)
+                self.proxy_aware_get_runtime_property(module, target, &key, receiver, 0)
             }
             "builtin:ReflectSet" => {
                 let target = self.read_object_argument(args, 0, "Reflect.set target object")?;
@@ -44649,13 +44710,13 @@ impl InterpreterCore {
                 }
                 let key_value = self.read_reg(args.start + 1)?;
                 let value = self.read_reg(args.start + 2)?;
-                let key = self.property_key_from_value(&key_value);
+                let key = self.executable_property_key_from_value(&key_value);
                 let receiver = if args.count > 3 {
                     self.read_reg(args.start + 3)?
                 } else {
                     Value::Object(target)
                 };
-                Ok(Value::Bool(self.proxy_aware_set_property(
+                Ok(Value::Bool(self.proxy_aware_set_runtime_property(
                     module, target, &key, value, receiver, 0,
                 )?))
             }
@@ -44668,11 +44729,11 @@ impl InterpreterCore {
                     });
                 }
                 let key_value = self.read_reg(args.start + 1)?;
-                let key = self.property_key_from_value(&key_value);
+                let key = self.executable_property_key_from_value(&key_value);
                 self.join_pending_hostcall_stream_label(target)?;
-                Ok(Value::Bool(
-                    self.proxy_aware_has_property(module, target, &key, 0)?,
-                ))
+                Ok(Value::Bool(self.proxy_aware_has_runtime_property(
+                    module, target, &key, 0,
+                )?))
             }
             "builtin:ReflectOwnKeys" => {
                 let target = self.read_object_argument(args, 0, "Reflect.ownKeys target object")?;
@@ -44691,10 +44752,12 @@ impl InterpreterCore {
                     });
                 }
                 let key_value = self.read_reg(args.start + 1)?;
-                let key = self.property_key_from_value(&key_value);
-                Ok(Value::Bool(
-                    self.proxy_aware_delete_property(module, target, &key, 0)?,
-                ))
+                let key = self.executable_property_key_from_value(&key_value);
+                let deleted = self.proxy_aware_delete_runtime_property(module, target, &key, 0)?;
+                if deleted {
+                    self.mark_deleted_for_in_iterators(target, key.string());
+                }
+                Ok(Value::Bool(deleted))
             }
             "builtin:ReflectApply" => {
                 if args.count < 3 {
@@ -45294,9 +45357,10 @@ impl InterpreterCore {
                             .get(obj_id.0 as usize)
                             .ok_or(InterpreterError::ObjectNotFound { id: obj_id.0 })?
                             .properties
-                            .keys()
-                            .filter(|key| self.writable_own_property_visible(obj_id, key))
-                            .map(|name| Value::str(name.as_str()))
+                            .exact_keys()
+                            .into_iter()
+                            .filter(|key| self.writable_own_runtime_property_visible(obj_id, key))
+                            .map(Value::Str)
                             .collect::<Vec<_>>();
                         self.join_pending_hostcall_stream_label(obj_id)?;
                         let array_id = self.alloc_array_from_values(&property_name_values)?;
@@ -46027,12 +46091,7 @@ impl InterpreterCore {
                 };
 
                 let prop_val = self.read_reg(args.start + 1)?;
-                let prop_name = match prop_val {
-                    Value::Str(s) => s.to_string(),
-                    Value::Int(n) => n.to_string(),
-                    Value::Float(f) => f.inner().to_string(),
-                    _ => return Ok(Value::Undefined),
-                };
+                let prop_name = self.executable_property_key_from_value(&prop_val);
 
                 // Snapshot the property value under an immutable borrow,
                 // then allocate + populate the descriptor under a fresh
@@ -46042,14 +46101,12 @@ impl InterpreterCore {
                     .get(obj_id.0 as usize)
                     .map(|obj| obj.is_frozen)
                     .unwrap_or(false);
-                let hides_writable_mirror = (self.writable_streams.contains_key(&obj_id)
-                    || self.writable_terminal_states.contains_key(&obj_id))
-                    && Self::is_writable_state_view_key(&prop_name);
-                let descriptor_source = (!hides_writable_mirror)
+                let descriptor_source = self
+                    .writable_own_runtime_property_visible(obj_id, prop_name.string())
                     .then(|| {
                         self.heap
                             .get(obj_id.0 as usize)
-                            .and_then(|obj| obj.properties.get(&prop_name).cloned())
+                            .and_then(|obj| obj.properties.get_exact(prop_name.string()).cloned())
                     })
                     .flatten()
                     .map(|value| (value, is_frozen));
@@ -46102,10 +46159,7 @@ impl InterpreterCore {
                 };
 
                 let prop_val = self.read_reg(args.start + 1)?;
-                let prop_key = match prop_val {
-                    Value::Str(s) => s.to_string(),
-                    _ => return Ok(Value::Undefined), // Non-string property keys not supported yet
-                };
+                let prop_key = self.executable_property_key_from_value(&prop_val);
 
                 // Use our prototype chain descriptor lookup
                 self.join_pending_hostcall_stream_label(obj_id)?;
@@ -46400,19 +46454,12 @@ impl InterpreterCore {
                 };
 
                 let prop_val = self.read_reg(args.start + 1)?;
-                let prop_key = match prop_val {
-                    Value::Str(s) => s.to_string(),
-                    Value::Int(n) => n.to_string(),
-                    Value::Float(f) => f.inner().to_string(),
-                    _ => return Ok(Value::Bool(false)),
-                };
-
                 // All ordinary own properties are enumerable in this simplified
                 // model; Writable state mirrors are inherited accessors.
                 self.join_pending_hostcall_stream_label(object_id)?;
                 Ok(Value::Bool(self.object_own_property_contains(
                     &Value::Object(object_id),
-                    &Value::str(prop_key),
+                    &prop_val,
                 )))
             }
 
@@ -50251,6 +50298,12 @@ impl InterpreterCore {
             .saturating_add(Self::estimate_value_bytes(value))
     }
 
+    fn estimate_js_string_map_entry_bytes(key: &JsString, value: &Value) -> u64 {
+        MEMORY_ESTIMATE_MAP_ENTRY_BYTES
+            .saturating_add(Self::estimate_js_string_bytes(key))
+            .saturating_add(Self::estimate_value_bytes(value))
+    }
+
     fn estimate_property_entry_bytes(key: &str, value: &Value) -> u64 {
         Self::estimate_plain_string_map_entry_bytes(key, value)
             // OrderedStringMap owns a second key for its ES-order
@@ -50793,7 +50846,7 @@ impl InterpreterCore {
                 .modules
                 .values()
                 .flat_map(|record| record.exports.iter())
-                .map(|(name, value)| Self::estimate_plain_string_map_entry_bytes(name, value)),
+                .map(|(name, value)| Self::estimate_js_string_map_entry_bytes(name, value)),
         )
     }
 
@@ -51106,12 +51159,8 @@ impl InterpreterCore {
     fn estimate_iterator_bytes(iterator: &RuntimeIteratorState) -> u64 {
         match iterator {
             RuntimeIteratorState::ForIn(state) => {
-                let keys = Self::saturating_sum(
-                    state
-                        .keys
-                        .iter()
-                        .map(|key| Self::estimate_string_bytes(key)),
-                );
+                let keys =
+                    Self::saturating_sum(state.keys.iter().map(Self::estimate_js_string_bytes));
                 MEMORY_ESTIMATE_ITERATOR_BASE_BYTES.saturating_add(keys)
             }
             RuntimeIteratorState::ForOf(state) => {
@@ -52326,7 +52375,7 @@ impl InterpreterCore {
             .ok_or(InterpreterError::IteratorNotFound { handle })
     }
 
-    fn collect_for_in_keys(&self, object_id: ObjectId) -> Result<Vec<String>, InterpreterError> {
+    fn collect_for_in_keys(&self, object_id: ObjectId) -> Result<Vec<JsString>, InterpreterError> {
         let mut keys = Vec::new();
         let mut seen = BTreeSet::new();
         let mut visited = BTreeSet::new();
@@ -52341,9 +52390,10 @@ impl InterpreterCore {
                 .heap
                 .get(id.0 as usize)
                 .ok_or(InterpreterError::ObjectNotFound { id: id.0 })?;
-            for key in object.properties.keys() {
-                if self.writable_own_property_visible(id, key) && seen.insert(key.clone()) {
-                    keys.push(key.clone());
+            for key in object.properties.exact_keys() {
+                if self.writable_own_runtime_property_visible(id, &key) && seen.insert(key.clone())
+                {
+                    keys.push(key);
                 }
             }
             current = object.prototype;
@@ -52392,12 +52442,12 @@ impl InterpreterCore {
         }
     }
 
-    fn mark_deleted_for_in_iterators(&mut self, object_id: ObjectId, key: &str) {
+    fn mark_deleted_for_in_iterators(&mut self, object_id: ObjectId, key: &JsString) {
         for iterator in &mut self.iterators {
             if let RuntimeIteratorState::ForIn(state) = iterator
                 && state.object_id == object_id
             {
-                state.deleted_keys.insert(key.to_string());
+                state.deleted_keys.insert(key.clone());
             }
         }
     }
@@ -52540,7 +52590,7 @@ impl InterpreterCore {
             object.cached_dense_length = projected_cached_dense_length;
         });
         for deleted_key in &deleted_index_keys {
-            self.mark_deleted_for_in_iterators(object_id, deleted_key);
+            self.mark_deleted_for_in_iterators(object_id, &JsString::from(deleted_key.as_str()));
         }
         self.gc_write_barrier(object_id);
         Ok(())
@@ -52644,7 +52694,7 @@ impl InterpreterCore {
         });
         self.estimated_memory_bytes = requested_bytes;
         for deleted_key in &deleted_index_keys {
-            self.mark_deleted_for_in_iterators(object_id, deleted_key);
+            self.mark_deleted_for_in_iterators(object_id, &JsString::from(deleted_key.as_str()));
         }
 
         // Trigger write barrier for GC correctness when setting object properties
@@ -57347,6 +57397,87 @@ mod async_runtime_tests_current {
             core.read_array_like_values(keys_id),
             vec![Value::str("trap-b"), Value::str("trap-a")]
         );
+    }
+
+    #[test]
+    fn proxy_own_keys_duplicate_identity_is_exact_bd_b12xs_6() {
+        let make_module = |keys: Vec<JsString>| {
+            let mut instructions = vec![Ir3Instruction::NewArray { dst: 0 }];
+            for pool_index in 0..keys.len() {
+                instructions.push(Ir3Instruction::LoadStr {
+                    dst: 1,
+                    pool_index: pool_index as u32,
+                });
+                instructions.push(Ir3Instruction::ArrayPush {
+                    array: 0,
+                    element: 1,
+                });
+            }
+            instructions.push(Ir3Instruction::Return { value: 0 });
+            let mut module = test_module_with_functions(
+                instructions,
+                vec![Ir3FunctionDesc {
+                    entry: 0,
+                    arity: 1,
+                    frame_size: 2,
+                    name: Some("proxy_exact_own_keys_trap".to_string()),
+                    is_generator: false,
+                    rest_param_index: None,
+                }],
+            );
+            module.constant_pool.extend(keys);
+            module
+        };
+
+        let d800 = JsString::from_code_units(&[0xD800]);
+        let d801 = JsString::from_code_units(&[0xD801]);
+        let replacement = JsString::from("\u{FFFD}");
+        let distinct_module = make_module(vec![d800.clone(), d801.clone(), replacement.clone()]);
+        let duplicate_module = make_module(vec![d800.clone(), d800.clone()]);
+
+        let mut core = test_interpreter();
+        let target = core.alloc_object_with_prototype(None).unwrap();
+        let handler = core.alloc_object_with_prototype(None).unwrap();
+        core.set_object_property(handler, "ownKeys".to_string(), Value::Function(0))
+            .unwrap();
+        core.set_reg(0, Value::Object(target));
+        core.set_reg(1, Value::Object(handler));
+        let proxy = core
+            .dispatch_builtin_hostcall("builtin:Proxy", RegRange { start: 0, count: 2 }, None)
+            .unwrap();
+        let Value::Object(proxy) = proxy else {
+            panic!("Proxy constructor must return an object");
+        };
+
+        core.set_reg(0, Value::Object(proxy));
+        let keys = core
+            .dispatch_builtin_hostcall(
+                "builtin:ReflectOwnKeys",
+                RegRange { start: 0, count: 1 },
+                Some(&distinct_module),
+            )
+            .expect("D800, D801, and U+FFFD are distinct Proxy ownKeys results");
+        let Value::Object(keys) = keys else {
+            panic!("Reflect.ownKeys must return an array");
+        };
+        assert_eq!(
+            core.read_array_like_values(keys),
+            vec![
+                Value::Str(d800.clone()),
+                Value::Str(d801),
+                Value::Str(replacement),
+            ]
+        );
+
+        core.set_reg(0, Value::Object(proxy));
+        assert!(matches!(
+            core.dispatch_builtin_hostcall(
+                "builtin:ReflectOwnKeys",
+                RegRange { start: 0, count: 1 },
+                Some(&duplicate_module),
+            ),
+            Err(InterpreterError::TypeError { .. })
+        ));
     }
 
     #[test]
@@ -62055,7 +62186,7 @@ mod async_runtime_tests_current {
         assert!(
             export_exact.module_state.modules[&specifier]
                 .exports
-                .contains_key("answer")
+                .contains_key(&JsString::from("answer"))
         );
         assert!(
             export_exact.heap[namespace.0 as usize]
@@ -76157,7 +76288,7 @@ mod tests {
         let mut core = InterpreterCore::new(config, "iterator-memory-delta");
         let iterator = RuntimeIteratorState::ForIn(RuntimeForInState {
             object_id: ObjectId(0),
-            keys: vec!["alpha".to_string(), "beta".to_string()],
+            keys: vec![JsString::from("alpha"), JsString::from("beta")],
             next_index: 0,
             deleted_keys: BTreeSet::new(),
             done: false,
@@ -82641,9 +82772,15 @@ mod tests {
             expected_keys
         );
 
-        assert_eq!(core.collect_for_in_keys(object_id).unwrap(), expected_keys);
         assert_eq!(
-            core.qs_stringify_object(object_id, "&", "="),
+            core.collect_for_in_keys(object_id).unwrap(),
+            expected_keys
+                .iter()
+                .map(|key| JsString::from(key.as_str()))
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(
+            core.qs_stringify_object(object_id, "&", "=").unwrap(),
             "0=6&2=3&10=2&4294967294=9&01=4&4294967295=5&a=7&b=8"
         );
         assert_eq!(
@@ -82653,6 +82790,447 @@ mod tests {
                     .to_string()
             )
         );
+    }
+
+    #[test]
+    fn exact_string_key_consumers_preserve_identity_bd_b12xs_6() {
+        let mut core = quickjs_test_core();
+        let object = core
+            .alloc_object_with_prototype(None)
+            .expect("exact-key source should allocate");
+        let d800 = JsString::from_code_units(&[0xD800]);
+        let d801 = JsString::from_code_units(&[0xD801]);
+        let replacement = JsString::from("\u{FFFD}");
+        let expected_keys = vec![d800.clone(), d801.clone(), replacement.clone()];
+        for (key, value) in expected_keys.iter().cloned().zip([8, 9, 10]) {
+            core.set_object_runtime_property(
+                object,
+                RuntimePropertyKey::String(key),
+                Value::Int(value),
+            )
+            .expect("exact property should fit");
+        }
+
+        assert_eq!(core.collect_for_in_keys(object).unwrap(), expected_keys);
+        assert_eq!(
+            core.ordinary_own_property_key_values(object).unwrap(),
+            expected_keys
+                .iter()
+                .cloned()
+                .map(Value::Str)
+                .collect::<Vec<_>>()
+        );
+
+        let iteration_object = core.alloc_object_with_prototype(None).unwrap();
+        for (key, value) in expected_keys.iter().cloned().zip([8, 9, 10]) {
+            core.set_object_runtime_property(
+                iteration_object,
+                RuntimePropertyKey::String(key),
+                Value::Int(value),
+            )
+            .unwrap();
+        }
+        let iterator = core
+            .init_for_in_iterator(Value::Object(iteration_object))
+            .unwrap();
+        assert_eq!(
+            core.advance_for_in_iterator(iterator.clone()).unwrap(),
+            Some(Value::Str(d800.clone()))
+        );
+        assert!(core.iteration_traces.last().is_some_and(|trace| {
+            trace.events.iter().any(|event| {
+                matches!(
+                    &event.operation,
+                    IterationOperation::IteratorNext { result }
+                        if result.value == IteratorValue::String("~pk~x:D800".to_string())
+                )
+            })
+        }));
+        core.set_reg(20, Value::Object(iteration_object));
+        core.set_reg(21, Value::Str(d801.clone()));
+        assert_eq!(
+            core.run_loop(&test_module(vec![
+                Ir3Instruction::DeleteProperty {
+                    obj: 20,
+                    key: 21,
+                    dst: 22,
+                },
+                Ir3Instruction::Return { value: 22 },
+            ]))
+            .unwrap(),
+            Value::Bool(true)
+        );
+        assert_eq!(
+            core.advance_for_in_iterator(iterator.clone()).unwrap(),
+            Some(Value::Str(replacement.clone()))
+        );
+        assert_eq!(core.advance_for_in_iterator(iterator).unwrap(), None);
+
+        core.set_reg(0, Value::Object(object));
+        for builtin in [
+            "builtin:ObjectKeys",
+            "builtin:ObjectGetOwnPropertyNames",
+            "builtin:ReflectOwnKeys",
+        ] {
+            let keys = core
+                .dispatch_builtin_hostcall(builtin, RegRange { start: 0, count: 1 }, None)
+                .expect("exact key reflection should succeed");
+            let Value::Object(keys) = keys else {
+                panic!("{builtin} must return an array");
+            };
+            assert_eq!(
+                core.read_array_like_values(keys),
+                expected_keys
+                    .iter()
+                    .cloned()
+                    .map(Value::Str)
+                    .collect::<Vec<_>>()
+            );
+        }
+
+        let handler = core.alloc_object_with_prototype(None).unwrap();
+        core.set_reg(0, Value::Object(object));
+        core.set_reg(1, Value::Object(handler));
+        let proxy = core
+            .dispatch_builtin_hostcall("builtin:Proxy", RegRange { start: 0, count: 2 }, None)
+            .unwrap();
+        let Value::Object(proxy) = proxy else {
+            panic!("Proxy constructor must return an object");
+        };
+        core.set_reg(0, Value::Object(proxy));
+        core.set_reg(1, Value::Str(d800.clone()));
+        assert_eq!(
+            core.dispatch_builtin_hostcall(
+                "builtin:ReflectGet",
+                RegRange { start: 0, count: 2 },
+                None,
+            )
+            .unwrap(),
+            Value::Int(8)
+        );
+        let proxy_keys = core
+            .dispatch_builtin_hostcall(
+                "builtin:ReflectOwnKeys",
+                RegRange { start: 0, count: 1 },
+                None,
+            )
+            .unwrap();
+        let Value::Object(proxy_keys) = proxy_keys else {
+            panic!("Proxy ordinary ownKeys fallback must return an array");
+        };
+        assert_eq!(
+            core.read_array_like_values(proxy_keys),
+            expected_keys
+                .iter()
+                .cloned()
+                .map(Value::Str)
+                .collect::<Vec<_>>()
+        );
+
+        core.set_reg(0, Value::Object(object));
+        let values = core
+            .dispatch_builtin_hostcall(
+                "builtin:ObjectValues",
+                RegRange { start: 0, count: 1 },
+                None,
+            )
+            .expect("Object.values should preserve exact-key values");
+        let Value::Object(values) = values else {
+            panic!("Object.values must return an array");
+        };
+        assert_eq!(
+            core.read_array_like_values(values),
+            vec![Value::Int(8), Value::Int(9), Value::Int(10)]
+        );
+
+        let entries = core
+            .dispatch_builtin_hostcall(
+                "builtin:ObjectEntries",
+                RegRange { start: 0, count: 1 },
+                None,
+            )
+            .expect("Object.entries should preserve exact keys");
+        let Value::Object(entries) = entries else {
+            panic!("Object.entries must return an array");
+        };
+        let entries = core
+            .read_array_like_values(entries)
+            .into_iter()
+            .map(|entry| {
+                let Value::Object(entry) = entry else {
+                    panic!("Object.entries member must be a pair array");
+                };
+                core.read_array_like_values(entry)
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            entries,
+            vec![
+                vec![Value::Str(d800.clone()), Value::Int(8)],
+                vec![Value::Str(d801.clone()), Value::Int(9)],
+                vec![Value::Str(replacement.clone()), Value::Int(10)],
+            ]
+        );
+
+        core.set_reg(0, Value::Object(object));
+        core.set_reg(1, Value::Str(d800.clone()));
+        assert_eq!(
+            core.dispatch_builtin_hostcall(
+                "builtin:ReflectGet",
+                RegRange { start: 0, count: 2 },
+                None,
+            )
+            .unwrap(),
+            Value::Int(8)
+        );
+        assert_eq!(
+            core.dispatch_builtin_hostcall(
+                "builtin:ReflectHas",
+                RegRange { start: 0, count: 2 },
+                None,
+            )
+            .unwrap(),
+            Value::Bool(true)
+        );
+        assert_eq!(
+            core.dispatch_builtin_hostcall(
+                "builtin:ObjectHasOwnProperty",
+                RegRange { start: 0, count: 2 },
+                None,
+            )
+            .unwrap(),
+            Value::Bool(true)
+        );
+
+        core.set_reg(1, Value::Str(d801.clone()));
+        core.set_reg(2, Value::Int(19));
+        assert_eq!(
+            core.dispatch_builtin_hostcall(
+                "builtin:ReflectSet",
+                RegRange { start: 0, count: 3 },
+                None,
+            )
+            .unwrap(),
+            Value::Bool(true)
+        );
+        assert_eq!(
+            core.heap[object.0 as usize].properties.get_exact(&d801),
+            Some(&Value::Int(19))
+        );
+        assert_eq!(
+            core.dispatch_builtin_hostcall(
+                "builtin:ReflectDeleteProperty",
+                RegRange { start: 0, count: 2 },
+                None,
+            )
+            .unwrap(),
+            Value::Bool(true)
+        );
+        core.set_object_runtime_property(
+            object,
+            RuntimePropertyKey::String(d801.clone()),
+            Value::Int(9),
+        )
+        .unwrap();
+        let expected_after_delete = vec![d800.clone(), replacement.clone(), d801.clone()];
+
+        let assigned = core.alloc_object_with_prototype(None).unwrap();
+        core.set_reg(0, Value::Object(assigned));
+        core.set_reg(1, Value::Object(object));
+        assert_eq!(
+            core.dispatch_builtin_hostcall(
+                "builtin:ObjectAssign",
+                RegRange { start: 0, count: 2 },
+                None,
+            )
+            .unwrap(),
+            Value::Object(assigned)
+        );
+        assert_eq!(
+            core.heap[assigned.0 as usize].properties.exact_keys(),
+            expected_after_delete
+        );
+
+        let spread_target = core.alloc_object_with_prototype(None).unwrap();
+        core.set_reg(5, Value::Object(spread_target));
+        core.set_reg(6, Value::Object(object));
+        core.ip = 0;
+        assert_eq!(
+            core.run_loop(&test_module(vec![
+                Ir3Instruction::SpreadIntoObject {
+                    target: 5,
+                    source: 6,
+                },
+                Ir3Instruction::Return { value: 5 },
+            ]))
+            .unwrap(),
+            Value::Object(spread_target)
+        );
+        assert_eq!(
+            core.heap[spread_target.0 as usize].properties.exact_keys(),
+            expected_after_delete
+        );
+
+        let entry_pairs = [
+            (d800.clone(), Value::Int(28)),
+            (d801.clone(), Value::Int(29)),
+            (replacement.clone(), Value::Int(30)),
+        ]
+        .into_iter()
+        .map(|(key, value)| {
+            core.alloc_array_from_values(&[Value::Str(key), value])
+                .unwrap()
+        })
+        .map(Value::Object)
+        .collect::<Vec<_>>();
+        let entry_source = core.alloc_array_from_values(&entry_pairs).unwrap();
+        core.set_reg(0, Value::Object(entry_source));
+        let from_entries = core
+            .dispatch_builtin_hostcall(
+                "builtin:ObjectFromEntries",
+                RegRange { start: 0, count: 1 },
+                None,
+            )
+            .unwrap();
+        let Value::Object(from_entries) = from_entries else {
+            panic!("Object.fromEntries must return an object");
+        };
+        assert_eq!(
+            core.heap[from_entries.0 as usize].properties.exact_keys(),
+            expected_keys
+        );
+
+        let descriptor = core
+            .alloc_object_with_properties(&[("value", Value::Int(88))])
+            .unwrap();
+        let defined = core.alloc_object_with_prototype(None).unwrap();
+        core.set_reg(0, Value::Object(defined));
+        core.set_reg(1, Value::Str(d800.clone()));
+        core.set_reg(2, Value::Object(descriptor));
+        core.dispatch_builtin_hostcall(
+            "builtin:ObjectDefineProperty",
+            RegRange { start: 0, count: 3 },
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            core.heap[defined.0 as usize].properties.get_exact(&d800),
+            Some(&Value::Int(88))
+        );
+        let descriptor = core
+            .dispatch_builtin_hostcall(
+                "builtin:ObjectGetOwnPropertyDescriptor",
+                RegRange { start: 0, count: 2 },
+                None,
+            )
+            .unwrap();
+        let Value::Object(descriptor) = descriptor else {
+            panic!("exact descriptor lookup must return an object");
+        };
+        assert_eq!(
+            core.heap[descriptor.0 as usize].properties.get("value"),
+            Some(&Value::Int(88))
+        );
+
+        let inherited = core
+            .alloc_object_with_prototype(Some(defined))
+            .expect("descriptor child should allocate");
+        core.set_reg(0, Value::Object(inherited));
+        core.set_reg(1, Value::Str(d800.clone()));
+        let descriptor = core
+            .dispatch_builtin_hostcall(
+                "builtin:ObjectGetPropertyDescriptor",
+                RegRange { start: 0, count: 2 },
+                None,
+            )
+            .unwrap();
+        let Value::Object(descriptor) = descriptor else {
+            panic!("exact inherited descriptor lookup must return an object");
+        };
+        assert_eq!(
+            core.heap[descriptor.0 as usize].properties.get("value"),
+            Some(&Value::Int(88))
+        );
+
+        core.set_reg(0, Value::Object(object));
+        assert_eq!(
+            core.dispatch_builtin_hostcall(
+                "builtin:JsonStringify",
+                RegRange { start: 0, count: 1 },
+                None,
+            )
+            .unwrap(),
+            Value::str(r#"{"\ud800":8,"�":10,"\ud801":9}"#)
+        );
+        assert!(matches!(
+            core.qs_stringify_object(object, "&", "="),
+            Err(InterpreterError::UncaughtException { .. })
+        ));
+        assert_eq!(
+            core.heap
+                .iter()
+                .rev()
+                .find_map(|object| object.properties.get("code")),
+            Some(&Value::str("ERR_INVALID_URI"))
+        );
+    }
+
+    #[test]
+    fn commonjs_finalization_keeps_exact_named_exports_bd_b12xs_6() {
+        let mut core = quickjs_test_core();
+        let specifier = "fixture.cjs".to_string();
+        let namespace_object = core.alloc_object_with_prototype(None).unwrap();
+        let exports_object = core.alloc_object_with_prototype(None).unwrap();
+        let module_object = core.alloc_object_with_prototype(None).unwrap();
+        let d800 = JsString::from_code_units(&[0xD800]);
+        let d801 = JsString::from_code_units(&[0xD801]);
+        let replacement = JsString::from("\u{FFFD}");
+        for (key, value) in [
+            (d800.clone(), 8),
+            (d801.clone(), 9),
+            (replacement.clone(), 10),
+        ] {
+            core.set_object_runtime_property(
+                exports_object,
+                RuntimePropertyKey::String(key),
+                Value::Int(value),
+            )
+            .unwrap();
+        }
+        core.set_object_property(
+            module_object,
+            "exports".to_string(),
+            Value::Object(exports_object),
+        )
+        .unwrap();
+        core.module_state.modules.insert(
+            specifier.clone(),
+            ModuleRuntimeRecord {
+                status: ModuleRuntimeStatus::Evaluating,
+                namespace_object,
+                exports: BTreeMap::new(),
+                cjs_module_object: Some(module_object),
+                compiled_module: None,
+            },
+        );
+        core.current_module_specifier = Some(specifier.clone());
+        core.finalize_cjs_exports(&CjsModuleContext {
+            module_object,
+            exports_object,
+            module_specifier: specifier.clone(),
+        })
+        .unwrap();
+
+        let record = core.module_state.modules.get(&specifier).unwrap();
+        for (key, value) in [(d800, 8), (d801, 9), (replacement, 10)] {
+            assert_eq!(record.exports.get(&key), Some(&Value::Int(value)));
+            assert_eq!(
+                core.heap[namespace_object.0 as usize]
+                    .properties
+                    .get_exact(&key),
+                Some(&Value::Int(value))
+            );
+        }
     }
 
     #[test]
@@ -84379,7 +84957,10 @@ mod memory_accounting_tests {
                     let object_id = object_id_for_slot(core, object_ids, 0)?;
                     core.alloc_iterator(RuntimeIteratorState::ForIn(RuntimeForInState {
                         object_id,
-                        keys: keys.clone(),
+                        keys: keys
+                            .iter()
+                            .map(|key| JsString::from(key.as_str()))
+                            .collect(),
                         next_index: 0,
                         deleted_keys: BTreeSet::new(),
                         done: false,

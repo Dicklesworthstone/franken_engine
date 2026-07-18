@@ -133,7 +133,7 @@ fn class_declaration_lowers_constructor_static_and_prototype_methods() {
         .filter_map(|op| match op {
             Ir1Op::SetProperty {
                 key: Ir1PropertyKey::Static(name),
-            } => Some(name.as_str()),
+            } => name.as_str(),
             _ => None,
         })
         .collect();

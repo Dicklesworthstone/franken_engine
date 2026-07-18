@@ -249,6 +249,23 @@ const MEMORY_ESTIMATE_EVENT_PROMISE_WAITER_BASE_BYTES: u64 = 48;
 const MEMORY_ESTIMATE_LOOPBACK_SERVER_BASE_BYTES: u64 = 128;
 const MEMORY_ESTIMATE_LOOPBACK_SOCKET_BASE_BYTES: u64 = 256;
 const MEMORY_ESTIMATE_LOOPBACK_TASK_BASE_BYTES: u64 = 96;
+const MEMORY_ESTIMATE_LOOPBACK_PORT_BASE_BYTES: u64 = 48;
+/// Conservative fixed charges and hard guest-controlled ceilings for the
+/// engine-owned HTTP/1.1 facade (bd-d0n7u). HTTP loopback retains request,
+/// response, header, and queued lifecycle state outside the guest heap; these
+/// bounds make every clone/allocation preflightable before publication.
+const MEMORY_ESTIMATE_HTTP_SERVER_BASE_BYTES: u64 = 64;
+const MEMORY_ESTIMATE_HTTP_CLIENT_REQUEST_BASE_BYTES: u64 = 192;
+const MEMORY_ESTIMATE_HTTP_INCOMING_MESSAGE_BASE_BYTES: u64 = 160;
+const MEMORY_ESTIMATE_HTTP_SERVER_RESPONSE_BASE_BYTES: u64 = 192;
+const MEMORY_ESTIMATE_HTTP_TASK_BASE_BYTES: u64 = 80;
+const MEMORY_ESTIMATE_HTTP_AGENT_BASE_BYTES: u64 = 48;
+const MEMORY_ESTIMATE_HTTP_HEADER_ARRAY_BASE_BYTES: u64 = 24;
+const MAX_HTTP_BODY_BYTES: usize = 1024 * 1024;
+const MAX_HTTP_HEADER_COUNT: usize = 128;
+const MAX_HTTP_HEADER_NAME_BYTES: usize = 256;
+const MAX_HTTP_HEADER_VALUE_BYTES: usize = 8 * 1024;
+const MAX_HTTP_PATH_BYTES: usize = 8 * 1024;
 /// TLS ALPN identifiers are one-byte-length-prefixed, and the complete
 /// ProtocolNameList is bounded by its u16 wire length. Enforce those protocol
 /// bounds before iterating or allocating from a guest-controlled array-like.
@@ -314,6 +331,9 @@ const ZLIB_PUBLICATION_METADATA_BYTES: u64 = 64 * 1024;
 /// Compression additionally scales input work by the requested level, while
 /// decompression reserves the full engine output cap before touching a codec.
 const ZLIB_WORK_UNIT_BYTES: u64 = 1024;
+/// One deterministic instruction-budget unit per KiB of HTTP framing, body,
+/// or header materialization work, plus one unit per visited header/array item.
+const HTTP_WORK_UNIT_BYTES: u64 = 1024;
 /// Approximate metadata footprint for an ArrayBuffer-backed typed-array view.
 const MEMORY_ESTIMATE_TYPED_ARRAY_VIEW_BYTES: u64 = 48;
 /// Approximate metadata footprint for an ArrayBuffer-backed DataView.
@@ -2596,6 +2616,21 @@ pub enum BuiltinFunctionKind {
     StringIterator,
     /// Generator `Symbol.iterator` identity method.
     GeneratorIteratorSelf,
+    /// Authenticated HTTP facade receiver methods (bd-d0n7u). Every HTTP
+    /// variant is appended after the previous true tail because builtin
+    /// discriminants participate in deterministic register hashing.
+    HttpClientRequestWrite,
+    HttpClientRequestEnd,
+    HttpClientRequestSetHeader,
+    HttpIncomingMessageSetEncoding,
+    HttpIncomingMessageResume,
+    HttpServerResponseSetHeader,
+    HttpServerResponseGetHeader,
+    HttpServerResponseHasHeader,
+    HttpServerResponseRemoveHeader,
+    HttpServerResponseWriteHead,
+    HttpServerResponseWrite,
+    HttpServerResponseEnd,
 }
 
 impl BuiltinFunctionKind {
@@ -3894,6 +3929,18 @@ impl BuiltinFunction {
             BuiltinFunctionKind::NetSocketUnref => "unref",
             BuiltinFunctionKind::NetSocketSetNoDelay => "setNoDelay",
             BuiltinFunctionKind::NetSocketSetKeepAlive => "setKeepAlive",
+            BuiltinFunctionKind::HttpClientRequestWrite
+            | BuiltinFunctionKind::HttpServerResponseWrite => "write",
+            BuiltinFunctionKind::HttpClientRequestEnd
+            | BuiltinFunctionKind::HttpServerResponseEnd => "end",
+            BuiltinFunctionKind::HttpClientRequestSetHeader
+            | BuiltinFunctionKind::HttpServerResponseSetHeader => "setHeader",
+            BuiltinFunctionKind::HttpIncomingMessageSetEncoding => "setEncoding",
+            BuiltinFunctionKind::HttpIncomingMessageResume => "resume",
+            BuiltinFunctionKind::HttpServerResponseGetHeader => "getHeader",
+            BuiltinFunctionKind::HttpServerResponseHasHeader => "hasHeader",
+            BuiltinFunctionKind::HttpServerResponseRemoveHeader => "removeHeader",
+            BuiltinFunctionKind::HttpServerResponseWriteHead => "writeHead",
             BuiltinFunctionKind::TlsSocketGetPeerCertificate => "getPeerCertificate",
             BuiltinFunctionKind::TlsSocketGetProtocol => "getProtocol",
             BuiltinFunctionKind::TlsSocketGetCipher => "getCipher",
@@ -6843,6 +6890,7 @@ struct PendingStreamEmission {
 struct LoopbackServerState {
     address: String,
     port: Option<u16>,
+    generation: u64,
     listening: bool,
     active_connections: BTreeSet<ObjectId>,
     close_requested: bool,
@@ -6877,6 +6925,7 @@ struct LoopbackBufferedData {
 struct LoopbackSocketState {
     peer: Option<ObjectId>,
     owner_server: Option<ObjectId>,
+    owner_server_generation: Option<u64>,
     paused: bool,
     encoding_utf8: bool,
     local_ended: bool,
@@ -6916,10 +6965,12 @@ struct HermeticTlsSocketState {
 enum PendingLoopbackTask {
     Listening {
         server: ObjectId,
+        generation: u64,
     },
     Connect {
         client: ObjectId,
         server: ObjectId,
+        generation: u64,
     },
     Data {
         target: ObjectId,
@@ -6937,6 +6988,7 @@ enum PendingLoopbackTask {
     },
     ServerClose {
         server: ObjectId,
+        generation: u64,
         label: Label,
     },
     Error {
@@ -6944,6 +6996,122 @@ enum PendingLoopbackTask {
         code: String,
         label: Label,
         close_after: bool,
+    },
+}
+
+/// Authoritative classification for every deterministic port allocated during
+/// one execution. Closed entries deliberately remain until reset: a request to
+/// a formerly internal port is an internal ECONNREFUSED, never an opportunity
+/// to escape through the external network provider.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LoopbackPortState {
+    Live { server: ObjectId, generation: u64 },
+    Closed { generation: u64 },
+}
+
+#[derive(Debug, Clone)]
+struct HttpHeaderValue {
+    original_name: String,
+    /// Node preserves array-valued response headers for `getHeader()`, while
+    /// request/response serialization folds them with `, `. Keep both shapes
+    /// so the guest-visible value is not reconstructed from a lossy string.
+    array_values: Option<Vec<String>>,
+    value: String,
+}
+
+type HttpHeaders = BTreeMap<String, HttpHeaderValue>;
+
+#[derive(Debug, Clone)]
+struct HttpServerState {
+    lifecycle_label: Label,
+}
+
+#[derive(Debug, Clone)]
+struct HttpClientRequestState {
+    host: String,
+    port: u16,
+    use_tls: bool,
+    internal_loopback_candidate: bool,
+    path: String,
+    method: String,
+    headers: HttpHeaders,
+    body: Vec<u8>,
+    ended: bool,
+    response_callback: Option<u32>,
+    lifecycle_label: Label,
+}
+
+#[derive(Debug, Clone)]
+struct ResolvedHttpRequest {
+    host: String,
+    port: u16,
+    use_tls: bool,
+    internal_loopback_candidate: bool,
+    path: String,
+    method: String,
+    headers: HttpHeaders,
+    response_callback: Option<u32>,
+}
+
+#[derive(Debug, Clone)]
+struct HttpIncomingMessageState {
+    body: Vec<u8>,
+    encoding_utf8: bool,
+    delivered: bool,
+    close_after_end: bool,
+    server_completion: Option<HttpServerCompletion>,
+    lifecycle_label: Label,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct HttpServerCompletion {
+    server: ObjectId,
+    generation: u64,
+    response: ObjectId,
+}
+
+#[derive(Debug, Clone)]
+struct HttpServerResponseState {
+    client_request: ObjectId,
+    server: ObjectId,
+    server_generation: u64,
+    request_method: String,
+    status_code: u16,
+    status_message: String,
+    headers: HttpHeaders,
+    body: Vec<u8>,
+    ended: bool,
+    lifecycle_label: Label,
+}
+
+#[derive(Debug, Clone)]
+enum PendingHttpTask {
+    DispatchRequest {
+        request: ObjectId,
+        server: ObjectId,
+        generation: u64,
+    },
+    DeliverResponse {
+        request: ObjectId,
+        message: ObjectId,
+    },
+    DeliverExternalResponse {
+        request: ObjectId,
+        response: Option<ObjectId>,
+    },
+    MessageData {
+        message: ObjectId,
+    },
+    MessageEnd {
+        message: ObjectId,
+    },
+    MessageClose {
+        message: ObjectId,
+    },
+    ClientError {
+        request: ObjectId,
+        code: String,
+        label: Label,
     },
 }
 
@@ -7709,9 +7877,23 @@ pub struct InterpreterCore {
     /// ports are deterministic execution-local identifiers, never OS ports.
     loopback_servers: BTreeMap<ObjectId, LoopbackServerState>,
     loopback_sockets: BTreeMap<ObjectId, LoopbackSocketState>,
+    loopback_ports: BTreeMap<u16, LoopbackPortState>,
     pending_loopback_tasks: BTreeMap<u64, PendingLoopbackTask>,
     loopback_task_in_flight_bytes: u64,
     next_loopback_port: u16,
+    /// Process-lifetime listener nonce. It is intentionally not reset with an
+    /// execution seed, so a delayed task can never authenticate against a
+    /// newly reused heap ObjectId.
+    next_loopback_listener_generation: u64,
+    /// Bounded HTTP/1.1 facade state. All transport identities and payloads are
+    /// engine-owned; guest `__type` writes cannot forge membership.
+    http_servers: BTreeMap<ObjectId, HttpServerState>,
+    http_client_requests: BTreeMap<ObjectId, HttpClientRequestState>,
+    http_incoming_messages: BTreeMap<ObjectId, HttpIncomingMessageState>,
+    http_server_responses: BTreeMap<ObjectId, HttpServerResponseState>,
+    http_agents: BTreeSet<ObjectId>,
+    pending_http_tasks: BTreeMap<u64, PendingHttpTask>,
+    http_task_in_flight_bytes: u64,
     /// Engine-owned Writable instances. Their per-state ready bit drives a
     /// pre-microtask lifecycle checkpoint without a separately retained queue.
     writable_streams: BTreeMap<ObjectId, WritableState>,
@@ -7908,9 +8090,18 @@ impl InterpreterCore {
             next_readable_pipe_token: 0,
             loopback_servers: BTreeMap::new(),
             loopback_sockets: BTreeMap::new(),
+            loopback_ports: BTreeMap::new(),
             pending_loopback_tasks: BTreeMap::new(),
             loopback_task_in_flight_bytes: 0,
             next_loopback_port: 41_000,
+            next_loopback_listener_generation: 1,
+            http_servers: BTreeMap::new(),
+            http_client_requests: BTreeMap::new(),
+            http_incoming_messages: BTreeMap::new(),
+            http_server_responses: BTreeMap::new(),
+            http_agents: BTreeSet::new(),
+            pending_http_tasks: BTreeMap::new(),
+            http_task_in_flight_bytes: 0,
             writable_streams: BTreeMap::new(),
             writable_terminal_states: BTreeMap::new(),
             writable_in_flight_callback_bytes: 0,
@@ -8727,6 +8918,174 @@ impl InterpreterCore {
         )
     }
 
+    fn loopback_ports_memory_bytes(&self) -> u64 {
+        (self.loopback_ports.len() as u64).saturating_mul(MEMORY_ESTIMATE_LOOPBACK_PORT_BASE_BYTES)
+    }
+
+    fn estimate_http_headers_bytes(headers: &HttpHeaders) -> u64 {
+        Self::saturating_sum(
+            headers
+                .iter()
+                .map(|(lower_name, header)| Self::estimate_http_header_bytes(lower_name, header)),
+        )
+    }
+
+    fn estimate_http_header_bytes(lower_name: &str, header: &HttpHeaderValue) -> u64 {
+        MEMORY_ESTIMATE_MAP_ENTRY_BYTES
+            .saturating_add(MEMORY_ESTIMATE_STRING_BASE_BYTES)
+            .saturating_add(lower_name.len() as u64)
+            .saturating_add(MEMORY_ESTIMATE_STRING_BASE_BYTES)
+            .saturating_add(header.original_name.len() as u64)
+            .saturating_add(MEMORY_ESTIMATE_STRING_BASE_BYTES)
+            .saturating_add(header.value.len() as u64)
+            .saturating_add(header.array_values.as_ref().map_or(0, |values| {
+                MEMORY_ESTIMATE_HTTP_HEADER_ARRAY_BASE_BYTES.saturating_add(Self::saturating_sum(
+                    values.iter().map(|value| {
+                        MEMORY_ESTIMATE_STRING_BASE_BYTES.saturating_add(value.len() as u64)
+                    }),
+                ))
+            }))
+    }
+
+    fn estimate_http_client_request_state_bytes(state: &HttpClientRequestState) -> u64 {
+        MEMORY_ESTIMATE_HTTP_CLIENT_REQUEST_BASE_BYTES
+            .saturating_add(MEMORY_ESTIMATE_STRING_BASE_BYTES)
+            .saturating_add(state.host.len() as u64)
+            .saturating_add(MEMORY_ESTIMATE_STRING_BASE_BYTES)
+            .saturating_add(state.path.len() as u64)
+            .saturating_add(MEMORY_ESTIMATE_STRING_BASE_BYTES)
+            .saturating_add(state.method.len() as u64)
+            .saturating_add(Self::estimate_http_headers_bytes(&state.headers))
+            .saturating_add(state.body.len() as u64)
+            .saturating_add(Self::estimate_label_bytes(&state.lifecycle_label))
+    }
+
+    fn estimate_http_incoming_message_state_bytes(state: &HttpIncomingMessageState) -> u64 {
+        MEMORY_ESTIMATE_HTTP_INCOMING_MESSAGE_BASE_BYTES
+            .saturating_add(state.body.len() as u64)
+            .saturating_add(Self::estimate_label_bytes(&state.lifecycle_label))
+    }
+
+    fn estimate_http_server_response_state_bytes(state: &HttpServerResponseState) -> u64 {
+        MEMORY_ESTIMATE_HTTP_SERVER_RESPONSE_BASE_BYTES
+            .saturating_add(MEMORY_ESTIMATE_STRING_BASE_BYTES)
+            .saturating_add(state.request_method.len() as u64)
+            .saturating_add(MEMORY_ESTIMATE_STRING_BASE_BYTES)
+            .saturating_add(state.status_message.len() as u64)
+            .saturating_add(Self::estimate_http_headers_bytes(&state.headers))
+            .saturating_add(state.body.len() as u64)
+            .saturating_add(Self::estimate_label_bytes(&state.lifecycle_label))
+    }
+
+    fn estimate_pending_http_task_bytes(task: &PendingHttpTask) -> u64 {
+        let payload = match task {
+            PendingHttpTask::ClientError { code, label, .. } => MEMORY_ESTIMATE_STRING_BASE_BYTES
+                .saturating_add(code.len() as u64)
+                .saturating_add(Self::estimate_label_bytes(label)),
+            _ => 0,
+        };
+        MEMORY_ESTIMATE_HTTP_TASK_BASE_BYTES.saturating_add(payload)
+    }
+
+    fn http_runtime_memory_bytes(&self) -> u64 {
+        (self.http_servers.len() as u64)
+            .saturating_mul(MEMORY_ESTIMATE_HTTP_SERVER_BASE_BYTES)
+            .saturating_add(Self::saturating_sum(
+                self.http_servers
+                    .values()
+                    .map(|state| Self::estimate_label_bytes(&state.lifecycle_label)),
+            ))
+            .saturating_add(Self::saturating_sum(
+                self.http_client_requests
+                    .values()
+                    .map(Self::estimate_http_client_request_state_bytes),
+            ))
+            .saturating_add(Self::saturating_sum(
+                self.http_incoming_messages
+                    .values()
+                    .map(Self::estimate_http_incoming_message_state_bytes),
+            ))
+            .saturating_add(Self::saturating_sum(
+                self.http_server_responses
+                    .values()
+                    .map(Self::estimate_http_server_response_state_bytes),
+            ))
+            .saturating_add(
+                (self.http_agents.len() as u64)
+                    .saturating_mul(MEMORY_ESTIMATE_HTTP_AGENT_BASE_BYTES),
+            )
+            .saturating_add(Self::saturating_sum(
+                self.pending_http_tasks
+                    .values()
+                    .map(Self::estimate_pending_http_task_bytes),
+            ))
+            .saturating_add(self.http_task_in_flight_bytes)
+    }
+
+    fn schedule_http_task(&mut self, task: PendingHttpTask) -> Result<u64, InterpreterError> {
+        let retained_bytes = Self::estimate_pending_http_task_bytes(&task);
+        let task_label = match &task {
+            PendingHttpTask::DispatchRequest { request, .. } => self
+                .http_client_requests
+                .get(request)
+                .map(|state| state.lifecycle_label.clone())
+                .unwrap_or(Label::Public),
+            PendingHttpTask::DeliverResponse { request, message } => self
+                .http_client_requests
+                .get(request)
+                .map(|state| state.lifecycle_label.clone())
+                .unwrap_or(Label::Public)
+                .join(
+                    &self
+                        .http_incoming_messages
+                        .get(message)
+                        .map(|state| state.lifecycle_label.clone())
+                        .unwrap_or(Label::Public),
+                ),
+            PendingHttpTask::DeliverExternalResponse { request, .. } => self
+                .http_client_requests
+                .get(request)
+                .map(|state| state.lifecycle_label.clone())
+                .unwrap_or(Label::Public),
+            PendingHttpTask::MessageData { message }
+            | PendingHttpTask::MessageEnd { message }
+            | PendingHttpTask::MessageClose { message } => self
+                .http_incoming_messages
+                .get(message)
+                .map(|state| state.lifecycle_label.clone())
+                .unwrap_or(Label::Public),
+            PendingHttpTask::ClientError { label, .. } => label.clone(),
+        };
+        self.apply_memory_component_delta(0, retained_bytes)?;
+        let previous_promise_bytes = self.promise_runtime_memory_bytes();
+        let sequence = self
+            .event_loop
+            .schedule_io_completion(crate::closure_model::ClosureHandle(u32::MAX), task_label);
+        if let Err(error) = self.apply_promise_runtime_memory_delta(previous_promise_bytes) {
+            self.event_loop.rollback_last_scheduled(sequence);
+            self.estimated_memory_bytes =
+                self.estimated_memory_bytes.saturating_sub(retained_bytes);
+            return Err(error);
+        }
+        self.pending_http_tasks.insert(sequence, task);
+        Ok(sequence)
+    }
+
+    fn cancel_http_task_registration(&mut self, sequence: u64) {
+        if let Some(task) = self.pending_http_tasks.remove(&sequence) {
+            self.estimated_memory_bytes = self
+                .estimated_memory_bytes
+                .saturating_sub(Self::estimate_pending_http_task_bytes(&task));
+        }
+        let previous_promise_bytes = self.promise_runtime_memory_bytes();
+        self.event_loop.cancel_registration(sequence);
+        let released_promise_bytes =
+            previous_promise_bytes.saturating_sub(self.promise_runtime_memory_bytes());
+        self.estimated_memory_bytes = self
+            .estimated_memory_bytes
+            .saturating_sub(released_promise_bytes);
+    }
+
     fn schedule_loopback_task(
         &mut self,
         task: PendingLoopbackTask,
@@ -8790,6 +9149,7 @@ impl InterpreterCore {
         let state = LoopbackServerState {
             address: "127.0.0.1".to_string(),
             port: None,
+            generation: 0,
             listening: false,
             active_connections: BTreeSet::new(),
             close_requested: false,
@@ -8840,6 +9200,7 @@ impl InterpreterCore {
         let state = LoopbackSocketState {
             peer: None,
             owner_server: None,
+            owner_server_generation: None,
             paused: false,
             encoding_utf8: false,
             local_ended: false,
@@ -9228,11 +9589,18 @@ impl InterpreterCore {
         } else {
             None
         };
-        let server = port.and_then(|port| {
-            self.loopback_servers.iter().find_map(|(object_id, state)| {
-                (state.listening && state.port == Some(port) && state.address == host)
-                    .then_some(*object_id)
-            })
+        let server = port.and_then(|port| match self.loopback_ports.get(&port) {
+            Some(LoopbackPortState::Live { server, generation })
+                if self.loopback_servers.get(server).is_some_and(|state| {
+                    state.listening
+                        && state.generation == *generation
+                        && state.port == Some(port)
+                        && state.address == host
+                }) =>
+            {
+                Some((*server, *generation))
+            }
+            _ => None,
         });
         drop(host);
         let lifecycle_label = self.writable_invocation_label(args)?;
@@ -9248,8 +9616,12 @@ impl InterpreterCore {
         if let Some(tls) = prepared_tls {
             self.install_tls_socket_metadata(client, tls)?;
         }
-        if let Some(server) = server {
-            self.schedule_loopback_task(PendingLoopbackTask::Connect { client, server })?;
+        if let Some((server, generation)) = server {
+            self.schedule_loopback_task(PendingLoopbackTask::Connect {
+                client,
+                server,
+                generation,
+            })?;
         } else {
             let label = self.loopback_socket_label(client);
             self.schedule_loopback_task(PendingLoopbackTask::Error {
@@ -9353,7 +9725,6 @@ impl InterpreterCore {
     ) -> Result<Value, InterpreterError> {
         let server = Self::loopback_server_receiver(receiver)?;
         let invocation_label = self.writable_invocation_label(args)?;
-        self.join_loopback_server_label(server, &invocation_label)?;
         let first = self.builtin_arg(args, 0)?.unwrap_or(Value::Int(0));
         let requested_port = self.loopback_port_from_value(&first).unwrap_or(0);
         let requested_host = if matches!(first, Value::Object(_)) {
@@ -9375,23 +9746,71 @@ impl InterpreterCore {
             });
         }
         let port = if requested_port == 0 {
-            let port = self.next_loopback_port;
-            self.next_loopback_port = self.next_loopback_port.checked_add(1).unwrap_or(41_000);
-            port
+            let start = self.next_loopback_port.max(41_000);
+            let mut candidate = start;
+            loop {
+                if !self.loopback_ports.contains_key(&candidate) {
+                    break candidate;
+                }
+                candidate = candidate.checked_add(1).unwrap_or(41_000);
+                if candidate == start {
+                    return Err(InterpreterError::RangeError {
+                        message: "no deterministic loopback ports remain".to_string(),
+                    });
+                }
+            }
         } else {
+            if self.loopback_ports.contains_key(&requested_port) {
+                return Err(InterpreterError::TypeError {
+                    expected: "unused deterministic loopback port".to_string(),
+                    got: format!("EADDRINUSE: address already in use 127.0.0.1:{requested_port}"),
+                });
+            }
             requested_port
         };
-        let Some(state) = self.loopback_servers.get_mut(&server) else {
+        let Some(state) = self.loopback_servers.get(&server) else {
             return Err(InterpreterError::ObjectNotFound { id: server.0 });
         };
-        state.address = "127.0.0.1".to_string();
-        state.port = Some(port);
-        state.listening = true;
-        self.set_object_property(server, "listening".to_string(), Value::Bool(true))?;
-        if let Some(callback) = self.last_callable_arg(args)? {
+        if state.listening {
+            return Err(InterpreterError::TypeError {
+                expected: "non-listening loopback server".to_string(),
+                got: "server is already listening".to_string(),
+            });
+        }
+        let generation = self.next_loopback_listener_generation;
+        let callback = self.last_callable_arg(args)?;
+        self.check_temporary_memory_budget(
+            (64 * 1024_u64)
+                .saturating_add(MEMORY_ESTIMATE_LOOPBACK_PORT_BASE_BYTES)
+                .saturating_add(MEMORY_ESTIMATE_LOOPBACK_TASK_BASE_BYTES)
+                .saturating_add(callback.as_ref().map_or(0, |_| {
+                    MEMORY_ESTIMATE_EVENT_LISTENER_BASE_BYTES.saturating_add(64)
+                })),
+        )?;
+        self.join_loopback_server_label(server, &invocation_label)?;
+        if let Some(callback) = callback {
             self.add_loopback_listener(server, "listening", callback, true)?;
         }
-        self.schedule_loopback_task(PendingLoopbackTask::Listening { server })?;
+        self.apply_memory_component_delta(0, MEMORY_ESTIMATE_LOOPBACK_PORT_BASE_BYTES)?;
+        self.loopback_ports
+            .insert(port, LoopbackPortState::Live { server, generation });
+        let state = self
+            .loopback_servers
+            .get_mut(&server)
+            .expect("loopback server was validated before listener publication");
+        state.address = "127.0.0.1".to_string();
+        state.port = Some(port);
+        state.generation = generation;
+        state.listening = true;
+        state.close_requested = false;
+        state.close_scheduled = false;
+        self.next_loopback_listener_generation = self
+            .next_loopback_listener_generation
+            .wrapping_add(1)
+            .max(1);
+        self.next_loopback_port = port.checked_add(1).unwrap_or(41_000);
+        self.set_object_property(server, "listening".to_string(), Value::Bool(true))?;
+        self.schedule_loopback_task(PendingLoopbackTask::Listening { server, generation })?;
         Ok(Value::Object(server))
     }
 
@@ -9419,8 +9838,9 @@ impl InterpreterCore {
     ) -> Result<Value, InterpreterError> {
         let server = Self::loopback_server_receiver(receiver)?;
         let invocation_label = self.writable_invocation_label(args)?;
+        self.check_temporary_memory_budget(64 * 1024)?;
         let lifecycle_label = self.join_loopback_server_label(server, &invocation_label)?;
-        let should_schedule = {
+        let (should_schedule, generation, port) = {
             let Some(state) = self.loopback_servers.get_mut(&server) else {
                 return Err(InterpreterError::ObjectNotFound { id: server.0 });
             };
@@ -9430,8 +9850,20 @@ impl InterpreterCore {
             if should_schedule {
                 state.close_scheduled = true;
             }
-            should_schedule
+            (should_schedule, state.generation, state.port)
         };
+        if let Some(port) = port
+            && matches!(
+                self.loopback_ports.get(&port),
+                Some(LoopbackPortState::Live {
+                    server: registered,
+                    generation: registered_generation,
+                }) if *registered == server && *registered_generation == generation
+            )
+        {
+            self.loopback_ports
+                .insert(port, LoopbackPortState::Closed { generation });
+        }
         self.set_object_property(server, "listening".to_string(), Value::Bool(false))?;
         if let Some(callback) = self.last_callable_arg(args)? {
             self.add_loopback_listener(server, "close", callback, true)?;
@@ -9439,6 +9871,7 @@ impl InterpreterCore {
         if should_schedule {
             self.schedule_loopback_task(PendingLoopbackTask::ServerClose {
                 server,
+                generation,
                 label: lifecycle_label,
             })?;
         }
@@ -9940,11 +10373,32 @@ impl InterpreterCore {
         module: Option<&Ir3Module>,
     ) -> Result<(), InterpreterError> {
         match task {
-            PendingLoopbackTask::Listening { server } => {
+            PendingLoopbackTask::Listening { server, generation } => {
+                let current = self.loopback_servers.get(&server).is_some_and(|state| {
+                    state.listening
+                        && state.generation == generation
+                        && state.port.is_some_and(|port| {
+                            matches!(
+                                self.loopback_ports.get(&port),
+                                Some(LoopbackPortState::Live {
+                                    server: registered,
+                                    generation: registered_generation,
+                                }) if *registered == server
+                                    && *registered_generation == generation
+                            )
+                        })
+                });
+                if !current {
+                    return Ok(());
+                }
                 let label = self.loopback_server_label(server);
                 let _ = self.emit_loopback_event(module, server, "listening", Vec::new(), label)?;
             }
-            PendingLoopbackTask::Connect { client, server } => {
+            PendingLoopbackTask::Connect {
+                client,
+                server,
+                generation,
+            } => {
                 if !self.loopback_sockets.contains_key(&client)
                     || self
                         .loopback_sockets
@@ -9953,11 +10407,20 @@ impl InterpreterCore {
                 {
                     return Ok(());
                 }
-                if !self
-                    .loopback_servers
-                    .get(&server)
-                    .is_some_and(|state| state.listening)
-                {
+                if !self.loopback_servers.get(&server).is_some_and(|state| {
+                    state.listening
+                        && state.generation == generation
+                        && state.port.is_some_and(|port| {
+                            matches!(
+                                self.loopback_ports.get(&port),
+                                Some(LoopbackPortState::Live {
+                                    server: registered,
+                                    generation: registered_generation,
+                                }) if *registered == server
+                                    && *registered_generation == generation
+                            )
+                        })
+                }) {
                     let label = self.loopback_socket_label(client);
                     self.schedule_loopback_task(PendingLoopbackTask::Error {
                         target: client,
@@ -10129,6 +10592,7 @@ impl InterpreterCore {
                 if let Some(state) = self.loopback_sockets.get_mut(&accepted) {
                     state.peer = Some(client);
                     state.owner_server = Some(server);
+                    state.owner_server_generation = Some(generation);
                 }
                 let previous_socket_bytes = self.loopback_sockets_memory_bytes();
                 let (pending_outbound, pending_outbound_end) = {
@@ -10315,7 +10779,7 @@ impl InterpreterCore {
                     state.pending_end = false;
                     state.pending_outbound.clear();
                     state.pending_outbound_end = false;
-                    state.owner_server
+                    state.owner_server.zip(state.owner_server_generation)
                 } else {
                     None
                 };
@@ -10333,10 +10797,11 @@ impl InterpreterCore {
                     vec![Value::Bool(had_error)],
                     lifecycle_label,
                 )?;
-                if let Some(server) = owner_server {
+                if let Some((server, generation)) = owner_server {
                     let previous_server_bytes = self.loopback_servers_memory_bytes();
                     let close_label = self.loopback_servers.get(&server).and_then(|state| {
-                        (state.close_requested
+                        (state.generation == generation
+                            && state.close_requested
                             && state.active_connections.len() == 1
                             && state.active_connections.contains(&target)
                             && !state.close_scheduled)
@@ -10355,12 +10820,24 @@ impl InterpreterCore {
                     if let Some(label) = close_label {
                         self.schedule_loopback_task(PendingLoopbackTask::ServerClose {
                             server,
+                            generation,
                             label,
                         })?;
                     }
                 }
             }
-            PendingLoopbackTask::ServerClose { server, label } => {
+            PendingLoopbackTask::ServerClose {
+                server,
+                generation,
+                label,
+            } => {
+                if !self
+                    .loopback_servers
+                    .get(&server)
+                    .is_some_and(|state| state.generation == generation && !state.listening)
+                {
+                    return Ok(());
+                }
                 let lifecycle_label = self.join_loopback_server_label(server, &label)?;
                 let _ =
                     self.emit_loopback_event(module, server, "close", Vec::new(), lifecycle_label)?;
@@ -10399,6 +10876,2341 @@ impl InterpreterCore {
         Ok(())
     }
 
+    fn http_status_message(status: u16) -> &'static str {
+        match status {
+            100 => "Continue",
+            200 => "OK",
+            201 => "Created",
+            202 => "Accepted",
+            204 => "No Content",
+            301 => "Moved Permanently",
+            302 => "Found",
+            304 => "Not Modified",
+            400 => "Bad Request",
+            401 => "Unauthorized",
+            403 => "Forbidden",
+            404 => "Not Found",
+            405 => "Method Not Allowed",
+            418 => "I'm a Teapot",
+            500 => "Internal Server Error",
+            502 => "Bad Gateway",
+            503 => "Service Unavailable",
+            _ => "",
+        }
+    }
+
+    fn validate_http_header(name: &str, value: &str) -> Result<(), InterpreterError> {
+        if name.is_empty() || name.len() > MAX_HTTP_HEADER_NAME_BYTES {
+            return Err(InterpreterError::RangeError {
+                message: format!(
+                    "HTTP header name length {} exceeds {MAX_HTTP_HEADER_NAME_BYTES} bytes",
+                    name.len()
+                ),
+            });
+        }
+        if value.len() > MAX_HTTP_HEADER_VALUE_BYTES {
+            return Err(InterpreterError::RangeError {
+                message: format!(
+                    "HTTP header value length {} exceeds {MAX_HTTP_HEADER_VALUE_BYTES} bytes",
+                    value.len()
+                ),
+            });
+        }
+        if !Self::is_http_token(name) {
+            return Err(InterpreterError::TypeError {
+                expected: "HTTP token header name".to_string(),
+                got: name.to_string(),
+            });
+        }
+        if value
+            .bytes()
+            .any(|byte| (byte < b' ' && byte != b'\t') || byte == 0x7f)
+        {
+            return Err(InterpreterError::TypeError {
+                expected: "HTTP header value without control bytes".to_string(),
+                got: "header value contains a control byte".to_string(),
+            });
+        }
+        Ok(())
+    }
+
+    fn is_http_token(value: &str) -> bool {
+        !value.is_empty()
+            && value.bytes().all(|byte| {
+                byte.is_ascii_alphanumeric()
+                    || matches!(
+                        byte,
+                        b'!' | b'#'
+                            | b'$'
+                            | b'%'
+                            | b'&'
+                            | b'\''
+                            | b'*'
+                            | b'+'
+                            | b'-'
+                            | b'.'
+                            | b'^'
+                            | b'_'
+                            | b'`'
+                            | b'|'
+                            | b'~'
+                    )
+            })
+    }
+
+    fn validate_http_request_target(
+        host: &str,
+        path: &str,
+        method: &str,
+    ) -> Result<(), InterpreterError> {
+        if !Self::is_http_token(method) {
+            return Err(InterpreterError::TypeError {
+                expected: "HTTP token method".to_string(),
+                got: method.to_string(),
+            });
+        }
+        if host.is_empty()
+            || host.bytes().any(|byte| {
+                byte.is_ascii_control()
+                    || byte.is_ascii_whitespace()
+                    || matches!(byte, b'/' | b'\\' | b'@' | b'?' | b'#')
+            })
+        {
+            return Err(InterpreterError::TypeError {
+                expected: "HTTP host without framing delimiters".to_string(),
+                got: host.to_string(),
+            });
+        }
+        if !path.starts_with('/')
+            || path
+                .bytes()
+                .any(|byte| byte.is_ascii_control() || byte == b' ')
+        {
+            return Err(InterpreterError::TypeError {
+                expected: "absolute HTTP path without control bytes".to_string(),
+                got: path.to_string(),
+            });
+        }
+        Ok(())
+    }
+
+    fn charge_http_work(
+        &mut self,
+        payload_bytes: usize,
+        entries: usize,
+    ) -> Result<(), InterpreterError> {
+        let byte_units = u64::try_from(payload_bytes)
+            .unwrap_or(u64::MAX)
+            .saturating_add(HTTP_WORK_UNIT_BYTES - 1)
+            / HTTP_WORK_UNIT_BYTES;
+        let work = byte_units
+            .max(1)
+            .saturating_add(u64::try_from(entries).unwrap_or(u64::MAX));
+        let next_executed = self.instructions_executed.saturating_add(work);
+        if next_executed > self.config.instruction_budget {
+            return Err(InterpreterError::BudgetExhausted {
+                executed: self.instructions_executed,
+                budget: self.config.instruction_budget,
+            });
+        }
+        self.instructions_executed = next_executed;
+        Ok(())
+    }
+
+    /// Return the exact rendered length for the bounded primitive subset used
+    /// by HTTP metadata without cloning guest-sized strings. Objects, symbols,
+    /// and callable/runtime handles are deliberately rejected: Buffer coercion
+    /// can decode an attacker-sized backing store, while error/symbol display
+    /// strings can retain attacker-sized descriptions.
+    fn http_primitive_string_len(
+        &self,
+        value: &Value,
+        expected: &str,
+    ) -> Result<usize, InterpreterError> {
+        match value {
+            Value::Undefined => Ok("undefined".len()),
+            Value::Null => Ok("null".len()),
+            Value::Bool(value) => Ok(if *value { "true".len() } else { "false".len() }),
+            Value::Int(value) => Ok(value.to_string().len()),
+            Value::Float(_) => Ok(self.value_to_string(value).len()),
+            Value::Str(value) => Ok(value.len()),
+            Value::BigInt(value) => Ok(value.len()),
+            other => Err(InterpreterError::TypeError {
+                expected: expected.to_string(),
+                got: other.type_name().to_string(),
+            }),
+        }
+    }
+
+    fn http_primitive_string(
+        &self,
+        value: &Value,
+        expected: &str,
+    ) -> Result<String, InterpreterError> {
+        self.http_primitive_string_len(value, expected)?;
+        Ok(self.value_to_string(value))
+    }
+
+    fn bounded_http_primitive_string(
+        &self,
+        value: &Value,
+        max_bytes: usize,
+        field: &str,
+    ) -> Result<String, InterpreterError> {
+        let expected = format!("bounded primitive HTTP {field}");
+        let rendered_len = self.http_primitive_string_len(value, &expected)?;
+        if rendered_len > max_bytes {
+            return Err(InterpreterError::RangeError {
+                message: format!("HTTP {field} length {rendered_len} exceeds {max_bytes} bytes"),
+            });
+        }
+        self.check_temporary_memory_budget(
+            u64::try_from(rendered_len)
+                .unwrap_or(u64::MAX)
+                .saturating_mul(2)
+                .saturating_add(64 * 1024),
+        )?;
+        self.http_primitive_string(value, &expected)
+    }
+
+    fn http_body_value_len(&self, value: &Value) -> Result<usize, InterpreterError> {
+        match value {
+            Value::Str(value) => Ok(value.len()),
+            Value::Object(_) => Ok(self.buffer_like_view(value)?.byte_length),
+            other => Err(InterpreterError::TypeError {
+                expected: "string, Buffer, or Uint8Array HTTP body".to_string(),
+                got: other.type_name().to_string(),
+            }),
+        }
+    }
+
+    fn http_body_value_bytes(&self, value: &Value) -> Result<Vec<u8>, InterpreterError> {
+        match value {
+            Value::Str(value) => Ok(value.as_bytes().to_vec()),
+            Value::Object(_) => self.bytes_for_buffer_like(value),
+            other => Err(InterpreterError::TypeError {
+                expected: "string, Buffer, or Uint8Array HTTP body".to_string(),
+                got: other.type_name().to_string(),
+            }),
+        }
+    }
+
+    fn http_header_value_rendered_len(&self, value: &Value) -> Result<usize, InterpreterError> {
+        let Value::Object(object_id) = value else {
+            return self.http_primitive_string_len(value, "bounded primitive HTTP header value");
+        };
+        let Some(object) = self.heap.get(object_id.0 as usize) else {
+            return Err(InterpreterError::ObjectNotFound { id: object_id.0 });
+        };
+        if !object.is_array {
+            return Err(InterpreterError::TypeError {
+                expected: "bounded primitive or primitive array HTTP header value".to_string(),
+                got: "object".to_string(),
+            });
+        }
+        let raw_length = object
+            .properties
+            .get("length")
+            .map(Self::value_as_integer)
+            .unwrap_or(0)
+            .max(0);
+        let length = usize::try_from(raw_length).unwrap_or(usize::MAX);
+        if length > MAX_HTTP_HEADER_COUNT {
+            return Err(InterpreterError::RangeError {
+                message: format!(
+                    "HTTP header array length {length} exceeds {MAX_HTTP_HEADER_COUNT}"
+                ),
+            });
+        }
+        let mut rendered_len = 0usize;
+        for index in 0..length {
+            let entry_len = match object.properties.get(&index.to_string()) {
+                Some(entry) => self.http_primitive_string_len(
+                    entry,
+                    "bounded primitive HTTP header array entry",
+                )?,
+                None => 0,
+            };
+            rendered_len = rendered_len
+                .saturating_add(if index == 0 { 0 } else { 2 })
+                .saturating_add(entry_len);
+            if rendered_len > MAX_HTTP_HEADER_VALUE_BYTES {
+                return Err(InterpreterError::RangeError {
+                    message: format!(
+                        "HTTP header value length exceeds {MAX_HTTP_HEADER_VALUE_BYTES} bytes"
+                    ),
+                });
+            }
+        }
+        Ok(rendered_len)
+    }
+
+    fn http_header_value_from_value(
+        &self,
+        value: &Value,
+    ) -> Result<(String, Option<Vec<String>>), InterpreterError> {
+        let Value::Object(object_id) = value else {
+            let rendered_len =
+                self.http_primitive_string_len(value, "bounded primitive HTTP header value")?;
+            if rendered_len > MAX_HTTP_HEADER_VALUE_BYTES {
+                return Err(InterpreterError::RangeError {
+                    message: format!(
+                        "HTTP header value length exceeds {MAX_HTTP_HEADER_VALUE_BYTES} bytes"
+                    ),
+                });
+            }
+            return Ok((
+                self.http_primitive_string(value, "bounded primitive HTTP header value")?,
+                None,
+            ));
+        };
+        let Some(object) = self.heap.get(object_id.0 as usize) else {
+            return Err(InterpreterError::ObjectNotFound { id: object_id.0 });
+        };
+        if !object.is_array {
+            return Err(InterpreterError::TypeError {
+                expected: "bounded primitive or primitive array HTTP header value".to_string(),
+                got: "object".to_string(),
+            });
+        }
+        let raw_length = object
+            .properties
+            .get("length")
+            .map(Self::value_as_integer)
+            .unwrap_or(0)
+            .max(0);
+        let length = usize::try_from(raw_length).unwrap_or(usize::MAX);
+        if length > MAX_HTTP_HEADER_COUNT {
+            return Err(InterpreterError::RangeError {
+                message: format!(
+                    "HTTP header array length {length} exceeds {MAX_HTTP_HEADER_COUNT}"
+                ),
+            });
+        }
+        let mut values = Vec::with_capacity(length);
+        let mut rendered = String::new();
+        for index in 0..length {
+            let entry = match object.properties.get(&index.to_string()) {
+                Some(entry) => {
+                    let entry_len = self.http_primitive_string_len(
+                        entry,
+                        "bounded primitive HTTP header array entry",
+                    )?;
+                    if rendered
+                        .len()
+                        .saturating_add(if index == 0 { 0 } else { 2 })
+                        .saturating_add(entry_len)
+                        > MAX_HTTP_HEADER_VALUE_BYTES
+                    {
+                        return Err(InterpreterError::RangeError {
+                            message: format!(
+                                "HTTP header value length exceeds {MAX_HTTP_HEADER_VALUE_BYTES} bytes"
+                            ),
+                        });
+                    }
+                    self.http_primitive_string(entry, "bounded primitive HTTP header array entry")?
+                }
+                None => String::new(),
+            };
+            let next_len = rendered
+                .len()
+                .saturating_add(if index == 0 { 0 } else { 2 })
+                .saturating_add(entry.len());
+            if next_len > MAX_HTTP_HEADER_VALUE_BYTES {
+                return Err(InterpreterError::RangeError {
+                    message: format!(
+                        "HTTP header value length exceeds {MAX_HTTP_HEADER_VALUE_BYTES} bytes"
+                    ),
+                });
+            }
+            if index != 0 {
+                rendered.push_str(", ");
+            }
+            rendered.push_str(&entry);
+            values.push(entry);
+        }
+        Ok((rendered, Some(values)))
+    }
+
+    fn http_headers_from_value(
+        &mut self,
+        value: Option<&Value>,
+    ) -> Result<HttpHeaders, InterpreterError> {
+        let Some(Value::Object(object_id)) = value else {
+            return Ok(BTreeMap::new());
+        };
+        let (header_count, item_count, work_bytes) = {
+            let object = self
+                .heap
+                .get(object_id.0 as usize)
+                .ok_or(InterpreterError::ObjectNotFound { id: object_id.0 })?;
+            if object.properties.len() > MAX_HTTP_HEADER_COUNT {
+                return Err(InterpreterError::RangeError {
+                    message: format!(
+                        "HTTP header count {} exceeds {MAX_HTTP_HEADER_COUNT}",
+                        object.properties.len()
+                    ),
+                });
+            }
+            let mut work_bytes = 0usize;
+            let mut item_count = 0usize;
+            for (name, value) in &object.properties {
+                Self::validate_http_header(name, "")?;
+                work_bytes = work_bytes
+                    .saturating_add(name.len())
+                    .saturating_add(self.http_header_value_rendered_len(value)?);
+                item_count = item_count.saturating_add(match value {
+                    Value::Object(value_id) => self
+                        .heap
+                        .get(value_id.0 as usize)
+                        .filter(|value_object| value_object.is_array)
+                        .and_then(|value_object| value_object.properties.get("length"))
+                        .map(Self::value_as_integer)
+                        .and_then(|length| usize::try_from(length.max(0)).ok())
+                        .unwrap_or(1),
+                    _ => 1,
+                });
+            }
+            (object.properties.len(), item_count, work_bytes)
+        };
+        self.charge_http_work(work_bytes, header_count.saturating_add(item_count))?;
+        self.check_temporary_memory_budget(
+            u64::try_from(work_bytes)
+                .unwrap_or(u64::MAX)
+                .saturating_mul(2)
+                .saturating_add(
+                    u64::try_from(item_count)
+                        .unwrap_or(u64::MAX)
+                        .saturating_mul(MEMORY_ESTIMATE_STRING_BASE_BYTES),
+                )
+                .saturating_add(64 * 1024),
+        )?;
+        let object = self
+            .heap
+            .get(object_id.0 as usize)
+            .ok_or(InterpreterError::ObjectNotFound { id: object_id.0 })?;
+        let mut headers = BTreeMap::new();
+        for (name, value) in &object.properties {
+            let (value, array_values) = self.http_header_value_from_value(value)?;
+            Self::validate_http_header(name, &value)?;
+            headers.insert(
+                name.to_ascii_lowercase(),
+                HttpHeaderValue {
+                    original_name: name.clone(),
+                    array_values,
+                    value,
+                },
+            );
+        }
+        Ok(headers)
+    }
+
+    fn resolve_http_request(
+        &mut self,
+        args: RegRange,
+        force_get: bool,
+    ) -> Result<ResolvedHttpRequest, InterpreterError> {
+        let first = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
+        let response_callback = self.last_callable_arg(args)?.and_then(|value| match value {
+            Value::Closure(closure_id) => Some(closure_id),
+            _ => None,
+        });
+        let mut host: String;
+        let port: u16;
+        let mut use_tls = false;
+        let mut path: String;
+        let mut method = "GET".to_string();
+        let mut headers = BTreeMap::new();
+
+        match &first {
+            Value::Str(url) => {
+                let source = url.as_str().unwrap_or_default();
+                if source.len() > MAX_HTTP_PATH_BYTES.saturating_add(MAX_LOOPBACK_HOST_BYTES + 32) {
+                    return Err(InterpreterError::RangeError {
+                        message: "HTTP URL exceeds the bounded facade limit".to_string(),
+                    });
+                }
+                let parsed = Url::parse(source).map_err(|_| InterpreterError::TypeError {
+                    expected: "absolute HTTP URL".to_string(),
+                    got: source.to_string(),
+                })?;
+                if !matches!(parsed.scheme(), "http" | "https") {
+                    return Err(InterpreterError::TypeError {
+                        expected: "http: or https: URL".to_string(),
+                        got: parsed.scheme().to_string(),
+                    });
+                }
+                host = parsed.host_str().unwrap_or_default().to_string();
+                use_tls = parsed.scheme() == "https";
+                port = parsed.port_or_known_default().unwrap_or(80);
+                path = parsed.path().to_string();
+                if let Some(query) = parsed.query() {
+                    path.push('?');
+                    path.push_str(query);
+                }
+                if let Some(options) = self.builtin_arg(args, 1)?
+                    && matches!(options, Value::Object(_))
+                {
+                    if !force_get {
+                        method = match self.fs_object_property(&options, "method") {
+                            Some(value) => self
+                                .bounded_http_primitive_string(
+                                    &value,
+                                    MAX_HTTP_HEADER_NAME_BYTES,
+                                    "method",
+                                )?
+                                .to_ascii_uppercase(),
+                            None => "GET".to_string(),
+                        };
+                        if method.is_empty() {
+                            method = "GET".to_string();
+                        }
+                    }
+                    let header_value = self.fs_object_property(&options, "headers");
+                    headers = self.http_headers_from_value(header_value.as_ref())?;
+                }
+            }
+            Value::Object(_) => {
+                host = match self
+                    .fs_object_property(&first, "host")
+                    .or_else(|| self.fs_object_property(&first, "hostname"))
+                {
+                    Some(value) => {
+                        self.bounded_http_primitive_string(&value, MAX_LOOPBACK_HOST_BYTES, "host")?
+                    }
+                    None => "127.0.0.1".to_string(),
+                };
+                port = self
+                    .fs_object_property(&first, "port")
+                    .and_then(|value| u16::try_from(Self::value_as_integer(&value)).ok())
+                    .unwrap_or(80);
+                path = match self.fs_object_property(&first, "path") {
+                    Some(value) => {
+                        self.bounded_http_primitive_string(&value, MAX_HTTP_PATH_BYTES, "path")?
+                    }
+                    None => "/".to_string(),
+                };
+                if !force_get {
+                    method = match self.fs_object_property(&first, "method") {
+                        Some(value) => self
+                            .bounded_http_primitive_string(
+                                &value,
+                                MAX_HTTP_HEADER_NAME_BYTES,
+                                "method",
+                            )?
+                            .to_ascii_uppercase(),
+                        None => "GET".to_string(),
+                    };
+                    if method.is_empty() {
+                        method = "GET".to_string();
+                    }
+                }
+                let header_value = self.fs_object_property(&first, "headers");
+                headers = self.http_headers_from_value(header_value.as_ref())?;
+            }
+            _ => {
+                return Err(InterpreterError::TypeError {
+                    expected: "HTTP URL string or options object".to_string(),
+                    got: first.type_name().to_string(),
+                });
+            }
+        }
+        if host == "localhost" {
+            host = "127.0.0.1".to_string();
+        }
+        let internal_loopback_candidate = !use_tls && host == "127.0.0.1";
+        if host.len() > MAX_LOOPBACK_HOST_BYTES {
+            return Err(InterpreterError::RangeError {
+                message: format!("HTTP host length exceeds {MAX_LOOPBACK_HOST_BYTES} bytes"),
+            });
+        }
+        if path.len() > MAX_HTTP_PATH_BYTES {
+            return Err(InterpreterError::RangeError {
+                message: format!("HTTP path length exceeds {MAX_HTTP_PATH_BYTES} bytes"),
+            });
+        }
+        Self::validate_http_request_target(&host, &path, &method)?;
+        if headers.len() >= MAX_HTTP_HEADER_COUNT && !headers.contains_key("host") {
+            return Err(InterpreterError::RangeError {
+                message: format!("HTTP header count exceeds {MAX_HTTP_HEADER_COUNT}"),
+            });
+        }
+        headers
+            .entry("host".to_string())
+            .or_insert_with(|| HttpHeaderValue {
+                original_name: "Host".to_string(),
+                array_values: None,
+                value: format!("{host}:{port}"),
+            });
+        Ok(ResolvedHttpRequest {
+            host,
+            port,
+            use_tls,
+            internal_loopback_candidate,
+            path,
+            method,
+            headers,
+            response_callback,
+        })
+    }
+
+    fn http_receiver_id(
+        &self,
+        receiver: Option<Value>,
+        expected_tag: &str,
+        contains: impl FnOnce(ObjectId) -> bool,
+    ) -> Result<ObjectId, InterpreterError> {
+        let receiver = receiver.unwrap_or(Value::Undefined);
+        let Value::Object(object_id) = receiver else {
+            return Err(InterpreterError::TypeError {
+                expected: format!("authenticated {expected_tag} receiver"),
+                got: receiver.type_name().to_string(),
+            });
+        };
+        let tagged = matches!(
+            self.heap
+                .get(object_id.0 as usize)
+                .and_then(|object| object.properties.get("__type")),
+            Some(Value::Str(tag)) if tag.as_ref() == expected_tag
+        );
+        if !tagged || !contains(object_id) {
+            return Err(InterpreterError::TypeError {
+                expected: format!("authenticated {expected_tag} receiver"),
+                got: "forged or stale object".to_string(),
+            });
+        }
+        Ok(object_id)
+    }
+
+    fn construct_http_server(&mut self, args: RegRange) -> Result<Value, InterpreterError> {
+        let previous_heap_len = self.heap.len();
+        let previous_estimated_bytes = self.estimated_memory_bytes;
+        let result = (|| {
+            let server = match self.construct_loopback_server_with_tls(
+                RegRange {
+                    start: args.start,
+                    count: 0,
+                },
+                None,
+            )? {
+                Value::Object(server) => server,
+                _ => unreachable!("loopback server constructor returned a non-object"),
+            };
+            let lifecycle_label = self.writable_invocation_label(args)?;
+            self.join_loopback_server_label(server, &lifecycle_label)?;
+            self.set_object_property(server, "__type".to_string(), Value::str("HttpServer"))?;
+            let state = HttpServerState {
+                lifecycle_label: lifecycle_label.clone(),
+            };
+            let retained = MEMORY_ESTIMATE_HTTP_SERVER_BASE_BYTES
+                .saturating_add(Self::estimate_label_bytes(&state.lifecycle_label));
+            self.apply_memory_component_delta(0, retained)?;
+            self.http_servers.insert(server, state);
+            if let Some(callback) = self.last_callable_arg(args)? {
+                self.add_loopback_listener(server, "request", callback, false)?;
+            }
+            Ok(Value::Object(server))
+        })();
+        if result.is_err() {
+            let new_servers: Vec<ObjectId> = self
+                .loopback_servers
+                .keys()
+                .copied()
+                .filter(|id| id.0 as usize >= previous_heap_len)
+                .collect();
+            for server in new_servers {
+                self.loopback_servers.remove(&server);
+                self.http_servers.remove(&server);
+                self.clear_event_listeners(server, None);
+            }
+            self.rollback_heap_to_len(previous_heap_len);
+            self.estimated_memory_bytes = previous_estimated_bytes;
+        }
+        result
+    }
+
+    fn construct_http_client_request(
+        &mut self,
+        args: RegRange,
+        auto_end: bool,
+    ) -> Result<Value, InterpreterError> {
+        let resolved = self.resolve_http_request(args, auto_end)?;
+        let lifecycle_label = self.writable_invocation_label(args)?;
+        let state = HttpClientRequestState {
+            host: resolved.host,
+            port: resolved.port,
+            use_tls: resolved.use_tls,
+            internal_loopback_candidate: resolved.internal_loopback_candidate,
+            path: resolved.path,
+            method: resolved.method,
+            headers: resolved.headers,
+            body: Vec::new(),
+            ended: false,
+            response_callback: resolved.response_callback,
+            lifecycle_label,
+        };
+        let retained = Self::estimate_http_client_request_state_bytes(&state);
+        let previous_heap_len = self.heap.len();
+        let previous_estimated_bytes = self.estimated_memory_bytes;
+        let mut published_request = None;
+        let result = (|| {
+            self.check_temporary_memory_budget(retained.saturating_add(64 * 1024))?;
+            let request = self.alloc_object_with_properties(&[
+                ("__type", Value::str("HttpClientRequest")),
+                ("__maxListeners", Value::Int(10)),
+                ("writable", Value::Bool(true)),
+                ("writableEnded", Value::Bool(false)),
+            ])?;
+            self.apply_memory_component_delta(0, retained)?;
+            self.http_client_requests.insert(request, state);
+            published_request = Some(request);
+            if auto_end {
+                self.finish_http_client_request(request)?;
+            }
+            Ok(Value::Object(request))
+        })();
+        // Once `.end()` has committed its one-shot transition, it may already
+        // have crossed the provider seam or published deferred delivery work.
+        // Never roll that request object back to a stale ObjectId merely
+        // because a later callback registration was refused.
+        let may_rollback = published_request.is_none_or(|request| {
+            self.http_client_requests
+                .get(&request)
+                .is_none_or(|state| !state.ended)
+        });
+        if result.is_err() && may_rollback {
+            self.http_client_requests
+                .retain(|request, _| (request.0 as usize) < previous_heap_len);
+            self.rollback_heap_to_len(previous_heap_len);
+            self.estimated_memory_bytes = previous_estimated_bytes;
+        }
+        result
+    }
+
+    fn construct_http_agent(&mut self, args: RegRange) -> Result<Value, InterpreterError> {
+        let keep_alive = self
+            .builtin_arg(args, 0)?
+            .and_then(|options| self.fs_object_property(&options, "keepAlive"))
+            .is_some_and(|value| matches!(value, Value::Bool(true)));
+        let agent = self.alloc_object_with_properties(&[
+            ("__type", Value::str("HttpAgent")),
+            ("keepAlive", Value::Bool(keep_alive)),
+            ("protocol", Value::str("http:")),
+        ])?;
+        self.apply_memory_component_delta(0, MEMORY_ESTIMATE_HTTP_AGENT_BASE_BYTES)?;
+        self.http_agents.insert(agent);
+        Ok(Value::Object(agent))
+    }
+
+    fn http_status_codes(&mut self) -> Result<Value, InterpreterError> {
+        let status_codes = self.alloc_object_with_properties(&[
+            ("200", Value::str("OK")),
+            ("204", Value::str("No Content")),
+            ("301", Value::str("Moved Permanently")),
+            ("404", Value::str("Not Found")),
+            ("418", Value::str("I'm a Teapot")),
+            ("500", Value::str("Internal Server Error")),
+        ])?;
+        Ok(Value::Object(status_codes))
+    }
+
+    fn http_methods(&mut self) -> Result<Value, InterpreterError> {
+        let methods = [
+            "GET", "HEAD", "POST", "PUT", "DELETE", "OPTIONS", "PATCH", "CONNECT", "TRACE",
+        ]
+        .map(Value::str);
+        Ok(Value::Object(self.alloc_array_from_values(&methods)?))
+    }
+
+    fn alloc_http_headers_object(
+        &mut self,
+        headers: &HttpHeaders,
+    ) -> Result<ObjectId, InterpreterError> {
+        let object = self.alloc_object_with_properties(&[])?;
+        for (name, header) in headers {
+            self.set_object_property(object, name.clone(), Value::str(header.value.as_str()))?;
+        }
+        Ok(object)
+    }
+
+    fn alloc_http_raw_headers(
+        &mut self,
+        headers: &HttpHeaders,
+    ) -> Result<ObjectId, InterpreterError> {
+        let values: Vec<Value> = headers
+            .values()
+            .flat_map(|header| {
+                [
+                    Value::str(header.original_name.as_str()),
+                    Value::str(header.value.as_str()),
+                ]
+            })
+            .collect();
+        self.alloc_array_from_values(&values)
+    }
+
+    fn construct_http_incoming_message(
+        &mut self,
+        body: Vec<u8>,
+        label: Label,
+        close_after_end: bool,
+        server_completion: Option<HttpServerCompletion>,
+    ) -> Result<ObjectId, InterpreterError> {
+        if body.len() > MAX_HTTP_BODY_BYTES {
+            return Err(InterpreterError::RangeError {
+                message: format!("HTTP body exceeds {MAX_HTTP_BODY_BYTES} bytes"),
+            });
+        }
+        let state = HttpIncomingMessageState {
+            body,
+            encoding_utf8: false,
+            delivered: false,
+            close_after_end,
+            server_completion,
+            lifecycle_label: label,
+        };
+        let retained = Self::estimate_http_incoming_message_state_bytes(&state);
+        let previous_heap_len = self.heap.len();
+        let previous_estimated_bytes = self.estimated_memory_bytes;
+        let result = (|| {
+            self.check_temporary_memory_budget(retained.saturating_add(64 * 1024))?;
+            let socket =
+                self.alloc_object_with_properties(&[("__type", Value::str("HttpSocket"))])?;
+            let message = self.alloc_object_with_properties(&[
+                ("__type", Value::str("HttpIncomingMessage")),
+                ("__maxListeners", Value::Int(10)),
+                ("httpVersion", Value::str("1.1")),
+                ("socket", Value::Object(socket)),
+                ("readable", Value::Bool(true)),
+            ])?;
+            self.apply_memory_component_delta(0, retained)?;
+            self.http_incoming_messages.insert(message, state);
+            Ok(message)
+        })();
+        if result.is_err() {
+            self.http_incoming_messages
+                .retain(|message, _| (message.0 as usize) < previous_heap_len);
+            self.rollback_heap_to_len(previous_heap_len);
+            self.estimated_memory_bytes = previous_estimated_bytes;
+        }
+        result
+    }
+
+    fn http_append_client_body(
+        &mut self,
+        request: ObjectId,
+        value: &Value,
+        invocation_label: Label,
+    ) -> Result<(), InterpreterError> {
+        let value_len = self.http_body_value_len(value)?;
+        let (previous_body_len, previous_bytes, previous_label) = {
+            let state = self
+                .http_client_requests
+                .get(&request)
+                .ok_or(InterpreterError::ObjectNotFound { id: request.0 })?;
+            if state.ended {
+                return Err(InterpreterError::TypeError {
+                    expected: "writable HTTP ClientRequest".to_string(),
+                    got: "request already ended".to_string(),
+                });
+            }
+            (
+                state.body.len(),
+                Self::estimate_http_client_request_state_bytes(state),
+                state.lifecycle_label.clone(),
+            )
+        };
+        let next_len = previous_body_len.saturating_add(value_len);
+        if next_len > MAX_HTTP_BODY_BYTES {
+            return Err(InterpreterError::RangeError {
+                message: format!("HTTP request body exceeds {MAX_HTTP_BODY_BYTES} bytes"),
+            });
+        }
+        self.charge_http_work(value_len, 1)?;
+        self.check_temporary_memory_budget(
+            u64::try_from(next_len)
+                .unwrap_or(u64::MAX)
+                .saturating_mul(2)
+                .saturating_add(
+                    u64::try_from(value_len)
+                        .unwrap_or(u64::MAX)
+                        .saturating_mul(2),
+                )
+                .saturating_add(64 * 1024),
+        )?;
+        let bytes = self.http_body_value_bytes(value)?;
+        let value_label = match value {
+            Value::Object(object_id) => self.binary_storage_label(*object_id),
+            _ => Label::Public,
+        };
+        let next_label = previous_label.join(&invocation_label).join(&value_label);
+        let next_bytes = previous_bytes
+            .saturating_add(bytes.len() as u64)
+            .saturating_sub(Self::estimate_label_bytes(&previous_label))
+            .saturating_add(Self::estimate_label_bytes(&next_label));
+        self.apply_memory_component_delta(previous_bytes, next_bytes)?;
+        let state = self
+            .http_client_requests
+            .get_mut(&request)
+            .expect("HTTP request was authenticated before atomic body append");
+        state.body.extend_from_slice(&bytes);
+        state.lifecycle_label = next_label;
+        Ok(())
+    }
+
+    fn http_append_response_body(
+        &mut self,
+        response: ObjectId,
+        value: &Value,
+        invocation_label: Label,
+    ) -> Result<(), InterpreterError> {
+        let value_len = self.http_body_value_len(value)?;
+        let (previous_body_len, previous_bytes, previous_label) = {
+            let state = self
+                .http_server_responses
+                .get(&response)
+                .ok_or(InterpreterError::ObjectNotFound { id: response.0 })?;
+            if state.ended {
+                return Err(InterpreterError::TypeError {
+                    expected: "writable HTTP ServerResponse".to_string(),
+                    got: "response already ended".to_string(),
+                });
+            }
+            (
+                state.body.len(),
+                Self::estimate_http_server_response_state_bytes(state),
+                state.lifecycle_label.clone(),
+            )
+        };
+        let next_len = previous_body_len.saturating_add(value_len);
+        if next_len > MAX_HTTP_BODY_BYTES {
+            return Err(InterpreterError::RangeError {
+                message: format!("HTTP response body exceeds {MAX_HTTP_BODY_BYTES} bytes"),
+            });
+        }
+        self.charge_http_work(value_len, 1)?;
+        self.check_temporary_memory_budget(
+            u64::try_from(next_len)
+                .unwrap_or(u64::MAX)
+                .saturating_mul(2)
+                .saturating_add(
+                    u64::try_from(value_len)
+                        .unwrap_or(u64::MAX)
+                        .saturating_mul(2),
+                )
+                .saturating_add(64 * 1024),
+        )?;
+        let bytes = self.http_body_value_bytes(value)?;
+        let value_label = match value {
+            Value::Object(object_id) => self.binary_storage_label(*object_id),
+            _ => Label::Public,
+        };
+        let next_label = previous_label.join(&invocation_label).join(&value_label);
+        let next_bytes = previous_bytes
+            .saturating_add(bytes.len() as u64)
+            .saturating_sub(Self::estimate_label_bytes(&previous_label))
+            .saturating_add(Self::estimate_label_bytes(&next_label));
+        self.apply_memory_component_delta(previous_bytes, next_bytes)?;
+        let state = self
+            .http_server_responses
+            .get_mut(&response)
+            .expect("HTTP response was authenticated before atomic body append");
+        state.body.extend_from_slice(&bytes);
+        state.lifecycle_label = next_label;
+        Ok(())
+    }
+
+    fn http_client_request_receiver(
+        &self,
+        receiver: Option<Value>,
+    ) -> Result<ObjectId, InterpreterError> {
+        self.http_receiver_id(receiver, "HttpClientRequest", |id| {
+            self.http_client_requests.contains_key(&id)
+        })
+    }
+
+    fn http_incoming_message_receiver(
+        &self,
+        receiver: Option<Value>,
+    ) -> Result<ObjectId, InterpreterError> {
+        self.http_receiver_id(receiver, "HttpIncomingMessage", |id| {
+            self.http_incoming_messages.contains_key(&id)
+        })
+    }
+
+    fn http_server_response_receiver(
+        &self,
+        receiver: Option<Value>,
+    ) -> Result<ObjectId, InterpreterError> {
+        self.http_receiver_id(receiver, "HttpServerResponse", |id| {
+            self.http_server_responses.contains_key(&id)
+        })
+    }
+
+    fn http_set_header(
+        &mut self,
+        receiver: Option<Value>,
+        args: RegRange,
+        client_request: bool,
+    ) -> Result<Value, InterpreterError> {
+        let object_id = if client_request {
+            self.http_client_request_receiver(receiver)?
+        } else {
+            self.http_server_response_receiver(receiver)?
+        };
+        let name_value = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
+        let value = self.builtin_arg(args, 1)?.unwrap_or(Value::Undefined);
+        let name_len =
+            self.http_primitive_string_len(&name_value, "bounded primitive HTTP header name")?;
+        if name_len > MAX_HTTP_HEADER_NAME_BYTES {
+            return Err(InterpreterError::RangeError {
+                message: format!(
+                    "HTTP header name length exceeds {MAX_HTTP_HEADER_NAME_BYTES} bytes"
+                ),
+            });
+        }
+        let rendered_len = self.http_header_value_rendered_len(&value)?;
+        let item_count = match &value {
+            Value::Object(object_id) => self
+                .heap
+                .get(object_id.0 as usize)
+                .filter(|object| object.is_array)
+                .and_then(|object| object.properties.get("length"))
+                .map(Self::value_as_integer)
+                .and_then(|length| usize::try_from(length.max(0)).ok())
+                .unwrap_or(1),
+            _ => 1,
+        };
+        self.charge_http_work(name_len.saturating_add(rendered_len), item_count)?;
+        self.check_temporary_memory_budget(
+            u64::try_from(rendered_len)
+                .unwrap_or(u64::MAX)
+                .saturating_mul(2)
+                .saturating_add(
+                    u64::try_from(name_len)
+                        .unwrap_or(u64::MAX)
+                        .saturating_mul(2),
+                )
+                .saturating_add(64 * 1024),
+        )?;
+        let name = self.http_primitive_string(&name_value, "bounded primitive HTTP header name")?;
+        Self::validate_http_header(&name, "")?;
+        let (rendered, array_values) = self.http_header_value_from_value(&value)?;
+        Self::validate_http_header(&name, &rendered)?;
+        let lower_name = name.to_ascii_lowercase();
+        let header = HttpHeaderValue {
+            original_name: name,
+            array_values,
+            value: rendered,
+        };
+        let invocation_label = self.writable_invocation_label(args)?;
+        if client_request {
+            let (previous_bytes, replaced_header_bytes, previous_label) = {
+                let state = &self.http_client_requests[&object_id];
+                if state.ended {
+                    return Err(InterpreterError::TypeError {
+                        expected: "mutable HTTP request headers".to_string(),
+                        got: "request already ended".to_string(),
+                    });
+                }
+                if !state.headers.contains_key(&lower_name)
+                    && state.headers.len() >= MAX_HTTP_HEADER_COUNT
+                {
+                    return Err(InterpreterError::RangeError {
+                        message: format!("HTTP header count exceeds {MAX_HTTP_HEADER_COUNT}"),
+                    });
+                }
+                (
+                    Self::estimate_http_client_request_state_bytes(state),
+                    state
+                        .headers
+                        .get(&lower_name)
+                        .map_or(0, |old| Self::estimate_http_header_bytes(&lower_name, old)),
+                    state.lifecycle_label.clone(),
+                )
+            };
+            let next_label = previous_label.join(&invocation_label);
+            let next_bytes = previous_bytes
+                .saturating_sub(replaced_header_bytes)
+                .saturating_sub(Self::estimate_label_bytes(&previous_label))
+                .saturating_add(Self::estimate_http_header_bytes(&lower_name, &header))
+                .saturating_add(Self::estimate_label_bytes(&next_label));
+            self.apply_memory_component_delta(previous_bytes, next_bytes)?;
+            let state = self
+                .http_client_requests
+                .get_mut(&object_id)
+                .expect("HTTP request was authenticated before header commit");
+            state.headers.insert(lower_name, header);
+            state.lifecycle_label = next_label;
+        } else {
+            let (previous_bytes, replaced_header_bytes, previous_label) = {
+                let state = &self.http_server_responses[&object_id];
+                if state.ended {
+                    return Err(InterpreterError::TypeError {
+                        expected: "mutable HTTP response headers".to_string(),
+                        got: "response already ended".to_string(),
+                    });
+                }
+                if !state.headers.contains_key(&lower_name)
+                    && state.headers.len() >= MAX_HTTP_HEADER_COUNT
+                {
+                    return Err(InterpreterError::RangeError {
+                        message: format!("HTTP header count exceeds {MAX_HTTP_HEADER_COUNT}"),
+                    });
+                }
+                (
+                    Self::estimate_http_server_response_state_bytes(state),
+                    state
+                        .headers
+                        .get(&lower_name)
+                        .map_or(0, |old| Self::estimate_http_header_bytes(&lower_name, old)),
+                    state.lifecycle_label.clone(),
+                )
+            };
+            let next_label = previous_label.join(&invocation_label);
+            let next_bytes = previous_bytes
+                .saturating_sub(replaced_header_bytes)
+                .saturating_sub(Self::estimate_label_bytes(&previous_label))
+                .saturating_add(Self::estimate_http_header_bytes(&lower_name, &header))
+                .saturating_add(Self::estimate_label_bytes(&next_label));
+            self.apply_memory_component_delta(previous_bytes, next_bytes)?;
+            let state = self
+                .http_server_responses
+                .get_mut(&object_id)
+                .expect("HTTP response was authenticated before header commit");
+            state.headers.insert(lower_name, header);
+            state.lifecycle_label = next_label;
+        }
+        Ok(Value::Object(object_id))
+    }
+
+    fn http_error_value(&mut self, code: &str) -> Result<Value, InterpreterError> {
+        let prototype = self.ensure_builtin_prototype("Error")?;
+        let error = self.alloc_object_with_prototype(Some(prototype))?;
+        self.initialize_error_like_object(error, "Error", code.to_string())?;
+        self.set_object_property(error, "code".to_string(), Value::str(code))?;
+        Ok(Value::Object(error))
+    }
+
+    fn validate_http_client_terminal_slots(
+        &self,
+        request: ObjectId,
+    ) -> Result<(), InterpreterError> {
+        let object = self
+            .heap
+            .get(request.0 as usize)
+            .ok_or(InterpreterError::ObjectNotFound { id: request.0 })?;
+        for property in ["writable", "writableEnded"] {
+            if !matches!(object.properties.get(property), Some(Value::Bool(_))) {
+                return Err(InterpreterError::InternalError {
+                    details: format!(
+                        "authenticated HTTP ClientRequest lacks Boolean {property} slot"
+                    ),
+                });
+            }
+        }
+        if !self.http_client_requests.contains_key(&request) {
+            return Err(InterpreterError::ObjectNotFound { id: request.0 });
+        }
+        Ok(())
+    }
+
+    fn mark_http_client_request_ended(
+        &mut self,
+        request: ObjectId,
+    ) -> Result<(), InterpreterError> {
+        self.validate_http_client_terminal_slots(request)?;
+        self.http_client_requests
+            .get_mut(&request)
+            .expect("HTTP request existence was validated before terminal commit")
+            .ended = true;
+        self.mutate_heap(|heap| {
+            let properties = &mut heap[request.0 as usize].properties;
+            *properties
+                .get_mut("writable")
+                .expect("HTTP writable slot was validated before terminal commit") =
+                Value::Bool(false);
+            *properties
+                .get_mut("writableEnded")
+                .expect("HTTP writableEnded slot was validated before terminal commit") =
+                Value::Bool(true);
+        });
+        Ok(())
+    }
+
+    fn http_effect_headers(headers: &HttpHeaders) -> Vec<(String, String)> {
+        // The shared HTTP/1.1 framing layer synthesizes exactly one Host field
+        // from the validated URL authority. Forwarding the facade's retained
+        // guest-visible Host entry would create an ambiguous duplicate.
+        headers
+            .values()
+            .filter(|header| !header.original_name.eq_ignore_ascii_case("host"))
+            .map(|header| (header.original_name.clone(), header.value.clone()))
+            .collect()
+    }
+
+    fn finish_http_client_request(&mut self, request: ObjectId) -> Result<Value, InterpreterError> {
+        let (port, internal_loopback_candidate, lifecycle_label) = {
+            let state = self
+                .http_client_requests
+                .get(&request)
+                .ok_or(InterpreterError::ObjectNotFound { id: request.0 })?;
+            if state.ended {
+                return Ok(Value::Undefined);
+            }
+            (
+                state.port,
+                state.internal_loopback_candidate,
+                state.lifecycle_label.clone(),
+            )
+        };
+
+        let port_state = self.loopback_ports.get(&port).copied();
+        if internal_loopback_candidate {
+            match port_state {
+                Some(LoopbackPortState::Live { server, generation })
+                    if self.http_servers.contains_key(&server) =>
+                {
+                    self.validate_http_client_terminal_slots(request)?;
+                    self.schedule_http_task(PendingHttpTask::DispatchRequest {
+                        request,
+                        server,
+                        generation,
+                    })?;
+                    self.mark_http_client_request_ended(request)?;
+                }
+                Some(LoopbackPortState::Live { .. }) | Some(LoopbackPortState::Closed { .. }) => {
+                    self.validate_http_client_terminal_slots(request)?;
+                    self.schedule_http_task(PendingHttpTask::ClientError {
+                        request,
+                        code: "ECONNREFUSED".to_string(),
+                        label: lifecycle_label,
+                    })?;
+                    self.mark_http_client_request_ended(request)?;
+                }
+                None => {}
+            }
+            if port_state.is_some() {
+                return Ok(Value::Undefined);
+            }
+        }
+
+        // External publication is prepared in full before the one-shot commit:
+        // policy refusal, deterministic-work exhaustion, or memory refusal must
+        // leave `http.get()` construction safely rollbackable. Once ended, the
+        // provider effect and its single deferred delivery task are never
+        // replayed through this request object.
+        check_hostcall_capability_gate(self, "net:request", self.ip as u32)?;
+        let (work_bytes, header_count) = {
+            let state = self
+                .http_client_requests
+                .get(&request)
+                .expect("HTTP request remained live after route classification");
+            (
+                state
+                    .host
+                    .len()
+                    .saturating_add(state.path.len())
+                    .saturating_add(state.method.len())
+                    .saturating_add(state.body.len())
+                    .saturating_add(
+                        state
+                            .headers
+                            .values()
+                            .filter(|header| !header.original_name.eq_ignore_ascii_case("host"))
+                            .map(|header| {
+                                header
+                                    .original_name
+                                    .len()
+                                    .saturating_add(header.value.len())
+                            })
+                            .sum::<usize>(),
+                    ),
+                state
+                    .headers
+                    .values()
+                    .filter(|header| !header.original_name.eq_ignore_ascii_case("host"))
+                    .count(),
+            )
+        };
+        self.charge_http_work(work_bytes, header_count)?;
+        self.check_temporary_memory_budget(
+            u64::try_from(work_bytes)
+                .unwrap_or(u64::MAX)
+                .saturating_mul(2)
+                .saturating_add(64 * 1024),
+        )?;
+        let (url, method, headers, body) = {
+            let state = self
+                .http_client_requests
+                .get(&request)
+                .expect("HTTP request remained live after external preflight");
+            (
+                format!(
+                    "{}://{}:{}{}",
+                    if state.use_tls { "https" } else { "http" },
+                    state.host,
+                    state.port,
+                    state.path
+                ),
+                state.method.clone(),
+                Self::http_effect_headers(&state.headers),
+                (!state.body.is_empty()).then(|| state.body.clone()),
+            )
+        };
+        self.validate_http_client_terminal_slots(request)?;
+        let delivery_sequence =
+            self.schedule_http_task(PendingHttpTask::DeliverExternalResponse {
+                request,
+                response: None,
+            })?;
+        self.mark_http_client_request_ended(request)?;
+        let response = self.perform_net_request_effect(url, method, headers, body)?;
+        if let Value::Object(response_id) = response {
+            let Some(PendingHttpTask::DeliverExternalResponse { response, .. }) =
+                self.pending_http_tasks.get_mut(&delivery_sequence)
+            else {
+                return Err(InterpreterError::InternalError {
+                    details: "reserved external HTTP delivery task disappeared".to_string(),
+                });
+            };
+            *response = Some(response_id);
+        }
+        Ok(Value::Undefined)
+    }
+
+    fn http_header_lookup_name(&mut self, args: RegRange) -> Result<String, InterpreterError> {
+        let Some(value) = self.builtin_arg(args, 0)? else {
+            return Ok(String::new());
+        };
+        let name_len =
+            self.http_primitive_string_len(&value, "bounded primitive HTTP header name")?;
+        if name_len > MAX_HTTP_HEADER_NAME_BYTES {
+            return Err(InterpreterError::RangeError {
+                message: format!(
+                    "HTTP header name length exceeds {MAX_HTTP_HEADER_NAME_BYTES} bytes"
+                ),
+            });
+        }
+        self.charge_http_work(name_len, 1)?;
+        self.check_temporary_memory_budget(
+            u64::try_from(name_len)
+                .unwrap_or(u64::MAX)
+                .saturating_mul(2)
+                .saturating_add(64 * 1024),
+        )?;
+        Ok(self
+            .http_primitive_string(&value, "bounded primitive HTTP header name")?
+            .to_ascii_lowercase())
+    }
+
+    fn http_get_header(
+        &mut self,
+        receiver: Option<Value>,
+        args: RegRange,
+    ) -> Result<Value, InterpreterError> {
+        let response = self.http_server_response_receiver(receiver)?;
+        let name = self.http_header_lookup_name(args)?;
+        let header = self.http_server_responses[&response]
+            .headers
+            .get(&name)
+            .cloned();
+        match header {
+            Some(HttpHeaderValue {
+                array_values: Some(values),
+                ..
+            }) => {
+                let values = values
+                    .iter()
+                    .map(String::as_str)
+                    .map(Value::str)
+                    .collect::<Vec<_>>();
+                Ok(Value::Object(self.alloc_array_from_values(&values)?))
+            }
+            Some(header) => Ok(Value::str(header.value.as_str())),
+            None => Ok(Value::Undefined),
+        }
+    }
+
+    fn http_has_header(
+        &mut self,
+        receiver: Option<Value>,
+        args: RegRange,
+    ) -> Result<Value, InterpreterError> {
+        let response = self.http_server_response_receiver(receiver)?;
+        let name = self.http_header_lookup_name(args)?;
+        Ok(Value::Bool(
+            self.http_server_responses[&response]
+                .headers
+                .contains_key(&name),
+        ))
+    }
+
+    fn http_remove_header(
+        &mut self,
+        receiver: Option<Value>,
+        args: RegRange,
+    ) -> Result<Value, InterpreterError> {
+        let response = self.http_server_response_receiver(receiver)?;
+        let name = self.http_header_lookup_name(args)?;
+        let (previous_bytes, removed_bytes, previous_label) = {
+            let state = &self.http_server_responses[&response];
+            if state.ended {
+                return Err(InterpreterError::TypeError {
+                    expected: "mutable HTTP response headers".to_string(),
+                    got: "response already ended".to_string(),
+                });
+            }
+            (
+                Self::estimate_http_server_response_state_bytes(state),
+                state
+                    .headers
+                    .get(&name)
+                    .map_or(0, |header| Self::estimate_http_header_bytes(&name, header)),
+                state.lifecycle_label.clone(),
+            )
+        };
+        let next_label = previous_label.join(&self.writable_invocation_label(args)?);
+        let next_bytes = previous_bytes
+            .saturating_sub(removed_bytes)
+            .saturating_sub(Self::estimate_label_bytes(&previous_label))
+            .saturating_add(Self::estimate_label_bytes(&next_label));
+        self.apply_memory_component_delta(previous_bytes, next_bytes)?;
+        let state = self
+            .http_server_responses
+            .get_mut(&response)
+            .expect("HTTP response was authenticated before header removal");
+        state.headers.remove(&name);
+        state.lifecycle_label = next_label;
+        Ok(Value::Undefined)
+    }
+
+    fn http_write_head(
+        &mut self,
+        receiver: Option<Value>,
+        args: RegRange,
+    ) -> Result<Value, InterpreterError> {
+        let response = self.http_server_response_receiver(receiver)?;
+        let status = self
+            .builtin_arg(args, 0)?
+            .map(|value| Self::value_as_integer(&value))
+            .unwrap_or(200);
+        if !(100..=999).contains(&status) {
+            return Err(InterpreterError::RangeError {
+                message: format!("invalid HTTP status code {status}"),
+            });
+        }
+        let second = self.builtin_arg(args, 1)?;
+        let third = self.builtin_arg(args, 2)?;
+        let status_message = second
+            .as_ref()
+            .filter(|value| matches!(value, Value::Str(_)))
+            .map(|value| self.value_to_string(value))
+            .unwrap_or_else(|| Self::http_status_message(status as u16).to_string());
+        if status_message.len() > MAX_HTTP_HEADER_VALUE_BYTES {
+            return Err(InterpreterError::RangeError {
+                message: format!(
+                    "HTTP status message length exceeds {MAX_HTTP_HEADER_VALUE_BYTES} bytes"
+                ),
+            });
+        }
+        if status_message.bytes().any(|byte| byte.is_ascii_control()) {
+            return Err(InterpreterError::TypeError {
+                expected: "HTTP status message without control bytes".to_string(),
+                got: "status message contains a control byte".to_string(),
+            });
+        }
+        let headers_value = third.as_ref().or_else(|| {
+            second
+                .as_ref()
+                .filter(|value| matches!(value, Value::Object(_)))
+        });
+        let headers = self.http_headers_from_value(headers_value)?;
+        let invocation_label = self.writable_invocation_label(args)?;
+        let (previous_bytes, replaced_header_bytes, previous_status_bytes, previous_label) = {
+            let state = &self.http_server_responses[&response];
+            if state.ended {
+                return Err(InterpreterError::TypeError {
+                    expected: "mutable HTTP response headers".to_string(),
+                    got: "response already ended".to_string(),
+                });
+            }
+            let inserted = headers
+                .keys()
+                .filter(|name| !state.headers.contains_key(*name))
+                .count();
+            if state.headers.len().saturating_add(inserted) > MAX_HTTP_HEADER_COUNT {
+                return Err(InterpreterError::RangeError {
+                    message: format!("HTTP header count exceeds {MAX_HTTP_HEADER_COUNT}"),
+                });
+            }
+            (
+                Self::estimate_http_server_response_state_bytes(state),
+                headers
+                    .keys()
+                    .filter_map(|name| {
+                        state
+                            .headers
+                            .get(name)
+                            .map(|old| Self::estimate_http_header_bytes(name, old))
+                    })
+                    .sum::<u64>(),
+                MEMORY_ESTIMATE_STRING_BASE_BYTES.saturating_add(state.status_message.len() as u64),
+                state.lifecycle_label.clone(),
+            )
+        };
+        let inserted_header_bytes = Self::estimate_http_headers_bytes(&headers);
+        let next_label = previous_label.join(&invocation_label);
+        let next_bytes = previous_bytes
+            .saturating_sub(replaced_header_bytes)
+            .saturating_sub(previous_status_bytes)
+            .saturating_sub(Self::estimate_label_bytes(&previous_label))
+            .saturating_add(inserted_header_bytes)
+            .saturating_add(MEMORY_ESTIMATE_STRING_BASE_BYTES)
+            .saturating_add(status_message.len() as u64)
+            .saturating_add(Self::estimate_label_bytes(&next_label));
+        let original_object = self.heap[response.0 as usize].clone();
+        let previous_estimated_bytes = self.estimated_memory_bytes;
+        let result = (|| {
+            self.set_object_property(response, "statusCode".to_string(), Value::Int(status))?;
+            self.set_object_property(
+                response,
+                "statusMessage".to_string(),
+                Value::str(status_message.as_str()),
+            )?;
+            self.apply_memory_component_delta(previous_bytes, next_bytes)?;
+            let state = self
+                .http_server_responses
+                .get_mut(&response)
+                .expect("HTTP response was authenticated before writeHead commit");
+            state.status_code = status as u16;
+            state.status_message = status_message;
+            state.headers.extend(headers);
+            state.lifecycle_label = next_label;
+            Ok(())
+        })();
+        if result.is_err() {
+            self.mutate_heap(|heap| heap[response.0 as usize] = original_object);
+            self.estimated_memory_bytes = previous_estimated_bytes;
+        }
+        result?;
+        Ok(Value::Object(response))
+    }
+
+    fn http_client_write(
+        &mut self,
+        receiver: Option<Value>,
+        args: RegRange,
+    ) -> Result<Value, InterpreterError> {
+        let request = self.http_client_request_receiver(receiver)?;
+        if let Some(value) = self.builtin_arg(args, 0)? {
+            let label = self.writable_invocation_label(args)?;
+            self.http_append_client_body(request, &value, label)?;
+        }
+        Ok(Value::Bool(true))
+    }
+
+    fn http_client_end(
+        &mut self,
+        receiver: Option<Value>,
+        args: RegRange,
+    ) -> Result<Value, InterpreterError> {
+        let request = self.http_client_request_receiver(receiver)?;
+        let first = self.builtin_arg(args, 0)?;
+        let second = self.builtin_arg(args, 1)?;
+        if let Some(value) = first.as_ref()
+            && !matches!(value, Value::Closure(_) | Value::Undefined)
+        {
+            let label = self.writable_invocation_label(args)?;
+            self.http_append_client_body(request, value, label)?;
+        }
+        let finish_callback = match second.or(first) {
+            Some(Value::Closure(callback)) => Some(callback),
+            _ => None,
+        };
+        let result = self.finish_http_client_request(request)?;
+        if let Some(callback) = finish_callback {
+            let label = self.http_client_requests[&request].lifecycle_label.clone();
+            self.schedule_io_callback_with_label(callback, Vec::new(), label)?;
+        }
+        Ok(result)
+    }
+
+    fn http_incoming_set_encoding(
+        &mut self,
+        receiver: Option<Value>,
+        args: RegRange,
+    ) -> Result<Value, InterpreterError> {
+        let message = self.http_incoming_message_receiver(receiver)?;
+        let encoding = match self.builtin_arg(args, 0)? {
+            Some(Value::Str(value)) if value.len() <= 16 => value.to_ascii_lowercase(),
+            Some(Value::Str(_)) => {
+                return Err(InterpreterError::RangeError {
+                    message: "HTTP stream encoding exceeds 16 bytes".to_string(),
+                });
+            }
+            Some(value) => {
+                return Err(InterpreterError::TypeError {
+                    expected: "bounded string HTTP stream encoding".to_string(),
+                    got: value.type_name().to_string(),
+                });
+            }
+            None => String::new(),
+        };
+        if !matches!(encoding.as_str(), "utf8" | "utf-8") {
+            return Err(InterpreterError::TypeError {
+                expected: "utf8 HTTP stream encoding".to_string(),
+                got: encoding,
+            });
+        }
+        if let Some(state) = self.http_incoming_messages.get_mut(&message) {
+            state.encoding_utf8 = true;
+        }
+        Ok(Value::Object(message))
+    }
+
+    fn http_incoming_resume(&self, receiver: Option<Value>) -> Result<Value, InterpreterError> {
+        Ok(Value::Object(
+            self.http_incoming_message_receiver(receiver)?,
+        ))
+    }
+
+    fn http_response_write(
+        &mut self,
+        receiver: Option<Value>,
+        args: RegRange,
+    ) -> Result<Value, InterpreterError> {
+        let response = self.http_server_response_receiver(receiver)?;
+        if let Some(value) = self.builtin_arg(args, 0)? {
+            let label = self.writable_invocation_label(args)?;
+            self.http_append_response_body(response, &value, label)?;
+        }
+        Ok(Value::Bool(true))
+    }
+
+    fn http_response_end(
+        &mut self,
+        receiver: Option<Value>,
+        args: RegRange,
+    ) -> Result<Value, InterpreterError> {
+        let response = self.http_server_response_receiver(receiver)?;
+        if let Some(value) = self.builtin_arg(args, 0)?
+            && !matches!(value, Value::Closure(_) | Value::Undefined)
+        {
+            let label = self.writable_invocation_label(args)?;
+            self.http_append_response_body(response, &value, label)?;
+        }
+        self.finish_http_server_response(response)?;
+        Ok(Value::Undefined)
+    }
+
+    fn finish_http_server_response(&mut self, response: ObjectId) -> Result<(), InterpreterError> {
+        let response_index = response.0 as usize;
+        let response_object = self
+            .heap
+            .get(response_index)
+            .ok_or(InterpreterError::ObjectNotFound { id: response.0 })?;
+        for property in ["writable", "writableEnded"] {
+            if !matches!(
+                response_object.properties.get(property),
+                Some(Value::Bool(_))
+            ) {
+                return Err(InterpreterError::InternalError {
+                    details: format!(
+                        "authenticated HTTP ServerResponse lacks Boolean {property} slot"
+                    ),
+                });
+            }
+        }
+        let effective_status = response_object
+            .properties
+            .get("statusCode")
+            .map(Self::value_as_integer)
+            .and_then(|status| u16::try_from(status).ok());
+        let explicit_status_message = match response_object.properties.get("statusMessage") {
+            Some(Value::Str(message)) => {
+                let message = message.as_str().unwrap_or_default();
+                if message.len() > MAX_HTTP_HEADER_VALUE_BYTES {
+                    return Err(InterpreterError::RangeError {
+                        message: format!(
+                            "HTTP status message length exceeds {MAX_HTTP_HEADER_VALUE_BYTES} bytes"
+                        ),
+                    });
+                }
+                if message.bytes().any(|byte| byte.is_ascii_control()) {
+                    return Err(InterpreterError::TypeError {
+                        expected: "HTTP status message without control bytes".to_string(),
+                        got: "status message contains a control byte".to_string(),
+                    });
+                }
+                Some(message.to_string())
+            }
+            _ => None,
+        };
+        let (
+            old_bytes,
+            publication_bytes,
+            temporary_peak,
+            header_count,
+            status_code,
+            status_message,
+            suppress_body,
+            add_transfer_encoding,
+        ) = {
+            let state = self
+                .http_server_responses
+                .get(&response)
+                .ok_or(InterpreterError::ObjectNotFound { id: response.0 })?;
+            if state.ended {
+                return Ok(());
+            }
+            let status_code = effective_status.unwrap_or(state.status_code);
+            let mut status_message = explicit_status_message
+                .clone()
+                .unwrap_or_else(|| state.status_message.clone());
+            if status_message.is_empty() {
+                status_message = Self::http_status_message(status_code).to_string();
+            }
+            let suppress_body = state.request_method == "HEAD" || status_code == 204;
+            let add_transfer_encoding = !suppress_body
+                && !state.body.is_empty()
+                && !state.headers.contains_key("content-length")
+                && !state.headers.contains_key("transfer-encoding");
+            let header_bytes = state
+                .headers
+                .values()
+                .map(|header| {
+                    header
+                        .original_name
+                        .len()
+                        .saturating_add(header.value.len())
+                })
+                .sum::<usize>();
+            let projected_header_bytes = header_bytes.saturating_add(if add_transfer_encoding {
+                "Transfer-Encoding".len() + "chunked".len()
+            } else {
+                0
+            });
+            let body_bytes = if suppress_body { 0 } else { state.body.len() };
+            let publication_bytes = body_bytes
+                .saturating_add(projected_header_bytes.saturating_mul(2))
+                .saturating_add(status_message.len())
+                .saturating_add(128);
+            let temporary_peak = body_bytes
+                .saturating_mul(3)
+                .saturating_add(projected_header_bytes.saturating_mul(6))
+                .saturating_add(status_message.len().saturating_mul(3))
+                .saturating_add(512 * 1024);
+            (
+                Self::estimate_http_server_response_state_bytes(state),
+                publication_bytes,
+                temporary_peak,
+                state.headers.len() + usize::from(add_transfer_encoding),
+                status_code,
+                status_message,
+                suppress_body,
+                add_transfer_encoding,
+            )
+        };
+        self.charge_http_work(publication_bytes, header_count)?;
+        self.check_temporary_memory_budget(u64::try_from(temporary_peak).unwrap_or(u64::MAX))?;
+        let mut next = self
+            .http_server_responses
+            .get(&response)
+            .cloned()
+            .expect("HTTP response was admitted before publication snapshot");
+        let previous_heap_len = self.heap.len();
+        let previous_estimated_bytes = self.estimated_memory_bytes;
+        next.status_code = status_code;
+        next.status_message = status_message;
+        if suppress_body {
+            next.body.clear();
+        } else if add_transfer_encoding {
+            next.headers.insert(
+                "transfer-encoding".to_string(),
+                HttpHeaderValue {
+                    original_name: "Transfer-Encoding".to_string(),
+                    array_values: None,
+                    value: "chunked".to_string(),
+                },
+            );
+        }
+        next.ended = true;
+
+        // Materialize the complete guest-visible response under one rollback
+        // checkpoint. The delivery task is the final fallible publication; on
+        // refusal, the response remains writable and no active connection can
+        // become permanently stranded behind an unreachable message object.
+        let result = (|| {
+            let message = self.construct_http_incoming_message(
+                next.body.clone(),
+                next.lifecycle_label.clone(),
+                true,
+                Some(HttpServerCompletion {
+                    server: next.server,
+                    generation: next.server_generation,
+                    response,
+                }),
+            )?;
+            let headers = self.alloc_http_headers_object(&next.headers)?;
+            let raw_headers = self.alloc_http_raw_headers(&next.headers)?;
+            self.set_object_property(
+                message,
+                "statusCode".to_string(),
+                Value::Int(i64::from(next.status_code)),
+            )?;
+            self.set_object_property(
+                message,
+                "statusMessage".to_string(),
+                Value::str(next.status_message.as_str()),
+            )?;
+            self.set_object_property(message, "headers".to_string(), Value::Object(headers))?;
+            self.set_object_property(
+                message,
+                "rawHeaders".to_string(),
+                Value::Object(raw_headers),
+            )?;
+
+            let new_bytes = Self::estimate_http_server_response_state_bytes(&next);
+            self.apply_memory_component_delta(old_bytes, new_bytes)?;
+            self.schedule_http_task(PendingHttpTask::DeliverResponse {
+                request: next.client_request,
+                message,
+            })?;
+            self.http_server_responses.insert(response, next);
+            self.mutate_heap(|heap| {
+                let properties = &mut heap[response_index].properties;
+                *properties
+                    .get_mut("writable")
+                    .expect("HTTP writable slot was validated before terminal commit") =
+                    Value::Bool(false);
+                *properties
+                    .get_mut("writableEnded")
+                    .expect("HTTP writableEnded slot was validated before terminal commit") =
+                    Value::Bool(true);
+            });
+            Ok(())
+        })();
+        if result.is_err() {
+            self.http_incoming_messages
+                .retain(|message, _| (message.0 as usize) < previous_heap_len);
+            self.rollback_heap_to_len(previous_heap_len);
+            self.estimated_memory_bytes = previous_estimated_bytes;
+        }
+        result
+    }
+
+    fn complete_http_server_response(
+        &mut self,
+        completion: HttpServerCompletion,
+        label: Label,
+    ) -> Result<(), InterpreterError> {
+        let mut removed_connection = false;
+        let mut schedule_close = false;
+        if let Some(server_state) = self.loopback_servers.get_mut(&completion.server)
+            && server_state.generation == completion.generation
+        {
+            removed_connection = server_state.active_connections.remove(&completion.response);
+            schedule_close = removed_connection
+                && server_state.close_requested
+                && server_state.active_connections.is_empty()
+                && !server_state.close_scheduled;
+            if schedule_close {
+                server_state.close_scheduled = true;
+            }
+        }
+        if removed_connection {
+            self.estimated_memory_bytes = self
+                .estimated_memory_bytes
+                .saturating_sub(MEMORY_ESTIMATE_MAP_ENTRY_BYTES);
+        }
+        if let Some(response_state) = self.http_server_responses.remove(&completion.response) {
+            self.clear_event_listeners(completion.response, None);
+            self.estimated_memory_bytes = self.estimated_memory_bytes.saturating_sub(
+                Self::estimate_http_server_response_state_bytes(&response_state),
+            );
+        }
+        if schedule_close
+            && let Err(error) = self.schedule_loopback_task(PendingLoopbackTask::ServerClose {
+                server: completion.server,
+                generation: completion.generation,
+                label,
+            })
+        {
+            if let Some(server_state) = self.loopback_servers.get_mut(&completion.server)
+                && server_state.generation == completion.generation
+            {
+                server_state.close_scheduled = false;
+            }
+            return Err(error);
+        }
+        Ok(())
+    }
+
+    fn discard_http_incoming_message(&mut self, message: ObjectId) -> Result<(), InterpreterError> {
+        let Some(state) = self.http_incoming_messages.remove(&message) else {
+            return Ok(());
+        };
+        self.clear_event_listeners(message, None);
+        self.estimated_memory_bytes = self
+            .estimated_memory_bytes
+            .saturating_sub(Self::estimate_http_incoming_message_state_bytes(&state));
+        if let Some(completion) = state.server_completion {
+            self.complete_http_server_response(completion, state.lifecycle_label)?;
+        }
+        Ok(())
+    }
+
+    fn execute_pending_http_task(
+        &mut self,
+        task: PendingHttpTask,
+        module: Option<&Ir3Module>,
+    ) -> Result<(), InterpreterError> {
+        let retained_bytes = Self::estimate_pending_http_task_bytes(&task);
+        self.http_task_in_flight_bytes = self
+            .http_task_in_flight_bytes
+            .saturating_add(retained_bytes);
+        let result = self.drive_pending_http_task(task, module);
+        self.http_task_in_flight_bytes = self
+            .http_task_in_flight_bytes
+            .saturating_sub(retained_bytes);
+        self.estimated_memory_bytes = self.estimated_memory_bytes.saturating_sub(retained_bytes);
+        result
+    }
+
+    fn drive_pending_http_task(
+        &mut self,
+        task: PendingHttpTask,
+        module: Option<&Ir3Module>,
+    ) -> Result<(), InterpreterError> {
+        match task {
+            PendingHttpTask::DispatchRequest {
+                request,
+                server,
+                generation,
+            } => {
+                if !matches!(
+                    self.loopback_ports.get(&self.http_client_requests.get(&request).map_or(0, |state| state.port)),
+                    Some(LoopbackPortState::Live {
+                        server: live_server,
+                        generation: live_generation,
+                    }) if *live_server == server && *live_generation == generation
+                ) || !self.http_servers.contains_key(&server)
+                {
+                    let label = self
+                        .http_client_requests
+                        .get(&request)
+                        .map(|state| state.lifecycle_label.clone())
+                        .unwrap_or(Label::Public);
+                    return self
+                        .schedule_http_task(PendingHttpTask::ClientError {
+                            request,
+                            code: "ECONNREFUSED".to_string(),
+                            label,
+                        })
+                        .map(|_| ());
+                }
+                let (publication_bytes, header_count) = {
+                    let state = self
+                        .http_client_requests
+                        .get(&request)
+                        .ok_or(InterpreterError::ObjectNotFound { id: request.0 })?;
+                    let header_bytes = state
+                        .headers
+                        .values()
+                        .map(|header| {
+                            header
+                                .original_name
+                                .len()
+                                .saturating_add(header.value.len())
+                        })
+                        .sum::<usize>();
+                    (
+                        state
+                            .body
+                            .len()
+                            .saturating_add(header_bytes.saturating_mul(2))
+                            .saturating_add(state.method.len())
+                            .saturating_add(state.path.len()),
+                        state.headers.len(),
+                    )
+                };
+                self.charge_http_work(publication_bytes, header_count)?;
+                self.check_temporary_memory_budget(
+                    u64::try_from(publication_bytes)
+                        .unwrap_or(u64::MAX)
+                        .saturating_mul(2)
+                        .saturating_add(256 * 1024),
+                )?;
+                let request_state = self
+                    .http_client_requests
+                    .get(&request)
+                    .cloned()
+                    .expect("HTTP request remained live after publication preflight");
+                let lifecycle_label = request_state.lifecycle_label.join(
+                    &self
+                        .http_servers
+                        .get(&server)
+                        .map(|state| state.lifecycle_label.clone())
+                        .unwrap_or(Label::Public),
+                );
+                let message = self.construct_http_incoming_message(
+                    request_state.body.clone(),
+                    lifecycle_label.clone(),
+                    true,
+                    None,
+                )?;
+                let headers = self.alloc_http_headers_object(&request_state.headers)?;
+                let raw_headers = self.alloc_http_raw_headers(&request_state.headers)?;
+                self.set_object_property(
+                    message,
+                    "method".to_string(),
+                    Value::str(request_state.method.as_str()),
+                )?;
+                self.set_object_property(
+                    message,
+                    "url".to_string(),
+                    Value::str(request_state.path.as_str()),
+                )?;
+                self.set_object_property(message, "headers".to_string(), Value::Object(headers))?;
+                self.set_object_property(
+                    message,
+                    "rawHeaders".to_string(),
+                    Value::Object(raw_headers),
+                )?;
+
+                let response = self.alloc_object_with_properties(&[
+                    ("__type", Value::str("HttpServerResponse")),
+                    ("__maxListeners", Value::Int(10)),
+                    ("statusCode", Value::Int(200)),
+                    ("statusMessage", Value::str("OK")),
+                    ("writable", Value::Bool(true)),
+                    ("writableEnded", Value::Bool(false)),
+                ])?;
+                let response_state = HttpServerResponseState {
+                    client_request: request,
+                    server,
+                    server_generation: generation,
+                    request_method: request_state.method,
+                    status_code: 200,
+                    status_message: "OK".to_string(),
+                    headers: BTreeMap::new(),
+                    body: Vec::new(),
+                    ended: false,
+                    lifecycle_label: lifecycle_label.clone(),
+                };
+                self.apply_memory_component_delta(
+                    0,
+                    Self::estimate_http_server_response_state_bytes(&response_state)
+                        .saturating_add(MEMORY_ESTIMATE_MAP_ENTRY_BYTES),
+                )?;
+                self.http_server_responses.insert(response, response_state);
+                self.loopback_servers
+                    .get_mut(&server)
+                    .expect("live HTTP server disappeared during request admission")
+                    .active_connections
+                    .insert(response);
+                let message_task = if !request_state.body.is_empty() {
+                    PendingHttpTask::MessageData { message }
+                } else {
+                    PendingHttpTask::MessageEnd { message }
+                };
+                let message_sequence = match self.schedule_http_task(message_task) {
+                    Ok(sequence) => sequence,
+                    Err(error) => {
+                        self.discard_http_incoming_message(message)?;
+                        self.complete_http_server_response(
+                            HttpServerCompletion {
+                                server,
+                                generation,
+                                response,
+                            },
+                            lifecycle_label.clone(),
+                        )?;
+                        return Err(error);
+                    }
+                };
+                let publication = self.emit_loopback_event(
+                    module,
+                    server,
+                    "request",
+                    vec![Value::Object(message), Value::Object(response)],
+                    lifecycle_label.clone(),
+                );
+                if let Err(error) = publication {
+                    self.cancel_http_task_registration(message_sequence);
+                    self.discard_http_incoming_message(message)?;
+                    self.complete_http_server_response(
+                        HttpServerCompletion {
+                            server,
+                            generation,
+                            response,
+                        },
+                        lifecycle_label,
+                    )?;
+                    return Err(error);
+                }
+            }
+            PendingHttpTask::DeliverResponse { request, message } => {
+                let (response_callback, request_label) = self
+                    .http_client_requests
+                    .get(&request)
+                    .map(|state| (state.response_callback, state.lifecycle_label.clone()))
+                    .ok_or(InterpreterError::ObjectNotFound { id: request.0 })?;
+                let response_label = request_label.join(
+                    &self
+                        .http_incoming_messages
+                        .get(&message)
+                        .map(|message| message.lifecycle_label.clone())
+                        .unwrap_or(Label::Public),
+                );
+                let next_phase = if self
+                    .http_incoming_messages
+                    .get(&message)
+                    .is_some_and(|message| !message.body.is_empty())
+                {
+                    PendingHttpTask::MessageData { message }
+                } else {
+                    PendingHttpTask::MessageEnd { message }
+                };
+                let next_sequence = match self.schedule_http_task(next_phase) {
+                    Ok(sequence) => sequence,
+                    Err(error) => {
+                        self.discard_http_incoming_message(message)?;
+                        return Err(error);
+                    }
+                };
+                let publication = (|| {
+                    if let (Some(module), Some(callback)) = (module, response_callback) {
+                        self.invoke_inline_method_call_with_argument_label(
+                            Some(module),
+                            Value::Closure(callback),
+                            Value::Undefined,
+                            vec![Value::Object(message)],
+                            Some(response_label.clone()),
+                        )?;
+                    }
+                    let _ = self.emit_loopback_event(
+                        module,
+                        request,
+                        "response",
+                        vec![Value::Object(message)],
+                        response_label,
+                    )?;
+                    Ok(())
+                })();
+                if let Err(error) = publication {
+                    self.cancel_http_task_registration(next_sequence);
+                    self.discard_http_incoming_message(message)?;
+                    return Err(error);
+                }
+            }
+            PendingHttpTask::DeliverExternalResponse { request, response } => {
+                let (response_callback, lifecycle_label) = self
+                    .http_client_requests
+                    .get(&request)
+                    .map(|state| (state.response_callback, state.lifecycle_label.clone()))
+                    .ok_or(InterpreterError::ObjectNotFound { id: request.0 })?;
+                let Some(response) = response else {
+                    let error = self.http_error_value("ERR_NETWORK")?;
+                    let _ = self.emit_loopback_event(
+                        module,
+                        request,
+                        "error",
+                        vec![error],
+                        lifecycle_label,
+                    )?;
+                    return Ok(());
+                };
+                self.schedule_stream_emission(response, StreamEventPhase::Data)?;
+                if let (Some(module), Some(callback)) = (module, response_callback) {
+                    self.invoke_inline_method_call_with_argument_label(
+                        Some(module),
+                        Value::Closure(callback),
+                        Value::Undefined,
+                        vec![Value::Object(response)],
+                        Some(lifecycle_label.clone()),
+                    )?;
+                }
+                let _ = self.emit_loopback_event(
+                    module,
+                    request,
+                    "response",
+                    vec![Value::Object(response)],
+                    lifecycle_label,
+                )?;
+            }
+            PendingHttpTask::MessageData { message } => {
+                let body_len = {
+                    let Some(state) = self.http_incoming_messages.get(&message) else {
+                        return Ok(());
+                    };
+                    if state.delivered || state.body.is_empty() {
+                        return Ok(());
+                    }
+                    state.body.len()
+                };
+                self.charge_http_work(body_len, 1)?;
+                self.check_temporary_memory_budget(
+                    u64::try_from(body_len)
+                        .unwrap_or(u64::MAX)
+                        .saturating_mul(3)
+                        .saturating_add(128 * 1024),
+                )?;
+                let Some((body, encoding_utf8, lifecycle_label)) =
+                    self.http_incoming_messages.get(&message).map(|state| {
+                        (
+                            state.body.clone(),
+                            state.encoding_utf8,
+                            state.lifecycle_label.clone(),
+                        )
+                    })
+                else {
+                    return Ok(());
+                };
+                let end_sequence =
+                    match self.schedule_http_task(PendingHttpTask::MessageEnd { message }) {
+                        Ok(sequence) => sequence,
+                        Err(error) => {
+                            self.discard_http_incoming_message(message)?;
+                            return Err(error);
+                        }
+                    };
+                let chunk = (|| {
+                    if encoding_utf8 {
+                        Ok(Value::str(String::from_utf8_lossy(&body).into_owned()))
+                    } else {
+                        let buffer = self.alloc_buffer_from_bytes(&body)?;
+                        self.join_binary_storage_label(buffer, &lifecycle_label)?;
+                        Ok(Value::Object(buffer))
+                    }
+                })();
+                let chunk = match chunk {
+                    Ok(chunk) => chunk,
+                    Err(error) => {
+                        self.cancel_http_task_registration(end_sequence);
+                        self.discard_http_incoming_message(message)?;
+                        return Err(error);
+                    }
+                };
+                if let Some(current) = self.http_incoming_messages.get_mut(&message) {
+                    current.delivered = true;
+                }
+                let emission =
+                    self.emit_loopback_event(module, message, "data", vec![chunk], lifecycle_label);
+                if let Err(error) = emission {
+                    self.cancel_http_task_registration(end_sequence);
+                    self.discard_http_incoming_message(message)?;
+                    return Err(error);
+                }
+            }
+            PendingHttpTask::MessageEnd { message } => {
+                let Some((close_after_end, lifecycle_label)) = self
+                    .http_incoming_messages
+                    .get(&message)
+                    .map(|state| (state.close_after_end, state.lifecycle_label.clone()))
+                else {
+                    return Ok(());
+                };
+                let close_sequence = if close_after_end {
+                    match self.schedule_http_task(PendingHttpTask::MessageClose { message }) {
+                        Ok(sequence) => Some(sequence),
+                        Err(error) => {
+                            self.discard_http_incoming_message(message)?;
+                            return Err(error);
+                        }
+                    }
+                } else {
+                    None
+                };
+                let publication = (|| {
+                    self.set_object_property(message, "readable".to_string(), Value::Bool(false))?;
+                    let _ = self.emit_loopback_event(
+                        module,
+                        message,
+                        "end",
+                        Vec::new(),
+                        lifecycle_label,
+                    )?;
+                    Ok(())
+                })();
+                if let Err(error) = publication {
+                    if let Some(sequence) = close_sequence {
+                        self.cancel_http_task_registration(sequence);
+                    }
+                    self.discard_http_incoming_message(message)?;
+                    return Err(error);
+                }
+            }
+            PendingHttpTask::MessageClose { message } => {
+                let Some(state) = self.http_incoming_messages.remove(&message) else {
+                    return Ok(());
+                };
+                self.estimated_memory_bytes = self
+                    .estimated_memory_bytes
+                    .saturating_sub(Self::estimate_http_incoming_message_state_bytes(&state));
+                let completion = if let Some(completion) = state.server_completion {
+                    self.complete_http_server_response(completion, state.lifecycle_label.clone())
+                } else {
+                    Ok(())
+                };
+                let emission = self.emit_loopback_event(
+                    module,
+                    message,
+                    "close",
+                    Vec::new(),
+                    state.lifecycle_label.clone(),
+                );
+                self.clear_event_listeners(message, None);
+                completion?;
+                let _ = emission?;
+            }
+            PendingHttpTask::ClientError {
+                request,
+                code,
+                label,
+            } => {
+                let error = self.http_error_value(&code)?;
+                let _ = self.emit_loopback_event(module, request, "error", vec![error], label)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn clear_http_execution_state(&mut self) {
+        let registrations: Vec<u64> = self.pending_http_tasks.keys().copied().collect();
+        let previous_promise_bytes = self.promise_runtime_memory_bytes();
+        for registration in registrations {
+            self.event_loop.cancel_registration(registration);
+        }
+        let released_promise_bytes =
+            previous_promise_bytes.saturating_sub(self.promise_runtime_memory_bytes());
+        let retained_bytes = self.http_runtime_memory_bytes();
+        let targets: Vec<ObjectId> = self
+            .http_servers
+            .keys()
+            .chain(self.http_client_requests.keys())
+            .chain(self.http_incoming_messages.keys())
+            .chain(self.http_server_responses.keys())
+            .copied()
+            .collect();
+        self.http_servers.clear();
+        self.http_client_requests.clear();
+        self.http_incoming_messages.clear();
+        self.http_server_responses.clear();
+        self.http_agents.clear();
+        self.pending_http_tasks.clear();
+        self.http_task_in_flight_bytes = 0;
+        for target in targets {
+            self.clear_event_listeners(target, None);
+            self.clear_event_promise_waiters_for_target(target);
+        }
+        self.estimated_memory_bytes = self
+            .estimated_memory_bytes
+            .saturating_sub(retained_bytes)
+            .saturating_sub(released_promise_bytes);
+    }
+
     fn clear_loopback_execution_state(&mut self) {
         let registrations: Vec<u64> = self.pending_loopback_tasks.keys().copied().collect();
         let previous_promise_bytes = self.promise_runtime_memory_bytes();
@@ -10410,6 +13222,7 @@ impl InterpreterCore {
         let retained_bytes = self
             .loopback_servers_memory_bytes()
             .saturating_add(self.loopback_sockets_memory_bytes())
+            .saturating_add(self.loopback_ports_memory_bytes())
             .saturating_add(self.pending_loopback_tasks_memory_bytes())
             .saturating_add(self.loopback_task_in_flight_bytes);
         let targets: Vec<ObjectId> = self
@@ -10420,6 +13233,7 @@ impl InterpreterCore {
             .collect();
         self.loopback_servers.clear();
         self.loopback_sockets.clear();
+        self.loopback_ports.clear();
         self.pending_loopback_tasks.clear();
         self.loopback_task_in_flight_bytes = 0;
         self.next_loopback_port = 41_000;
@@ -18501,6 +21315,10 @@ impl InterpreterCore {
                     .cloned()
                     .unwrap_or(Value::Undefined);
                 let has_body = matches!(&chunk, Value::Str(s) if !s.is_empty());
+                // Admit the terminal phase before exposing data callbacks so a
+                // memory refusal cannot publish a response stream that never
+                // reaches `end`.
+                self.schedule_stream_emission(object_id, StreamEventPhase::End)?;
                 if has_body {
                     for closure_id in self.event_listeners_for(object_id, "data") {
                         self.invoke_stream_listener(
@@ -18511,8 +21329,6 @@ impl InterpreterCore {
                         )?;
                     }
                 }
-                // `'end'` always follows `'data'`, on its own turn.
-                self.schedule_stream_emission(object_id, StreamEventPhase::End)?;
                 Ok(())
             }
             StreamEventPhase::End => {
@@ -18911,6 +21727,7 @@ impl InterpreterCore {
         self.clear_stream_pipeline_execution_state();
         self.clear_readable_execution_state();
         self.clear_writable_execution_state();
+        self.clear_http_execution_state();
         self.clear_loopback_execution_state();
         if let Some(context) = self.active_inline_callback_context_label.take() {
             self.estimated_memory_bytes = self
@@ -23495,6 +26312,40 @@ impl InterpreterCore {
                     })
                     .unwrap_or(false);
                 Ok(Value::Bool(value))
+            }
+            BuiltinFunctionKind::HttpClientRequestWrite => {
+                self.http_client_write(receiver, args)
+            }
+            BuiltinFunctionKind::HttpClientRequestEnd => self.http_client_end(receiver, args),
+            BuiltinFunctionKind::HttpClientRequestSetHeader => {
+                self.http_set_header(receiver, args, true)
+            }
+            BuiltinFunctionKind::HttpIncomingMessageSetEncoding => {
+                self.http_incoming_set_encoding(receiver, args)
+            }
+            BuiltinFunctionKind::HttpIncomingMessageResume => {
+                self.http_incoming_resume(receiver)
+            }
+            BuiltinFunctionKind::HttpServerResponseSetHeader => {
+                self.http_set_header(receiver, args, false)
+            }
+            BuiltinFunctionKind::HttpServerResponseGetHeader => {
+                self.http_get_header(receiver, args)
+            }
+            BuiltinFunctionKind::HttpServerResponseHasHeader => {
+                self.http_has_header(receiver, args)
+            }
+            BuiltinFunctionKind::HttpServerResponseRemoveHeader => {
+                self.http_remove_header(receiver, args)
+            }
+            BuiltinFunctionKind::HttpServerResponseWriteHead => {
+                self.http_write_head(receiver, args)
+            }
+            BuiltinFunctionKind::HttpServerResponseWrite => {
+                self.http_response_write(receiver, args)
+            }
+            BuiltinFunctionKind::HttpServerResponseEnd => {
+                self.http_response_end(receiver, args)
             }
             BuiltinFunctionKind::ClientRequestWrite => {
                 // bd-3894s slice (2b): `req.write(chunk)` — append the chunk to the
@@ -31518,6 +34369,60 @@ impl InterpreterCore {
                     .or_else(|| Self::collection_prototype_method("Writable", key)),
             };
         }
+        if matches!(
+            type_tag,
+            "HttpServer" | "HttpClientRequest" | "HttpIncomingMessage" | "HttpServerResponse"
+        ) {
+            let method = match (type_tag, key) {
+                ("HttpServer", "listen") => Some(BuiltinFunction::new_kind(
+                    BuiltinFunctionKind::NetServerListen,
+                )),
+                ("HttpServer", "address") => Some(BuiltinFunction::new_kind(
+                    BuiltinFunctionKind::NetServerAddress,
+                )),
+                ("HttpServer", "close") => Some(BuiltinFunction::new_kind(
+                    BuiltinFunctionKind::NetServerClose,
+                )),
+                ("HttpClientRequest", "write") => Some(BuiltinFunction::new_kind(
+                    BuiltinFunctionKind::HttpClientRequestWrite,
+                )),
+                ("HttpClientRequest", "end") => Some(BuiltinFunction::new_kind(
+                    BuiltinFunctionKind::HttpClientRequestEnd,
+                )),
+                ("HttpClientRequest", "setHeader") => Some(BuiltinFunction::new_kind(
+                    BuiltinFunctionKind::HttpClientRequestSetHeader,
+                )),
+                ("HttpIncomingMessage", "setEncoding") => Some(BuiltinFunction::new_kind(
+                    BuiltinFunctionKind::HttpIncomingMessageSetEncoding,
+                )),
+                ("HttpIncomingMessage", "resume") => Some(BuiltinFunction::new_kind(
+                    BuiltinFunctionKind::HttpIncomingMessageResume,
+                )),
+                ("HttpServerResponse", "setHeader") => Some(BuiltinFunction::new_kind(
+                    BuiltinFunctionKind::HttpServerResponseSetHeader,
+                )),
+                ("HttpServerResponse", "getHeader") => Some(BuiltinFunction::new_kind(
+                    BuiltinFunctionKind::HttpServerResponseGetHeader,
+                )),
+                ("HttpServerResponse", "hasHeader") => Some(BuiltinFunction::new_kind(
+                    BuiltinFunctionKind::HttpServerResponseHasHeader,
+                )),
+                ("HttpServerResponse", "removeHeader") => Some(BuiltinFunction::new_kind(
+                    BuiltinFunctionKind::HttpServerResponseRemoveHeader,
+                )),
+                ("HttpServerResponse", "writeHead") => Some(BuiltinFunction::new_kind(
+                    BuiltinFunctionKind::HttpServerResponseWriteHead,
+                )),
+                ("HttpServerResponse", "write") => Some(BuiltinFunction::new_kind(
+                    BuiltinFunctionKind::HttpServerResponseWrite,
+                )),
+                ("HttpServerResponse", "end") => Some(BuiltinFunction::new_kind(
+                    BuiltinFunctionKind::HttpServerResponseEnd,
+                )),
+                _ => None,
+            };
+            return method.or_else(|| Self::collection_prototype_method("EventEmitter", key));
+        }
         match (type_tag, key) {
             ("Map", "set") => Some(BuiltinFunction::map_set()),
             ("Map", "get") => Some(BuiltinFunction::map_get()),
@@ -34409,6 +37314,9 @@ impl InterpreterCore {
                 result.map(|_| ())
             }
             crate::promise_model::MacrotaskSource::IoCompletion => {
+                if let Some(task) = self.pending_http_tasks.remove(&macrotask.registration_seq) {
+                    return self.execute_pending_http_task(task, module);
+                }
                 // bd-7qwej: interpreter-local `net` lifecycle/data actions use
                 // the deterministic I/O lane with a sentinel handler. Dispatch
                 // their engine-owned side-table entry before any raw closure
@@ -42522,6 +45430,12 @@ impl InterpreterCore {
             "builtin:ZlibGunzip" => self.dispatch_zlib_hostcall(cap, args),
             "builtin:ZlibDeflate" => self.dispatch_zlib_hostcall(cap, args),
             "builtin:ZlibInflate" => self.dispatch_zlib_hostcall(cap, args),
+            "builtin:HttpCreateServer" => self.construct_http_server(args),
+            "builtin:HttpGet" => self.construct_http_client_request(args, true),
+            "builtin:HttpRequest" => self.construct_http_client_request(args, false),
+            "builtin:HttpStatusCodes" => self.http_status_codes(),
+            "builtin:HttpMethods" => self.http_methods(),
+            "builtin:HttpAgent" => self.construct_http_agent(args),
             "builtin:NetSocket" => {
                 let lifecycle_label = self.writable_invocation_label(args)?;
                 let socket = self.construct_loopback_socket(false, None, lifecycle_label)?;
@@ -52550,8 +55464,10 @@ impl InterpreterCore {
             .saturating_add(self.readable_pipe_links_memory_bytes())
             .saturating_add(self.loopback_servers_memory_bytes())
             .saturating_add(self.loopback_sockets_memory_bytes())
+            .saturating_add(self.loopback_ports_memory_bytes())
             .saturating_add(self.pending_loopback_tasks_memory_bytes())
             .saturating_add(self.loopback_task_in_flight_bytes)
+            .saturating_add(self.http_runtime_memory_bytes())
             .saturating_add(self.writable_streams_memory_bytes())
             .saturating_add(self.writable_terminal_states_memory_bytes())
             .saturating_add(self.writable_in_flight_callback_bytes)
@@ -87345,6 +90261,193 @@ mod memory_accounting_tests {
             core.estimated_memory_bytes(),
             core.recompute_estimated_memory_bytes(),
             "reset must release both side-table and event-loop ownership"
+        );
+    }
+
+    #[test]
+    fn http_known_closed_port_is_refused_without_external_capability_bd_d0n7u() {
+        let mut core = InterpreterCore::new(test_quickjs_config(), "http-known-closed");
+        let server = match core
+            .construct_http_server(RegRange { start: 0, count: 0 })
+            .expect("HTTP server")
+        {
+            Value::Object(server) => server,
+            other => panic!("expected server object, got {other:?}"),
+        };
+        core.write_reg(0, Value::Int(42_321)).expect("port");
+        core.write_reg(1, Value::str("127.0.0.1")).expect("host");
+        core.loopback_server_listen(Value::Object(server), RegRange { start: 0, count: 2 })
+            .expect("listen");
+        let generation = core.loopback_servers[&server].generation;
+        core.loopback_server_close(Value::Object(server), RegRange { start: 2, count: 0 })
+            .expect("close");
+        assert_eq!(
+            core.loopback_ports.get(&42_321),
+            Some(&LoopbackPortState::Closed { generation })
+        );
+
+        let options = core
+            .alloc_object_with_properties(&[
+                ("host", Value::str("127.0.0.1")),
+                ("port", Value::Int(42_321)),
+                ("path", Value::str("/known-internal")),
+            ])
+            .expect("request options");
+        core.write_reg(3, Value::Object(options)).expect("options");
+        let request = core
+            .construct_http_client_request(RegRange { start: 3, count: 1 }, true)
+            .expect("known-closed request needs no NetworkEgress grant");
+        let Value::Object(request) = request else {
+            panic!("expected request object")
+        };
+        assert!(core.pending_http_tasks.values().any(|task| matches!(
+            task,
+            PendingHttpTask::ClientError {
+                request: queued,
+                code,
+                ..
+            } if *queued == request && code == "ECONNREFUSED"
+        )));
+        assert!(!core.pending_http_tasks.values().any(|task| matches!(
+            task,
+            PendingHttpTask::DispatchRequest { request: queued, .. } if *queued == request
+        )));
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+    }
+
+    #[test]
+    fn http_external_transport_and_host_framing_are_independent_bd_d0n7u() {
+        let mut core = InterpreterCore::new(test_quickjs_config(), "http-external-transport");
+        core.write_reg(0, Value::str("http://example.test:8080/plain"))
+            .expect("plain URL");
+        let mut plain = core
+            .resolve_http_request(RegRange { start: 0, count: 1 }, true)
+            .expect("plain external request");
+        assert!(!plain.use_tls);
+        assert!(!plain.internal_loopback_candidate);
+        assert!(InterpreterCore::http_effect_headers(&plain.headers).is_empty());
+
+        plain.headers.insert(
+            "x-trace".to_string(),
+            HttpHeaderValue {
+                original_name: "X-Trace".to_string(),
+                array_values: None,
+                value: "one".to_string(),
+            },
+        );
+        assert_eq!(
+            InterpreterCore::http_effect_headers(&plain.headers),
+            vec![("X-Trace".to_string(), "one".to_string())]
+        );
+
+        core.write_reg(0, Value::str("https://example.test/secure"))
+            .expect("TLS URL");
+        let tls = core
+            .resolve_http_request(RegRange { start: 0, count: 1 }, true)
+            .expect("TLS external request");
+        assert!(tls.use_tls);
+        assert!(!tls.internal_loopback_candidate);
+    }
+
+    #[test]
+    fn http_header_arrays_and_body_ceiling_are_bounded_atomically_bd_d0n7u() {
+        let mut core = InterpreterCore::new(test_quickjs_config(), "http-bounds");
+        let array = core
+            .alloc_array_from_values(&[Value::str("a"), Value::str("b")])
+            .expect("header array");
+        assert_eq!(
+            core.http_header_value_from_value(&Value::Object(array)),
+            Ok((
+                "a, b".to_string(),
+                Some(vec!["a".to_string(), "b".to_string()])
+            ))
+        );
+
+        let options = core
+            .alloc_object_with_properties(&[
+                ("host", Value::str("127.0.0.1")),
+                ("port", Value::Int(42_322)),
+                ("path", Value::str("/bounded")),
+            ])
+            .expect("request options");
+        core.write_reg(0, Value::Object(options)).expect("options");
+        let Value::Object(request) = core
+            .construct_http_client_request(RegRange { start: 0, count: 1 }, false)
+            .expect("client request")
+        else {
+            panic!("expected request object")
+        };
+        core.write_reg(1, Value::str("x".repeat(MAX_HTTP_BODY_BYTES + 1)))
+            .expect("oversize chunk");
+        let before = core.estimated_memory_bytes();
+        let error = core
+            .http_client_write(
+                Some(Value::Object(request)),
+                RegRange { start: 1, count: 1 },
+            )
+            .expect_err("body ceiling");
+        assert!(matches!(error, InterpreterError::RangeError { .. }));
+        assert!(core.http_client_requests[&request].body.is_empty());
+        assert_eq!(core.estimated_memory_bytes(), before);
+        assert_eq!(before, core.recompute_estimated_memory_bytes());
+
+        let oversized_header_bytes = vec![b'h'; MAX_HTTP_HEADER_VALUE_BYTES + 1];
+        let oversized_header_buffer = core
+            .alloc_buffer_from_bytes(&oversized_header_bytes)
+            .expect("oversized header Buffer");
+        core.write_reg(2, Value::str("X-Oversized"))
+            .expect("header name");
+        core.write_reg(3, Value::Object(oversized_header_buffer))
+            .expect("header value");
+        let before_header = core.estimated_memory_bytes();
+        let before_work = core.instructions_executed;
+        let error = core
+            .http_set_header(
+                Some(Value::Object(request)),
+                RegRange { start: 2, count: 2 },
+                true,
+            )
+            .expect_err("Buffer header coercion must stay outside the bounded subset");
+        assert!(matches!(error, InterpreterError::TypeError { .. }));
+        assert!(
+            !core.http_client_requests[&request]
+                .headers
+                .contains_key("x-oversized")
+        );
+        assert_eq!(core.instructions_executed, before_work);
+        assert_eq!(core.estimated_memory_bytes(), before_header);
+        assert_eq!(before_header, core.recompute_estimated_memory_bytes());
+    }
+
+    #[test]
+    fn http_reset_clears_all_side_tables_but_not_generation_nonce_bd_d0n7u() {
+        let mut core = InterpreterCore::new(test_quickjs_config(), "http-reset");
+        let server = match core
+            .construct_http_server(RegRange { start: 0, count: 0 })
+            .expect("HTTP server")
+        {
+            Value::Object(server) => server,
+            other => panic!("expected server object, got {other:?}"),
+        };
+        core.write_reg(0, Value::Int(42_323)).expect("port");
+        core.loopback_server_listen(Value::Object(server), RegRange { start: 0, count: 1 })
+            .expect("listen");
+        let next_generation = core.next_loopback_listener_generation;
+        core.clear_http_execution_state();
+        core.clear_loopback_execution_state();
+        assert!(core.http_servers.is_empty());
+        assert!(core.http_client_requests.is_empty());
+        assert!(core.http_incoming_messages.is_empty());
+        assert!(core.http_server_responses.is_empty());
+        assert!(core.pending_http_tasks.is_empty());
+        assert!(core.loopback_ports.is_empty());
+        assert_eq!(core.next_loopback_listener_generation, next_generation);
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
         );
     }
 

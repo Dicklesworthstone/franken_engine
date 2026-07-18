@@ -760,15 +760,15 @@ fn lower_ir0_to_ir1_with_ambient_grant(
     for alias in confirmed_fs_module_aliases(&ir0.tree.body, &binding_lookup) {
         binding_lookup.insert(fs_module_alias_sentinel(&alias), 0);
     }
-    // bd-656a2 (http leg): record http/https-module binding aliases
-    // (`const http = require('http')` that are actually used as
-    // `http.get/http.request`) as NUL-sentinels, so the binding form lowers to a
-    // `net:request` HostCall just like the inline `require('http').get` form.
-    // Usage-gated like the fs aliases: a bare/unused `const http = require('http')`
-    // keeps its existing behavior. The sentinel value is unused — its presence is
-    // the signal; the NUL-prefixed key can never collide with a real binding name.
+    // bd-d0n7u: a statically authenticated `http` / `node:http` alias is a
+    // lowering-only facade over the hermetic loopback HTTP kernel. HTTPS remains
+    // a distinct external-egress surface: it keeps the legacy `net:*` lowering
+    // and is never silently reinterpreted as plaintext HTTP.
     for alias in confirmed_http_module_aliases(&ir0.tree.body, &binding_lookup) {
         binding_lookup.insert(http_module_alias_sentinel(&alias), 0);
+    }
+    for alias in confirmed_https_module_aliases(&ir0.tree.body, &binding_lookup) {
+        binding_lookup.insert(https_module_alias_sentinel(&alias), 0);
     }
     // bd-3894s (http leg ESM imports): mirror bd-1xl17.b's fs ESM lowering for
     // http/https. Namespace/default http imports used as `http.get/request(...)`
@@ -782,7 +782,13 @@ fn lower_ir0_to_ir1_with_ambient_grant(
     for alias in confirmed_http_namespace_import_aliases(&ir0.tree.body) {
         binding_lookup.insert(http_module_alias_sentinel(&alias), 0);
     }
+    for alias in confirmed_https_namespace_import_aliases(&ir0.tree.body) {
+        binding_lookup.insert(https_module_alias_sentinel(&alias), 0);
+    }
     for (local, capability) in confirmed_http_named_imports(&ir0.tree.body) {
+        binding_lookup.insert(http_named_import_sentinel(&local, capability), 0);
+    }
+    for (local, capability) in confirmed_https_named_imports(&ir0.tree.body) {
         binding_lookup.insert(http_named_import_sentinel(&local, capability), 0);
     }
     // bd-1xl17.b: ESM fs imports. Namespace/default fs imports used as
@@ -1060,6 +1066,8 @@ fn lower_ir0_to_ir1_with_ambient_grant(
                                 .contains_key(&fs_promises_module_alias_sentinel(local)))
                             || (module_source_matches(&import.source, is_http_module_specifier)
                                 && binding_lookup.contains_key(&http_module_alias_sentinel(local)))
+                            || (module_source_matches(&import.source, is_https_module_specifier)
+                                && binding_lookup.contains_key(&https_module_alias_sentinel(local)))
                         {
                             ir1.ops.push(Ir1Op::LoadLiteral {
                                 value: Ir1Literal::Undefined,
@@ -1101,6 +1109,8 @@ fn lower_ir0_to_ir1_with_ambient_grant(
                                 .contains_key(&fs_promises_module_alias_sentinel(local)))
                             || (module_source_matches(&import.source, is_http_module_specifier)
                                 && binding_lookup.contains_key(&http_module_alias_sentinel(local)))
+                            || (module_source_matches(&import.source, is_https_module_specifier)
+                                && binding_lookup.contains_key(&https_module_alias_sentinel(local)))
                         {
                             ir1.ops.push(Ir1Op::LoadLiteral {
                                 value: Ir1Literal::Undefined,
@@ -1202,6 +1212,21 @@ fn lower_ir0_to_ir1_with_ambient_grant(
                                 || (module_source_matches(
                                     &import.source,
                                     is_http_module_specifier,
+                                ) && specifiers.iter().any(|spec| {
+                                    binding_lookup.contains_key(&http_named_import_sentinel(
+                                        &spec.local_name,
+                                        "builtin:HttpGet",
+                                    )) || binding_lookup.contains_key(&http_named_import_sentinel(
+                                        &spec.local_name,
+                                        "builtin:HttpRequest",
+                                    )) || binding_lookup.contains_key(&http_named_import_sentinel(
+                                        &spec.local_name,
+                                        "builtin:HttpCreateServer",
+                                    ))
+                                }))
+                                || (module_source_matches(
+                                    &import.source,
+                                    is_https_module_specifier,
                                 ) && specifiers.iter().any(|spec| {
                                     binding_lookup.contains_key(&http_named_import_sentinel(
                                         &spec.local_name,
@@ -3398,6 +3423,9 @@ fn lower_statement_to_ir1_with_flow(
                                     .contains_key(&fs_promises_module_alias_sentinel(alias)))
                             || (is_require_http_module_initializer(init, binding_lookup)
                                 && binding_lookup.contains_key(&http_module_alias_sentinel(alias)))
+                            || (is_require_https_module_initializer(init, binding_lookup)
+                                && binding_lookup
+                                    .contains_key(&https_module_alias_sentinel(alias)))
                             || (is_require_path_module_initializer(init, binding_lookup)
                                 && binding_lookup.contains_key(&path_module_alias_sentinel(alias)))
                             || (is_require_querystring_module_initializer(init, binding_lookup)
@@ -9789,7 +9817,7 @@ fn lower_expression_to_ir1(
     Ok(())
 }
 
-/// bd-7qwej: keep every net-specific call/constructor branch out of
+/// bd-7qwej / bd-d0n7u: keep net/http call/constructor branches out of
 /// [`lower_expression_to_ir1_inner`]'s already-large recursive stack frame.
 /// Debug builds do not reliably optimize that frame, and even a small branch
 /// added enough spills to push nested callback sources over the fixed 2 MiB
@@ -9812,10 +9840,22 @@ fn try_lower_net_expression_to_ir1(
         Expression::Call {
             callee, arguments, ..
         } => {
-            let Some(capability) = net_builtin_call_capability(callee, binding_lookup)
-                .or_else(|| tls_builtin_call_capability(callee, binding_lookup))
-            else {
-                return Ok(false);
+            let capability = if let Some(capability) =
+                net_builtin_call_capability(callee, binding_lookup)
+                    .or_else(|| tls_builtin_call_capability(callee, binding_lookup))
+            {
+                capability
+            } else {
+                let Some(capability) = http_builtin_call_capability(callee, binding_lookup)
+                    .or_else(|| https_external_call_capability(callee, binding_lookup))
+                    .or_else(|| http_named_import_call_capability(callee, binding_lookup))
+                else {
+                    return Ok(false);
+                };
+                if arguments.is_empty() && capability != "builtin:HttpCreateServer" {
+                    return Ok(false);
+                }
+                capability
             };
             (arguments.as_slice(), capability)
         }
@@ -9823,6 +9863,11 @@ fn try_lower_net_expression_to_ir1(
             if net_socket_constructor_capability(callee, binding_lookup).is_some() =>
         {
             (arguments.as_slice(), "builtin:NetSocket")
+        }
+        Expression::New { callee, arguments }
+            if http_agent_constructor_capability(callee, binding_lookup).is_some() =>
+        {
+            (arguments.as_slice(), "builtin:HttpAgent")
         }
         _ => return Ok(false),
     };
@@ -11524,84 +11569,6 @@ fn lower_expression_to_ir1_inner(
                     return Ok(());
                 }
             }
-            if let Some(capability) = http_builtin_call_capability(callee, binding_lookup) {
-                // bd-656a2 / bd-3894s (http leg): `http.get(url)` lowers to a
-                // `net:request` HostCall (immediate egress; the round trip fires at
-                // the call site) while `http.request(url[, opts])` lowers to a
-                // `net:client_request` HostCall (slice 2b: build a writable
-                // `ClientRequest` object; `.end()` performs the deferred egress).
-                // The recognizer picks the capability; both route through the
-                // interpreter's host-I/O seam to perform+record a real,
-                // capability-gated network host effect — the egress the run --json
-                // effect ledger renders. Like the fs forms we do NOT lower the
-                // inner `require('http')` receiver (there is no real http module
-                // object; that path would fault at runtime); recognition is purely
-                // syntactic. Forward ALL arguments in source order — the URL operand
-                // (arg[0]), the optional options object (arg[1] — `http.request(url,
-                // { method, headers })`), and the optional trailing response callback
-                // (`http.get(url[, opts], cb)`, slice 2c). The interpreter
-                // disambiguates: it frames the real method/headers and seeds the
-                // ClientRequest body from an options object (bd-3894s slice 2; a
-                // non-object arg[1] such as a bare callback resolves to the GET
-                // defaults), accumulates a `req.write`/`req.end` body on the
-                // ClientRequest at dispatch (slice 2b), and delivers `cb(res)` to a
-                // trailing `Value::Closure` after the egress (slice 2c). A 0-arg call
-                // is malformed: fall through so it is not silently mis-shaped.
-                if !arguments.is_empty() {
-                    for arg in arguments {
-                        lower_expression_to_ir1(
-                            arg,
-                            ops,
-                            bindings,
-                            binding_lookup,
-                            binding_index,
-                            root_scope_id,
-                            label_counter,
-                            span_table,
-                        )?;
-                    }
-                    ops.push(Ir1Op::HostCall {
-                        capability: capability.to_string(),
-                        arg_count: arguments.len() as u32,
-                    });
-                    return Ok(());
-                }
-            }
-            if let Some(capability) = http_named_import_call_capability(callee, binding_lookup) {
-                // bd-3894s (http leg ESM imports): `get(url)` / `request(url)`
-                // named-imported from 'node:http' (`import { get, request } from
-                // 'node:http'`, incl. `as` renames) — recorded as a sentinel by the
-                // program pre-scan. Lowers to the SAME capability as the CJS
-                // require-binding/inline member-call forms (`get` -> `net:request`
-                // immediate egress, `request` -> `net:client_request` writable
-                // ClientRequest, slice 2b), forwarding ALL arguments in source order —
-                // the URL operand (arg[0]), the optional options object (arg[1]), and
-                // the optional trailing response callback (slice 2c) — shared with
-                // `http_builtin_call_capability`: the interpreter frames the real
-                // method/headers (bd-3894s slice 2) from an options object instead of
-                // a hardcoded GET, and delivers `cb(res)` to a trailing closure after
-                // the egress (slice 2c). A 0-arg call is malformed: fall through so it
-                // is not silently mis-shaped.
-                if !arguments.is_empty() {
-                    for arg in arguments {
-                        lower_expression_to_ir1(
-                            arg,
-                            ops,
-                            bindings,
-                            binding_lookup,
-                            binding_index,
-                            root_scope_id,
-                            label_counter,
-                            span_table,
-                        )?;
-                    }
-                    ops.push(Ir1Op::HostCall {
-                        capability: capability.to_string(),
-                        arg_count: arguments.len() as u32,
-                    });
-                    return Ok(());
-                }
-            }
             if let Some(capability) = fetch_builtin_call_capability(callee, binding_lookup) {
                 // bd-3894s (http leg, fetch global): `fetch(url[, init])` — the bare
                 // unshadowed WHATWG/Node global — lowers to the same `net:request`
@@ -12583,6 +12550,18 @@ fn lower_expression_to_ir1_inner(
             if zlib_constants_member_read(object, property, *computed, binding_lookup) {
                 ops.push(Ir1Op::HostCall {
                     capability: "builtin:ZlibConstants".to_string(),
+                    arg_count: 0,
+                });
+                return Ok(());
+            }
+            // bd-d0n7u: immutable module bundles are produced directly by the
+            // hermetic HTTP facade. The lowering-only module receiver is never
+            // evaluated; chained reads operate on the returned engine object.
+            if let Some(capability) =
+                http_member_read_capability(object, property, *computed, binding_lookup)
+            {
+                ops.push(Ir1Op::HostCall {
+                    capability: capability.to_string(),
                     arg_count: 0,
                 });
                 return Ok(());
@@ -14877,22 +14856,6 @@ fn expr_contains_matching_call<F: Fn(&Expression) -> bool>(
     }
 }
 
-/// True when any top-level expression statement or variable initializer in
-/// `body` satisfies `uses`. This is the shallow, fail-closed scan surface shared
-/// by every fs usage-lookahead (bd-1xl17.a/.b): only program-body positions are
-/// inspected; deeper nesting (function/class bodies) is left to the opaque
-/// handling inside [`expr_contains_matching_call`].
-fn body_top_level_expr_matches<F: Fn(&Expression) -> bool>(body: &[Statement], uses: &F) -> bool {
-    body.iter().any(|stmt| match stmt {
-        Statement::Expression(es) => uses(&es.expression),
-        Statement::VariableDeclaration(vd) => vd
-            .declarations
-            .iter()
-            .any(|d| d.initializer.as_ref().is_some_and(uses)),
-        _ => false,
-    })
-}
-
 /// Compute the set of identifier names that are BOTH bound via
 /// `const/let/var <name> = require('fs')` / `require('node:fs')` AND used as a
 /// recognized fs host method (`<name>.readFileSync/writeFileSync(...)`) somewhere
@@ -16376,6 +16339,17 @@ fn suppress_net_module_sentinel(binding_lookup: &mut BTreeMap<String, BindingId>
     binding_lookup.remove(&net_module_alias_sentinel(name));
     // The same lexical declaration shadows a same-named TLS alias sentinel.
     binding_lookup.remove(&tls_module_alias_sentinel(name));
+    binding_lookup.remove(&http_module_alias_sentinel(name));
+    binding_lookup.remove(&https_module_alias_sentinel(name));
+    for capability in [
+        "builtin:HttpCreateServer",
+        "builtin:HttpGet",
+        "builtin:HttpRequest",
+        "net:request",
+        "net:client_request",
+    ] {
+        binding_lookup.remove(&http_named_import_sentinel(name, capability));
+    }
 }
 
 fn suppress_net_module_sentinels(
@@ -16392,7 +16366,11 @@ fn seed_net_module_alias_sentinels(
     outer_lookup: &BTreeMap<String, BindingId>,
 ) {
     for key in outer_lookup.keys() {
-        if key.starts_with("\0netmod\0") {
+        if key.starts_with("\0netmod\0")
+            || key.starts_with("\0httpmod\0")
+            || key.starts_with("\0httpsmod\0")
+            || key.starts_with("\0httpnamed\0")
+        {
             body_lookup.insert(key.clone(), 0);
         }
     }
@@ -16475,6 +16453,10 @@ fn net_socket_constructor_capability(
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum LoweringOnlyModuleAliasSurface {
     Net,
+    Http,
+    HttpsExternal,
+    HttpNamedCreateServer,
+    HttpNamedRequest,
     Tls,
     Zlib,
     Cluster,
@@ -16533,6 +16515,36 @@ fn is_net_alias_usage(expr: &Expression, alias: &str) -> bool {
     }
 }
 
+fn is_http_alias_usage(expr: &Expression, alias: &str) -> bool {
+    match expr {
+        Expression::Call {
+            callee, arguments, ..
+        } => module_alias_member_name(callee, alias).is_some_and(|method| {
+            http_method_capability(method).is_some()
+                && (method == "createServer" || !arguments.is_empty())
+        }),
+        Expression::New { callee, .. } => module_alias_member_name(callee, alias) == Some("Agent"),
+        Expression::Member { .. } => module_alias_member_name(expr, alias)
+            .is_some_and(|property| http_property_capability(property).is_some()),
+        _ => false,
+    }
+}
+
+fn is_https_external_alias_usage(expr: &Expression, alias: &str) -> bool {
+    matches!(expr,
+        Expression::Call { callee, arguments, .. }
+            if module_alias_member_name(callee, alias)
+                .is_some_and(|method| https_external_method_capability(method).is_some())
+                && !arguments.is_empty())
+}
+
+fn is_http_named_alias_usage(expr: &Expression, alias: &str, allow_zero_arguments: bool) -> bool {
+    matches!(expr,
+        Expression::Call { callee, arguments, .. }
+            if matches!(callee.as_ref(), Expression::Identifier(name) if name == alias)
+                && (allow_zero_arguments || !arguments.is_empty()))
+}
+
 fn is_module_alias_usage(
     expr: &Expression,
     alias: &str,
@@ -16540,6 +16552,14 @@ fn is_module_alias_usage(
 ) -> bool {
     match surface {
         LoweringOnlyModuleAliasSurface::Net => is_net_alias_usage(expr, alias),
+        LoweringOnlyModuleAliasSurface::Http => is_http_alias_usage(expr, alias),
+        LoweringOnlyModuleAliasSurface::HttpsExternal => is_https_external_alias_usage(expr, alias),
+        LoweringOnlyModuleAliasSurface::HttpNamedCreateServer => {
+            is_http_named_alias_usage(expr, alias, true)
+        }
+        LoweringOnlyModuleAliasSurface::HttpNamedRequest => {
+            is_http_named_alias_usage(expr, alias, false)
+        }
         LoweringOnlyModuleAliasSurface::Tls => {
             is_tls_alias_call(expr, alias) || is_tls_alias_constant_read(expr, alias)
         }
@@ -16902,6 +16922,22 @@ fn module_alias_expr_has_rejected_use(
         } if match surface {
             LoweringOnlyModuleAliasSurface::Net => net_alias_member_name(callee, alias)
                 .is_some_and(|method| net_method_capability(method).is_some()),
+            LoweringOnlyModuleAliasSurface::Http => module_alias_member_name(callee, alias)
+                .is_some_and(|method| {
+                    http_method_capability(method).is_some()
+                        && (method == "createServer" || !arguments.is_empty())
+                }),
+            LoweringOnlyModuleAliasSurface::HttpsExternal => {
+                module_alias_member_name(callee, alias)
+                    .is_some_and(|method| https_external_method_capability(method).is_some())
+                    && !arguments.is_empty()
+            }
+            LoweringOnlyModuleAliasSurface::HttpNamedCreateServer => {
+                is_http_named_alias_usage(expr, alias, true)
+            }
+            LoweringOnlyModuleAliasSurface::HttpNamedRequest => {
+                is_http_named_alias_usage(expr, alias, false)
+            }
             LoweringOnlyModuleAliasSurface::Tls => is_tls_alias_call(expr, alias),
             LoweringOnlyModuleAliasSurface::Zlib => module_alias_member_name(callee, alias)
                 .is_some_and(|method| zlib_method_capability(method).is_some()),
@@ -16925,6 +16961,14 @@ fn module_alias_expr_has_rejected_use(
         Expression::New { callee, arguments }
             if surface == LoweringOnlyModuleAliasSurface::Net
                 && net_alias_member_name(callee, alias) == Some("Socket") =>
+        {
+            arguments
+                .iter()
+                .any(|argument| module_alias_expr_has_rejected_use(argument, alias, surface))
+        }
+        Expression::New { callee, arguments }
+            if surface == LoweringOnlyModuleAliasSurface::Http
+                && module_alias_member_name(callee, alias) == Some("Agent") =>
         {
             arguments
                 .iter()
@@ -16956,6 +17000,13 @@ fn module_alias_expr_has_rejected_use(
         Expression::Member { .. }
             if surface == LoweringOnlyModuleAliasSurface::Zlib
                 && module_alias_member_name(expr, alias) == Some("constants") =>
+        {
+            false
+        }
+        Expression::Member { .. }
+            if surface == LoweringOnlyModuleAliasSurface::Http
+                && module_alias_member_name(expr, alias)
+                    .is_some_and(|property| http_property_capability(property).is_some()) =>
         {
             false
         }
@@ -17200,7 +17251,7 @@ fn module_alias_statement_contains_unshadowed_usage(
         }
         Statement::ForIn(for_statement) => {
             if net_pattern_binds_alias(&for_statement.binding, alias) {
-                return false;
+                return for_statement.binding_kind.is_none();
             }
             module_alias_binding_pattern_contains_unshadowed_usage(
                 &for_statement.binding,
@@ -17215,7 +17266,7 @@ fn module_alias_statement_contains_unshadowed_usage(
         }
         Statement::ForOf(for_statement) => {
             if net_pattern_binds_alias(&for_statement.binding, alias) {
-                return false;
+                return for_statement.binding_kind.is_none();
             }
             module_alias_binding_pattern_contains_unshadowed_usage(
                 &for_statement.binding,
@@ -17420,7 +17471,7 @@ fn module_alias_statement_has_rejected_use(
         }
         Statement::ForIn(for_statement) => {
             if net_pattern_binds_alias(&for_statement.binding, alias) {
-                return false;
+                return for_statement.binding_kind.is_none();
             }
             module_alias_binding_pattern_has_rejected_use(&for_statement.binding, alias, surface)
                 || module_alias_expr_has_rejected_use(&for_statement.object, alias, surface)
@@ -17428,7 +17479,7 @@ fn module_alias_statement_has_rejected_use(
         }
         Statement::ForOf(for_statement) => {
             if net_pattern_binds_alias(&for_statement.binding, alias) {
-                return false;
+                return for_statement.binding_kind.is_none();
             }
             module_alias_binding_pattern_has_rejected_use(&for_statement.binding, alias, surface)
                 || module_alias_expr_has_rejected_use(&for_statement.iterable, alias, surface)
@@ -17500,6 +17551,8 @@ fn module_alias_expression_is_predeclaration_call_hazard(
         Expression::OptionalCall { .. } | Expression::New { .. }
     ) || matches!(expression, Expression::Call { .. })
         && !is_require_net_module_initializer(expression, binding_lookup)
+        && !is_require_http_module_initializer(expression, binding_lookup)
+        && !is_require_https_module_initializer(expression, binding_lookup)
         && !is_require_tls_module_initializer(expression, binding_lookup)
         && !is_require_zlib_module_initializer(expression, binding_lookup)
         && !is_require_cluster_module_initializer(expression, binding_lookup)
@@ -19126,29 +19179,26 @@ fn confirmed_os_module_aliases(
     used
 }
 
-/// bd-656a2 (http leg): true when `specifier` names the Node http/https client
-/// module (`http`, `node:http`, `https`, `node:https`). HTTPS shares HTTP's
-/// recognizer + lowering in this first slice — the network mechanism is
-/// plaintext TCP (no TLS yet), so an `https.*` egress is framed identically and
-/// recognition is purely syntactic; the SSRF gate (product layer) authorizes the
-/// endpoint regardless of scheme.
+/// bd-d0n7u: only plaintext `http` enters the hermetic loopback facade.
 fn is_http_module_specifier(specifier: &str) -> bool {
-    matches!(specifier, "http" | "node:http" | "https" | "node:https")
+    matches!(specifier, "http" | "node:http")
 }
 
-/// bd-656a2: sentinel key recording that `name` is bound to the http/https
-/// module via `const <name> = require('http')` AND used as `<name>.get/request`.
-/// Mirror of [`fs_module_alias_sentinel`]: stored in the lowering
-/// `binding_lookup`; the leading NUL cannot occur in a JS identifier so the
-/// sentinel never collides with or shadows a real binding lookup.
+/// HTTPS retains its existing external `net:*` path. Keeping a distinct
+/// recognizer prevents the hermetic HTTP facade from silently treating TLS as
+/// plaintext.
+fn is_https_module_specifier(specifier: &str) -> bool {
+    matches!(specifier, "https" | "node:https")
+}
+
 fn http_module_alias_sentinel(name: &str) -> String {
     format!("\0httpmod\0{name}")
 }
 
-/// bd-656a2: true when `expr` is exactly `require('http')` / `require('https')`
-/// (incl. `node:` specifiers) with an unshadowed `require` — the initializer
-/// shape that aliases the http module in `const http = require('http')`. Mirror
-/// of [`is_require_fs_module_initializer`].
+fn https_module_alias_sentinel(name: &str) -> String {
+    format!("\0httpsmod\0{name}")
+}
+
 fn is_require_http_module_initializer(
     expr: &Expression,
     binding_lookup: &BTreeMap<String, BindingId>,
@@ -19168,171 +19218,221 @@ fn is_require_http_module_initializer(
         if well_formed_string_literal(spec).is_some_and(is_http_module_specifier))
 }
 
-/// bd-656a2: true when `callee` is a non-computed member access `<obj>.get` /
-/// `<obj>.request` whose object identifier is in `alias_names` — a recognized
-/// http host-method call on a `const http = require('http')` alias. This is the
-/// *usage gate* (mirror of [`is_fs_alias_method_callee`]): matching it records
-/// the alias sentinel so the per-call-site recognizer can fire.
-fn is_http_alias_method_callee(callee: &Expression, alias_names: &BTreeSet<String>) -> bool {
-    let Expression::Member {
-        object,
-        property,
-        computed: false,
-        ..
-    } = callee
+fn is_require_https_module_initializer(
+    expr: &Expression,
+    binding_lookup: &BTreeMap<String, BindingId>,
+) -> bool {
+    let Expression::Call {
+        callee, arguments, ..
+    } = expr
     else {
         return false;
     };
-    let Expression::Identifier(obj) = object.as_ref() else {
+    if !matches!(callee.as_ref(), Expression::Identifier(name)
+        if name == "require" && !is_lexically_shadowed(binding_lookup, name))
+    {
         return false;
-    };
-    if !alias_names.contains(obj) {
-        return false;
     }
-    well_formed_static_name(property).is_some_and(|method| matches!(method, "get" | "request"))
+    matches!(arguments.as_slice(), [spec]
+        if well_formed_string_literal(spec).is_some_and(is_https_module_specifier))
 }
 
-/// bd-656a2: usage-lookahead predicate — does `expr` contain a call to
-/// `<alias>.get/request(...)` for one of `alias_names`? Reuses the shared
-/// [`expr_contains_matching_call`] walker (function/class bodies and object
-/// literals are opaque, fail-closed), mirroring the original fs usage scan.
-fn expr_uses_http_alias_method(expr: &Expression, alias_names: &BTreeSet<String>) -> bool {
-    expr_contains_matching_call(expr, &|callee| {
-        is_http_alias_method_callee(callee, alias_names)
-    })
-}
-
-/// bd-656a2: collect the `const <name> = require('http'|'https')` aliases that
-/// are actually used as `<name>.get/request(...)` at a top-level program
-/// position. Usage-gated exactly like [`confirmed_fs_module_aliases`]: a bare,
-/// unused `const http = require('http')` is NOT recorded and keeps its existing
-/// behavior (the require evaluates through the normal module path).
-fn confirmed_http_module_aliases(
-    body: &[Statement],
-    binding_lookup: &BTreeMap<String, BindingId>,
-) -> BTreeSet<String> {
-    let mut candidates = BTreeSet::new();
-    for stmt in body {
-        if let Statement::VariableDeclaration(vd) = stmt {
-            for d in &vd.declarations {
-                if let (BindingPattern::Identifier(name), Some(init)) = (&d.pattern, &d.initializer)
-                    && is_require_http_module_initializer(init, binding_lookup)
-                {
-                    candidates.insert(name.clone());
-                }
-            }
-        }
-    }
-    if candidates.is_empty() {
-        return candidates;
-    }
-
-    let mut used = BTreeSet::new();
-    for name in &candidates {
-        let single: BTreeSet<String> = std::iter::once(name.clone()).collect();
-        if body_top_level_expr_matches(body, &|e| expr_uses_http_alias_method(e, &single)) {
-            used.insert(name.clone());
-        }
-    }
-    used
-}
-
-/// bd-656a2: the http analogue of [`fs_builtin_call_capability`]. Recognizes
-///   * inline:  `require('http').get(url)` / `require('http').request(url)`
-///   * binding: `http.get(url)` / `http.request(url)` where `http` was aliased
-///     via `const http = require('http')` (recorded as a NUL-sentinel, usage-
-///     gated by the same pre-scan as the binding-form fs recognizer).
-///
-/// Returns the `net:request` capability tag, which the IR3 executor routes to
-/// the host-I/O seam (`dispatch_host_io_hostcall`) where — when a sandboxed
-/// provider is installed and network egress was granted — it performs and
-/// records a real, capability-gated NetworkSend host effect. Only `http`/`https`
-/// specifiers and the `get`/`request` methods match.
-fn http_builtin_call_capability(
-    callee: &Expression,
-    binding_lookup: &BTreeMap<String, BindingId>,
-) -> Option<&'static str> {
-    let Expression::Member {
-        object,
-        property,
-        computed: false,
-        ..
-    } = callee
-    else {
-        return None;
-    };
-    let receiver_is_http_module = match object.as_ref() {
-        // inline `require('http')` / `require('https')` receiver.
-        Expression::Call {
-            callee: require_callee,
-            arguments: require_args,
-            ..
-        } => {
-            matches!(require_callee.as_ref(), Expression::Identifier(name) if name == "require")
-                && matches!(require_args.as_slice(), [spec]
-                    if well_formed_string_literal(spec).is_some_and(is_http_module_specifier))
-        }
-        // binding form: identifier aliased to the http module.
-        Expression::Identifier(alias) => {
-            binding_lookup.contains_key(&http_module_alias_sentinel(alias))
-        }
-        _ => false,
-    };
-    if !receiver_is_http_module {
-        return None;
-    }
-    let method = well_formed_static_name(property)?;
+fn http_method_capability(method: &str) -> Option<&'static str> {
     match method {
-        // `http.get(url)` auto-ends and carries no writable request body, so it
-        // keeps the immediate `net:request` egress (the round trip fires at the
-        // call site and the call evaluates to the response).
+        "createServer" => Some("builtin:HttpCreateServer"),
+        "get" => Some("builtin:HttpGet"),
+        "request" => Some("builtin:HttpRequest"),
+        _ => None,
+    }
+}
+
+fn https_external_method_capability(method: &str) -> Option<&'static str> {
+    match method {
         "get" => Some("net:request"),
-        // bd-3894s slice (2b): `http.request(url[, opts])` returns a writable
-        // `ClientRequest` whose body is built incrementally via `req.write`/
-        // `req.end`. It lowers to `net:client_request`, which the interpreter
-        // turns into a ClientRequest object (no egress); `.end()` performs the
-        // deferred egress. This matches Node, where `http.request` REQUIRES an
-        // explicit `.end()` and never sends at the call site.
         "request" => Some("net:client_request"),
         _ => None,
     }
 }
 
-/// bd-3894s: true when `callee` is exactly the bare identifier `name` — the
-/// direct-call shape `get(url)` / `request(url)` of an http function brought in
-/// by a named ESM import `import { get, request } from 'node:http'`. The http
-/// analogue of [`is_fs_named_callee`]; the usage-lookahead target for
-/// [`expr_contains_matching_call`].
-fn is_http_named_callee(callee: &Expression, name: &str) -> bool {
-    matches!(callee, Expression::Identifier(n) if n == name)
+fn http_property_capability(property: &str) -> Option<&'static str> {
+    match property {
+        "STATUS_CODES" => Some("builtin:HttpStatusCodes"),
+        "METHODS" => Some("builtin:HttpMethods"),
+        _ => None,
+    }
 }
 
-/// bd-3894s: sentinel key recording that the local binding `local_name` is an
-/// http *named import* (`import { get } from 'node:http'`, incl. `as` renames)
-/// bound to `capability` ("net:request") AND used as a direct call. Mirror of
-/// [`fs_named_import_sentinel`]: lives in the lowering `binding_lookup`; the
-/// leading NUL and the `:` inside the capability cannot occur in a JS
-/// identifier, so the composite key never collides with a real binding. This
-/// lets the direct-call recognizer map `get(...)`/`request(...)` to its
-/// `net:request` hostcall without threading import provenance through the IR1
-/// recursion.
+fn is_http_module_object(expr: &Expression, binding_lookup: &BTreeMap<String, BindingId>) -> bool {
+    match expr {
+        Expression::Identifier(alias) => {
+            binding_lookup.contains_key(&http_module_alias_sentinel(alias))
+        }
+        Expression::Call { .. } => is_require_http_module_initializer(expr, binding_lookup),
+        _ => false,
+    }
+}
+
+fn is_https_module_object(expr: &Expression, binding_lookup: &BTreeMap<String, BindingId>) -> bool {
+    match expr {
+        Expression::Identifier(alias) => {
+            binding_lookup.contains_key(&https_module_alias_sentinel(alias))
+        }
+        Expression::Call { .. } => is_require_https_module_initializer(expr, binding_lookup),
+        _ => false,
+    }
+}
+
+fn http_member_name<'a>(
+    expression: &'a Expression,
+    binding_lookup: &BTreeMap<String, BindingId>,
+) -> Option<&'a str> {
+    let Expression::Member {
+        object,
+        property,
+        computed: false,
+        ..
+    } = expression
+    else {
+        return None;
+    };
+    if !is_http_module_object(object, binding_lookup) {
+        return None;
+    }
+    well_formed_static_name(property)
+}
+
+fn https_member_name<'a>(
+    expression: &'a Expression,
+    binding_lookup: &BTreeMap<String, BindingId>,
+) -> Option<&'a str> {
+    let Expression::Member {
+        object,
+        property,
+        computed: false,
+        ..
+    } = expression
+    else {
+        return None;
+    };
+    if !is_https_module_object(object, binding_lookup) {
+        return None;
+    }
+    well_formed_static_name(property)
+}
+
+fn http_builtin_call_capability(
+    callee: &Expression,
+    binding_lookup: &BTreeMap<String, BindingId>,
+) -> Option<&'static str> {
+    http_member_name(callee, binding_lookup).and_then(http_method_capability)
+}
+
+fn https_external_call_capability(
+    callee: &Expression,
+    binding_lookup: &BTreeMap<String, BindingId>,
+) -> Option<&'static str> {
+    https_member_name(callee, binding_lookup).and_then(https_external_method_capability)
+}
+
+fn http_agent_constructor_capability(
+    callee: &Expression,
+    binding_lookup: &BTreeMap<String, BindingId>,
+) -> Option<&'static str> {
+    (http_member_name(callee, binding_lookup) == Some("Agent")).then_some("builtin:HttpAgent")
+}
+
+fn http_member_read_capability(
+    object: &Expression,
+    property: &Expression,
+    computed: bool,
+    binding_lookup: &BTreeMap<String, BindingId>,
+) -> Option<&'static str> {
+    if computed || !is_http_module_object(object, binding_lookup) {
+        return None;
+    }
+    well_formed_static_name(property).and_then(http_property_capability)
+}
+
+fn confirmed_http_like_module_aliases(
+    body: &[Statement],
+    binding_lookup: &BTreeMap<String, BindingId>,
+    initializer_matches: fn(&Expression, &BTreeMap<String, BindingId>) -> bool,
+    surface: LoweringOnlyModuleAliasSurface,
+) -> BTreeSet<String> {
+    let mut candidates = BTreeMap::new();
+    for (statement_index, statement) in body.iter().enumerate() {
+        if let Statement::VariableDeclaration(declaration) = statement {
+            if declaration.kind != VariableDeclarationKind::Const {
+                continue;
+            }
+            for (declarator_index, declarator) in declaration.declarations.iter().enumerate() {
+                if let (BindingPattern::Identifier(alias), Some(initializer)) =
+                    (&declarator.pattern, &declarator.initializer)
+                    && initializer_matches(initializer, binding_lookup)
+                {
+                    candidates.insert(alias.clone(), (statement_index, declarator_index));
+                }
+            }
+        }
+    }
+
+    candidates
+        .into_iter()
+        .filter(|(alias, (statement_index, declarator_index))| {
+            !module_alias_has_predeclaration_hazard(
+                body,
+                *statement_index,
+                *declarator_index,
+                alias,
+                surface,
+                binding_lookup,
+            ) && body.iter().any(|statement| {
+                module_alias_statement_contains_unshadowed_usage(statement, alias, surface)
+            }) && !body
+                .iter()
+                .any(|statement| module_alias_statement_has_rejected_use(statement, alias, surface))
+        })
+        .map(|(alias, _)| alias)
+        .collect()
+}
+
+fn confirmed_http_module_aliases(
+    body: &[Statement],
+    binding_lookup: &BTreeMap<String, BindingId>,
+) -> BTreeSet<String> {
+    confirmed_http_like_module_aliases(
+        body,
+        binding_lookup,
+        is_require_http_module_initializer,
+        LoweringOnlyModuleAliasSurface::Http,
+    )
+}
+
+fn confirmed_https_module_aliases(
+    body: &[Statement],
+    binding_lookup: &BTreeMap<String, BindingId>,
+) -> BTreeSet<String> {
+    confirmed_http_like_module_aliases(
+        body,
+        binding_lookup,
+        is_require_https_module_initializer,
+        LoweringOnlyModuleAliasSurface::HttpsExternal,
+    )
+}
+
 fn http_named_import_sentinel(local_name: &str, capability: &str) -> String {
     format!("\0httpnamed\0{capability}\0{local_name}")
 }
 
-/// bd-3894s: confirmed http *namespace/default* ESM import aliases — a local
-/// bound via `import * as http from 'node:http'` or `import http from
-/// 'node:http'` that is actually used as `<local>.get/request(...)` at a
-/// top-level program position. These reuse the SAME member-call recognizer and
-/// [`http_module_alias_sentinel`] as the require-binding form, so the call sites
-/// need no additional handling. Mirror of
-/// [`confirmed_fs_namespace_import_aliases`]; usage-gated so a bare/unused http
-/// import keeps its current (runtime module-load) behavior.
-fn confirmed_http_namespace_import_aliases(body: &[Statement]) -> BTreeSet<String> {
+fn confirmed_http_like_namespace_import_aliases(
+    body: &[Statement],
+    source_matches: fn(&str) -> bool,
+    surface: LoweringOnlyModuleAliasSurface,
+) -> BTreeSet<String> {
     let mut candidates = BTreeSet::new();
     for stmt in body {
         if let Statement::Import(import) = stmt
-            && module_source_matches(&import.source, is_http_module_specifier)
+            && module_source_matches(&import.source, source_matches)
         {
             match &import.clause {
                 ImportClause::Namespace { local } | ImportClause::Default { local } => {
@@ -19342,37 +19442,48 @@ fn confirmed_http_namespace_import_aliases(body: &[Statement]) -> BTreeSet<Strin
             }
         }
     }
-    let mut used = BTreeSet::new();
-    for name in &candidates {
-        let single: BTreeSet<String> = std::iter::once(name.clone()).collect();
-        if body_top_level_expr_matches(body, &|e| expr_uses_http_alias_method(e, &single)) {
-            used.insert(name.clone());
-        }
-    }
-    used
+    candidates
+        .into_iter()
+        .filter(|alias| {
+            body.iter().any(|statement| {
+                module_alias_statement_contains_unshadowed_usage(statement, alias, surface)
+            }) && !body
+                .iter()
+                .any(|statement| module_alias_statement_has_rejected_use(statement, alias, surface))
+        })
+        .collect()
 }
 
-/// bd-3894s: confirmed http *named* ESM imports — `import { get[, request] }
-/// from 'node:http'` (incl. `as` renames) whose local binding is used as a
-/// direct call `<local>(...)` at a top-level program position. Returns a map of
-/// local name -> capability: `get` keeps the immediate `net:request` egress,
-/// while `request` (bd-3894s slice 2b) maps to `net:client_request` so a named
-/// `request(url)` builds a writable `ClientRequest` exactly like the member-call
-/// `http.request(url)` form. Recorded as capability-encoding NUL-sentinels (see
-/// [`http_named_import_sentinel`]) and gated on usage, exactly like the fs
-/// named-import form ([`confirmed_fs_named_imports`]).
-fn confirmed_http_named_imports(body: &[Statement]) -> BTreeMap<String, &'static str> {
+fn confirmed_http_namespace_import_aliases(body: &[Statement]) -> BTreeSet<String> {
+    confirmed_http_like_namespace_import_aliases(
+        body,
+        is_http_module_specifier,
+        LoweringOnlyModuleAliasSurface::Http,
+    )
+}
+
+fn confirmed_https_namespace_import_aliases(body: &[Statement]) -> BTreeSet<String> {
+    confirmed_http_like_namespace_import_aliases(
+        body,
+        is_https_module_specifier,
+        LoweringOnlyModuleAliasSurface::HttpsExternal,
+    )
+}
+
+fn confirmed_http_like_named_imports(
+    body: &[Statement],
+    source_matches: fn(&str) -> bool,
+    capability_for_name: fn(&str) -> Option<&'static str>,
+) -> BTreeMap<String, &'static str> {
     let mut candidates: BTreeMap<String, &'static str> = BTreeMap::new();
     for stmt in body {
         if let Statement::Import(import) = stmt
-            && module_source_matches(&import.source, is_http_module_specifier)
+            && module_source_matches(&import.source, source_matches)
             && let ImportClause::Named { specifiers } = &import.clause
         {
             for spec in specifiers {
-                let capability = match spec.import_name.as_str() {
-                    "get" => "net:request",
-                    "request" => "net:client_request",
-                    _ => continue,
+                let Some(capability) = capability_for_name(&spec.import_name) else {
+                    continue;
                 };
                 candidates.insert(spec.local_name.clone(), capability);
             }
@@ -19380,23 +19491,33 @@ fn confirmed_http_named_imports(body: &[Statement]) -> BTreeMap<String, &'static
     }
     candidates
         .into_iter()
-        .filter(|(local, _)| {
-            body_top_level_expr_matches(body, &|e| {
-                expr_contains_matching_call(e, &|c| is_http_named_callee(c, local))
-            })
+        .filter(|(local, capability)| {
+            let surface = if *capability == "builtin:HttpCreateServer" {
+                LoweringOnlyModuleAliasSurface::HttpNamedCreateServer
+            } else {
+                LoweringOnlyModuleAliasSurface::HttpNamedRequest
+            };
+            body.iter().any(|statement| {
+                module_alias_statement_contains_unshadowed_usage(statement, local, surface)
+            }) && !body
+                .iter()
+                .any(|statement| module_alias_statement_has_rejected_use(statement, local, surface))
         })
         .collect()
 }
 
-/// bd-3894s: recognize a direct call to an http *named import* — `get(url)` /
-/// `request(url)` brought in by `import { ... } from 'node:http'` — and return
-/// its hostcall capability (`net:request` for `get`, `net:client_request` for
-/// `request`; see [`confirmed_http_named_imports`]). The local name (respecting
-/// `as` renames) was recorded as a capability-encoding NUL-sentinel in
-/// `binding_lookup` by the program pre-scan, gated on actual direct-call usage so
-/// a bare/unused http import keeps its current behavior. The ESM-named-import
-/// analogue of [`http_builtin_call_capability`]'s inline/binding member-call
-/// recognition.
+fn confirmed_http_named_imports(body: &[Statement]) -> BTreeMap<String, &'static str> {
+    confirmed_http_like_named_imports(body, is_http_module_specifier, http_method_capability)
+}
+
+fn confirmed_https_named_imports(body: &[Statement]) -> BTreeMap<String, &'static str> {
+    confirmed_http_like_named_imports(
+        body,
+        is_https_module_specifier,
+        https_external_method_capability,
+    )
+}
+
 fn http_named_import_call_capability(
     callee: &Expression,
     binding_lookup: &BTreeMap<String, BindingId>,
@@ -19404,21 +19525,27 @@ fn http_named_import_call_capability(
     let Expression::Identifier(name) = callee else {
         return None;
     };
-    if binding_lookup.contains_key(&http_named_import_sentinel(name, "net:request")) {
-        Some("net:request")
-    } else if binding_lookup.contains_key(&http_named_import_sentinel(name, "net:client_request")) {
-        Some("net:client_request")
-    } else {
-        None
+    for capability in [
+        "builtin:HttpCreateServer",
+        "builtin:HttpGet",
+        "builtin:HttpRequest",
+        "net:request",
+        "net:client_request",
+    ] {
+        if binding_lookup.contains_key(&http_named_import_sentinel(name, capability)) {
+            return Some(capability);
+        }
     }
+    None
 }
 
 /// bd-3894s (http leg, fetch global): capability for a bare `fetch(url)` call —
 /// the WHATWG/Node global HTTP entry point. Like the timer/global-function
 /// builtins it is invoked as a bare identifier (not a member access), so it is
 /// recognized here rather than by the http member-call recognizer
-/// [`http_builtin_call_capability`]. Returns the same `net:request` egress
-/// capability as `http.get`/`http.request`. Returns `None` when `fetch` is
+/// [`http_builtin_call_capability`]. Fetch remains an external
+/// `net:request` egress surface; it is intentionally separate from the
+/// hermetic plain-HTTP facade. Returns `None` when `fetch` is
 /// shadowed by a user binding in scope (e.g. `const fetch = ...`), so a local
 /// `fetch` is never reinterpreted as the host egress — the fail-closed shadowing
 /// gate shared with [`timer_builtin_call_capability`].
@@ -22814,6 +22941,13 @@ mod tests {
         })
     }
 
+    fn ops_have_https_import_module(ops: &[Ir1Op]) -> bool {
+        ops.iter().any(|op| {
+            matches!(op, Ir1Op::ImportModule { specifier }
+                if module_source_matches(specifier, is_https_module_specifier))
+        })
+    }
+
     /// bd-1xl17.b: a named ESM import (`import { writeFileSync, readFileSync } from
     /// 'node:fs'`) used as direct calls lowers to fs:write/fs:read HostCalls and
     /// elides the (fault-prone) node:fs module load.
@@ -23945,45 +24079,248 @@ mod tests {
         );
     }
 
-    /// bd-656a2 (http leg): the binding form `const http = require('http');
-    /// http.get(url)` lowers to a `net:request` HostCall — the http mirror of the
-    /// `const fs = require('fs'); fs.readFileSync` binding-form fs lowering.
     #[test]
-    fn http_binding_get_lowers_to_net_request_bd_656a2() {
+    fn http_facade_static_surface_lowers_to_distinct_builtins_bd_d0n7u() {
+        let ops = lower_script_source_ops(
+            "const http = require('node:http');\n\
+             function exercise() {\n\
+               http.createServer(() => {});\n\
+               http.get('http://127.0.0.1:9/');\n\
+               http.request('http://127.0.0.1:9/');\n\
+               new http.Agent({ keepAlive: false });\n\
+               return [http.STATUS_CODES, http.METHODS];\n\
+             }\n",
+            "http_facade_static_surface_bd_d0n7u.js",
+        );
+
+        for capability in [
+            "builtin:HttpCreateServer",
+            "builtin:HttpGet",
+            "builtin:HttpRequest",
+            "builtin:HttpAgent",
+            "builtin:HttpStatusCodes",
+            "builtin:HttpMethods",
+        ] {
+            assert_eq!(
+                count_hostcall_deep(&ops, capability),
+                1,
+                "expected exactly one {capability} hostcall"
+            );
+        }
+        assert!(
+            !ops_have_hostcall(&ops, "module:require"),
+            "a confirmed HTTP facade must elide its ambient require initializer"
+        );
+        assert!(
+            !ops_have_hostcall(&ops, "net:request")
+                && !ops_have_hostcall(&ops, "net:client_request"),
+            "plain HTTP facade operations must not reuse external-egress capabilities"
+        );
+    }
+
+    #[test]
+    fn http_inline_require_is_exact_and_lexically_shadow_aware_bd_d0n7u() {
+        let ops = lower_script_source_ops(
+            "require('http').createServer();\n\
+             require('node:http').get('http://127.0.0.1:9/');\n\
+             new (require('http').Agent)();\n\
+             require('node:http').METHODS;\n",
+            "http_inline_exact_bd_d0n7u.js",
+        );
+        assert_eq!(count_hostcall_deep(&ops, "builtin:HttpCreateServer"), 1);
+        assert_eq!(count_hostcall_deep(&ops, "builtin:HttpGet"), 1);
+        assert_eq!(count_hostcall_deep(&ops, "builtin:HttpAgent"), 1);
+        assert_eq!(count_hostcall_deep(&ops, "builtin:HttpMethods"), 1);
+
+        let tree = crate::parser_api_stability::parse_script(
+            "function probe(require) {\n\
+               return require('http').createServer();\n\
+             }\n",
+        )
+        .expect("parse script");
+        let ir0 = Ir0Module::from_syntax_tree(tree, "http_inline_require_shadow_bd_d0n7u.js");
+        let error = lower_ir0_to_ir1(&ir0)
+            .expect_err("a lexical require parameter must not acquire HTTP builtin provenance");
+        assert!(
+            matches!(
+                error,
+                LoweringPipelineError::AmbientAuthorityViolation { .. }
+            ),
+            "a lexical require parameter must preserve ambient denial, got {error:?}"
+        );
+    }
+
+    #[test]
+    fn http_alias_sentinel_propagates_and_nested_shadows_suppress_it_bd_d0n7u() {
+        let ops = lower_script_source_ops(
+            "const http = require('http');\n\
+             http.get('http://127.0.0.1:9/');\n\
+             function nested() { return http.createServer(); }\n\
+             function parameterShadow(http) { return http.get('/local'); }\n\
+             { const http = { request() {} }; http.request('/local'); }\n",
+            "http_nested_provenance_bd_d0n7u.js",
+        );
+        assert_eq!(count_hostcall_deep(&ops, "builtin:HttpGet"), 1);
+        assert_eq!(count_hostcall_deep(&ops, "builtin:HttpCreateServer"), 1);
+        assert_eq!(count_hostcall_deep(&ops, "builtin:HttpRequest"), 0);
+    }
+
+    #[test]
+    fn http_mutable_escaped_dynamic_and_tdz_aliases_fail_closed_bd_d0n7u() {
+        for (label, source) in [
+            ("unused", "const http = require('http');"),
+            (
+                "let-alias",
+                "let http = require('http'); http.get('http://127.0.0.1:9/');",
+            ),
+            (
+                "var-alias",
+                "var http = require('http'); http.get('http://127.0.0.1:9/');",
+            ),
+            (
+                "reassigned",
+                "const http = require('http'); http = null; http.createServer();",
+            ),
+            (
+                "member-mutation",
+                "const http = require('http'); http.createServer = () => null; http.createServer();",
+            ),
+            (
+                "alias-escape",
+                "const http = require('http'); consume(http); http.createServer();",
+            ),
+            (
+                "method-escape",
+                "const http = require('http'); const create = http.createServer; create();",
+            ),
+            (
+                "computed",
+                "const http = require('http'); http['get']('http://127.0.0.1:9/');",
+            ),
+            (
+                "optional",
+                "const http = require('http'); http?.get('http://127.0.0.1:9/');",
+            ),
+            (
+                "unknown",
+                "const http = require('http'); http.validateHeaderName('x');",
+            ),
+            (
+                "same-declaration-tdz",
+                "const methods = http.METHODS, http = require('http');",
+            ),
+            (
+                "predeclaration-call-hazard",
+                "probe(); const http = require('http'); function probe() { return http.METHODS; }",
+            ),
+        ] {
+            let tree = crate::parser_api_stability::parse_script(source).expect("parse script");
+            let ir0 = Ir0Module::from_syntax_tree(tree, format!("http_{label}_bd_d0n7u.js"));
+            let error = lower_ir0_to_ir1(&ir0)
+                .expect_err("untrusted HTTP module provenance must preserve ambient denial");
+            assert!(
+                matches!(
+                    error,
+                    LoweringPipelineError::AmbientAuthorityViolation { .. }
+                ),
+                "{label} should preserve ambient require denial, got {error:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn http_loop_assignment_targets_do_not_preserve_module_authority_bd_d0n7u() {
+        for (label, source) in [
+            (
+                "for-of-http",
+                "const http = require('http');\n\
+                 for (http of [null]) {}\n\
+                 http.get('http://127.0.0.1:9/');\n",
+            ),
+            (
+                "for-in-https",
+                "const https = require('https');\n\
+                 for (https in { key: true }) {}\n\
+                 https.get('https://127.0.0.1:9/');\n",
+            ),
+        ] {
+            let tree = crate::parser_api_stability::parse_script(source).expect("parse script");
+            let ir0 = Ir0Module::from_syntax_tree(tree, format!("{label}_bd_d0n7u.js"));
+            let error = lower_ir0_to_ir1(&ir0)
+                .expect_err("a loop assignment target must invalidate module provenance");
+            assert!(
+                matches!(
+                    error,
+                    LoweringPipelineError::AmbientAuthorityViolation { .. }
+                ),
+                "{label} must preserve ambient require denial, got {error:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn zero_argument_http_requests_fail_closed_before_hostcall_bd_d0n7u() {
+        for (label, source) in [
+            ("http-get", "require('http').get();"),
+            ("http-request", "require('http').request();"),
+            ("https-get", "require('https').get();"),
+            ("https-request", "require('https').request();"),
+        ] {
+            let tree = crate::parser_api_stability::parse_script(source).expect("parse script");
+            let ir0 = Ir0Module::from_syntax_tree(tree, format!("zero_arg_{label}_bd_d0n7u.js"));
+            let error = lower_ir0_to_ir1(&ir0)
+                .expect_err("a malformed zero-argument request must not emit a hostcall");
+            assert!(
+                matches!(
+                    error,
+                    LoweringPipelineError::AmbientAuthorityViolation { .. }
+                ),
+                "{label} should fail at the ambient module boundary, got {error:?}"
+            );
+        }
+
+        let named = lower_esm_source_ops(
+            "import { get } from 'node:http';\nget();\n",
+            "zero_arg_named_http_bd_d0n7u.mjs",
+        );
+        assert!(ops_have_http_import_module(&named));
+        assert!(!ops_have_hostcall(&named, "builtin:HttpGet"));
+    }
+
+    /// bd-d0n7u: authenticated plain-http calls enter the hermetic HTTP facade.
+    #[test]
+    fn http_binding_get_lowers_to_http_builtin_bd_d0n7u() {
         let ops = lower_script_source_ops(
             "const http = require('http');\n\
              http.get('http://127.0.0.1:9/');\n",
             "http_binding_get.js",
         );
         assert!(
-            ops_have_hostcall(&ops, "net:request"),
-            "const http = require('http'); http.get(url) must lower to a net:request hostcall"
+            ops_have_hostcall(&ops, "builtin:HttpGet"),
+            "const http = require('http'); http.get(url) must lower to builtin:HttpGet"
         );
     }
 
-    /// bd-656a2 / bd-3894s slice (2b): the inline form
-    /// `require('http').request(url)` lowers to a `net:client_request` HostCall —
-    /// `http.request` returns a writable `ClientRequest` (it does NOT egress at the
-    /// call site, unlike `http.get`), so it gets the ClientRequest-creation
-    /// capability, not the immediate `net:request` egress.
+    /// bd-656a2 / bd-3894s / bd-d0n7u: the inline form
+    /// `require('http').request(url)` enters the hermetic HTTP facade through the
+    /// dedicated `builtin:HttpRequest` capability, never external egress.
     #[test]
-    fn http_inline_request_lowers_to_net_client_request_bd_3894s() {
+    fn http_inline_request_lowers_to_http_builtin_bd_d0n7u() {
         let ops = lower_script_source_ops(
             "require('http').request('http://127.0.0.1:9/');\n",
             "http_inline_request.js",
         );
         assert!(
-            ops_have_hostcall(&ops, "net:client_request"),
-            "require('http').request(url) must lower to a net:client_request hostcall"
+            ops_have_hostcall(&ops, "builtin:HttpRequest"),
+            "require('http').request(url) must lower to builtin:HttpRequest"
         );
         assert!(
-            !ops_have_hostcall(&ops, "net:request"),
-            "http.request must NOT lower to the immediate net:request egress"
+            !ops_have_hostcall(&ops, "net:client_request"),
+            "plain http.request must not lower directly to external egress"
         );
     }
 
-    /// bd-656a2: the https binding form `const https = require('https');
-    /// https.get(url)` shares the http recognizer and lowers to `net:request`.
+    /// bd-656a2 / bd-d0n7u: HTTPS remains external and lowers to `net:request`.
     #[test]
     fn https_binding_get_lowers_to_net_request_bd_656a2() {
         let ops = lower_script_source_ops(
@@ -23995,6 +24332,10 @@ mod tests {
             ops_have_hostcall(&ops, "net:request"),
             "const https = require('https'); https.get(url) must lower to a net:request hostcall"
         );
+        assert!(
+            !ops_have_hostcall(&ops, "builtin:HttpGet"),
+            "HTTPS must never be silently routed through the plaintext HTTP facade"
+        );
     }
 
     /// bd-656a2: `http.get(url)` with NO `const http = require('http')` binding
@@ -24002,12 +24343,12 @@ mod tests {
     /// recorded, so it must NOT lower to `net:request` (the usage-gate is
     /// fail-closed, exactly like the fs binding form).
     #[test]
-    fn unbound_http_get_does_not_lower_to_net_request_bd_656a2() {
+    fn unbound_http_get_does_not_lower_to_http_builtin_bd_d0n7u() {
         let ops =
             lower_script_source_ops("http.get('http://127.0.0.1:9/');\n", "unbound_http_get.js");
         assert!(
-            !ops_have_hostcall(&ops, "net:request"),
-            "http.get(url) without a require('http') binding must not lower to a network hostcall"
+            !ops_have_hostcall(&ops, "builtin:HttpGet"),
+            "http.get(url) without module provenance must not lower to builtin:HttpGet"
         );
     }
 
@@ -24018,7 +24359,7 @@ mod tests {
     /// here: `require` itself trips the ambient-authority gate unless the module is
     /// one of the recognized + usage-confirmed builtins that elide the require.)
     #[test]
-    fn fs_binding_does_not_lower_to_net_request_bd_656a2() {
+    fn fs_binding_does_not_lower_to_http_builtin_bd_d0n7u() {
         let ops = lower_script_source_ops(
             "const fs = require('fs');\n\
              fs.readFileSync('out.txt');\n",
@@ -24029,19 +24370,18 @@ mod tests {
             "the fs binding form must still lower to its fs:read hostcall"
         );
         assert!(
-            !ops_have_hostcall(&ops, "net:request"),
-            "an fs binding must not be mis-recognized as a network hostcall"
+            !ops_have_hostcall(&ops, "builtin:HttpGet"),
+            "an fs binding must not be mis-recognized as an HTTP builtin"
         );
     }
 
     /// bd-3894s (http leg ESM imports): a named ESM import (`import { get,
     /// request } from 'node:http'`) used as direct calls lowers to the http
     /// HostCalls and elides the (fault-prone) node:http module load — the http
-    /// mirror of the fs named-import lowering (bd-1xl17.b). `get` keeps the
-    /// immediate `net:request` egress while `request` (slice 2b) lowers to
-    /// `net:client_request` (writable ClientRequest).
+    /// mirror of the fs named-import lowering (bd-1xl17.b). The two operations
+    /// retain distinct hermetic-facade capabilities.
     #[test]
-    fn esm_named_http_import_lowers_to_net_request_bd_3894s() {
+    fn esm_named_http_import_lowers_to_http_builtins_bd_d0n7u() {
         let ops = lower_esm_source_ops(
             "import { get, request } from 'node:http';\n\
              get('http://127.0.0.1:9/');\n\
@@ -24049,12 +24389,12 @@ mod tests {
             "esm_named_http.mjs",
         );
         assert!(
-            ops_have_hostcall(&ops, "net:request"),
-            "named http import `get(url)` must lower to a net:request hostcall"
+            ops_have_hostcall(&ops, "builtin:HttpGet"),
+            "named http import `get(url)` must lower to builtin:HttpGet"
         );
         assert!(
-            ops_have_hostcall(&ops, "net:client_request"),
-            "named http import `request(url)` must lower to a net:client_request hostcall"
+            ops_have_hostcall(&ops, "builtin:HttpRequest"),
+            "named http import `request(url)` must lower to builtin:HttpRequest"
         );
         assert!(
             !ops_have_http_import_module(&ops),
@@ -24064,17 +24404,17 @@ mod tests {
 
     /// bd-3894s: named http import recognition respects `as` renames — the local
     /// name (`req`), not the imported name, is what the call site uses. `request`
-    /// (slice 2b) lowers to `net:client_request` even under a rename.
+    /// retains its dedicated `builtin:HttpRequest` capability under a rename.
     #[test]
-    fn esm_named_http_import_rename_lowers_to_net_request_bd_3894s() {
+    fn esm_named_http_import_rename_lowers_to_http_builtin_bd_d0n7u() {
         let ops = lower_esm_source_ops(
             "import { request as req } from 'node:http';\n\
              req('http://127.0.0.1:9/');\n",
             "esm_named_rename_http.mjs",
         );
         assert!(
-            ops_have_hostcall(&ops, "net:client_request"),
-            "a renamed http `request` named import must still lower to net:client_request"
+            ops_have_hostcall(&ops, "builtin:HttpRequest"),
+            "a renamed http `request` named import must lower to builtin:HttpRequest"
         );
         assert!(
             !ops_have_http_import_module(&ops),
@@ -24082,19 +24422,103 @@ mod tests {
         );
     }
 
+    #[test]
+    fn esm_named_http_import_mutation_and_escape_fail_closed_bd_d0n7u() {
+        for (label, source) in [
+            (
+                "http-reassigned",
+                "import { get } from 'node:http';\n\
+                 get = localGet;\n\
+                 get('http://127.0.0.1:9/');\n",
+            ),
+            (
+                "http-escaped",
+                "import { request } from 'node:http';\n\
+                 consume(request);\n\
+                 request('http://127.0.0.1:9/');\n",
+            ),
+        ] {
+            let ops = lower_esm_source_ops(source, &format!("esm_named_{label}_bd_d0n7u.mjs"));
+            assert!(
+                ops_have_http_import_module(&ops),
+                "{label} must preserve the real module load after provenance rejection"
+            );
+            for capability in [
+                "builtin:HttpCreateServer",
+                "builtin:HttpGet",
+                "builtin:HttpRequest",
+                "net:request",
+                "net:client_request",
+            ] {
+                assert!(
+                    !ops_have_hostcall(&ops, capability),
+                    "{label} must not retain {capability} authority"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn esm_named_https_import_mutation_and_happy_path_split_bd_d0n7u() {
+        let rejected = lower_esm_source_ops(
+            "import { get } from 'node:https';\n\
+             get = localGet;\n\
+             get('https://127.0.0.1:9/');\n",
+            "esm_named_https_mutation_bd_d0n7u.mjs",
+        );
+        assert!(
+            ops_have_https_import_module(&rejected),
+            "a reassigned HTTPS import must preserve the module load"
+        );
+        assert!(!ops_have_hostcall(&rejected, "net:request"));
+        assert!(!ops_have_hostcall(&rejected, "builtin:HttpGet"));
+
+        let accepted = lower_esm_source_ops(
+            "import { get } from 'node:https';\n\
+             get('https://127.0.0.1:9/');\n",
+            "esm_named_https_happy_bd_d0n7u.mjs",
+        );
+        assert!(ops_have_hostcall(&accepted, "net:request"));
+        assert!(!ops_have_hostcall(&accepted, "builtin:HttpGet"));
+        assert!(!ops_have_https_import_module(&accepted));
+    }
+
+    #[test]
+    fn esm_http_namespace_mutation_and_escape_fail_closed_bd_d0n7u() {
+        for (label, source) in [
+            (
+                "namespace-mutation",
+                "import * as http from 'node:http';\n\
+                 http.get = localGet;\n\
+                 http.get('http://127.0.0.1:9/');\n",
+            ),
+            (
+                "namespace-escape",
+                "import * as http from 'node:http';\n\
+                 consume(http);\n\
+                 http.get('http://127.0.0.1:9/');\n",
+            ),
+        ] {
+            let ops = lower_esm_source_ops(source, &format!("esm_{label}_bd_d0n7u.mjs"));
+            assert!(ops_have_http_import_module(&ops));
+            assert!(!ops_have_hostcall(&ops, "builtin:HttpGet"));
+            assert!(!ops_have_hostcall(&ops, "net:request"));
+        }
+    }
+
     /// bd-3894s: a namespace ESM import (`import * as http from 'node:http'`)
     /// used as `http.get/request(...)` lowers via the shared member-call
     /// recognizer + module-alias sentinel (mirror of the fs namespace form).
     #[test]
-    fn esm_namespace_http_import_lowers_to_net_request_bd_3894s() {
+    fn esm_namespace_http_import_lowers_to_http_builtin_bd_d0n7u() {
         let ops = lower_esm_source_ops(
             "import * as http from 'node:http';\n\
              http.get('http://127.0.0.1:9/');\n",
             "esm_namespace_http.mjs",
         );
         assert!(
-            ops_have_hostcall(&ops, "net:request"),
-            "import * as http from 'node:http'; http.get(url) must lower to net:request"
+            ops_have_hostcall(&ops, "builtin:HttpGet"),
+            "namespace http.get(url) must lower to builtin:HttpGet"
         );
         assert!(
             !ops_have_http_import_module(&ops),
@@ -24103,18 +24527,18 @@ mod tests {
     }
 
     /// bd-3894s: a default ESM import (`import http from 'node:http'`) used as
-    /// `http.request(...)` lowers via the shared member-call recognizer to a
-    /// `net:client_request` HostCall (slice 2b: writable ClientRequest).
+    /// `http.request(...)` lowers via the shared member-call recognizer to the
+    /// dedicated `builtin:HttpRequest` HostCall.
     #[test]
-    fn esm_default_http_import_lowers_to_net_request_bd_3894s() {
+    fn esm_default_http_import_lowers_to_http_builtin_bd_d0n7u() {
         let ops = lower_esm_source_ops(
             "import http from 'node:http';\n\
              http.request('http://127.0.0.1:9/');\n",
             "esm_default_http.mjs",
         );
         assert!(
-            ops_have_hostcall(&ops, "net:client_request"),
-            "import http from 'node:http'; http.request(url) must lower to net:client_request"
+            ops_have_hostcall(&ops, "builtin:HttpRequest"),
+            "default-imported http.request(url) must lower to builtin:HttpRequest"
         );
         assert!(
             !ops_have_http_import_module(&ops),
@@ -24135,8 +24559,8 @@ mod tests {
             "an unused http named import must keep its module load (no recognition)"
         );
         assert!(
-            !ops_have_hostcall(&ops, "net:request"),
-            "an unused http named import must not emit a network hostcall"
+            !ops_have_hostcall(&ops, "builtin:HttpGet"),
+            "an unused http named import must not emit an HTTP builtin"
         );
     }
 
@@ -24153,14 +24577,14 @@ mod tests {
             "esm_named_get_lodash.mjs",
         );
         assert!(
-            !ops_have_hostcall(&ops, "net:request"),
-            "a `get` named-imported from a non-http module must not lower to a network hostcall"
+            !ops_have_hostcall(&ops, "builtin:HttpGet"),
+            "a `get` imported from a non-http module must not lower to builtin:HttpGet"
         );
     }
 
     /// bd-3894s (http leg, fetch global): the bare `fetch(url)` global lowers to
     /// a `net:request` HostCall — the egress proof for the dominant modern HTTP
-    /// idiom, shared with `http.get`/`http.request`.
+    /// idiom. It remains external while plain `http` uses hermetic builtins.
     #[test]
     fn fetch_global_lowers_to_net_request_bd_3894s() {
         let ops = lower_script_source_ops("fetch('http://127.0.0.1:9/');\n", "fetch_global.js");
@@ -24199,9 +24623,9 @@ mod tests {
     }
 
     /// bd-3894s slice (2)+(2b): `http.request(url, { method, headers })` forwards
-    /// the options object as arg[1] (arg_count == 2) on the `net:client_request`
-    /// lowering (the writable ClientRequest seeds its method/headers from it); a
-    /// bare `http.get(url)` stays at arg_count == 1 on `net:request`.
+    /// the options object as arg[1] (arg_count == 2) on the dedicated hermetic
+    /// `builtin:HttpRequest` lowering; a bare `http.get(url)` stays at arg_count
+    /// == 1 on `builtin:HttpGet`.
     #[test]
     fn http_request_with_options_forwards_options_arg_bd_3894s() {
         let ops = lower_script_source_ops(
@@ -24210,11 +24634,11 @@ mod tests {
             "http_request_options.js",
         );
         assert!(
-            ops_have_hostcall(&ops, "net:client_request"),
-            "http.request(url, options) must lower to a net:client_request hostcall"
+            ops_have_hostcall(&ops, "builtin:HttpRequest"),
+            "http.request(url, options) must lower to builtin:HttpRequest"
         );
         assert_eq!(
-            first_hostcall_arg_count(&ops, "net:client_request"),
+            first_hostcall_arg_count(&ops, "builtin:HttpRequest"),
             Some(2),
             "http.request(url, options) must forward the options object as arg[1]"
         );
@@ -24225,7 +24649,7 @@ mod tests {
             "http_get_bare.js",
         );
         assert_eq!(
-            net_request_arg_count(&bare),
+            first_hostcall_arg_count(&bare, "builtin:HttpGet"),
             Some(1),
             "a bare http.get(url) forwards only the URL (arg_count == 1)"
         );
@@ -24243,11 +24667,11 @@ mod tests {
             "http_get_callback.js",
         );
         assert!(
-            ops_have_hostcall(&ops, "net:request"),
-            "http.get(url, cb) must lower to a net:request hostcall"
+            ops_have_hostcall(&ops, "builtin:HttpGet"),
+            "http.get(url, cb) must lower to builtin:HttpGet"
         );
         assert_eq!(
-            net_request_arg_count(&ops),
+            first_hostcall_arg_count(&ops, "builtin:HttpGet"),
             Some(2),
             "http.get(url, cb) must forward the trailing callback closure as arg[1]"
         );
@@ -24266,7 +24690,7 @@ mod tests {
             "http_get_options_callback.js",
         );
         assert_eq!(
-            net_request_arg_count(&ops),
+            first_hostcall_arg_count(&ops, "builtin:HttpGet"),
             Some(3),
             "http.get(url, options, cb) must forward url + options + callback"
         );
@@ -24284,11 +24708,11 @@ mod tests {
             "http_request_callback.js",
         );
         assert!(
-            ops_have_hostcall(&ops, "net:client_request"),
-            "http.request(url, options, cb) must lower to a net:client_request hostcall"
+            ops_have_hostcall(&ops, "builtin:HttpRequest"),
+            "http.request(url, options, cb) must lower to builtin:HttpRequest"
         );
         assert_eq!(
-            first_hostcall_arg_count(&ops, "net:client_request"),
+            first_hostcall_arg_count(&ops, "builtin:HttpRequest"),
             Some(3),
             "http.request(url, options, cb) must forward url + options + callback"
         );

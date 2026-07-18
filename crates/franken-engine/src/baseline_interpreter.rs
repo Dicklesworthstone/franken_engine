@@ -77380,7 +77380,7 @@ mod tests {
             ))
         );
         assert_eq!(result.value, Value::Undefined);
-        assert_eq!(result.instructions_executed, 1);
+        assert_eq!(result.instructions_executed, 2); // NewObject + empty Writable checkpoint scan
     }
 
     #[test]
@@ -80007,7 +80007,7 @@ mod tests {
             Ir3Instruction::Halt,
         ]);
         let result = quickjs_execute(&m).expect("operation should succeed for valid inputs");
-        assert_eq!(result.instructions_executed, 4); // 3 ops + halt
+        assert_eq!(result.instructions_executed, 5); // 3 ops + halt + empty Writable checkpoint scan
     }
 
     // -----------------------------------------------------------------------

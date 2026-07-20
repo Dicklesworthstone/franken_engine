@@ -582,20 +582,33 @@ impl CapabilitySafeHostApiSurface {
             &[RuntimeCapability::ProcessSpawn],
             "Grant `process_spawn` capability before calling node:process.spawn.",
         );
-        surface.insert_descriptor(
-            "hostapi.node-crypto.random-bytes.v1",
-            "node:crypto",
-            "random_bytes",
-            &[RuntimeCapability::IdempotencyDerive],
-            "Grant `idempotency_derive` capability before calling node:crypto.random_bytes.",
-        );
-        surface.insert_descriptor(
-            "hostapi.node-crypto.sha256.v1",
-            "node:crypto",
-            "sha256",
-            &[RuntimeCapability::IdempotencyDerive],
-            "Grant `idempotency_derive` capability before calling node:crypto.sha256.",
-        );
+        for (descriptor_id, operation) in [
+            ("hostapi.node-crypto.create-hash.v1", "create_hash"),
+            ("hostapi.node-crypto.create-hmac.v1", "create_hmac"),
+            (
+                "hostapi.node-crypto.timing-safe-equal.v1",
+                "timing_safe_equal",
+            ),
+            ("hostapi.node-crypto.pbkdf2-sync.v1", "pbkdf2_sync"),
+            ("hostapi.node-crypto.pbkdf2.v1", "pbkdf2"),
+            ("hostapi.node-crypto.scrypt-sync.v1", "scrypt_sync"),
+            ("hostapi.node-crypto.create-cipheriv.v1", "create_cipheriv"),
+            (
+                "hostapi.node-crypto.create-decipheriv.v1",
+                "create_decipheriv",
+            ),
+            ("hostapi.node-crypto.get-hashes.v1", "get_hashes"),
+            ("hostapi.node-crypto.get-ciphers.v1", "get_ciphers"),
+            ("hostapi.node-crypto.constants.v1", "constants"),
+        ] {
+            surface.insert_descriptor(
+                descriptor_id,
+                "node:crypto",
+                operation,
+                &[RuntimeCapability::Builtin],
+                "Grant `builtin` capability before calling deterministic node:crypto compute operations.",
+            );
+        }
 
         surface
     }
@@ -5613,8 +5626,42 @@ mod tests {
         assert!(surface.descriptor("node:fs", "write_file").is_some());
         assert!(surface.descriptor("node:net", "connect").is_some());
         assert!(surface.descriptor("node:process", "spawn").is_some());
-        assert!(surface.descriptor("node:crypto", "random_bytes").is_some());
-        assert!(surface.descriptor("node:crypto", "sha256").is_some());
+        let create_hash = surface
+            .descriptor("node:crypto", "create_hash")
+            .expect("deterministic hash descriptor");
+        assert_eq!(
+            create_hash.required_capabilities,
+            BTreeSet::from([RuntimeCapability::Builtin])
+        );
+        assert!(surface.descriptor("node:crypto", "create_hmac").is_some());
+        assert!(
+            surface
+                .descriptor("node:crypto", "timing_safe_equal")
+                .is_some()
+        );
+        assert!(surface.descriptor("node:crypto", "pbkdf2_sync").is_some());
+        assert!(surface.descriptor("node:crypto", "scrypt_sync").is_some());
+        assert!(
+            surface
+                .descriptor("node:crypto", "create_cipheriv")
+                .is_some()
+        );
+        assert!(
+            surface
+                .descriptor("node:crypto", "create_decipheriv")
+                .is_some()
+        );
+        assert!(surface.descriptor("node:crypto", "get_hashes").is_some());
+        assert!(surface.descriptor("node:crypto", "get_ciphers").is_some());
+        assert!(surface.descriptor("node:crypto", "constants").is_some());
+        assert!(
+            surface.descriptor("node:crypto", "random_int").is_none(),
+            "argument-blind host authorization must not overgrant entropy-producing randomInt"
+        );
+        assert!(
+            surface.descriptor("node:crypto", "random_bytes").is_none(),
+            "entropy-producing operations stay fail-closed until a trusted entropy capability exists"
+        );
     }
 
     #[test]

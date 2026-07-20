@@ -889,6 +889,25 @@ fn lower_ir0_to_ir1_with_ambient_grant(
     for alias in confirmed_zlib_module_aliases(&ir0.tree.body, &binding_lookup) {
         binding_lookup.insert(zlib_module_alias_sentinel(&alias), 0);
     }
+    // bd-2z157: deterministic `crypto` operations are a finite lowering-only
+    // facade. Only immutable const aliases whose complete use stays inside the
+    // authenticated hash/HMAC/KDF/cipher/metadata surface are recorded. CSPRNG,
+    // asymmetric, escaped, mutated, computed, and unsupported uses deliberately
+    // keep the ambient module-load denial. `randomInt` is admitted only for a
+    // statically provable invalid range, so its deterministic validation error
+    // never manufactures entropy.
+    for alias in confirmed_crypto_module_aliases(&ir0.tree.body, &binding_lookup) {
+        binding_lookup.insert(crypto_module_alias_sentinel(&alias), 0);
+    }
+    // bd-1by6p: returned hash/HMAC/cipher objects are real runtime values, but
+    // their finite lifecycle methods need an authenticated lowering contract
+    // too. Record only immutable aliases whose complete use stays inside the
+    // supported static method surface. Those calls carry the receiver through
+    // a private-brand-checked HostCall; mutated, escaped, computed, shadowed,
+    // predeclaration, and unsupported uses retain generic CallMethod semantics.
+    for (alias, surface) in confirmed_crypto_object_aliases(&ir0.tree.body, &binding_lookup) {
+        insert_crypto_object_alias_sentinel(&mut binding_lookup, &alias, surface);
+    }
     // bd-9p2v3: `cluster` is a finite, engine-owned primary-process facade.
     // Only const aliases whose complete use stays inside the authenticated
     // static surface are materialized; bare possession, escape, reassignment,
@@ -2163,6 +2182,9 @@ fn reserve_and_mark_source_scope_bindings(
             .expect("reserved source binding must have an exact id");
         binding_lookup.insert(capture_origin_sentinel(&name), binding_id);
     }
+    for (alias, surface) in confirmed_crypto_object_aliases(statements, binding_lookup) {
+        insert_crypto_object_alias_sentinel(binding_lookup, &alias, surface);
+    }
 }
 
 fn mark_pre_reserved_source_scope_bindings(
@@ -2181,6 +2203,9 @@ fn mark_pre_reserved_source_scope_bindings(
             .get(&name)
             .expect("reserved source binding must have an exact id");
         binding_lookup.insert(capture_origin_sentinel(&name), binding_id);
+    }
+    for (alias, surface) in confirmed_crypto_object_aliases(statements, binding_lookup) {
+        insert_crypto_object_alias_sentinel(binding_lookup, &alias, surface);
     }
 }
 
@@ -2243,6 +2268,9 @@ fn binding_entry_snapshot(
             let pending_stream_promises = pending_stream_promises_binding_sentinel(name);
             let net_module = net_module_alias_sentinel(name);
             let tls_module = tls_module_alias_sentinel(name);
+            let crypto_hash_object = crypto_hash_object_alias_sentinel(name);
+            let crypto_hmac_object = crypto_hmac_object_alias_sentinel(name);
+            let crypto_cipher_object = crypto_cipher_object_alias_sentinel(name);
             [
                 (name.clone(), binding_lookup.get(name).copied()),
                 (origin.clone(), binding_lookup.get(&origin).copied()),
@@ -2300,6 +2328,18 @@ fn binding_entry_snapshot(
                 ),
                 (net_module.clone(), binding_lookup.get(&net_module).copied()),
                 (tls_module.clone(), binding_lookup.get(&tls_module).copied()),
+                (
+                    crypto_hash_object.clone(),
+                    binding_lookup.get(&crypto_hash_object).copied(),
+                ),
+                (
+                    crypto_hmac_object.clone(),
+                    binding_lookup.get(&crypto_hmac_object).copied(),
+                ),
+                (
+                    crypto_cipher_object.clone(),
+                    binding_lookup.get(&crypto_cipher_object).copied(),
+                ),
             ]
         })
         .collect()
@@ -3436,6 +3476,9 @@ fn lower_statement_to_ir1_with_flow(
                             || (is_require_zlib_module_initializer(init, binding_lookup)
                                 && binding_lookup
                                     .contains_key(&zlib_module_alias_sentinel(alias)))
+                            || (is_require_crypto_module_initializer(init, binding_lookup)
+                                && binding_lookup
+                                    .contains_key(&crypto_module_alias_sentinel(alias)))
                             // bd-suwvw: confirmed timers / timers-promises
                             // aliases join the same elision (their operations
                             // are recognized at the member call/read sites).
@@ -5374,7 +5417,7 @@ pub fn lower_ir1_to_ir2(
         .into_iter()
         .map(CapabilityTag)
         .collect();
-    let flow_metrics = infer_ir2_flow_annotations(&mut ir2);
+    let flow_metrics = infer_ir2_flow_annotations(&mut ir2)?;
 
     let source_hash_matches = ir2.header.source_hash.as_ref() == Some(&ir1_hash);
     let hostcall_effects_have_capability = ir2
@@ -9379,11 +9422,8 @@ fn lower_typeof_operand_suppressing_ambient(
 ) -> Result<bool, LoweringPipelineError> {
     match argument {
         Expression::Identifier(name)
-            if (if name == "process" {
-                !has_source_lexical_binding(binding_lookup, name)
-            } else {
-                !is_lexically_shadowed(binding_lookup, name)
-            }) && required_effect_for_ambient_authority(name, None).is_some() =>
+            if !has_source_lexical_binding(binding_lookup, name)
+                && required_effect_for_ambient_authority(name, None).is_some() =>
         {
             // Plain binding load (a forward-ref placeholder resolved later to the
             // runtime global), skipping the Identifier arm's ambient check.
@@ -9416,11 +9456,7 @@ fn lower_typeof_operand_suppressing_ambient(
             let Some(prop_name) = well_formed_static_name(property) else {
                 return Ok(false);
             };
-            let is_shadowed = if obj_name == "process" {
-                has_source_lexical_binding(binding_lookup, obj_name)
-            } else {
-                is_lexically_shadowed(binding_lookup, obj_name)
-            };
+            let is_shadowed = has_source_lexical_binding(binding_lookup, obj_name);
             if is_shadowed
                 || required_effect_for_ambient_authority(obj_name, Some(prop_name)).is_none()
             {
@@ -9911,7 +9947,7 @@ fn lower_expression_to_ir1_inner(
     match expression {
         Expression::Identifier(name) => {
             // Check for ambient authority violation on direct identifier access
-            if !(name == "process" && has_source_lexical_binding(binding_lookup, name))
+            if !has_source_lexical_binding(binding_lookup, name)
                 && let Some(required_effect) = required_effect_for_ambient_authority(name, None)
                 && let Err(caller_profile) =
                     check_ambient_authority_allowed(required_effect, root_scope_id, binding_lookup)
@@ -11251,6 +11287,55 @@ fn lower_expression_to_ir1_inner(
                 });
                 return Ok(());
             }
+            if let Some(capability) =
+                crypto_object_builtin_call_capability(callee, arguments, binding_lookup)
+            {
+                let Expression::Member { object, .. } = callee.as_ref() else {
+                    unreachable!("authenticated crypto object call has a member callee")
+                };
+                let arg_count = arguments.len().checked_add(1).ok_or(
+                    LoweringPipelineError::TooManyArguments {
+                        count: arguments.len(),
+                        max: (u32::MAX as usize).saturating_sub(1),
+                    },
+                )?;
+                if arg_count > u32::MAX as usize {
+                    return Err(LoweringPipelineError::TooManyArguments {
+                        count: arg_count,
+                        max: u32::MAX as usize,
+                    });
+                }
+                // Slot 0 is the real runtime receiver. The interpreter
+                // revalidates it against the private crypto-object side table;
+                // no heap tag or source-level alias can forge this contract.
+                lower_expression_to_ir1(
+                    object,
+                    ops,
+                    bindings,
+                    binding_lookup,
+                    binding_index,
+                    root_scope_id,
+                    label_counter,
+                    span_table,
+                )?;
+                for argument in arguments {
+                    lower_expression_to_ir1(
+                        argument,
+                        ops,
+                        bindings,
+                        binding_lookup,
+                        binding_index,
+                        root_scope_id,
+                        label_counter,
+                        span_table,
+                    )?;
+                }
+                ops.push(Ir1Op::HostCall {
+                    capability: capability.to_string(),
+                    arg_count: arg_count as u32,
+                });
+                return Ok(());
+            }
             if let Some(capability) = math_builtin_call_capability(callee, binding_lookup) {
                 let arg_count = arguments.len();
                 if arg_count > u32::MAX as usize {
@@ -11325,6 +11410,7 @@ fn lower_expression_to_ir1_inner(
             if let Some(capability) = querystring_builtin_call_capability(callee, binding_lookup)
                 .or_else(|| os_builtin_call_capability(callee, binding_lookup))
                 .or_else(|| zlib_builtin_call_capability(callee, binding_lookup))
+                .or_else(|| crypto_builtin_call_capability(callee, arguments, binding_lookup))
                 // bd-suwvw: `require('timers/promises')` member calls
                 // (`tp.setTimeout(ms, value)`, `tp.setInterval(ms)`) share
                 // the slot-0 no-receiver convention with querystring/os.
@@ -11998,7 +12084,7 @@ fn lower_expression_to_ir1_inner(
             }
             if let Expression::Identifier(name) = callee.as_ref()
                 && name == "require"
-                && !is_lexically_shadowed(binding_lookup, name)
+                && !has_source_lexical_binding(binding_lookup, name)
             {
                 // Ambient-authority gate (bd-1lw7r.12): `require` is an ambient
                 // filesystem-authority surface (FsRead). It must be rejected at
@@ -12393,9 +12479,13 @@ fn lower_expression_to_ir1_inner(
             span,
         } => {
             // Check for ambient authority violation on member access
+            // `crypto.constants` is the one authenticated crypto-alias read
+            // whose value is deterministic and engine-owned; exempt it before
+            // the generic `crypto.* => random.read` ambient classifier so the
+            // dedicated lowering below can allocate that immutable bundle.
             if let Expression::Identifier(object_name) = object.as_ref()
-                && !(object_name == "process"
-                    && has_source_lexical_binding(binding_lookup, object_name))
+                && !has_source_lexical_binding(binding_lookup, object_name)
+                && !crypto_constants_member_read(object, property, *computed, binding_lookup)
                 && !*computed
                 && let Expression::Identifier(prop_name) = property.as_ref()
                 && let Some(required_effect) =
@@ -12550,6 +12640,16 @@ fn lower_expression_to_ir1_inner(
             if zlib_constants_member_read(object, property, *computed, binding_lookup) {
                 ops.push(Ir1Op::HostCall {
                     capability: "builtin:ZlibConstants".to_string(),
+                    arg_count: 0,
+                });
+                return Ok(());
+            }
+            // bd-2z157: `crypto.constants` is an immutable engine-owned bundle.
+            // As with zlib, the authenticated lowering-only receiver is not
+            // evaluated; the interpreter allocates the constants object.
+            if crypto_constants_member_read(object, property, *computed, binding_lookup) {
+                ops.push(Ir1Op::HostCall {
+                    capability: "builtin:CryptoConstants".to_string(),
                     arg_count: 0,
                 });
                 return Ok(());
@@ -15800,6 +15900,667 @@ fn confirmed_zlib_module_aliases(
 }
 
 // ---------------------------------------------------------------------------
+// Node `crypto` deterministic builtin recognition (bd-2z157)
+// ---------------------------------------------------------------------------
+
+fn is_crypto_module_specifier(specifier: &str) -> bool {
+    specifier == "crypto" || specifier == "node:crypto"
+}
+
+fn crypto_module_alias_sentinel(name: &str) -> String {
+    format!("\0cryptomod\0{name}")
+}
+
+fn crypto_hash_object_alias_sentinel(name: &str) -> String {
+    format!("\0cryptoobj\0hash\0{name}")
+}
+
+fn crypto_hmac_object_alias_sentinel(name: &str) -> String {
+    format!("\0cryptoobj\0hmac\0{name}")
+}
+
+fn crypto_cipher_object_alias_sentinel(name: &str) -> String {
+    format!("\0cryptoobj\0cipher\0{name}")
+}
+
+fn crypto_object_alias_surface(
+    name: &str,
+    binding_lookup: &BTreeMap<String, BindingId>,
+) -> Option<LoweringOnlyModuleAliasSurface> {
+    if binding_lookup.contains_key(&crypto_hash_object_alias_sentinel(name)) {
+        Some(LoweringOnlyModuleAliasSurface::CryptoHashObject)
+    } else if binding_lookup.contains_key(&crypto_hmac_object_alias_sentinel(name)) {
+        Some(LoweringOnlyModuleAliasSurface::CryptoHmacObject)
+    } else if binding_lookup.contains_key(&crypto_cipher_object_alias_sentinel(name)) {
+        Some(LoweringOnlyModuleAliasSurface::CryptoCipherObject)
+    } else {
+        None
+    }
+}
+
+fn insert_crypto_object_alias_sentinel(
+    binding_lookup: &mut BTreeMap<String, BindingId>,
+    name: &str,
+    surface: LoweringOnlyModuleAliasSurface,
+) {
+    let sentinel = match surface {
+        LoweringOnlyModuleAliasSurface::CryptoHashObject => crypto_hash_object_alias_sentinel(name),
+        LoweringOnlyModuleAliasSurface::CryptoHmacObject => crypto_hmac_object_alias_sentinel(name),
+        LoweringOnlyModuleAliasSurface::CryptoCipherObject => {
+            crypto_cipher_object_alias_sentinel(name)
+        }
+        _ => unreachable!("only crypto-object surfaces have object sentinels"),
+    };
+    binding_lookup.insert(sentinel, 0);
+}
+
+fn is_require_crypto_module_initializer(
+    expr: &Expression,
+    binding_lookup: &BTreeMap<String, BindingId>,
+) -> bool {
+    let Expression::Call {
+        callee, arguments, ..
+    } = expr
+    else {
+        return false;
+    };
+    matches!(callee.as_ref(), Expression::Identifier(name)
+        if name == "require" && !is_lexically_shadowed(binding_lookup, name))
+        && matches!(arguments.as_slice(), [specifier]
+            if well_formed_string_literal(specifier).is_some_and(is_crypto_module_specifier))
+}
+
+/// Finite deterministic crypto surface. Entropy and asymmetric-key operations
+/// are intentionally absent: recognizing them would turn an ambient-denied
+/// module load into authority the lowering pass cannot honestly supply.
+fn crypto_deterministic_method_capability(method: &str) -> Option<&'static str> {
+    match method {
+        "createHash" => Some("builtin:CryptoCreateHash"),
+        "createHmac" => Some("builtin:CryptoCreateHmac"),
+        "timingSafeEqual" => Some("builtin:CryptoTimingSafeEqual"),
+        "pbkdf2Sync" => Some("builtin:CryptoPbkdf2Sync"),
+        "pbkdf2" => Some("builtin:CryptoPbkdf2"),
+        "scryptSync" => Some("builtin:CryptoScryptSync"),
+        "createCipheriv" => Some("builtin:CryptoCreateCipheriv"),
+        "createDecipheriv" => Some("builtin:CryptoCreateDecipheriv"),
+        "getHashes" => Some("builtin:CryptoGetHashes"),
+        "getCiphers" => Some("builtin:CryptoGetCiphers"),
+        _ => None,
+    }
+}
+
+/// `randomInt` normally consumes CSPRNG authority and therefore remains
+/// ambient-denied. A literal range that is already invalid is different: Node
+/// must throw before drawing entropy. Only those statically proved validation
+/// calls receive the deterministic validation hostcall.
+fn crypto_random_int_args_are_statically_invalid(arguments: &[Expression]) -> bool {
+    match arguments {
+        [Expression::NumericLiteral(max)] => *max <= 0,
+        [
+            Expression::NumericLiteral(min),
+            Expression::NumericLiteral(max),
+        ] => min >= max,
+        _ => false,
+    }
+}
+
+fn crypto_method_call_capability(method: &str, arguments: &[Expression]) -> Option<&'static str> {
+    if arguments
+        .iter()
+        .any(|argument| matches!(argument, Expression::SpreadElement(_)))
+    {
+        return None;
+    }
+    crypto_deterministic_method_capability(method).or_else(|| {
+        (method == "randomInt" && crypto_random_int_args_are_statically_invalid(arguments))
+            .then_some("builtin:CryptoRandomInt")
+    })
+}
+
+fn is_crypto_module_object(
+    expr: &Expression,
+    binding_lookup: &BTreeMap<String, BindingId>,
+) -> bool {
+    match expr {
+        Expression::Identifier(alias) => {
+            binding_lookup.contains_key(&crypto_module_alias_sentinel(alias))
+        }
+        Expression::Call { .. } => is_require_crypto_module_initializer(expr, binding_lookup),
+        _ => false,
+    }
+}
+
+fn crypto_builtin_call_capability(
+    callee: &Expression,
+    arguments: &[Expression],
+    binding_lookup: &BTreeMap<String, BindingId>,
+) -> Option<&'static str> {
+    let Expression::Member {
+        object,
+        property,
+        computed: false,
+        ..
+    } = callee
+    else {
+        return None;
+    };
+    if !is_crypto_module_object(object, binding_lookup) {
+        return None;
+    }
+    crypto_method_call_capability(well_formed_static_name(property)?, arguments)
+}
+
+fn crypto_object_method_capability(method: &str) -> Option<&'static str> {
+    match method {
+        "update" => Some("builtin:CryptoObjectUpdate"),
+        "digest" => Some("builtin:CryptoObjectDigest"),
+        "copy" => Some("builtin:CryptoObjectCopy"),
+        "final" => Some("builtin:CryptoObjectFinal"),
+        "getAuthTag" => Some("builtin:CryptoObjectGetAuthTag"),
+        "setAuthTag" => Some("builtin:CryptoObjectSetAuthTag"),
+        _ => None,
+    }
+}
+
+fn crypto_object_factory_surface(
+    expression: &Expression,
+    binding_lookup: &BTreeMap<String, BindingId>,
+) -> Option<LoweringOnlyModuleAliasSurface> {
+    let Expression::Call {
+        callee, arguments, ..
+    } = expression
+    else {
+        return None;
+    };
+    match crypto_builtin_call_capability(callee, arguments, binding_lookup) {
+        Some("builtin:CryptoCreateHash") => Some(LoweringOnlyModuleAliasSurface::CryptoHashObject),
+        Some("builtin:CryptoCreateHmac") => Some(LoweringOnlyModuleAliasSurface::CryptoHmacObject),
+        Some("builtin:CryptoCreateCipheriv" | "builtin:CryptoCreateDecipheriv") => {
+            Some(LoweringOnlyModuleAliasSurface::CryptoCipherObject)
+        }
+        _ => None,
+    }
+}
+
+/// Recover the authenticated crypto-object surface produced by an expression
+/// without consulting guest-visible heap tags. Besides a direct factory call,
+/// hash/HMAC methods whose Node contract returns an authenticated object may
+/// participate in a finite static chain. Cipher `setAuthTag` is deliberately
+/// absent: its fluent return remains outside the accepted surface until that
+/// contract is implemented explicitly (bd-2z157).
+fn crypto_object_expression_surface(
+    expression: &Expression,
+    binding_lookup: &BTreeMap<String, BindingId>,
+) -> Option<LoweringOnlyModuleAliasSurface> {
+    if let Some(surface) = crypto_object_factory_surface(expression, binding_lookup) {
+        return Some(surface);
+    }
+    if let Expression::Identifier(alias) = expression {
+        return crypto_object_alias_surface(alias, binding_lookup);
+    }
+    let Expression::Call {
+        callee, arguments, ..
+    } = expression
+    else {
+        return None;
+    };
+    if arguments
+        .iter()
+        .any(|argument| matches!(argument, Expression::SpreadElement(_)))
+    {
+        return None;
+    }
+    let Expression::Member {
+        object,
+        property,
+        computed: false,
+        ..
+    } = callee.as_ref()
+    else {
+        return None;
+    };
+    let surface = crypto_object_expression_surface(object, binding_lookup)?;
+    let method = well_formed_static_name(property)?;
+    match (surface, method) {
+        (LoweringOnlyModuleAliasSurface::CryptoHashObject, "update" | "copy") => Some(surface),
+        (LoweringOnlyModuleAliasSurface::CryptoHmacObject, "update") => Some(surface),
+        _ => None,
+    }
+}
+
+fn crypto_object_builtin_call_capability(
+    callee: &Expression,
+    arguments: &[Expression],
+    binding_lookup: &BTreeMap<String, BindingId>,
+) -> Option<&'static str> {
+    let Expression::Member {
+        object,
+        property,
+        computed: false,
+        ..
+    } = callee
+    else {
+        return None;
+    };
+    let surface = crypto_object_expression_surface(object, binding_lookup)?;
+    if arguments
+        .iter()
+        .any(|argument| matches!(argument, Expression::SpreadElement(_)))
+    {
+        return None;
+    }
+    let method = well_formed_static_name(property)?;
+    let capability = crypto_object_method_capability(method)?;
+    match surface {
+        LoweringOnlyModuleAliasSurface::CryptoHashObject
+            if matches!(method, "update" | "digest" | "copy") =>
+        {
+            Some(capability)
+        }
+        LoweringOnlyModuleAliasSurface::CryptoHmacObject
+            if matches!(method, "update" | "digest") =>
+        {
+            Some(capability)
+        }
+        LoweringOnlyModuleAliasSurface::CryptoCipherObject
+            if matches!(method, "update" | "final" | "getAuthTag" | "setAuthTag") =>
+        {
+            Some(capability)
+        }
+        _ => None,
+    }
+}
+
+fn crypto_constants_member_read(
+    object: &Expression,
+    property: &Expression,
+    computed: bool,
+    binding_lookup: &BTreeMap<String, BindingId>,
+) -> bool {
+    if computed || !is_crypto_module_object(object, binding_lookup) {
+        return false;
+    }
+    well_formed_static_name(property) == Some("constants")
+}
+
+fn is_crypto_alias_usage(expr: &Expression, alias: &str) -> bool {
+    match expr {
+        Expression::Call {
+            callee, arguments, ..
+        } => module_alias_member_name(callee, alias)
+            .is_some_and(|method| crypto_method_call_capability(method, arguments).is_some()),
+        Expression::Member { .. } => module_alias_member_name(expr, alias) == Some("constants"),
+        _ => false,
+    }
+}
+
+fn is_crypto_object_alias_usage(
+    expr: &Expression,
+    alias: &str,
+    surface: LoweringOnlyModuleAliasSurface,
+) -> bool {
+    matches!(
+        expr,
+        Expression::Call {
+            callee,
+            arguments,
+            ..
+        } if module_alias_member_name(callee, alias).is_some_and(|method| match surface {
+            LoweringOnlyModuleAliasSurface::CryptoHashObject => {
+                matches!(method, "update" | "digest" | "copy")
+            }
+            LoweringOnlyModuleAliasSurface::CryptoHmacObject => {
+                matches!(method, "update" | "digest")
+            }
+            LoweringOnlyModuleAliasSurface::CryptoCipherObject => {
+                matches!(method, "update" | "final" | "getAuthTag" | "setAuthTag")
+            }
+            _ => false,
+        })
+            && arguments
+                .iter()
+                .all(|argument| !matches!(argument, Expression::SpreadElement(_)))
+    )
+}
+
+fn is_discarded_crypto_identity_call(
+    expr: &Expression,
+    alias: &str,
+    surface: LoweringOnlyModuleAliasSurface,
+) -> bool {
+    matches!(
+        expr,
+        Expression::Call {
+            callee,
+            arguments,
+            ..
+        } if module_alias_member_name(callee, alias).is_some_and(|method| match surface {
+            LoweringOnlyModuleAliasSurface::CryptoHashObject => {
+                matches!(method, "update" | "copy")
+            }
+            LoweringOnlyModuleAliasSurface::CryptoHmacObject => method == "update",
+            LoweringOnlyModuleAliasSurface::CryptoCipherObject => method == "setAuthTag",
+            _ => false,
+        })
+            && arguments
+                .iter()
+                .all(|argument| !matches!(argument, Expression::SpreadElement(_)))
+    )
+}
+
+fn crypto_object_alias_identity_chain_rejected_use(
+    expr: &Expression,
+    alias: &str,
+    surface: LoweringOnlyModuleAliasSurface,
+) -> Option<bool> {
+    if matches!(expr, Expression::Identifier(name) if name == alias) {
+        return Some(false);
+    }
+    let Expression::Call {
+        callee, arguments, ..
+    } = expr
+    else {
+        return None;
+    };
+    if arguments
+        .iter()
+        .any(|argument| matches!(argument, Expression::SpreadElement(_)))
+    {
+        return None;
+    }
+    let Expression::Member {
+        object,
+        property,
+        computed: false,
+        ..
+    } = callee.as_ref()
+    else {
+        return None;
+    };
+    let receiver_rejected =
+        crypto_object_alias_identity_chain_rejected_use(object, alias, surface)?;
+    let method = well_formed_static_name(property)?;
+    let returns_authenticated_identity = match surface {
+        LoweringOnlyModuleAliasSurface::CryptoHashObject => {
+            matches!(method, "update" | "copy")
+        }
+        LoweringOnlyModuleAliasSurface::CryptoHmacObject => method == "update",
+        _ => false,
+    };
+    returns_authenticated_identity.then(|| {
+        receiver_rejected
+            || arguments
+                .iter()
+                .any(|argument| module_alias_expr_has_rejected_use(argument, alias, surface))
+    })
+}
+
+fn crypto_object_alias_closed_result_call_rejected_use(
+    expr: &Expression,
+    alias: &str,
+    surface: LoweringOnlyModuleAliasSurface,
+) -> Option<bool> {
+    let Expression::Call {
+        callee, arguments, ..
+    } = expr
+    else {
+        return None;
+    };
+    if arguments
+        .iter()
+        .any(|argument| matches!(argument, Expression::SpreadElement(_)))
+    {
+        return None;
+    }
+    let Expression::Member {
+        object,
+        property,
+        computed: false,
+        ..
+    } = callee.as_ref()
+    else {
+        return None;
+    };
+    let receiver_rejected =
+        crypto_object_alias_identity_chain_rejected_use(object, alias, surface)?;
+    let method = well_formed_static_name(property)?;
+    let returns_closed_result = matches!(
+        (surface, method),
+        (
+            LoweringOnlyModuleAliasSurface::CryptoHashObject
+                | LoweringOnlyModuleAliasSurface::CryptoHmacObject,
+            "digest"
+        )
+    );
+    returns_closed_result.then(|| {
+        receiver_rejected
+            || arguments
+                .iter()
+                .any(|argument| module_alias_expr_has_rejected_use(argument, alias, surface))
+    })
+}
+
+/// Recognize the one crypto-object identity transfer that is safe to bind to a
+/// second name: `Hash::copy`, optionally followed by finite `update` calls.
+/// `update` by itself deliberately stays excluded because it aliases the same
+/// mutable lifecycle object; `copy` creates an independently tracked hash.
+fn is_crypto_hash_copy_transfer_initializer(expr: &Expression, source_alias: &str) -> bool {
+    let Expression::Call {
+        callee, arguments, ..
+    } = expr
+    else {
+        return false;
+    };
+    if arguments
+        .iter()
+        .any(|argument| matches!(argument, Expression::SpreadElement(_)))
+        || arguments.iter().any(|argument| {
+            module_alias_expr_has_rejected_use(
+                argument,
+                source_alias,
+                LoweringOnlyModuleAliasSurface::CryptoHashObject,
+            )
+        })
+    {
+        return false;
+    }
+    let Expression::Member {
+        object,
+        property,
+        computed: false,
+        ..
+    } = callee.as_ref()
+    else {
+        return false;
+    };
+    match well_formed_static_name(property) {
+        Some("copy") => {
+            matches!(object.as_ref(), Expression::Identifier(name) if name == source_alias)
+        }
+        Some("update") => is_crypto_hash_copy_transfer_initializer(object, source_alias),
+        _ => false,
+    }
+}
+
+fn crypto_object_alias_has_rejected_use(
+    body: &[Statement],
+    alias: &str,
+    surface: LoweringOnlyModuleAliasSurface,
+    binding_lookup: &BTreeMap<String, BindingId>,
+    active: &mut BTreeSet<String>,
+) -> bool {
+    if !active.insert(alias.to_string()) {
+        return true;
+    }
+
+    let rejected = body.iter().enumerate().any(|(statement_index, statement)| {
+        let Statement::VariableDeclaration(declaration) = statement else {
+            return module_alias_statement_has_rejected_use(statement, alias, surface);
+        };
+        declaration
+            .declarations
+            .iter()
+            .enumerate()
+            .any(|(declarator_index, declarator)| {
+                if net_pattern_binds_alias(&declarator.pattern, alias) {
+                    return declarator.initializer.as_ref().is_some_and(|initializer| {
+                        module_alias_expr_has_rejected_use(initializer, alias, surface)
+                    });
+                }
+                if module_alias_binding_pattern_has_rejected_use(
+                    &declarator.pattern,
+                    alias,
+                    surface,
+                ) {
+                    return true;
+                }
+                let Some(initializer) = declarator.initializer.as_ref() else {
+                    return false;
+                };
+                if declaration.kind == VariableDeclarationKind::Const
+                    && surface == LoweringOnlyModuleAliasSurface::CryptoHashObject
+                    && let BindingPattern::Identifier(target_alias) = &declarator.pattern
+                    && is_crypto_hash_copy_transfer_initializer(initializer, alias)
+                {
+                    let target_surface = LoweringOnlyModuleAliasSurface::CryptoHashObject;
+                    return module_alias_has_predeclaration_hazard(
+                        body,
+                        statement_index,
+                        declarator_index,
+                        target_alias,
+                        target_surface,
+                        binding_lookup,
+                    ) || !body.iter().any(|statement| {
+                        module_alias_statement_contains_unshadowed_usage(
+                            statement,
+                            target_alias,
+                            target_surface,
+                        )
+                    }) || crypto_object_alias_has_rejected_use(
+                        body,
+                        target_alias,
+                        target_surface,
+                        binding_lookup,
+                        active,
+                    );
+                }
+                module_alias_expr_has_rejected_use(initializer, alias, surface)
+            })
+    });
+    active.remove(alias);
+    rejected
+}
+
+fn confirmed_crypto_module_aliases(
+    body: &[Statement],
+    binding_lookup: &BTreeMap<String, BindingId>,
+) -> BTreeSet<String> {
+    let mut candidates = BTreeMap::new();
+    for (statement_index, statement) in body.iter().enumerate() {
+        if let Statement::VariableDeclaration(declaration) = statement {
+            if declaration.kind != VariableDeclarationKind::Const {
+                continue;
+            }
+            for (declarator_index, declarator) in declaration.declarations.iter().enumerate() {
+                if let (BindingPattern::Identifier(name), Some(initializer)) =
+                    (&declarator.pattern, &declarator.initializer)
+                    && is_require_crypto_module_initializer(initializer, binding_lookup)
+                {
+                    candidates.insert(name.clone(), (statement_index, declarator_index));
+                }
+            }
+        }
+    }
+
+    candidates
+        .into_iter()
+        .filter(|(alias, (statement_index, declarator_index))| {
+            !module_alias_has_predeclaration_hazard(
+                body,
+                *statement_index,
+                *declarator_index,
+                alias,
+                LoweringOnlyModuleAliasSurface::Crypto,
+                binding_lookup,
+            ) && body.iter().any(|statement| {
+                module_alias_statement_contains_unshadowed_usage(
+                    statement,
+                    alias,
+                    LoweringOnlyModuleAliasSurface::Crypto,
+                )
+            }) && !body.iter().any(|statement| {
+                module_alias_statement_has_rejected_use(
+                    statement,
+                    alias,
+                    LoweringOnlyModuleAliasSurface::Crypto,
+                )
+            })
+        })
+        .map(|(alias, _)| alias)
+        .collect()
+}
+
+fn confirmed_crypto_object_aliases(
+    body: &[Statement],
+    binding_lookup: &BTreeMap<String, BindingId>,
+) -> BTreeMap<String, LoweringOnlyModuleAliasSurface> {
+    let mut confirmed: BTreeMap<String, LoweringOnlyModuleAliasSurface> = BTreeMap::new();
+    loop {
+        let mut augmented_lookup = binding_lookup.clone();
+        for (alias, surface) in &confirmed {
+            insert_crypto_object_alias_sentinel(&mut augmented_lookup, alias, *surface);
+        }
+
+        let mut discovered = Vec::new();
+        for (statement_index, statement) in body.iter().enumerate() {
+            if let Statement::VariableDeclaration(declaration) = statement {
+                if declaration.kind != VariableDeclarationKind::Const {
+                    continue;
+                }
+                for (declarator_index, declarator) in declaration.declarations.iter().enumerate() {
+                    let (BindingPattern::Identifier(name), Some(initializer)) =
+                        (&declarator.pattern, &declarator.initializer)
+                    else {
+                        continue;
+                    };
+                    if confirmed.contains_key(name) {
+                        continue;
+                    }
+                    let Some(surface) =
+                        crypto_object_expression_surface(initializer, &augmented_lookup)
+                    else {
+                        continue;
+                    };
+                    if !module_alias_has_predeclaration_hazard(
+                        body,
+                        statement_index,
+                        declarator_index,
+                        name,
+                        surface,
+                        &augmented_lookup,
+                    ) && body.iter().any(|statement| {
+                        module_alias_statement_contains_unshadowed_usage(statement, name, surface)
+                    }) && !crypto_object_alias_has_rejected_use(
+                        body,
+                        name,
+                        surface,
+                        &augmented_lookup,
+                        &mut BTreeSet::new(),
+                    ) {
+                        discovered.push((name.clone(), surface));
+                    }
+                }
+            }
+        }
+
+        if discovered.is_empty() {
+            return confirmed;
+        }
+        confirmed.extend(discovered);
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Node `cluster` primary-process facade recognition (bd-9p2v3)
 // ---------------------------------------------------------------------------
 
@@ -16256,10 +17017,15 @@ fn seed_zlib_module_alias_sentinels(
             body_lookup.insert(key.clone(), 0);
         }
     }
+    // Crypto shares the same immutable lowering-only alias lifetime: every
+    // function-like scope that carries zlib provenance must also carry crypto
+    // provenance, with the same lexical-shadow suppression below.
+    seed_crypto_module_alias_sentinels(body_lookup, outer_lookup);
 }
 
 fn suppress_zlib_module_sentinel(binding_lookup: &mut BTreeMap<String, BindingId>, name: &str) {
     binding_lookup.remove(&zlib_module_alias_sentinel(name));
+    suppress_crypto_module_sentinel(binding_lookup, name);
 }
 
 fn suppress_zlib_module_sentinels(
@@ -16267,7 +17033,38 @@ fn suppress_zlib_module_sentinels(
     names: &BTreeSet<String>,
 ) {
     for name in names {
-        suppress_zlib_module_sentinel(binding_lookup, name);
+        binding_lookup.remove(&zlib_module_alias_sentinel(name));
+    }
+    suppress_crypto_module_sentinels(binding_lookup, names);
+}
+
+/// Retain authenticated crypto-module provenance in nested callbacks. The
+/// runtime values returned by `createHash`/`createCipheriv` are ordinary heap
+/// objects, but the module alias itself remains lowering-only.
+fn seed_crypto_module_alias_sentinels(
+    body_lookup: &mut BTreeMap<String, BindingId>,
+    outer_lookup: &BTreeMap<String, BindingId>,
+) {
+    for key in outer_lookup.keys() {
+        if key.starts_with("\0cryptomod\0") || key.starts_with("\0cryptoobj\0") {
+            body_lookup.insert(key.clone(), 0);
+        }
+    }
+}
+
+fn suppress_crypto_module_sentinel(binding_lookup: &mut BTreeMap<String, BindingId>, name: &str) {
+    binding_lookup.remove(&crypto_module_alias_sentinel(name));
+    binding_lookup.remove(&crypto_hash_object_alias_sentinel(name));
+    binding_lookup.remove(&crypto_hmac_object_alias_sentinel(name));
+    binding_lookup.remove(&crypto_cipher_object_alias_sentinel(name));
+}
+
+fn suppress_crypto_module_sentinels(
+    binding_lookup: &mut BTreeMap<String, BindingId>,
+    names: &BTreeSet<String>,
+) {
+    for name in names {
+        suppress_crypto_module_sentinel(binding_lookup, name);
     }
 }
 
@@ -16459,10 +17256,23 @@ enum LoweringOnlyModuleAliasSurface {
     HttpNamedRequest,
     Tls,
     Zlib,
+    Crypto,
+    CryptoHashObject,
+    CryptoHmacObject,
+    CryptoCipherObject,
     Cluster,
     StreamConstructor,
     StreamPipeline,
     StreamPromises,
+}
+
+impl LoweringOnlyModuleAliasSurface {
+    fn is_crypto_object(self) -> bool {
+        matches!(
+            self,
+            Self::CryptoHashObject | Self::CryptoHmacObject | Self::CryptoCipherObject
+        )
+    }
 }
 
 fn module_alias_member_name<'a>(callee: &'a Expression, alias: &str) -> Option<&'a str> {
@@ -16564,6 +17374,12 @@ fn is_module_alias_usage(
             is_tls_alias_call(expr, alias) || is_tls_alias_constant_read(expr, alias)
         }
         LoweringOnlyModuleAliasSurface::Zlib => is_zlib_alias_usage(expr, alias),
+        LoweringOnlyModuleAliasSurface::Crypto => is_crypto_alias_usage(expr, alias),
+        LoweringOnlyModuleAliasSurface::CryptoHashObject
+        | LoweringOnlyModuleAliasSurface::CryptoHmacObject
+        | LoweringOnlyModuleAliasSurface::CryptoCipherObject => {
+            is_crypto_object_alias_usage(expr, alias, surface)
+        }
         LoweringOnlyModuleAliasSurface::Cluster => is_cluster_alias_usage(expr, alias),
         LoweringOnlyModuleAliasSurface::StreamConstructor => is_stream_constructor_use(expr, alias),
         LoweringOnlyModuleAliasSurface::StreamPipeline => {
@@ -16726,6 +17542,39 @@ fn net_function_scope_shadows_alias(
             .any(|statement| net_statement_hoists_var_alias(statement, alias))
 }
 
+fn crypto_object_params_have_outer_alias_use(
+    name: Option<&str>,
+    params: &[FunctionParam],
+    alias: &str,
+    surface: LoweringOnlyModuleAliasSurface,
+) -> bool {
+    if name == Some(alias)
+        || params
+            .iter()
+            .any(|param| net_pattern_binds_alias(&param.pattern, alias))
+    {
+        return false;
+    }
+    params.iter().any(|param| {
+        module_alias_binding_pattern_contains_unshadowed_usage(&param.pattern, alias, surface)
+            || module_alias_binding_pattern_has_rejected_use(&param.pattern, alias, surface)
+    })
+}
+
+fn crypto_object_body_has_outer_alias_use(
+    name: Option<&str>,
+    params: &[FunctionParam],
+    body: &[Statement],
+    alias: &str,
+    surface: LoweringOnlyModuleAliasSurface,
+) -> bool {
+    !net_function_scope_shadows_alias(name, params, body, alias)
+        && body.iter().any(|statement| {
+            module_alias_statement_contains_unshadowed_usage(statement, alias, surface)
+                || module_alias_statement_has_rejected_use(statement, alias, surface)
+        })
+}
+
 fn module_alias_expr_contains_unshadowed_usage(
     expr: &Expression,
     alias: &str,
@@ -16741,6 +17590,28 @@ fn module_alias_expr_contains_unshadowed_usage(
                 .any(|param| net_pattern_binds_alias(&param.pattern, alias))
             {
                 return false;
+            }
+            if surface.is_crypto_object() {
+                return params.iter().any(|param| {
+                    module_alias_binding_pattern_contains_unshadowed_usage(
+                        &param.pattern,
+                        alias,
+                        surface,
+                    ) || module_alias_binding_pattern_has_rejected_use(
+                        &param.pattern,
+                        alias,
+                        surface,
+                    )
+                }) || match body {
+                    ArrowBody::Expression(inner) => {
+                        module_alias_expr_contains_unshadowed_usage(inner, alias, surface)
+                            || module_alias_expr_has_rejected_use(inner, alias, surface)
+                    }
+                    ArrowBody::Block(block) => block.body.iter().any(|statement| {
+                        module_alias_statement_contains_unshadowed_usage(statement, alias, surface)
+                            || module_alias_statement_has_rejected_use(statement, alias, surface)
+                    }),
+                };
             }
             params.iter().any(|param| {
                 module_alias_binding_pattern_contains_unshadowed_usage(
@@ -16836,6 +17707,32 @@ fn module_alias_expr_contains_unshadowed_usage(
             super_class,
             body,
         } => {
+            if surface.is_crypto_object()
+                && name.as_deref() != Some(alias)
+                && body.iter().any(|method| {
+                    !net_function_scope_shadows_alias(
+                        None,
+                        &method.params,
+                        &method.body.body,
+                        alias,
+                    ) && (method.params.iter().any(|param| {
+                        module_alias_binding_pattern_contains_unshadowed_usage(
+                            &param.pattern,
+                            alias,
+                            surface,
+                        ) || module_alias_binding_pattern_has_rejected_use(
+                            &param.pattern,
+                            alias,
+                            surface,
+                        )
+                    }) || method.body.body.iter().any(|statement| {
+                        module_alias_statement_contains_unshadowed_usage(statement, alias, surface)
+                            || module_alias_statement_has_rejected_use(statement, alias, surface)
+                    }))
+                })
+            {
+                return true;
+            }
             super_class.as_deref().is_some_and(|super_class| {
                 module_alias_expr_contains_unshadowed_usage(super_class, alias, surface)
             }) || (name.as_deref() != Some(alias)
@@ -16891,6 +17788,10 @@ fn module_alias_write_target_has_rejected_use(
             module_alias_member_name(target, alias).is_some()
                 || (surface == LoweringOnlyModuleAliasSurface::Zlib
                     && module_alias_expr_contains_unshadowed_usage(target, alias, surface))
+                || (surface == LoweringOnlyModuleAliasSurface::Crypto
+                    && module_alias_expr_contains_unshadowed_usage(target, alias, surface))
+                || (surface.is_crypto_object()
+                    && module_alias_expr_contains_unshadowed_usage(target, alias, surface))
                 || (surface == LoweringOnlyModuleAliasSurface::Cluster
                     && module_alias_expr_contains_unshadowed_usage(target, alias, surface))
                 || module_alias_expr_has_rejected_use(object, alias, surface)
@@ -16909,6 +17810,12 @@ fn module_alias_expr_has_rejected_use(
     alias: &str,
     surface: LoweringOnlyModuleAliasSurface,
 ) -> bool {
+    if surface.is_crypto_object()
+        && let Some(rejected) =
+            crypto_object_alias_closed_result_call_rejected_use(expr, alias, surface)
+    {
+        return rejected;
+    }
     match expr {
         Expression::Identifier(name) => name == alias,
         Expression::Call { .. }
@@ -16941,6 +17848,13 @@ fn module_alias_expr_has_rejected_use(
             LoweringOnlyModuleAliasSurface::Tls => is_tls_alias_call(expr, alias),
             LoweringOnlyModuleAliasSurface::Zlib => module_alias_member_name(callee, alias)
                 .is_some_and(|method| zlib_method_capability(method).is_some()),
+            LoweringOnlyModuleAliasSurface::Crypto => module_alias_member_name(callee, alias)
+                .is_some_and(|method| crypto_method_call_capability(method, arguments).is_some()),
+            LoweringOnlyModuleAliasSurface::CryptoHashObject
+            | LoweringOnlyModuleAliasSurface::CryptoHmacObject
+            | LoweringOnlyModuleAliasSurface::CryptoCipherObject => {
+                is_crypto_object_alias_usage(expr, alias, surface)
+            }
             LoweringOnlyModuleAliasSurface::Cluster => module_alias_member_name(callee, alias)
                 .is_some_and(|method| {
                     cluster_method_is_supported(method) && !matches!(method, "on" | "once")
@@ -16954,9 +17868,10 @@ fn module_alias_expr_has_rejected_use(
             }
         } =>
         {
-            arguments
-                .iter()
-                .any(|argument| module_alias_expr_has_rejected_use(argument, alias, surface))
+            is_discarded_crypto_identity_call(expr, alias, surface)
+                || arguments
+                    .iter()
+                    .any(|argument| module_alias_expr_has_rejected_use(argument, alias, surface))
         }
         Expression::New { callee, arguments }
             if surface == LoweringOnlyModuleAliasSurface::Net
@@ -17004,6 +17919,12 @@ fn module_alias_expr_has_rejected_use(
             false
         }
         Expression::Member { .. }
+            if surface == LoweringOnlyModuleAliasSurface::Crypto
+                && module_alias_member_name(expr, alias) == Some("constants") =>
+        {
+            false
+        }
+        Expression::Member { .. }
             if surface == LoweringOnlyModuleAliasSurface::Http
                 && module_alias_member_name(expr, alias)
                     .is_some_and(|property| http_property_capability(property).is_some()) =>
@@ -17023,6 +17944,37 @@ fn module_alias_expr_has_rejected_use(
                 .any(|param| net_pattern_binds_alias(&param.pattern, alias))
             {
                 return false;
+            }
+            if surface.is_crypto_object() {
+                return params.iter().any(|param| {
+                    module_alias_binding_pattern_contains_unshadowed_usage(
+                        &param.pattern,
+                        alias,
+                        surface,
+                    ) || module_alias_binding_pattern_has_rejected_use(
+                        &param.pattern,
+                        alias,
+                        surface,
+                    )
+                }) || match body {
+                    ArrowBody::Expression(inner) => {
+                        module_alias_expr_contains_unshadowed_usage(inner, alias, surface)
+                            || module_alias_expr_has_rejected_use(inner, alias, surface)
+                    }
+                    ArrowBody::Block(block) => {
+                        if net_function_scope_shadows_alias(None, params, &block.body, alias) {
+                            false
+                        } else {
+                            block.body.iter().any(|statement| {
+                                module_alias_statement_contains_unshadowed_usage(
+                                    statement, alias, surface,
+                                ) || module_alias_statement_has_rejected_use(
+                                    statement, alias, surface,
+                                )
+                            })
+                        }
+                    }
+                };
             }
             params.iter().any(|param| {
                 module_alias_binding_pattern_has_rejected_use(&param.pattern, alias, surface)
@@ -17044,7 +17996,23 @@ fn module_alias_expr_has_rejected_use(
         Expression::Function {
             name, params, body, ..
         } => {
-            !net_function_scope_shadows_alias(name.as_deref(), params, &body.body, alias)
+            let unshadowed =
+                !net_function_scope_shadows_alias(name.as_deref(), params, &body.body, alias);
+            if surface.is_crypto_object() {
+                return crypto_object_params_have_outer_alias_use(
+                    name.as_deref(),
+                    params,
+                    alias,
+                    surface,
+                ) || crypto_object_body_has_outer_alias_use(
+                    name.as_deref(),
+                    params,
+                    &body.body,
+                    alias,
+                    surface,
+                );
+            }
+            unshadowed
                 && (params.iter().any(|param| {
                     module_alias_binding_pattern_has_rejected_use(&param.pattern, alias, surface)
                 }) || body.body.iter().any(|statement| {
@@ -17124,6 +18092,21 @@ fn module_alias_expr_has_rejected_use(
             super_class,
             body,
         } => {
+            if surface.is_crypto_object()
+                && name.as_deref() != Some(alias)
+                && body.iter().any(|method| {
+                    crypto_object_params_have_outer_alias_use(None, &method.params, alias, surface)
+                        || crypto_object_body_has_outer_alias_use(
+                            None,
+                            &method.params,
+                            &method.body.body,
+                            alias,
+                            surface,
+                        )
+                })
+            {
+                return true;
+            }
             super_class.as_deref().is_some_and(|super_class| {
                 module_alias_expr_has_rejected_use(super_class, alias, surface)
             }) || (name.as_deref() != Some(alias)
@@ -17355,8 +18338,19 @@ fn module_alias_statement_contains_unshadowed_usage(
         Statement::Labeled(labeled) => {
             module_alias_statement_contains_unshadowed_usage(&labeled.body, alias, surface)
         }
-        // `with` is rejected by lowering; imports/exports and control-only
-        // statements carry no net alias use.
+        Statement::Export(export) => match &export.kind {
+            ExportKind::Default(expression) => {
+                module_alias_expr_contains_unshadowed_usage(expression, alias, surface)
+            }
+            ExportKind::NamedClause(clause) => {
+                clause.source().is_none()
+                    && parse_named_export_clause_bindings(clause.canonical_head())
+                        .iter()
+                        .any(|(local_name, _)| local_name == alias)
+            }
+        },
+        // `with` is rejected by lowering; imports and control-only statements
+        // carry no module-alias use.
         _ => false,
     }
 }
@@ -17391,6 +18385,16 @@ fn module_alias_statement_has_rejected_use(
                 .iter()
                 .any(|argument| module_alias_expr_has_rejected_use(argument, alias, surface))
         }
+        Statement::Expression(expression)
+            if is_discarded_crypto_identity_call(&expression.expression, alias, surface) =>
+        {
+            let Expression::Call { arguments, .. } = &expression.expression else {
+                unreachable!("discarded crypto identity use is a call")
+            };
+            arguments
+                .iter()
+                .any(|argument| module_alias_expr_has_rejected_use(argument, alias, surface))
+        }
         Statement::Expression(expression) => {
             module_alias_expr_has_rejected_use(&expression.expression, alias, surface)
         }
@@ -17408,20 +18412,51 @@ fn module_alias_statement_has_rejected_use(
         }
         Statement::Block(block) => module_alias_block_has_rejected_use(&block.body, alias, surface),
         Statement::FunctionDeclaration(function) => {
-            !net_function_scope_shadows_alias(
+            let unshadowed = !net_function_scope_shadows_alias(
                 function.name.as_deref(),
                 &function.params,
                 &function.body.body,
                 alias,
-            ) && (function.params.iter().any(|param| {
-                module_alias_binding_pattern_has_rejected_use(&param.pattern, alias, surface)
-            }) || function
-                .body
-                .body
-                .iter()
-                .any(|inner| module_alias_statement_has_rejected_use(inner, alias, surface)))
+            );
+            if surface.is_crypto_object() {
+                return crypto_object_params_have_outer_alias_use(
+                    function.name.as_deref(),
+                    &function.params,
+                    alias,
+                    surface,
+                ) || crypto_object_body_has_outer_alias_use(
+                    function.name.as_deref(),
+                    &function.params,
+                    &function.body.body,
+                    alias,
+                    surface,
+                );
+            }
+            unshadowed
+                && (function.params.iter().any(|param| {
+                    module_alias_binding_pattern_has_rejected_use(&param.pattern, alias, surface)
+                }) || function
+                    .body
+                    .body
+                    .iter()
+                    .any(|inner| module_alias_statement_has_rejected_use(inner, alias, surface)))
         }
         Statement::ClassDeclaration(class) => {
+            if surface.is_crypto_object()
+                && class.name.as_deref() != Some(alias)
+                && class.body.iter().any(|method| {
+                    crypto_object_params_have_outer_alias_use(None, &method.params, alias, surface)
+                        || crypto_object_body_has_outer_alias_use(
+                            None,
+                            &method.params,
+                            &method.body.body,
+                            alias,
+                            surface,
+                        )
+                })
+            {
+                return true;
+            }
             class.super_class.as_deref().is_some_and(|super_class| {
                 module_alias_expr_has_rejected_use(super_class, alias, surface)
             }) || (class.name.as_deref() != Some(alias)
@@ -17531,6 +18566,17 @@ fn module_alias_statement_has_rejected_use(
         Statement::Labeled(labeled) => {
             module_alias_statement_has_rejected_use(&labeled.body, alias, surface)
         }
+        Statement::Export(export) => match &export.kind {
+            ExportKind::Default(expression) => {
+                module_alias_expr_has_rejected_use(expression, alias, surface)
+            }
+            ExportKind::NamedClause(clause) => {
+                clause.source().is_none()
+                    && parse_named_export_clause_bindings(clause.canonical_head())
+                        .iter()
+                        .any(|(local_name, _)| local_name == alias)
+            }
+        },
         _ => false,
     }
 }
@@ -17555,6 +18601,7 @@ fn module_alias_expression_is_predeclaration_call_hazard(
         && !is_require_https_module_initializer(expression, binding_lookup)
         && !is_require_tls_module_initializer(expression, binding_lookup)
         && !is_require_zlib_module_initializer(expression, binding_lookup)
+        && !is_require_crypto_module_initializer(expression, binding_lookup)
         && !is_require_cluster_module_initializer(expression, binding_lookup)
 }
 
@@ -17605,12 +18652,24 @@ fn module_alias_has_predeclaration_hazard(
     surface: LoweringOnlyModuleAliasSurface,
     binding_lookup: &BTreeMap<String, BindingId>,
 ) -> bool {
+    // Crypto lifecycle objects have a stricter, whole-body provenance scan:
+    // every unshadowed function/arrow/class capture of the object alias is a
+    // rejected use. An unrelated call before the lexical initializer therefore
+    // cannot reach a hoisted closure that observes the alias. Applying the
+    // generic call/new hazard here would reject ordinary setup expressions such
+    // as `const bytes = Buffer.from(...); const hash = crypto.createHash(...)`.
+    // Direct prefix uses and all rejected/escaped uses remain fail-closed below.
+    let arbitrary_call_can_observe_hoisted_alias = !surface.is_crypto_object();
     let statement_prefix_has_hazard = body[..statement_index].iter().any(|statement| {
         module_alias_statement_contains_unshadowed_usage(statement, alias, surface)
             || module_alias_statement_has_rejected_use(statement, alias, surface)
-            || timers_scan_statement_deep(statement, &|expression| {
-                module_alias_expression_is_predeclaration_call_hazard(expression, binding_lookup)
-            })
+            || (arbitrary_call_can_observe_hoisted_alias
+                && timers_scan_statement_deep(statement, &|expression| {
+                    module_alias_expression_is_predeclaration_call_hazard(
+                        expression,
+                        binding_lookup,
+                    )
+                }))
     });
     let declarator_prefix_has_hazard = match &body[statement_index] {
         Statement::VariableDeclaration(declaration) => declaration.declarations[..declarator_index]
@@ -17627,17 +18686,19 @@ fn module_alias_has_predeclaration_hazard(
                         alias,
                         surface,
                     )
-                    || module_alias_binding_pattern_has_predeclaration_call_hazard(
-                        &declarator.pattern,
-                        binding_lookup,
-                    )
+                    || (arbitrary_call_can_observe_hoisted_alias
+                        && module_alias_binding_pattern_has_predeclaration_call_hazard(
+                            &declarator.pattern,
+                            binding_lookup,
+                        ))
                     || declarator.initializer.as_ref().is_some_and(|initializer| {
                         module_alias_expr_contains_unshadowed_usage(initializer, alias, surface)
                             || module_alias_expr_has_rejected_use(initializer, alias, surface)
-                            || module_alias_expression_has_predeclaration_call_hazard(
-                                initializer,
-                                binding_lookup,
-                            )
+                            || (arbitrary_call_can_observe_hoisted_alias
+                                && module_alias_expression_has_predeclaration_call_hazard(
+                                    initializer,
+                                    binding_lookup,
+                                ))
                     })
             }),
         _ => true,
@@ -19525,18 +20586,15 @@ fn http_named_import_call_capability(
     let Expression::Identifier(name) = callee else {
         return None;
     };
-    for capability in [
+    [
         "builtin:HttpCreateServer",
         "builtin:HttpGet",
         "builtin:HttpRequest",
         "net:request",
         "net:client_request",
-    ] {
-        if binding_lookup.contains_key(&http_named_import_sentinel(name, capability)) {
-            return Some(capability);
-        }
-    }
-    None
+    ]
+    .into_iter()
+    .find(|&capability| binding_lookup.contains_key(&http_named_import_sentinel(name, capability)))
 }
 
 /// bd-3894s (http leg, fetch global): capability for a bare `fetch(url)` call —
@@ -20964,18 +22022,1082 @@ fn classify_ir1_op(
     }
 }
 
-fn infer_ir2_flow_annotations(ir2: &mut Ir2Module) -> FlowInferenceMetrics {
+#[derive(Clone, Debug)]
+struct FlowValue {
+    identity: usize,
+    label: Label,
+    crypto_origin: Option<usize>,
+    shape: FlowValueShape,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum FlowValueShape {
+    Unknown,
+    Primitive,
+    ClosedResult,
+    FreshAggregate,
+}
+
+impl FlowValueShape {
+    fn is_closed(self) -> bool {
+        !matches!(self, Self::Unknown)
+    }
+}
+
+fn invalidate_nonprimitive_flow_shapes(values: &mut [FlowValue]) {
+    for value in values {
+        if value.shape != FlowValueShape::Primitive {
+            value.shape = FlowValueShape::Unknown;
+        }
+    }
+}
+
+fn invalidate_nonprimitive_binding_flow_shapes(
+    binding_shapes: &mut BTreeMap<BindingId, FlowValueShape>,
+) {
+    for shape in binding_shapes.values_mut() {
+        if *shape != FlowValueShape::Primitive {
+            *shape = FlowValueShape::Unknown;
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CryptoFlowObjectKind {
+    Hash,
+    Hmac,
+    Cipher,
+}
+
+fn crypto_flow_kind_supports_capability(kind: CryptoFlowObjectKind, capability: &str) -> bool {
+    match kind {
+        CryptoFlowObjectKind::Hash => matches!(
+            capability,
+            "builtin:CryptoObjectUpdate"
+                | "builtin:CryptoObjectDigest"
+                | "builtin:CryptoObjectCopy"
+        ),
+        CryptoFlowObjectKind::Hmac => matches!(
+            capability,
+            "builtin:CryptoObjectUpdate" | "builtin:CryptoObjectDigest"
+        ),
+        CryptoFlowObjectKind::Cipher => matches!(
+            capability,
+            "builtin:CryptoObjectUpdate"
+                | "builtin:CryptoObjectFinal"
+                | "builtin:CryptoObjectGetAuthTag"
+                | "builtin:CryptoObjectSetAuthTag"
+        ),
+    }
+}
+
+#[derive(Clone, Debug)]
+struct CryptoFlowObjectState {
+    kind: CryptoFlowObjectKind,
+    lifecycle_label: Label,
+}
+
+fn pop_flow_value(value_stack: &mut Vec<FlowValue>) -> Result<FlowValue, LoweringPipelineError> {
+    value_stack
+        .pop()
+        .ok_or(LoweringPipelineError::ValueStackUnderflow)
+}
+
+fn pop_flow_values(
+    value_stack: &mut Vec<FlowValue>,
+    count: usize,
+) -> Result<Vec<FlowValue>, LoweringPipelineError> {
+    if count > value_stack.len() {
+        return Err(LoweringPipelineError::ValueStackUnderflow);
+    }
+    let mut values = Vec::with_capacity(count.min(1024));
+    for _ in 0..count {
+        values.push(pop_flow_value(value_stack)?);
+    }
+    Ok(values)
+}
+
+fn join_flow_values(values: &[FlowValue]) -> Label {
+    Label::join_all(values.iter().map(|value| value.label.clone())).unwrap_or(Label::Public)
+}
+
+fn fresh_flow_value(label: Label, next_identity: &mut usize) -> FlowValue {
+    let identity = *next_identity;
+    *next_identity = (*next_identity).saturating_add(1);
+    FlowValue {
+        identity,
+        label,
+        crypto_origin: None,
+        shape: FlowValueShape::Unknown,
+    }
+}
+
+fn fresh_shaped_flow_value(
+    label: Label,
+    shape: FlowValueShape,
+    next_identity: &mut usize,
+) -> FlowValue {
+    let mut value = fresh_flow_value(label, next_identity);
+    value.shape = shape;
+    value
+}
+
+fn fresh_crypto_flow_value(
+    label: Label,
+    crypto_origin: Option<usize>,
+    next_identity: &mut usize,
+) -> FlowValue {
+    let mut value = fresh_flow_value(label, next_identity);
+    value.crypto_origin = crypto_origin;
+    value
+}
+
+fn join_binding_label(
+    binding_labels: &mut BTreeMap<BindingId, Label>,
+    binding_id: BindingId,
+    label: &Label,
+) -> bool {
+    match binding_labels.get_mut(&binding_id) {
+        Some(existing) => {
+            let joined = existing.join(label);
+            if *existing == joined {
+                false
+            } else {
+                *existing = joined;
+                true
+            }
+        }
+        None => {
+            binding_labels.insert(binding_id, label.clone());
+            true
+        }
+    }
+}
+
+fn infer_function_capture_label(
+    free_vars: &[String],
+    binding_labels: &BTreeMap<BindingId, Label>,
+) -> Label {
+    let capture_label = Label::join_all(free_vars.iter().map(|runtime_name| {
+        let origin_id = parse_capture_cell_name(runtime_name)
+            .or_else(|| parse_class_expression_self_capture_name(runtime_name))
+            .map(|(origin_id, _)| origin_id);
+        origin_id.map_or(Label::TopSecret, |binding_id| {
+            binding_labels
+                .get(&binding_id)
+                .cloned()
+                // A recognized lexical capture may precede its first store
+                // (notably `const server = make(() => server.close())`). Start
+                // that fixed-point edge at the same Internal unknown-runtime
+                // floor as an ordinary unresolved binding load; later passes
+                // monotonically join the actual store provenance. Only an
+                // unparseable capture identity takes the fail-high branch.
+                .unwrap_or(Label::Internal)
+        })
+    }))
+    .unwrap_or(Label::Public);
+
+    // Function results are not identity transforms of their captures: the
+    // deferred body, caller-supplied parameters, and nested calls can all add
+    // provenance that IR2 does not yet summarize. Preserve the historic
+    // unknown-runtime floor so operand-aware inference never downgrades a
+    // function binding from Internal to Public; bd-qjh7y owns exact summaries.
+    Label::Internal.join(&capture_label)
+}
+
+type CatchRegionEvents = (
+    BTreeMap<usize, Vec<u32>>,
+    BTreeMap<usize, Vec<u32>>,
+    BTreeMap<u32, Label>,
+);
+
+fn ir2_catch_region_events(ir2: &Ir2Module) -> Result<CatchRegionEvents, LoweringPipelineError> {
+    let mut label_positions = BTreeMap::new();
+    for (index, op) in ir2.ops.iter().enumerate() {
+        let Ir1Op::Label { id } = &op.inner else {
+            continue;
+        };
+        if label_positions.insert(*id, index).is_some() {
+            return Err(LoweringPipelineError::InvariantViolation {
+                detail: "lowered exception flow contains a duplicate label",
+            });
+        }
+    }
+
+    struct ProtectedRegion {
+        start_index: usize,
+        target_index: usize,
+        catch_label: Option<u32>,
+        end_index: Option<usize>,
+    }
+
+    let mut regions = Vec::<ProtectedRegion>::new();
+    let mut region_by_begin = BTreeMap::<usize, usize>::new();
+    for (index, op) in ir2.ops.iter().enumerate() {
+        let Ir1Op::BeginTry {
+            catch_label,
+            finally_label,
+        } = &op.inner
+        else {
+            continue;
+        };
+        let Some(&target_index) = label_positions.get(catch_label) else {
+            return Err(LoweringPipelineError::InvariantViolation {
+                detail: "lowered try references missing catch label",
+            });
+        };
+        let Some(start_index) = index.checked_add(1) else {
+            return Err(LoweringPipelineError::InvariantViolation {
+                detail: "lowered try region index overflow",
+            });
+        };
+        if target_index < start_index {
+            return Err(LoweringPipelineError::InvariantViolation {
+                detail: "lowered catch label precedes its protected region",
+            });
+        }
+        let region_id = regions.len();
+        regions.push(ProtectedRegion {
+            start_index,
+            target_index,
+            catch_label: (finally_label.as_ref() != Some(catch_label)).then_some(*catch_label),
+            end_index: None,
+        });
+        region_by_begin.insert(index, region_id);
+    }
+
+    // Abrupt-exit lowering can emit several mutually exclusive `EndTry`
+    // forwarders for one protected region. Attribute every marker to the
+    // innermost lexical region whose target still lies ahead, and use only its
+    // first marker as the end of exception provenance. This excludes the
+    // forwarders' finalizer bodies without letting duplicate inner markers
+    // accidentally terminate an enclosing region.
+    let mut active_regions = Vec::<usize>::new();
+    for (op_index, op) in ir2.ops.iter().enumerate() {
+        while active_regions
+            .last()
+            .is_some_and(|region_id| regions[*region_id].target_index <= op_index)
+        {
+            active_regions.pop();
+        }
+
+        if let Some(&region_id) = region_by_begin.get(&op_index) {
+            if active_regions.last().is_some_and(|parent_id| {
+                regions[region_id].target_index > regions[*parent_id].target_index
+            }) {
+                return Err(LoweringPipelineError::InvariantViolation {
+                    detail: "lowered protected regions cross instead of nesting",
+                });
+            }
+            active_regions.push(region_id);
+        }
+
+        if !matches!(&op.inner, Ir1Op::EndTry) {
+            continue;
+        }
+        let Some(&region_id) = active_regions.last() else {
+            return Err(LoweringPipelineError::InvariantViolation {
+                detail: "lowered EndTry is outside a protected region",
+            });
+        };
+        regions[region_id].end_index.get_or_insert(op_index);
+    }
+
+    let mut starts = BTreeMap::<usize, Vec<u32>>::new();
+    let mut ends = BTreeMap::<usize, Vec<u32>>::new();
+    let mut labels = BTreeMap::<u32, Label>::new();
+
+    for region in regions {
+        let Some(end_index) = region.end_index else {
+            return Err(LoweringPipelineError::InvariantViolation {
+                detail: "lowered protected region has no EndTry marker",
+            });
+        };
+        let Some(catch_label) = region.catch_label else {
+            continue;
+        };
+        starts
+            .entry(region.start_index)
+            .or_default()
+            .push(catch_label);
+        if ends.insert(end_index, vec![catch_label]).is_some() {
+            return Err(LoweringPipelineError::InvariantViolation {
+                detail: "multiple catch regions share one EndTry marker",
+            });
+        }
+        // Even a data-independent engine failure can disclose internal error
+        // details. Direct operands may raise this floor, but never lower it.
+        labels.entry(catch_label).or_insert(Label::Internal);
+    }
+
+    Ok((starts, ends, labels))
+}
+
+fn hostcall_exception_is_operand_derived(capability: &str, inputs: &[FlowValue]) -> bool {
+    if matches!(
+        capability,
+        "builtin:CryptoCreateHash"
+            | "builtin:CryptoCreateHmac"
+            | "builtin:CryptoTimingSafeEqual"
+            | "builtin:CryptoPbkdf2Sync"
+            | "builtin:CryptoPbkdf2"
+            | "builtin:CryptoScryptSync"
+            | "builtin:CryptoCreateCipheriv"
+            | "builtin:CryptoCreateDecipheriv"
+            | "builtin:CryptoGetHashes"
+            | "builtin:CryptoGetCiphers"
+            | "builtin:CryptoConstants"
+            | "builtin:CryptoRandomInt"
+            | "builtin:CryptoObjectUpdate"
+            | "builtin:CryptoObjectDigest"
+            | "builtin:CryptoObjectCopy"
+            | "builtin:CryptoObjectFinal"
+            | "builtin:CryptoObjectGetAuthTag"
+            | "builtin:CryptoObjectSetAuthTag"
+    ) {
+        return inputs
+            .iter()
+            .all(|value| value.shape.is_closed() || value.crypto_origin.is_some());
+    }
+
+    match capability {
+        // These constructors are intercepted only for the unshadowed native
+        // globals. Closed direct inputs cover primitive lengths/offsets,
+        // engine-owned ArrayBuffers/views, and fresh array literals without
+        // admitting arbitrary array-like objects whose properties could carry
+        // unsummarized provenance.
+        "builtin:ArrayBuffer"
+        | "builtin:Uint8Array"
+        | "builtin:Int32Array"
+        | "builtin:Uint32Array"
+        | "builtin:DataView" => inputs.iter().all(|value| value.shape.is_closed()),
+        // Buffer.from and Buffer.alloc/allocUnsafe have a closed exception
+        // contract only for direct primitive arguments. Object arguments can
+        // expose mutable array-like or backing-store state whose provenance is
+        // not summarized by the object register label yet.
+        "builtin:BufferFrom" | "builtin:BufferAlloc" | "builtin:BufferAllocUnsafe" => {
+            !inputs.is_empty()
+                && inputs
+                    .iter()
+                    .all(|value| value.shape == FlowValueShape::Primitive)
+        }
+        // Buffer.concat is finite only when its list is a fresh aggregate of
+        // closed elements. Passive binding storage may retain that proof, but
+        // every mutation, opaque escape, or control-flow merge invalidates it.
+        "builtin:BufferConcat" => inputs.last().is_some_and(|list| {
+            list.shape == FlowValueShape::FreshAggregate
+                && inputs[..inputs.len() - 1]
+                    .iter()
+                    .all(|value| value.shape == FlowValueShape::Primitive)
+        }),
+        _ => false,
+    }
+}
+
+fn ir1_exception_flow_label(
+    op: &Ir1Op,
+    inferred_label: &Label,
+    hostcall_is_operand_derived: bool,
+) -> Option<Label> {
+    match op {
+        // An explicit throw carries precisely the thrown value's provenance.
+        Ir1Op::Throw => Some(inferred_label.clone()),
+        // Finite engine-owned hostcalls derive both results and validation
+        // errors from their direct operands. Dynamic hostcalls have no such
+        // closed contract and therefore remain fail-high.
+        Ir1Op::HostCall { .. } if hostcall_is_operand_derived => {
+            Some(Label::Internal.join(inferred_label))
+        }
+        // Named builtins are fail-high unless their exception contract is
+        // explicitly audited above. Some finite hostcalls synchronously run
+        // guest callbacks, whose thrown values are not summarized by their
+        // direct IR2 operands (for example Array.from and Array#some).
+        Ir1Op::HostCall { .. } => Some(Label::TopSecret),
+        // User code, accessors, coercions, iterators, and resumed computations
+        // can throw values that direct IR2 operands do not summarize yet.
+        Ir1Op::Call { .. }
+        | Ir1Op::CallMethod { .. }
+        | Ir1Op::Construct { .. }
+        | Ir1Op::Await
+        | Ir1Op::Yield { .. }
+        | Ir1Op::GetProperty { .. }
+        | Ir1Op::SetProperty { .. }
+        | Ir1Op::DefineAccessor { .. }
+        | Ir1Op::DeleteProperty { .. }
+        | Ir1Op::BinaryOp { .. }
+        | Ir1Op::UnaryOp { .. }
+        | Ir1Op::ForInInit
+        | Ir1Op::ForInNext { .. }
+        | Ir1Op::ForOfInit
+        | Ir1Op::ForOfNext { .. }
+        | Ir1Op::IteratorClose { .. }
+        | Ir1Op::SpreadIntoArray
+        | Ir1Op::SpreadIntoObject
+        | Ir1Op::ImportModule { .. } => Some(Label::TopSecret),
+        // Allocation and deterministic primitive operations can still fail for
+        // engine-internal reasons, while any disclosed operand data retains its
+        // inferred label.
+        Ir1Op::NewArray { .. } | Ir1Op::NewObject { .. } | Ir1Op::ArraySlice => {
+            Some(Label::Internal.join(inferred_label))
+        }
+        Ir1Op::TemplateLiteral { .. } | Ir1Op::AssignOp { .. } => {
+            Some(Label::Internal.join(inferred_label))
+        }
+        _ => None,
+    }
+}
+
+fn simulate_ir2_flow_labels(
+    ir2: &Ir2Module,
+    binding_labels: &mut BTreeMap<BindingId, Label>,
+    catch_region_events: &CatchRegionEvents,
+) -> Result<(Vec<Label>, bool), LoweringPipelineError> {
+    let mut value_stack = Vec::<FlowValue>::new();
+    let mut next_identity = 0usize;
+    let (catch_region_starts, catch_region_ends, initial_catch_entry_labels) = catch_region_events;
+    let mut catch_entry_labels = initial_catch_entry_labels.clone();
+    let mut active_catch_regions = Vec::<u32>::new();
+    let mut iterator_cleanup_labels = BTreeMap::<u32, usize>::new();
+    let mut binding_crypto_origins = BTreeMap::<BindingId, Option<usize>>::new();
+    let mut binding_flow_shapes = BTreeMap::<BindingId, FlowValueShape>::new();
+    let mut crypto_flow_states = BTreeMap::<usize, CryptoFlowObjectState>::new();
+    let mut inferred_labels = Vec::with_capacity(ir2.ops.len());
+    let mut bindings_changed = false;
+
+    for (op_index, op) in ir2.ops.iter().enumerate() {
+        if let Some(ending) = catch_region_ends.get(&op_index) {
+            for catch_label in ending {
+                if active_catch_regions.pop().as_ref() != Some(catch_label) {
+                    return Err(LoweringPipelineError::InvariantViolation {
+                        detail: "catch region termination is not properly nested",
+                    });
+                }
+            }
+        }
+        if let Some(starting) = catch_region_starts.get(&op_index) {
+            active_catch_regions.extend(starting.iter().copied());
+        }
+        let mut hostcall_is_operand_derived = false;
+        let inferred = match &op.inner {
+            Ir1Op::LoadLiteral { .. } => {
+                let label = infer_data_label_for_op(&op.inner, binding_labels, Label::Public);
+                value_stack.push(fresh_shaped_flow_value(
+                    label.clone(),
+                    FlowValueShape::Primitive,
+                    &mut next_identity,
+                ));
+                label
+            }
+            Ir1Op::LoadBinding { binding_id } => {
+                let crypto_origin = binding_crypto_origins
+                    .get(binding_id)
+                    .copied()
+                    .flatten()
+                    .filter(|origin| crypto_flow_states.contains_key(origin));
+                let label = crypto_origin
+                    .and_then(|origin| crypto_flow_states.get(&origin))
+                    .map(|state| state.lifecycle_label.clone())
+                    .or_else(|| binding_labels.get(binding_id).cloned())
+                    .unwrap_or(Label::Internal);
+                let mut value =
+                    fresh_crypto_flow_value(label.clone(), crypto_origin, &mut next_identity);
+                value.shape = binding_flow_shapes
+                    .get(binding_id)
+                    .copied()
+                    .unwrap_or(FlowValueShape::Unknown);
+                value_stack.push(value);
+                label
+            }
+            Ir1Op::StoreBinding { binding_id } => {
+                let mut value = pop_flow_value(&mut value_stack)?;
+                bindings_changed |= join_binding_label(binding_labels, *binding_id, &value.label);
+                binding_crypto_origins.insert(*binding_id, value.crypto_origin);
+                binding_flow_shapes.insert(*binding_id, value.shape);
+                let label = value.label.clone();
+                // The binding retains a straight-line closed-shape proof until
+                // an operation below can mutate or escape it. The assignment
+                // expression's stack copy is no longer a fresh value.
+                invalidate_nonprimitive_flow_shapes(std::slice::from_mut(&mut value));
+                value_stack.push(value);
+                label
+            }
+            Ir1Op::Call { arg_count } => {
+                let mut inputs = pop_flow_values(&mut value_stack, *arg_count as usize)?;
+                inputs.push(pop_flow_value(&mut value_stack)?);
+                let label = join_flow_values(&inputs);
+                invalidate_nonprimitive_flow_shapes(&mut value_stack);
+                invalidate_nonprimitive_binding_flow_shapes(&mut binding_flow_shapes);
+                value_stack.push(fresh_flow_value(label.clone(), &mut next_identity));
+                label
+            }
+            Ir1Op::CallMethod { arg_count } => {
+                let mut inputs = pop_flow_values(&mut value_stack, *arg_count as usize)?;
+                inputs.push(pop_flow_value(&mut value_stack)?);
+                inputs.push(pop_flow_value(&mut value_stack)?);
+                let label = join_flow_values(&inputs);
+                invalidate_nonprimitive_flow_shapes(&mut value_stack);
+                invalidate_nonprimitive_binding_flow_shapes(&mut binding_flow_shapes);
+                value_stack.push(fresh_flow_value(label.clone(), &mut next_identity));
+                label
+            }
+            Ir1Op::Return => {
+                if op_index + 1 == ir2.ops.len() {
+                    value_stack
+                        .last()
+                        .map_or(Label::Public, |value| value.label.clone())
+                } else {
+                    pop_flow_value(&mut value_stack)?.label
+                }
+            }
+            Ir1Op::ImportModule { .. } => {
+                let label = Label::Internal;
+                invalidate_nonprimitive_flow_shapes(&mut value_stack);
+                invalidate_nonprimitive_binding_flow_shapes(&mut binding_flow_shapes);
+                value_stack.push(fresh_flow_value(label.clone(), &mut next_identity));
+                label
+            }
+            Ir1Op::ExportBinding { .. } => {
+                let mut value = pop_flow_value(&mut value_stack)?;
+                let label = value.label.clone();
+                invalidate_nonprimitive_flow_shapes(std::slice::from_mut(&mut value));
+                invalidate_nonprimitive_binding_flow_shapes(&mut binding_flow_shapes);
+                value_stack.push(value);
+                label
+            }
+            Ir1Op::Await | Ir1Op::Yield { .. } => {
+                let value = pop_flow_value(&mut value_stack)?;
+                // Await resumes with a Promise settlement and Yield resumes
+                // with a caller-supplied value. Neither output is an identity
+                // transform of the suspended operand, so retain the historic
+                // unknown-runtime floor while also preserving any stronger
+                // direct-input label.
+                let label = Label::Internal.join(&value.label);
+                invalidate_nonprimitive_flow_shapes(&mut value_stack);
+                invalidate_nonprimitive_binding_flow_shapes(&mut binding_flow_shapes);
+                value_stack.push(fresh_flow_value(label.clone(), &mut next_identity));
+                label
+            }
+            Ir1Op::Nop => {
+                let value = pop_flow_value(&mut value_stack)?;
+                let label = value.label.clone();
+                value_stack.push(value);
+                label
+            }
+            Ir1Op::Pop | Ir1Op::Discard | Ir1Op::Throw => pop_flow_value(&mut value_stack)?.label,
+            Ir1Op::BeginTry {
+                catch_label: _,
+                finally_label: _,
+            } => Label::Public,
+            Ir1Op::EndTry
+            | Ir1Op::EnterFinally
+            | Ir1Op::EndFinally
+            | Ir1Op::DiscardAbruptCompletion => Label::Public,
+            Ir1Op::BinaryOp { operator } => {
+                if matches!(
+                    operator,
+                    BinaryOperator::LogicalAnd
+                        | BinaryOperator::LogicalOr
+                        | BinaryOperator::NullishCoalescing
+                ) {
+                    return Err(LoweringPipelineError::InvariantViolation {
+                        detail: "logical operators must be short-circuit lowered before IR3",
+                    });
+                }
+                let inputs = pop_flow_values(&mut value_stack, 2)?;
+                let label = join_flow_values(&inputs);
+                invalidate_nonprimitive_flow_shapes(&mut value_stack);
+                invalidate_nonprimitive_binding_flow_shapes(&mut binding_flow_shapes);
+                value_stack.push(fresh_flow_value(label.clone(), &mut next_identity));
+                label
+            }
+            Ir1Op::UnaryOp { operator } => {
+                if matches!(operator, UnaryOperator::Delete) {
+                    return Err(LoweringPipelineError::InvariantViolation {
+                        detail: "delete must lower through delete_property or literal-true path before IR3",
+                    });
+                }
+                let value = pop_flow_value(&mut value_stack)?;
+                let label = value.label;
+                invalidate_nonprimitive_flow_shapes(&mut value_stack);
+                invalidate_nonprimitive_binding_flow_shapes(&mut binding_flow_shapes);
+                value_stack.push(fresh_flow_value(label.clone(), &mut next_identity));
+                label
+            }
+            Ir1Op::AssignOp {
+                binding_id,
+                operator,
+            } => {
+                if matches!(
+                    operator,
+                    AssignmentOperator::LogicalAndAssign
+                        | AssignmentOperator::LogicalOrAssign
+                        | AssignmentOperator::NullishCoalescingAssign
+                ) {
+                    return Err(LoweringPipelineError::InvariantViolation {
+                        detail: "logical compound assignments must be short-circuit lowered before IR3",
+                    });
+                }
+                let may_coerce = !matches!(operator, AssignmentOperator::Assign);
+                let rhs = pop_flow_value(&mut value_stack)?;
+                let label = if matches!(operator, AssignmentOperator::Assign) {
+                    rhs.label
+                } else {
+                    binding_labels
+                        .get(binding_id)
+                        .cloned()
+                        .unwrap_or(Label::Internal)
+                        .join(&rhs.label)
+                };
+                bindings_changed |= join_binding_label(binding_labels, *binding_id, &label);
+                binding_crypto_origins.insert(*binding_id, None);
+                binding_flow_shapes.insert(
+                    *binding_id,
+                    if rhs.shape == FlowValueShape::Primitive {
+                        FlowValueShape::Primitive
+                    } else {
+                        FlowValueShape::Unknown
+                    },
+                );
+                if may_coerce {
+                    invalidate_nonprimitive_flow_shapes(&mut value_stack);
+                    invalidate_nonprimitive_binding_flow_shapes(&mut binding_flow_shapes);
+                }
+                value_stack.push(fresh_flow_value(label.clone(), &mut next_identity));
+                label
+            }
+            Ir1Op::Label { id } => {
+                invalidate_nonprimitive_flow_shapes(&mut value_stack);
+                invalidate_nonprimitive_binding_flow_shapes(&mut binding_flow_shapes);
+                if let Some(catch_label) = catch_entry_labels.get(id) {
+                    value_stack.push(fresh_flow_value(catch_label.clone(), &mut next_identity));
+                }
+                if iterator_cleanup_labels.get(id).is_some_and(|expected| {
+                    value_stack
+                        .last()
+                        .is_some_and(|value| value.identity == *expected)
+                }) {
+                    value_stack.pop();
+                }
+                Label::Public
+            }
+            Ir1Op::Jump { .. } => {
+                invalidate_nonprimitive_flow_shapes(&mut value_stack);
+                invalidate_nonprimitive_binding_flow_shapes(&mut binding_flow_shapes);
+                Label::Public
+            }
+            Ir1Op::JumpIfFalsy { .. } => {
+                let value = pop_flow_value(&mut value_stack)?;
+                let label = value.label.clone();
+                value_stack.push(value);
+                invalidate_nonprimitive_flow_shapes(&mut value_stack);
+                invalidate_nonprimitive_binding_flow_shapes(&mut binding_flow_shapes);
+                label
+            }
+            Ir1Op::JumpIfFalsyConsume { .. }
+            | Ir1Op::JumpIfTruthy { .. }
+            | Ir1Op::JumpIfNullish { .. } => {
+                let label = pop_flow_value(&mut value_stack)?.label;
+                invalidate_nonprimitive_flow_shapes(&mut value_stack);
+                invalidate_nonprimitive_binding_flow_shapes(&mut binding_flow_shapes);
+                label
+            }
+            Ir1Op::GetProperty { key } => {
+                let mut inputs = Vec::with_capacity(2);
+                if matches!(key, Ir1PropertyKey::Dynamic) {
+                    inputs.push(pop_flow_value(&mut value_stack)?);
+                }
+                inputs.push(pop_flow_value(&mut value_stack)?);
+                let label = join_flow_values(&inputs);
+                invalidate_nonprimitive_flow_shapes(&mut value_stack);
+                invalidate_nonprimitive_binding_flow_shapes(&mut binding_flow_shapes);
+                value_stack.push(fresh_flow_value(label.clone(), &mut next_identity));
+                label
+            }
+            Ir1Op::SetProperty { key } => {
+                let mut value = pop_flow_value(&mut value_stack)?;
+                let mut inputs = vec![value.clone()];
+                if matches!(key, Ir1PropertyKey::Dynamic) {
+                    inputs.push(pop_flow_value(&mut value_stack)?);
+                }
+                inputs.push(pop_flow_value(&mut value_stack)?);
+                let label = join_flow_values(&inputs);
+                invalidate_nonprimitive_flow_shapes(&mut value_stack);
+                invalidate_nonprimitive_flow_shapes(std::slice::from_mut(&mut value));
+                invalidate_nonprimitive_binding_flow_shapes(&mut binding_flow_shapes);
+                value_stack.push(value);
+                label
+            }
+            Ir1Op::DefineAccessor { key, .. } => {
+                let function = pop_flow_value(&mut value_stack)?;
+                let mut inputs = vec![function];
+                if matches!(key, Ir1PropertyKey::Dynamic) {
+                    inputs.push(pop_flow_value(&mut value_stack)?);
+                }
+                let object = pop_flow_value(&mut value_stack)?;
+                inputs.push(object.clone());
+                let label = join_flow_values(&inputs);
+                invalidate_nonprimitive_flow_shapes(&mut value_stack);
+                invalidate_nonprimitive_binding_flow_shapes(&mut binding_flow_shapes);
+                value_stack.push(FlowValue {
+                    identity: object.identity,
+                    label: label.clone(),
+                    crypto_origin: None,
+                    shape: FlowValueShape::Unknown,
+                });
+                label
+            }
+            Ir1Op::DeleteProperty { key } => {
+                let mut inputs = Vec::with_capacity(2);
+                if matches!(key, Ir1PropertyKey::Dynamic) {
+                    inputs.push(pop_flow_value(&mut value_stack)?);
+                }
+                inputs.push(pop_flow_value(&mut value_stack)?);
+                let label = join_flow_values(&inputs);
+                invalidate_nonprimitive_flow_shapes(&mut value_stack);
+                invalidate_nonprimitive_binding_flow_shapes(&mut binding_flow_shapes);
+                value_stack.push(fresh_flow_value(label.clone(), &mut next_identity));
+                label
+            }
+            Ir1Op::NewArray { count } => {
+                let inputs = pop_flow_values(&mut value_stack, *count as usize)?;
+                let label = join_flow_values(&inputs);
+                let shape = if inputs.iter().all(|value| value.shape.is_closed()) {
+                    FlowValueShape::FreshAggregate
+                } else {
+                    FlowValueShape::Unknown
+                };
+                value_stack.push(fresh_shaped_flow_value(
+                    label.clone(),
+                    shape,
+                    &mut next_identity,
+                ));
+                label
+            }
+            Ir1Op::NewObject { count } => {
+                let needed = (*count as usize)
+                    .checked_mul(2)
+                    .ok_or(LoweringPipelineError::ValueStackUnderflow)?;
+                let inputs = pop_flow_values(&mut value_stack, needed)?;
+                let label = join_flow_values(&inputs);
+                let shape = if inputs.iter().all(|value| value.shape.is_closed()) {
+                    FlowValueShape::FreshAggregate
+                } else {
+                    FlowValueShape::Unknown
+                };
+                value_stack.push(fresh_shaped_flow_value(
+                    label.clone(),
+                    shape,
+                    &mut next_identity,
+                ));
+                label
+            }
+            Ir1Op::ArrayPush
+            | Ir1Op::ArraySlice
+            | Ir1Op::SpreadIntoArray
+            | Ir1Op::SpreadIntoObject => {
+                let rhs = pop_flow_value(&mut value_stack)?;
+                let lhs = pop_flow_value(&mut value_stack)?;
+                let label = lhs.label.join(&rhs.label);
+                let preserve_identity = matches!(
+                    &op.inner,
+                    Ir1Op::ArrayPush | Ir1Op::SpreadIntoArray | Ir1Op::SpreadIntoObject
+                );
+                invalidate_nonprimitive_flow_shapes(&mut value_stack);
+                invalidate_nonprimitive_binding_flow_shapes(&mut binding_flow_shapes);
+                if preserve_identity {
+                    value_stack.push(FlowValue {
+                        identity: lhs.identity,
+                        label: label.clone(),
+                        crypto_origin: None,
+                        shape: FlowValueShape::Unknown,
+                    });
+                } else {
+                    value_stack.push(fresh_flow_value(label.clone(), &mut next_identity));
+                }
+                label
+            }
+            Ir1Op::LoadThis | Ir1Op::LoadNewTarget | Ir1Op::LoadSuper => {
+                let label = Label::Internal;
+                value_stack.push(fresh_flow_value(label.clone(), &mut next_identity));
+                label
+            }
+            Ir1Op::DeclareFunction {
+                binding_id,
+                free_vars,
+                ..
+            } => {
+                let label = infer_function_capture_label(free_vars, binding_labels);
+                bindings_changed |= join_binding_label(binding_labels, *binding_id, &label);
+                binding_flow_shapes.insert(*binding_id, FlowValueShape::Unknown);
+                value_stack.push(fresh_flow_value(label.clone(), &mut next_identity));
+                label
+            }
+            Ir1Op::CreateFunction { free_vars, .. } => {
+                let label = infer_function_capture_label(free_vars, binding_labels);
+                value_stack.push(fresh_flow_value(label.clone(), &mut next_identity));
+                label
+            }
+            Ir1Op::ForInInit | Ir1Op::ForOfInit => {
+                let source = pop_flow_value(&mut value_stack)?;
+                let label = source.label;
+                invalidate_nonprimitive_flow_shapes(&mut value_stack);
+                invalidate_nonprimitive_binding_flow_shapes(&mut binding_flow_shapes);
+                value_stack.push(fresh_flow_value(label.clone(), &mut next_identity));
+                label
+            }
+            Ir1Op::ForInNext { done_label } | Ir1Op::ForOfNext { done_label } => {
+                let iterator = value_stack
+                    .last()
+                    .cloned()
+                    .ok_or(LoweringPipelineError::ValueStackUnderflow)?;
+                iterator_cleanup_labels
+                    .entry(*done_label)
+                    .or_insert(iterator.identity);
+                let label = iterator.label;
+                invalidate_nonprimitive_flow_shapes(&mut value_stack);
+                invalidate_nonprimitive_binding_flow_shapes(&mut binding_flow_shapes);
+                value_stack.push(fresh_flow_value(label.clone(), &mut next_identity));
+                label
+            }
+            Ir1Op::IteratorClose { .. } => {
+                let label = pop_flow_value(&mut value_stack)?.label;
+                invalidate_nonprimitive_flow_shapes(&mut value_stack);
+                invalidate_nonprimitive_binding_flow_shapes(&mut binding_flow_shapes);
+                label
+            }
+            Ir1Op::Construct { arg_count } => {
+                let count = (*arg_count as usize)
+                    .checked_add(1)
+                    .ok_or(LoweringPipelineError::ValueStackUnderflow)?;
+                let inputs = pop_flow_values(&mut value_stack, count)?;
+                let label = join_flow_values(&inputs);
+                invalidate_nonprimitive_flow_shapes(&mut value_stack);
+                invalidate_nonprimitive_binding_flow_shapes(&mut binding_flow_shapes);
+                value_stack.push(fresh_flow_value(label.clone(), &mut next_identity));
+                label
+            }
+            Ir1Op::TemplateLiteral { quasi_count } => {
+                let count = if *quasi_count == 0 {
+                    0
+                } else {
+                    (*quasi_count as usize)
+                        .checked_mul(2)
+                        .and_then(|count| count.checked_sub(1))
+                        .ok_or(LoweringPipelineError::ValueStackUnderflow)?
+                };
+                let inputs = pop_flow_values(&mut value_stack, count)?;
+                let label = join_flow_values(&inputs);
+                invalidate_nonprimitive_flow_shapes(&mut value_stack);
+                invalidate_nonprimitive_binding_flow_shapes(&mut binding_flow_shapes);
+                value_stack.push(fresh_flow_value(label.clone(), &mut next_identity));
+                label
+            }
+            Ir1Op::HostCall {
+                capability,
+                arg_count,
+            } => {
+                let inputs = pop_flow_values(&mut value_stack, *arg_count as usize)?;
+                hostcall_is_operand_derived =
+                    hostcall_exception_is_operand_derived(capability, &inputs);
+                if !hostcall_is_operand_derived {
+                    // Dynamic/callback-capable hostcalls can observe or mutate
+                    // escaped values. Audited operand-derived hostcalls cannot,
+                    // so they preserve unrelated closed values that are still
+                    // on the stack during nested argument evaluation.
+                    invalidate_nonprimitive_flow_shapes(&mut value_stack);
+                    invalidate_nonprimitive_binding_flow_shapes(&mut binding_flow_shapes);
+                }
+                let direct_label = join_flow_values(&inputs);
+                let mut label = direct_label.clone();
+                let mut result_origin = None;
+                let mut result_shape = FlowValueShape::Unknown;
+
+                let constructor_kind = match capability.as_str() {
+                    "builtin:CryptoCreateHash" => Some(CryptoFlowObjectKind::Hash),
+                    "builtin:CryptoCreateHmac" => Some(CryptoFlowObjectKind::Hmac),
+                    "builtin:CryptoCreateCipheriv" | "builtin:CryptoCreateDecipheriv" => {
+                        Some(CryptoFlowObjectKind::Cipher)
+                    }
+                    _ => None,
+                };
+                if let Some(kind) = constructor_kind {
+                    crypto_flow_states.insert(
+                        op_index,
+                        CryptoFlowObjectState {
+                            kind,
+                            lifecycle_label: label.clone(),
+                        },
+                    );
+                    result_origin = Some(op_index);
+                } else if matches!(
+                    capability.as_str(),
+                    "builtin:CryptoObjectUpdate"
+                        | "builtin:CryptoObjectDigest"
+                        | "builtin:CryptoObjectCopy"
+                        | "builtin:CryptoObjectFinal"
+                        | "builtin:CryptoObjectGetAuthTag"
+                        | "builtin:CryptoObjectSetAuthTag"
+                ) {
+                    let receiver_origin = inputs.last().and_then(|value| value.crypto_origin);
+                    if let Some((origin, prior)) = receiver_origin
+                        .and_then(|origin| {
+                            crypto_flow_states
+                                .get(&origin)
+                                .cloned()
+                                .map(|state| (origin, state))
+                        })
+                        .filter(|(_, state)| {
+                            crypto_flow_kind_supports_capability(state.kind, capability)
+                        })
+                    {
+                        label = prior.lifecycle_label.join(&direct_label);
+                        match capability.as_str() {
+                            "builtin:CryptoObjectUpdate" => {
+                                crypto_flow_states.insert(
+                                    origin,
+                                    CryptoFlowObjectState {
+                                        kind: prior.kind,
+                                        lifecycle_label: label.clone(),
+                                    },
+                                );
+                                if matches!(
+                                    prior.kind,
+                                    CryptoFlowObjectKind::Hash | CryptoFlowObjectKind::Hmac
+                                ) {
+                                    result_origin = Some(origin);
+                                } else {
+                                    result_shape = FlowValueShape::ClosedResult;
+                                }
+                            }
+                            "builtin:CryptoObjectCopy" => {
+                                if prior.kind == CryptoFlowObjectKind::Hash {
+                                    crypto_flow_states.insert(
+                                        op_index,
+                                        CryptoFlowObjectState {
+                                            kind: CryptoFlowObjectKind::Hash,
+                                            lifecycle_label: label.clone(),
+                                        },
+                                    );
+                                    result_origin = Some(op_index);
+                                }
+                            }
+                            "builtin:CryptoObjectDigest"
+                            | "builtin:CryptoObjectFinal"
+                            | "builtin:CryptoObjectGetAuthTag" => {
+                                crypto_flow_states.insert(
+                                    origin,
+                                    CryptoFlowObjectState {
+                                        kind: prior.kind,
+                                        lifecycle_label: label.clone(),
+                                    },
+                                );
+                                result_shape = FlowValueShape::ClosedResult;
+                            }
+                            "builtin:CryptoObjectSetAuthTag" => {
+                                crypto_flow_states.insert(
+                                    origin,
+                                    CryptoFlowObjectState {
+                                        kind: prior.kind,
+                                        lifecycle_label: label.clone(),
+                                    },
+                                );
+                                result_origin = Some(origin);
+                            }
+                            _ => unreachable!("matched finite crypto lifecycle capability"),
+                        }
+                    } else {
+                        // A finite lifecycle capability without its statically
+                        // authenticated origin is malformed or crossed an
+                        // unsupported escape. Fail high instead of treating its
+                        // direct arguments as the complete exception source.
+                        label = Label::TopSecret;
+                    }
+                }
+                if hostcall_is_operand_derived
+                    && matches!(
+                        capability.as_str(),
+                        "builtin:BufferFrom"
+                            | "builtin:BufferAlloc"
+                            | "builtin:BufferAllocUnsafe"
+                            | "builtin:BufferConcat"
+                            | "builtin:ArrayBuffer"
+                            | "builtin:Uint8Array"
+                            | "builtin:Int32Array"
+                            | "builtin:Uint32Array"
+                            | "builtin:DataView"
+                    )
+                {
+                    result_shape = FlowValueShape::ClosedResult;
+                }
+                let mut result =
+                    fresh_crypto_flow_value(label.clone(), result_origin, &mut next_identity);
+                result.shape = result_shape;
+                value_stack.push(result);
+                label
+            }
+        };
+        if let Some(exception_label) =
+            ir1_exception_flow_label(&op.inner, &inferred, hostcall_is_operand_derived)
+        {
+            // The runtime routes an exception to the innermost active handler.
+            // An enclosing handler is tainted only if the inner handler later
+            // rethrows while the enclosing protected region remains active.
+            if let Some(catch_label) = active_catch_regions.last() {
+                let Some(entry) = catch_entry_labels.get_mut(catch_label) else {
+                    return Err(LoweringPipelineError::InvariantViolation {
+                        detail: "active catch region is missing its flow label",
+                    });
+                };
+                *entry = entry.join(&exception_label);
+            }
+        }
+        inferred_labels.push(inferred);
+    }
+
+    Ok((inferred_labels, bindings_changed))
+}
+
+fn infer_ir2_flow_annotations(
+    ir2: &mut Ir2Module,
+) -> Result<FlowInferenceMetrics, LoweringPipelineError> {
+    const MAX_FLOW_INFERENCE_PASSES: usize = 16;
+
     let mut binding_labels = BTreeMap::<BindingId, Label>::new();
-    let mut last_label = Label::Public;
+    let catch_region_events = ir2_catch_region_events(ir2)?;
+    let mut converged = false;
+    // A reverse binding-dependency chain can otherwise force one complete IR2
+    // rescan per binding, making inference quadratic in attacker-controlled
+    // source size. The strict pass budget bounds work to O(n) and fails closed
+    // when exact propagation would require a dedicated dependency worklist.
+    for _ in 0..MAX_FLOW_INFERENCE_PASSES {
+        let (_, changed) =
+            simulate_ir2_flow_labels(ir2, &mut binding_labels, &catch_region_events)?;
+        if !changed {
+            converged = true;
+            break;
+        }
+    }
+    if !converged {
+        return Err(LoweringPipelineError::InvariantViolation {
+            detail: "IR2 flow-label inference exceeded its pass budget",
+        });
+    }
+
+    let (inferred_labels, changed_after_convergence) =
+        simulate_ir2_flow_labels(ir2, &mut binding_labels, &catch_region_events)?;
+    if changed_after_convergence {
+        return Err(LoweringPipelineError::InvariantViolation {
+            detail: "IR2 flow-label binding fixed point changed after convergence",
+        });
+    }
+
     let mut metrics = FlowInferenceMetrics {
         total_flow_ops: 0,
         static_proven_ops: 0,
         runtime_check_ops: 0,
     };
 
-    for op in &mut ir2.ops {
-        let inferred_data_label =
-            infer_data_label_for_op(&op.inner, &binding_labels, last_label.clone());
+    for (op, inferred_data_label) in ir2.ops.iter_mut().zip(inferred_labels) {
         let inferred_sink_clearance = infer_sink_clearance(
             &op.effect,
             op.required_capability.as_ref(),
@@ -21008,20 +23130,9 @@ fn infer_ir2_flow_annotations(ir2: &mut Ir2Module) -> FlowInferenceMetrics {
         } else {
             op.flow = None;
         }
-
-        if let Ir1Op::StoreBinding { binding_id } = &op.inner {
-            binding_labels.insert(*binding_id, inferred_data_label.clone());
-        }
-        if let Ir1Op::LoadBinding { binding_id } = &op.inner
-            && let Some(existing) = binding_labels.get(binding_id)
-        {
-            last_label = existing.clone();
-            continue;
-        }
-        last_label = inferred_data_label;
     }
 
-    metrics
+    Ok(metrics)
 }
 
 fn infer_data_label_for_op(
@@ -21083,7 +23194,22 @@ fn sink_clearance_from_capability(capability: &str) -> Label {
     if normalized == "hostcall.invoke" {
         return Label::Internal;
     }
-    if normalized.contains("net.")
+    // `builtin:Net*` is the authenticated, engine-owned hermetic loopback
+    // facade. Callback registration and in-memory socket state are not public
+    // network egress and may retain values at any lattice level. Actual host
+    // network operations use `net.*` capabilities and remain Public below.
+    if normalized.starts_with("builtin:net") {
+        return Label::TopSecret;
+    }
+    // Authenticated crypto lifecycle calls only mutate/read the engine-private
+    // side table. They are not egress: their result and exception labels retain
+    // the receiver lifecycle joined with direct operands, so high inputs may
+    // flow into the private state but cannot later cross a lower sink.
+    if normalized.starts_with("builtin:cryptoobject") {
+        return Label::TopSecret;
+    }
+    if normalized.starts_with("net:")
+        || normalized.contains("net.")
         || normalized.contains("net_")
         || normalized.contains("network")
         || normalized.contains("process.")
@@ -21802,6 +23928,998 @@ mod tests {
             })
             .expect("dynamic hostcall");
         assert!(guard_index < invoke_index);
+    }
+
+    #[test]
+    fn multi_argument_hostcall_flow_join_is_operand_order_invariant_bd_bscab() {
+        for values in [
+            ["secret_token", "public-value"],
+            ["public-value", "secret_token"],
+        ] {
+            let mut ir1 = Ir1Module::new(ContentHash::compute(b"flow-order"), "flow_order.js");
+            for value in values {
+                ir1.ops.push(Ir1Op::LoadLiteral {
+                    value: Ir1Literal::String(value.into()),
+                });
+            }
+            ir1.ops.push(Ir1Op::HostCall {
+                capability: "net.write".to_string(),
+                arg_count: 2,
+            });
+            ir1.ops.push(Ir1Op::Return);
+
+            let ir2 = lower_ir1_to_ir2(&ir1)
+                .expect("operand-aware IR1 to IR2 lowering")
+                .module;
+            let flow = ir2
+                .ops
+                .iter()
+                .find(|op| matches!(op.inner, Ir1Op::HostCall { .. }))
+                .and_then(|op| op.flow.as_ref())
+                .expect("hostcall flow annotation");
+            assert_eq!(flow.data_label, Label::Secret);
+            assert_eq!(flow.sink_clearance, Label::Public);
+            assert!(flow.declassification_required);
+
+            let ir3 = lower_ir2_to_ir3(&ir2)
+                .expect("guarded IR2 to IR3 lowering")
+                .module;
+            assert!(ir3.instructions.iter().any(|instruction| matches!(
+                instruction,
+                Ir3Instruction::HostCall { capability, .. }
+                    if capability.0 == IFC_RUNTIME_GUARD_CAPABILITY
+            )));
+        }
+    }
+
+    #[test]
+    fn catch_flow_uses_protected_exception_provenance_bd_bscab() {
+        let cases = [
+            (
+                "public-builtin-error",
+                vec![
+                    Ir1Op::LoadLiteral {
+                        value: Ir1Literal::String("public-input".into()),
+                    },
+                    Ir1Op::HostCall {
+                        capability: "builtin:CryptoCreateHash".to_string(),
+                        arg_count: 1,
+                    },
+                    Ir1Op::Pop,
+                ],
+                Label::Internal,
+                false,
+            ),
+            (
+                "secret-explicit-throw",
+                vec![
+                    Ir1Op::LoadLiteral {
+                        value: Ir1Literal::String("secret-token".into()),
+                    },
+                    Ir1Op::Throw,
+                ],
+                Label::Secret,
+                true,
+            ),
+            (
+                "guest-callback-hostcall",
+                vec![
+                    Ir1Op::LoadLiteral {
+                        value: Ir1Literal::String("public-callback".into()),
+                    },
+                    Ir1Op::HostCall {
+                        capability: "builtin:ArrayPrototypeSome".to_string(),
+                        arg_count: 1,
+                    },
+                    Ir1Op::Pop,
+                ],
+                Label::TopSecret,
+                true,
+            ),
+        ];
+
+        for (name, protected_ops, expected_label, expected_declassification) in cases {
+            let mut ir1 =
+                Ir1Module::new(ContentHash::compute(name.as_bytes()), format!("{name}.js"));
+            ir1.ops.push(Ir1Op::BeginTry {
+                catch_label: 41,
+                finally_label: None,
+            });
+            ir1.ops.extend(protected_ops);
+            ir1.ops.push(Ir1Op::EndTry);
+            ir1.ops.push(Ir1Op::Jump { label_id: 42 });
+            ir1.ops.push(Ir1Op::Label { id: 41 });
+            ir1.ops.push(Ir1Op::HostCall {
+                capability: "console:log".to_string(),
+                arg_count: 1,
+            });
+            ir1.ops.push(Ir1Op::Pop);
+            ir1.ops.push(Ir1Op::Label { id: 42 });
+            ir1.ops.push(Ir1Op::LoadLiteral {
+                value: Ir1Literal::Undefined,
+            });
+            ir1.ops.push(Ir1Op::Return);
+
+            let ir2 = lower_ir1_to_ir2(&ir1)
+                .expect("catch flow inference must accept well-formed protected regions")
+                .module;
+            let console_flow = ir2
+                .ops
+                .iter()
+                .find(|op| {
+                    matches!(
+                        &op.inner,
+                        Ir1Op::HostCall { capability, .. } if capability == "console:log"
+                    )
+                })
+                .and_then(|op| op.flow.as_ref())
+                .expect("catch console flow annotation");
+            assert_eq!(console_flow.data_label, expected_label, "{name}");
+            assert_eq!(
+                console_flow.declassification_required, expected_declassification,
+                "{name}"
+            );
+        }
+    }
+
+    #[test]
+    fn caught_crypto_lifecycle_error_keeps_authenticated_provenance_bd_bscab() {
+        let source = r#"
+            const crypto = require('crypto');
+            const cbcText = Buffer.from('0c276227d7db10379bfbb334ea96a5fc', 'hex');
+            const bad = crypto.createDecipheriv(
+                'aes-256-cbc',
+                Buffer.alloc(32, 2),
+                Buffer.alloc(16, 2),
+            );
+            try {
+                bad.update(cbcText);
+                bad.final();
+            } catch (error) {
+                console.log(error instanceof Error);
+            }
+        "#;
+        let tree = crate::parser_api_stability::parse_script(source).expect("parse crypto script");
+        let ir0 = Ir0Module::from_syntax_tree(tree, "caught_crypto_lifecycle_error.js");
+        let ir1 = lower_ir0_to_ir1(&ir0)
+            .expect("crypto lifecycle source should lower to IR1")
+            .module;
+        assert_eq!(
+            count_hostcall_deep(&ir1.ops, "builtin:CryptoObjectUpdate"),
+            1
+        );
+        assert_eq!(
+            count_hostcall_deep(&ir1.ops, "builtin:CryptoObjectFinal"),
+            1
+        );
+        let ir2 = lower_ir1_to_ir2(&ir1).unwrap_or_else(|error| {
+            panic!(
+                "crypto lifecycle catch flow should remain finite: {error}; IR1={:#?}",
+                ir1.ops
+            )
+        });
+        let instanceof_flow = ir2
+            .module
+            .ops
+            .iter()
+            .find(|op| {
+                matches!(
+                    &op.inner,
+                    Ir1Op::HostCall { capability, .. }
+                        if capability == "builtin:instanceof:Error"
+                )
+            })
+            .and_then(|op| op.flow.as_ref())
+            .expect("caught error instanceof flow annotation");
+        assert_eq!(instanceof_flow.data_label, Label::Internal);
+        assert!(!instanceof_flow.declassification_required);
+        let console_flow = ir2
+            .module
+            .ops
+            .iter()
+            .find(|op| {
+                matches!(
+                    &op.inner,
+                    Ir1Op::HostCall { capability, .. } if capability == "console:log"
+                )
+            })
+            .and_then(|op| op.flow.as_ref())
+            .expect("caught error console flow annotation");
+        assert_eq!(console_flow.data_label, Label::Internal);
+        assert!(!console_flow.declassification_required);
+    }
+
+    #[test]
+    fn catch_flow_excludes_abrupt_forwarder_finalizer_bd_bscab() {
+        let mut ir1 = Ir1Module::new(
+            ContentHash::compute(b"catch-forwarder"),
+            "catch_forwarder.js",
+        );
+        ir1.ops.extend([
+            Ir1Op::BeginTry {
+                catch_label: 41,
+                finally_label: Some(45),
+            },
+            Ir1Op::LoadLiteral {
+                value: Ir1Literal::String("sha256".into()),
+            },
+            Ir1Op::HostCall {
+                capability: "builtin:CryptoCreateHash".to_string(),
+                arg_count: 1,
+            },
+            Ir1Op::Pop,
+            Ir1Op::Jump { label_id: 44 },
+            Ir1Op::Label { id: 43 },
+            Ir1Op::EndTry,
+            Ir1Op::LoadLiteral {
+                value: Ir1Literal::String("secret-forwarder-value".into()),
+            },
+            Ir1Op::Throw,
+            Ir1Op::Label { id: 44 },
+            Ir1Op::EndTry,
+            Ir1Op::Jump { label_id: 42 },
+            Ir1Op::Label { id: 41 },
+            Ir1Op::HostCall {
+                capability: "console:log".to_string(),
+                arg_count: 1,
+            },
+            Ir1Op::Pop,
+            Ir1Op::Jump { label_id: 42 },
+            Ir1Op::Label { id: 45 },
+            Ir1Op::EnterFinally,
+            Ir1Op::EndFinally,
+            Ir1Op::Label { id: 42 },
+            Ir1Op::LoadLiteral {
+                value: Ir1Literal::Undefined,
+            },
+            Ir1Op::Return,
+        ]);
+
+        let ir2 = lower_ir1_to_ir2(&ir1)
+            .expect("forwarder finalizer lies outside the catch provenance region")
+            .module;
+        let console_flow = ir2
+            .ops
+            .iter()
+            .find(|op| {
+                matches!(
+                    &op.inner,
+                    Ir1Op::HostCall { capability, .. } if capability == "console:log"
+                )
+            })
+            .and_then(|op| op.flow.as_ref())
+            .expect("catch console flow annotation");
+        assert_eq!(console_flow.data_label, Label::Internal);
+        assert!(!console_flow.declassification_required);
+    }
+
+    #[test]
+    fn nested_catch_flow_distinguishes_swallow_from_rethrow_bd_bscab() {
+        for (rethrow, expected_outer_label, expected_declassification) in
+            [(false, Label::Internal, false), (true, Label::Secret, true)]
+        {
+            let mut ir1 = Ir1Module::new(
+                ContentHash::compute(if rethrow {
+                    b"nested-rethrow"
+                } else {
+                    b"nested-swallow"
+                }),
+                "nested_catch.js",
+            );
+            ir1.ops.extend([
+                Ir1Op::BeginTry {
+                    catch_label: 90,
+                    finally_label: None,
+                },
+                Ir1Op::BeginTry {
+                    catch_label: 91,
+                    finally_label: None,
+                },
+                Ir1Op::LoadLiteral {
+                    value: Ir1Literal::String("secret-inner-error".into()),
+                },
+                Ir1Op::Throw,
+                Ir1Op::EndTry,
+                Ir1Op::Jump { label_id: 92 },
+                Ir1Op::Label { id: 91 },
+            ]);
+            ir1.ops
+                .push(if rethrow { Ir1Op::Throw } else { Ir1Op::Pop });
+            ir1.ops.extend([
+                Ir1Op::Label { id: 92 },
+                Ir1Op::EndTry,
+                Ir1Op::Jump { label_id: 93 },
+                Ir1Op::Label { id: 90 },
+                Ir1Op::HostCall {
+                    capability: "console:log".to_string(),
+                    arg_count: 1,
+                },
+                Ir1Op::Pop,
+                Ir1Op::Label { id: 93 },
+                Ir1Op::LoadLiteral {
+                    value: Ir1Literal::Undefined,
+                },
+                Ir1Op::Return,
+            ]);
+
+            let ir2 = lower_ir1_to_ir2(&ir1)
+                .expect("nested catch provenance must remain stack balanced")
+                .module;
+            let console_flow = ir2
+                .ops
+                .iter()
+                .find(|op| {
+                    matches!(
+                        &op.inner,
+                        Ir1Op::HostCall { capability, .. } if capability == "console:log"
+                    )
+                })
+                .and_then(|op| op.flow.as_ref())
+                .expect("outer catch console flow annotation");
+            assert_eq!(
+                console_flow.data_label, expected_outer_label,
+                "rethrow={rethrow}"
+            );
+            assert_eq!(
+                console_flow.declassification_required, expected_declassification,
+                "rethrow={rethrow}"
+            );
+        }
+    }
+
+    #[test]
+    fn deeply_nested_catch_events_remain_lifo_bd_bscab() {
+        const DEPTH: u32 = 64;
+
+        let mut ir1 = Ir1Module::new(
+            ContentHash::compute(b"deep-catch-events"),
+            "deep_catch_events.js",
+        );
+        for depth in 0..DEPTH {
+            ir1.ops.push(Ir1Op::BeginTry {
+                catch_label: 1_000 + depth,
+                finally_label: None,
+            });
+        }
+        ir1.ops.extend([
+            Ir1Op::LoadLiteral {
+                value: Ir1Literal::Undefined,
+            },
+            Ir1Op::Pop,
+        ]);
+        for depth in (0..DEPTH).rev() {
+            ir1.ops.extend([
+                Ir1Op::EndTry,
+                Ir1Op::Jump {
+                    label_id: 2_000 + depth,
+                },
+                Ir1Op::Label { id: 1_000 + depth },
+                Ir1Op::Pop,
+                Ir1Op::Label { id: 2_000 + depth },
+            ]);
+        }
+        ir1.ops.extend([
+            Ir1Op::LoadLiteral {
+                value: Ir1Literal::Undefined,
+            },
+            Ir1Op::Return,
+        ]);
+
+        lower_ir1_to_ir2(&ir1).expect("deeply nested catch metadata must terminate in LIFO order");
+    }
+
+    #[test]
+    fn flow_inference_budget_fails_closed_on_reverse_dependency_chain_bd_bscab() {
+        let mut ir1 = Ir1Module::new(
+            ContentHash::compute(b"reverse-flow-chain"),
+            "reverse_flow_chain.js",
+        );
+        for binding_id in 1..=20 {
+            ir1.ops.extend([
+                Ir1Op::LoadBinding {
+                    binding_id: binding_id + 1,
+                },
+                Ir1Op::StoreBinding { binding_id },
+                Ir1Op::Pop,
+            ]);
+        }
+        ir1.ops.extend([
+            Ir1Op::LoadLiteral {
+                value: Ir1Literal::String("secret-chain-source".into()),
+            },
+            Ir1Op::StoreBinding { binding_id: 21 },
+            Ir1Op::Pop,
+            Ir1Op::LoadLiteral {
+                value: Ir1Literal::Undefined,
+            },
+            Ir1Op::Return,
+        ]);
+
+        let error = lower_ir1_to_ir2(&ir1).expect_err("inference must fail closed at its budget");
+        assert!(matches!(
+            error,
+            LoweringPipelineError::InvariantViolation {
+                detail: "IR2 flow-label inference exceeded its pass budget"
+            }
+        ));
+    }
+
+    #[test]
+    fn catch_metadata_rejects_malformed_regions_bd_bscab() {
+        let cases = [
+            (
+                "duplicate-label",
+                vec![
+                    Ir1Op::Label { id: 7 },
+                    Ir1Op::Label { id: 7 },
+                    Ir1Op::LoadLiteral {
+                        value: Ir1Literal::Undefined,
+                    },
+                    Ir1Op::Return,
+                ],
+                "lowered exception flow contains a duplicate label",
+            ),
+            (
+                "missing-finally-only-target",
+                vec![
+                    Ir1Op::BeginTry {
+                        catch_label: 7,
+                        finally_label: Some(7),
+                    },
+                    Ir1Op::EndTry,
+                    Ir1Op::LoadLiteral {
+                        value: Ir1Literal::Undefined,
+                    },
+                    Ir1Op::Return,
+                ],
+                "lowered try references missing catch label",
+            ),
+            (
+                "reversed-catch-target",
+                vec![
+                    Ir1Op::Label { id: 7 },
+                    Ir1Op::BeginTry {
+                        catch_label: 7,
+                        finally_label: None,
+                    },
+                    Ir1Op::EndTry,
+                    Ir1Op::LoadLiteral {
+                        value: Ir1Literal::Undefined,
+                    },
+                    Ir1Op::Return,
+                ],
+                "lowered catch label precedes its protected region",
+            ),
+            (
+                "missing-end-try",
+                vec![
+                    Ir1Op::BeginTry {
+                        catch_label: 7,
+                        finally_label: None,
+                    },
+                    Ir1Op::Jump { label_id: 8 },
+                    Ir1Op::Label { id: 7 },
+                    Ir1Op::Pop,
+                    Ir1Op::Label { id: 8 },
+                    Ir1Op::LoadLiteral {
+                        value: Ir1Literal::Undefined,
+                    },
+                    Ir1Op::Return,
+                ],
+                "lowered protected region has no EndTry marker",
+            ),
+        ];
+
+        for (name, ops, expected_detail) in cases {
+            let mut ir1 =
+                Ir1Module::new(ContentHash::compute(name.as_bytes()), format!("{name}.js"));
+            ir1.ops = ops;
+            let error = lower_ir1_to_ir2(&ir1).expect_err("malformed catch metadata must fail");
+            assert!(
+                matches!(
+                    &error,
+                    LoweringPipelineError::InvariantViolation { detail }
+                        if *detail == expected_detail
+                ),
+                "{name}: {error:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn hostcall_flow_joins_only_consumed_operands_bd_bscab() {
+        let mut ir1 = Ir1Module::new(ContentHash::compute(b"flow-slice"), "flow_slice.js");
+        ir1.ops.push(Ir1Op::LoadLiteral {
+            value: Ir1Literal::String("secret_below_args".into()),
+        });
+        ir1.ops.push(Ir1Op::LoadLiteral {
+            value: Ir1Literal::String("public-value".into()),
+        });
+        ir1.ops.push(Ir1Op::HostCall {
+            capability: "fs.read".to_string(),
+            arg_count: 1,
+        });
+        ir1.ops.push(Ir1Op::Return);
+
+        let ir2 = lower_ir1_to_ir2(&ir1)
+            .expect("operand-sliced IR1 to IR2 lowering")
+            .module;
+        let flow = ir2
+            .ops
+            .iter()
+            .find(|op| matches!(op.inner, Ir1Op::HostCall { .. }))
+            .and_then(|op| op.flow.as_ref())
+            .expect("hostcall flow annotation");
+        assert_eq!(flow.data_label, Label::Public);
+        assert!(!flow.declassification_required);
+    }
+
+    #[test]
+    fn computed_values_preserve_nonfinal_secret_operands_bd_bscab() {
+        let cases = [
+            vec![
+                Ir1Op::LoadLiteral {
+                    value: Ir1Literal::String("secret_lhs".into()),
+                },
+                Ir1Op::LoadLiteral {
+                    value: Ir1Literal::String("public-rhs".into()),
+                },
+                Ir1Op::BinaryOp {
+                    operator: BinaryOperator::Add,
+                },
+            ],
+            vec![
+                Ir1Op::LoadLiteral {
+                    value: Ir1Literal::String("public-callee".into()),
+                },
+                Ir1Op::LoadLiteral {
+                    value: Ir1Literal::String("secret_receiver".into()),
+                },
+                Ir1Op::LoadLiteral {
+                    value: Ir1Literal::String("public-arg".into()),
+                },
+                Ir1Op::CallMethod { arg_count: 1 },
+            ],
+        ];
+
+        for (case_index, prefix) in cases.into_iter().enumerate() {
+            let mut ir1 = Ir1Module::new(
+                ContentHash::compute(format!("computed-flow-{case_index}").as_bytes()),
+                format!("computed_flow_{case_index}.js"),
+            );
+            ir1.ops.extend(prefix);
+            ir1.ops.push(Ir1Op::HostCall {
+                capability: "net.write".to_string(),
+                arg_count: 1,
+            });
+            ir1.ops.push(Ir1Op::Return);
+
+            let ir2 = lower_ir1_to_ir2(&ir1)
+                .expect("computed operand flow lowering")
+                .module;
+            let flow = ir2
+                .ops
+                .iter()
+                .find(|op| matches!(op.inner, Ir1Op::HostCall { .. }))
+                .and_then(|op| op.flow.as_ref())
+                .expect("hostcall flow annotation");
+            assert_eq!(flow.data_label, Label::Secret, "case {case_index}");
+            assert!(flow.declassification_required, "case {case_index}");
+        }
+    }
+
+    #[test]
+    fn aggregate_and_invocation_results_join_every_direct_input_bd_bscab() {
+        let cases = [
+            vec![
+                Ir1Op::LoadLiteral {
+                    value: Ir1Literal::String("secret_callee".into()),
+                },
+                Ir1Op::LoadLiteral {
+                    value: Ir1Literal::String("public-argument".into()),
+                },
+                Ir1Op::Call { arg_count: 1 },
+            ],
+            vec![
+                Ir1Op::LoadLiteral {
+                    value: Ir1Literal::String("secret_object".into()),
+                },
+                Ir1Op::LoadLiteral {
+                    value: Ir1Literal::String("public-key".into()),
+                },
+                Ir1Op::GetProperty {
+                    key: Ir1PropertyKey::Dynamic,
+                },
+            ],
+            vec![
+                Ir1Op::LoadLiteral {
+                    value: Ir1Literal::String("secret_element".into()),
+                },
+                Ir1Op::LoadLiteral {
+                    value: Ir1Literal::String("public-element".into()),
+                },
+                Ir1Op::NewArray { count: 2 },
+            ],
+            vec![
+                Ir1Op::LoadLiteral {
+                    value: Ir1Literal::String("secret_key".into()),
+                },
+                Ir1Op::LoadLiteral {
+                    value: Ir1Literal::String("public-value".into()),
+                },
+                Ir1Op::NewObject { count: 1 },
+            ],
+            vec![
+                Ir1Op::LoadLiteral {
+                    value: Ir1Literal::String("secret_constructor".into()),
+                },
+                Ir1Op::LoadLiteral {
+                    value: Ir1Literal::String("public-argument".into()),
+                },
+                Ir1Op::Construct { arg_count: 1 },
+            ],
+            vec![
+                Ir1Op::LoadLiteral {
+                    value: Ir1Literal::String("secret-quasi".into()),
+                },
+                Ir1Op::LoadLiteral {
+                    value: Ir1Literal::String("public-expression".into()),
+                },
+                Ir1Op::LoadLiteral {
+                    value: Ir1Literal::String("public-quasi".into()),
+                },
+                Ir1Op::TemplateLiteral { quasi_count: 2 },
+            ],
+        ];
+
+        for (case_index, prefix) in cases.into_iter().enumerate() {
+            let mut ir1 = Ir1Module::new(
+                ContentHash::compute(format!("aggregate-flow-{case_index}").as_bytes()),
+                format!("aggregate_flow_{case_index}.js"),
+            );
+            ir1.ops.extend(prefix);
+            ir1.ops.push(Ir1Op::HostCall {
+                capability: "net.write".to_string(),
+                arg_count: 1,
+            });
+            ir1.ops.push(Ir1Op::Return);
+
+            let ir2 = lower_ir1_to_ir2(&ir1)
+                .expect("aggregate operand flow lowering")
+                .module;
+            let flow = ir2
+                .ops
+                .iter()
+                .find(|op| matches!(op.inner, Ir1Op::HostCall { .. }))
+                .and_then(|op| op.flow.as_ref())
+                .expect("hostcall flow annotation");
+            assert_eq!(flow.data_label, Label::Secret, "case {case_index}");
+            assert!(flow.declassification_required, "case {case_index}");
+        }
+    }
+
+    #[test]
+    fn closure_capture_labels_use_outer_origin_ids_bd_bscab() {
+        let mut ir1 = Ir1Module::new(
+            ContentHash::compute(b"closure-capture-flow"),
+            "closure_capture_flow.js",
+        );
+        ir1.ops.push(Ir1Op::LoadLiteral {
+            value: Ir1Literal::String("secret_capture".into()),
+        });
+        ir1.ops.push(Ir1Op::StoreBinding { binding_id: 17 });
+        ir1.ops.push(Ir1Op::Pop);
+        ir1.ops.push(Ir1Op::CreateFunction {
+            name: None,
+            param_names: Vec::new(),
+            body_ops: vec![Ir1Op::LoadBinding { binding_id: 0 }, Ir1Op::Return],
+            free_vars: vec![capture_cell_name("secret_capture", 17)],
+            free_var_ids: vec![0],
+            runtime_global_loads: Vec::new(),
+            child_captured_locals: Vec::new(),
+            is_generator: false,
+            is_async: false,
+            rest_param_index: None,
+        });
+        ir1.ops.push(Ir1Op::HostCall {
+            capability: "net.write".to_string(),
+            arg_count: 1,
+        });
+        ir1.ops.push(Ir1Op::Return);
+
+        let ir2 = lower_ir1_to_ir2(&ir1)
+            .expect("closure capture flow lowering")
+            .module;
+        let flow = ir2
+            .ops
+            .iter()
+            .find(|op| matches!(op.inner, Ir1Op::HostCall { .. }))
+            .and_then(|op| op.flow.as_ref())
+            .expect("hostcall flow annotation");
+        assert_eq!(flow.data_label, Label::Secret);
+        assert!(flow.declassification_required);
+    }
+
+    #[test]
+    fn function_values_retain_unknown_runtime_floor_bd_bscab() {
+        let mut ir1 = Ir1Module::new(
+            ContentHash::compute(b"function-output-floor"),
+            "function_output_floor.js",
+        );
+        ir1.ops.push(Ir1Op::CreateFunction {
+            name: None,
+            param_names: Vec::new(),
+            body_ops: vec![
+                Ir1Op::LoadLiteral {
+                    value: Ir1Literal::String("secret_return".into()),
+                },
+                Ir1Op::Return,
+            ],
+            free_vars: Vec::new(),
+            free_var_ids: Vec::new(),
+            runtime_global_loads: Vec::new(),
+            child_captured_locals: Vec::new(),
+            is_generator: false,
+            is_async: false,
+            rest_param_index: None,
+        });
+        ir1.ops.push(Ir1Op::Call { arg_count: 0 });
+        ir1.ops.push(Ir1Op::HostCall {
+            capability: "net.write".to_string(),
+            arg_count: 1,
+        });
+        ir1.ops.push(Ir1Op::Return);
+
+        let ir2 = lower_ir1_to_ir2(&ir1)
+            .expect("function output floor lowering")
+            .module;
+        let flow = ir2
+            .ops
+            .iter()
+            .find(|op| matches!(op.inner, Ir1Op::HostCall { .. }))
+            .and_then(|op| op.flow.as_ref())
+            .expect("hostcall flow annotation");
+        assert_eq!(flow.data_label, Label::Internal);
+        assert!(flow.declassification_required);
+    }
+
+    #[test]
+    fn declared_function_values_retain_unknown_runtime_floor_bd_bscab() {
+        let mut ir1 = Ir1Module::new(
+            ContentHash::compute(b"declared-function-output-floor"),
+            "declared_function_output_floor.js",
+        );
+        ir1.ops.push(Ir1Op::DeclareFunction {
+            name: "secretReturningFunction".to_string(),
+            binding_id: 23,
+            param_names: Vec::new(),
+            body_ops: vec![
+                Ir1Op::LoadLiteral {
+                    value: Ir1Literal::String("secret_return".into()),
+                },
+                Ir1Op::Return,
+            ],
+            free_vars: Vec::new(),
+            free_var_ids: Vec::new(),
+            runtime_global_loads: Vec::new(),
+            child_captured_locals: Vec::new(),
+            is_generator: false,
+            is_async: false,
+            rest_param_index: None,
+        });
+        ir1.ops.push(Ir1Op::Pop);
+        ir1.ops.push(Ir1Op::LoadBinding { binding_id: 23 });
+        ir1.ops.push(Ir1Op::Call { arg_count: 0 });
+        ir1.ops.push(Ir1Op::HostCall {
+            capability: "net.write".to_string(),
+            arg_count: 1,
+        });
+        ir1.ops.push(Ir1Op::Return);
+
+        let ir2 = lower_ir1_to_ir2(&ir1)
+            .expect("declared function output floor lowering")
+            .module;
+        let flow = ir2
+            .ops
+            .iter()
+            .find(|op| matches!(op.inner, Ir1Op::HostCall { .. }))
+            .and_then(|op| op.flow.as_ref())
+            .expect("hostcall flow annotation");
+        assert_eq!(flow.data_label, Label::Internal);
+        assert!(flow.declassification_required);
+    }
+
+    #[test]
+    fn await_and_yield_retain_unknown_runtime_floor_bd_bscab() {
+        for (case_index, suspension) in [Ir1Op::Await, Ir1Op::Yield { delegate: false }]
+            .into_iter()
+            .enumerate()
+        {
+            let mut ir1 = Ir1Module::new(
+                ContentHash::compute(format!("suspension-floor-{case_index}").as_bytes()),
+                format!("suspension_floor_{case_index}.js"),
+            );
+            ir1.ops.push(Ir1Op::LoadLiteral {
+                value: Ir1Literal::String("public-value".into()),
+            });
+            ir1.ops.push(suspension);
+            ir1.ops.push(Ir1Op::HostCall {
+                capability: "net.write".to_string(),
+                arg_count: 1,
+            });
+            ir1.ops.push(Ir1Op::Return);
+
+            let ir2 = lower_ir1_to_ir2(&ir1)
+                .expect("suspension output floor lowering")
+                .module;
+            let flow = ir2
+                .ops
+                .iter()
+                .find(|op| matches!(op.inner, Ir1Op::HostCall { .. }))
+                .and_then(|op| op.flow.as_ref())
+                .expect("hostcall flow annotation");
+            assert_eq!(flow.data_label, Label::Internal, "case {case_index}");
+            assert!(flow.declassification_required, "case {case_index}");
+        }
+    }
+
+    #[test]
+    fn unrecognized_capture_identity_fails_high_bd_bscab() {
+        let mut ir1 = Ir1Module::new(
+            ContentHash::compute(b"unknown-capture-flow"),
+            "unknown_capture_flow.js",
+        );
+        ir1.ops.push(Ir1Op::CreateFunction {
+            name: Some("recursive".to_string()),
+            param_names: Vec::new(),
+            body_ops: vec![
+                Ir1Op::LoadLiteral {
+                    value: Ir1Literal::Undefined,
+                },
+                Ir1Op::Return,
+            ],
+            free_vars: vec!["recursive".to_string()],
+            free_var_ids: vec![0],
+            runtime_global_loads: Vec::new(),
+            child_captured_locals: Vec::new(),
+            is_generator: false,
+            is_async: false,
+            rest_param_index: None,
+        });
+        ir1.ops.push(Ir1Op::HostCall {
+            capability: "net.write".to_string(),
+            arg_count: 1,
+        });
+        ir1.ops.push(Ir1Op::Return);
+
+        let ir2 = lower_ir1_to_ir2(&ir1)
+            .expect("unknown capture identity remains structurally valid")
+            .module;
+        let flow = ir2
+            .ops
+            .iter()
+            .find(|op| matches!(op.inner, Ir1Op::HostCall { .. }))
+            .and_then(|op| op.flow.as_ref())
+            .expect("hostcall flow annotation");
+        assert_eq!(flow.data_label, Label::TopSecret);
+        assert!(flow.declassification_required);
+    }
+
+    #[test]
+    fn binding_flow_fixed_point_is_store_order_invariant_bd_bscab() {
+        for values in [
+            ["secret_branch", "public-value"],
+            ["public-value", "secret_branch"],
+        ] {
+            let mut ir1 = Ir1Module::new(ContentHash::compute(b"binding-flow"), "binding_flow.js");
+            for value in values {
+                ir1.ops.push(Ir1Op::LoadLiteral {
+                    value: Ir1Literal::String(value.into()),
+                });
+                ir1.ops.push(Ir1Op::StoreBinding { binding_id: 7 });
+                ir1.ops.push(Ir1Op::Pop);
+            }
+            ir1.ops.push(Ir1Op::LoadBinding { binding_id: 7 });
+            ir1.ops.push(Ir1Op::HostCall {
+                capability: "net.write".to_string(),
+                arg_count: 1,
+            });
+            ir1.ops.push(Ir1Op::Return);
+
+            let ir2 = lower_ir1_to_ir2(&ir1)
+                .expect("binding fixed-point lowering")
+                .module;
+            let flow = ir2
+                .ops
+                .iter()
+                .find(|op| matches!(op.inner, Ir1Op::HostCall { .. }))
+                .and_then(|op| op.flow.as_ref())
+                .expect("hostcall flow annotation");
+            assert_eq!(flow.data_label, Label::Secret);
+            assert!(flow.declassification_required);
+        }
+    }
+
+    #[test]
+    fn backward_binding_dependency_reaches_fixed_point_bd_bscab() {
+        let mut ir1 = Ir1Module::new(
+            ContentHash::compute(b"binding-backedge-flow"),
+            "binding_backedge_flow.js",
+        );
+        ir1.ops.push(Ir1Op::Label { id: 1 });
+        ir1.ops.push(Ir1Op::LoadBinding { binding_id: 11 });
+        ir1.ops.push(Ir1Op::StoreBinding { binding_id: 12 });
+        ir1.ops.push(Ir1Op::Pop);
+        ir1.ops.push(Ir1Op::LoadLiteral {
+            value: Ir1Literal::String("secret_loop_carried".into()),
+        });
+        ir1.ops.push(Ir1Op::StoreBinding { binding_id: 11 });
+        ir1.ops.push(Ir1Op::Pop);
+        ir1.ops.push(Ir1Op::Jump { label_id: 1 });
+        ir1.ops.push(Ir1Op::LoadBinding { binding_id: 12 });
+        ir1.ops.push(Ir1Op::HostCall {
+            capability: "net.write".to_string(),
+            arg_count: 1,
+        });
+        ir1.ops.push(Ir1Op::Return);
+
+        let ir2 = lower_ir1_to_ir2(&ir1)
+            .expect("backward binding flow reaches a fixed point")
+            .module;
+        let flow = ir2
+            .ops
+            .iter()
+            .find(|op| matches!(op.inner, Ir1Op::HostCall { .. }))
+            .and_then(|op| op.flow.as_ref())
+            .expect("hostcall flow annotation");
+        assert_eq!(flow.data_label, Label::Secret);
+        assert!(flow.declassification_required);
+    }
+
+    #[test]
+    fn malformed_hostcall_operand_shape_fails_closed_bd_bscab() {
+        let mut ir1 = Ir1Module::new(ContentHash::compute(b"flow-underflow"), "flow_underflow.js");
+        ir1.ops.push(Ir1Op::LoadLiteral {
+            value: Ir1Literal::String("only-one".into()),
+        });
+        ir1.ops.push(Ir1Op::HostCall {
+            capability: "net.write".to_string(),
+            arg_count: 2,
+        });
+
+        assert!(matches!(
+            lower_ir1_to_ir2(&ir1),
+            Err(LoweringPipelineError::ValueStackUnderflow)
+        ));
+    }
+
+    #[test]
+    fn parsed_source_preserves_nonfinal_secret_hostcall_operand_bd_bscab() {
+        let tree = crate::parser_api_stability::parse_script(
+            "const fs = require('fs'); fs.writeFileSync('secret_path', 'public-data');",
+        )
+        .expect("parse source-level multi-argument hostcall");
+        let ir0 = Ir0Module::from_syntax_tree(tree, "source_operand_order_bd_bscab.js");
+        let ir1 = lower_ir0_to_ir1(&ir0)
+            .expect("lower source-level multi-argument hostcall to IR1")
+            .module;
+        let ir2 = lower_ir1_to_ir2(&ir1)
+            .expect("lower source-level multi-argument hostcall to IR2")
+            .module;
+        let flow = ir2
+            .ops
+            .iter()
+            .find(|op| {
+                matches!(
+                    &op.inner,
+                    Ir1Op::HostCall { capability, .. } if capability == "fs:write"
+                )
+            })
+            .and_then(|op| op.flow.as_ref())
+            .expect("fs write hostcall flow annotation");
+        assert_eq!(flow.data_label, Label::Secret);
+        assert_eq!(flow.sink_clearance, Label::Internal);
+        assert!(flow.declassification_required);
     }
 
     #[test]
@@ -23101,6 +26219,1251 @@ mod tests {
             .sum()
     }
 
+    fn assert_crypto_ambient_denied_bd_2z157(source: &str, label: &str) {
+        let tree = if matches!(
+            label,
+            "named module alias export" | "default module alias export"
+        ) {
+            crate::parser_api_stability::parse_module(source).expect("parse crypto module")
+        } else {
+            crate::parser_api_stability::parse_script(source).expect("parse crypto source")
+        };
+        let ir0 = Ir0Module::from_syntax_tree(tree, format!("crypto_{label}_bd_2z157.js"));
+        let error = lower_ir0_to_ir1(&ir0)
+            .expect_err("untrusted crypto possession must preserve ambient denial");
+        assert!(
+            matches!(
+                error,
+                LoweringPipelineError::AmbientAuthorityViolation { .. }
+            ),
+            "{label} should preserve ambient crypto denial, got {error:?}"
+        );
+    }
+
+    #[test]
+    fn crypto_deterministic_static_surface_lowers_with_exact_capabilities_bd_2z157() {
+        let ops = lower_script_source_ops(
+            "const crypto = require('crypto');\n\
+             crypto.createHash('sha256').update('abc').digest('hex');\n\
+             crypto.createHmac('sha256', 'key').update('abc').digest('hex');\n\
+             crypto.timingSafeEqual(Buffer.from('a'), Buffer.from('a'));\n\
+             crypto.pbkdf2Sync('pw', 'salt', 10, 8, 'sha256');\n\
+             crypto.pbkdf2('pw', 'salt', 10, 8, 'sha256', (_err, _key) => {\n\
+               crypto.pbkdf2Sync('pw', 'salt', 10, 8, 'sha256');\n\
+             });\n\
+             crypto.scryptSync('pw', 'salt', 8);\n\
+             crypto.createCipheriv('aes-128-ctr', Buffer.alloc(16), Buffer.alloc(16));\n\
+             crypto.createDecipheriv('aes-128-ctr', Buffer.alloc(16), Buffer.alloc(16));\n\
+             crypto.getHashes();\n\
+             crypto.getCiphers();\n\
+             crypto.constants.RSA_PKCS1_PADDING;\n\
+             try { crypto.randomInt(5, 5); } catch (_error) {}\n\
+             try { crypto.randomInt(0); } catch (_error) {}\n",
+            "crypto_static_surface_bd_2z157.js",
+        );
+
+        for (capability, expected_count) in [
+            ("builtin:CryptoCreateHash", 1),
+            ("builtin:CryptoCreateHmac", 1),
+            ("builtin:CryptoTimingSafeEqual", 1),
+            ("builtin:CryptoPbkdf2Sync", 2),
+            ("builtin:CryptoPbkdf2", 1),
+            ("builtin:CryptoScryptSync", 1),
+            ("builtin:CryptoCreateCipheriv", 1),
+            ("builtin:CryptoCreateDecipheriv", 1),
+            ("builtin:CryptoGetHashes", 1),
+            ("builtin:CryptoGetCiphers", 1),
+            ("builtin:CryptoConstants", 1),
+            ("builtin:CryptoRandomInt", 2),
+        ] {
+            assert_eq!(
+                count_hostcall_deep(&ops, capability),
+                expected_count,
+                "unexpected {capability} hostcall count"
+            );
+        }
+        assert!(ops_deep_match(&ops, &|op| matches!(
+            op,
+            Ir1Op::HostCall {
+                capability,
+                arg_count: 6
+            } if capability == "builtin:CryptoPbkdf2"
+        )));
+    }
+
+    #[test]
+    fn crypto_inline_node_specifier_and_method_chains_preserve_provenance_bd_2z157() {
+        let ops = lower_script_source_ops(
+            "require('node:crypto').createHash('sha256').update('abc').digest('hex');\n\
+             require('crypto').createHmac('sha1', 'key').update('data').digest();\n\
+             require('node:crypto').constants.RSA_PKCS1_PADDING;\n",
+            "crypto_inline_bd_2z157.js",
+        );
+        assert_eq!(count_hostcall_deep(&ops, "builtin:CryptoCreateHash"), 1);
+        assert_eq!(count_hostcall_deep(&ops, "builtin:CryptoCreateHmac"), 1);
+        assert_eq!(count_hostcall_deep(&ops, "builtin:CryptoConstants"), 1);
+        assert_eq!(count_hostcall_deep(&ops, "builtin:CryptoObjectUpdate"), 2);
+        assert_eq!(count_hostcall_deep(&ops, "builtin:CryptoObjectDigest"), 2);
+    }
+
+    #[test]
+    fn crypto_object_alias_provenance_reaches_dependent_copy_alias_bd_1by6p() {
+        let ops = lower_script_source_ops(
+            "const crypto = require('crypto');\n\
+             const hash = crypto.createHash('sha256').update('partial');\n\
+             const copy = hash.copy().update('-more');\n\
+             const copy2 = copy.copy().update('-again');\n\
+             hash.digest('hex');\n\
+             copy.digest('hex');\n\
+             copy2.digest('hex');\n",
+            "crypto_dependent_copy_alias_bd_1by6p.js",
+        );
+        assert_eq!(count_hostcall_deep(&ops, "builtin:CryptoCreateHash"), 1);
+        assert_eq!(count_hostcall_deep(&ops, "builtin:CryptoObjectUpdate"), 3);
+        assert_eq!(count_hostcall_deep(&ops, "builtin:CryptoObjectCopy"), 2);
+        assert_eq!(count_hostcall_deep(&ops, "builtin:CryptoObjectDigest"), 3);
+    }
+
+    #[test]
+    fn crypto_object_alias_fluent_identity_chains_close_with_digest_bd_1by6p() {
+        let ops = lower_script_source_ops(
+            "const crypto = require('crypto');\n\
+             const hash = crypto.createHash('sha256');\n\
+             console.log(hash.update('abc').digest('hex'));\n\
+             const copied = crypto.createHash('sha256');\n\
+             console.log(copied.copy().update('def').digest('hex'));\n\
+             const hmac = crypto.createHmac('sha256', 'public-key');\n\
+             console.log(hmac.update('ghi').digest('hex'));\n",
+            "crypto_alias_fluent_identity_chains_bd_1by6p.js",
+        );
+        assert_eq!(count_hostcall_deep(&ops, "builtin:CryptoCreateHash"), 2);
+        assert_eq!(count_hostcall_deep(&ops, "builtin:CryptoCreateHmac"), 1);
+        assert_eq!(count_hostcall_deep(&ops, "builtin:CryptoObjectUpdate"), 3);
+        assert_eq!(count_hostcall_deep(&ops, "builtin:CryptoObjectCopy"), 1);
+        assert_eq!(count_hostcall_deep(&ops, "builtin:CryptoObjectDigest"), 3);
+    }
+
+    #[test]
+    fn crypto_successful_entropy_asymmetric_and_untrusted_alias_uses_fail_closed_bd_2z157() {
+        for (label, source) in [
+            ("unused", "const crypto = require('crypto');"),
+            (
+                "mutable alias",
+                "let crypto = require('crypto'); crypto.getHashes();",
+            ),
+            (
+                "successful randomInt max",
+                "const crypto = require('crypto'); crypto.randomInt(10);",
+            ),
+            (
+                "successful randomInt range",
+                "const crypto = require('crypto'); crypto.randomInt(5, 8);",
+            ),
+            (
+                "dynamic randomInt range",
+                "const crypto = require('crypto'); const min = 5, max = 5; crypto.randomInt(min, max);",
+            ),
+            (
+                "random bytes",
+                "const crypto = require('crypto'); crypto.randomBytes(16);",
+            ),
+            (
+                "random UUID",
+                "const crypto = require('crypto'); crypto.randomUUID();",
+            ),
+            (
+                "random fill",
+                "const crypto = require('crypto'); crypto.randomFillSync(Buffer.alloc(8));",
+            ),
+            (
+                "asymmetric",
+                "const crypto = require('crypto'); crypto.generateKeyPairSync('ed25519');",
+            ),
+            (
+                "escaped",
+                "const crypto = require('crypto'); crypto.getHashes(); console.log(crypto);",
+            ),
+            (
+                "destructured escape",
+                "const crypto = require('crypto'); const { createHash } = crypto; createHash('sha256');",
+            ),
+            (
+                "mutated member",
+                "const crypto = require('crypto'); crypto.getHashes(); crypto.createHash = null;",
+            ),
+            (
+                "mutated binding",
+                "const crypto = require('crypto'); crypto.getHashes(); crypto = {};",
+            ),
+            (
+                "computed method",
+                "const crypto = require('crypto'); crypto['createHash']('sha256');",
+            ),
+            (
+                "spread deterministic method",
+                "const crypto = require('crypto'); try { crypto.createHash(...['sha256']); } catch (_error) {} console.log('continued');",
+            ),
+            (
+                "named module alias export",
+                "const crypto = require('crypto'); crypto.getHashes(); export { crypto };",
+            ),
+            (
+                "default module alias export",
+                "const crypto = require('crypto'); crypto.getHashes(); export default crypto;",
+            ),
+            (
+                "computed constants",
+                "const crypto = require('crypto'); crypto['constants'];",
+            ),
+            (
+                "unsupported member",
+                "const crypto = require('crypto'); crypto.getHashes(); crypto.webcrypto;",
+            ),
+            (
+                "shadowed only",
+                "const crypto = require('crypto'); function f(crypto) { return crypto.getHashes(); }",
+            ),
+            (
+                "predeclaration call",
+                "useCrypto(); const crypto = require('crypto'); function useCrypto() { return crypto.getHashes(); }",
+            ),
+        ] {
+            assert_crypto_ambient_denied_bd_2z157(source, label);
+        }
+    }
+
+    #[test]
+    fn crypto_inline_entropy_and_forged_provenance_never_emit_crypto_hostcalls_bd_2z157() {
+        assert_crypto_ambient_denied_bd_2z157(
+            "require('crypto').randomInt(10);",
+            "inline successful entropy",
+        );
+
+        let forged = lower_script_source_ops(
+            "const crypto = {}; crypto.createHash('sha256');",
+            "crypto_forged_bd_2z157.js",
+        );
+        for capability in [
+            "builtin:CryptoCreateHash",
+            "builtin:CryptoCreateHmac",
+            "builtin:CryptoTimingSafeEqual",
+            "builtin:CryptoPbkdf2Sync",
+            "builtin:CryptoPbkdf2",
+            "builtin:CryptoScryptSync",
+            "builtin:CryptoCreateCipheriv",
+            "builtin:CryptoCreateDecipheriv",
+            "builtin:CryptoGetHashes",
+            "builtin:CryptoGetCiphers",
+            "builtin:CryptoConstants",
+            "builtin:CryptoRandomInt",
+        ] {
+            assert_eq!(count_hostcall_deep(&forged, capability), 0);
+        }
+
+        let shadowed_require = lower_script_source_ops(
+            "function f(require) { return require('crypto').getHashes(); }",
+            "crypto_shadowed_require_bd_2z157.js",
+        );
+        assert_eq!(
+            count_hostcall_deep(&shadowed_require, "builtin:CryptoGetHashes"),
+            0
+        );
+    }
+
+    #[test]
+    fn crypto_confirmed_outer_alias_never_authenticates_inner_shadow_bindings_bd_2z157() {
+        let ops = lower_script_source_ops(
+            "const crypto = require('crypto');\n\
+             crypto.getHashes();\n\
+             function parameterShadow(crypto) { return crypto.getHashes(); }\n\
+             function destructuredShadow({ crypto }) { return crypto.getHashes(); }\n\
+             function localShadow() {\n\
+               const crypto = { getHashes() { return []; } };\n\
+               return crypto.getHashes();\n\
+             }\n\
+             parameterShadow({ getHashes() { return []; } });\n\
+             destructuredShadow({ crypto: { getHashes() { return []; } } });\n\
+             localShadow();\n",
+            "crypto_nested_shadow_bd_2z157.js",
+        );
+
+        assert_eq!(
+            count_hostcall_deep(&ops, "builtin:CryptoGetHashes"),
+            1,
+            "only the confirmed outer alias may emit a crypto hostcall"
+        );
+    }
+
+    #[test]
+    fn authenticated_crypto_object_aliases_lower_to_finite_hostcalls_bd_1by6p() {
+        let ops = lower_script_source_ops(
+            "const crypto = require('crypto');\n\
+             try {\n\
+               const bad = crypto.createDecipheriv('aes-256-cbc', Buffer.alloc(32, 2), Buffer.alloc(16, 2));\n\
+               bad.update(Buffer.alloc(16));\n\
+               bad.final();\n\
+             } catch (error) { console.log(error instanceof Error); }\n",
+            "crypto_object_catch_bd_1by6p.js",
+        );
+
+        assert_eq!(count_hostcall_deep(&ops, "builtin:CryptoObjectUpdate"), 1);
+        assert_eq!(count_hostcall_deep(&ops, "builtin:CryptoObjectFinal"), 1);
+        assert!(ops_deep_match(&ops, &|op| matches!(
+            op,
+            Ir1Op::HostCall {
+                capability,
+                arg_count: 2
+            } if capability == "builtin:CryptoObjectUpdate"
+        )));
+        assert!(ops_deep_match(&ops, &|op| matches!(
+            op,
+            Ir1Op::HostCall {
+                capability,
+                arg_count: 1
+            } if capability == "builtin:CryptoObjectFinal"
+        )));
+
+        let hash_ops = lower_script_source_ops(
+            "const crypto = require('crypto');\n\
+             const hash = crypto.createHash('sha256');\n\
+             hash.update('public-input');\n\
+             console.log(hash.digest('hex'));\n",
+            "crypto_hash_object_discarded_update_bd_1by6p.js",
+        );
+        assert_eq!(
+            count_hostcall_deep(&hash_ops, "builtin:CryptoObjectUpdate"),
+            1
+        );
+        assert_eq!(
+            count_hostcall_deep(&hash_ops, "builtin:CryptoObjectDigest"),
+            1
+        );
+
+        let gcm_ops = lower_script_source_ops(
+            "const crypto = require('crypto');\n\
+             const decipher = crypto.createDecipheriv('aes-256-gcm', Buffer.alloc(32), Buffer.alloc(12));\n\
+             decipher.setAuthTag(Buffer.alloc(16));\n\
+             decipher.update(Buffer.alloc(8));\n\
+             decipher.final();\n",
+            "crypto_gcm_set_auth_tag_bd_2z157.js",
+        );
+        assert!(ops_deep_match(&gcm_ops, &|op| matches!(
+            op,
+            Ir1Op::HostCall {
+                capability,
+                arg_count: 2
+            } if capability == "builtin:CryptoObjectSetAuthTag"
+        )));
+
+        for (label, source) in [
+            (
+                "assigned",
+                "const c=require('crypto'); const d=c.createDecipheriv('aes-256-gcm',Buffer.alloc(32),Buffer.alloc(12)); const x=d.setAuthTag(Buffer.alloc(16)); d.final();",
+            ),
+            (
+                "chained",
+                "const c=require('crypto'); const d=c.createDecipheriv('aes-256-gcm',Buffer.alloc(32),Buffer.alloc(12)); d.setAuthTag(Buffer.alloc(16)).final();",
+            ),
+            (
+                "computed",
+                "const c=require('crypto'); const d=c.createDecipheriv('aes-256-gcm',Buffer.alloc(32),Buffer.alloc(12)); d['setAuthTag'](Buffer.alloc(16)); d.final();",
+            ),
+        ] {
+            let rejected = lower_script_source_ops(
+                source,
+                &format!("crypto_gcm_set_auth_tag_{label}_bd_2z157.js"),
+            );
+            assert_eq!(
+                count_hostcall_deep(&rejected, "builtin:CryptoObjectSetAuthTag"),
+                0,
+                "{label} setAuthTag use must remain generic"
+            );
+        }
+    }
+
+    #[test]
+    fn finite_buffer_hostcall_catches_require_closed_argument_shapes_bd_x10yn() {
+        for (
+            case_name,
+            setup_ops,
+            capability,
+            arg_count,
+            expected_label,
+            expected_declassification,
+        ) in [
+            (
+                "primitive_from",
+                vec![Ir1Op::LoadLiteral {
+                    value: Ir1Literal::String("public-input".into()),
+                }],
+                "builtin:BufferFrom",
+                1,
+                Label::Internal,
+                false,
+            ),
+            (
+                "primitive_alloc",
+                vec![
+                    Ir1Op::LoadLiteral {
+                        value: Ir1Literal::Integer(16),
+                    },
+                    Ir1Op::LoadLiteral {
+                        value: Ir1Literal::String("secret-token".into()),
+                    },
+                ],
+                "builtin:BufferAlloc",
+                2,
+                Label::Secret,
+                true,
+            ),
+            (
+                "primitive_alloc_unsafe",
+                vec![Ir1Op::LoadLiteral {
+                    value: Ir1Literal::Integer(16),
+                }],
+                "builtin:BufferAllocUnsafe",
+                1,
+                Label::Internal,
+                false,
+            ),
+            (
+                "fresh_closed_concat",
+                vec![
+                    Ir1Op::LoadLiteral {
+                        value: Ir1Literal::String("public-input".into()),
+                    },
+                    Ir1Op::NewArray { count: 1 },
+                ],
+                "builtin:BufferConcat",
+                1,
+                Label::Internal,
+                false,
+            ),
+            (
+                "fresh_closed_concat_with_primitive_length",
+                vec![
+                    Ir1Op::LoadLiteral {
+                        value: Ir1Literal::String("public-input".into()),
+                    },
+                    Ir1Op::NewArray { count: 1 },
+                    Ir1Op::LoadLiteral {
+                        value: Ir1Literal::Integer(64),
+                    },
+                ],
+                "builtin:BufferConcat",
+                2,
+                Label::Internal,
+                false,
+            ),
+            (
+                "object_from_fails_high",
+                vec![Ir1Op::NewObject { count: 0 }],
+                "builtin:BufferFrom",
+                1,
+                Label::TopSecret,
+                true,
+            ),
+            (
+                "object_fill_alloc_fails_high",
+                vec![
+                    Ir1Op::LoadLiteral {
+                        value: Ir1Literal::Integer(16),
+                    },
+                    Ir1Op::NewObject { count: 0 },
+                ],
+                "builtin:BufferAlloc",
+                2,
+                Label::TopSecret,
+                true,
+            ),
+            (
+                "unknown_element_concat_fails_high",
+                vec![
+                    Ir1Op::LoadBinding { binding_id: 99 },
+                    Ir1Op::NewArray { count: 1 },
+                ],
+                "builtin:BufferConcat",
+                1,
+                Label::TopSecret,
+                true,
+            ),
+            (
+                "escaped_then_mutated_concat_fails_high",
+                vec![
+                    Ir1Op::LoadLiteral {
+                        value: Ir1Literal::String("public-input".into()),
+                    },
+                    Ir1Op::NewArray { count: 1 },
+                    Ir1Op::StoreBinding { binding_id: 91 },
+                    Ir1Op::LoadBinding { binding_id: 91 },
+                    Ir1Op::LoadLiteral {
+                        value: Ir1Literal::Integer(0),
+                    },
+                    Ir1Op::LoadLiteral {
+                        value: Ir1Literal::String("replacement".into()),
+                    },
+                    Ir1Op::SetProperty {
+                        key: Ir1PropertyKey::Dynamic,
+                    },
+                    Ir1Op::Pop,
+                ],
+                "builtin:BufferConcat",
+                1,
+                Label::TopSecret,
+                true,
+            ),
+            (
+                "branch_crossing_concat_fails_high",
+                vec![
+                    Ir1Op::LoadLiteral {
+                        value: Ir1Literal::String("public-input".into()),
+                    },
+                    Ir1Op::NewArray { count: 1 },
+                    Ir1Op::Jump { label_id: 50 },
+                    Ir1Op::Label { id: 50 },
+                ],
+                "builtin:BufferConcat",
+                1,
+                Label::TopSecret,
+                true,
+            ),
+        ] {
+            let mut ir1 = Ir1Module::new(
+                ContentHash::compute(case_name.as_bytes()),
+                format!("buffer_exception_{case_name}_bd_x10yn.js"),
+            );
+            ir1.ops.push(Ir1Op::BeginTry {
+                catch_label: 41,
+                finally_label: None,
+            });
+            ir1.ops.extend(setup_ops);
+            ir1.ops.extend([
+                Ir1Op::HostCall {
+                    capability: capability.to_string(),
+                    arg_count,
+                },
+                Ir1Op::Pop,
+                Ir1Op::EndTry,
+                Ir1Op::Jump { label_id: 42 },
+                Ir1Op::Label { id: 41 },
+                Ir1Op::HostCall {
+                    capability: "console:log".to_string(),
+                    arg_count: 1,
+                },
+                Ir1Op::Pop,
+                Ir1Op::Label { id: 42 },
+                Ir1Op::LoadLiteral {
+                    value: Ir1Literal::Undefined,
+                },
+                Ir1Op::Return,
+            ]);
+
+            let ir2 = lower_ir1_to_ir2(&ir1)
+                .expect("Buffer catch flow remains representable")
+                .module;
+            let console_flow = ir2
+                .ops
+                .iter()
+                .find(|op| {
+                    matches!(
+                        &op.inner,
+                        Ir1Op::HostCall { capability, .. } if capability == "console:log"
+                    )
+                })
+                .and_then(|op| op.flow.as_ref())
+                .expect("catch console flow annotation");
+            assert_eq!(console_flow.data_label, expected_label, "{case_name}");
+            assert_eq!(
+                console_flow.declassification_required, expected_declassification,
+                "{case_name}"
+            );
+        }
+    }
+
+    #[test]
+    fn operand_derived_nested_hostcalls_preserve_closed_stack_values_bd_1by6p() {
+        let mut ir1 = Ir1Module::new(
+            ContentHash::compute(b"nested-closed-hostcalls"),
+            "nested_closed_hostcalls_bd_1by6p.js",
+        );
+        ir1.ops.extend([
+            Ir1Op::BeginTry {
+                catch_label: 41,
+                finally_label: None,
+            },
+            Ir1Op::LoadLiteral {
+                value: Ir1Literal::String("left".into()),
+            },
+            Ir1Op::HostCall {
+                capability: "builtin:BufferFrom".to_string(),
+                arg_count: 1,
+            },
+            Ir1Op::LoadLiteral {
+                value: Ir1Literal::String("right".into()),
+            },
+            Ir1Op::HostCall {
+                capability: "builtin:BufferFrom".to_string(),
+                arg_count: 1,
+            },
+            Ir1Op::HostCall {
+                capability: "builtin:CryptoTimingSafeEqual".to_string(),
+                arg_count: 2,
+            },
+            Ir1Op::Pop,
+            Ir1Op::EndTry,
+            Ir1Op::Jump { label_id: 42 },
+            Ir1Op::Label { id: 41 },
+            Ir1Op::HostCall {
+                capability: "console:log".to_string(),
+                arg_count: 1,
+            },
+            Ir1Op::Pop,
+            Ir1Op::Label { id: 42 },
+            Ir1Op::LoadLiteral {
+                value: Ir1Literal::Undefined,
+            },
+            Ir1Op::Return,
+        ]);
+
+        let ir2 = lower_ir1_to_ir2(&ir1)
+            .expect("nested finite hostcalls retain closed argument provenance")
+            .module;
+        let console_flow = ir2
+            .ops
+            .iter()
+            .find(|op| {
+                matches!(
+                    &op.inner,
+                    Ir1Op::HostCall { capability, .. } if capability == "console:log"
+                )
+            })
+            .and_then(|op| op.flow.as_ref())
+            .expect("nested hostcall catch console flow annotation");
+        assert_eq!(console_flow.data_label, Label::Internal);
+        assert!(!console_flow.declassification_required);
+    }
+
+    #[test]
+    fn native_binary_constructors_retain_closed_catch_provenance_bd_1by6p() {
+        let tree = crate::parser_api_stability::parse_script(
+            "const crypto = require('crypto');\
+             const binary = new ArrayBuffer(4);\
+             try {\
+               const hash = crypto.createHash('sha256');\
+               hash.update(binary);\
+             } catch (error) {\
+               console.log(error instanceof TypeError);\
+             }",
+        )
+        .expect("parse native binary constructor catch source");
+        let ir0 = Ir0Module::from_syntax_tree(tree, "binary_constructor_catch_bd_1by6p.js");
+        let ir1 = lower_ir0_to_ir1(&ir0)
+            .expect("lower native binary constructor catch source")
+            .module;
+        let ir2 = lower_ir1_to_ir2(&ir1)
+            .expect("native binary constructor catch remains finite")
+            .module;
+        let console_flow = ir2
+            .ops
+            .iter()
+            .find(|op| {
+                matches!(
+                    &op.inner,
+                    Ir1Op::HostCall { capability, .. } if capability == "console:log"
+                )
+            })
+            .and_then(|op| op.flow.as_ref())
+            .expect("native binary constructor catch console flow annotation");
+        assert_eq!(console_flow.data_label, Label::Internal);
+        assert!(!console_flow.declassification_required);
+    }
+
+    #[test]
+    fn callback_capable_buffer_method_catch_stays_top_secret_bd_x10yn() {
+        let tree = crate::parser_api_stability::parse_script(
+            "try { Buffer.from('x').map(value => { throw 'secret-token'; }); } \
+             catch (error) { console.log(error); }",
+        )
+        .expect("parse callback-capable Buffer source");
+        let ir0 = Ir0Module::from_syntax_tree(tree, "buffer_callback_catch_bd_x10yn.js");
+        let ir1 = lower_ir0_to_ir1(&ir0)
+            .expect("lower callback-capable Buffer source")
+            .module;
+        assert!(ops_deep_match(&ir1.ops, &|op| matches!(
+            op,
+            Ir1Op::CallMethod { .. }
+        )));
+
+        let ir2 = lower_ir1_to_ir2(&ir1)
+            .expect("callback-capable Buffer catch remains representable")
+            .module;
+        let console_flow = ir2
+            .ops
+            .iter()
+            .find(|op| {
+                matches!(
+                    &op.inner,
+                    Ir1Op::HostCall { capability, .. } if capability == "console:log"
+                )
+            })
+            .and_then(|op| op.flow.as_ref())
+            .expect("catch console flow annotation");
+        assert_eq!(console_flow.data_label, Label::TopSecret);
+        assert!(console_flow.declassification_required);
+    }
+
+    #[test]
+    fn crypto_object_alias_rejected_uses_never_gain_finite_dispatch_bd_1by6p() {
+        for (label, source) in [
+            (
+                "mutated",
+                "const crypto=require('crypto'); const d=crypto.createDecipheriv('aes-256-cbc',Buffer.alloc(32),Buffer.alloc(16)); d.final=()=>{}; d.final();",
+            ),
+            (
+                "computed",
+                "const crypto=require('crypto'); const d=crypto.createDecipheriv('aes-256-cbc',Buffer.alloc(32),Buffer.alloc(16)); d['final']();",
+            ),
+            (
+                "detached",
+                "const crypto=require('crypto'); const d=crypto.createDecipheriv('aes-256-cbc',Buffer.alloc(32),Buffer.alloc(16)); const f=d.final; f();",
+            ),
+            (
+                "escaped",
+                "const crypto=require('crypto'); const d=crypto.createDecipheriv('aes-256-cbc',Buffer.alloc(32),Buffer.alloc(16)); consume(d); d.final();",
+            ),
+            (
+                "captured",
+                "const crypto=require('crypto'); const d=crypto.createDecipheriv('aes-256-cbc',Buffer.alloc(32),Buffer.alloc(16)); function later(){ d.final(); } later();",
+            ),
+            (
+                "direct_predeclaration",
+                "const crypto=require('crypto'); d.final(); const d=crypto.createDecipheriv('aes-256-cbc',Buffer.alloc(32),Buffer.alloc(16));",
+            ),
+            (
+                "hoisted_predeclaration_capture",
+                "const crypto=require('crypto'); later(); const d=crypto.createDecipheriv('aes-256-cbc',Buffer.alloc(32),Buffer.alloc(16)); function later(){ d.final(); }",
+            ),
+            (
+                "hash_result_alias",
+                "const crypto=require('crypto'); const h=crypto.createHash('sha256'); const x=h.update('public'); x.update('secret-token'); console.log(h.digest('hex'));",
+            ),
+            (
+                "hash_copy_result_escape",
+                "const crypto=require('crypto'); const h=crypto.createHash('sha256'); const x=h.copy(); consume(x); console.log(h.digest('hex'));",
+            ),
+            (
+                "hash_copy_argument_escape",
+                "const crypto=require('crypto'); const h=crypto.createHash('sha256'); const x=h.copy().update(consume(h)); console.log(h.digest('hex')); console.log(x.digest('hex'));",
+            ),
+            (
+                "hash_copy_mutable_target",
+                "const crypto=require('crypto'); const h=crypto.createHash('sha256'); let x=h.copy(); console.log(h.digest('hex')); console.log(x.digest('hex'));",
+            ),
+            (
+                "named_hash_export",
+                "const crypto=require('crypto'); const h=crypto.createHash('sha256'); export { h }; console.log(h.digest('hex'));",
+            ),
+            (
+                "default_hash_export",
+                "const crypto=require('crypto'); const h=crypto.createHash('sha256'); export default h; console.log(h.digest('hex'));",
+            ),
+            (
+                "hash_factory_self_reference",
+                "const crypto=require('crypto'); const h=crypto.createHash(h); console.log(h.digest('hex'));",
+            ),
+            (
+                "hash_copy_target_self_reference",
+                "const crypto=require('crypto'); const h=crypto.createHash('sha256'); const x=h.copy().update(x); console.log(h.digest('hex')); console.log(x.digest('hex'));",
+            ),
+            (
+                "arrow_expression_capture",
+                "const crypto=require('crypto'); const h=crypto.createHash('sha256'); const mutate=()=>h.update('secret-token'); mutate(); console.log(h.digest('hex'));",
+            ),
+            (
+                "arrow_block_capture",
+                "const crypto=require('crypto'); const h=crypto.createHash('sha256'); const mutate=()=>{ h.update('secret-token'); }; mutate(); console.log(h.digest('hex'));",
+            ),
+            (
+                "default_parameter_capture",
+                "const crypto=require('crypto'); const h=crypto.createHash('sha256'); function mutate(value=h.update('secret-token')){} mutate(); console.log(h.digest('hex'));",
+            ),
+            (
+                "default_parameter_body_shadow",
+                "const crypto=require('crypto'); const h=crypto.createHash('sha256'); function mutate(value=h.update('secret-token')){ const h=0; } mutate(); console.log(h.digest('hex'));",
+            ),
+            (
+                "function_expression_default_body_shadow",
+                "const crypto=require('crypto'); const h=crypto.createHash('sha256'); const mutate=function(value=h.update('secret-token')){ const h=0; }; mutate(); console.log(h.digest('hex'));",
+            ),
+            (
+                "class_default_body_shadow",
+                "const crypto=require('crypto'); const h=crypto.createHash('sha256'); class Mutator { run(value=h.update('secret-token')){ const h=0; } } new Mutator().run(); console.log(h.digest('hex'));",
+            ),
+            (
+                "class_method_capture",
+                "const crypto=require('crypto'); const h=crypto.createHash('sha256'); class Mutator { run(){ h.update('secret-token'); } } new Mutator().run(); console.log(h.digest('hex'));",
+            ),
+            (
+                "hmac_copy",
+                "const crypto=require('crypto'); const h=crypto.createHmac('sha256','key'); h.copy(); console.log(h.digest('hex'));",
+            ),
+            ("forged", "const d={__type:'Cipher',final(){}}; d.final();"),
+        ] {
+            let source_label = format!("crypto_object_{label}_bd_1by6p.js");
+            let ops = if matches!(label, "named_hash_export" | "default_hash_export") {
+                lower_esm_source_ops(source, &source_label)
+            } else {
+                lower_script_source_ops(source, &source_label)
+            };
+            for capability in [
+                "builtin:CryptoObjectUpdate",
+                "builtin:CryptoObjectDigest",
+                "builtin:CryptoObjectCopy",
+                "builtin:CryptoObjectFinal",
+                "builtin:CryptoObjectGetAuthTag",
+                "builtin:CryptoObjectSetAuthTag",
+            ] {
+                assert_eq!(
+                    count_hostcall_deep(&ops, capability),
+                    0,
+                    "{label} must not authenticate {capability}"
+                );
+            }
+            let retains_inert_generic_invocation =
+                ops_deep_match(&ops, &|op| matches!(op, Ir1Op::CallMethod { .. }))
+                    || (label == "detached"
+                        && ops_deep_match(&ops, &|op| matches!(op, Ir1Op::Call { .. })));
+            assert!(
+                retains_inert_generic_invocation,
+                "{label} must retain an inert generic Call/CallMethod rather than finite crypto dispatch"
+            );
+        }
+    }
+
+    #[test]
+    fn crypto_lifecycle_flow_persists_across_update_and_into_catch_bd_1by6p() {
+        for (update_value, expected_label, expected_declassification) in [
+            ("public-input", Label::Internal, false),
+            ("secret-token", Label::Secret, true),
+        ] {
+            let mut ir1 = Ir1Module::new(
+                ContentHash::compute(update_value.as_bytes()),
+                format!("crypto_lifecycle_{update_value}_bd_1by6p.js"),
+            );
+            ir1.ops.extend([
+                Ir1Op::LoadLiteral {
+                    value: Ir1Literal::String("aes-256-cbc".into()),
+                },
+                Ir1Op::LoadLiteral {
+                    value: Ir1Literal::String("public-key".into()),
+                },
+                Ir1Op::LoadLiteral {
+                    value: Ir1Literal::String("public-iv".into()),
+                },
+                Ir1Op::HostCall {
+                    capability: "builtin:CryptoCreateDecipheriv".to_string(),
+                    arg_count: 3,
+                },
+                Ir1Op::StoreBinding { binding_id: 7 },
+                Ir1Op::Pop,
+                Ir1Op::LoadBinding { binding_id: 7 },
+                Ir1Op::LoadLiteral {
+                    value: Ir1Literal::String(update_value.into()),
+                },
+                Ir1Op::HostCall {
+                    capability: "builtin:CryptoObjectUpdate".to_string(),
+                    arg_count: 2,
+                },
+                Ir1Op::Pop,
+                Ir1Op::BeginTry {
+                    catch_label: 41,
+                    finally_label: None,
+                },
+                Ir1Op::LoadBinding { binding_id: 7 },
+                Ir1Op::HostCall {
+                    capability: "builtin:CryptoObjectFinal".to_string(),
+                    arg_count: 1,
+                },
+                Ir1Op::Pop,
+                Ir1Op::EndTry,
+                Ir1Op::Jump { label_id: 42 },
+                Ir1Op::Label { id: 41 },
+                Ir1Op::HostCall {
+                    capability: "console:log".to_string(),
+                    arg_count: 1,
+                },
+                Ir1Op::Pop,
+                Ir1Op::Label { id: 42 },
+                Ir1Op::LoadLiteral {
+                    value: Ir1Literal::Undefined,
+                },
+                Ir1Op::Return,
+            ]);
+
+            let ir2 = lower_ir1_to_ir2(&ir1)
+                .expect("authenticated lifecycle flow lowering")
+                .module;
+            let console_flow = ir2
+                .ops
+                .iter()
+                .find(|op| {
+                    matches!(
+                        &op.inner,
+                        Ir1Op::HostCall { capability, .. } if capability == "console:log"
+                    )
+                })
+                .and_then(|op| op.flow.as_ref())
+                .expect("catch console flow annotation");
+            assert_eq!(console_flow.data_label, expected_label, "{update_value}");
+            assert_eq!(
+                console_flow.declassification_required, expected_declassification,
+                "{update_value}"
+            );
+        }
+    }
+
+    #[test]
+    fn crypto_set_auth_tag_catch_joins_receiver_and_tag_bd_1by6p() {
+        for (tag_value, expected_label, expected_declassification) in [
+            ("public-auth-tag", Label::Internal, false),
+            ("secret-token", Label::Secret, true),
+        ] {
+            let mut ir1 = Ir1Module::new(
+                ContentHash::compute(tag_value.as_bytes()),
+                format!("crypto_set_auth_tag_{tag_value}_bd_1by6p.js"),
+            );
+            ir1.ops.extend([
+                Ir1Op::LoadLiteral {
+                    value: Ir1Literal::String("aes-256-gcm".into()),
+                },
+                Ir1Op::LoadLiteral {
+                    value: Ir1Literal::String("public-key".into()),
+                },
+                Ir1Op::LoadLiteral {
+                    value: Ir1Literal::String("public-iv".into()),
+                },
+                Ir1Op::HostCall {
+                    capability: "builtin:CryptoCreateDecipheriv".to_string(),
+                    arg_count: 3,
+                },
+                Ir1Op::StoreBinding { binding_id: 7 },
+                Ir1Op::Pop,
+                Ir1Op::BeginTry {
+                    catch_label: 41,
+                    finally_label: None,
+                },
+                Ir1Op::LoadBinding { binding_id: 7 },
+                Ir1Op::LoadLiteral {
+                    value: Ir1Literal::String(tag_value.into()),
+                },
+                Ir1Op::HostCall {
+                    capability: "builtin:CryptoObjectSetAuthTag".to_string(),
+                    arg_count: 2,
+                },
+                Ir1Op::Pop,
+                Ir1Op::EndTry,
+                Ir1Op::Jump { label_id: 42 },
+                Ir1Op::Label { id: 41 },
+                Ir1Op::HostCall {
+                    capability: "console:log".to_string(),
+                    arg_count: 1,
+                },
+                Ir1Op::Pop,
+                Ir1Op::Label { id: 42 },
+                Ir1Op::LoadLiteral {
+                    value: Ir1Literal::Undefined,
+                },
+                Ir1Op::Return,
+            ]);
+
+            let ir2 = lower_ir1_to_ir2(&ir1)
+                .expect("authenticated setAuthTag catch flow lowering")
+                .module;
+            let console_flow = ir2
+                .ops
+                .iter()
+                .find(|op| {
+                    matches!(
+                        &op.inner,
+                        Ir1Op::HostCall { capability, .. } if capability == "console:log"
+                    )
+                })
+                .and_then(|op| op.flow.as_ref())
+                .expect("setAuthTag catch console flow annotation");
+            assert_eq!(console_flow.data_label, expected_label, "{tag_value}");
+            assert_eq!(
+                console_flow.declassification_required, expected_declassification,
+                "{tag_value}"
+            );
+        }
+    }
+
+    #[test]
+    fn crypto_hostcall_catch_with_escaped_object_input_fails_high_bd_1by6p() {
+        let mut ir1 = Ir1Module::new(
+            ContentHash::compute(b"crypto-escaped-tag-catch"),
+            "crypto_escaped_tag_catch_bd_1by6p.js",
+        );
+        ir1.ops.extend([
+            Ir1Op::LoadLiteral {
+                value: Ir1Literal::String("public-tag".into()),
+            },
+            Ir1Op::HostCall {
+                capability: "builtin:BufferFrom".to_string(),
+                arg_count: 1,
+            },
+            Ir1Op::StoreBinding { binding_id: 8 },
+            Ir1Op::Pop,
+            Ir1Op::LoadLiteral {
+                value: Ir1Literal::Undefined,
+            },
+            Ir1Op::LoadBinding { binding_id: 8 },
+            Ir1Op::Call { arg_count: 1 },
+            Ir1Op::Pop,
+            Ir1Op::LoadLiteral {
+                value: Ir1Literal::String("aes-256-gcm".into()),
+            },
+            Ir1Op::LoadLiteral {
+                value: Ir1Literal::String("public-key".into()),
+            },
+            Ir1Op::LoadLiteral {
+                value: Ir1Literal::String("public-iv".into()),
+            },
+            Ir1Op::HostCall {
+                capability: "builtin:CryptoCreateDecipheriv".to_string(),
+                arg_count: 3,
+            },
+            Ir1Op::StoreBinding { binding_id: 7 },
+            Ir1Op::Pop,
+            Ir1Op::BeginTry {
+                catch_label: 41,
+                finally_label: None,
+            },
+            Ir1Op::LoadBinding { binding_id: 7 },
+            Ir1Op::LoadBinding { binding_id: 8 },
+            Ir1Op::HostCall {
+                capability: "builtin:CryptoObjectSetAuthTag".to_string(),
+                arg_count: 2,
+            },
+            Ir1Op::Pop,
+            Ir1Op::EndTry,
+            Ir1Op::Jump { label_id: 42 },
+            Ir1Op::Label { id: 41 },
+            Ir1Op::HostCall {
+                capability: "console:log".to_string(),
+                arg_count: 1,
+            },
+            Ir1Op::Pop,
+            Ir1Op::Label { id: 42 },
+            Ir1Op::LoadLiteral {
+                value: Ir1Literal::Undefined,
+            },
+            Ir1Op::Return,
+        ]);
+
+        let ir2 = lower_ir1_to_ir2(&ir1)
+            .expect("escaped crypto operand stays representable but fail-high")
+            .module;
+        let console_flow = ir2
+            .ops
+            .iter()
+            .find(|op| {
+                matches!(
+                    &op.inner,
+                    Ir1Op::HostCall { capability, .. } if capability == "console:log"
+                )
+            })
+            .and_then(|op| op.flow.as_ref())
+            .expect("escaped crypto catch console flow annotation");
+        assert_eq!(console_flow.data_label, Label::TopSecret);
+        assert!(console_flow.declassification_required);
+    }
+
+    #[test]
+    fn retained_crypto_buffer_shape_invalidates_on_alias_mutation_and_branch_bd_1by6p() {
+        for (case_name, invalidation) in [
+            ("alias_mutation", "const alias = tag; alias[0] = 1;"),
+            ("branch_merge", "if (tag) {}"),
+        ] {
+            let source = format!(
+                "const crypto = require('crypto');\n\
+                 const tag = Buffer.from('public-auth-tag');\n\
+                 {invalidation}\n\
+                 const decipher = crypto.createDecipheriv(\
+                   'aes-256-gcm', 'public-key', 'public-iv'\
+                 );\n\
+                 try {{ decipher.setAuthTag(tag); }} catch (error) {{\n\
+                   console.log(error instanceof Error);\n\
+                 }}"
+            );
+            let tree = crate::parser_api_stability::parse_script(&source)
+                .expect("parse retained Buffer invalidation source");
+            let ir0 = Ir0Module::from_syntax_tree(
+                tree,
+                format!("crypto_retained_buffer_{case_name}_bd_1by6p.js"),
+            );
+            let ir1 = lower_ir0_to_ir1(&ir0)
+                .expect("retained Buffer invalidation source should lower")
+                .module;
+            assert_eq!(
+                count_hostcall_deep(&ir1.ops, "builtin:CryptoObjectSetAuthTag"),
+                1,
+                "{case_name} should retain finite authenticated crypto dispatch"
+            );
+
+            let ir2 = lower_ir1_to_ir2(&ir1)
+                .expect("retained Buffer invalidation flow should remain representable")
+                .module;
+            let console_flow = ir2
+                .ops
+                .iter()
+                .find(|op| {
+                    matches!(
+                        &op.inner,
+                        Ir1Op::HostCall { capability, .. } if capability == "console:log"
+                    )
+                })
+                .and_then(|op| op.flow.as_ref())
+                .expect("retained Buffer invalidation catch console flow annotation");
+            assert_eq!(console_flow.data_label, Label::TopSecret, "{case_name}");
+            assert!(console_flow.declassification_required, "{case_name}");
+        }
+    }
+
+    #[test]
+    fn forged_crypto_lifecycle_hostcall_fails_high_bd_1by6p() {
+        let mut ir1 = Ir1Module::new(
+            ContentHash::compute(b"forged-crypto-lifecycle"),
+            "forged_crypto_lifecycle_bd_1by6p.js",
+        );
+        ir1.ops.extend([
+            Ir1Op::BeginTry {
+                catch_label: 41,
+                finally_label: None,
+            },
+            Ir1Op::LoadLiteral {
+                value: Ir1Literal::String("public-forged-object".into()),
+            },
+            Ir1Op::HostCall {
+                capability: "builtin:CryptoObjectFinal".to_string(),
+                arg_count: 1,
+            },
+            Ir1Op::Pop,
+            Ir1Op::EndTry,
+            Ir1Op::Jump { label_id: 42 },
+            Ir1Op::Label { id: 41 },
+            Ir1Op::HostCall {
+                capability: "console:log".to_string(),
+                arg_count: 1,
+            },
+            Ir1Op::Pop,
+            Ir1Op::Label { id: 42 },
+            Ir1Op::LoadLiteral {
+                value: Ir1Literal::Undefined,
+            },
+            Ir1Op::Return,
+        ]);
+
+        let ir2 = lower_ir1_to_ir2(&ir1)
+            .expect("malformed finite capability stays representable but fail-high")
+            .module;
+        let console_flow = ir2
+            .ops
+            .iter()
+            .find(|op| {
+                matches!(
+                    &op.inner,
+                    Ir1Op::HostCall { capability, .. } if capability == "console:log"
+                )
+            })
+            .and_then(|op| op.flow.as_ref())
+            .expect("forged catch console flow annotation");
+        assert_eq!(console_flow.data_label, Label::TopSecret);
+        assert!(console_flow.declassification_required);
+    }
+
+    #[test]
+    fn wrong_kind_crypto_lifecycle_hostcalls_fail_high_bd_1by6p() {
+        for (constructor, constructor_arg_count, lifecycle, case_name) in [
+            (
+                "builtin:CryptoCreateHash",
+                1,
+                "builtin:CryptoObjectFinal",
+                "hash_final",
+            ),
+            (
+                "builtin:CryptoCreateHmac",
+                2,
+                "builtin:CryptoObjectCopy",
+                "hmac_copy",
+            ),
+            (
+                "builtin:CryptoCreateCipheriv",
+                3,
+                "builtin:CryptoObjectDigest",
+                "cipher_digest",
+            ),
+        ] {
+            let mut ir1 = Ir1Module::new(
+                ContentHash::compute(case_name.as_bytes()),
+                format!("wrong_kind_{case_name}_bd_1by6p.js"),
+            );
+            for _ in 0..constructor_arg_count {
+                ir1.ops.push(Ir1Op::LoadLiteral {
+                    value: Ir1Literal::String("public-constructor-argument".into()),
+                });
+            }
+            ir1.ops.extend([
+                Ir1Op::HostCall {
+                    capability: constructor.to_string(),
+                    arg_count: constructor_arg_count,
+                },
+                Ir1Op::StoreBinding { binding_id: 7 },
+                Ir1Op::Pop,
+                Ir1Op::BeginTry {
+                    catch_label: 41,
+                    finally_label: None,
+                },
+                Ir1Op::LoadBinding { binding_id: 7 },
+                Ir1Op::HostCall {
+                    capability: lifecycle.to_string(),
+                    arg_count: 1,
+                },
+                Ir1Op::Pop,
+                Ir1Op::EndTry,
+                Ir1Op::Jump { label_id: 42 },
+                Ir1Op::Label { id: 41 },
+                Ir1Op::HostCall {
+                    capability: "console:log".to_string(),
+                    arg_count: 1,
+                },
+                Ir1Op::Pop,
+                Ir1Op::Label { id: 42 },
+                Ir1Op::LoadLiteral {
+                    value: Ir1Literal::Undefined,
+                },
+                Ir1Op::Return,
+            ]);
+
+            let ir2 = lower_ir1_to_ir2(&ir1)
+                .expect("wrong-kind lifecycle flow remains representable")
+                .module;
+            let console_flow = ir2
+                .ops
+                .iter()
+                .find(|op| {
+                    matches!(
+                        &op.inner,
+                        Ir1Op::HostCall { capability, .. } if capability == "console:log"
+                    )
+                })
+                .and_then(|op| op.flow.as_ref())
+                .expect("wrong-kind catch console flow annotation");
+            assert_eq!(console_flow.data_label, Label::TopSecret, "{case_name}");
+            assert!(console_flow.declassification_required, "{case_name}");
+        }
+    }
+
     #[test]
     fn object_get_own_property_symbols_lowers_to_builtin_bd_n8eta_4_2() {
         let ops = lower_script_source_ops(
@@ -24132,21 +28495,30 @@ mod tests {
         assert_eq!(count_hostcall_deep(&ops, "builtin:HttpAgent"), 1);
         assert_eq!(count_hostcall_deep(&ops, "builtin:HttpMethods"), 1);
 
-        let tree = crate::parser_api_stability::parse_script(
+        let shadowed = lower_script_source_ops(
             "function probe(require) {\n\
                return require('http').createServer();\n\
              }\n",
-        )
-        .expect("parse script");
-        let ir0 = Ir0Module::from_syntax_tree(tree, "http_inline_require_shadow_bd_d0n7u.js");
-        let error = lower_ir0_to_ir1(&ir0)
-            .expect_err("a lexical require parameter must not acquire HTTP builtin provenance");
+            "http_inline_require_shadow_bd_d0n7u.js",
+        );
+        for capability in [
+            "builtin:HttpCreateServer",
+            "builtin:HttpGet",
+            "builtin:HttpRequest",
+            "builtin:HttpAgent",
+            "builtin:HttpStatusCodes",
+            "builtin:HttpMethods",
+        ] {
+            assert_eq!(
+                count_hostcall_deep(&shadowed, capability),
+                0,
+                "a lexical require parameter must not acquire {capability} provenance"
+            );
+        }
         assert!(
-            matches!(
-                error,
-                LoweringPipelineError::AmbientAuthorityViolation { .. }
-            ),
-            "a lexical require parameter must preserve ambient denial, got {error:?}"
+            ops_deep_match(&shadowed, &|op| matches!(op, Ir1Op::Call { .. }))
+                && ops_deep_match(&shadowed, &|op| matches!(op, Ir1Op::CallMethod { .. })),
+            "a lexical require parameter must retain generic call semantics"
         );
     }
 
@@ -26008,6 +30380,51 @@ mod tests {
         let cap = CapabilityTag("net.write".to_string());
         let label = infer_sink_clearance(&EffectBoundary::Pure, Some(&cap), &Label::Secret);
         assert_eq!(label, Label::Public);
+    }
+
+    #[test]
+    fn hermetic_net_builtin_sink_is_not_public_egress_bd_bscab_bd_oardi() {
+        for capability in [
+            "builtin:NetCreateServer",
+            "builtin:NetConnect",
+            "builtin:NetSocket",
+        ] {
+            let capability = CapabilityTag(capability.to_string());
+            let clearance = infer_sink_clearance(
+                &EffectBoundary::HostcallEffect,
+                Some(&capability),
+                &Label::TopSecret,
+            );
+            assert_eq!(clearance, Label::TopSecret);
+        }
+
+        for host_egress in ["net.write", "net:request", "net:client_request"] {
+            let host_egress = CapabilityTag(host_egress.to_string());
+            assert_eq!(
+                infer_sink_clearance(
+                    &EffectBoundary::NetworkEffect,
+                    Some(&host_egress),
+                    &Label::TopSecret,
+                ),
+                Label::Public,
+                "real host-network authority must remain a public sink"
+            );
+        }
+    }
+
+    #[test]
+    fn recognized_forward_capture_uses_internal_fixed_point_seed_bd_bscab_bd_oardi() {
+        let labels = BTreeMap::new();
+        assert_eq!(
+            infer_function_capture_label(&[capture_cell_name("server", 73)], &labels),
+            Label::Internal,
+            "a recognized capture preceding its store must converge from the runtime floor"
+        );
+        assert_eq!(
+            infer_function_capture_label(&["unrecognized-capture".to_string()], &labels),
+            Label::TopSecret,
+            "an unauthenticated capture identity must still fail high"
+        );
     }
 
     // -- alloc_register --
@@ -30357,6 +34774,49 @@ mod tests {
             )),
             Err(LoweringPipelineError::AmbientAuthorityViolation { .. })
         ));
+    }
+
+    #[test]
+    fn typeof_placeholders_never_shadow_later_ambient_authority_bd_d0n7u() {
+        for (label, source, expected_effect) in [
+            (
+                "require",
+                "typeof require; require('fs');",
+                EffectKind::FsRead,
+            ),
+            (
+                "fetch",
+                "typeof fetch; fetch('http://127.0.0.1:9/');",
+                EffectKind::NetConnect,
+            ),
+            (
+                "crypto",
+                "typeof crypto; crypto.getHashes();",
+                EffectKind::RandomRead,
+            ),
+        ] {
+            let error = lower_script_with_grant_bd_xewby(source, AmbientAuthorityGrant::DenyAll)
+                .expect_err("a typeof placeholder must not authorize a later ambient use");
+            assert!(
+                matches!(
+                    error,
+                    LoweringPipelineError::AmbientAuthorityViolation {
+                        required_effect,
+                        ..
+                    } if required_effect == expected_effect
+                ),
+                "{label} must retain its ambient denial after typeof, got {error:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn repeated_typeof_ambient_reference_stays_non_authoritative_bd_d0n7u() {
+        lower_script_with_grant_bd_xewby(
+            "typeof require; typeof require; typeof fetch; typeof fetch; typeof crypto; typeof crypto;",
+            AmbientAuthorityGrant::DenyAll,
+        )
+        .expect("repeated typeof probes must not exercise ambient authority");
     }
 
     #[test]

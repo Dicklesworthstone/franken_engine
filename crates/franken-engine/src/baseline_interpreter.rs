@@ -46,13 +46,21 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use aes::cipher::{
+    BlockDecryptMut, BlockEncryptMut, KeyIvInit, StreamCipher,
+    block_padding::{NoPadding, Pkcs7},
+};
+use aes_gcm::aead::{AeadInPlace, KeyInit as AeadKeyInit};
 use flate2::{Compression, GzBuilder, read::MultiGzDecoder};
 use hmac::{Hmac, Mac};
+use md5::Md5;
 use regex::{NoExpand, Regex, RegexBuilder};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
-use sha2::Sha256;
+use sha1::Sha1;
+use sha2::{Digest, Sha256, Sha512};
 use subtle::ConstantTimeEq;
 use url::{Url, form_urlencoded};
+use zeroize::Zeroizing;
 
 use frankenengine_core::object_model::{
     BaselineSymbolProperty, OrderedStringMap, SymbolId as CoreSymbolId,
@@ -331,6 +339,25 @@ const ZLIB_PUBLICATION_METADATA_BYTES: u64 = 64 * 1024;
 /// Compression additionally scales input work by the requested level, while
 /// decompression reserves the full engine output cap before touching a codec.
 const ZLIB_WORK_UNIT_BYTES: u64 = 1024;
+/// Deterministic crypto inputs and outputs share Buffer's per-backing cap.
+/// Stateful hash/cipher objects retain at most this much guest-controlled
+/// material, and KDFs must prove their complete workspace below the global
+/// memory ceiling before starting expensive work (bd-2z157).
+const CRYPTO_MAX_INPUT_BYTES: usize = MAX_ARRAY_BUFFER_BYTE_LENGTH as usize;
+const CRYPTO_STATE_BASE_BYTES: u64 = 192;
+const CRYPTO_WORK_UNIT_BYTES: u64 = 1024;
+/// One deterministic VM budget tick represents two scrypt ROMix block-mix
+/// rounds. The complete ROMix plus both PBKDF2-phase work estimate is
+/// separately capped before RustCrypto is invoked, so this calibration admits
+/// Node's canonical N=16384,r=8 default under the 100k QuickJS budget without
+/// restoring the former 128x undercharge.
+const CRYPTO_SCRYPT_MIXES_PER_BUDGET_TICK: u64 = 2;
+const CRYPTO_MAX_SCRYPT_WORK_UNITS: u64 = 1_000_000;
+const CRYPTO_MAX_SAFE_INTEGER: i64 = 9_007_199_254_740_991;
+/// Conservative metadata and encoded-string headroom for publishing a crypto
+/// output. `encode_buffer_bytes` peaks at four bytes per source byte for its
+/// UTF-16 path; unencoded Buffer publication is strictly below this bound.
+const CRYPTO_OUTPUT_PUBLICATION_METADATA_BYTES: u64 = 4 * 1024;
 /// One deterministic instruction-budget unit per KiB of HTTP framing, body,
 /// or header materialization work, plus one unit per visited header/array item.
 const HTTP_WORK_UNIT_BYTES: u64 = 1024;
@@ -383,6 +410,153 @@ impl ZlibOperationFailure {
         Self::Data {
             code: "Z_NEED_DICT",
             message: message.into(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CryptoHashAlgorithm {
+    Md5,
+    Sha1,
+    Sha256,
+    Sha512,
+}
+
+impl CryptoHashAlgorithm {
+    fn parse(name: &str) -> Option<Self> {
+        if name.eq_ignore_ascii_case("md5") {
+            Some(Self::Md5)
+        } else if name.eq_ignore_ascii_case("sha1") || name.eq_ignore_ascii_case("sha-1") {
+            Some(Self::Sha1)
+        } else if name.eq_ignore_ascii_case("sha256") || name.eq_ignore_ascii_case("sha-256") {
+            Some(Self::Sha256)
+        } else if name.eq_ignore_ascii_case("sha512") || name.eq_ignore_ascii_case("sha-512") {
+            Some(Self::Sha512)
+        } else {
+            None
+        }
+    }
+
+    fn output_len(self) -> usize {
+        match self {
+            Self::Md5 => 16,
+            Self::Sha1 => 20,
+            Self::Sha256 => 32,
+            Self::Sha512 => 64,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CryptoCipherAlgorithm {
+    Aes256Cbc,
+    Aes128Ctr,
+    Aes256Gcm,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CryptoCipherDirection {
+    Encrypt,
+    Decrypt,
+}
+
+type CryptoCipherOutput = (Zeroizing<Vec<u8>>, Option<Zeroizing<Vec<u8>>>);
+
+/// Authenticated state for JS-visible crypto objects. No guest-writable heap
+/// property participates in branding or lifecycle decisions: ObjectId
+/// membership in `InterpreterCore::crypto_objects` is the authority.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum CryptoObjectState {
+    HashActive {
+        algorithm: CryptoHashAlgorithm,
+        input: Zeroizing<Vec<u8>>,
+        lifecycle_label: Label,
+    },
+    HashFinalized {
+        lifecycle_label: Label,
+    },
+    HmacActive {
+        algorithm: CryptoHashAlgorithm,
+        key: Zeroizing<Vec<u8>>,
+        input: Zeroizing<Vec<u8>>,
+        lifecycle_label: Label,
+    },
+    HmacFinalized {
+        lifecycle_label: Label,
+    },
+    CipherActive {
+        algorithm: CryptoCipherAlgorithm,
+        direction: CryptoCipherDirection,
+        key: Zeroizing<Vec<u8>>,
+        iv: Zeroizing<Vec<u8>>,
+        input: Zeroizing<Vec<u8>>,
+        auth_tag: Option<Zeroizing<Vec<u8>>>,
+        emitted: usize,
+        output_encoding: Option<String>,
+        output_remainder: Zeroizing<Vec<u8>>,
+        lifecycle_label: Label,
+    },
+    CipherFinalized {
+        algorithm: CryptoCipherAlgorithm,
+        direction: CryptoCipherDirection,
+        auth_tag: Option<Zeroizing<Vec<u8>>>,
+        lifecycle_label: Label,
+    },
+}
+
+impl CryptoObjectState {
+    fn lifecycle_label(&self) -> &Label {
+        match self {
+            Self::HashActive {
+                lifecycle_label, ..
+            }
+            | Self::HashFinalized { lifecycle_label }
+            | Self::HmacActive {
+                lifecycle_label, ..
+            }
+            | Self::HmacFinalized { lifecycle_label }
+            | Self::CipherActive {
+                lifecycle_label, ..
+            }
+            | Self::CipherFinalized {
+                lifecycle_label, ..
+            } => lifecycle_label,
+        }
+    }
+
+    fn supports_lifecycle_capability(&self, capability: &str) -> bool {
+        match self {
+            Self::HashActive { .. } | Self::HashFinalized { .. } => matches!(
+                capability,
+                "builtin:CryptoObjectUpdate"
+                    | "builtin:CryptoObjectDigest"
+                    | "builtin:CryptoObjectCopy"
+            ),
+            Self::HmacActive { .. } | Self::HmacFinalized { .. } => matches!(
+                capability,
+                "builtin:CryptoObjectUpdate" | "builtin:CryptoObjectDigest"
+            ),
+            Self::CipherActive {
+                algorithm,
+                direction,
+                ..
+            }
+            | Self::CipherFinalized {
+                algorithm,
+                direction,
+                ..
+            } => match capability {
+                "builtin:CryptoObjectUpdate" | "builtin:CryptoObjectFinal" => true,
+                "builtin:CryptoObjectGetAuthTag" => {
+                    *algorithm == CryptoCipherAlgorithm::Aes256Gcm
+                        && *direction == CryptoCipherDirection::Encrypt
+                }
+                "builtin:CryptoObjectSetAuthTag" => {
+                    *algorithm == CryptoCipherAlgorithm::Aes256Gcm
+                        && *direction == CryptoCipherDirection::Decrypt
+                }
+                _ => false,
+            },
         }
     }
 }
@@ -2631,6 +2805,16 @@ pub enum BuiltinFunctionKind {
     HttpServerResponseWriteHead,
     HttpServerResponseWrite,
     HttpServerResponseEnd,
+    /// Authenticated Node crypto receiver methods (bd-2z157). These remain at
+    /// the true enum tail because builtin discriminants participate in the
+    /// deterministic register hash.
+    CryptoUpdate,
+    CryptoDigest,
+    CryptoCopy,
+    CryptoCipherUpdate,
+    CryptoCipherFinal,
+    CryptoGetAuthTag,
+    CryptoSetAuthTag,
 }
 
 impl BuiltinFunctionKind {
@@ -4083,6 +4267,12 @@ impl BuiltinFunction {
             BuiltinFunctionKind::ClusterDisconnect => "disconnect",
             BuiltinFunctionKind::ClusterFork => "fork",
             BuiltinFunctionKind::ClusterWorker => "Worker",
+            BuiltinFunctionKind::CryptoUpdate | BuiltinFunctionKind::CryptoCipherUpdate => "update",
+            BuiltinFunctionKind::CryptoDigest => "digest",
+            BuiltinFunctionKind::CryptoCopy => "copy",
+            BuiltinFunctionKind::CryptoCipherFinal => "final",
+            BuiltinFunctionKind::CryptoGetAuthTag => "getAuthTag",
+            BuiltinFunctionKind::CryptoSetAuthTag => "setAuthTag",
         }
     }
 }
@@ -5690,9 +5880,10 @@ impl EvidenceLog {
 
     /// Compute HMAC-SHA256 of a binary message.
     fn compute_hmac(&self, message: &[u8]) -> String {
-        let mut mac = Hmac::<Sha256>::new_from_slice(&self.signing_key).unwrap_or_else(|_| {
-            panic!("32-byte signing key should always be valid for HMAC-SHA256")
-        });
+        let mut mac =
+            <Hmac<Sha256> as Mac>::new_from_slice(&self.signing_key).unwrap_or_else(|_| {
+                panic!("32-byte signing key should always be valid for HMAC-SHA256")
+            });
         mac.update(message);
         format!("hmac-sha256-{}", hex::encode(mac.finalize().into_bytes()))
     }
@@ -7844,6 +8035,9 @@ pub struct InterpreterCore {
     /// One authenticated facade/settings pair per execution. Repeated bare or
     /// `node:` cluster hostcalls return this same facade identity.
     cluster_facades: BTreeMap<ObjectId, ClusterRuntimeState>,
+    /// Non-forgeable hash/HMAC/cipher state keyed by the JS-visible object's
+    /// heap identity. Guest `__type` fields are never consulted (bd-2z157).
+    crypto_objects: BTreeMap<ObjectId, CryptoObjectState>,
     stream_pipelines: BTreeMap<u32, StreamPipelineState>,
     next_stream_pipeline_token: u32,
     /// bd-3894s slice (2d): deferred readable-stream emissions (`'data'`/`'end'`),
@@ -8079,6 +8273,7 @@ impl InterpreterCore {
             url_objects: BTreeMap::new(),
             url_search_params: BTreeMap::new(),
             cluster_facades: BTreeMap::new(),
+            crypto_objects: BTreeMap::new(),
             stream_pipelines: BTreeMap::new(),
             next_stream_pipeline_token: 0,
             pending_stream_emissions: BTreeMap::new(),
@@ -13831,6 +14026,12 @@ impl InterpreterCore {
     fn clear_cluster_execution_state(&mut self) {
         let released_bytes = self.cluster_facades_memory_bytes();
         self.cluster_facades.clear();
+        self.estimated_memory_bytes = self.estimated_memory_bytes.saturating_sub(released_bytes);
+    }
+
+    fn clear_crypto_execution_state(&mut self) {
+        let released_bytes = self.crypto_objects_memory_bytes();
+        self.crypto_objects.clear();
         self.estimated_memory_bytes = self.estimated_memory_bytes.saturating_sub(released_bytes);
     }
 
@@ -21724,6 +21925,7 @@ impl InterpreterCore {
         // preceding execution.
         self.clear_url_execution_state();
         self.clear_cluster_execution_state();
+        self.clear_crypto_execution_state();
         self.clear_stream_pipeline_execution_state();
         self.clear_readable_execution_state();
         self.clear_writable_execution_state();
@@ -27182,6 +27384,25 @@ impl InterpreterCore {
                     });
                 }
                 Ok(receiver)
+            }
+            BuiltinFunctionKind::CryptoUpdate => {
+                self.crypto_update(receiver, builtin, args)
+            }
+            BuiltinFunctionKind::CryptoDigest => {
+                self.crypto_digest(receiver, builtin, args)
+            }
+            BuiltinFunctionKind::CryptoCopy => self.crypto_copy(receiver, builtin, args),
+            BuiltinFunctionKind::CryptoCipherUpdate => {
+                self.crypto_cipher_update(receiver, builtin, args)
+            }
+            BuiltinFunctionKind::CryptoCipherFinal => {
+                self.crypto_cipher_final(receiver, builtin, args)
+            }
+            BuiltinFunctionKind::CryptoGetAuthTag => {
+                self.crypto_get_auth_tag(receiver, builtin, args)
+            }
+            BuiltinFunctionKind::CryptoSetAuthTag => {
+                self.crypto_set_auth_tag(receiver, builtin, args)
             }
             BuiltinFunctionKind::ConsoleLog => self.dispatch_console_hostcall("console:log", args),
             BuiltinFunctionKind::ConsoleError => {
@@ -34354,6 +34575,76 @@ impl InterpreterCore {
         }
     }
 
+    /// Build a receiver-bound crypto method for focused interpreter tests.
+    ///
+    /// Production property lookup intentionally never calls this helper: all
+    /// accepted crypto lifecycle operations arrive through finite HostCalls.
+    /// Keeping authenticated objects methodless at the generic JS property
+    /// boundary prevents computed, escaped, and excluded fluent uses from
+    /// dynamically recovering privileged crypto dispatch (bd-2z157).
+    #[cfg(test)]
+    fn crypto_test_method(&self, object_id: ObjectId, key: &str) -> Option<BuiltinFunction> {
+        let state = self.crypto_objects.get(&object_id)?;
+        let kind = match (state, key) {
+            (
+                CryptoObjectState::HashActive { .. }
+                | CryptoObjectState::HashFinalized { .. }
+                | CryptoObjectState::HmacActive { .. }
+                | CryptoObjectState::HmacFinalized { .. },
+                "update",
+            ) => BuiltinFunctionKind::CryptoUpdate,
+            (
+                CryptoObjectState::HashActive { .. }
+                | CryptoObjectState::HashFinalized { .. }
+                | CryptoObjectState::HmacActive { .. }
+                | CryptoObjectState::HmacFinalized { .. },
+                "digest",
+            ) => BuiltinFunctionKind::CryptoDigest,
+            (
+                CryptoObjectState::HashActive { .. } | CryptoObjectState::HashFinalized { .. },
+                "copy",
+            ) => BuiltinFunctionKind::CryptoCopy,
+            (
+                CryptoObjectState::CipherActive { .. } | CryptoObjectState::CipherFinalized { .. },
+                "update",
+            ) => BuiltinFunctionKind::CryptoCipherUpdate,
+            (
+                CryptoObjectState::CipherActive { .. } | CryptoObjectState::CipherFinalized { .. },
+                "final",
+            ) => BuiltinFunctionKind::CryptoCipherFinal,
+            (
+                CryptoObjectState::CipherActive {
+                    algorithm: CryptoCipherAlgorithm::Aes256Gcm,
+                    direction: CryptoCipherDirection::Encrypt,
+                    ..
+                }
+                | CryptoObjectState::CipherFinalized {
+                    algorithm: CryptoCipherAlgorithm::Aes256Gcm,
+                    direction: CryptoCipherDirection::Encrypt,
+                    ..
+                },
+                "getAuthTag",
+            ) => BuiltinFunctionKind::CryptoGetAuthTag,
+            (
+                CryptoObjectState::CipherActive {
+                    algorithm: CryptoCipherAlgorithm::Aes256Gcm,
+                    direction: CryptoCipherDirection::Decrypt,
+                    ..
+                }
+                | CryptoObjectState::CipherFinalized {
+                    algorithm: CryptoCipherAlgorithm::Aes256Gcm,
+                    direction: CryptoCipherDirection::Decrypt,
+                    ..
+                },
+                "setAuthTag",
+            ) => BuiltinFunctionKind::CryptoSetAuthTag,
+            _ => return None,
+        };
+        let mut builtin = BuiltinFunction::new_kind(kind);
+        builtin.bound_object = Some(object_id.0);
+        Some(builtin)
+    }
+
     /// Resolve a Map/Set prototype method name to its receiver-aware builtin
     /// callable (bd-juodx). `.size` is a data property, not a method.
     fn collection_prototype_method(type_tag: &str, key: &str) -> Option<BuiltinFunction> {
@@ -38923,6 +39214,94 @@ impl InterpreterCore {
         self.bytes_for_typed_array_view(&view)
     }
 
+    fn crypto_binary_view_range(
+        &self,
+        value: &Value,
+        allow_array_buffer: bool,
+    ) -> Result<(ObjectId, usize, usize), InterpreterError> {
+        let Value::Object(object_id) = value else {
+            return Err(InterpreterError::TypeError {
+                expected: "ArrayBuffer or an ArrayBuffer view".to_string(),
+                got: value.type_name().to_string(),
+            });
+        };
+        let object = self
+            .heap
+            .get(object_id.0 as usize)
+            .ok_or(InterpreterError::ObjectNotFound { id: object_id.0 })?;
+        let (buffer, byte_offset, byte_length) = if let Some(view) = &object.typed_array {
+            (view.buffer, view.byte_offset, view.byte_length)
+        } else if let Some(view) = &object.data_view {
+            (view.buffer, view.byte_offset, view.byte_length)
+        } else if allow_array_buffer && let Some(backing) = &object.array_buffer {
+            (*object_id, 0, backing.bytes.len())
+        } else {
+            return Err(InterpreterError::TypeError {
+                expected: if allow_array_buffer {
+                    "ArrayBuffer or an ArrayBuffer view".to_string()
+                } else {
+                    "ArrayBuffer view".to_string()
+                },
+                got: "ordinary object".to_string(),
+            });
+        };
+        let end =
+            byte_offset
+                .checked_add(byte_length)
+                .ok_or_else(|| InterpreterError::RangeError {
+                    message: "crypto binary view range overflows host address space".to_string(),
+                })?;
+        self.with_array_buffer_bytes(buffer, |bytes| {
+            if end <= bytes.len() {
+                Ok(())
+            } else {
+                Err(InterpreterError::RangeError {
+                    message: format!(
+                        "crypto binary view range {byte_offset}..{end} exceeds backing length {}",
+                        bytes.len()
+                    ),
+                })
+            }
+        })??;
+        Ok((buffer, byte_offset, byte_length))
+    }
+
+    fn copy_crypto_binary_view_range(
+        &self,
+        buffer: ObjectId,
+        byte_offset: usize,
+        byte_length: usize,
+    ) -> Result<Vec<u8>, InterpreterError> {
+        let end =
+            byte_offset
+                .checked_add(byte_length)
+                .ok_or_else(|| InterpreterError::RangeError {
+                    message: "crypto binary view range overflows host address space".to_string(),
+                })?;
+        self.with_array_buffer_bytes(buffer, |bytes| {
+            bytes
+                .get(byte_offset..end)
+                .map(<[u8]>::to_vec)
+                .ok_or_else(|| InterpreterError::RangeError {
+                    message: format!(
+                        "crypto binary view range {byte_offset}..{end} exceeds backing length {}",
+                        bytes.len()
+                    ),
+                })
+        })?
+    }
+
+    fn crypto_binary_view_bytes_with_mode(
+        &self,
+        value: &Value,
+        allow_array_buffer: bool,
+    ) -> Result<Vec<u8>, InterpreterError> {
+        let (buffer, byte_offset, byte_length) =
+            self.crypto_binary_view_range(value, allow_array_buffer)?;
+        self.check_temporary_memory_budget(u64::try_from(byte_length).unwrap_or(u64::MAX))?;
+        self.copy_crypto_binary_view_range(buffer, byte_offset, byte_length)
+    }
+
     fn buffer_encoding(
         &self,
         value: Option<Value>,
@@ -39062,12 +39441,12 @@ impl InterpreterCore {
                 let decoded = base64::engine::general_purpose::STANDARD.decode(&normalized);
                 decoded.map_err(|_| InterpreterError::TypeError {
                     expected: format!("valid {encoding} Buffer input"),
-                    got: text.to_string(),
+                    got: Self::crypto_diagnostic_fragment(text),
                 })
             }
             _ => Err(InterpreterError::TypeError {
                 expected: "a recognized Node BufferEncoding".to_string(),
-                got: encoding.to_string(),
+                got: Self::crypto_diagnostic_fragment(encoding),
             }),
         }
     }
@@ -44440,6 +44819,2422 @@ impl InterpreterCore {
         }
     }
 
+    // ---------------------------------------------------------------------
+    // Deterministic Node crypto builtins (bd-2z157)
+    // ---------------------------------------------------------------------
+
+    fn charge_crypto_work(&mut self, work: u64) -> Result<(), InterpreterError> {
+        let next_executed = self.instructions_executed.saturating_add(work.max(1));
+        if next_executed > self.config.instruction_budget {
+            return Err(InterpreterError::BudgetExhausted {
+                executed: self.instructions_executed,
+                budget: self.config.instruction_budget,
+            });
+        }
+        self.instructions_executed = next_executed;
+        Ok(())
+    }
+
+    fn crypto_byte_work(bytes: usize) -> u64 {
+        u64::try_from(bytes)
+            .unwrap_or(u64::MAX)
+            .div_ceil(CRYPTO_WORK_UNIT_BYTES)
+    }
+
+    /// Conservative transient peak for the cipher output pipeline.
+    ///
+    /// Stateful cipher calls can retain the complete transformed output, a
+    /// cloned raw tail, and the string-decoder combined buffer together.  A
+    /// string publication can then retain up to four times that combined
+    /// buffer while producing a `JsString`.  This helper intentionally also
+    /// covers the cheaper Buffer-publication branch so callers can preflight
+    /// once before invoking RustCrypto.
+    fn crypto_output_pipeline_peak_bytes(
+        transformed_bound: u64,
+        raw_output_bound: u64,
+        previous_remainder_bound: u64,
+    ) -> u64 {
+        let stream_combined_bound = raw_output_bound.saturating_add(previous_remainder_bound);
+        transformed_bound
+            .saturating_add(raw_output_bound)
+            .saturating_add(stream_combined_bound)
+            .saturating_add(stream_combined_bound.saturating_mul(4))
+            .saturating_add(MEMORY_ESTIMATE_STRING_BASE_BYTES.saturating_mul(2))
+            .saturating_add(CRYPTO_OUTPUT_PUBLICATION_METADATA_BYTES)
+    }
+
+    fn crypto_output_publication_peak_bytes(
+        payload_bound: u64,
+        label: &Label,
+        publish_result_label: bool,
+    ) -> u64 {
+        let label_copies = if publish_result_label { 2 } else { 1 };
+        payload_bound
+            .saturating_mul(4)
+            .saturating_add(MEMORY_ESTIMATE_STRING_BASE_BYTES.saturating_mul(2))
+            .saturating_add(CRYPTO_OUTPUT_PUBLICATION_METADATA_BYTES)
+            .saturating_add(Self::estimate_label_bytes(label).saturating_mul(label_copies))
+    }
+
+    fn crypto_invocation_label(&self, args: RegRange) -> Result<Label, InterpreterError> {
+        let mut winner: Option<&Label> = self.active_inline_callback_context_label.as_ref();
+        for index in 0..args.count {
+            let register =
+                args.start
+                    .checked_add(index)
+                    .ok_or(InterpreterError::RegisterOutOfBounds {
+                        register: args.start,
+                        max: u32::MAX,
+                    })?;
+            let register_label = self.get_register_label(register)?;
+            if winner.is_none_or(|current| register_label > current) {
+                winner = Some(register_label);
+            }
+            if let Value::Object(object_id) = self.read_reg(register)?
+                && let Some(backing_label) = self.binary_storage_label_ref(object_id)
+                && winner.is_none_or(|current| backing_label > current)
+            {
+                winner = Some(backing_label);
+            }
+        }
+        let Some(winner) = winner else {
+            return Ok(Label::Public);
+        };
+        self.check_temporary_memory_budget(Self::estimate_label_bytes(winner))?;
+        Ok(winner.clone())
+    }
+
+    fn crypto_input_bytes_with_mode(
+        &self,
+        value: &Value,
+        encoding: Option<&Value>,
+        allow_array_buffer: bool,
+    ) -> Result<Vec<u8>, InterpreterError> {
+        match value {
+            Value::Str(text) => {
+                let encoding = Self::crypto_input_encoding_name(encoding)?;
+                self.decode_buffer_string(text, encoding)
+            }
+            Value::Object(_) => self.crypto_binary_view_bytes_with_mode(value, allow_array_buffer),
+            other => Err(InterpreterError::TypeError {
+                expected: if allow_array_buffer {
+                    "string or BinaryLike crypto input".to_string()
+                } else {
+                    "string or ArrayBufferView crypto input".to_string()
+                },
+                got: other.type_name().to_string(),
+            }),
+        }
+    }
+
+    fn crypto_input_bytes(
+        &self,
+        value: &Value,
+        encoding: Option<&Value>,
+    ) -> Result<Vec<u8>, InterpreterError> {
+        self.crypto_input_bytes_with_mode(value, encoding, true)
+    }
+
+    fn crypto_update_input_bytes(
+        &self,
+        value: &Value,
+        encoding: Option<&Value>,
+    ) -> Result<Vec<u8>, InterpreterError> {
+        self.crypto_input_bytes_with_mode(value, encoding, false)
+    }
+
+    /// Conservative peak allocation for materializing a guest crypto input.
+    /// Callers which keep more than one input alive must sum these bounds and
+    /// preflight the aggregate before cloning the first guest-controlled byte.
+    fn crypto_input_allocation_bound_with_mode(
+        &self,
+        value: &Value,
+        encoding: Option<&Value>,
+        allow_array_buffer: bool,
+    ) -> Result<u64, InterpreterError> {
+        let bytes = match value {
+            Value::Str(text) => {
+                let encoding = Self::crypto_input_encoding_name(encoding)?;
+                match encoding {
+                    "utf8" | "utf-8" => text.len(),
+                    "ascii" | "latin1" | "binary" => text.utf16_len(),
+                    "ucs2" | "ucs-2" | "utf16le" | "utf-16le" => text
+                        .utf16_len()
+                        .checked_mul(2)
+                        .ok_or_else(|| InterpreterError::RangeError {
+                            message: "crypto UTF-16 input size overflows host address space"
+                                .to_string(),
+                        })?,
+                    "hex" => text.len() / 2,
+                    // Decoding retains normalized and decoded buffers at the
+                    // same time. Match decode_buffer_string's peak bound.
+                    "base64" | "base64url" => text
+                        .len()
+                        .checked_mul(2)
+                        .and_then(|length| length.checked_add(3))
+                        .ok_or_else(|| InterpreterError::RangeError {
+                            message: "crypto base64 input size overflows host address space"
+                                .to_string(),
+                        })?,
+                    _ => {
+                        return Err(InterpreterError::TypeError {
+                            expected: "a recognized Node BufferEncoding".to_string(),
+                            got: Self::crypto_diagnostic_fragment(encoding),
+                        });
+                    }
+                }
+            }
+            Value::Object(_) => self.crypto_binary_view_range(value, allow_array_buffer)?.2,
+            other => {
+                return Err(InterpreterError::TypeError {
+                    expected: if allow_array_buffer {
+                        "string or BinaryLike crypto input".to_string()
+                    } else {
+                        "string or ArrayBufferView crypto input".to_string()
+                    },
+                    got: other.type_name().to_string(),
+                });
+            }
+        };
+        Ok(u64::try_from(bytes).unwrap_or(u64::MAX))
+    }
+
+    fn crypto_input_allocation_bound(
+        &self,
+        value: &Value,
+        encoding: Option<&Value>,
+    ) -> Result<u64, InterpreterError> {
+        self.crypto_input_allocation_bound_with_mode(value, encoding, true)
+    }
+
+    fn crypto_update_input_allocation_bound(
+        &self,
+        value: &Value,
+        encoding: Option<&Value>,
+    ) -> Result<u64, InterpreterError> {
+        self.crypto_input_allocation_bound_with_mode(value, encoding, false)
+    }
+
+    fn crypto_required_arg(
+        &self,
+        args: RegRange,
+        index: u32,
+        expected: &str,
+    ) -> Result<Value, InterpreterError> {
+        self.builtin_arg(args, index)?
+            .ok_or_else(|| InterpreterError::TypeError {
+                expected: expected.to_string(),
+                got: "missing argument".to_string(),
+            })
+    }
+
+    fn crypto_required_string_arg(
+        &self,
+        args: RegRange,
+        index: u32,
+        expected: &str,
+    ) -> Result<JsString, InterpreterError> {
+        match self.crypto_required_arg(args, index, expected)? {
+            Value::Str(value) => Ok(value),
+            other => Err(InterpreterError::TypeError {
+                expected: expected.to_string(),
+                got: other.type_name().to_string(),
+            }),
+        }
+    }
+
+    fn crypto_diagnostic_fragment(value: &str) -> String {
+        const MAX_CHARS: usize = 64;
+        let mut chars = value.chars();
+        let mut fragment = chars.by_ref().take(MAX_CHARS).collect::<String>();
+        if chars.next().is_some() {
+            fragment.push_str("...");
+        }
+        fragment
+    }
+
+    fn crypto_canonical_buffer_encoding(name: &str) -> Option<&'static str> {
+        if name.eq_ignore_ascii_case("utf8") || name.eq_ignore_ascii_case("utf-8") {
+            Some("utf8")
+        } else if name.eq_ignore_ascii_case("ascii") {
+            Some("ascii")
+        } else if name.eq_ignore_ascii_case("latin1") || name.eq_ignore_ascii_case("binary") {
+            Some("latin1")
+        } else if name.eq_ignore_ascii_case("ucs2")
+            || name.eq_ignore_ascii_case("ucs-2")
+            || name.eq_ignore_ascii_case("utf16le")
+            || name.eq_ignore_ascii_case("utf-16le")
+        {
+            Some("utf16le")
+        } else if name.eq_ignore_ascii_case("hex") {
+            Some("hex")
+        } else if name.eq_ignore_ascii_case("base64") {
+            Some("base64")
+        } else if name.eq_ignore_ascii_case("base64url") {
+            Some("base64url")
+        } else {
+            None
+        }
+    }
+
+    fn crypto_input_encoding_name(
+        encoding: Option<&Value>,
+    ) -> Result<&'static str, InterpreterError> {
+        match encoding {
+            None | Some(Value::Undefined) => Ok("utf8"),
+            Some(Value::Str(encoding)) => Self::crypto_canonical_buffer_encoding(encoding)
+                .ok_or_else(|| InterpreterError::TypeError {
+                    expected: "a recognized Node BufferEncoding".to_string(),
+                    got: Self::crypto_diagnostic_fragment(encoding),
+                }),
+            Some(other) => Err(InterpreterError::TypeError {
+                expected: "crypto string input encoding".to_string(),
+                got: other.type_name().to_string(),
+            }),
+        }
+    }
+
+    fn crypto_integer_arg(
+        &self,
+        value: &Value,
+        name: &str,
+        allow_zero: bool,
+    ) -> Result<usize, InterpreterError> {
+        let integer = match value {
+            Value::Int(value) if value.unsigned_abs() <= CRYPTO_MAX_SAFE_INTEGER as u64 => *value,
+            Value::Float(value)
+                if value.inner().is_finite()
+                    && value.inner().fract() == 0.0
+                    && value.inner().abs() <= CRYPTO_MAX_SAFE_INTEGER as f64 =>
+            {
+                value.inner() as i64
+            }
+            _ => {
+                return Err(InterpreterError::TypeError {
+                    expected: format!("integer crypto {name}"),
+                    got: value.type_name().to_string(),
+                });
+            }
+        };
+        let minimum = if allow_zero { 0 } else { 1 };
+        if integer < minimum {
+            return Err(InterpreterError::RangeError {
+                message: format!(
+                    "crypto {name} must be {}",
+                    if allow_zero {
+                        "non-negative"
+                    } else {
+                        "positive"
+                    }
+                ),
+            });
+        }
+        usize::try_from(integer).map_err(|_| InterpreterError::RangeError {
+            message: format!("crypto {name} exceeds host addressable range"),
+        })
+    }
+
+    fn crypto_throw_node_error(
+        &mut self,
+        name: &str,
+        code: &str,
+        message: String,
+        label: &Label,
+    ) -> InterpreterError {
+        self.crypto_throw_node_error_with_temporary_budget(name, code, message, label, 0)
+    }
+
+    fn crypto_throw_node_error_with_temporary_budget(
+        &mut self,
+        name: &str,
+        code: &str,
+        message: String,
+        label: &Label,
+        already_owned_temporary_bytes: u64,
+    ) -> InterpreterError {
+        // Error materialization captures up to 50 stack frames.  Every frame
+        // owns formatting fields before the final stack string is installed,
+        // and the error/prototype objects own four string-valued properties.
+        // Reserve a deliberately conservative aggregate before allocating the
+        // first object so caller-owned crypto buffers cannot overlap an
+        // individually successful but collectively over-budget error path.
+        let source_bytes = self
+            .current_module_specifier
+            .as_ref()
+            .map_or(16, |source| u64::try_from(source.len()).unwrap_or(u64::MAX));
+        let stack_materialization_bound = source_bytes
+            .saturating_add(256)
+            .saturating_mul(50)
+            .saturating_mul(4);
+        let property_materialization_bound = u64::try_from(
+            name.len()
+                .saturating_add(code.len())
+                .saturating_add(message.capacity()),
+        )
+        .unwrap_or(u64::MAX)
+        .saturating_mul(4)
+        .saturating_add(MEMORY_ESTIMATE_STRING_BASE_BYTES.saturating_mul(16))
+        .saturating_add(MEMORY_ESTIMATE_MAP_ENTRY_BYTES.saturating_mul(16))
+        .saturating_add(MEMORY_ESTIMATE_HEAP_OBJECT_BASE_BYTES.saturating_mul(4));
+        if let Err(error) = self.check_temporary_memory_budget(
+            already_owned_temporary_bytes
+                .saturating_add(stack_materialization_bound)
+                .saturating_add(property_materialization_bound)
+                .saturating_add(Self::estimate_label_bytes(label).saturating_mul(2)),
+        ) {
+            return error;
+        }
+        if let Err(error) = self.ensure_builtin_prototype(name) {
+            return error;
+        }
+        let previous_heap_len = self.heap.len();
+        let previous_estimated_bytes = self.estimated_memory_bytes;
+        let thrown = match self.construct_buffer_node_error(name, code, message) {
+            Ok(value) => value,
+            Err(error) => {
+                self.rollback_heap_to_len(previous_heap_len);
+                self.estimated_memory_bytes = previous_estimated_bytes;
+                return error;
+            }
+        };
+        let dominant_label = if &self.pending_exception_label >= label {
+            &self.pending_exception_label
+        } else {
+            label
+        };
+        // The caller-owned label and the pending-slot clone overlap.  Build
+        // the accounted error object first, then gate both live label copies
+        // together before cloning the winner.
+        if let Err(error) = self.check_temporary_memory_budget(
+            Self::estimate_label_bytes(dominant_label).saturating_mul(2),
+        ) {
+            self.rollback_heap_to_len(previous_heap_len);
+            self.estimated_memory_bytes = previous_estimated_bytes;
+            return error;
+        }
+        let next_pending_label = dominant_label.clone();
+        let previous_label_bytes = Self::estimate_label_bytes(&self.pending_exception_label);
+        let next_label_bytes = Self::estimate_label_bytes(&next_pending_label);
+        if let Err(error) =
+            self.apply_memory_component_delta(previous_label_bytes, next_label_bytes)
+        {
+            self.rollback_heap_to_len(previous_heap_len);
+            self.estimated_memory_bytes = previous_estimated_bytes;
+            return error;
+        }
+        self.pending_exception = Some(thrown.clone());
+        self.pending_exception_label = next_pending_label;
+        InterpreterError::UncaughtException {
+            value: Self::uncaught_exception_description(&thrown),
+        }
+    }
+
+    fn crypto_alloc_object(&mut self, state: CryptoObjectState) -> Result<Value, InterpreterError> {
+        self.crypto_alloc_object_with_temporary_budget(state, 0)
+    }
+
+    fn crypto_alloc_object_with_temporary_budget(
+        &mut self,
+        state: CryptoObjectState,
+        already_owned_temporary_bytes: u64,
+    ) -> Result<Value, InterpreterError> {
+        let state_bytes = Self::estimate_crypto_object_state_bytes(&state);
+        self.check_temporary_memory_budget(
+            already_owned_temporary_bytes
+                .saturating_add(state_bytes)
+                .saturating_add(MEMORY_ESTIMATE_HEAP_OBJECT_BASE_BYTES)
+                .saturating_add(Self::estimate_label_bytes(state.lifecycle_label())),
+        )?;
+        let lifecycle_label = state.lifecycle_label().clone();
+        let previous_heap_len = self.heap.len();
+        let previous_estimated_bytes = self.estimated_memory_bytes;
+        let result = (|| {
+            let object_id = self.alloc_object_with_properties(&[])?;
+            self.apply_memory_component_delta(0, state_bytes)?;
+            self.crypto_objects.insert(object_id, state);
+            self.replace_pending_hostcall_result_label(Some(lifecycle_label))?;
+            Ok(Value::Object(object_id))
+        })();
+        if result.is_err() {
+            self.crypto_objects
+                .retain(|object_id, _| object_id.0 < previous_heap_len as u32);
+            self.rollback_heap_to_len(previous_heap_len);
+            self.estimated_memory_bytes = previous_estimated_bytes;
+        }
+        result
+    }
+
+    fn crypto_receiver_id(
+        &self,
+        receiver: Option<Value>,
+        builtin: &BuiltinFunction,
+        method: &str,
+    ) -> Result<ObjectId, InterpreterError> {
+        let receiver = receiver.unwrap_or(Value::Undefined);
+        let Value::Object(object_id) = receiver else {
+            return Err(InterpreterError::TypeError {
+                expected: format!("authenticated crypto receiver for {method}"),
+                got: receiver.type_name().to_string(),
+            });
+        };
+        if builtin.bound_object != Some(object_id.0)
+            || !self.crypto_objects.contains_key(&object_id)
+        {
+            return Err(InterpreterError::TypeError {
+                expected: format!("authenticated crypto receiver for {method}"),
+                got: "detached or forged receiver".to_string(),
+            });
+        }
+        Ok(object_id)
+    }
+
+    fn crypto_state_snapshot(
+        &self,
+        object_id: ObjectId,
+    ) -> Result<CryptoObjectState, InterpreterError> {
+        let state = self
+            .crypto_objects
+            .get(&object_id)
+            .expect("authenticated crypto receiver has state");
+        self.check_temporary_memory_budget(Self::estimate_crypto_object_state_bytes(state))?;
+        Ok(state.clone())
+    }
+
+    fn crypto_output_value_with_temporary_budget(
+        &mut self,
+        bytes: &[u8],
+        encoding: Option<Value>,
+        label: &Label,
+        publish_result_label: bool,
+        already_owned_temporary_bytes: u64,
+    ) -> Result<Value, InterpreterError> {
+        let payload_bound = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
+        self.check_temporary_memory_budget(already_owned_temporary_bytes.saturating_add(
+            Self::crypto_output_publication_peak_bytes(payload_bound, label, publish_result_label),
+        ))?;
+        let previous_heap_len = self.heap.len();
+        let previous_estimated_bytes = self.estimated_memory_bytes;
+        let result = (|| {
+            let value = match encoding {
+                None | Some(Value::Undefined) => {
+                    let object_id = self.alloc_buffer_from_bytes(bytes)?;
+                    self.join_binary_storage_label(object_id, label)?;
+                    Value::Object(object_id)
+                }
+                Some(Value::Str(encoding)) => {
+                    let Some(normalized) = Self::crypto_canonical_buffer_encoding(&encoding) else {
+                        return Err(self.crypto_throw_node_error_with_temporary_budget(
+                            "TypeError",
+                            "ERR_UNKNOWN_ENCODING",
+                            format!(
+                                "Unknown encoding: {}",
+                                Self::crypto_diagnostic_fragment(&encoding)
+                            ),
+                            label,
+                            already_owned_temporary_bytes.saturating_add(payload_bound),
+                        ));
+                    };
+                    let encoded = match self.encode_buffer_bytes(bytes, normalized) {
+                        Ok(encoded) => encoded,
+                        Err(InterpreterError::TypeError { .. }) => {
+                            return Err(self.crypto_throw_node_error_with_temporary_budget(
+                                "TypeError",
+                                "ERR_UNKNOWN_ENCODING",
+                                format!("Unknown encoding: {normalized}"),
+                                label,
+                                already_owned_temporary_bytes.saturating_add(payload_bound),
+                            ));
+                        }
+                        Err(error) => return Err(error),
+                    };
+                    Value::Str(encoded)
+                }
+                Some(other) => {
+                    return Err(self.crypto_throw_node_error_with_temporary_budget(
+                        "TypeError",
+                        "ERR_UNKNOWN_ENCODING",
+                        format!("Unknown encoding: received {}", other.type_name()),
+                        label,
+                        already_owned_temporary_bytes.saturating_add(payload_bound),
+                    ));
+                }
+            };
+            if publish_result_label {
+                self.replace_pending_hostcall_result_label(Some(label.clone()))?;
+            }
+            Ok(value)
+        })();
+        if result
+            .as_ref()
+            .is_err_and(|error| !matches!(error, InterpreterError::UncaughtException { .. }))
+        {
+            self.rollback_heap_to_len(previous_heap_len);
+            self.estimated_memory_bytes = previous_estimated_bytes;
+        }
+        result
+    }
+
+    fn crypto_canonical_output_encoding(encoding: &Option<Value>) -> Result<Option<String>, ()> {
+        let Some(value) = encoding else {
+            return Ok(None);
+        };
+        match value {
+            Value::Undefined => Ok(None),
+            Value::Str(encoding) => Self::crypto_canonical_buffer_encoding(encoding)
+                .map(str::to_string)
+                .map(Some)
+                .ok_or(()),
+            _ => Err(()),
+        }
+    }
+
+    fn crypto_utf8_incomplete_suffix_len(bytes: &[u8]) -> usize {
+        let search_start = bytes.len().saturating_sub(3);
+        for start in search_start..bytes.len() {
+            let suffix = &bytes[start..];
+            let expected_len = match suffix[0] {
+                // Match Node's StringDecoder byte-prefix classification,
+                // including invalid lead-byte values which are held until the
+                // decoder sees the next chunk or finalizes with U+FFFD.
+                0xc0..=0xdf => 2,
+                0xe0..=0xef => 3,
+                0xf0..=0xf7 => 4,
+                _ => continue,
+            };
+            if suffix.len() < expected_len
+                && suffix[1..].iter().all(|byte| matches!(byte, 0x80..=0xbf))
+            {
+                return suffix.len();
+            }
+        }
+        0
+    }
+
+    fn crypto_encoded_stream_chunk(
+        previous_remainder: &[u8],
+        raw_output: &[u8],
+        encoding: &str,
+        final_chunk: bool,
+    ) -> (Zeroizing<Vec<u8>>, Zeroizing<Vec<u8>>) {
+        let mut combined = Zeroizing::new(Vec::with_capacity(
+            previous_remainder.len().saturating_add(raw_output.len()),
+        ));
+        combined.extend_from_slice(previous_remainder);
+        combined.extend_from_slice(raw_output);
+        let publish_len = if final_chunk {
+            combined.len()
+        } else {
+            match encoding {
+                "base64" | "base64url" => combined.len() / 3 * 3,
+                "utf16le" => {
+                    let even_len = combined.len() / 2 * 2;
+                    let trailing_complete_unit_is_high_surrogate = even_len >= 2
+                        && matches!(
+                            u16::from_le_bytes([combined[even_len - 2], combined[even_len - 1]]),
+                            0xd800..=0xdbff
+                        );
+                    let has_odd_tail = even_len != combined.len();
+                    let trailing_unit_was_already_buffered = previous_remainder.len() >= even_len;
+                    if trailing_complete_unit_is_high_surrogate
+                        && (!has_odd_tail || trailing_unit_was_already_buffered)
+                    {
+                        even_len - 2
+                    } else {
+                        even_len
+                    }
+                }
+                "utf8" => combined
+                    .len()
+                    .saturating_sub(Self::crypto_utf8_incomplete_suffix_len(&combined)),
+                _ => combined.len(),
+            }
+        };
+        let remainder = Zeroizing::new(combined[publish_len..].to_vec());
+        combined.truncate(publish_len);
+        (combined, remainder)
+    }
+
+    fn crypto_digest_bytes(algorithm: CryptoHashAlgorithm, input: &[u8]) -> Zeroizing<Vec<u8>> {
+        match algorithm {
+            CryptoHashAlgorithm::Md5 => Zeroizing::new(Md5::digest(input).to_vec()),
+            CryptoHashAlgorithm::Sha1 => Zeroizing::new(Sha1::digest(input).to_vec()),
+            CryptoHashAlgorithm::Sha256 => Zeroizing::new(Sha256::digest(input).to_vec()),
+            CryptoHashAlgorithm::Sha512 => Zeroizing::new(Sha512::digest(input).to_vec()),
+        }
+    }
+
+    fn crypto_hmac_bytes(
+        algorithm: CryptoHashAlgorithm,
+        key: &[u8],
+        input: &[u8],
+    ) -> Result<Zeroizing<Vec<u8>>, InterpreterError> {
+        macro_rules! finish_hmac {
+            ($digest:ty) => {{
+                let mut mac = <Hmac<$digest> as Mac>::new_from_slice(key).map_err(|_| {
+                    InterpreterError::TypeError {
+                        expected: "valid HMAC key".to_string(),
+                        got: "rejected key".to_string(),
+                    }
+                })?;
+                mac.update(input);
+                Ok(Zeroizing::new(mac.finalize().into_bytes().to_vec()))
+            }};
+        }
+        match algorithm {
+            CryptoHashAlgorithm::Md5 => finish_hmac!(Md5),
+            CryptoHashAlgorithm::Sha1 => finish_hmac!(Sha1),
+            CryptoHashAlgorithm::Sha256 => finish_hmac!(Sha256),
+            CryptoHashAlgorithm::Sha512 => finish_hmac!(Sha512),
+        }
+    }
+
+    fn crypto_create_hash(&mut self, args: RegRange) -> Result<Value, InterpreterError> {
+        let invocation_label = self.crypto_invocation_label(args)?;
+        let algorithm_name = self.crypto_required_string_arg(args, 0, "crypto hash algorithm")?;
+        let Some(algorithm) = CryptoHashAlgorithm::parse(&algorithm_name) else {
+            return Err(self.crypto_throw_node_error(
+                "Error",
+                "ERR_OSSL_EVP_UNSUPPORTED",
+                format!(
+                    "Digest method not supported: {}",
+                    Self::crypto_diagnostic_fragment(&algorithm_name)
+                ),
+                &invocation_label,
+            ));
+        };
+        self.crypto_alloc_object(CryptoObjectState::HashActive {
+            algorithm,
+            input: Zeroizing::new(Vec::new()),
+            lifecycle_label: invocation_label,
+        })
+    }
+
+    fn crypto_create_hmac(&mut self, args: RegRange) -> Result<Value, InterpreterError> {
+        let invocation_label = self.crypto_invocation_label(args)?;
+        let algorithm_name = self.crypto_required_string_arg(args, 0, "crypto HMAC algorithm")?;
+        let Some(algorithm) = CryptoHashAlgorithm::parse(&algorithm_name) else {
+            return Err(self.crypto_throw_node_error(
+                "Error",
+                "ERR_OSSL_EVP_UNSUPPORTED",
+                format!(
+                    "Digest method not supported: {}",
+                    Self::crypto_diagnostic_fragment(&algorithm_name)
+                ),
+                &invocation_label,
+            ));
+        };
+        let key_value = self.crypto_required_arg(args, 1, "crypto HMAC key")?;
+        self.check_temporary_memory_budget(
+            self.crypto_input_allocation_bound(&key_value, None)?
+                .saturating_add(Self::estimate_label_bytes(&invocation_label)),
+        )?;
+        let key = Zeroizing::new(self.crypto_input_bytes(&key_value, None)?);
+        if key.len() > CRYPTO_MAX_INPUT_BYTES {
+            return Err(InterpreterError::RangeError {
+                message: "crypto HMAC key exceeds engine input limit".to_string(),
+            });
+        }
+        self.crypto_alloc_object(CryptoObjectState::HmacActive {
+            algorithm,
+            key,
+            input: Zeroizing::new(Vec::new()),
+            lifecycle_label: invocation_label,
+        })
+    }
+
+    fn crypto_update(
+        &mut self,
+        receiver: Option<Value>,
+        builtin: &BuiltinFunction,
+        args: RegRange,
+    ) -> Result<Value, InterpreterError> {
+        let object_id = self.crypto_receiver_id(receiver, builtin, "update")?;
+        let invocation_label = self.crypto_invocation_label(args)?;
+        let value = self.crypto_required_arg(args, 0, "crypto update input")?;
+        let encoding = self.builtin_arg(args, 1)?;
+        let retained_state_bytes = self
+            .crypto_objects
+            .get(&object_id)
+            .map(Self::estimate_crypto_object_state_bytes)
+            .expect("authenticated crypto receiver has state");
+        let input_bound = self.crypto_update_input_allocation_bound(&value, encoding.as_ref())?;
+        self.check_temporary_memory_budget(
+            retained_state_bytes
+                .saturating_add(input_bound)
+                .saturating_add(Self::estimate_label_bytes(&invocation_label)),
+        )?;
+        let previous = self.crypto_state_snapshot(object_id)?;
+        if matches!(
+            previous,
+            CryptoObjectState::HashFinalized { .. } | CryptoObjectState::HmacFinalized { .. }
+        ) {
+            let label = self.clone_dominant_label_with_temporary_budget(
+                previous.lifecycle_label(),
+                &invocation_label,
+                Self::estimate_crypto_object_state_bytes(&previous)
+                    .saturating_add(Self::estimate_label_bytes(&invocation_label)),
+            )?;
+            return Err(self.crypto_throw_node_error_with_temporary_budget(
+                "Error",
+                "ERR_CRYPTO_HASH_FINALIZED",
+                "Digest already called".to_string(),
+                &label,
+                retained_state_bytes.saturating_add(Self::estimate_label_bytes(&invocation_label)),
+            ));
+        }
+        let bytes = Zeroizing::new(self.crypto_update_input_bytes(&value, encoding.as_ref())?);
+        let previous_input_len = match &previous {
+            CryptoObjectState::HashActive { input, .. }
+            | CryptoObjectState::HmacActive { input, .. } => input.len(),
+            _ => {
+                return Err(InterpreterError::TypeError {
+                    expected: "hash or HMAC receiver".to_string(),
+                    got: "cipher receiver".to_string(),
+                });
+            }
+        };
+        let next_input_len = previous_input_len.checked_add(bytes.len()).ok_or_else(|| {
+            InterpreterError::RangeError {
+                message: "crypto update input length overflow".to_string(),
+            }
+        })?;
+        if next_input_len > CRYPTO_MAX_INPUT_BYTES {
+            return Err(InterpreterError::RangeError {
+                message: format!(
+                    "crypto update exceeds engine input limit of {CRYPTO_MAX_INPUT_BYTES} bytes"
+                ),
+            });
+        }
+        self.charge_crypto_work(Self::crypto_byte_work(bytes.len()))?;
+        self.check_temporary_memory_budget(
+            Self::estimate_crypto_object_state_bytes(&previous)
+                .saturating_add(u64::try_from(bytes.len()).unwrap_or(u64::MAX))
+                .saturating_add(Self::estimate_label_bytes(&invocation_label)),
+        )?;
+        let next_lifecycle_label = self.clone_dominant_label_with_temporary_budget(
+            previous.lifecycle_label(),
+            &invocation_label,
+            Self::estimate_crypto_object_state_bytes(&previous)
+                .saturating_add(u64::try_from(bytes.len()).unwrap_or(u64::MAX))
+                .saturating_add(Self::estimate_label_bytes(&invocation_label)),
+        )?;
+        // At the mutation point the retained original, the snapshot, the
+        // decoded input and the candidate next state can all coexist. Charge
+        // the complete transient set before cloning the retained vectors.
+        self.check_temporary_memory_budget(
+            Self::estimate_crypto_object_state_bytes(&previous)
+                .saturating_mul(2)
+                .saturating_add(u64::try_from(bytes.capacity()).unwrap_or(u64::MAX))
+                .saturating_add(u64::try_from(next_input_len).unwrap_or(u64::MAX))
+                .saturating_add(Self::estimate_label_bytes(&next_lifecycle_label)),
+        )?;
+        let next = match &previous {
+            CryptoObjectState::HashActive {
+                algorithm, input, ..
+            } => {
+                let mut next_input = Zeroizing::new(Vec::with_capacity(next_input_len));
+                next_input.extend_from_slice(input);
+                next_input.extend_from_slice(&bytes);
+                CryptoObjectState::HashActive {
+                    algorithm: *algorithm,
+                    input: next_input,
+                    lifecycle_label: next_lifecycle_label,
+                }
+            }
+            CryptoObjectState::HmacActive {
+                algorithm,
+                key,
+                input,
+                ..
+            } => {
+                let mut next_input = Zeroizing::new(Vec::with_capacity(next_input_len));
+                next_input.extend_from_slice(input);
+                next_input.extend_from_slice(&bytes);
+                CryptoObjectState::HmacActive {
+                    algorithm: *algorithm,
+                    key: key.clone(),
+                    input: next_input,
+                    lifecycle_label: next_lifecycle_label,
+                }
+            }
+            _ => unreachable!("active hash/HMAC state was checked"),
+        };
+        let previous_bytes = Self::estimate_crypto_object_state_bytes(&previous);
+        let next_bytes = Self::estimate_crypto_object_state_bytes(&next);
+        let previous_estimated_bytes = self.estimated_memory_bytes;
+        self.apply_memory_component_delta(previous_bytes, next_bytes)?;
+        let result_label = next.lifecycle_label().clone();
+        self.crypto_objects.insert(object_id, next);
+        if let Err(error) = self.replace_pending_hostcall_result_label(Some(result_label)) {
+            self.crypto_objects.insert(object_id, previous);
+            self.estimated_memory_bytes = previous_estimated_bytes;
+            return Err(error);
+        }
+        Ok(Value::Object(object_id))
+    }
+
+    fn crypto_digest(
+        &mut self,
+        receiver: Option<Value>,
+        builtin: &BuiltinFunction,
+        args: RegRange,
+    ) -> Result<Value, InterpreterError> {
+        let object_id = self.crypto_receiver_id(receiver, builtin, "digest")?;
+        let invocation_label = self.crypto_invocation_label(args)?;
+        let retained_state_bytes = self
+            .crypto_objects
+            .get(&object_id)
+            .map(Self::estimate_crypto_object_state_bytes)
+            .expect("authenticated crypto receiver has state");
+        let invocation_label_bytes = Self::estimate_label_bytes(&invocation_label);
+        self.check_temporary_memory_budget(
+            retained_state_bytes.saturating_add(invocation_label_bytes),
+        )?;
+        let previous = self.crypto_state_snapshot(object_id)?;
+        let lifecycle_label = self.clone_dominant_label_with_temporary_budget(
+            previous.lifecycle_label(),
+            &invocation_label,
+            retained_state_bytes.saturating_add(invocation_label_bytes),
+        )?;
+        let lifecycle_label_bytes = Self::estimate_label_bytes(&lifecycle_label);
+        let output_bound = match &previous {
+            CryptoObjectState::HashActive { algorithm, .. }
+            | CryptoObjectState::HmacActive { algorithm, .. } => {
+                u64::try_from(algorithm.output_len()).unwrap_or(u64::MAX)
+            }
+            CryptoObjectState::HmacFinalized { .. }
+            | CryptoObjectState::HashFinalized { .. }
+            | CryptoObjectState::CipherActive { .. }
+            | CryptoObjectState::CipherFinalized { .. } => 0,
+        };
+        let candidate_state_bound = CRYPTO_STATE_BASE_BYTES
+            .saturating_add(MEMORY_ESTIMATE_MAP_ENTRY_BYTES)
+            .saturating_add(lifecycle_label_bytes);
+        let caller_temporary_bound = retained_state_bytes
+            .saturating_add(invocation_label_bytes)
+            .saturating_add(lifecycle_label_bytes)
+            .saturating_add(output_bound);
+        self.check_temporary_memory_budget(
+            caller_temporary_bound
+                .saturating_add(candidate_state_bound)
+                .saturating_add(Self::crypto_output_publication_peak_bytes(
+                    output_bound,
+                    &lifecycle_label,
+                    true,
+                )),
+        )?;
+        let (output, next) = match &previous {
+            CryptoObjectState::HashActive {
+                algorithm, input, ..
+            } => {
+                self.charge_crypto_work(Self::crypto_byte_work(input.len()))?;
+                (
+                    Self::crypto_digest_bytes(*algorithm, input),
+                    CryptoObjectState::HashFinalized {
+                        lifecycle_label: lifecycle_label.clone(),
+                    },
+                )
+            }
+            CryptoObjectState::HmacActive {
+                algorithm,
+                key,
+                input,
+                ..
+            } => {
+                self.charge_crypto_work(Self::crypto_byte_work(
+                    key.len().saturating_add(input.len()),
+                ))?;
+                (
+                    Self::crypto_hmac_bytes(*algorithm, key, input)?,
+                    CryptoObjectState::HmacFinalized {
+                        lifecycle_label: lifecycle_label.clone(),
+                    },
+                )
+            }
+            CryptoObjectState::HashFinalized { .. } => {
+                return Err(self.crypto_throw_node_error_with_temporary_budget(
+                    "Error",
+                    "ERR_CRYPTO_HASH_FINALIZED",
+                    "Digest already called".to_string(),
+                    &lifecycle_label,
+                    retained_state_bytes
+                        .saturating_add(invocation_label_bytes)
+                        .saturating_add(lifecycle_label_bytes),
+                ));
+            }
+            CryptoObjectState::HmacFinalized { .. } => (
+                Zeroizing::new(Vec::new()),
+                CryptoObjectState::HmacFinalized {
+                    lifecycle_label: lifecycle_label.clone(),
+                },
+            ),
+            CryptoObjectState::CipherActive { .. } | CryptoObjectState::CipherFinalized { .. } => {
+                return Err(InterpreterError::TypeError {
+                    expected: "hash or HMAC receiver".to_string(),
+                    got: "cipher receiver".to_string(),
+                });
+            }
+        };
+        self.check_temporary_memory_budget(
+            Self::estimate_crypto_object_state_bytes(&previous)
+                .saturating_add(u64::try_from(output.len()).unwrap_or(u64::MAX))
+                .saturating_add(Self::estimate_crypto_object_state_bytes(&next)),
+        )?;
+        let previous_state_bytes = Self::estimate_crypto_object_state_bytes(&previous);
+        let next_state_bytes = Self::estimate_crypto_object_state_bytes(&next);
+        let requested_output_encoding = self.builtin_arg(args, 0)?;
+        // Hash/HMAC digest has a historical Node quirk: unknown and non-string
+        // encoding arguments are ignored and select the default Buffer result.
+        // Cipher output validation is intentionally stricter.
+        let output_encoding = Self::crypto_canonical_output_encoding(&requested_output_encoding)
+            .ok()
+            .flatten()
+            .map(Value::str);
+        let previous_heap_len = self.heap.len();
+        let previous_estimated_bytes = self.estimated_memory_bytes;
+        let result = (|| {
+            self.apply_memory_component_delta(previous_state_bytes, next_state_bytes)?;
+            self.crypto_objects.insert(object_id, next);
+            self.crypto_output_value_with_temporary_budget(
+                &output,
+                output_encoding,
+                &lifecycle_label,
+                true,
+                retained_state_bytes
+                    .saturating_add(invocation_label_bytes)
+                    .saturating_add(lifecycle_label_bytes)
+                    .saturating_add(u64::try_from(output.capacity()).unwrap_or(u64::MAX)),
+            )
+        })();
+        if result
+            .as_ref()
+            .is_err_and(|error| !matches!(error, InterpreterError::UncaughtException { .. }))
+        {
+            self.crypto_objects.insert(object_id, previous);
+            self.rollback_heap_to_len(previous_heap_len);
+            self.estimated_memory_bytes = previous_estimated_bytes;
+        }
+        result
+    }
+
+    fn crypto_copy(
+        &mut self,
+        receiver: Option<Value>,
+        builtin: &BuiltinFunction,
+        args: RegRange,
+    ) -> Result<Value, InterpreterError> {
+        let object_id = self.crypto_receiver_id(receiver, builtin, "copy")?;
+        let invocation_label = self.crypto_invocation_label(args)?;
+        let retained_state_bytes = self
+            .crypto_objects
+            .get(&object_id)
+            .map(Self::estimate_crypto_object_state_bytes)
+            .expect("authenticated crypto receiver has state");
+        let invocation_label_bytes = Self::estimate_label_bytes(&invocation_label);
+        self.check_temporary_memory_budget(
+            retained_state_bytes.saturating_add(invocation_label_bytes),
+        )?;
+        let previous = self.crypto_state_snapshot(object_id)?;
+        let joined_lifecycle_label = self.clone_dominant_label_with_temporary_budget(
+            previous.lifecycle_label(),
+            &invocation_label,
+            retained_state_bytes.saturating_add(invocation_label_bytes),
+        )?;
+        match previous {
+            CryptoObjectState::HashActive {
+                algorithm, input, ..
+            } => {
+                self.charge_crypto_work(Self::crypto_byte_work(input.len()))?;
+                self.crypto_alloc_object_with_temporary_budget(
+                    CryptoObjectState::HashActive {
+                        algorithm,
+                        input,
+                        lifecycle_label: joined_lifecycle_label,
+                    },
+                    invocation_label_bytes,
+                )
+            }
+            CryptoObjectState::HashFinalized { .. } => Err(self
+                .crypto_throw_node_error_with_temporary_budget(
+                    "Error",
+                    "ERR_CRYPTO_HASH_FINALIZED",
+                    "Digest already called".to_string(),
+                    &joined_lifecycle_label,
+                    retained_state_bytes.saturating_add(invocation_label_bytes),
+                )),
+            _ => Err(InterpreterError::TypeError {
+                expected: "Hash receiver for copy".to_string(),
+                got: "non-Hash crypto object".to_string(),
+            }),
+        }
+    }
+
+    fn crypto_pbkdf2_bytes(
+        algorithm: CryptoHashAlgorithm,
+        password: &[u8],
+        salt: &[u8],
+        iterations: u32,
+        output: &mut [u8],
+    ) -> Result<(), InterpreterError> {
+        match algorithm {
+            CryptoHashAlgorithm::Sha1 => {
+                pbkdf2::pbkdf2_hmac::<Sha1>(password, salt, iterations, output)
+            }
+            CryptoHashAlgorithm::Sha256 => {
+                pbkdf2::pbkdf2_hmac::<Sha256>(password, salt, iterations, output)
+            }
+            CryptoHashAlgorithm::Sha512 => {
+                pbkdf2::pbkdf2_hmac::<Sha512>(password, salt, iterations, output)
+            }
+            CryptoHashAlgorithm::Md5 => {
+                pbkdf2::pbkdf2_hmac::<Md5>(password, salt, iterations, output)
+            }
+        }
+        Ok(())
+    }
+
+    fn crypto_pbkdf2(
+        &mut self,
+        args: RegRange,
+        asynchronous: bool,
+    ) -> Result<Value, InterpreterError> {
+        let invocation_label = self.crypto_invocation_label(args)?;
+        let password_value = self.crypto_required_arg(args, 0, "PBKDF2 password")?;
+        let salt_value = self.crypto_required_arg(args, 1, "PBKDF2 salt")?;
+        let iterations_value = self.crypto_required_arg(args, 2, "PBKDF2 iterations")?;
+        let key_len_value = self.crypto_required_arg(args, 3, "PBKDF2 key length")?;
+        let digest_name = self.crypto_required_string_arg(args, 4, "PBKDF2 digest")?;
+        let Some(algorithm) = CryptoHashAlgorithm::parse(&digest_name) else {
+            return Err(self.crypto_throw_node_error(
+                "Error",
+                "ERR_CRYPTO_INVALID_DIGEST",
+                format!(
+                    "Invalid digest: {}",
+                    Self::crypto_diagnostic_fragment(&digest_name)
+                ),
+                &invocation_label,
+            ));
+        };
+        let iterations = self.crypto_integer_arg(&iterations_value, "iterations", false)?;
+        if iterations > i32::MAX as usize {
+            return Err(self.crypto_throw_node_error(
+                "RangeError",
+                "ERR_OUT_OF_RANGE",
+                "PBKDF2 iterations must be less than or equal to 2147483647".to_string(),
+                &invocation_label,
+            ));
+        }
+        let iterations = u32::try_from(iterations).map_err(|_| InterpreterError::RangeError {
+            message: "PBKDF2 iterations exceed u32 range".to_string(),
+        })?;
+        let key_len = self.crypto_integer_arg(&key_len_value, "key length", true)?;
+        if key_len > CRYPTO_MAX_INPUT_BYTES {
+            return Err(InterpreterError::RangeError {
+                message: "PBKDF2 output exceeds engine Buffer cap".to_string(),
+            });
+        }
+        let callback = if asynchronous {
+            Some(
+                match self.crypto_required_arg(args, 5, "PBKDF2 callback")? {
+                    Value::Closure(callback) => callback,
+                    other => {
+                        return Err(InterpreterError::TypeError {
+                            expected: "PBKDF2 callback function".to_string(),
+                            got: other.type_name().to_string(),
+                        });
+                    }
+                },
+            )
+        } else {
+            None
+        };
+        let password_bound = self.crypto_input_allocation_bound(&password_value, None)?;
+        let salt_bound = self.crypto_input_allocation_bound(&salt_value, None)?;
+        self.check_temporary_memory_budget(
+            password_bound
+                .saturating_add(salt_bound)
+                .saturating_add(u64::try_from(key_len).unwrap_or(u64::MAX).saturating_mul(2))
+                .saturating_add(Self::estimate_label_bytes(&invocation_label)),
+        )?;
+        let password = Zeroizing::new(self.crypto_input_bytes(&password_value, None)?);
+        let salt = Zeroizing::new(self.crypto_input_bytes(&salt_value, None)?);
+        let blocks = key_len.div_ceil(algorithm.output_len());
+        let password_work = Self::crypto_byte_work(password.len());
+        let salt_work = Self::crypto_byte_work(salt.len().saturating_add(4));
+        let per_block_work = u64::from(iterations).saturating_add(salt_work);
+        let work = password_work.saturating_add(
+            u64::try_from(blocks.max(1))
+                .unwrap_or(u64::MAX)
+                .saturating_mul(per_block_work),
+        );
+        self.charge_crypto_work(work)?;
+        let mut output = Zeroizing::new(vec![0u8; key_len]);
+        Self::crypto_pbkdf2_bytes(algorithm, &password, &salt, iterations, &mut output)?;
+        drop(password);
+        drop(salt);
+        let output_temporary_bytes = u64::try_from(output.capacity())
+            .unwrap_or(u64::MAX)
+            .saturating_add(Self::estimate_label_bytes(&invocation_label));
+
+        let Some(callback) = callback else {
+            return self.crypto_output_value_with_temporary_budget(
+                &output,
+                None,
+                &invocation_label,
+                true,
+                output_temporary_bytes,
+            );
+        };
+        let previous_heap_len = self.heap.len();
+        let previous_estimated_bytes = self.estimated_memory_bytes;
+        let key = self.crypto_output_value_with_temporary_budget(
+            &output,
+            None,
+            &invocation_label,
+            false,
+            output_temporary_bytes,
+        )?;
+        drop(output);
+        if let Err(error) =
+            self.schedule_io_callback_with_label(callback, vec![Value::Null, key], invocation_label)
+        {
+            self.rollback_heap_to_len(previous_heap_len);
+            self.estimated_memory_bytes = previous_estimated_bytes;
+            return Err(error);
+        }
+        Ok(Value::Undefined)
+    }
+
+    fn crypto_scrypt_sync(&mut self, args: RegRange) -> Result<Value, InterpreterError> {
+        let invocation_label = self.crypto_invocation_label(args)?;
+        let password_value = self.crypto_required_arg(args, 0, "scrypt password")?;
+        let salt_value = self.crypto_required_arg(args, 1, "scrypt salt")?;
+        let key_len_value = self.crypto_required_arg(args, 2, "scrypt key length")?;
+        let key_len = self.crypto_integer_arg(&key_len_value, "key length", true)?;
+        if key_len > CRYPTO_MAX_INPUT_BYTES {
+            return Err(InterpreterError::RangeError {
+                message: "scrypt output exceeds engine Buffer cap".to_string(),
+            });
+        }
+        let options = self.builtin_arg(args, 3)?;
+        let option_integer = |this: &Self, names: &[&str], default: usize, allow_zero: bool| {
+            let Some(Value::Object(options_id)) = options.as_ref() else {
+                return Ok(default);
+            };
+            let object = this
+                .heap
+                .get(options_id.0 as usize)
+                .ok_or(InterpreterError::ObjectNotFound { id: options_id.0 })?;
+            let mut selected = None;
+            for name in names {
+                if let Some(value) = object.properties.get(name) {
+                    if selected.is_some() {
+                        return Err(InterpreterError::TypeError {
+                            expected: format!(
+                                "at most one scrypt option from {}",
+                                names.join(", ")
+                            ),
+                            got: "incompatible option pair".to_string(),
+                        });
+                    }
+                    selected = Some((*name, value));
+                }
+            }
+            let Some((name, value)) = selected else {
+                return Ok(default);
+            };
+            this.crypto_integer_arg(value, name, allow_zero)
+        };
+        let n = option_integer(self, &["N", "cost"], 16_384, false)?;
+        let r = option_integer(self, &["r", "blockSize"], 8, false)?;
+        let p = option_integer(self, &["p", "parallelization"], 1, false)?;
+        let configured_maxmem = option_integer(self, &["maxmem"], 32 * 1024 * 1024, true)?;
+        let maxmem = if configured_maxmem == 0 {
+            32 * 1024 * 1024
+        } else {
+            configured_maxmem
+        };
+        if !n.is_power_of_two() || n < 2 {
+            return Err(InterpreterError::RangeError {
+                message: "scrypt N must be a power of two greater than one".to_string(),
+            });
+        }
+        let r_u32 = u32::try_from(r).map_err(|_| InterpreterError::RangeError {
+            message: "scrypt r exceeds u32 range".to_string(),
+        })?;
+        let p_u32 = u32::try_from(p).map_err(|_| InterpreterError::RangeError {
+            message: "scrypt p exceeds u32 range".to_string(),
+        })?;
+        let log_n = u8::try_from(n.trailing_zeros()).map_err(|_| InterpreterError::RangeError {
+            message: "scrypt N logarithm exceeds u8 range".to_string(),
+        })?;
+        // Params::new's length is password-hash metadata constrained to
+        // 10..=64, not the raw scrypt output length. Raw Node outputs may be
+        // any length allowed by our Buffer cap, including zero.
+        let params = scrypt::Params::new(log_n, r_u32, p_u32, 32).map_err(|_| {
+            InterpreterError::RangeError {
+                message: "invalid scrypt parameters".to_string(),
+            }
+        })?;
+        let r_bytes = 128u64.saturating_mul(u64::try_from(r).unwrap_or(u64::MAX));
+        let b_workspace = r_bytes.saturating_mul(u64::try_from(p).unwrap_or(u64::MAX));
+        let v_workspace = r_bytes.saturating_mul(u64::try_from(n).unwrap_or(u64::MAX));
+        let t_workspace = r_bytes;
+        let workspace = b_workspace
+            .saturating_add(v_workspace)
+            .saturating_add(t_workspace);
+        if workspace > u64::try_from(maxmem).unwrap_or(u64::MAX) {
+            return Err(InterpreterError::RangeError {
+                message: "scrypt parameters exceed maxmem".to_string(),
+            });
+        }
+        let password_bound = self.crypto_input_allocation_bound(&password_value, None)?;
+        let salt_bound = self.crypto_input_allocation_bound(&salt_value, None)?;
+        let temporary_bytes = workspace
+            .saturating_add(password_bound)
+            .saturating_add(salt_bound)
+            .saturating_add(u64::try_from(key_len).unwrap_or(u64::MAX).saturating_mul(2))
+            .saturating_add(Self::estimate_label_bytes(&invocation_label));
+        self.check_temporary_memory_budget(temporary_bytes)?;
+        let password = Zeroizing::new(self.crypto_input_bytes(&password_value, None)?);
+        let salt = Zeroizing::new(self.crypto_input_bytes(&salt_value, None)?);
+        let mixing_rounds = u64::try_from(n)
+            .unwrap_or(u64::MAX)
+            .saturating_mul(u64::try_from(r).unwrap_or(u64::MAX))
+            .saturating_mul(u64::try_from(p).unwrap_or(u64::MAX));
+        // RustCrypto performs PBKDF2(password, salt, 1, B), ROMix over each
+        // p-sized B chunk, then PBKDF2(password, B, 1, output). The final
+        // phase hashes the entire B workspace once per output block, so
+        // charging only N*r*p leaves a large-key CPU amplification hole.
+        let password_work = Self::crypto_byte_work(password.len());
+        let salt_work = Self::crypto_byte_work(salt.len().saturating_add(4));
+        let b_work = b_workspace.div_ceil(CRYPTO_WORK_UNIT_BYTES);
+        let initial_pbkdf_blocks = b_workspace.div_ceil(32);
+        let final_pbkdf_blocks = u64::try_from(key_len).unwrap_or(u64::MAX).div_ceil(32);
+        let kdf_work = password_work
+            .saturating_mul(2)
+            .saturating_add(initial_pbkdf_blocks.saturating_mul(salt_work.saturating_add(1)))
+            .saturating_add(final_pbkdf_blocks.saturating_mul(b_work.saturating_add(1)));
+        let total_work = mixing_rounds.saturating_add(kdf_work);
+        if total_work > CRYPTO_MAX_SCRYPT_WORK_UNITS {
+            return Err(InterpreterError::BudgetExhausted {
+                executed: self.instructions_executed,
+                budget: self.config.instruction_budget,
+            });
+        }
+        let work = total_work.div_ceil(CRYPTO_SCRYPT_MIXES_PER_BUDGET_TICK);
+        self.charge_crypto_work(work)?;
+        let mut output = Zeroizing::new(vec![0u8; key_len]);
+        if !output.is_empty() {
+            scrypt::scrypt(&password, &salt, &params, &mut output).map_err(|_| {
+                InterpreterError::InternalError {
+                    details: "scrypt computation failed after parameter preflight".to_string(),
+                }
+            })?;
+        }
+        drop(password);
+        drop(salt);
+        let output_temporary_bytes = u64::try_from(output.capacity())
+            .unwrap_or(u64::MAX)
+            .saturating_add(Self::estimate_label_bytes(&invocation_label));
+        self.crypto_output_value_with_temporary_budget(
+            &output,
+            None,
+            &invocation_label,
+            true,
+            output_temporary_bytes,
+        )
+    }
+
+    fn crypto_timing_safe_equal(&mut self, args: RegRange) -> Result<Value, InterpreterError> {
+        let invocation_label = self.crypto_invocation_label(args)?;
+        let left_value = self.crypto_required_arg(args, 0, "timingSafeEqual left input")?;
+        let right_value = self.crypto_required_arg(args, 1, "timingSafeEqual right input")?;
+        let (left_buffer, left_offset, left_len) =
+            match self.crypto_binary_view_range(&left_value, true) {
+                Ok(view) => view,
+                Err(_) => {
+                    return Err(self.crypto_throw_node_error(
+                        "TypeError",
+                        "ERR_INVALID_ARG_TYPE",
+                        "The first argument must be an ArrayBuffer or ArrayBuffer view".to_string(),
+                        &invocation_label,
+                    ));
+                }
+            };
+        let (right_buffer, right_offset, right_len) = match self
+            .crypto_binary_view_range(&right_value, true)
+        {
+            Ok(view) => view,
+            Err(_) => {
+                return Err(self.crypto_throw_node_error(
+                    "TypeError",
+                    "ERR_INVALID_ARG_TYPE",
+                    "The second argument must be an ArrayBuffer or ArrayBuffer view".to_string(),
+                    &invocation_label,
+                ));
+            }
+        };
+        self.check_temporary_memory_budget(
+            u64::try_from(left_len)
+                .unwrap_or(u64::MAX)
+                .saturating_add(u64::try_from(right_len).unwrap_or(u64::MAX))
+                .saturating_add(Self::estimate_label_bytes(&invocation_label)),
+        )?;
+        let left = Zeroizing::new(self.copy_crypto_binary_view_range(
+            left_buffer,
+            left_offset,
+            left_len,
+        )?);
+        let right = Zeroizing::new(self.copy_crypto_binary_view_range(
+            right_buffer,
+            right_offset,
+            right_len,
+        )?);
+        self.charge_crypto_work(Self::crypto_byte_work(left.len().max(right.len())))?;
+        if left.len() != right.len() {
+            drop(left);
+            drop(right);
+            return Err(self.crypto_throw_node_error(
+                "RangeError",
+                "ERR_CRYPTO_TIMING_SAFE_EQUAL_LENGTH",
+                "Input buffers must have the same byte length".to_string(),
+                &invocation_label,
+            ));
+        }
+        self.replace_pending_hostcall_result_label(Some(invocation_label))?;
+        Ok(Value::Bool(bool::from(
+            left.as_slice().ct_eq(right.as_slice()),
+        )))
+    }
+
+    fn crypto_get_hashes(&mut self) -> Result<Value, InterpreterError> {
+        let values = ["md5", "sha1", "sha256", "sha512"].map(Value::str);
+        Ok(Value::Object(self.alloc_array_from_values(&values)?))
+    }
+
+    fn crypto_get_ciphers(&mut self) -> Result<Value, InterpreterError> {
+        let values = ["aes-128-ctr", "aes-256-cbc", "aes-256-gcm"].map(Value::str);
+        Ok(Value::Object(self.alloc_array_from_values(&values)?))
+    }
+
+    fn crypto_constants(&mut self, args: RegRange) -> Result<Value, InterpreterError> {
+        if args.count != 0 {
+            return Err(InterpreterError::TypeError {
+                expected: "zero crypto.constants arguments".to_string(),
+                got: format!("{} argument(s)", args.count),
+            });
+        }
+        Ok(Value::Object(self.alloc_object_with_properties(&[
+            ("RSA_PKCS1_PADDING", Value::Int(1)),
+            ("RSA_NO_PADDING", Value::Int(3)),
+            ("RSA_PKCS1_OAEP_PADDING", Value::Int(4)),
+        ])?))
+    }
+
+    fn crypto_invalid_random_int(&mut self, args: RegRange) -> Result<Value, InterpreterError> {
+        let invocation_label = self.crypto_invocation_label(args)?;
+        Err(self.crypto_throw_node_error(
+            "RangeError",
+            "ERR_OUT_OF_RANGE",
+            "The value of max must be greater than min".to_string(),
+            &invocation_label,
+        ))
+    }
+
+    fn crypto_cipher_algorithm(
+        name: &str,
+        _direction: CryptoCipherDirection,
+    ) -> Option<CryptoCipherAlgorithm> {
+        if name.eq_ignore_ascii_case("aes-256-cbc") {
+            Some(CryptoCipherAlgorithm::Aes256Cbc)
+        } else if name.eq_ignore_ascii_case("aes-128-ctr") {
+            Some(CryptoCipherAlgorithm::Aes128Ctr)
+        } else if name.eq_ignore_ascii_case("aes-256-gcm") {
+            Some(CryptoCipherAlgorithm::Aes256Gcm)
+        } else {
+            None
+        }
+    }
+
+    fn crypto_cipher_key_iv_lengths(algorithm: CryptoCipherAlgorithm) -> (usize, usize) {
+        match algorithm {
+            CryptoCipherAlgorithm::Aes256Cbc => (32, 16),
+            CryptoCipherAlgorithm::Aes128Ctr => (16, 16),
+            CryptoCipherAlgorithm::Aes256Gcm => (32, 12),
+        }
+    }
+
+    fn crypto_create_cipher(
+        &mut self,
+        args: RegRange,
+        direction: CryptoCipherDirection,
+    ) -> Result<Value, InterpreterError> {
+        let invocation_label = self.crypto_invocation_label(args)?;
+        let algorithm_name = self.crypto_required_string_arg(args, 0, "cipher algorithm")?;
+        let Some(algorithm) = Self::crypto_cipher_algorithm(&algorithm_name, direction) else {
+            return Err(self.crypto_throw_node_error(
+                "Error",
+                "ERR_CRYPTO_UNKNOWN_CIPHER",
+                format!(
+                    "Unknown cipher: {}",
+                    Self::crypto_diagnostic_fragment(&algorithm_name)
+                ),
+                &invocation_label,
+            ));
+        };
+        let key_value = self.crypto_required_arg(args, 1, "cipher key")?;
+        let iv_value = self.crypto_required_arg(args, 2, "cipher IV")?;
+        self.check_temporary_memory_budget(
+            self.crypto_input_allocation_bound(&key_value, None)?
+                .saturating_add(self.crypto_input_allocation_bound(&iv_value, None)?)
+                .saturating_add(CRYPTO_STATE_BASE_BYTES)
+                .saturating_add(Self::estimate_label_bytes(&invocation_label)),
+        )?;
+        let key = Zeroizing::new(self.crypto_input_bytes(&key_value, None)?);
+        let iv = Zeroizing::new(self.crypto_input_bytes(&iv_value, None)?);
+        let (expected_key, expected_iv) = Self::crypto_cipher_key_iv_lengths(algorithm);
+        if key.len() != expected_key {
+            drop(key);
+            drop(iv);
+            return Err(self.crypto_throw_node_error(
+                "RangeError",
+                "ERR_CRYPTO_INVALID_KEYLEN",
+                format!("Invalid key length: expected {expected_key} bytes"),
+                &invocation_label,
+            ));
+        }
+        if iv.len() != expected_iv {
+            drop(key);
+            drop(iv);
+            return Err(self.crypto_throw_node_error(
+                "TypeError",
+                "ERR_CRYPTO_INVALID_IV",
+                format!("Invalid initialization vector: expected {expected_iv} bytes"),
+                &invocation_label,
+            ));
+        }
+        self.crypto_alloc_object(CryptoObjectState::CipherActive {
+            algorithm,
+            direction,
+            key,
+            iv,
+            input: Zeroizing::new(Vec::new()),
+            auth_tag: None,
+            emitted: 0,
+            output_encoding: None,
+            output_remainder: Zeroizing::new(Vec::new()),
+            lifecycle_label: invocation_label,
+        })
+    }
+
+    fn crypto_transform_cipher_all(
+        algorithm: CryptoCipherAlgorithm,
+        direction: CryptoCipherDirection,
+        key: &[u8],
+        iv: &[u8],
+        input: &[u8],
+        auth_tag: Option<&[u8]>,
+    ) -> Result<CryptoCipherOutput, &'static str> {
+        match (algorithm, direction) {
+            (CryptoCipherAlgorithm::Aes256Cbc, CryptoCipherDirection::Encrypt) => {
+                let mut output = Zeroizing::new(Vec::with_capacity(input.len().saturating_add(16)));
+                output.extend_from_slice(input);
+                let input_len = output.len();
+                output.resize(input_len.saturating_add(16), 0);
+                let output_len = cbc::Encryptor::<aes::Aes256>::new_from_slices(key, iv)
+                    .map_err(|_| "invalid AES-256-CBC key or IV")?
+                    .encrypt_padded_mut::<Pkcs7>(&mut output, input_len)
+                    .map_err(|_| "AES-256-CBC padding failed")?
+                    .len();
+                output.truncate(output_len);
+                Ok((output, None))
+            }
+            (CryptoCipherAlgorithm::Aes256Cbc, CryptoCipherDirection::Decrypt) => {
+                let mut output = Zeroizing::new(input.to_vec());
+                let output_len = cbc::Decryptor::<aes::Aes256>::new_from_slices(key, iv)
+                    .map_err(|_| "invalid AES-256-CBC key or IV")?
+                    .decrypt_padded_mut::<Pkcs7>(&mut output)
+                    .map_err(|_| "bad decrypt")?
+                    .len();
+                output.truncate(output_len);
+                Ok((output, None))
+            }
+            (CryptoCipherAlgorithm::Aes128Ctr, _) => {
+                let mut output = Zeroizing::new(input.to_vec());
+                let mut cipher = ctr::Ctr128BE::<aes::Aes128>::new_from_slices(key, iv)
+                    .map_err(|_| "invalid AES-128-CTR key or IV")?;
+                cipher.apply_keystream(&mut output);
+                Ok((output, None))
+            }
+            (CryptoCipherAlgorithm::Aes256Gcm, CryptoCipherDirection::Encrypt) => {
+                let cipher = <aes_gcm::Aes256Gcm as AeadKeyInit>::new_from_slice(key)
+                    .map_err(|_| "invalid AES-256-GCM key")?;
+                let nonce = aes_gcm::Nonce::<aes::cipher::consts::U12>::from_slice(iv);
+                let mut output = Zeroizing::new(input.to_vec());
+                let tag = cipher
+                    .encrypt_in_place_detached(nonce, b"", &mut output)
+                    .map_err(|_| "AES-256-GCM encryption failed")?;
+                Ok((output, Some(Zeroizing::new(tag.to_vec()))))
+            }
+            (CryptoCipherAlgorithm::Aes256Gcm, CryptoCipherDirection::Decrypt) => {
+                let cipher = <aes_gcm::Aes256Gcm as AeadKeyInit>::new_from_slice(key)
+                    .map_err(|_| "invalid AES-256-GCM key")?;
+                let nonce = aes_gcm::Nonce::<aes::cipher::consts::U12>::from_slice(iv);
+                let tag = aes_gcm::Tag::from_slice(auth_tag.ok_or("authentication tag not set")?);
+                let mut output = Zeroizing::new(input.to_vec());
+                cipher
+                    .decrypt_in_place_detached(nonce, b"", &mut output, tag)
+                    .map_err(|_| "unable to authenticate data")?;
+                Ok((output, None))
+            }
+        }
+    }
+
+    fn crypto_transform_cbc_prefix(
+        direction: CryptoCipherDirection,
+        key: &[u8],
+        iv: &[u8],
+        input: &[u8],
+        prefix_len: usize,
+    ) -> Result<Zeroizing<Vec<u8>>, &'static str> {
+        if prefix_len == 0 {
+            return Ok(Zeroizing::new(Vec::new()));
+        }
+        let Some(prefix) = input.get(..prefix_len) else {
+            return Err("AES-256-CBC prefix exceeds buffered input");
+        };
+        let mut output = Zeroizing::new(prefix.to_vec());
+        let output_len = match direction {
+            CryptoCipherDirection::Encrypt => {
+                cbc::Encryptor::<aes::Aes256>::new_from_slices(key, iv)
+                    .map_err(|_| "invalid AES-256-CBC key or IV")?
+                    .encrypt_padded_mut::<NoPadding>(&mut output, prefix_len)
+                    .map_err(|_| "AES-256-CBC block encryption failed")?
+                    .len()
+            }
+            CryptoCipherDirection::Decrypt => {
+                cbc::Decryptor::<aes::Aes256>::new_from_slices(key, iv)
+                    .map_err(|_| "invalid AES-256-CBC key or IV")?
+                    .decrypt_padded_mut::<NoPadding>(&mut output)
+                    .map_err(|_| "AES-256-CBC block decryption failed")?
+                    .len()
+            }
+        };
+        output.truncate(output_len);
+        Ok(output)
+    }
+
+    fn crypto_cipher_update(
+        &mut self,
+        receiver: Option<Value>,
+        builtin: &BuiltinFunction,
+        args: RegRange,
+    ) -> Result<Value, InterpreterError> {
+        let object_id = self.crypto_receiver_id(receiver, builtin, "update")?;
+        let invocation_label = self.crypto_invocation_label(args)?;
+        let input_value = self.crypto_required_arg(args, 0, "cipher update input")?;
+        let input_encoding = self.builtin_arg(args, 1)?;
+        let requested_output_encoding = self.builtin_arg(args, 2)?;
+        let retained_state_bytes = self
+            .crypto_objects
+            .get(&object_id)
+            .map(Self::estimate_crypto_object_state_bytes)
+            .expect("authenticated crypto receiver has state");
+        self.check_temporary_memory_budget(
+            retained_state_bytes
+                .saturating_add(
+                    self.crypto_update_input_allocation_bound(
+                        &input_value,
+                        input_encoding.as_ref(),
+                    )?,
+                )
+                .saturating_add(Self::estimate_label_bytes(&invocation_label)),
+        )?;
+        let previous = self.crypto_state_snapshot(object_id)?;
+        if let CryptoObjectState::CipherFinalized {
+            lifecycle_label, ..
+        } = &previous
+        {
+            let label = self.clone_dominant_label_with_temporary_budget(
+                lifecycle_label,
+                &invocation_label,
+                Self::estimate_crypto_object_state_bytes(&previous)
+                    .saturating_add(Self::estimate_label_bytes(&invocation_label)),
+            )?;
+            return Err(self.crypto_throw_node_error_with_temporary_budget(
+                "Error",
+                "ERR_CRYPTO_INVALID_STATE",
+                "Cipher context already finalized".to_string(),
+                &label,
+                retained_state_bytes.saturating_add(Self::estimate_label_bytes(&invocation_label)),
+            ));
+        }
+        let bytes =
+            Zeroizing::new(self.crypto_update_input_bytes(&input_value, input_encoding.as_ref())?);
+        let CryptoObjectState::CipherActive {
+            algorithm,
+            direction,
+            key,
+            iv,
+            input,
+            auth_tag,
+            emitted,
+            output_encoding: previous_output_encoding,
+            output_remainder: previous_output_remainder,
+            lifecycle_label,
+        } = &previous
+        else {
+            return Err(InterpreterError::TypeError {
+                expected: "cipher receiver".to_string(),
+                got: "hash/HMAC receiver".to_string(),
+            });
+        };
+        let next_input_len =
+            input
+                .len()
+                .checked_add(bytes.len())
+                .ok_or_else(|| InterpreterError::RangeError {
+                    message: "cipher input length overflow".to_string(),
+                })?;
+        if next_input_len > CRYPTO_MAX_INPUT_BYTES {
+            return Err(InterpreterError::RangeError {
+                message: "cipher input exceeds engine Buffer cap".to_string(),
+            });
+        }
+        let next_lifecycle_label = self.clone_dominant_label_with_temporary_budget(
+            lifecycle_label,
+            &invocation_label,
+            Self::estimate_crypto_object_state_bytes(&previous)
+                .saturating_add(u64::try_from(bytes.len()).unwrap_or(u64::MAX))
+                .saturating_add(Self::estimate_label_bytes(&invocation_label)),
+        )?;
+        let next_input_bytes = u64::try_from(next_input_len).unwrap_or(u64::MAX);
+        let candidate_state_bytes = CRYPTO_STATE_BASE_BYTES
+            .saturating_add(MEMORY_ESTIMATE_MAP_ENTRY_BYTES)
+            .saturating_add(u64::try_from(key.capacity()).unwrap_or(u64::MAX))
+            .saturating_add(u64::try_from(iv.capacity()).unwrap_or(u64::MAX))
+            .saturating_add(next_input_bytes)
+            .saturating_add(
+                auth_tag
+                    .as_ref()
+                    .map_or(0, |tag| u64::try_from(tag.capacity()).unwrap_or(u64::MAX)),
+            )
+            .saturating_add(u64::try_from(previous_output_remainder.capacity()).unwrap_or(u64::MAX))
+            .saturating_add(Self::estimate_label_bytes(&next_lifecycle_label));
+        let invocation_label_bytes = Self::estimate_label_bytes(&invocation_label);
+        let next_lifecycle_label_bytes = Self::estimate_label_bytes(&next_lifecycle_label);
+        let previous_remainder_bytes =
+            u64::try_from(previous_output_remainder.capacity()).unwrap_or(u64::MAX);
+        // Peak CTR/GCM update retains the state snapshot, decoded bytes,
+        // candidate state, full transformed output, sliced incremental output,
+        // and its published Buffer/string together. Preflight the complete set
+        // before growing the candidate input or invoking RustCrypto.
+        self.check_temporary_memory_budget(
+            Self::estimate_crypto_object_state_bytes(&previous)
+                .saturating_add(u64::try_from(bytes.capacity()).unwrap_or(u64::MAX))
+                .saturating_add(candidate_state_bytes)
+                .saturating_add(Self::crypto_output_pipeline_peak_bytes(
+                    next_input_bytes,
+                    next_input_bytes,
+                    previous_remainder_bytes,
+                ))
+                // The standalone joined label, published backing-store label,
+                // and pending hostcall-result label can coexist.  The
+                // candidate state's copy is already in candidate_state_bytes.
+                .saturating_add(next_lifecycle_label_bytes.saturating_mul(3))
+                .saturating_add(invocation_label_bytes),
+        )?;
+        self.charge_crypto_work(Self::crypto_byte_work(next_input_len))?;
+        let mut next_input = Zeroizing::new(Vec::with_capacity(next_input_len));
+        next_input.extend_from_slice(input);
+        next_input.extend_from_slice(&bytes);
+        let full_output = match algorithm {
+            CryptoCipherAlgorithm::Aes256Cbc => {
+                let complete_blocks = next_input.len() / 16;
+                let emitted_blocks = match direction {
+                    CryptoCipherDirection::Encrypt => complete_blocks,
+                    // Retain the last complete ciphertext block until final so
+                    // PKCS#7 padding is validated before its plaintext escapes.
+                    CryptoCipherDirection::Decrypt => complete_blocks.saturating_sub(1),
+                };
+                Self::crypto_transform_cbc_prefix(
+                    *direction,
+                    key,
+                    iv,
+                    &next_input,
+                    emitted_blocks.saturating_mul(16),
+                )
+                .map_err(|message| InterpreterError::InternalError {
+                    details: message.to_string(),
+                })?
+            }
+            CryptoCipherAlgorithm::Aes256Gcm if *direction == CryptoCipherDirection::Decrypt => {
+                // Authenticated plaintext cannot escape before final verifies
+                // the caller-supplied tag.
+                Zeroizing::new(Vec::new())
+            }
+            CryptoCipherAlgorithm::Aes128Ctr | CryptoCipherAlgorithm::Aes256Gcm => {
+                Self::crypto_transform_cipher_all(
+                    *algorithm,
+                    *direction,
+                    key,
+                    iv,
+                    &next_input,
+                    auth_tag.as_ref().map(|tag| tag.as_slice()),
+                )
+                .map_err(|message| InterpreterError::InternalError {
+                    details: message.to_string(),
+                })?
+                .0
+            }
+        };
+        let raw_output = Zeroizing::new(full_output.get(*emitted..).unwrap_or_default().to_vec());
+        let next_emitted = full_output.len();
+        let canonical_output_encoding =
+            Self::crypto_canonical_output_encoding(&requested_output_encoding);
+        let encoding_mismatch = canonical_output_encoding.as_ref().is_ok_and(|encoding| {
+            encoding.as_ref().is_some_and(|encoding| {
+                previous_output_encoding
+                    .as_ref()
+                    .is_some_and(|previous| previous != encoding)
+            })
+        });
+        let (output, next_output_encoding, next_output_remainder, output_encoding_for_publication) =
+            match canonical_output_encoding {
+                Ok(None) | Err(()) => (
+                    raw_output,
+                    previous_output_encoding.clone(),
+                    previous_output_remainder.clone(),
+                    requested_output_encoding,
+                ),
+                Ok(Some(_)) if encoding_mismatch => {
+                    drop(raw_output);
+                    (
+                        Zeroizing::new(Vec::new()),
+                        previous_output_encoding.clone(),
+                        previous_output_remainder.clone(),
+                        None,
+                    )
+                }
+                Ok(Some(encoding)) => {
+                    let (output, remainder) = Self::crypto_encoded_stream_chunk(
+                        previous_output_remainder,
+                        &raw_output,
+                        &encoding,
+                        false,
+                    );
+                    (
+                        output,
+                        Some(encoding.clone()),
+                        remainder,
+                        Some(Value::str(encoding)),
+                    )
+                }
+            };
+        let next = CryptoObjectState::CipherActive {
+            algorithm: *algorithm,
+            direction: *direction,
+            key: key.clone(),
+            iv: iv.clone(),
+            input: next_input,
+            auth_tag: auth_tag.clone(),
+            emitted: next_emitted,
+            output_encoding: next_output_encoding,
+            output_remainder: next_output_remainder,
+            lifecycle_label: next_lifecycle_label.clone(),
+        };
+        let previous_state_bytes = Self::estimate_crypto_object_state_bytes(&previous);
+        let next_state_bytes = Self::estimate_crypto_object_state_bytes(&next);
+        let previous_heap_len = self.heap.len();
+        let previous_estimated_bytes = self.estimated_memory_bytes;
+        let result = (|| {
+            self.apply_memory_component_delta(previous_state_bytes, next_state_bytes)?;
+            self.crypto_objects.insert(object_id, next);
+            if encoding_mismatch {
+                return Err(self.crypto_throw_node_error_with_temporary_budget(
+                    "Error",
+                    "ERR_INTERNAL_ASSERTION",
+                    "Cannot change encoding".to_string(),
+                    &next_lifecycle_label,
+                    previous_state_bytes
+                        .saturating_add(u64::try_from(bytes.capacity()).unwrap_or(u64::MAX))
+                        .saturating_add(u64::try_from(full_output.capacity()).unwrap_or(u64::MAX))
+                        .saturating_add(u64::try_from(output.capacity()).unwrap_or(u64::MAX))
+                        .saturating_add(invocation_label_bytes),
+                ));
+            }
+            self.crypto_output_value_with_temporary_budget(
+                &output,
+                output_encoding_for_publication,
+                &next_lifecycle_label,
+                true,
+                previous_state_bytes
+                    .saturating_add(u64::try_from(bytes.capacity()).unwrap_or(u64::MAX))
+                    .saturating_add(u64::try_from(full_output.capacity()).unwrap_or(u64::MAX))
+                    .saturating_add(u64::try_from(output.capacity()).unwrap_or(u64::MAX))
+                    .saturating_add(invocation_label_bytes)
+                    .saturating_add(next_lifecycle_label_bytes),
+            )
+        })();
+        if result
+            .as_ref()
+            .is_err_and(|error| !matches!(error, InterpreterError::UncaughtException { .. }))
+        {
+            self.crypto_objects.insert(object_id, previous);
+            self.rollback_heap_to_len(previous_heap_len);
+            self.estimated_memory_bytes = previous_estimated_bytes;
+        }
+        result
+    }
+
+    fn crypto_cipher_final(
+        &mut self,
+        receiver: Option<Value>,
+        builtin: &BuiltinFunction,
+        args: RegRange,
+    ) -> Result<Value, InterpreterError> {
+        let object_id = self.crypto_receiver_id(receiver, builtin, "final")?;
+        let invocation_label = self.crypto_invocation_label(args)?;
+        let requested_output_encoding = self.builtin_arg(args, 0)?;
+        let retained_state_bytes = self
+            .crypto_objects
+            .get(&object_id)
+            .map(Self::estimate_crypto_object_state_bytes)
+            .expect("authenticated crypto receiver has state");
+        let invocation_label_bytes = Self::estimate_label_bytes(&invocation_label);
+        self.check_temporary_memory_budget(
+            retained_state_bytes.saturating_add(invocation_label_bytes),
+        )?;
+        let previous = self.crypto_state_snapshot(object_id)?;
+        let CryptoObjectState::CipherActive {
+            algorithm,
+            direction,
+            key,
+            iv,
+            input,
+            auth_tag: expected_auth_tag,
+            emitted,
+            output_encoding: previous_output_encoding,
+            output_remainder: previous_output_remainder,
+            lifecycle_label,
+        } = &previous
+        else {
+            let label = self.clone_dominant_label_with_temporary_budget(
+                previous.lifecycle_label(),
+                &invocation_label,
+                Self::estimate_crypto_object_state_bytes(&previous)
+                    .saturating_add(Self::estimate_label_bytes(&invocation_label)),
+            )?;
+            return Err(self.crypto_throw_node_error_with_temporary_budget(
+                "Error",
+                "ERR_CRYPTO_INVALID_STATE",
+                "Cipher context already finalized".to_string(),
+                &label,
+                retained_state_bytes.saturating_add(invocation_label_bytes),
+            ));
+        };
+        let next_lifecycle_label = self.clone_dominant_label_with_temporary_budget(
+            lifecycle_label,
+            &invocation_label,
+            Self::estimate_crypto_object_state_bytes(&previous)
+                .saturating_add(Self::estimate_label_bytes(&invocation_label)),
+        )?;
+        let transformed_bound = u64::try_from(input.len().saturating_add(16)).unwrap_or(u64::MAX);
+        let previous_remainder_bound =
+            u64::try_from(previous_output_remainder.capacity()).unwrap_or(u64::MAX);
+        let next_lifecycle_label_bytes = Self::estimate_label_bytes(&next_lifecycle_label);
+        let candidate_state_bytes = CRYPTO_STATE_BASE_BYTES
+            .saturating_add(MEMORY_ESTIMATE_MAP_ENTRY_BYTES)
+            .saturating_add(16)
+            .saturating_add(next_lifecycle_label_bytes);
+        self.check_temporary_memory_budget(
+            retained_state_bytes
+                .saturating_add(candidate_state_bytes)
+                .saturating_add(Self::crypto_output_pipeline_peak_bytes(
+                    transformed_bound,
+                    transformed_bound,
+                    previous_remainder_bound,
+                ))
+                .saturating_add(next_lifecycle_label_bytes.saturating_mul(3))
+                .saturating_add(invocation_label_bytes),
+        )?;
+        self.charge_crypto_work(Self::crypto_byte_work(input.len()))?;
+        let transformed = Self::crypto_transform_cipher_all(
+            *algorithm,
+            *direction,
+            key,
+            iv,
+            input,
+            expected_auth_tag.as_ref().map(|tag| tag.as_slice()),
+        );
+        let (full_output, auth_tag) = match transformed {
+            Ok(output) => output,
+            Err(message) => {
+                // Node consumes the cipher context on the first final attempt,
+                // including a decrypt that fails padding validation. Install a
+                // keyless tombstone before exposing the native error so retrying
+                // final/update cannot reuse key, IV, or buffered ciphertext.
+                let next = CryptoObjectState::CipherFinalized {
+                    algorithm: *algorithm,
+                    direction: *direction,
+                    auth_tag: None,
+                    lifecycle_label: next_lifecycle_label.clone(),
+                };
+                self.apply_memory_component_delta(
+                    Self::estimate_crypto_object_state_bytes(&previous),
+                    Self::estimate_crypto_object_state_bytes(&next),
+                )?;
+                self.crypto_objects.insert(object_id, next);
+                let error_code = if *algorithm == CryptoCipherAlgorithm::Aes256Cbc
+                    && *direction == CryptoCipherDirection::Decrypt
+                    && (input.is_empty() || input.len() % 16 != 0)
+                {
+                    "ERR_OSSL_WRONG_FINAL_BLOCK_LENGTH"
+                } else {
+                    "ERR_OSSL_BAD_DECRYPT"
+                };
+                return Err(self.crypto_throw_node_error_with_temporary_budget(
+                    "Error",
+                    error_code,
+                    message.to_string(),
+                    &next_lifecycle_label,
+                    retained_state_bytes.saturating_add(invocation_label_bytes),
+                ));
+            }
+        };
+        let raw_output = Zeroizing::new(full_output.get(*emitted..).unwrap_or_default().to_vec());
+        let canonical_output_encoding =
+            Self::crypto_canonical_output_encoding(&requested_output_encoding);
+        let encoding_mismatch = canonical_output_encoding.as_ref().is_ok_and(|encoding| {
+            encoding.as_ref().is_some_and(|encoding| {
+                previous_output_encoding
+                    .as_ref()
+                    .is_some_and(|previous| previous != encoding)
+            })
+        });
+        let (output, output_encoding_for_publication) = match canonical_output_encoding {
+            Ok(None) | Err(()) => (raw_output, requested_output_encoding),
+            Ok(Some(_)) if encoding_mismatch => {
+                drop(raw_output);
+                (Zeroizing::new(Vec::new()), None)
+            }
+            Ok(Some(encoding)) => {
+                let (output, _) = Self::crypto_encoded_stream_chunk(
+                    previous_output_remainder,
+                    &raw_output,
+                    &encoding,
+                    true,
+                );
+                (output, Some(Value::str(encoding)))
+            }
+        };
+        let next = CryptoObjectState::CipherFinalized {
+            algorithm: *algorithm,
+            direction: *direction,
+            auth_tag,
+            lifecycle_label: next_lifecycle_label.clone(),
+        };
+        let previous_state_bytes = Self::estimate_crypto_object_state_bytes(&previous);
+        let next_state_bytes = Self::estimate_crypto_object_state_bytes(&next);
+        let previous_heap_len = self.heap.len();
+        let previous_estimated_bytes = self.estimated_memory_bytes;
+        let result = (|| {
+            self.apply_memory_component_delta(previous_state_bytes, next_state_bytes)?;
+            self.crypto_objects.insert(object_id, next);
+            if encoding_mismatch {
+                return Err(self.crypto_throw_node_error_with_temporary_budget(
+                    "Error",
+                    "ERR_INTERNAL_ASSERTION",
+                    "Cannot change encoding".to_string(),
+                    &next_lifecycle_label,
+                    previous_state_bytes
+                        .saturating_add(u64::try_from(full_output.capacity()).unwrap_or(u64::MAX))
+                        .saturating_add(u64::try_from(output.capacity()).unwrap_or(u64::MAX))
+                        .saturating_add(invocation_label_bytes),
+                ));
+            }
+            self.crypto_output_value_with_temporary_budget(
+                &output,
+                output_encoding_for_publication,
+                &next_lifecycle_label,
+                true,
+                previous_state_bytes
+                    .saturating_add(u64::try_from(full_output.capacity()).unwrap_or(u64::MAX))
+                    .saturating_add(u64::try_from(output.capacity()).unwrap_or(u64::MAX))
+                    .saturating_add(invocation_label_bytes)
+                    .saturating_add(next_lifecycle_label_bytes),
+            )
+        })();
+        if result
+            .as_ref()
+            .is_err_and(|error| !matches!(error, InterpreterError::UncaughtException { .. }))
+        {
+            self.crypto_objects.insert(object_id, previous);
+            self.rollback_heap_to_len(previous_heap_len);
+            self.estimated_memory_bytes = previous_estimated_bytes;
+        }
+        result
+    }
+
+    fn crypto_get_auth_tag(
+        &mut self,
+        receiver: Option<Value>,
+        builtin: &BuiltinFunction,
+        args: RegRange,
+    ) -> Result<Value, InterpreterError> {
+        let object_id = self.crypto_receiver_id(receiver, builtin, "getAuthTag")?;
+        let invocation_label = self.crypto_invocation_label(args)?;
+        let retained_state_bytes = self
+            .crypto_objects
+            .get(&object_id)
+            .map(Self::estimate_crypto_object_state_bytes)
+            .expect("authenticated crypto receiver has state");
+        let invocation_label_bytes = Self::estimate_label_bytes(&invocation_label);
+        self.check_temporary_memory_budget(
+            retained_state_bytes.saturating_add(invocation_label_bytes),
+        )?;
+        let state = self.crypto_state_snapshot(object_id)?;
+        let label = self.clone_dominant_label_with_temporary_budget(
+            state.lifecycle_label(),
+            &invocation_label,
+            Self::estimate_crypto_object_state_bytes(&state)
+                .saturating_add(Self::estimate_label_bytes(&invocation_label)),
+        )?;
+        let CryptoObjectState::CipherFinalized {
+            algorithm: CryptoCipherAlgorithm::Aes256Gcm,
+            direction: CryptoCipherDirection::Encrypt,
+            auth_tag: Some(auth_tag),
+            ..
+        } = state
+        else {
+            return Err(self.crypto_throw_node_error_with_temporary_budget(
+                "Error",
+                "ERR_CRYPTO_INVALID_STATE",
+                "Authentication tag is available only after final".to_string(),
+                &label,
+                retained_state_bytes.saturating_add(invocation_label_bytes),
+            ));
+        };
+        self.crypto_output_value_with_temporary_budget(
+            &auth_tag,
+            None,
+            &label,
+            true,
+            invocation_label_bytes
+                .saturating_add(Self::estimate_label_bytes(&label))
+                .saturating_add(u64::try_from(auth_tag.capacity()).unwrap_or(u64::MAX)),
+        )
+    }
+
+    fn crypto_set_auth_tag(
+        &mut self,
+        receiver: Option<Value>,
+        builtin: &BuiltinFunction,
+        args: RegRange,
+    ) -> Result<Value, InterpreterError> {
+        let object_id = self.crypto_receiver_id(receiver, builtin, "setAuthTag")?;
+        let invocation_label = self.crypto_invocation_label(args)?;
+        let tag_value = self.crypto_required_arg(args, 0, "authentication tag")?;
+        let retained_state_bytes = self
+            .crypto_objects
+            .get(&object_id)
+            .map(Self::estimate_crypto_object_state_bytes)
+            .expect("authenticated crypto receiver has state");
+        let tag_allocation_bound = self.crypto_input_allocation_bound(&tag_value, None)?;
+        let invocation_label_bytes = Self::estimate_label_bytes(&invocation_label);
+        let dominant_label_bytes = self
+            .crypto_objects
+            .get(&object_id)
+            .map(|state| {
+                let winner = if state.lifecycle_label() >= &invocation_label {
+                    state.lifecycle_label()
+                } else {
+                    &invocation_label
+                };
+                Self::estimate_label_bytes(winner)
+            })
+            .expect("authenticated crypto receiver has state");
+        // The retained state is already included in estimated_memory_bytes.
+        // During this transactional replacement, however, its snapshot and a
+        // second candidate clone coexist with the decoded tag and the joined
+        // lifecycle label. Preflight that complete transient peak before the
+        // first allocation; checking each clone in isolation would let their
+        // overlapping lifetimes exceed the configured memory cap.
+        self.check_temporary_memory_budget(
+            retained_state_bytes
+                .saturating_mul(2)
+                .saturating_add(tag_allocation_bound.saturating_mul(2))
+                .saturating_add(invocation_label_bytes)
+                .saturating_add(dominant_label_bytes.saturating_mul(2)),
+        )?;
+        let tag = Zeroizing::new(self.crypto_input_bytes(&tag_value, None)?);
+        let previous = self.crypto_state_snapshot(object_id)?;
+        let CryptoObjectState::CipherActive {
+            algorithm: CryptoCipherAlgorithm::Aes256Gcm,
+            direction: CryptoCipherDirection::Decrypt,
+            key,
+            iv,
+            input,
+            auth_tag: previous_auth_tag,
+            emitted,
+            output_encoding,
+            output_remainder,
+            lifecycle_label,
+        } = &previous
+        else {
+            let label = self.clone_dominant_label_with_temporary_budget(
+                previous.lifecycle_label(),
+                &invocation_label,
+                Self::estimate_crypto_object_state_bytes(&previous)
+                    .saturating_add(Self::estimate_label_bytes(&invocation_label)),
+            )?;
+            return Err(self.crypto_throw_node_error_with_temporary_budget(
+                "Error",
+                "ERR_CRYPTO_INVALID_STATE",
+                "setAuthTag is available only on an active GCM decipher".to_string(),
+                &label,
+                retained_state_bytes
+                    .saturating_add(tag_allocation_bound)
+                    .saturating_add(invocation_label_bytes),
+            ));
+        };
+        let next_lifecycle_label = self.clone_dominant_label_with_temporary_budget(
+            lifecycle_label,
+            &invocation_label,
+            Self::estimate_crypto_object_state_bytes(&previous)
+                .saturating_add(u64::try_from(tag.capacity()).unwrap_or(u64::MAX))
+                .saturating_add(Self::estimate_label_bytes(&invocation_label)),
+        )?;
+        if previous_auth_tag.is_some() {
+            return Err(self.crypto_throw_node_error_with_temporary_budget(
+                "Error",
+                "ERR_CRYPTO_INVALID_STATE",
+                "Authentication tag has already been set".to_string(),
+                &next_lifecycle_label,
+                retained_state_bytes
+                    .saturating_add(tag_allocation_bound)
+                    .saturating_add(invocation_label_bytes),
+            ));
+        }
+        if tag.len() != 16 {
+            return Err(self.crypto_throw_node_error_with_temporary_budget(
+                "TypeError",
+                "ERR_CRYPTO_INVALID_AUTH_TAG",
+                "Invalid authentication tag length: expected 16 bytes".to_string(),
+                &next_lifecycle_label,
+                retained_state_bytes
+                    .saturating_add(tag_allocation_bound)
+                    .saturating_add(invocation_label_bytes),
+            ));
+        }
+        let next = CryptoObjectState::CipherActive {
+            algorithm: CryptoCipherAlgorithm::Aes256Gcm,
+            direction: CryptoCipherDirection::Decrypt,
+            key: key.clone(),
+            iv: iv.clone(),
+            input: input.clone(),
+            auth_tag: Some(tag),
+            emitted: *emitted,
+            output_encoding: output_encoding.clone(),
+            output_remainder: output_remainder.clone(),
+            lifecycle_label: next_lifecycle_label,
+        };
+        self.apply_memory_component_delta(
+            Self::estimate_crypto_object_state_bytes(&previous),
+            Self::estimate_crypto_object_state_bytes(&next),
+        )?;
+        self.crypto_objects.insert(object_id, next);
+        Ok(Value::Object(object_id))
+    }
+
+    fn crypto_rethrow_native_error_with_label(
+        &mut self,
+        error: &InterpreterError,
+        label: &Label,
+    ) -> Result<InterpreterError, InterpreterError> {
+        self.check_temporary_memory_budget(Self::estimate_label_bytes(label))?;
+        self.crypto_rethrow_native_error_with_owned_label(error, label.clone())
+    }
+
+    fn crypto_rethrow_native_error_with_owned_label(
+        &mut self,
+        error: &InterpreterError,
+        label: Label,
+    ) -> Result<InterpreterError, InterpreterError> {
+        let previous_heap_len = self.heap.len();
+        let previous_estimated_bytes = self.estimated_memory_bytes;
+        let result = (|| {
+            let thrown = self.native_error_to_thrown_value(error)?;
+            self.replace_pending_abrupt_slots(Some((thrown.clone(), label)), None)?;
+            Ok(InterpreterError::UncaughtException {
+                value: Self::uncaught_exception_description(&thrown),
+            })
+        })();
+        if result.is_err() {
+            self.rollback_heap_to_len(previous_heap_len);
+            self.estimated_memory_bytes = previous_estimated_bytes;
+        }
+        result
+    }
+
+    fn crypto_rethrow_lifecycle_error(
+        &mut self,
+        error: &InterpreterError,
+        object_id: ObjectId,
+        capability: &str,
+        method_args: RegRange,
+    ) -> Result<InterpreterError, InterpreterError> {
+        let previous_heap_len = self.heap.len();
+        let previous_estimated_bytes = self.estimated_memory_bytes;
+        let result = (|| {
+            // Construct and account the error object before cloning an
+            // attacker-sized Custom label.  The heap allocation is then part
+            // of estimated_memory_bytes when the label is materialized, so
+            // the two peaks cannot pass independent non-reserving checks.
+            let thrown = self.native_error_to_thrown_value(error)?;
+            let invocation_label = self.crypto_invocation_label(method_args)?;
+            let error_label = match self.crypto_objects.get(&object_id) {
+                Some(state) if state.supports_lifecycle_capability(capability) => self
+                    .join_owned_label_with_temporary_budget(
+                        invocation_label,
+                        state.lifecycle_label(),
+                    )?,
+                _ => Label::TopSecret,
+            };
+            self.replace_pending_abrupt_slots(Some((thrown.clone(), error_label)), None)?;
+            Ok(InterpreterError::UncaughtException {
+                value: Self::uncaught_exception_description(&thrown),
+            })
+        })();
+        if result.is_err() {
+            self.rollback_heap_to_len(previous_heap_len);
+            self.estimated_memory_bytes = previous_estimated_bytes;
+        }
+        result
+    }
+
+    fn crypto_object_hostcall(
+        &mut self,
+        capability: &str,
+        args: RegRange,
+    ) -> Result<Value, InterpreterError> {
+        let receiver = match self.builtin_arg(args, 0)? {
+            Some(receiver) => receiver,
+            None => {
+                let error = InterpreterError::TypeError {
+                    expected: "authenticated crypto lifecycle receiver in argument slot 0"
+                        .to_string(),
+                    got: "missing argument".to_string(),
+                };
+                return Err(self.crypto_rethrow_native_error_with_label(&error, &Label::TopSecret)?);
+            }
+        };
+        let object_id = match receiver {
+            Value::Object(object_id) => object_id,
+            other => {
+                let error = InterpreterError::TypeError {
+                    expected: "authenticated crypto lifecycle receiver".to_string(),
+                    got: other.type_name().to_string(),
+                };
+                return Err(self.crypto_rethrow_native_error_with_label(&error, &Label::TopSecret)?);
+            }
+        };
+        let Some(state) = self.crypto_objects.get(&object_id) else {
+            let error = InterpreterError::TypeError {
+                expected: "authenticated crypto lifecycle receiver".to_string(),
+                got: "forged or detached object".to_string(),
+            };
+            return Err(self.crypto_rethrow_native_error_with_label(&error, &Label::TopSecret)?);
+        };
+        if !state.supports_lifecycle_capability(capability) {
+            let error = InterpreterError::TypeError {
+                expected: "authenticated crypto lifecycle receiver in argument slot 0".to_string(),
+                got: format!("private crypto state incompatible with {capability}"),
+            };
+            return Err(self.crypto_rethrow_native_error_with_label(&error, &Label::TopSecret)?);
+        }
+        let kind = match capability {
+            "builtin:CryptoObjectUpdate" => match state {
+                CryptoObjectState::HashActive { .. }
+                | CryptoObjectState::HashFinalized { .. }
+                | CryptoObjectState::HmacActive { .. }
+                | CryptoObjectState::HmacFinalized { .. } => BuiltinFunctionKind::CryptoUpdate,
+                CryptoObjectState::CipherActive { .. }
+                | CryptoObjectState::CipherFinalized { .. } => {
+                    BuiltinFunctionKind::CryptoCipherUpdate
+                }
+            },
+            "builtin:CryptoObjectDigest" => BuiltinFunctionKind::CryptoDigest,
+            "builtin:CryptoObjectCopy" => BuiltinFunctionKind::CryptoCopy,
+            "builtin:CryptoObjectFinal" => BuiltinFunctionKind::CryptoCipherFinal,
+            "builtin:CryptoObjectGetAuthTag" => BuiltinFunctionKind::CryptoGetAuthTag,
+            "builtin:CryptoObjectSetAuthTag" => BuiltinFunctionKind::CryptoSetAuthTag,
+            _ => {
+                return Err(InterpreterError::InternalError {
+                    details: format!(
+                        "unknown authenticated crypto lifecycle capability: {capability}"
+                    ),
+                });
+            }
+        };
+        let method_args = RegRange {
+            start: args
+                .start
+                .checked_add(1)
+                .ok_or(InterpreterError::RegisterOutOfBounds {
+                    register: args.start,
+                    max: self.config.max_registers,
+                })?,
+            count: args.count.saturating_sub(1),
+        };
+        let mut builtin = BuiltinFunction::new_kind(kind);
+        builtin.bound_object = Some(object_id.0);
+        let receiver = Some(Value::Object(object_id));
+        let result = match kind {
+            BuiltinFunctionKind::CryptoUpdate => {
+                self.crypto_update(receiver, &builtin, method_args)
+            }
+            BuiltinFunctionKind::CryptoDigest => {
+                self.crypto_digest(receiver, &builtin, method_args)
+            }
+            BuiltinFunctionKind::CryptoCopy => self.crypto_copy(receiver, &builtin, method_args),
+            BuiltinFunctionKind::CryptoCipherUpdate => {
+                self.crypto_cipher_update(receiver, &builtin, method_args)
+            }
+            BuiltinFunctionKind::CryptoCipherFinal => {
+                self.crypto_cipher_final(receiver, &builtin, method_args)
+            }
+            BuiltinFunctionKind::CryptoGetAuthTag => {
+                self.crypto_get_auth_tag(receiver, &builtin, method_args)
+            }
+            BuiltinFunctionKind::CryptoSetAuthTag => {
+                self.crypto_set_auth_tag(receiver, &builtin, method_args)
+            }
+            _ => unreachable!("finite crypto lifecycle capability selected a crypto method"),
+        };
+        match result {
+            Err(error)
+                if !matches!(&error, InterpreterError::UncaughtException { .. })
+                    && Self::js_catchable_error_name(&error).is_some() =>
+            {
+                // Inner lifecycle methods are synchronous and every
+                // mutation-before-error path arms its own labeled exception.
+                // Recompute the finite label only after a raw validation error
+                // returns, when the inner method's snapshots and buffers have
+                // dropped.  Keeping a wrapper-owned label clone alive across
+                // the call would invalidate every inner peak preflight.
+                Err(self.crypto_rethrow_lifecycle_error(
+                    &error,
+                    object_id,
+                    capability,
+                    method_args,
+                )?)
+            }
+            other => other,
+        }
+    }
+
     fn dispatch_builtin_hostcall(
         &mut self,
         cap: &str,
@@ -45430,6 +48225,28 @@ impl InterpreterCore {
             "builtin:ZlibGunzip" => self.dispatch_zlib_hostcall(cap, args),
             "builtin:ZlibDeflate" => self.dispatch_zlib_hostcall(cap, args),
             "builtin:ZlibInflate" => self.dispatch_zlib_hostcall(cap, args),
+            "builtin:CryptoCreateHash" => self.crypto_create_hash(args),
+            "builtin:CryptoCreateHmac" => self.crypto_create_hmac(args),
+            "builtin:CryptoTimingSafeEqual" => self.crypto_timing_safe_equal(args),
+            "builtin:CryptoPbkdf2Sync" => self.crypto_pbkdf2(args, false),
+            "builtin:CryptoPbkdf2" => self.crypto_pbkdf2(args, true),
+            "builtin:CryptoScryptSync" => self.crypto_scrypt_sync(args),
+            "builtin:CryptoCreateCipheriv" => {
+                self.crypto_create_cipher(args, CryptoCipherDirection::Encrypt)
+            }
+            "builtin:CryptoCreateDecipheriv" => {
+                self.crypto_create_cipher(args, CryptoCipherDirection::Decrypt)
+            }
+            "builtin:CryptoGetHashes" => self.crypto_get_hashes(),
+            "builtin:CryptoGetCiphers" => self.crypto_get_ciphers(),
+            "builtin:CryptoConstants" => self.crypto_constants(args),
+            "builtin:CryptoRandomInt" => self.crypto_invalid_random_int(args),
+            "builtin:CryptoObjectUpdate"
+            | "builtin:CryptoObjectDigest"
+            | "builtin:CryptoObjectCopy"
+            | "builtin:CryptoObjectFinal"
+            | "builtin:CryptoObjectGetAuthTag"
+            | "builtin:CryptoObjectSetAuthTag" => self.crypto_object_hostcall(cap, args),
             "builtin:HttpCreateServer" => self.construct_http_server(args),
             "builtin:HttpGet" => self.construct_http_client_request(args, true),
             "builtin:HttpRequest" => self.construct_http_client_request(args, false),
@@ -55346,6 +58163,46 @@ impl InterpreterCore {
         )
     }
 
+    fn estimate_crypto_object_state_bytes(state: &CryptoObjectState) -> u64 {
+        let dynamic_bytes = match state {
+            CryptoObjectState::HashActive { input, .. } => input.capacity(),
+            CryptoObjectState::HmacActive { key, input, .. } => {
+                key.capacity().saturating_add(input.capacity())
+            }
+            CryptoObjectState::CipherActive {
+                key,
+                iv,
+                input,
+                auth_tag,
+                output_encoding,
+                output_remainder,
+                ..
+            } => key
+                .capacity()
+                .saturating_add(iv.capacity())
+                .saturating_add(input.capacity())
+                .saturating_add(auth_tag.as_ref().map_or(0, |tag| tag.capacity()))
+                .saturating_add(output_encoding.as_ref().map_or(0, String::capacity))
+                .saturating_add(output_remainder.capacity()),
+            CryptoObjectState::CipherFinalized { auth_tag, .. } => {
+                auth_tag.as_ref().map_or(0, |tag| tag.capacity())
+            }
+            CryptoObjectState::HashFinalized { .. } | CryptoObjectState::HmacFinalized { .. } => 0,
+        };
+        CRYPTO_STATE_BASE_BYTES
+            .saturating_add(MEMORY_ESTIMATE_MAP_ENTRY_BYTES)
+            .saturating_add(u64::try_from(dynamic_bytes).unwrap_or(u64::MAX))
+            .saturating_add(Self::estimate_label_bytes(state.lifecycle_label()))
+    }
+
+    fn crypto_objects_memory_bytes(&self) -> u64 {
+        Self::saturating_sum(
+            self.crypto_objects
+                .values()
+                .map(Self::estimate_crypto_object_state_bytes),
+        )
+    }
+
     fn readable_from_streams_memory_bytes(&self) -> u64 {
         Self::saturating_sum(
             self.readable_from_streams
@@ -55454,6 +58311,7 @@ impl InterpreterCore {
             .saturating_add(self.url_objects_memory_bytes())
             .saturating_add(self.url_search_params_memory_bytes())
             .saturating_add(self.cluster_facades_memory_bytes())
+            .saturating_add(self.crypto_objects_memory_bytes())
             .saturating_add(self.stream_pipelines_memory_bytes())
             .saturating_add(self.readable_from_streams_memory_bytes())
             .saturating_add(Self::saturating_sum(
@@ -76257,6 +79115,854 @@ mod tests {
         InterpreterCore::new(test_quickjs_config(), "test-trace")
     }
 
+    #[test]
+    fn crypto_brand_lifecycle_label_and_memory_are_private_bd_2z157() {
+        let mut core = quickjs_test_core();
+        let forged = core
+            .alloc_object_with_properties(&[("__type", Value::str("Hash"))])
+            .expect("forged ordinary object allocation");
+        assert!(core.crypto_test_method(forged, "update").is_none());
+
+        core.write_reg(0, Value::str("sha256"))
+            .expect("seed hash algorithm");
+        let Value::Object(hash) = core
+            .crypto_create_hash(RegRange { start: 0, count: 1 })
+            .expect("create authenticated hash")
+        else {
+            panic!("createHash must return an object")
+        };
+        core.clear_pending_hostcall_result_label();
+        assert_eq!(
+            core.prototype_chain_get(hash, "update")
+                .expect("generic crypto property lookup must stay inert"),
+            Value::Undefined,
+            "authenticated crypto objects expose lifecycle methods only through finite HostCalls"
+        );
+        let update = core
+            .crypto_test_method(hash, "update")
+            .expect("authenticated hash update method");
+        assert_eq!(update.bound_object, Some(hash.0));
+
+        let classified = core
+            .alloc_buffer_from_bytes(b"classified")
+            .expect("classified input Buffer");
+        core.join_binary_storage_label(classified, &Label::Secret)
+            .expect("classify input backing");
+        core.write_reg(0, Value::Object(classified))
+            .expect("seed update input");
+        core.crypto_update(
+            Some(Value::Object(hash)),
+            &update,
+            RegRange { start: 0, count: 1 },
+        )
+        .expect("update authenticated hash");
+        assert_eq!(core.crypto_objects[&hash].lifecycle_label(), &Label::Secret);
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+    }
+
+    #[test]
+    fn crypto_object_hostcalls_revalidate_private_brand_bd_1by6p() {
+        let mut core = quickjs_test_core();
+        core.write_reg(0, Value::str("sha256"))
+            .expect("seed hash algorithm");
+        let Value::Object(hash) = core
+            .crypto_create_hash(RegRange { start: 0, count: 1 })
+            .expect("create authenticated hash")
+        else {
+            panic!("createHash must return an object")
+        };
+        core.clear_pending_hostcall_result_label();
+
+        core.write_reg(0, Value::Object(hash))
+            .expect("seed authenticated receiver");
+        core.write_reg(1, Value::str("payload"))
+            .expect("seed lifecycle input");
+        assert_eq!(
+            core.dispatch_builtin_hostcall(
+                "builtin:CryptoObjectUpdate",
+                RegRange { start: 0, count: 2 },
+                None,
+            )
+            .expect("finite lifecycle hostcall"),
+            Value::Object(hash)
+        );
+
+        let classified = core
+            .alloc_buffer_from_bytes(b"classified")
+            .expect("classified lifecycle input Buffer");
+        core.join_binary_storage_label(classified, &Label::Secret)
+            .expect("classify lifecycle input backing");
+        core.write_reg(0, Value::Object(hash))
+            .expect("seed authenticated receiver for classified update");
+        core.write_reg(1, Value::Object(classified))
+            .expect("seed classified lifecycle input");
+        core.dispatch_builtin_hostcall(
+            "builtin:CryptoObjectUpdate",
+            RegRange { start: 0, count: 2 },
+            None,
+        )
+        .expect("classified finite lifecycle update");
+        core.write_reg(0, Value::Object(hash))
+            .expect("seed authenticated receiver for ignored digest encoding");
+        core.write_reg(1, Value::Int(7))
+            .expect("seed ignored digest encoding");
+        let digest = core
+            .dispatch_builtin_hostcall(
+                "builtin:CryptoObjectDigest",
+                RegRange { start: 0, count: 2 },
+                None,
+            )
+            .expect("Node ignores a non-string hash digest encoding");
+        assert!(matches!(digest, Value::Object(_)));
+        assert_eq!(core.pending_hostcall_result_label, Some(Label::Secret));
+        core.clear_pending_hostcall_result_label();
+
+        let forged = core
+            .alloc_object_with_properties(&[("__type", Value::str("Hash"))])
+            .expect("forge ordinary object");
+        core.write_reg(0, Value::Object(forged))
+            .expect("seed forged receiver");
+        assert!(matches!(
+            core.dispatch_builtin_hostcall(
+                "builtin:CryptoObjectDigest",
+                RegRange { start: 0, count: 1 },
+                None,
+            ),
+            Err(InterpreterError::UncaughtException { .. })
+        ));
+        assert_eq!(core.pending_exception_label, Label::TopSecret);
+        core.clear_pending_exception_slot();
+
+        assert!(matches!(
+            core.dispatch_builtin_hostcall(
+                "builtin:CryptoObjectDigest",
+                RegRange { start: 0, count: 0 },
+                None,
+            ),
+            Err(InterpreterError::UncaughtException { .. })
+        ));
+        assert_eq!(core.pending_exception_label, Label::TopSecret);
+        core.clear_pending_exception_slot();
+
+        core.write_reg(0, Value::str("not-an-object"))
+            .expect("seed detached receiver");
+        assert!(matches!(
+            core.dispatch_builtin_hostcall(
+                "builtin:CryptoObjectFinal",
+                RegRange { start: 0, count: 1 },
+                None,
+            ),
+            Err(InterpreterError::UncaughtException { .. })
+        ));
+        assert_eq!(core.pending_exception_label, Label::TopSecret);
+        core.clear_pending_exception_slot();
+
+        core.write_reg(0, Value::Object(hash))
+            .expect("seed wrong-kind authenticated receiver");
+        assert!(matches!(
+            core.dispatch_builtin_hostcall(
+                "builtin:CryptoObjectFinal",
+                RegRange { start: 0, count: 1 },
+                None,
+            ),
+            Err(InterpreterError::UncaughtException { .. })
+        ));
+        assert_eq!(core.pending_exception_label, Label::TopSecret);
+        core.clear_pending_exception_slot();
+
+        core.write_reg(0, Value::str("sha256"))
+            .expect("seed HMAC algorithm");
+        core.write_reg(1, Value::str("public-key"))
+            .expect("seed HMAC key");
+        let Value::Object(hmac) = core
+            .crypto_create_hmac(RegRange { start: 0, count: 2 })
+            .expect("create authenticated HMAC")
+        else {
+            panic!("createHmac must return an object")
+        };
+        core.clear_pending_hostcall_result_label();
+        core.write_reg(0, Value::Object(hmac))
+            .expect("seed authenticated HMAC receiver");
+        assert!(matches!(
+            core.dispatch_builtin_hostcall(
+                "builtin:CryptoObjectCopy",
+                RegRange { start: 0, count: 1 },
+                None,
+            ),
+            Err(InterpreterError::UncaughtException { .. })
+        ));
+        assert_eq!(core.pending_exception_label, Label::TopSecret);
+        core.clear_pending_exception_slot();
+    }
+
+    #[test]
+    fn crypto_update_refusal_and_finalized_tombstone_are_atomic_bd_2z157() {
+        let mut core = quickjs_test_core();
+        core.write_reg(0, Value::str("sha256"))
+            .expect("seed hash algorithm");
+        let Value::Object(hash) = core
+            .crypto_create_hash(RegRange { start: 0, count: 1 })
+            .expect("create authenticated hash")
+        else {
+            panic!("createHash must return an object")
+        };
+        core.clear_pending_hostcall_result_label();
+        let update = core
+            .crypto_test_method(hash, "update")
+            .expect("authenticated update method");
+        core.write_reg(0, Value::str("too-large-for-headroom"))
+            .expect("seed refused update");
+        let before = core.crypto_objects[&hash].clone();
+        let memory_before = core.estimated_memory_bytes();
+        core.config.max_total_memory_bytes = memory_before.saturating_add(1);
+        assert!(matches!(
+            core.crypto_update(
+                Some(Value::Object(hash)),
+                &update,
+                RegRange { start: 0, count: 1 },
+            ),
+            Err(InterpreterError::MemoryBudgetExceeded { .. })
+        ));
+        assert_eq!(core.crypto_objects[&hash], before);
+        assert_eq!(core.estimated_memory_bytes(), memory_before);
+
+        core.config.max_total_memory_bytes = u64::MAX;
+        let digest = core
+            .crypto_test_method(hash, "digest")
+            .expect("authenticated digest method");
+        core.crypto_digest(
+            Some(Value::Object(hash)),
+            &digest,
+            RegRange { start: 0, count: 0 },
+        )
+        .expect("finalize hash");
+        assert!(matches!(
+            core.crypto_objects.get(&hash),
+            Some(CryptoObjectState::HashFinalized { .. })
+        ));
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+    }
+
+    #[test]
+    fn crypto_lifecycle_error_materialization_refusal_is_atomic_bd_2z157() {
+        let mut core = quickjs_test_core();
+        core.ensure_builtin_prototype("TypeError")
+            .expect("prime catchable error prototypes before the refusal");
+        core.write_reg(0, Value::str("sha256"))
+            .expect("seed hash algorithm");
+        let Value::Object(hash) = core
+            .crypto_create_hash(RegRange { start: 0, count: 1 })
+            .expect("create authenticated hash")
+        else {
+            panic!("createHash must return an object")
+        };
+        core.clear_pending_hostcall_result_label();
+        core.write_reg(0, Value::Object(hash))
+            .expect("seed lifecycle receiver");
+        core.write_reg(1, Value::Int(7))
+            .expect("seed invalid update input");
+        core.set_register_label(
+            1,
+            Label::Custom {
+                name: "crypto-label".repeat(512),
+                level: 9,
+            },
+        )
+        .expect("seed attacker-sized invocation label");
+
+        let state_before = core.crypto_objects[&hash].clone();
+        let heap_len_before = core.heap.len();
+        let memory_before = core.estimated_memory_bytes();
+        let pending_before = core.pending_exception.clone();
+        let pending_label_before = core.pending_exception_label.clone();
+        let pending_result_label_before = core.pending_hostcall_result_label.clone();
+        let instructions_before = core.instructions_executed;
+        core.config.max_total_memory_bytes =
+            memory_before.saturating_add(MEMORY_ESTIMATE_HEAP_OBJECT_BASE_BYTES);
+
+        assert!(matches!(
+            core.dispatch_builtin_hostcall(
+                "builtin:CryptoObjectUpdate",
+                RegRange { start: 0, count: 2 },
+                None,
+            ),
+            Err(InterpreterError::MemoryBudgetExceeded { .. })
+        ));
+        assert_eq!(core.crypto_objects[&hash], state_before);
+        assert_eq!(core.heap.len(), heap_len_before);
+        assert_eq!(core.estimated_memory_bytes(), memory_before);
+        assert_eq!(core.pending_exception, pending_before);
+        assert_eq!(core.pending_exception_label, pending_label_before);
+        assert_eq!(
+            core.pending_hostcall_result_label,
+            pending_result_label_before
+        );
+        assert_eq!(core.instructions_executed, instructions_before);
+    }
+
+    #[test]
+    fn crypto_cipher_update_preflights_full_output_pipeline_bd_2z157() {
+        let mut core = quickjs_test_core();
+        let key = core
+            .alloc_buffer_from_bytes(&[1; 16])
+            .expect("allocate CTR key");
+        let iv = core
+            .alloc_buffer_from_bytes(&[2; 16])
+            .expect("allocate CTR IV");
+        core.write_reg(0, Value::str("aes-128-ctr"))
+            .expect("seed CTR algorithm");
+        core.write_reg(1, Value::Object(key)).expect("seed CTR key");
+        core.write_reg(2, Value::Object(iv)).expect("seed CTR IV");
+        let Value::Object(cipher) = core
+            .crypto_create_cipher(
+                RegRange { start: 0, count: 3 },
+                CryptoCipherDirection::Encrypt,
+            )
+            .expect("create CTR cipher")
+        else {
+            panic!("createCipheriv must return an object")
+        };
+        core.clear_pending_hostcall_result_label();
+
+        let payload = core
+            .alloc_buffer_from_bytes(&[3; 1024])
+            .expect("allocate cipher payload");
+        core.write_reg(0, Value::Object(payload))
+            .expect("seed cipher payload");
+        core.write_reg(1, Value::Undefined)
+            .expect("seed default input encoding");
+        core.write_reg(2, Value::str("utf16le"))
+            .expect("seed expanding output encoding");
+        let update = core
+            .crypto_test_method(cipher, "update")
+            .expect("authenticated cipher update method");
+        let state = &core.crypto_objects[&cipher];
+        let CryptoObjectState::CipherActive {
+            key,
+            iv,
+            input,
+            auth_tag,
+            output_remainder,
+            lifecycle_label,
+            ..
+        } = state
+        else {
+            panic!("cipher must remain active")
+        };
+        let retained_state_bytes = InterpreterCore::estimate_crypto_object_state_bytes(state);
+        let next_input_bytes = u64::try_from(input.len() + 1024).expect("bounded test input");
+        let label_bytes = InterpreterCore::estimate_label_bytes(lifecycle_label);
+        let candidate_state_bytes = CRYPTO_STATE_BASE_BYTES
+            .saturating_add(MEMORY_ESTIMATE_MAP_ENTRY_BYTES)
+            .saturating_add(u64::try_from(key.capacity()).expect("bounded key"))
+            .saturating_add(u64::try_from(iv.capacity()).expect("bounded IV"))
+            .saturating_add(next_input_bytes)
+            .saturating_add(
+                auth_tag
+                    .as_ref()
+                    .map_or(0, |tag| u64::try_from(tag.capacity()).unwrap_or(u64::MAX)),
+            )
+            .saturating_add(u64::try_from(output_remainder.capacity()).expect("bounded remainder"))
+            .saturating_add(label_bytes);
+        let aggregate_peak = retained_state_bytes
+            .saturating_add(1024)
+            .saturating_add(candidate_state_bytes)
+            .saturating_add(InterpreterCore::crypto_output_pipeline_peak_bytes(
+                next_input_bytes,
+                next_input_bytes,
+                0,
+            ))
+            .saturating_add(label_bytes.saturating_mul(3));
+        let state_before = state.clone();
+        let heap_len_before = core.heap.len();
+        let memory_before = core.estimated_memory_bytes();
+        let instructions_before = core.instructions_executed;
+        core.config.max_total_memory_bytes = memory_before.saturating_add(aggregate_peak - 1);
+
+        assert!(matches!(
+            core.crypto_cipher_update(
+                Some(Value::Object(cipher)),
+                &update,
+                RegRange { start: 0, count: 3 },
+            ),
+            Err(InterpreterError::MemoryBudgetExceeded { .. })
+        ));
+        assert_eq!(core.crypto_objects[&cipher], state_before);
+        assert_eq!(core.heap.len(), heap_len_before);
+        assert_eq!(core.estimated_memory_bytes(), memory_before);
+        assert_eq!(core.instructions_executed, instructions_before);
+    }
+
+    #[test]
+    fn crypto_cipher_final_preflights_full_output_pipeline_bd_2z157() {
+        let mut core = quickjs_test_core();
+        core.config.instruction_budget = u64::MAX;
+        let key = core
+            .alloc_buffer_from_bytes(&[4; 32])
+            .expect("allocate GCM key");
+        let iv = core
+            .alloc_buffer_from_bytes(&[5; 12])
+            .expect("allocate GCM IV");
+        core.write_reg(0, Value::str("aes-256-gcm"))
+            .expect("seed GCM algorithm");
+        core.write_reg(1, Value::Object(key)).expect("seed GCM key");
+        core.write_reg(2, Value::Object(iv)).expect("seed GCM IV");
+        let Value::Object(decipher) = core
+            .crypto_create_cipher(
+                RegRange { start: 0, count: 3 },
+                CryptoCipherDirection::Decrypt,
+            )
+            .expect("create GCM decipher")
+        else {
+            panic!("createDecipheriv must return an object")
+        };
+        core.clear_pending_hostcall_result_label();
+
+        let tag = core
+            .alloc_buffer_from_bytes(&[6; 16])
+            .expect("allocate GCM tag");
+        core.write_reg(0, Value::Object(tag)).expect("seed GCM tag");
+        let set_auth_tag = core
+            .crypto_test_method(decipher, "setAuthTag")
+            .expect("authenticated setAuthTag method");
+        core.crypto_set_auth_tag(
+            Some(Value::Object(decipher)),
+            &set_auth_tag,
+            RegRange { start: 0, count: 1 },
+        )
+        .expect("install GCM tag");
+
+        let ciphertext = core
+            .alloc_buffer_from_bytes(&[7; 1024])
+            .expect("allocate GCM ciphertext");
+        core.write_reg(0, Value::Object(ciphertext))
+            .expect("seed GCM ciphertext");
+        let update = core
+            .crypto_test_method(decipher, "update")
+            .expect("authenticated decipher update method");
+        core.crypto_cipher_update(
+            Some(Value::Object(decipher)),
+            &update,
+            RegRange { start: 0, count: 1 },
+        )
+        .expect("buffer GCM ciphertext without publishing plaintext");
+        core.clear_pending_hostcall_result_label();
+
+        core.write_reg(0, Value::str("utf16le"))
+            .expect("seed expanding final encoding");
+        let final_method = core
+            .crypto_test_method(decipher, "final")
+            .expect("authenticated decipher final method");
+        let state = &core.crypto_objects[&decipher];
+        let CryptoObjectState::CipherActive {
+            input,
+            output_remainder,
+            lifecycle_label,
+            ..
+        } = state
+        else {
+            panic!("decipher must remain active")
+        };
+        let retained_state_bytes = InterpreterCore::estimate_crypto_object_state_bytes(state);
+        let transformed_bound = u64::try_from(input.len() + 16).expect("bounded test input");
+        let label_bytes = InterpreterCore::estimate_label_bytes(lifecycle_label);
+        let candidate_state_bytes = CRYPTO_STATE_BASE_BYTES
+            .saturating_add(MEMORY_ESTIMATE_MAP_ENTRY_BYTES)
+            .saturating_add(16)
+            .saturating_add(label_bytes);
+        let aggregate_peak = retained_state_bytes
+            .saturating_add(candidate_state_bytes)
+            .saturating_add(InterpreterCore::crypto_output_pipeline_peak_bytes(
+                transformed_bound,
+                transformed_bound,
+                u64::try_from(output_remainder.capacity()).expect("bounded remainder"),
+            ))
+            .saturating_add(label_bytes.saturating_mul(3));
+        let state_before = state.clone();
+        let heap_len_before = core.heap.len();
+        let memory_before = core.estimated_memory_bytes();
+        let instructions_before = core.instructions_executed;
+        core.config.max_total_memory_bytes = memory_before.saturating_add(aggregate_peak - 1);
+
+        assert!(matches!(
+            core.crypto_cipher_final(
+                Some(Value::Object(decipher)),
+                &final_method,
+                RegRange { start: 0, count: 1 },
+            ),
+            Err(InterpreterError::MemoryBudgetExceeded { .. })
+        ));
+        assert_eq!(core.crypto_objects[&decipher], state_before);
+        assert_eq!(core.heap.len(), heap_len_before);
+        assert_eq!(core.estimated_memory_bytes(), memory_before);
+        assert_eq!(core.instructions_executed, instructions_before);
+    }
+
+    #[test]
+    fn crypto_pbkdf2_rejects_iterations_above_node_i32_ceiling_bd_2z157() {
+        let mut core = quickjs_test_core();
+        core.write_reg(0, Value::str("password"))
+            .expect("seed PBKDF2 password");
+        core.write_reg(1, Value::str("salt"))
+            .expect("seed PBKDF2 salt");
+        core.write_reg(2, Value::Int(i64::from(i32::MAX) + 1))
+            .expect("seed out-of-range iteration count");
+        core.write_reg(3, Value::Int(0))
+            .expect("seed zero output length");
+        core.write_reg(4, Value::str("sha256"))
+            .expect("seed PBKDF2 digest");
+        let instructions_before = core.instructions_executed;
+
+        assert!(matches!(
+            core.crypto_pbkdf2(RegRange { start: 0, count: 5 }, false),
+            Err(InterpreterError::UncaughtException { .. })
+        ));
+        assert_eq!(core.instructions_executed, instructions_before);
+        let Value::Object(error_id) = core
+            .pending_exception
+            .clone()
+            .expect("Node-style PBKDF2 RangeError must be catchable")
+        else {
+            panic!("pending exception must be an Error object")
+        };
+        assert_eq!(
+            core.heap[error_id.0 as usize].properties.get("code"),
+            Some(&Value::str("ERR_OUT_OF_RANGE"))
+        );
+    }
+
+    #[test]
+    fn crypto_gcm_auth_tag_is_private_labeled_and_transactional_bd_2z157() {
+        let mut core = quickjs_test_core();
+        let key = core
+            .alloc_buffer_from_bytes(&[5; 32])
+            .expect("allocate GCM key");
+        let iv = core
+            .alloc_buffer_from_bytes(&[6; 12])
+            .expect("allocate GCM IV");
+        core.write_reg(0, Value::str("aes-256-gcm"))
+            .expect("seed GCM algorithm");
+        core.write_reg(1, Value::Object(key)).expect("seed GCM key");
+        core.write_reg(2, Value::Object(iv)).expect("seed GCM IV");
+        let Value::Object(decipher) = core
+            .crypto_create_cipher(
+                RegRange { start: 0, count: 3 },
+                CryptoCipherDirection::Decrypt,
+            )
+            .expect("create authenticated GCM decipher")
+        else {
+            panic!("createDecipheriv must return an object")
+        };
+        core.clear_pending_hostcall_result_label();
+
+        let classified_tag = core
+            .alloc_buffer_from_bytes(&[7; 16])
+            .expect("allocate classified GCM tag");
+        core.join_binary_storage_label(classified_tag, &Label::Secret)
+            .expect("classify GCM tag backing");
+        core.write_reg(0, Value::Object(classified_tag))
+            .expect("seed classified GCM tag");
+        let set_auth_tag = core
+            .crypto_test_method(decipher, "setAuthTag")
+            .expect("authenticated GCM setAuthTag method");
+        assert_eq!(
+            core.crypto_set_auth_tag(
+                Some(Value::Object(decipher)),
+                &set_auth_tag,
+                RegRange { start: 0, count: 1 },
+            )
+            .expect("install authenticated GCM tag"),
+            Value::Object(decipher)
+        );
+        assert!(matches!(
+            core.crypto_objects.get(&decipher),
+            Some(CryptoObjectState::CipherActive {
+                auth_tag: Some(tag),
+                lifecycle_label: Label::Secret,
+                ..
+            }) if tag.as_slice() == [7; 16]
+        ));
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+
+        assert!(matches!(
+            core.crypto_set_auth_tag(
+                Some(Value::Object(decipher)),
+                &set_auth_tag,
+                RegRange { start: 0, count: 1 },
+            ),
+            Err(InterpreterError::UncaughtException { .. })
+        ));
+        core.clear_pending_exception_slot();
+
+        core.write_reg(0, Value::str("aes-256-gcm"))
+            .expect("seed second GCM algorithm");
+        core.write_reg(1, Value::Object(key))
+            .expect("seed second GCM key");
+        core.write_reg(2, Value::Object(iv))
+            .expect("seed second GCM IV");
+        let Value::Object(refused) = core
+            .crypto_create_cipher(
+                RegRange { start: 0, count: 3 },
+                CryptoCipherDirection::Decrypt,
+            )
+            .expect("create GCM decipher for memory refusal")
+        else {
+            panic!("createDecipheriv must return an object")
+        };
+        core.clear_pending_hostcall_result_label();
+        core.write_reg(0, Value::Object(classified_tag))
+            .expect("seed refused GCM tag");
+        let refused_method = core
+            .crypto_test_method(refused, "setAuthTag")
+            .expect("second authenticated GCM setAuthTag method");
+        let before = core.crypto_objects[&refused].clone();
+        let memory_before = core.estimated_memory_bytes();
+        let retained_state_bytes =
+            InterpreterCore::estimate_crypto_object_state_bytes(&core.crypto_objects[&refused]);
+        let tag_value = Value::Object(classified_tag);
+        let obsolete_per_allocation_headroom = retained_state_bytes
+            .saturating_add(
+                core.crypto_input_allocation_bound(&tag_value, None)
+                    .expect("bound classified tag"),
+            )
+            .saturating_add(InterpreterCore::estimate_label_bytes(&Label::Secret));
+        core.config.max_total_memory_bytes =
+            memory_before.saturating_add(obsolete_per_allocation_headroom);
+        assert!(matches!(
+            core.crypto_set_auth_tag(
+                Some(Value::Object(refused)),
+                &refused_method,
+                RegRange { start: 0, count: 1 },
+            ),
+            Err(InterpreterError::MemoryBudgetExceeded { .. })
+        ));
+        assert_eq!(core.crypto_objects[&refused], before);
+        assert_eq!(core.estimated_memory_bytes(), memory_before);
+    }
+
+    #[test]
+    fn crypto_state_is_cleared_before_seed_object_ids_are_reused_bd_2z157() {
+        let mut core = quickjs_test_core();
+        let seed = core.capture_execution_seed();
+        core.write_reg(0, Value::str("sha256"))
+            .expect("seed hash algorithm");
+        core.crypto_create_hash(RegRange { start: 0, count: 1 })
+            .expect("create execution-local crypto state");
+        core.clear_pending_hostcall_result_label();
+        assert!(!core.crypto_objects.is_empty());
+
+        let previous_register_bytes = core.registers_memory_bytes();
+        let previous_heap_bytes = core.heap_memory_bytes();
+        core.reset_execution_state_from_seed(&seed)
+            .expect("restore pre-crypto execution seed");
+        core.apply_register_heap_memory_delta(previous_register_bytes, previous_heap_bytes)
+            .expect("restored seed memory accounting");
+        assert!(core.crypto_objects.is_empty());
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+    }
+
+    #[test]
+    fn crypto_kdf_validation_precedes_work_and_rejects_fractional_counts_bd_2z157() {
+        let mut core = quickjs_test_core();
+        assert!(matches!(
+            core.crypto_integer_arg(&Value::Float(Float64::new(1.5)), "iterations", false),
+            Err(InterpreterError::TypeError { .. })
+        ));
+
+        core.write_reg(0, Value::str("password"))
+            .expect("seed PBKDF2 password");
+        core.write_reg(1, Value::str("salt"))
+            .expect("seed PBKDF2 salt");
+        core.write_reg(2, Value::Int(1_000_000))
+            .expect("seed deliberately expensive iteration count");
+        core.write_reg(3, Value::Int(32))
+            .expect("seed PBKDF2 output length");
+        core.write_reg(4, Value::str("sha256"))
+            .expect("seed PBKDF2 digest");
+        core.write_reg(5, Value::Int(7))
+            .expect("seed invalid callback");
+        let instructions_before = core.instructions_executed;
+        assert!(matches!(
+            core.crypto_pbkdf2(RegRange { start: 0, count: 6 }, true),
+            Err(InterpreterError::TypeError { .. })
+        ));
+        assert_eq!(core.instructions_executed, instructions_before);
+    }
+
+    #[test]
+    fn crypto_scrypt_raw_output_length_and_full_workspace_preflight_bd_2z157() {
+        let mut core = quickjs_test_core();
+        core.config.instruction_budget = u64::MAX;
+        let options = core
+            .alloc_object_with_properties(&[
+                ("N", Value::Int(2)),
+                ("r", Value::Int(1)),
+                ("p", Value::Int(1)),
+                ("maxmem", Value::Int(4096)),
+            ])
+            .expect("allocate bounded scrypt options");
+        for (key_len, expected_len) in [(1, 1usize), (0, 0usize)] {
+            core.write_reg(0, Value::str("password"))
+                .expect("seed scrypt password");
+            core.write_reg(1, Value::str("salt"))
+                .expect("seed scrypt salt");
+            core.write_reg(2, Value::Int(key_len))
+                .expect("seed raw scrypt output length");
+            core.write_reg(3, Value::Object(options))
+                .expect("seed scrypt options");
+            let value = core
+                .crypto_scrypt_sync(RegRange { start: 0, count: 4 })
+                .expect("raw scrypt output length must not be constrained by Params metadata");
+            assert_eq!(
+                core.bytes_for_buffer_like(&value)
+                    .expect("scrypt returns a Buffer")
+                    .len(),
+                expected_len
+            );
+            core.clear_pending_hostcall_result_label();
+        }
+
+        let refused = core
+            .alloc_object_with_properties(&[
+                ("N", Value::Int(1024)),
+                ("r", Value::Int(8)),
+                ("p", Value::Int(2)),
+                ("maxmem", Value::Int(1024)),
+            ])
+            .expect("allocate maxmem-refused scrypt options");
+        core.write_reg(2, Value::Int(16))
+            .expect("seed refused output length");
+        core.write_reg(3, Value::Object(refused))
+            .expect("seed refused scrypt options");
+        let instructions_before = core.instructions_executed;
+        assert!(matches!(
+            core.crypto_scrypt_sync(RegRange { start: 0, count: 4 }),
+            Err(InterpreterError::RangeError { message }) if message.contains("maxmem")
+        ));
+        assert_eq!(core.instructions_executed, instructions_before);
+
+        let amplified = core
+            .alloc_object_with_properties(&[
+                ("N", Value::Int(2)),
+                ("r", Value::Int(1)),
+                ("p", Value::Int(40_000)),
+                ("maxmem", Value::Int(32 * 1024 * 1024)),
+            ])
+            .expect("allocate PBKDF-amplified scrypt options");
+        core.write_reg(2, Value::Int(CRYPTO_MAX_INPUT_BYTES as i64))
+            .expect("seed amplified output length");
+        core.write_reg(3, Value::Object(amplified))
+            .expect("seed amplified scrypt options");
+        let instructions_before = core.instructions_executed;
+        assert!(matches!(
+            core.crypto_scrypt_sync(RegRange { start: 0, count: 4 }),
+            Err(InterpreterError::BudgetExhausted { .. })
+        ));
+        assert_eq!(core.instructions_executed, instructions_before);
+    }
+
+    #[test]
+    fn crypto_retained_memory_uses_vector_capacity_bd_2z157() {
+        let mut input = Vec::with_capacity(128);
+        input.push(1);
+        let state = CryptoObjectState::HashActive {
+            algorithm: CryptoHashAlgorithm::Sha256,
+            input: Zeroizing::new(input),
+            lifecycle_label: Label::Public,
+        };
+        assert!(
+            InterpreterCore::estimate_crypto_object_state_bytes(&state)
+                >= CRYPTO_STATE_BASE_BYTES
+                    .saturating_add(MEMORY_ESTIMATE_MAP_ENTRY_BYTES)
+                    .saturating_add(128)
+        );
+    }
+
+    #[test]
+    fn crypto_encoded_stream_carries_incomplete_utf_units_bd_2z157() {
+        let (published, remainder) =
+            InterpreterCore::crypto_encoded_stream_chunk(&[], &[0xc0], "utf8", false);
+        assert!(published.is_empty());
+        assert_eq!(remainder.as_slice(), &[0xc0]);
+        let (published, remainder) =
+            InterpreterCore::crypto_encoded_stream_chunk(&[], &[0x3d, 0xd8], "utf16le", false);
+        assert!(published.is_empty());
+        assert_eq!(remainder.as_slice(), &[0x3d, 0xd8]);
+        let (published, remainder) =
+            InterpreterCore::crypto_encoded_stream_chunk(&remainder, &[], "utf16le", true);
+        assert_eq!(published.as_slice(), &[0x3d, 0xd8]);
+        assert!(remainder.is_empty());
+
+        let (published, remainder) = InterpreterCore::crypto_encoded_stream_chunk(
+            &[],
+            &[0x3d, 0xd8, 0x00],
+            "utf16le",
+            false,
+        );
+        assert_eq!(published.as_slice(), &[0x3d, 0xd8]);
+        assert_eq!(remainder.as_slice(), &[0x00]);
+
+        let (published, high_surrogate) =
+            InterpreterCore::crypto_encoded_stream_chunk(&[], &[0x3d, 0xd8], "utf16le", false);
+        assert!(published.is_empty());
+        let (published, high_and_odd) = InterpreterCore::crypto_encoded_stream_chunk(
+            &high_surrogate,
+            &[0x00],
+            "utf16le",
+            false,
+        );
+        assert!(published.is_empty());
+        assert_eq!(high_and_odd.as_slice(), &[0x3d, 0xd8, 0x00]);
+        let (published, remainder) =
+            InterpreterCore::crypto_encoded_stream_chunk(&high_and_odd, &[0xde], "utf16le", false);
+        assert_eq!(published.as_slice(), &[0x3d, 0xd8, 0x00, 0xde]);
+        assert!(remainder.is_empty());
+
+        let (published, odd) =
+            InterpreterCore::crypto_encoded_stream_chunk(&[], &[0x3d], "utf16le", false);
+        assert!(published.is_empty());
+        let (published, remainder) =
+            InterpreterCore::crypto_encoded_stream_chunk(&odd, &[0xd8, 0x00], "utf16le", false);
+        assert_eq!(published.as_slice(), &[0x3d, 0xd8]);
+        assert_eq!(remainder.as_slice(), &[0x00]);
+    }
+
+    #[test]
+    fn timing_safe_equal_preflights_both_temporary_copies_bd_2z157() {
+        let mut core = quickjs_test_core();
+        let left = core
+            .alloc_array_buffer_object(16)
+            .expect("allocate left timingSafeEqual input");
+        let right = core
+            .alloc_array_buffer_object(16)
+            .expect("allocate right timingSafeEqual input");
+        core.write_reg(0, Value::Object(left))
+            .expect("seed left timingSafeEqual input");
+        core.write_reg(1, Value::Object(right))
+            .expect("seed right timingSafeEqual input");
+        let retained = core.estimated_memory_bytes();
+        core.config.max_total_memory_bytes = retained
+            .saturating_add(16)
+            .saturating_add(InterpreterCore::estimate_label_bytes(&Label::Public));
+        assert!(matches!(
+            core.crypto_timing_safe_equal(RegRange { start: 0, count: 2 }),
+            Err(InterpreterError::MemoryBudgetExceeded { .. })
+        ));
+        assert_eq!(core.estimated_memory_bytes(), retained);
+    }
+
     fn lower_symbol_source_bd_n8eta_4_2(source: &str) -> Ir3Module {
         let syntax_tree = CanonicalEs2020Parser
             .parse_with_options(
@@ -83920,7 +87626,7 @@ mod tests {
             };
 
             let signature = log.sign_receipt(&receipt);
-            let mut expected_mac = Hmac::<Sha256>::new_from_slice(&key)
+            let mut expected_mac = <Hmac<Sha256> as Mac>::new_from_slice(&key)
                 .expect("operation should succeed for valid inputs");
             // bd-gn3mt: receipt_signing_message now returns Vec<u8> directly.
             expected_mac.update(&log.receipt_signing_message(&receipt));

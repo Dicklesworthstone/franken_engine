@@ -2170,8 +2170,8 @@ fn merge_logical_lines_requires_continuation(
 }
 
 /// Replace comment bytes with spaces so the line-merge and statement-segment
-/// passes never observe comment characters. Newlines are preserved (for line/
-/// column accuracy) and every blanked character emits exactly `len_utf8()`
+/// passes never observe comment characters. ECMAScript line terminators are
+/// preserved for line/column accuracy, and every blanked character emits exactly `len_utf8()`
 /// spaces, so total byte length and the byte offset of every non-comment byte
 /// are identical to the original source — spans stay accurate.
 ///
@@ -2192,9 +2192,9 @@ fn strip_comments_to_whitespace(text: &str) -> String {
     let mut chars = text.chars().peekable();
     while let Some(ch) = chars.next() {
         if in_line_comment {
-            if ch == '\n' {
+            if is_ecmascript_line_terminator(ch) {
                 in_line_comment = false;
-                out.push('\n');
+                out.push(ch);
             } else {
                 push_blanked(&mut out, ch);
             }
@@ -2206,8 +2206,8 @@ fn strip_comments_to_whitespace(text: &str) -> String {
                 push_blanked(&mut out, '*');
                 push_blanked(&mut out, '/');
                 in_block_comment = false;
-            } else if ch == '\n' {
-                out.push('\n');
+            } else if is_ecmascript_line_terminator(ch) {
+                out.push(ch);
             } else {
                 push_blanked(&mut out, ch);
             }
@@ -2289,7 +2289,7 @@ fn strip_comments_to_whitespace(text: &str) -> String {
                 last_significant = Some(ch);
                 trailing_identifier.clear();
             }
-            ch if ch.is_ascii_whitespace() => {
+            ch if ch.is_ascii_whitespace() || is_ecmascript_line_terminator(ch) => {
                 out.push(ch);
             }
             ch if ch.is_ascii_alphabetic() || ch == '_' || ch == '$' => {
@@ -2325,9 +2325,67 @@ fn push_blanked(out: &mut String, ch: char) {
     }
 }
 
+#[inline]
+fn is_ecmascript_line_terminator(ch: char) -> bool {
+    matches!(ch, '\r' | '\n' | '\u{2028}' | '\u{2029}')
+}
+
+#[derive(Debug, Clone, Copy)]
+struct PhysicalLine<'a> {
+    segment: &'a str,
+    content: &'a str,
+    terminator: &'a str,
+}
+
+fn source_line_terminator_ranges(source: &str) -> Vec<(usize, usize)> {
+    let mut ranges = Vec::new();
+    let mut chars = source.char_indices().peekable();
+    while let Some((index, ch)) = chars.next() {
+        match ch {
+            '\r' => {
+                let end = if matches!(chars.peek(), Some((_, '\n'))) {
+                    chars.next().map_or(index.saturating_add(1), |(next, ch)| {
+                        next.saturating_add(ch.len_utf8())
+                    })
+                } else {
+                    index.saturating_add(ch.len_utf8())
+                };
+                ranges.push((index, end));
+            }
+            ch if is_ecmascript_line_terminator(ch) => {
+                ranges.push((index, index.saturating_add(ch.len_utf8())));
+            }
+            _ => {}
+        }
+    }
+    ranges
+}
+
+fn physical_line_segments(source: &str) -> Vec<PhysicalLine<'_>> {
+    let mut lines = Vec::new();
+    let mut start = 0usize;
+    for (terminator_start, terminator_end) in source_line_terminator_ranges(source) {
+        lines.push(PhysicalLine {
+            segment: &source[start..terminator_end],
+            content: &source[start..terminator_start],
+            terminator: &source[terminator_start..terminator_end],
+        });
+        start = terminator_end;
+    }
+    if start < source.len() {
+        lines.push(PhysicalLine {
+            segment: &source[start..],
+            content: &source[start..],
+            terminator: "",
+        });
+    }
+    lines
+}
+
 /// Merge physical lines into logical lines by tracking brace/paren/bracket depth.
 /// When a line ends with unbalanced delimiters, subsequent lines are merged until balance.
 fn merge_logical_lines(text: &str) -> Vec<LogicalLine> {
+    let physical_lines = physical_line_segments(text);
     let mut result = Vec::with_capacity(16);
     let mut current_text = String::new();
     let mut current_byte_offset: u64 = 0;
@@ -2345,15 +2403,11 @@ fn merge_logical_lines(text: &str) -> Vec<LogicalLine> {
     let mut last_significant: Option<char> = None;
     let mut trailing_identifier = String::new();
 
-    for (line_idx, segment) in text.split_inclusive('\n').enumerate() {
+    for (line_idx, physical_line) in physical_lines.iter().copied().enumerate() {
         let line_no = (line_idx as u64).saturating_add(1);
-        let (line, line_ending) = if let Some(line) = segment.strip_suffix("\r\n") {
-            (line, "\r\n")
-        } else if let Some(line) = segment.strip_suffix('\n') {
-            (line, "\n")
-        } else {
-            (segment, "")
-        };
+        let segment = physical_line.segment;
+        let line = physical_line.content;
+        let line_ending = physical_line.terminator;
 
         if line_idx == 0 {
             let line_without_bom = line.strip_prefix('\u{feff}').unwrap_or(line);
@@ -2538,9 +2592,8 @@ fn merge_logical_lines(text: &str) -> Vec<LogicalLine> {
 
         // Preserve physical line terminators while a quoted token is open.
         // The exact string cooker must distinguish a backslash continuation
-        // (which removes the terminator) from a raw LF/CRLF (which is invalid
-        // in single- and double-quoted literals). The old synthetic space
-        // collapsed both cases and could silently change the literal value.
+        // (which removes the terminator) from a raw ECMAScript line terminator
+        // (whose validity depends on the literal grammar).
         if in_quote.is_some() && !line_ending.is_empty() {
             current_text.push_str(line_ending);
             escaped = false;
@@ -2590,7 +2643,7 @@ fn merge_logical_lines(text: &str) -> Vec<LogicalLine> {
                 text: trimmed.to_string(),
                 byte_offset: current_byte_offset,
                 start_line: current_start_line,
-                end_line: text.lines().count().max(1) as u64,
+                end_line: line_count(text),
             });
         }
     }
@@ -2817,21 +2870,12 @@ fn format_named_export_clause(names: &[String]) -> String {
 }
 
 fn line_count(source: &str) -> u64 {
-    let mut count = 1u64;
-    for byte in source.as_bytes() {
-        if *byte == b'\n' {
-            count = count.saturating_add(1);
-        }
-    }
-    count
+    (source_line_terminator_ranges(source).len() as u64).saturating_add(1)
 }
 
 fn source_end_position(source: &str, source_label: &str) -> ParseResult<(u64, u64)> {
-    let final_line_start = source
-        .as_bytes()
-        .iter()
-        .rposition(|byte| *byte == b'\n')
-        .map_or(0, |index| index.saturating_add(1));
+    let terminators = source_line_terminator_ranges(source);
+    let final_line_start = terminators.last().map_or(0, |(_, end)| *end);
     let end_column = to_u64(
         source
             .len()
@@ -2840,7 +2884,7 @@ fn source_end_position(source: &str, source_label: &str) -> ParseResult<(u64, u6
         source_label,
         None,
     )?;
-    Ok((line_count(source), end_column))
+    Ok(((terminators.len() as u64).saturating_add(1), end_column))
 }
 
 /// Strip one or more leading `label:` prefixes from a statement segment,
@@ -8717,9 +8761,9 @@ fn strip_initial_hashbang(source: &str) -> &str {
     if !source.starts_with("#!") {
         return source;
     }
-    source
-        .find('\n')
-        .map_or("", |newline| &source[newline + 1..])
+    source_line_terminator_ranges(source)
+        .first()
+        .map_or("", |(_, end)| &source[*end..])
 }
 
 fn has_use_strict_directive(source: &str) -> bool {
@@ -10524,6 +10568,56 @@ mod tests {
                 .parse(source, ParseGoal::Script)
                 .expect_err("raw LF/CRLF in a quoted literal must fail closed");
             assert_eq!(error.code, ParseErrorCode::UnsupportedSyntax, "{source:?}");
+        }
+    }
+
+    #[test]
+    fn quoted_and_template_continuations_keep_physical_positions_bd_21nbg() {
+        let parser = CanonicalEs2020Parser;
+        for terminator in ["\r", "\r\n", "\n", "\u{2028}", "\u{2029}"] {
+            let quoted_source = format!("\"a\\{terminator}b\"");
+            let quoted_tree = parser
+                .parse(quoted_source.as_str(), ParseGoal::Script)
+                .unwrap_or_else(|error| panic!("failed to parse {quoted_source:?}: {error}"));
+            assert!(matches!(
+                first_expr(&quoted_tree),
+                Expression::StringLiteral(value) if value == "ab"
+            ));
+
+            let template_source = format!("let value = `a\\{terminator}b`;{terminator}after;");
+            let template_tree = parser
+                .parse(template_source.as_str(), ParseGoal::Script)
+                .unwrap_or_else(|error| panic!("failed to parse {template_source:?}: {error}"));
+            assert_eq!(template_tree.body.len(), 2, "{template_source:?}");
+            let Statement::VariableDeclaration(declaration) = &template_tree.body[0] else {
+                panic!("expected template declaration for {template_source:?}");
+            };
+            let Some(Expression::TemplateLiteral { quasis, .. }) =
+                declaration.declarations[0].initializer.as_ref()
+            else {
+                panic!("expected template initializer for {template_source:?}");
+            };
+            assert_eq!(quasis.len(), 1, "{template_source:?}");
+            assert_eq!(
+                quasis[0],
+                format!("a\\{terminator}b"),
+                "template raw quasi must retain {terminator:?}"
+            );
+            assert_eq!(
+                template_tree.body[1].span().start_line,
+                3,
+                "{template_source:?}"
+            );
+            assert_eq!(
+                template_tree.body[1].span().start_column,
+                1,
+                "{template_source:?}"
+            );
+            assert_eq!(
+                template_tree.body[1].span().start_offset,
+                template_source.find("after").expect("after is present") as u64,
+                "{template_source:?}"
+            );
         }
     }
 
@@ -13499,6 +13593,47 @@ mod tests {
     }
 
     #[test]
+    fn line_count_recognizes_ecmascript_line_terminators_bd_21nbg() {
+        for (source, expected) in [
+            ("alpha\rbeta", 2),
+            ("alpha\r\nbeta", 2),
+            ("alpha\nbeta", 2),
+            ("alpha\u{2028}beta", 2),
+            ("alpha\u{2029}beta", 2),
+            ("alpha\r\n\u{2028}\u{2029}", 4),
+        ] {
+            assert_eq!(line_count(source), expected, "{source:?}");
+        }
+    }
+
+    #[test]
+    fn ecmascript_line_terminators_split_physical_statements_bd_21nbg() {
+        let parser = CanonicalEs2020Parser;
+        for terminator in ["\r", "\r\n", "\n", "\u{2028}", "\u{2029}"] {
+            let source = format!("first;{terminator}second;");
+            let tree = parser
+                .parse(source.as_str(), ParseGoal::Script)
+                .unwrap_or_else(|error| panic!("failed to parse {source:?}: {error}"));
+            assert_eq!(tree.body.len(), 2, "{source:?}");
+            assert_eq!(tree.body[0].span().start_line, 1, "{source:?}");
+            assert_eq!(tree.body[0].span().end_line, 1, "{source:?}");
+            assert_eq!(tree.body[1].span().start_line, 2, "{source:?}");
+            assert_eq!(tree.body[1].span().end_line, 2, "{source:?}");
+
+            let blank_line_source = format!("first;{terminator}{terminator}second;");
+            let blank_line_tree = parser
+                .parse(blank_line_source.as_str(), ParseGoal::Script)
+                .unwrap_or_else(|error| panic!("failed to parse {blank_line_source:?}: {error}"));
+            assert_eq!(blank_line_tree.body.len(), 2, "{blank_line_source:?}");
+            assert_eq!(
+                blank_line_tree.body[1].span().start_line,
+                3,
+                "{blank_line_source:?}"
+            );
+        }
+    }
+
+    #[test]
     fn syntax_tree_root_span_ends_at_eof_byte_column_bd_4tt6s() {
         let parser = CanonicalEs2020Parser;
         let cases = [
@@ -13507,6 +13642,12 @@ mod tests {
             ("alpha\n", 2, 1),
             ("alpha\r\nbeta", 2, 5),
             ("alpha\r\n", 2, 1),
+            ("alpha\rbeta", 2, 5),
+            ("alpha\r", 2, 1),
+            ("alpha\u{2028}beta", 2, 5),
+            ("alpha\u{2028}", 2, 1),
+            ("alpha\u{2029}beta", 2, 5),
+            ("alpha\u{2029}", 2, 1),
             ("'é'", 1, 5),
             ("alpha  ", 1, 8),
         ];
@@ -15325,6 +15466,55 @@ mod tests {
     }
 
     #[test]
+    fn comments_preserve_ecmascript_line_terminators_and_spans_bd_21nbg() {
+        let parser = CanonicalEs2020Parser;
+        for terminator in ["\r", "\r\n", "\n", "\u{2028}", "\u{2029}"] {
+            let line_source = format!("first; // comment{terminator}second;");
+            let stripped = strip_comments_to_whitespace(&line_source);
+            assert_eq!(stripped.len(), line_source.len(), "{line_source:?}");
+            assert!(stripped.contains(terminator), "{line_source:?}");
+            let tree = parser
+                .parse(line_source.as_str(), ParseGoal::Script)
+                .unwrap_or_else(|error| panic!("failed to parse {line_source:?}: {error}"));
+            assert_eq!(tree.body.len(), 2, "{line_source:?}");
+            assert_eq!(tree.body[1].span().start_line, 2, "{line_source:?}");
+            assert_eq!(
+                tree.body[1].span().start_offset,
+                line_source.find("second").expect("second is present") as u64,
+                "{line_source:?}"
+            );
+
+            let block_source = format!("first; /* comment{terminator}still */{terminator}second;");
+            let stripped = strip_comments_to_whitespace(&block_source);
+            assert_eq!(stripped.len(), block_source.len(), "{block_source:?}");
+            assert_eq!(
+                stripped.matches(terminator).count(),
+                block_source.matches(terminator).count(),
+                "{block_source:?}"
+            );
+            let tree = parser
+                .parse(block_source.as_str(), ParseGoal::Script)
+                .unwrap_or_else(|error| panic!("failed to parse {block_source:?}: {error}"));
+            assert_eq!(tree.body.len(), 2, "{block_source:?}");
+            assert_eq!(tree.body[1].span().start_line, 3, "{block_source:?}");
+            assert_eq!(
+                tree.body[1].span().start_offset,
+                block_source.find("second").expect("second is present") as u64,
+                "{block_source:?}"
+            );
+
+            let regex_source = format!("const value ={terminator}/a\\//;{terminator}value;");
+            let stripped = strip_comments_to_whitespace(&regex_source);
+            assert_eq!(stripped.len(), regex_source.len(), "{regex_source:?}");
+            assert!(stripped.contains("/a\\//"), "{regex_source:?}");
+            let tree = parser
+                .parse(regex_source.as_str(), ParseGoal::Script)
+                .unwrap_or_else(|error| panic!("failed to parse {regex_source:?}: {error}"));
+            assert_eq!(tree.body.len(), 2, "{regex_source:?}");
+        }
+    }
+
+    #[test]
     fn strip_comments_leaves_double_slash_inside_string_intact() {
         let src = "var u = \"http://example.com\"; // trailing\n";
         let stripped = strip_comments_to_whitespace(src);
@@ -15505,15 +15695,27 @@ process.exit(attackSucceeded ? 0 : 1);"#,
     }
 
     #[test]
-    fn parse_script_hashbang_preserves_following_strict_mode_directive() {
+    fn parse_script_hashbang_preserves_following_strict_mode_directive_bd_21nbg() {
         let parser = CanonicalEs2020Parser;
-        let err = parser
-            .parse(
-                "#! /usr/bin/env node\n\"use strict\";\nwith (obj) { x; }",
-                ParseGoal::Script,
-            )
-            .expect_err("strict-mode with should still be rejected after hashbang");
-        assert_eq!(err.code, ParseErrorCode::StrictModeWithStatement);
+        for bom in ["", "\u{FEFF}"] {
+            for terminator in ["\r", "\r\n", "\n", "\u{2028}", "\u{2029}"] {
+                let hashbang = format!("{bom}#! /usr/bin/env node{terminator}");
+                let source = format!("{hashbang}\"use strict\";{terminator}with (obj) {{ x; }}");
+                let lines = merge_logical_lines(&source);
+                assert_eq!(lines[0].byte_offset, hashbang.len() as u64, "{source:?}");
+                assert_eq!(lines[0].start_line, 2, "{source:?}");
+                assert_eq!(lines[0].text, "\"use strict\";", "{source:?}");
+
+                let err = parser
+                    .parse(source.as_str(), ParseGoal::Script)
+                    .expect_err("strict-mode with should still be rejected after hashbang");
+                assert_eq!(
+                    err.code,
+                    ParseErrorCode::StrictModeWithStatement,
+                    "{source:?}"
+                );
+            }
+        }
     }
 
     // -----------------------------------------------------------------------

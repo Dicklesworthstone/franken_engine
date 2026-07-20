@@ -317,6 +317,12 @@ fn parser_root_span_ends_at_eof_byte_column_bd_4tt6s() {
         ("alpha\n", 2, 1),
         ("alpha\r\nbeta", 2, 5),
         ("alpha\r\n", 2, 1),
+        ("alpha\rbeta", 2, 5),
+        ("alpha\r", 2, 1),
+        ("alpha\u{2028}beta", 2, 5),
+        ("alpha\u{2028}", 2, 1),
+        ("alpha\u{2029}beta", 2, 5),
+        ("alpha\u{2029}", 2, 1),
         ("'é'", 1, 5),
         ("alpha  ", 1, 8),
     ];

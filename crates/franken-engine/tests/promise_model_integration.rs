@@ -639,8 +639,8 @@ fn fulfill_triggers_all_registered_reactions() {
     store
         .fulfill(h, js_int(42), Label::Public, &mut queue)
         .unwrap();
-    // 2 .then() calls = 4 reactions (2 fulfill + 2 reject) -> 4 microtasks
-    assert_eq!(queue.pending_count(), 4);
+    // Settlement queues only the reactions for the fulfilled branch.
+    assert_eq!(queue.pending_count(), 2);
 }
 
 #[test]
@@ -1011,18 +1011,38 @@ fn rejection_with_handler_registered_before_reject_is_handled() {
 }
 
 #[test]
-fn rejection_with_only_on_fulfilled_registered_before_reject_is_unhandled() {
+fn rejection_with_only_on_fulfilled_registered_before_reject_transfers_to_result() {
     let mut store = PromiseStore::new();
     let mut queue = MicrotaskQueue::new();
-    let h = store.create();
-    store
-        .then(h, Some(ClosureHandle(0)), None, Label::Public, &mut queue)
+    let source = store.create();
+    let result = store
+        .then(
+            source,
+            Some(ClosureHandle(0)),
+            None,
+            Label::Public,
+            &mut queue,
+        )
         .unwrap();
+    assert!(store.get(source).unwrap().rejection_handled);
     store
-        .reject(h, js_str("still_unhandled"), Label::Public, &mut queue)
+        .reject(source, js_str("transferred"), Label::Public, &mut queue)
         .unwrap();
-    let unhandled = store.unhandled_rejections();
-    assert_eq!(unhandled, vec![h]);
+    assert!(store.unhandled_rejections().is_empty());
+
+    let Microtask::PromiseRejection {
+        reason,
+        result_promise,
+        label,
+    } = queue.dequeue().expect("thrower job should be queued")
+    else {
+        panic!("expected rejection propagation job");
+    };
+    assert_eq!(result_promise, result);
+    store
+        .reject(result_promise, reason, label, &mut queue)
+        .unwrap();
+    assert_eq!(store.unhandled_rejections(), vec![result]);
 }
 
 #[test]
@@ -1041,19 +1061,39 @@ fn then_on_rejected_promise_marks_as_handled() {
 }
 
 #[test]
-fn then_on_rejected_without_on_rejected_does_not_mark_handled() {
+fn then_on_rejected_without_on_rejected_transfers_to_result() {
     let mut store = PromiseStore::new();
     let mut queue = MicrotaskQueue::new();
-    let h = store.create();
+    let source = store.create();
     store
-        .reject(h, js_str("err"), Label::Public, &mut queue)
+        .reject(source, js_str("err"), Label::Public, &mut queue)
         .unwrap();
-    assert_eq!(store.unhandled_rejections(), vec![h]);
+    assert_eq!(store.unhandled_rejections(), vec![source]);
 
-    store
-        .then(h, Some(ClosureHandle(1)), None, Label::Public, &mut queue)
+    let result = store
+        .then(
+            source,
+            Some(ClosureHandle(1)),
+            None,
+            Label::Public,
+            &mut queue,
+        )
         .unwrap();
-    assert_eq!(store.unhandled_rejections(), vec![h]);
+    assert!(store.unhandled_rejections().is_empty());
+
+    let Microtask::PromiseRejection {
+        reason,
+        result_promise,
+        label,
+    } = queue.dequeue().expect("thrower job should be queued")
+    else {
+        panic!("expected rejection propagation job");
+    };
+    assert_eq!(result_promise, result);
+    store
+        .reject(result_promise, reason, label, &mut queue)
+        .unwrap();
+    assert_eq!(store.unhandled_rejections(), vec![result]);
 }
 
 #[test]

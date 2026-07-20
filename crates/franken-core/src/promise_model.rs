@@ -444,12 +444,13 @@ impl PromiseStore {
 
         let record = self.get_mut(handle)?;
         let reactions: Vec<PromiseReaction> = std::mem::take(&mut record.reactions);
-        let has_reject_handler = reactions
-            .iter()
-            .any(|r| r.kind == ReactionKind::Reject && r.handler.is_some());
+        let rejection_handled = record.rejection_handled
+            || reactions
+                .iter()
+                .any(|reaction| reaction.kind == ReactionKind::Reject);
         record.state = PromiseState::Rejected(reason.clone());
         record.label = label.clone();
-        record.rejection_handled = has_reject_handler;
+        record.rejection_handled = rejection_handled;
 
         self.witness.push(WitnessEvent::PromiseRejected {
             handle,
@@ -524,11 +525,6 @@ impl PromiseStore {
                 });
             }
             PromiseState::Rejected(reason) => {
-                // Only explicit onRejected handlers mark rejection as handled.
-                if on_rejected.is_some() {
-                    let record = self.get_mut(handle)?;
-                    record.rejection_handled = true;
-                }
                 let effective_label = settlement_label.join(&label);
                 if on_rejected.is_some() {
                     queue.enqueue(Microtask::PromiseReaction {
@@ -546,6 +542,11 @@ impl PromiseStore {
                 }
             }
         }
+
+        // PerformPromiseThen marks the source handled even when the rejection
+        // callback is the implicit thrower. In that case the queued rejection
+        // job transfers any unhandled rejection to `result_promise`.
+        self.get_mut(handle)?.rejection_handled = true;
 
         Ok(result_promise)
     }
@@ -1979,20 +1980,81 @@ mod tests {
     }
 
     #[test]
-    fn rejection_without_on_rejected_registered_before_reject_remains_unhandled() {
+    fn rejection_without_on_rejected_registered_before_reject_transfers_to_result() {
         let mut store = PromiseStore::new();
         let mut queue = MicrotaskQueue::new();
-        let h = store.create();
+        let source = store.create();
 
-        // Register only onFulfilled; this must not mark a future rejection handled.
-        store
-            .then(h, Some(ClosureHandle(7)), None, Label::Public, &mut queue)
+        let result = store
+            .then(
+                source,
+                Some(ClosureHandle(7)),
+                None,
+                Label::Public,
+                &mut queue,
+            )
             .expect("operation should succeed for valid inputs");
+        assert!(
+            store
+                .get(source)
+                .expect("source promise should remain valid")
+                .rejection_handled
+        );
         store
-            .reject(h, js_str("still_unhandled"), Label::Public, &mut queue)
+            .reject(source, js_str("transferred"), Label::Public, &mut queue)
             .expect("operation should succeed for valid inputs");
 
-        assert_eq!(store.unhandled_rejections(), vec![h]);
+        assert!(store.unhandled_rejections().is_empty());
+        let Microtask::PromiseRejection {
+            reason,
+            result_promise,
+            label,
+        } = queue.dequeue().expect("thrower job should be queued")
+        else {
+            panic!("expected rejection propagation job");
+        };
+        assert_eq!(result_promise, result);
+        store
+            .reject(result_promise, reason, label, &mut queue)
+            .expect("propagated result should reject");
+        assert_eq!(store.unhandled_rejections(), vec![result]);
+    }
+
+    #[test]
+    fn legacy_pending_then_snapshot_marks_source_handled_on_rejection() {
+        let mut store = PromiseStore::new();
+        let mut queue = MicrotaskQueue::new();
+        let source = store.create();
+        let result = store
+            .then(
+                source,
+                Some(ClosureHandle(7)),
+                None,
+                Label::Public,
+                &mut queue,
+            )
+            .expect("operation should succeed for valid inputs");
+
+        let mut wire = serde_json::to_value(&store).expect("promise store should serialize");
+        wire["promises"][source.0 as usize]["rejection_handled"] = serde_json::json!(false);
+        let mut restored: PromiseStore =
+            serde_json::from_value(wire).expect("legacy promise store should deserialize");
+        assert!(
+            !restored
+                .get(source)
+                .expect("restored source promise should remain valid")
+                .rejection_handled
+        );
+        restored
+            .reject(source, js_str("legacy"), Label::Public, &mut queue)
+            .expect("legacy pending source should reject");
+
+        assert!(restored.unhandled_rejections().is_empty());
+        assert!(matches!(
+            queue.dequeue(),
+            Some(Microtask::PromiseRejection { result_promise, .. })
+                if result_promise == result
+        ));
     }
 
     #[test]
@@ -2015,19 +2077,38 @@ mod tests {
     }
 
     #[test]
-    fn then_on_rejected_without_on_rejected_does_not_mark_handled() {
+    fn then_on_rejected_without_on_rejected_transfers_to_result() {
         let mut store = PromiseStore::new();
         let mut queue = MicrotaskQueue::new();
-        let h = store.create();
+        let source = store.create();
         store
-            .reject(h, js_str("err"), Label::Public, &mut queue)
+            .reject(source, js_str("err"), Label::Public, &mut queue)
             .expect("operation should succeed for valid inputs");
-        assert_eq!(store.unhandled_rejections(), vec![h]);
+        assert_eq!(store.unhandled_rejections(), vec![source]);
 
-        store
-            .then(h, Some(ClosureHandle(1)), None, Label::Public, &mut queue)
+        let result = store
+            .then(
+                source,
+                Some(ClosureHandle(1)),
+                None,
+                Label::Public,
+                &mut queue,
+            )
             .expect("operation should succeed for valid inputs");
-        assert_eq!(store.unhandled_rejections(), vec![h]);
+        assert!(store.unhandled_rejections().is_empty());
+        let Microtask::PromiseRejection {
+            reason,
+            result_promise,
+            label,
+        } = queue.dequeue().expect("thrower job should be queued")
+        else {
+            panic!("expected rejection propagation job");
+        };
+        assert_eq!(result_promise, result);
+        store
+            .reject(result_promise, reason, label, &mut queue)
+            .expect("propagated result should reject");
+        assert_eq!(store.unhandled_rejections(), vec![result]);
     }
 
     // ----- IFC label propagation -----

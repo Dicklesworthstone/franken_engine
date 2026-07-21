@@ -7313,6 +7313,7 @@ enum ReadableFromPumpPhase {
     End,
     DestroyError,
     Close,
+    SettleToArray,
 }
 
 /// Deferred result for `Readable.from(...).toArray()`. The result array is
@@ -18258,7 +18259,7 @@ impl InterpreterCore {
         let Some(state) = self.readable_from_streams.get(&object_id) else {
             return false;
         };
-        event != "data" || !state.paused
+        state.phase != ReadableFromPumpPhase::SettleToArray && (event != "data" || !state.paused)
     }
 
     fn reserve_readable_activation_pump(
@@ -18360,7 +18361,10 @@ impl InterpreterCore {
                 got: receiver.type_name().to_string(),
             });
         };
-        let is_readable = self.readable_from_streams.contains_key(&object_id);
+        let is_readable = self
+            .readable_from_streams
+            .get(&object_id)
+            .is_some_and(|state| state.phase != ReadableFromPumpPhase::SettleToArray);
         if !is_readable {
             return Err(InterpreterError::TypeError {
                 expected: "Readable receiver".to_string(),
@@ -21064,6 +21068,52 @@ impl InterpreterCore {
         Ok(Value::Promise(promise.0))
     }
 
+    fn settle_readable_to_array_after_close(
+        &mut self,
+        object_id: ObjectId,
+    ) -> Result<(), InterpreterError> {
+        let Some(state) = self.readable_from_streams.remove(&object_id) else {
+            return Ok(());
+        };
+        debug_assert_eq!(state.phase, ReadableFromPumpPhase::SettleToArray);
+        let previous_total = self.estimated_memory_bytes;
+        let state_bytes = Self::estimate_readable_from_state_bytes(&state);
+        self.estimated_memory_bytes = self.estimated_memory_bytes.saturating_sub(state_bytes);
+
+        let settlement = if let Some(waiter) = state.to_array_waiter.as_ref() {
+            if state.destroy_requested {
+                self.reject_promise(
+                    waiter.promise,
+                    state.destroy_error.as_ref().map_or_else(
+                        || Self::value_to_js_value(&Value::str("Premature close")),
+                        Self::value_to_js_value,
+                    ),
+                    state.lifecycle_label.join(&waiter.label),
+                )
+            } else {
+                self.fulfill_promise(
+                    waiter.promise,
+                    Self::value_to_js_value(&Value::Object(waiter.result)),
+                    waiter.label.clone(),
+                )
+            }
+        } else {
+            Ok(())
+        };
+
+        if let Err(error) = settlement {
+            self.estimated_memory_bytes = previous_total;
+            let previous = self.readable_from_streams.insert(object_id, state);
+            debug_assert!(previous.is_none());
+            debug_assert_eq!(
+                self.estimated_memory_bytes,
+                self.recompute_estimated_memory_bytes()
+            );
+            return Err(error);
+        }
+        Ok(())
+    }
+
     /// Execute one finite-readable phase without holding the stream-state or
     /// listener-table borrow across user callback re-entrancy.
     fn drive_readable_read_callback(
@@ -21415,53 +21465,31 @@ impl InterpreterCore {
                 self.mirror_readable_bool(object_id, "destroyed", true);
                 self.mirror_readable_bool(object_id, "closed", true);
                 self.detach_current_readable_pipe(object_id);
-                let (lifecycle_label, to_array_waiter, destroy_requested, destroy_error) = self
+                let lifecycle_label = self
                     .readable_from_streams
-                    .remove(&object_id)
-                    .map(|state| {
-                        self.estimated_memory_bytes = self
-                            .estimated_memory_bytes
-                            .saturating_sub(Self::estimate_readable_from_state_bytes(&state));
-                        (
-                            state.lifecycle_label,
-                            state.to_array_waiter,
-                            state.destroy_requested,
-                            state.destroy_error,
-                        )
-                    })
-                    .unwrap_or((Label::Public, None, false, None));
+                    .get(&object_id)
+                    .map(|state| state.lifecycle_label.clone())
+                    .unwrap_or(Label::Public);
+                if let Some(state) = self.readable_from_streams.get_mut(&object_id) {
+                    state.phase = ReadableFromPumpPhase::SettleToArray;
+                }
                 let emission = self.emit_event_listener_records(
                     module,
                     object_id,
                     "close",
                     Vec::new(),
-                    lifecycle_label.clone(),
+                    lifecycle_label,
                 );
                 self.clear_event_listeners(object_id, None);
                 // Promise reactions are enqueued only after every close
                 // listener has run. Even a throwing close listener must not
                 // strand the already-consumed toArray Promise.
-                let settlement = if let Some(waiter) = to_array_waiter {
-                    if destroy_requested {
-                        self.reject_promise(
-                            waiter.promise,
-                            Self::value_to_js_value(
-                                &destroy_error.unwrap_or_else(|| Value::str("Premature close")),
-                            ),
-                            lifecycle_label.join(&waiter.label),
-                        )
-                    } else {
-                        self.fulfill_promise(
-                            waiter.promise,
-                            Self::value_to_js_value(&Value::Object(waiter.result)),
-                            waiter.label,
-                        )
-                    }
-                } else {
-                    Ok(())
-                };
+                let settlement = self.settle_readable_to_array_after_close(object_id);
                 emission?;
                 settlement?;
+            }
+            ReadableFromPumpPhase::SettleToArray => {
+                self.settle_readable_to_array_after_close(object_id)?;
             }
         }
         Ok(())
@@ -75351,6 +75379,229 @@ mod async_runtime_tests_current {
             core.estimated_memory_bytes(),
             core.recompute_estimated_memory_bytes()
         );
+    }
+
+    #[test]
+    fn readable_to_array_terminal_settlement_is_transactional_bd_33wvn() {
+        let module = test_module_with_functions(
+            vec![Ir3Instruction::Throw { value: 0 }],
+            vec![Ir3FunctionDesc {
+                entry: 0,
+                arity: 0,
+                frame_size: 1,
+                name: Some("unexpected_second_close".to_string()),
+                is_generator: false,
+                rest_param_index: None,
+            }],
+        );
+
+        for destroy_requested in [false, true] {
+            let fixture = || {
+                let mut core = test_interpreter();
+                let source = core
+                    .alloc_array_from_values(&[Value::str("terminal item")])
+                    .expect("toArray source");
+                core.write_reg(0, Value::Object(source))
+                    .expect("source register");
+                let Value::Object(readable) = core
+                    .construct_readable_from(RegRange { start: 0, count: 1 })
+                    .expect("finite Readable")
+                else {
+                    panic!("Readable.from must return an object");
+                };
+                let Value::Promise(promise_id) = core
+                    .readable_to_array(Value::Object(readable))
+                    .expect("toArray Promise")
+                else {
+                    panic!("toArray must return a Promise");
+                };
+                let promise = crate::promise_model::PromiseHandle(promise_id);
+
+                if destroy_requested {
+                    core.readable_destroy(Value::Object(readable), RegRange { start: 0, count: 0 })
+                        .expect("destroy pending toArray");
+                } else {
+                    core.drive_readable_from_pump(readable, Some(&module))
+                        .expect("advance toArray through end");
+                }
+
+                assert_eq!(
+                    core.readable_from_streams
+                        .get(&readable)
+                        .expect("terminal Readable state")
+                        .phase,
+                    ReadableFromPumpPhase::Close
+                );
+                assert_eq!(core.pending_readable_from_pumps.len(), 1);
+                assert_eq!(
+                    core.estimated_memory_bytes(),
+                    core.recompute_estimated_memory_bytes()
+                );
+                (core, readable, promise)
+            };
+
+            let drive_scheduled_close = |core: &mut InterpreterCore| {
+                let previous_promise_bytes = core.promise_runtime_memory_bytes();
+                let macrotask = core
+                    .event_loop
+                    .turn()
+                    .macrotask
+                    .expect("scheduled close pump");
+                let transferred_bytes = core.begin_promise_task_transfer(previous_promise_bytes);
+                let result = core.execute_macrotask_callback(&macrotask, Some(&module));
+                core.finish_promise_task_transfer(transferred_bytes);
+                result
+            };
+
+            let assert_settled =
+                |core: &InterpreterCore, promise: crate::promise_model::PromiseHandle| {
+                    let state = &core
+                        .promise_store
+                        .get(promise)
+                        .expect("toArray Promise record")
+                        .state;
+                    if destroy_requested {
+                        assert!(matches!(
+                            state,
+                            crate::promise_model::PromiseState::Rejected(
+                                crate::object_model::JsValue::Str(reason)
+                            ) if reason == "Premature close"
+                        ));
+                    } else {
+                        assert!(matches!(
+                            state,
+                            crate::promise_model::PromiseState::Fulfilled(
+                                crate::object_model::JsValue::Object(_)
+                            )
+                        ));
+                    }
+                };
+
+            let (mut ceiling_probe, probe_readable, probe_promise) = fixture();
+            ceiling_probe.config.max_total_memory_bytes = 0;
+            let exact_terminal_bytes = match drive_scheduled_close(&mut ceiling_probe) {
+                Err(InterpreterError::MemoryBudgetExceeded {
+                    requested_bytes,
+                    max_bytes: 0,
+                    ..
+                }) => requested_bytes,
+                other => panic!("settlement ceiling probe returned {other:?}"),
+            };
+            assert!(exact_terminal_bytes > 0);
+            assert!(matches!(
+                ceiling_probe
+                    .promise_store
+                    .get(probe_promise)
+                    .expect("ceiling-probe Promise survives")
+                    .state,
+                crate::promise_model::PromiseState::Pending
+            ));
+            assert_eq!(
+                ceiling_probe
+                    .readable_from_streams
+                    .get(&probe_readable)
+                    .expect("ceiling probe retains terminal owner")
+                    .phase,
+                ReadableFromPumpPhase::SettleToArray
+            );
+            assert!(ceiling_probe.pending_readable_from_pumps.is_empty());
+            assert!(ceiling_probe.readable_pump_reservations.is_empty());
+            assert_eq!(
+                ceiling_probe.estimated_memory_bytes(),
+                ceiling_probe.recompute_estimated_memory_bytes()
+            );
+
+            let (mut refused, refused_readable, refused_promise) = fixture();
+            refused.config.max_total_memory_bytes = exact_terminal_bytes.saturating_sub(1);
+            match drive_scheduled_close(&mut refused) {
+                Err(InterpreterError::MemoryBudgetExceeded {
+                    requested_bytes,
+                    max_bytes,
+                    ..
+                }) => {
+                    assert_eq!(requested_bytes, exact_terminal_bytes);
+                    assert_eq!(max_bytes, exact_terminal_bytes - 1);
+                }
+                other => panic!("one-byte-short settlement returned {other:?}"),
+            }
+            assert!(matches!(
+                refused
+                    .promise_store
+                    .get(refused_promise)
+                    .expect("refused toArray Promise survives")
+                    .state,
+                crate::promise_model::PromiseState::Pending
+            ));
+            let retained = refused
+                .readable_from_streams
+                .get(&refused_readable)
+                .expect("refused settlement retains terminal ownership");
+            assert_eq!(retained.phase, ReadableFromPumpPhase::SettleToArray);
+            assert!(retained.to_array_waiter.is_some());
+            assert!(refused.pending_readable_from_pumps.is_empty());
+            assert!(refused.readable_pump_reservations.is_empty());
+            assert!(
+                refused
+                    .readable_receiver_id(Value::Object(refused_readable))
+                    .is_err()
+            );
+            assert!(!refused.readable_activation_applies(refused_readable, "data"));
+            assert_eq!(
+                refused.estimated_memory_bytes(),
+                refused.recompute_estimated_memory_bytes()
+            );
+
+            refused.config.max_total_memory_bytes = DEFAULT_QUICKJS_MAX_TOTAL_MEMORY_BYTES;
+            refused
+                .insert_event_listener(
+                    refused_readable,
+                    "close",
+                    EventListenerRecord {
+                        listener: Value::Function(0),
+                        once: false,
+                    },
+                    false,
+                )
+                .expect("post-close listener registration");
+            refused
+                .drive_readable_from_pump(refused_readable, Some(&module))
+                .expect("retry only terminal settlement");
+            assert_settled(&refused, refused_promise);
+            assert!(
+                !refused
+                    .readable_from_streams
+                    .contains_key(&refused_readable)
+            );
+            assert!(refused.pending_readable_from_pumps.is_empty());
+            assert!(refused.readable_pump_reservations.is_empty());
+            assert_eq!(
+                refused
+                    .event_listeners
+                    .get(&refused_readable)
+                    .and_then(|events| events.get("close"))
+                    .map(Vec::len),
+                Some(1),
+                "settlement retry must not emit or clear close again"
+            );
+            refused.clear_event_listeners(refused_readable, None);
+            assert_eq!(
+                refused.estimated_memory_bytes(),
+                refused.recompute_estimated_memory_bytes()
+            );
+
+            let (mut exact, exact_readable, exact_promise) = fixture();
+            exact.config.max_total_memory_bytes = exact_terminal_bytes;
+            drive_scheduled_close(&mut exact).expect("terminal settlement at the exact ceiling");
+            assert_settled(&exact, exact_promise);
+            assert!(!exact.readable_from_streams.contains_key(&exact_readable));
+            assert!(exact.pending_readable_from_pumps.is_empty());
+            assert!(exact.readable_pump_reservations.is_empty());
+            assert!(exact.estimated_memory_bytes() <= exact_terminal_bytes);
+            assert_eq!(
+                exact.estimated_memory_bytes(),
+                exact.recompute_estimated_memory_bytes()
+            );
+        }
     }
 
     #[test]

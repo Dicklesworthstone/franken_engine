@@ -2108,9 +2108,93 @@ impl<'a> ParseExecutionContext<'a> {
 /// A logical line that may span multiple physical lines (for block statements).
 struct LogicalLine {
     text: String,
+    /// Maps every byte boundary in `text` back to the corresponding byte
+    /// boundary in the physical source. Normalized separator spaces can span
+    /// an arbitrary physical gap, so offsets cannot be reconstructed from
+    /// `byte_offset` alone.
+    source_boundaries: Vec<usize>,
     byte_offset: u64,
     start_line: u64,
     end_line: u64,
+}
+
+impl LogicalLine {
+    fn source_offset_at(&self, logical_offset: usize) -> usize {
+        *self
+            .source_boundaries
+            .get(logical_offset)
+            .expect("logical-line boundary map covers normalized text")
+    }
+}
+
+fn append_source_fragment(
+    logical_text: &mut String,
+    source_boundaries: &mut Vec<usize>,
+    fragment: &str,
+    source_start: usize,
+) {
+    if source_boundaries.is_empty() {
+        debug_assert!(logical_text.is_empty());
+        source_boundaries.push(source_start);
+    } else {
+        debug_assert_eq!(
+            source_boundaries.len(),
+            logical_text.len().saturating_add(1)
+        );
+        debug_assert_eq!(source_boundaries.last().copied(), Some(source_start));
+    }
+
+    logical_text.push_str(fragment);
+    source_boundaries
+        .extend((1..=fragment.len()).map(|length| source_start.saturating_add(length)));
+    debug_assert_eq!(
+        source_boundaries.len(),
+        logical_text.len().saturating_add(1)
+    );
+}
+
+fn append_normalized_separator(
+    logical_text: &mut String,
+    source_boundaries: &mut Vec<usize>,
+    following_source_offset: usize,
+) {
+    debug_assert_eq!(
+        source_boundaries.len(),
+        logical_text.len().saturating_add(1)
+    );
+    debug_assert!(
+        source_boundaries
+            .last()
+            .is_some_and(|offset| *offset <= following_source_offset)
+    );
+    logical_text.push(' ');
+    source_boundaries.push(following_source_offset);
+}
+
+fn logical_line_from_buffer(
+    text: &str,
+    source_boundaries: &[usize],
+    start_line: u64,
+    end_line: u64,
+) -> Option<LogicalLine> {
+    debug_assert_eq!(source_boundaries.len(), text.len().saturating_add(1));
+    let leading = text.len().saturating_sub(text.trim_start().len());
+    let trimmed_end = text.trim_end().len();
+    if trimmed_end <= leading {
+        return None;
+    }
+
+    let text = text[leading..trimmed_end].to_string();
+    let source_boundaries = source_boundaries[leading..=trimmed_end].to_vec();
+    let byte_offset = source_boundaries[0] as u64;
+    debug_assert_eq!(source_boundaries.len(), text.len().saturating_add(1));
+    Some(LogicalLine {
+        text,
+        source_boundaries,
+        byte_offset,
+        start_line,
+        end_line,
+    })
 }
 
 fn merge_logical_lines_keyword_allows_regex(identifier: &str) -> bool {
@@ -2361,6 +2445,20 @@ fn source_line_terminator_ranges(source: &str) -> Vec<(usize, usize)> {
     ranges
 }
 
+fn source_position_at_offset(
+    source_offset: usize,
+    line_terminators: &[(usize, usize)],
+) -> (u64, u64) {
+    let completed_lines = line_terminators.partition_point(|(_, end)| *end <= source_offset);
+    let line_start = completed_lines
+        .checked_sub(1)
+        .map_or(0, |previous| line_terminators[previous].1);
+    (
+        completed_lines.saturating_add(1) as u64,
+        source_offset.saturating_sub(line_start).saturating_add(1) as u64,
+    )
+}
+
 fn physical_line_segments(source: &str) -> Vec<PhysicalLine<'_>> {
     let mut lines = Vec::new();
     let mut start = 0usize;
@@ -2388,9 +2486,9 @@ fn merge_logical_lines(text: &str) -> Vec<LogicalLine> {
     let physical_lines = physical_line_segments(text);
     let mut result = Vec::with_capacity(16);
     let mut current_text = String::new();
-    let mut current_byte_offset: u64 = 0;
+    let mut current_source_boundaries = Vec::new();
     let mut current_start_line: u64 = 0;
-    let mut byte_offset: u64 = 0;
+    let mut byte_offset: usize = 0;
     let mut brace_depth: i64 = 0;
     let mut paren_depth: i64 = 0;
     let mut bracket_depth: i64 = 0;
@@ -2412,7 +2510,7 @@ fn merge_logical_lines(text: &str) -> Vec<LogicalLine> {
         if line_idx == 0 {
             let line_without_bom = line.strip_prefix('\u{feff}').unwrap_or(line);
             if line_without_bom.starts_with("#!") {
-                byte_offset = byte_offset.saturating_add(segment.len() as u64);
+                byte_offset = byte_offset.saturating_add(segment.len());
                 continue;
             }
         }
@@ -2437,33 +2535,65 @@ fn merge_logical_lines(text: &str) -> Vec<LogicalLine> {
                     .is_some_and(|prev: &LogicalLine| !prev.text.ends_with(';'));
             if dot_continues_previous {
                 let prev = result.pop().expect("checked non-empty above");
-                current_text.clear();
-                current_text.push_str(&prev.text);
-                current_text.push(' ');
-                current_text.push_str(trimmed_line);
-                current_byte_offset = prev.byte_offset;
+                current_text = prev.text;
+                current_source_boundaries = prev.source_boundaries;
+                let leading = line.len().saturating_sub(trimmed_line.len());
+                let trimmed_source_offset = byte_offset.saturating_add(leading);
+                append_normalized_separator(
+                    &mut current_text,
+                    &mut current_source_boundaries,
+                    trimmed_source_offset,
+                );
+                append_source_fragment(
+                    &mut current_text,
+                    &mut current_source_boundaries,
+                    trimmed_line,
+                    trimmed_source_offset,
+                );
                 current_start_line = prev.start_line;
                 last_significant = None;
                 trailing_identifier.clear();
             } else {
                 current_text.clear();
-                current_byte_offset = byte_offset;
+                current_source_boundaries.clear();
                 current_start_line = line_no;
                 last_significant = None;
                 trailing_identifier.clear();
-                current_text.push_str(line);
+                append_source_fragment(
+                    &mut current_text,
+                    &mut current_source_boundaries,
+                    line,
+                    byte_offset,
+                );
             }
         } else {
             if in_quote.is_some() {
-                current_text.push_str(line);
+                append_source_fragment(
+                    &mut current_text,
+                    &mut current_source_boundaries,
+                    line,
+                    byte_offset,
+                );
             } else {
                 let preserve_leading_whitespace = in_block_comment || in_regex_literal;
-                current_text.push(' ');
-                if preserve_leading_whitespace {
-                    current_text.push_str(line);
+                let (fragment, fragment_source_offset) = if preserve_leading_whitespace {
+                    (line, byte_offset)
                 } else {
-                    current_text.push_str(line.trim_start());
-                }
+                    let fragment = line.trim_start();
+                    let leading = line.len().saturating_sub(fragment.len());
+                    (fragment, byte_offset.saturating_add(leading))
+                };
+                append_normalized_separator(
+                    &mut current_text,
+                    &mut current_source_boundaries,
+                    fragment_source_offset,
+                );
+                append_source_fragment(
+                    &mut current_text,
+                    &mut current_source_boundaries,
+                    fragment,
+                    fragment_source_offset,
+                );
             }
         }
 
@@ -2595,11 +2725,16 @@ fn merge_logical_lines(text: &str) -> Vec<LogicalLine> {
         // (which removes the terminator) from a raw ECMAScript line terminator
         // (whose validity depends on the literal grammar).
         if in_quote.is_some() && !line_ending.is_empty() {
-            current_text.push_str(line_ending);
+            append_source_fragment(
+                &mut current_text,
+                &mut current_source_boundaries,
+                line_ending,
+                byte_offset.saturating_add(line.len()),
+            );
             escaped = false;
         }
 
-        byte_offset = byte_offset.saturating_add(segment.len() as u64);
+        byte_offset = byte_offset.saturating_add(segment.len());
 
         let balanced = brace_depth <= 0
             && paren_depth <= 0
@@ -2613,14 +2748,13 @@ fn merge_logical_lines(text: &str) -> Vec<LogicalLine> {
                 trailing_identifier.as_str(),
             )
         {
-            let trimmed = current_text.trim();
-            if !trimmed.is_empty() {
-                result.push(LogicalLine {
-                    text: trimmed.to_string(),
-                    byte_offset: current_byte_offset,
-                    start_line: current_start_line,
-                    end_line: line_no,
-                });
+            if let Some(logical_line) = logical_line_from_buffer(
+                &current_text,
+                &current_source_boundaries,
+                current_start_line,
+                line_no,
+            ) {
+                result.push(logical_line);
             }
             brace_depth = 0;
             paren_depth = 0;
@@ -2636,16 +2770,15 @@ fn merge_logical_lines(text: &str) -> Vec<LogicalLine> {
         }
     }
 
-    if accumulating {
-        let trimmed = current_text.trim();
-        if !trimmed.is_empty() {
-            result.push(LogicalLine {
-                text: trimmed.to_string(),
-                byte_offset: current_byte_offset,
-                start_line: current_start_line,
-                end_line: line_count(text),
-            });
-        }
+    if accumulating
+        && let Some(logical_line) = logical_line_from_buffer(
+            &current_text,
+            &current_source_boundaries,
+            current_start_line,
+            line_count(text),
+        )
+    {
+        result.push(logical_line);
     }
 
     result
@@ -2707,22 +2840,32 @@ fn parse_source(
 
     let stripped = strip_comments_to_whitespace(text);
     let logical_lines = merge_logical_lines(&stripped);
+    let source_line_terminators = source_line_terminator_ranges(text);
     let mut statements = Vec::with_capacity(8);
     context.strict_mode |= has_use_strict_directive(&stripped);
 
     for logical_line in &logical_lines {
+        debug_assert_eq!(
+            logical_line.byte_offset,
+            logical_line.source_offset_at(0) as u64
+        );
+        debug_assert!(logical_line.start_line <= logical_line.end_line);
         for (start_in_line, end_in_line, statement_text) in
             split_statement_segments(&logical_line.text)
         {
+            let start_offset = logical_line.source_offset_at(start_in_line);
+            let end_offset = logical_line.source_offset_at(end_in_line);
+            let (start_line, start_column) =
+                source_position_at_offset(start_offset, &source_line_terminators);
+            let (end_line, end_column) =
+                source_position_at_offset(end_offset, &source_line_terminators);
             let span = SourceSpan::new(
-                logical_line
-                    .byte_offset
-                    .saturating_add(start_in_line as u64),
-                logical_line.byte_offset.saturating_add(end_in_line as u64),
-                logical_line.start_line,
-                start_in_line.saturating_add(1) as u64,
-                logical_line.end_line,
-                end_in_line.saturating_add(1) as u64,
+                start_offset as u64,
+                end_offset as u64,
+                start_line,
+                start_column,
+                end_line,
+                end_column,
             );
             statements.extend(parse_module_statement_segment(
                 statement_text,
@@ -13630,6 +13773,159 @@ mod tests {
                 3,
                 "{blank_line_source:?}"
             );
+        }
+    }
+
+    #[test]
+    fn normalized_logical_lines_map_spans_to_physical_source_bd_crph5() {
+        let parser = CanonicalEs2020Parser;
+        for terminator in ["\r", "\r\n", "\n", "\u{2028}", "\u{2029}"] {
+            let source = format!("call({terminator}  value{terminator});  after;");
+            let tree = parser
+                .parse(source.as_str(), ParseGoal::Script)
+                .unwrap_or_else(|error| panic!("failed to parse {source:?}: {error}"));
+            assert_eq!(tree.body.len(), 2, "{source:?}");
+
+            let call_span = tree.body[0].span();
+            assert_eq!(call_span.start_offset, 0, "{source:?}");
+            assert_eq!(
+                call_span.end_offset,
+                source.find(';').expect("call terminator is present") as u64,
+                "{source:?}"
+            );
+            assert_eq!(call_span.start_line, 1, "{source:?}");
+            assert_eq!(call_span.start_column, 1, "{source:?}");
+            assert_eq!(call_span.end_line, 3, "{source:?}");
+            assert_eq!(call_span.end_column, 2, "{source:?}");
+
+            let after_offset = source.find("after").expect("after is present") as u64;
+            let after_span = tree.body[1].span();
+            assert_eq!(after_span.start_offset, after_offset, "{source:?}");
+            assert_eq!(after_span.end_offset, after_offset + 5, "{source:?}");
+            assert_eq!(after_span.start_line, 3, "{source:?}");
+            assert_eq!(after_span.start_column, 5, "{source:?}");
+            assert_eq!(after_span.end_line, 3, "{source:?}");
+            assert_eq!(after_span.end_column, 10, "{source:?}");
+        }
+    }
+
+    #[test]
+    fn leading_dot_continuation_maps_across_trivia_gap_bd_crph5() {
+        let parser = CanonicalEs2020Parser;
+        let source = "value\n// gap\n  .method();\n  after;";
+        let tree = parser
+            .parse(source, ParseGoal::Script)
+            .unwrap_or_else(|error| panic!("failed to parse {source:?}: {error}"));
+        assert_eq!(tree.body.len(), 2);
+
+        let chained_span = tree.body[0].span();
+        assert_eq!(chained_span.start_offset, 0);
+        assert_eq!(
+            chained_span.end_offset,
+            source.find(';').expect("chain terminator is present") as u64
+        );
+        assert_eq!(chained_span.start_line, 1);
+        assert_eq!(chained_span.start_column, 1);
+        assert_eq!(chained_span.end_line, 3);
+        assert_eq!(chained_span.end_column, 12);
+
+        let after_offset = source.find("after").expect("after is present") as u64;
+        let after_span = tree.body[1].span();
+        assert_eq!(after_span.start_offset, after_offset);
+        assert_eq!(after_span.end_offset, after_offset + 5);
+        assert_eq!(after_span.start_line, 4);
+        assert_eq!(after_span.start_column, 3);
+        assert_eq!(after_span.end_line, 4);
+        assert_eq!(after_span.end_column, 8);
+    }
+
+    #[test]
+    fn comment_gaps_and_multiline_blocks_map_physical_spans_bd_crph5() {
+        let parser = CanonicalEs2020Parser;
+        for terminator in ["\r", "\r\n", "\n", "\u{2028}", "\u{2029}"] {
+            let source = format!(
+                "  first; // trailing é{terminator}{terminator}if (ready) {{{terminator}  work();{terminator}}}{terminator}  after;"
+            );
+            let tree = parser
+                .parse(source.as_str(), ParseGoal::Script)
+                .unwrap_or_else(|error| panic!("failed to parse {source:?}: {error}"));
+            assert_eq!(tree.body.len(), 3, "{source:?}");
+
+            let first_span = tree.body[0].span();
+            assert_eq!(first_span.start_offset, 2, "{source:?}");
+            assert_eq!(first_span.end_offset, 7, "{source:?}");
+            assert_eq!(first_span.start_line, 1, "{source:?}");
+            assert_eq!(first_span.start_column, 3, "{source:?}");
+            assert_eq!(first_span.end_line, 1, "{source:?}");
+            assert_eq!(first_span.end_column, 8, "{source:?}");
+
+            let block_start = source.find("if").expect("block start is present") as u64;
+            let block_end = source.find('}').expect("block end is present") as u64 + 1;
+            let block_span = tree.body[1].span();
+            assert_eq!(block_span.start_offset, block_start, "{source:?}");
+            assert_eq!(block_span.end_offset, block_end, "{source:?}");
+            assert_eq!(block_span.start_line, 3, "{source:?}");
+            assert_eq!(block_span.start_column, 1, "{source:?}");
+            assert_eq!(block_span.end_line, 5, "{source:?}");
+            assert_eq!(block_span.end_column, 2, "{source:?}");
+
+            let after_offset = source.find("after").expect("after is present") as u64;
+            let after_span = tree.body[2].span();
+            assert_eq!(after_span.start_offset, after_offset, "{source:?}");
+            assert_eq!(after_span.end_offset, after_offset + 5, "{source:?}");
+            assert_eq!(after_span.start_line, 6, "{source:?}");
+            assert_eq!(after_span.start_column, 3, "{source:?}");
+            assert_eq!(after_span.end_line, 6, "{source:?}");
+            assert_eq!(after_span.end_column, 8, "{source:?}");
+        }
+    }
+
+    #[test]
+    fn quoted_multiline_spans_and_boundary_maps_remain_exact_bd_crph5() {
+        let parser = CanonicalEs2020Parser;
+        for terminator in ["\r", "\r\n", "\n", "\u{2028}", "\u{2029}"] {
+            let source = format!("const value = `a{terminator}b`;  next;");
+            let tree = parser
+                .parse(source.as_str(), ParseGoal::Script)
+                .unwrap_or_else(|error| panic!("failed to parse {source:?}: {error}"));
+            assert_eq!(tree.body.len(), 2, "{source:?}");
+
+            let template_span = tree.body[0].span();
+            assert_eq!(template_span.start_offset, 0, "{source:?}");
+            assert_eq!(
+                template_span.end_offset,
+                source.find(';').expect("template terminator is present") as u64,
+                "{source:?}"
+            );
+            assert_eq!(template_span.start_line, 1, "{source:?}");
+            assert_eq!(template_span.start_column, 1, "{source:?}");
+            assert_eq!(template_span.end_line, 2, "{source:?}");
+            assert_eq!(template_span.end_column, 3, "{source:?}");
+
+            let next_offset = source.find("next").expect("next is present") as u64;
+            let next_span = tree.body[1].span();
+            assert_eq!(next_span.start_offset, next_offset, "{source:?}");
+            assert_eq!(next_span.end_offset, next_offset + 4, "{source:?}");
+            assert_eq!(next_span.start_line, 2, "{source:?}");
+            assert_eq!(next_span.start_column, 6, "{source:?}");
+            assert_eq!(next_span.end_line, 2, "{source:?}");
+            assert_eq!(next_span.end_column, 10, "{source:?}");
+
+            let stripped = strip_comments_to_whitespace(&source);
+            for logical_line in merge_logical_lines(&stripped) {
+                assert_eq!(
+                    logical_line.source_boundaries.len(),
+                    logical_line.text.len() + 1,
+                    "{source:?}"
+                );
+                assert!(
+                    logical_line
+                        .source_boundaries
+                        .windows(2)
+                        .all(|window| window[0] <= window[1]),
+                    "{source:?}"
+                );
+            }
         }
     }
 

@@ -22334,6 +22334,8 @@ fn ir2_catch_region_events(ir2: &Ir2Module) -> Result<CatchRegionEvents, Lowerin
 }
 
 fn hostcall_exception_is_operand_derived(capability: &str, inputs: &[FlowValue]) -> bool {
+    let all_inputs_are_closed = || inputs.iter().all(|value| value.shape.is_closed());
+
     if matches!(
         capability,
         "builtin:CryptoCreateHash"
@@ -22361,6 +22363,28 @@ fn hostcall_exception_is_operand_derived(capability: &str, inputs: &[FlowValue])
     }
 
     match capability {
+        // These product-path builtins are finite engine implementations: they
+        // neither invoke guest code nor perform accessor/coercion callbacks.
+        // Keep the closed-shape requirement because zlib also has distinct
+        // callback entry points, while zlib/console can receive objects whose
+        // transitive provenance is not summarized after escape yet. The
+        // Internal exception floor below accounts for engine failures without
+        // discarding stronger operand labels.
+        "builtin:ConsoleLog"
+        | "builtin:ConsoleError"
+        | "builtin:ConsoleWarn"
+        | "builtin:ConsoleInfo"
+        | "console:log"
+        | "console:error"
+        | "console:warn"
+        | "console:info"
+        | "builtin:ZlibGunzipSync" => all_inputs_are_closed(),
+        // These exact pure-compute entry points validate only primitive
+        // arguments. Object inputs remain fail-high because their coercion or
+        // transitive state does not yet have a complete static summary.
+        "builtin:PathJoin" | "builtin:OsSetPriority" | "builtin:Url" => inputs
+            .iter()
+            .all(|value| value.shape == FlowValueShape::Primitive),
         // These constructors are intercepted only for the unshadowed native
         // globals. Closed direct inputs cover primitive lengths/offsets,
         // engine-owned ArrayBuffers/views, and fresh array literals without
@@ -22397,7 +22421,7 @@ fn hostcall_exception_is_operand_derived(capability: &str, inputs: &[FlowValue])
 fn ir1_exception_flow_label(
     op: &Ir1Op,
     inferred_label: &Label,
-    hostcall_is_operand_derived: bool,
+    operation_exception_is_operand_derived: bool,
 ) -> Option<Label> {
     match op {
         // An explicit throw carries precisely the thrown value's provenance.
@@ -22405,7 +22429,15 @@ fn ir1_exception_flow_label(
         // Finite engine-owned hostcalls derive both results and validation
         // errors from their direct operands. Dynamic hostcalls have no such
         // closed contract and therefore remain fail-high.
-        Ir1Op::HostCall { .. } if hostcall_is_operand_derived => {
+        Ir1Op::HostCall { .. } if operation_exception_is_operand_derived => {
+            Some(Label::Internal.join(inferred_label))
+        }
+        // Unary operations over a statically primitive operand cannot invoke
+        // guest coercion. `typeof`, `void`, and logical-not are non-coercing for
+        // every operand shape. Their only exceptional outcomes are therefore
+        // engine-owned and direct-operand-derived; object/unknown operands to
+        // numeric/bitwise unary operators still fail high below.
+        Ir1Op::UnaryOp { .. } if operation_exception_is_operand_derived => {
             Some(Label::Internal.join(inferred_label))
         }
         // Named builtins are fail-high unless their exception contract is
@@ -22477,7 +22509,7 @@ fn simulate_ir2_flow_labels(
         if let Some(starting) = catch_region_starts.get(&op_index) {
             active_catch_regions.extend(starting.iter().copied());
         }
-        let mut hostcall_is_operand_derived = false;
+        let mut operation_exception_is_operand_derived = false;
         let inferred = match &op.inner {
             Ir1Op::LoadLiteral { .. } => {
                 let label = infer_data_label_for_op(&op.inner, binding_labels, Label::Public);
@@ -22617,10 +22649,26 @@ fn simulate_ir2_flow_labels(
                     });
                 }
                 let value = pop_flow_value(&mut value_stack)?;
+                let operand_is_primitive = value.shape == FlowValueShape::Primitive;
+                let operator_is_noncoercing = matches!(
+                    operator,
+                    UnaryOperator::LogicalNot | UnaryOperator::Typeof | UnaryOperator::Void
+                );
+                operation_exception_is_operand_derived =
+                    operand_is_primitive || operator_is_noncoercing;
                 let label = value.label;
-                invalidate_nonprimitive_flow_shapes(&mut value_stack);
-                invalidate_nonprimitive_binding_flow_shapes(&mut binding_flow_shapes);
-                value_stack.push(fresh_flow_value(label.clone(), &mut next_identity));
+                if !operation_exception_is_operand_derived {
+                    invalidate_nonprimitive_flow_shapes(&mut value_stack);
+                    invalidate_nonprimitive_binding_flow_shapes(&mut binding_flow_shapes);
+                }
+                // Every successful ECMAScript unary operation produces a
+                // primitive, even when a numeric/bitwise operator first runs
+                // an object coercion whose exception path must remain fail-high.
+                value_stack.push(fresh_shaped_flow_value(
+                    label.clone(),
+                    FlowValueShape::Primitive,
+                    &mut next_identity,
+                ));
                 label
             }
             Ir1Op::AssignOp {
@@ -22897,8 +22945,9 @@ fn simulate_ir2_flow_labels(
                 arg_count,
             } => {
                 let inputs = pop_flow_values(&mut value_stack, *arg_count as usize)?;
-                hostcall_is_operand_derived =
+                let hostcall_is_operand_derived =
                     hostcall_exception_is_operand_derived(capability, &inputs);
+                operation_exception_is_operand_derived = hostcall_is_operand_derived;
                 if !hostcall_is_operand_derived {
                     // Dynamic/callback-capable hostcalls can observe or mutate
                     // escaped values. Audited operand-derived hostcalls cannot,
@@ -23037,7 +23086,7 @@ fn simulate_ir2_flow_labels(
             }
         };
         if let Some(exception_label) =
-            ir1_exception_flow_label(&op.inner, &inferred, hostcall_is_operand_derived)
+            ir1_exception_flow_label(&op.inner, &inferred, operation_exception_is_operand_derived)
         {
             // The runtime routes an exception to the innermost active handler.
             // An enclosing handler is tainted only if the inner handler later
@@ -24057,6 +24106,185 @@ mod tests {
             assert_eq!(console_flow.data_label, expected_label, "{name}");
             assert_eq!(
                 console_flow.declassification_required, expected_declassification,
+                "{name}"
+            );
+        }
+    }
+
+    #[test]
+    fn product_catch_contracts_recover_only_finite_native_paths_bd_bscab() {
+        let cases = [
+            (
+                "console_literal",
+                "try { console.log('no-throw'); } catch (error) { console.log(error); }",
+                Label::Internal,
+                false,
+            ),
+            (
+                "buffer_alloc_negative",
+                "try { Buffer.alloc(-1); console.log('no-throw'); } catch (error) { console.log(error); }",
+                Label::Internal,
+                false,
+            ),
+            (
+                "os_set_priority",
+                "const os = require('os'); try { os.setPriority(0, 1000); console.log('no-throw'); } catch (error) { console.log(error); }",
+                Label::Internal,
+                false,
+            ),
+            (
+                "path_join",
+                "const path = require('path'); try { path.join('a', 1); console.log('no-throw'); } catch (error) { console.log(error); }",
+                Label::Internal,
+                false,
+            ),
+            (
+                "url_parse",
+                "try { new URL('not a url'); console.log('no-throw'); } catch (error) { console.log(error); }",
+                Label::Internal,
+                false,
+            ),
+            (
+                "zlib_gunzip_sync",
+                "const zlib = require('zlib'); try { zlib.gunzipSync(Buffer.from('not gzip')); console.log('no-throw'); } catch (error) { console.log(error); }",
+                Label::Internal,
+                false,
+            ),
+            (
+                "crypto_timing_safe_equal",
+                "const crypto = require('crypto'); try { crypto.timingSafeEqual(Buffer.from('a'), Buffer.from('ab')); console.log('no-throw'); } catch (error) { console.log(error); }",
+                Label::Internal,
+                false,
+            ),
+            (
+                "crypto_random_int",
+                "const crypto = require('crypto'); try { crypto.randomInt(5, 5); console.log('no-throw'); } catch (error) { console.log(error); }",
+                Label::Internal,
+                false,
+            ),
+            (
+                "crypto_invalid_hash",
+                "const crypto = require('crypto'); try { crypto.createHash('not-a-real-hash'); console.log('no-throw'); } catch (error) { console.log(error); }",
+                Label::Internal,
+                false,
+            ),
+            (
+                "secret_console_input",
+                "try { console.log('secret-token'); } catch (error) { console.log(error); }",
+                Label::Secret,
+                true,
+            ),
+            (
+                "unknown_console_input_stays_fail_high",
+                "const value = {}; value.changed = true; try { console.log(value); } catch (error) { console.log(error); }",
+                Label::TopSecret,
+                true,
+            ),
+            (
+                "fs_provider_error_stays_fail_high",
+                "const fs = require('fs'); try { fs.readFileSync('missing', 'utf8'); console.log('no-throw'); } catch (error) { console.log(error); }",
+                Label::TopSecret,
+                true,
+            ),
+            (
+                "buffer_instance_method_stays_fail_high",
+                "try { Buffer.from('abc').toString('bogus'); console.log('no-throw'); } catch (error) { console.log(error); }",
+                Label::TopSecret,
+                true,
+            ),
+            (
+                "url_object_input_stays_fail_high",
+                "try { new URL({}); console.log('no-throw'); } catch (error) { console.log(error); }",
+                Label::TopSecret,
+                true,
+            ),
+            (
+                "path_object_input_stays_fail_high",
+                "const path = require('path'); try { path.join({}); console.log('no-throw'); } catch (error) { console.log(error); }",
+                Label::TopSecret,
+                true,
+            ),
+            (
+                "os_object_input_stays_fail_high",
+                "const os = require('os'); try { os.setPriority({}, 1); console.log('no-throw'); } catch (error) { console.log(error); }",
+                Label::TopSecret,
+                true,
+            ),
+            (
+                "unknown_zlib_sync_input_stays_fail_high",
+                "const zlib = require('zlib'); const input = Buffer.from('not gzip'); input.changed = true; try { zlib.gunzipSync(input); console.log('no-throw'); } catch (error) { console.log(error); }",
+                Label::TopSecret,
+                true,
+            ),
+            (
+                "zlib_callback_stays_fail_high",
+                "const zlib = require('zlib'); try { zlib.gunzip(Buffer.from('not gzip'), () => {}); console.log('no-throw'); } catch (error) { console.log(error); }",
+                Label::TopSecret,
+                true,
+            ),
+            (
+                "object_unary_stays_fail_high",
+                "try { -{}; console.log('no-throw'); } catch (error) { console.log(error); }",
+                Label::TopSecret,
+                true,
+            ),
+            (
+                "object_unary_plus_stays_fail_high",
+                "try { +{}; console.log('no-throw'); } catch (error) { console.log(error); }",
+                Label::TopSecret,
+                true,
+            ),
+            (
+                "object_bitwise_not_stays_fail_high",
+                "try { ~{}; console.log('no-throw'); } catch (error) { console.log(error); }",
+                Label::TopSecret,
+                true,
+            ),
+            (
+                "noncoercing_object_unary",
+                "try { typeof {}; void {}; !{}; console.log('no-throw'); } catch (error) { console.log(error); }",
+                Label::Internal,
+                false,
+            ),
+            (
+                "primitive_numeric_unary",
+                "try { +1; ~1; console.log('no-throw'); } catch (error) { console.log(error); }",
+                Label::Internal,
+                false,
+            ),
+            (
+                "coercing_unary_result_is_primitive",
+                "const coerced = -{}; try { Buffer.from(coerced); console.log('no-throw'); } catch (error) { console.log(error); }",
+                Label::Internal,
+                false,
+            ),
+        ];
+
+        for (name, source, expected_label, expected_declassification) in cases {
+            let tree = crate::parser_api_stability::parse_script(source)
+                .unwrap_or_else(|error| panic!("parse {name}: {error}"));
+            let ir0 = Ir0Module::from_syntax_tree(tree, format!("{name}_bd_bscab.js"));
+            let ir1 = lower_ir0_to_ir1(&ir0)
+                .unwrap_or_else(|error| panic!("lower {name} to IR1: {error}"))
+                .module;
+            let ir2 = lower_ir1_to_ir2(&ir1)
+                .unwrap_or_else(|error| panic!("lower {name} to IR2: {error}"))
+                .module;
+            let catch_console_flow = ir2
+                .ops
+                .iter()
+                .rev()
+                .find(|op| {
+                    matches!(
+                        &op.inner,
+                        Ir1Op::HostCall { capability, .. } if capability == "console:log"
+                    )
+                })
+                .and_then(|op| op.flow.as_ref())
+                .unwrap_or_else(|| panic!("catch console flow for {name}"));
+            assert_eq!(catch_console_flow.data_label, expected_label, "{name}");
+            assert_eq!(
+                catch_console_flow.declassification_required, expected_declassification,
                 "{name}"
             );
         }

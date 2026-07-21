@@ -92862,16 +92862,13 @@ mod class_feature_bd_bg9l1_16_tests {
     }
 
     #[test]
-    fn computed_method_name_fails_closed_until_lowered() {
-        let err = eval_class_source(concat!(
+    fn computed_string_literal_method_name_executes() {
+        let value = eval_class_source(concat!(
             "class WithComputed { [\"answer\"](){ return 42; } }\n",
             "let value = new WithComputed(); value.answer();\n",
         ))
-        .expect_err("computed method names must fail closed until computed class methods lower");
-        assert!(
-            err.contains("computed") || err.contains("Unsupported") || err.contains("expected"),
-            "computed method rejection should be explicit, got: {err}"
-        );
+        .expect("computed string-literal method names must lower to their static property key");
+        assert_eq!(value, "42");
     }
 
     #[test]

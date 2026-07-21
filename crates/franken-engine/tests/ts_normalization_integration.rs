@@ -1601,12 +1601,10 @@ fn source_map_entry_clone_eq() {
 // ===========================================================================
 
 #[test]
-fn output_normalized_source_has_no_trailing_whitespace_lines() {
+fn output_normalized_source_preserves_internal_blank_lines_bd_88rcn() {
     let source = "const x: number = 1;\n\n\nconst y: string = 'hi';";
     let output = normalize(source).unwrap();
-    for line in output.normalized_source.lines() {
-        assert_eq!(line, line.trim(), "line should be trimmed: '{line}'");
-    }
+    assert!(output.normalized_source.contains("1;\n\n\nconst y"));
 }
 
 #[test]
@@ -3325,19 +3323,17 @@ fn enrichment_ts_normalization_error_is_std_error() {
 }
 
 #[test]
-fn enrichment_whitespace_trimming_all_lines() {
-    let source = "  const x: number = 1;  \n  const y = 2;  ";
+fn enrichment_preserves_internal_line_spacing_bd_88rcn() {
+    let source = "const x: number = 1;  \n  const y = 2;";
     let output = normalize(source).unwrap();
-    for line in output.normalized_source.lines() {
-        assert_eq!(line, line.trim());
-    }
+    assert!(output.normalized_source.contains("1;  \n  const y"));
 }
 
 #[test]
-fn enrichment_empty_lines_removed() {
+fn enrichment_preserves_empty_lines_bd_88rcn() {
     let source = "const x = 1;\n\n\n\nconst y = 2;";
     let output = normalize(source).unwrap();
-    assert!(!output.normalized_source.contains("\n\n"));
+    assert!(output.normalized_source.contains("1;\n\n\n\nconst y"));
 }
 
 #[test]

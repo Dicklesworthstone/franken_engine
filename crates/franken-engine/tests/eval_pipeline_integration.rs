@@ -206,6 +206,34 @@ fn quickjs_eval_normalizes_typescript_and_reports_source_ingestion() {
 }
 
 #[test]
+fn typescript_eval_preserves_multiline_template_interpolation_bd_88rcn() {
+    let source = "const label: string = \"x\";\nconst value: string = `\n  alpha ${label}\n\n    beta\n`; value;";
+    let expected = "\n  alpha x\n\n    beta\n";
+
+    let mut quickjs = QuickJsInspiredNativeEngine;
+    let quickjs_outcome = quickjs
+        .eval(source)
+        .expect("quickjs lane should evaluate normalized TypeScript template");
+    assert_eq!(quickjs_outcome.value, expected);
+    assert_eq!(
+        quickjs_outcome.source_ingestion.source_language,
+        SourceLanguage::TypeScript
+    );
+    assert!(quickjs_outcome.source_ingestion.normalization_applied);
+
+    let mut v8 = V8InspiredNativeEngine;
+    let v8_outcome = v8
+        .eval(source)
+        .expect("v8 lane should evaluate normalized TypeScript template");
+    assert_eq!(v8_outcome.value, expected);
+    assert_eq!(
+        v8_outcome.source_ingestion.source_language,
+        SourceLanguage::TypeScript
+    );
+    assert!(v8_outcome.source_ingestion.normalization_applied);
+}
+
+#[test]
 fn hybrid_router_eval_normalizes_typescript_and_keeps_route_metadata() {
     let mut router = HybridRouter::default();
     let outcome = router

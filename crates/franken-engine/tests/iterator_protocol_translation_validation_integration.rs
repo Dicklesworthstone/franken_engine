@@ -7,9 +7,9 @@
 #![forbid(unsafe_code)]
 
 use frankenengine_engine::iterator_protocol_translation_validator::{
-    IterCategory, IterSource, IterStmt, IterValidationContext, LoopExit,
-    SemanticsBreakingTransform, apply_transform, faithful_lower, generate_iterator_test_programs,
-    reference_trace, target_trace,
+    CloseReason, IterCategory, IterEventKind, IterSource, IterStmt, IterValidationContext,
+    LoopExit, SemanticsBreakingTransform, apply_transform, faithful_lower,
+    generate_iterator_test_programs, reference_trace, target_trace,
 };
 
 #[test]
@@ -28,6 +28,7 @@ fn corpus_covers_all_required_categories() {
         ForOfCustom,
         ForInProtoChain,
         BreakInForOf,
+        ContinueOuterInForOf,
         ReturnInForOf,
         ThrowInForOf,
     ] {
@@ -115,6 +116,28 @@ fn throw_in_for_of_closes_then_propagates() {
     let r = IterValidationContext::faithful(src.clone()).validate();
     assert!(r.validation_successful);
     let trace = reference_trace(&src);
+    assert_eq!(trace.last().unwrap().state_after.open_iterators, 0);
+}
+
+#[test]
+fn boundary_crossing_continue_closes_then_propagates() {
+    let src = vec![IterStmt::ForOf {
+        loop_id: 10,
+        source: IterSource::Custom(4),
+        exit: LoopExit::ContinueOuterAt(1),
+    }];
+    let trace = reference_trace(&src);
+    assert!(trace.iter().any(|event| matches!(
+        event.kind,
+        IterEventKind::IteratorClose {
+            loop_id: 10,
+            reason: CloseReason::Continue
+        }
+    )));
+    assert!(matches!(
+        trace.last().map(|event| &event.kind),
+        Some(IterEventKind::ContinueOut)
+    ));
     assert_eq!(trace.last().unwrap().state_after.open_iterators, 0);
 }
 

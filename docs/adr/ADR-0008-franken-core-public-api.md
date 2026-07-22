@@ -7,7 +7,8 @@
 - Related beads: `bd-cixqu.10.6`, `bd-cixqu.10.7`, `bd-4w7h9.1`,
   `bd-4w7h9.2`, `bd-n8eta.4`, `bd-n8eta.4.1`, `bd-n8eta.4.6`,
   `bd-b12xs`, `bd-b12xs.1`, `bd-b12xs.2`, `bd-b12xs.3`,
-  `bd-b12xs.4`, `bd-b12xs.5`, `bd-b12xs.6`, `bd-f1ixz`
+  `bd-b12xs.4`, `bd-b12xs.5`, `bd-b12xs.6`, `bd-f1ixz`, `bd-g73mg`,
+  `bd-t9n3s`
 
 ## Context
 
@@ -694,6 +695,23 @@ members, methods, accessors, classes, and destructuring. Class accessor
 prefixes concatenate UTF-16 units losslessly, while function display names
 remain diagnostic strings. Well-formed-only builtin recognition does not
 determine property identity.
+
+### Engine IteratorClose reason schema checkpoint (`bd-g73mg`)
+
+The engine adds the externally tagged `IteratorCloseReason::Continue` variant
+to IR1, its IR2 wrapper, and IR3 so a labelled continue that crosses a `for..of` boundary remains
+distinct from break, return, and throw. Because an older reader cannot decode
+that new enum variant, the engine advances `IrSchemaVersion::CURRENT` from
+`0.6.0` to `0.7.0`. Engine `0.7.0` readers retain the supported historical
+engine minors, including `0.6.0`; `0.5.0` remains deliberately skipped because
+it identifies the incompatible core wire.
+
+The replay-visible iterator protocol advances independently from
+`franken-engine.iterator-protocol.v1` to `.v2` for the corresponding
+`CloseReason::Continue` variant. Neither schema change advances the unreleased
+Cargo package version. `franken-core` remains on IR `0.5.0` and does not yet
+carry the complete boundary-crossing lowering/runtime behavior; `bd-t9n3s`
+owns that explicit parity migration and its donor/oracle evidence.
 
 ## Cross-Crate Compatibility Matrix
 

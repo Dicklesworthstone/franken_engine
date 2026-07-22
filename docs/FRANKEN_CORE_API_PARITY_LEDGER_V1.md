@@ -85,6 +85,14 @@ that numeric version already identifies the incompatible core wire. The new
 engine operations preserve parser-authored strict/sloppy assignment semantics;
 they do not resolve the existing cross-seam ownership exception.
 
+`bd-g73mg` advances the engine IR again to `0.7.0` for the externally tagged
+`IteratorCloseReason::Continue` variant used by labelled continues that cross a
+`for..of` boundary. The engine iterator-protocol replay schema advances from
+`v1` to `v2` for the matching close reason. Core remains on IR `0.5.0` and its
+lowering does not yet model the complete body throw, function return, or outer
+labelled-exit close paths. `bd-t9n3s` records that explicit parity obligation;
+neither schema change settles ownership of the divergent IR/lowering rows.
+
 ## Active Parity Exception: Executable Symbol Keys
 
 `bd-n8eta.4.1` records a wire-additive but Rust-source-breaking versioned

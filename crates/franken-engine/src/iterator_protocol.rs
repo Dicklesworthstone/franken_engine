@@ -21,7 +21,9 @@ use crate::object_model::{PropertyKey, SymbolId, WellKnownSymbol};
 // Schema versioning
 // ---------------------------------------------------------------------------
 
-pub const ITERATOR_PROTOCOL_SCHEMA_VERSION: &str = "franken-engine.iterator-protocol.v1";
+/// V2 adds the replay-visible `CloseReason::Continue` used when a labelled
+/// continue crosses a `for..of` iterator boundary.
+pub const ITERATOR_PROTOCOL_SCHEMA_VERSION: &str = "franken-engine.iterator-protocol.v2";
 pub const ITERATOR_PROTOCOL_BEAD_ID: &str = "bd-1lsy.4.8.1";
 
 // ---------------------------------------------------------------------------
@@ -277,6 +279,8 @@ impl IteratorSymbolKind {
 pub enum CloseReason {
     /// `break` statement in a `for..of` loop.
     Break,
+    /// `continue` to an enclosing loop crossed this iterator.
+    Continue,
     /// `return` statement inside a `for..of` loop body.
     Return,
     /// An exception was thrown during iteration.
@@ -289,6 +293,7 @@ impl fmt::Display for CloseReason {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Break => write!(f, "break"),
+            Self::Continue => write!(f, "continue"),
             Self::Return => write!(f, "return"),
             Self::Throw => write!(f, "throw"),
             Self::DestructuringExhausted => write!(f, "destructuring_exhausted"),
@@ -827,6 +832,7 @@ mod tests {
     #[test]
     fn close_reason_display() {
         assert_eq!(CloseReason::Break.to_string(), "break");
+        assert_eq!(CloseReason::Continue.to_string(), "continue");
         assert_eq!(CloseReason::Return.to_string(), "return");
         assert_eq!(CloseReason::Throw.to_string(), "throw");
         assert_eq!(
@@ -1875,6 +1881,7 @@ mod tests {
     fn iteration_operation_close_all_reasons_serde() {
         let reasons = [
             CloseReason::Break,
+            CloseReason::Continue,
             CloseReason::Return,
             CloseReason::Throw,
             CloseReason::DestructuringExhausted,

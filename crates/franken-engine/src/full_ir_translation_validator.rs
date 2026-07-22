@@ -772,14 +772,16 @@ impl FeatureWitness {
         Ok(())
     }
 
-    /// G.6.D: every iterator acquisition (`ForOfInit`/`ForInInit`) must be matched
-    /// by an `IteratorClose` so the close obligation is discharged on every exit
-    /// path (break/return/throw). A missing close leaks the iterator.
+    /// G.6.D: every modelled abrupt `for..of` boundary (`ForOfInit`) must be
+    /// matched by an `IteratorClose`. `for..in` does not use the iterator
+    /// protocol and therefore must not contribute a close obligation. The
+    /// compact count model covers one close per crossed boundary; target-aware
+    /// nested labelled-continue behavior lives in the dedicated G.6.D model.
     fn check_iterator_close_obligation(&self) -> Result<(), String> {
         let opens = self
             .opcodes
             .iter()
-            .filter(|o| matches!(o, FeatureOpcode::ForOfInit | FeatureOpcode::ForInInit))
+            .filter(|o| matches!(o, FeatureOpcode::ForOfInit))
             .count();
         let closes = self
             .opcodes
@@ -1013,8 +1015,8 @@ fn feature_obligation_text(
             VerificationMethod::SymbolicExecution,
         ),
         FeatureClass::IteratorProtocol => (
-            "source closes the iterator on every break/return/throw exit path",
-            "lowered IR3 discharges an IteratorClose obligation for each acquisition",
+            "source closes each crossed for-of iterator on break/boundary-crossing continue/return/throw and never closes for-in",
+            "lowered IR3 discharges one IteratorClose obligation per modelled for-of boundary",
             VerificationMethod::ModelChecking,
         ),
         FeatureClass::Hostcalls => (
@@ -1070,12 +1072,18 @@ pub fn break_witness(witness: &FeatureWitness) -> FeatureWitness {
             opcodes.insert(0, FeatureOpcode::GeneratorResume);
         }
         FeatureClass::IteratorProtocol => {
-            // Drop the iterator close: the classic "optimized-away" leak.
+            // Drop a required for-of close. A for-in witness instead gains an
+            // invalid close, proving that enumeration does not use the
+            // iterator protocol.
             if let Some(pos) = opcodes
                 .iter()
                 .position(|o| matches!(o, FeatureOpcode::IteratorClose { .. }))
             {
                 opcodes.remove(pos);
+            } else {
+                opcodes.push(FeatureOpcode::IteratorClose {
+                    reason: IteratorCloseReason::Break,
+                });
             }
         }
         FeatureClass::Hostcalls => {
@@ -1110,7 +1118,8 @@ pub fn break_witness(witness: &FeatureWitness) -> FeatureWitness {
 /// Produces ≥50 programs spread across all six G.6 sub-tracks, covering the
 /// variants called out in the acceptance criteria (nested try, try-without-
 /// finally, throw in finally/catch, await in try/finally, yield*, for-in/for-of
-/// with break/return/throw exits, capability-gated hostcalls, and IFC flows).
+/// with break/boundary-crossing continue/return/throw exits,
+/// capability-gated hostcalls, and IFC flows).
 #[allow(clippy::vec_init_then_push)]
 pub fn generate_feature_programs() -> Vec<FeatureWitness> {
     use FeatureOpcode as Op;
@@ -1309,9 +1318,10 @@ pub fn generate_feature_programs() -> Vec<FeatureWitness> {
         ));
     }
 
-    // ---- G.6.D: iterator protocol (12 programs) ----------------------------
+    // ---- G.6.D: iterator protocol (15 programs) ----------------------------
     let close_reasons = [
         IteratorCloseReason::Break,
+        IteratorCloseReason::Continue,
         IteratorCloseReason::Return,
         IteratorCloseReason::Throw,
     ];
@@ -1324,19 +1334,25 @@ pub fn generate_feature_programs() -> Vec<FeatureWitness> {
         programs.push(FeatureWitness::new(
             format!("for_in_{}", reason.as_str()),
             FeatureClass::IteratorProtocol,
-            vec![Op::ForInInit, Op::ForInNext, Op::IteratorClose { reason }],
+            vec![Op::ForInInit, Op::ForInNext],
         ));
-        programs.push(FeatureWitness::new(
-            format!("nested_for_of_{}", reason.as_str()),
-            FeatureClass::IteratorProtocol,
-            vec![
-                Op::ForOfInit,
-                Op::ForOfInit,
-                Op::ForOfNext,
-                Op::IteratorClose { reason },
-                Op::IteratorClose { reason },
-            ],
-        ));
+        // The count-only witness cannot encode a labelled continue's target.
+        // Nested break/return/throw cross both represented boundaries; nested
+        // continue is covered by the target-aware G.6.D model and executable
+        // regression, where only the crossed inner iterator closes.
+        if reason != IteratorCloseReason::Continue {
+            programs.push(FeatureWitness::new(
+                format!("nested_for_of_{}", reason.as_str()),
+                FeatureClass::IteratorProtocol,
+                vec![
+                    Op::ForOfInit,
+                    Op::ForOfInit,
+                    Op::ForOfNext,
+                    Op::IteratorClose { reason },
+                    Op::IteratorClose { reason },
+                ],
+            ));
+        }
         programs.push(FeatureWitness::new(
             format!("for_of_with_await_{}", reason.as_str()),
             FeatureClass::IteratorProtocol,

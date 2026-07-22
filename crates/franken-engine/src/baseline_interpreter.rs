@@ -5410,6 +5410,11 @@ struct CatchFrame {
     /// Call stack depth when the try block was entered.  Used to validate
     /// that the catch frame is still in scope during unwinding.
     call_depth: usize,
+    /// Active source-finally depth when this handler was installed. Abrupt
+    /// completions owned by deeper finalizers are abandoned when unwinding to
+    /// this frame, while completions at this depth remain resumable when a
+    /// local catch consumes the newer exception.
+    finally_mode_depth: usize,
 }
 
 /// Tracks how a finally block was entered so `EndFinally` knows whether to
@@ -5432,8 +5437,16 @@ enum FinallyMode {
 enum AbruptCompletion {
     /// A thrown value plus its IFC label (bd-l0d6z): the label must survive
     /// suspension so a later catch binding inherits the thrown value's taint.
-    Exception(Value, Label),
-    Return(Value),
+    Exception(Value, Label, usize),
+    Return(Value, usize),
+}
+
+impl AbruptCompletion {
+    fn finally_mode_depth(&self) -> usize {
+        match self {
+            Self::Exception(_, _, depth) | Self::Return(_, depth) => *depth,
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -28879,12 +28892,30 @@ impl InterpreterCore {
         Some(frame)
     }
 
+    fn nearest_async_call_depth(&self) -> Option<usize> {
+        self.call_stack
+            .iter()
+            .rposition(|frame| frame.async_function_id.is_some())
+            .map(|index| index + 1)
+    }
+
     fn pop_exception_target_frame(&mut self) -> Result<Option<CatchFrame>, InterpreterError> {
+        // An async function converts every uncaught body exception into a
+        // rejected Promise. A caller's catch frame sits below that async call
+        // frame and therefore cannot be selected during synchronous unwinding.
+        let minimum_call_depth = self.nearest_async_call_depth().unwrap_or(0);
+        self.pop_exception_target_frame_at_or_above(minimum_call_depth)
+    }
+
+    fn pop_exception_target_frame_at_or_above(
+        &mut self,
+        minimum_call_depth: usize,
+    ) -> Result<Option<CatchFrame>, InterpreterError> {
         let current_depth = self.call_stack.len();
         let Some(idx) = self
             .catch_frames
             .iter()
-            .rposition(|f| f.call_depth <= current_depth)
+            .rposition(|f| f.call_depth >= minimum_call_depth && f.call_depth <= current_depth)
         else {
             return Ok(None);
         };
@@ -28893,16 +28924,43 @@ impl InterpreterCore {
         let (restored_pending_exception, restored_pending_return) =
             self.unwind_call_stack_to(frame.call_depth)?;
         self.suspend_abrupt_completion(restored_pending_exception, restored_pending_return)?;
+        self.prune_abrupt_state_to_finally_depth(frame.finally_mode_depth);
         Ok(Some(frame))
     }
 
+    /// Drop completions owned by finalizers that an exception just crossed.
+    /// A handler installed inside the same finalizer retains equal-depth state,
+    /// allowing the older completion to resume after the close error is caught.
+    fn prune_abrupt_state_to_finally_depth(&mut self, target_depth: usize) {
+        let mut released_bytes = 0u64;
+        self.suspended_abrupt_completions.retain(|completion| {
+            if completion.finally_mode_depth() <= target_depth {
+                true
+            } else {
+                released_bytes = released_bytes
+                    .saturating_add(std::mem::size_of::<AbruptCompletion>() as u64)
+                    .saturating_add(Self::estimate_abrupt_completion_bytes(completion));
+                false
+            }
+        });
+        self.finally_modes.truncate(target_depth);
+        self.estimated_memory_bytes = self.estimated_memory_bytes.saturating_sub(released_bytes);
+    }
+
     fn take_current_abrupt_completion(&mut self) -> Option<AbruptCompletion> {
+        let finally_mode_depth = self.finally_modes.len();
         if let Some(exception) = self.pending_exception.take() {
             self.pending_return = None;
             let label = std::mem::replace(&mut self.pending_exception_label, Label::Public);
-            Some(AbruptCompletion::Exception(exception, label))
+            Some(AbruptCompletion::Exception(
+                exception,
+                label,
+                finally_mode_depth,
+            ))
         } else {
-            self.pending_return.take().map(AbruptCompletion::Return)
+            self.pending_return
+                .take()
+                .map(|value| AbruptCompletion::Return(value, finally_mode_depth))
         }
     }
 
@@ -28916,16 +28974,23 @@ impl InterpreterCore {
             "only one abrupt completion should be active at a time"
         );
 
+        let finally_mode_depth = self.finally_modes.len();
         let completions = match (pending_exception, pending_return) {
             (Some((exception, label)), None) => {
-                vec![AbruptCompletion::Exception(exception, label)]
+                vec![AbruptCompletion::Exception(
+                    exception,
+                    label,
+                    finally_mode_depth,
+                )]
             }
-            (None, Some(return_val)) => vec![AbruptCompletion::Return(return_val)],
+            (None, Some(return_val)) => {
+                vec![AbruptCompletion::Return(return_val, finally_mode_depth)]
+            }
             (None, None) => Vec::new(),
             (Some((exception, label)), Some(return_val)) => {
                 vec![
-                    AbruptCompletion::Exception(exception, label),
-                    AbruptCompletion::Return(return_val),
+                    AbruptCompletion::Exception(exception, label, finally_mode_depth),
+                    AbruptCompletion::Return(return_val, finally_mode_depth),
                 ]
             }
         };
@@ -28961,11 +29026,11 @@ impl InterpreterCore {
         let previous_bytes = self.call_stack_memory_bytes();
         if let Some(completion) = self.suspended_abrupt_completions.pop() {
             match completion {
-                AbruptCompletion::Exception(exception, label) => {
+                AbruptCompletion::Exception(exception, label, _) => {
                     self.pending_exception = Some(exception);
                     self.pending_exception_label = label;
                 }
-                AbruptCompletion::Return(return_val) => {
+                AbruptCompletion::Return(return_val, _) => {
                     self.pending_return = Some(return_val);
                 }
             }
@@ -28983,6 +29048,7 @@ impl InterpreterCore {
             .rposition(|f| f.call_depth == current_depth && f.finally_target.is_some())?;
         let frame = self.catch_frames[idx].clone();
         self.catch_frames.truncate(idx);
+        self.prune_abrupt_state_to_finally_depth(frame.finally_mode_depth);
         frame.finally_target
     }
 
@@ -29675,7 +29741,10 @@ impl InterpreterCore {
     /// invisible here and is reached by re-propagating the host error upward.
     fn has_active_catch_frame(&self) -> bool {
         let depth = self.call_stack.len();
-        self.catch_frames.iter().any(|f| f.call_depth <= depth)
+        let minimum_depth = self.nearest_async_call_depth().unwrap_or(0);
+        self.catch_frames
+            .iter()
+            .any(|frame| frame.call_depth >= minimum_depth && frame.call_depth <= depth)
     }
 
     /// Route an explicit `throw` that escaped an *isolated re-entrant run* into
@@ -29735,6 +29804,57 @@ impl InterpreterCore {
         }
     }
 
+    /// Route a failing `iterator.return()` as the replacing throw completion.
+    /// Explicit throws arrive re-armed by the isolated callback; native JS
+    /// faults are materialized here so both forms reach the same catch or async
+    /// rejection boundary without allowing the displaced return to resurrect.
+    fn route_iterator_close_failure(
+        &mut self,
+        err: InterpreterError,
+    ) -> Result<Option<InterpreterError>, InterpreterError> {
+        let (thrown, thrown_label) = if matches!(err, InterpreterError::UncaughtException { .. }) {
+            let Some((thrown, thrown_label)) = self.take_pending_exception_slot() else {
+                return Ok(Some(err));
+            };
+            (thrown, thrown_label)
+        } else if Self::js_catchable_error_name(&err).is_some() {
+            (self.native_error_to_thrown_value(&err)?, Label::Public)
+        } else {
+            return Ok(Some(err));
+        };
+
+        self.replace_pending_abrupt_slots(Some((thrown, thrown_label)), None)?;
+        if let Some(async_depth) = self
+            .call_stack
+            .iter()
+            .rposition(|frame| frame.async_function_id.is_some())
+            .map(|index| index + 1)
+        {
+            if let Some(frame) = self.pop_exception_target_frame_at_or_above(async_depth)? {
+                self.ip = frame.catch_target;
+                return Ok(None);
+            }
+            let rejection = self
+                .take_pending_exception_slot()
+                .map(|(value, _)| value)
+                .ok_or_else(|| InterpreterError::UncaughtException {
+                    value: "iterator close lost its pending exception".to_string(),
+                })?;
+            if self.reject_nearest_async_boundary(rejection)? {
+                return Ok(None);
+            }
+            self.clear_suspended_abrupt_completions();
+            return Ok(Some(err));
+        }
+        if let Some(frame) = self.pop_exception_target_frame()? {
+            self.ip = frame.catch_target;
+            Ok(None)
+        } else {
+            self.clear_suspended_abrupt_completions();
+            Ok(Some(err))
+        }
+    }
+
     /// Drive the bytecode dispatch loop, converting *native* runtime errors
     /// (TypeError from `null.x`, ReferenceError from TDZ access, …) into JS
     /// exceptions that are catchable by JS `try`/`catch` (bd-8enww.4.3).
@@ -29753,7 +29873,8 @@ impl InterpreterCore {
             match self.run_loop_dispatch(module) {
                 Err(err)
                     if Self::js_catchable_error_name(&err).is_some()
-                        && self.has_active_catch_frame() =>
+                        && (self.has_active_catch_frame()
+                            || self.nearest_async_call_depth().is_some()) =>
                 {
                     let thrown = self.native_error_to_thrown_value(&err)?;
                     self.suspend_current_abrupt_completion()?;
@@ -29766,7 +29887,10 @@ impl InterpreterCore {
                             // Re-enter dispatch at the handler.
                         }
                         None => {
-                            // `has_active_catch_frame` raced/changed: surface as
+                            if self.reject_nearest_async_boundary(thrown.clone())? {
+                                continue;
+                            }
+                            // `has_active_catch_frame` raced/changed: surface
                             // an uncaught exception rather than the host error.
                             self.clear_suspended_abrupt_completions();
                             return Err(InterpreterError::UncaughtException {
@@ -30017,20 +30141,37 @@ impl InterpreterCore {
                 Ir3Instruction::IteratorClose { iterator, reason } => {
                     let iterator = self.read_reg(iterator)?;
                     // A finally-style throw-close handler keeps the original
-                    // exception in pending-completion state. An isolated
-                    // iterator.return call may temporarily replace that slot
-                    // with its own throw, so retain the original explicitly.
-                    let preserved_throw = if reason == IteratorCloseReason::Throw {
-                        self.pending_exception
-                            .clone()
-                            .map(|value| (value, self.pending_exception_label.clone()))
-                    } else {
-                        None
-                    };
+                    // exception in pending-completion state. Move that owned
+                    // completion onto the suspension stack before the isolated
+                    // iterator.return call, rather than cloning a potentially
+                    // large custom label across arbitrary callback execution.
+                    let suspended_original_throw =
+                        reason == IteratorCloseReason::Throw && self.pending_exception.is_some();
+                    if suspended_original_throw {
+                        self.suspend_current_abrupt_completion()?;
+                    }
+                    // Break/outer-continue can run while a source `finally` is
+                    // carrying an older throw or return. Isolated `return()`
+                    // calls re-arm their own explicit throw after restoring the
+                    // caller snapshot, which would otherwise overwrite that
+                    // inherited completion. Suspend it with its finalizer owner
+                    // depth so a local catch can resume it, while an outer catch
+                    // prunes it during unwinding.
+                    let suspended_inherited_completion = matches!(
+                        reason,
+                        IteratorCloseReason::Break | IteratorCloseReason::Continue
+                    ) && (self.pending_exception.is_some()
+                        || self.pending_return.is_some());
+                    if suspended_inherited_completion {
+                        self.suspend_current_abrupt_completion()?;
+                    }
                     match self.close_iterator(module, iterator, reason) {
                         Ok(()) => {
-                            if let Some((value, label)) = preserved_throw {
-                                self.replace_pending_abrupt_slots(Some((value, label)), None)?;
+                            if suspended_original_throw {
+                                self.restore_suspended_abrupt_completion();
+                            }
+                            if suspended_inherited_completion {
+                                self.restore_suspended_abrupt_completion();
                             }
                             self.ip += 1;
                         }
@@ -30044,13 +30185,26 @@ impl InterpreterCore {
                                     && self.pending_exception.is_some();
                             if reason == IteratorCloseReason::Throw
                                 && (explicit_throw || Self::js_catchable_error_name(&err).is_some())
-                                && let Some((value, label)) = preserved_throw
+                                && suspended_original_throw
                             {
-                                self.replace_pending_abrupt_slots(Some((value, label)), None)?;
+                                self.clear_pending_abrupt_slots();
+                                self.restore_suspended_abrupt_completion();
                                 self.ip += 1;
                                 continue;
                             }
-                            return Err(err);
+                            if suspended_original_throw {
+                                // Resource/engine faults are not suppressible JS
+                                // completions, but restoring the moved original
+                                // keeps ownership and accounting balanced while
+                                // the engine fault propagates.
+                                self.clear_pending_abrupt_slots();
+                                self.restore_suspended_abrupt_completion();
+                                return Err(err);
+                            }
+                            match self.route_iterator_close_failure(err)? {
+                                None => continue,
+                                Some(err) => return Err(err),
+                            }
                         }
                     }
                 }
@@ -32213,6 +32367,7 @@ impl InterpreterCore {
                         catch_target: catch_target as usize,
                         finally_target: finally_target.map(|t| t as usize),
                         call_depth: self.call_stack.len(),
+                        finally_mode_depth: self.finally_modes.len(),
                     });
                     self.ip += 1;
                 }
@@ -32320,6 +32475,7 @@ impl InterpreterCore {
                 Ir3Instruction::DiscardAbruptCompletion => {
                     self.clear_pending_abrupt_slots();
                     let _ = self.finally_modes.pop();
+                    self.prune_abrupt_state_to_finally_depth(self.finally_modes.len());
                     self.restore_suspended_abrupt_completion();
                     self.ip += 1;
                 }
@@ -33519,6 +33675,7 @@ impl InterpreterCore {
     fn close_reason_from_ir(reason: IteratorCloseReason) -> CloseReason {
         match reason {
             IteratorCloseReason::Break => CloseReason::Break,
+            IteratorCloseReason::Continue => CloseReason::Continue,
             IteratorCloseReason::Return => CloseReason::Return,
             IteratorCloseReason::Throw => CloseReason::Throw,
         }
@@ -35062,7 +35219,7 @@ impl InterpreterCore {
         }
         let result =
             self.invoke_inline_method_call(Some(module), return_method, receiver, Vec::new())?;
-        if !matches!(result, Value::Object(_)) {
+        if !result.is_object_like() {
             return Err(InterpreterError::TypeError {
                 expected: "object returned by iterator.return".to_string(),
                 got: result.type_name().to_string(),
@@ -58159,10 +58316,10 @@ impl InterpreterCore {
 
     fn estimate_abrupt_completion_bytes(completion: &AbruptCompletion) -> u64 {
         match completion {
-            AbruptCompletion::Exception(value, label) => {
+            AbruptCompletion::Exception(value, label, _) => {
                 Self::estimate_value_bytes(value).saturating_add(Self::estimate_label_bytes(label))
             }
-            AbruptCompletion::Return(value) => Self::estimate_value_bytes(value),
+            AbruptCompletion::Return(value, _) => Self::estimate_value_bytes(value),
         }
     }
 
@@ -86660,6 +86817,89 @@ mod tests {
     }
 
     #[test]
+    fn prune_abrupt_state_uses_finally_ownership_and_exact_memory_bd_g73mg() {
+        let config = test_quickjs_config();
+        let mut core = InterpreterCore::new(config, "finally-depth-prune-memory");
+        core.finally_modes = vec![FinallyMode::Exception, FinallyMode::Return];
+        core.suspended_abrupt_completions = vec![
+            AbruptCompletion::Exception(
+                Value::str("retained exception"),
+                Label::Custom {
+                    name: "retained-label".repeat(8),
+                    level: 3,
+                },
+                1,
+            ),
+            AbruptCompletion::Return(Value::str("discarded deep return"), 2),
+        ];
+        core.sync_estimated_memory_bytes()
+            .expect("seeded completion state should fit memory budget");
+
+        core.prune_abrupt_state_to_finally_depth(1);
+
+        assert_eq!(core.finally_modes, vec![FinallyMode::Exception]);
+        assert!(matches!(
+            core.suspended_abrupt_completions.as_slice(),
+            [AbruptCompletion::Exception(value, Label::Custom { .. }, 1)]
+                if value == &Value::str("retained exception")
+        ));
+        assert_eq!(
+            core.recompute_estimated_memory_bytes(),
+            core.estimated_memory_bytes,
+            "depth pruning must release fixed and dynamic completion bytes exactly"
+        );
+    }
+
+    #[test]
+    fn suspending_throw_moves_custom_label_without_dynamic_memory_duplication_bd_g73mg() {
+        let config = test_quickjs_config();
+        let mut core = InterpreterCore::new(config, "move-throw-label-memory");
+        let custom_name = "iterator-close-label".repeat(64);
+        let custom_name_ptr = custom_name.as_ptr();
+        core.replace_pending_abrupt_slots(
+            Some((
+                Value::str("original throw"),
+                Label::Custom {
+                    name: custom_name,
+                    level: 7,
+                },
+            )),
+            None,
+        )
+        .expect("pending throw should fit memory budget");
+        let before_suspend = core.estimated_memory_bytes;
+
+        core.suspend_current_abrupt_completion()
+            .expect("suspension should charge only its fixed carrier");
+
+        assert!(core.pending_exception.is_none());
+        assert!(matches!(
+            core.suspended_abrupt_completions.last(),
+            Some(AbruptCompletion::Exception(
+                _,
+                Label::Custom { name, level: 7 },
+                0
+            )) if name.as_ptr() == custom_name_ptr
+        ));
+        assert_eq!(
+            core.estimated_memory_bytes,
+            before_suspend + std::mem::size_of::<AbruptCompletion>() as u64,
+            "moving an owned completion must not charge or allocate duplicate dynamic bytes"
+        );
+
+        core.restore_suspended_abrupt_completion();
+        assert_eq!(core.estimated_memory_bytes, before_suspend);
+        assert!(matches!(
+            &core.pending_exception_label,
+            Label::Custom { name, level: 7 } if name.as_ptr() == custom_name_ptr
+        ));
+        assert_eq!(
+            core.recompute_estimated_memory_bytes(),
+            core.estimated_memory_bytes
+        );
+    }
+
+    #[test]
     fn unwind_call_stack_updates_call_components_incrementally() {
         let config = test_quickjs_config();
         let mut core = InterpreterCore::new(config, "unwind-memory-delta");
@@ -86696,7 +86936,7 @@ mod tests {
                 .expect("scope binding update");
         }
         core.suspended_abrupt_completions
-            .push(AbruptCompletion::Return(Value::str("inner")));
+            .push(AbruptCompletion::Return(Value::str("inner"), 0));
         core.call_stack.push(CallFrame {
             return_ip: 777,
             return_reg: 0,
@@ -86781,7 +87021,7 @@ mod tests {
                 .expect("scope binding update");
         }
         core.suspended_abrupt_completions
-            .push(AbruptCompletion::Return(Value::str("inner")));
+            .push(AbruptCompletion::Return(Value::str("inner"), 0));
         core.finally_modes.push(FinallyMode::Return);
         core.call_stack.push(CallFrame {
             return_ip: 909,

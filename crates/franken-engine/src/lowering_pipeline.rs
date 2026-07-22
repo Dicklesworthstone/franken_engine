@@ -4333,7 +4333,8 @@ fn lower_statement_to_ir1_with_flow(
             let loop_label = alloc_label(label_counter);
             let continue_label = alloc_label(label_counter);
             let close_label = alloc_label(label_counter);
-            let head_error_label = alloc_label(label_counter);
+            let throw_close_label = alloc_label(label_counter);
+            let return_close_label = alloc_label(label_counter);
             let end_label = alloc_label(label_counter);
 
             ops.push(Ir1Op::Label { id: loop_label });
@@ -4341,14 +4342,13 @@ fn lower_statement_to_ir1_with_flow(
                 done_label: end_label,
             });
             // IteratorStep/IteratorValue failures do not close the iterator.
-            // Begin the protected region only once a yielded value exists, and
-            // end it before the body so continue/body abrupt paths are unchanged.
+            // Begin the head protected region only once a yielded value exists.
             ops.push(Ir1Op::BeginTry {
-                catch_label: head_error_label,
+                catch_label: throw_close_label,
                 // Route directly to a finally-style handler. Unlike a catch,
                 // this preserves the pending exception for EndFinally instead
                 // of materializing it as a new user-value Throw.
-                finally_label: Some(head_error_label),
+                finally_label: Some(throw_close_label),
             });
 
             // Bind the yielded value to the loop variable.
@@ -4480,6 +4480,37 @@ fn lower_statement_to_ir1_with_flow(
             }
             ops.push(Ir1Op::EndTry);
 
+            // A body throw and a function return carry different completion
+            // precedence through IteratorClose. The runtime already routes a
+            // Throw through catch_target and a Return through finally_target,
+            // so one synthetic frame can preserve the distinction. Raw jumps
+            // (break/continue) use the explicit forwarders below because they
+            // do not participate in runtime exception-frame unwinding.
+            let mut outer_break_close_forwarders = Vec::new();
+            let mut outer_continue_close_forwarders = Vec::new();
+            for frame in &label_ctx.frames {
+                alloc_finally_forwarder(
+                    &mut outer_break_close_forwarders,
+                    Some(frame.break_target),
+                    label_counter,
+                );
+                alloc_finally_forwarder(
+                    &mut outer_continue_close_forwarders,
+                    frame.continue_target,
+                    label_counter,
+                );
+            }
+            let body_label_ctx = label_ctx
+                .remap_abrupt_targets(
+                    &outer_break_close_forwarders,
+                    &outer_continue_close_forwarders,
+                )
+                .enter_loop(close_label, continue_label);
+            ops.push(Ir1Op::BeginTry {
+                catch_label: throw_close_label,
+                finally_label: Some(return_close_label),
+            });
+
             lower_statement_to_ir1_with_flow(
                 &for_of_stmt.body,
                 ops,
@@ -4493,27 +4524,87 @@ fn lower_statement_to_ir1_with_flow(
                     break_label: Some(close_label),
                     continue_label: Some(continue_label),
                 },
-                &label_ctx.enter_loop(close_label, continue_label),
+                &body_label_ctx,
             )?;
-            ops.push(Ir1Op::Label { id: continue_label });
+            ops.push(Ir1Op::EndTry);
             ops.push(Ir1Op::Jump {
                 label_id: loop_label,
             });
-            // Break path: close the iterator before exiting, then skip the
-            // out-of-line assignment-error finalizer below.
+
+            // A continue targeting this loop exits the synthetic body frame but
+            // does not close this iterator.
+            ops.push(Ir1Op::Label { id: continue_label });
+            ops.push(Ir1Op::EndTry);
+            ops.push(Ir1Op::Jump {
+                label_id: loop_label,
+            });
+
+            // A break targeting this loop exits the synthetic body frame and
+            // closes exactly once before leaving the loop.
             ops.push(Ir1Op::Label { id: close_label });
+            ops.push(Ir1Op::EndTry);
+            ops.push(Ir1Op::LoadBinding {
+                binding_id: iterator_binding_id,
+            });
             ops.push(Ir1Op::IteratorClose {
                 reason: IteratorCloseReason::Break,
             });
             ops.push(Ir1Op::Jump {
                 label_id: end_label,
             });
+
+            // A labelled exit that crosses this for-of boundary must close this
+            // iterator before forwarding to the enclosing target. Nested
+            // for-of loops therefore chain these blocks innermost-first.
+            for (via_label, actual_target) in outer_break_close_forwarders {
+                ops.push(Ir1Op::Label { id: via_label });
+                ops.push(Ir1Op::EndTry);
+                ops.push(Ir1Op::LoadBinding {
+                    binding_id: iterator_binding_id,
+                });
+                ops.push(Ir1Op::IteratorClose {
+                    reason: IteratorCloseReason::Break,
+                });
+                ops.push(Ir1Op::Jump {
+                    label_id: actual_target,
+                });
+            }
+            for (via_label, actual_target) in outer_continue_close_forwarders {
+                ops.push(Ir1Op::Label { id: via_label });
+                ops.push(Ir1Op::EndTry);
+                ops.push(Ir1Op::LoadBinding {
+                    binding_id: iterator_binding_id,
+                });
+                ops.push(Ir1Op::IteratorClose {
+                    reason: IteratorCloseReason::Continue,
+                });
+                ops.push(Ir1Op::Jump {
+                    label_id: actual_target,
+                });
+            }
+
+            // Return is a non-throw completion: a close failure replaces the
+            // return value, while a successful close lets EndFinally resume it.
+            // Close before EnterFinally so a replacing failure does not leave a
+            // stale FinallyMode::Return on the runtime stack.
             ops.push(Ir1Op::Label {
-                id: head_error_label,
+                id: return_close_label,
             });
-            // The finally-style entry keeps the original exception pending.
-            // Close against the iterator retained by ForOfNext, then let
-            // EndFinally propagate that exact completion to the outer handler.
+            ops.push(Ir1Op::LoadBinding {
+                binding_id: iterator_binding_id,
+            });
+            ops.push(Ir1Op::IteratorClose {
+                reason: IteratorCloseReason::Return,
+            });
+            ops.push(Ir1Op::EnterFinally);
+            ops.push(Ir1Op::EndFinally);
+
+            ops.push(Ir1Op::Label {
+                id: throw_close_label,
+            });
+            // The finally-style entry keeps the original head/body exception
+            // pending. Close against the retained iterator, then let EndFinally
+            // propagate that exact completion to the outer handler.
             ops.push(Ir1Op::EnterFinally);
             ops.push(Ir1Op::LoadBinding {
                 binding_id: iterator_binding_id,
@@ -6221,6 +6312,18 @@ pub fn lower_ir2_to_ir3(
     let mut iterator_cleanup_labels = BTreeMap::<u32, Reg>::new();
     let mut pending_jumps = Vec::<PendingJump>::new();
     let mut catch_entry_labels = BTreeSet::<u32>::new();
+    // A synthetic unwind frame may use distinct Throw and Return targets while
+    // still sending the Throw target directly into EnterFinally. Detect those
+    // explicit finally-style entries so IR3 lowering does not inject EnterCatch
+    // and consume the pending exception before IteratorClose can preserve it.
+    let explicit_finally_entry_labels = ir2
+        .ops
+        .windows(2)
+        .filter_map(|pair| match (&pair[0].inner, &pair[1].inner) {
+            (Ir1Op::Label { id }, Ir1Op::EnterFinally) => Some(*id),
+            _ => None,
+        })
+        .collect::<BTreeSet<_>>();
     // Deferred function bodies retain their own binding-id namespace and exact
     // local lexical metadata. A named carrier keeps nested enqueue sites from
     // silently swapping fields as this execution contract evolves.
@@ -6848,7 +6951,9 @@ pub fn lower_ir2_to_ir3(
                 // catch, exceptions go directly to the finally block and
                 // EnterCatch must NOT be emitted — it would consume the pending
                 // exception before EndFinally can re-throw it.
-                if finally_label.as_ref() != Some(catch_label) {
+                if finally_label.as_ref() != Some(catch_label)
+                    && !explicit_finally_entry_labels.contains(catch_label)
+                {
                     catch_entry_labels.insert(*catch_label);
                 }
                 let instr_idx = ir3.instructions.len();
@@ -7929,6 +8034,13 @@ pub fn lower_ir2_to_ir3(
         let mut fn_pending_jumps = Vec::<PendingJump>::new();
         let mut fn_catch_entry_labels = BTreeSet::<u32>::new();
         let mut fn_iterator_cleanup_labels = BTreeMap::<u32, Reg>::new();
+        let fn_explicit_finally_entry_labels = body_ops
+            .windows(2)
+            .filter_map(|pair| match pair {
+                [Ir1Op::Label { id }, Ir1Op::EnterFinally] => Some(*id),
+                _ => None,
+            })
+            .collect::<BTreeSet<_>>();
 
         // Reconstruct the exact body binding IDs allocated for parameters.
         // Duplicate parameter names reuse one binding ID but the final
@@ -9083,7 +9195,9 @@ pub fn lower_ir2_to_ir3(
                     catch_label,
                     finally_label,
                 } => {
-                    if finally_label.as_ref() != Some(catch_label) {
+                    if finally_label.as_ref() != Some(catch_label)
+                        && !fn_explicit_finally_entry_labels.contains(catch_label)
+                    {
                         fn_catch_entry_labels.insert(*catch_label);
                     }
                     let instr_idx = ir3.instructions.len();
@@ -22931,6 +23045,14 @@ fn ir2_catch_region_events(ir2: &Ir2Module) -> Result<CatchRegionEvents, Lowerin
             });
         }
     }
+    let explicit_finally_entry_labels = ir2
+        .ops
+        .windows(2)
+        .filter_map(|pair| match (&pair[0].inner, &pair[1].inner) {
+            (Ir1Op::Label { id }, Ir1Op::EnterFinally) => Some(*id),
+            _ => None,
+        })
+        .collect::<BTreeSet<_>>();
 
     struct ProtectedRegion {
         start_index: usize,
@@ -22968,7 +23090,9 @@ fn ir2_catch_region_events(ir2: &Ir2Module) -> Result<CatchRegionEvents, Lowerin
         regions.push(ProtectedRegion {
             start_index,
             target_index,
-            catch_label: (finally_label.as_ref() != Some(catch_label)).then_some(*catch_label),
+            catch_label: (finally_label.as_ref() != Some(catch_label)
+                && !explicit_finally_entry_labels.contains(catch_label))
+            .then_some(*catch_label),
             end_index: None,
         });
         region_by_begin.insert(index, region_id);
@@ -24176,11 +24300,11 @@ mod tests {
         ArrowBody, AssignmentOperator, BinaryOperator, BindingPattern, BlockStatement,
         BreakStatement, CatchClause, ContinueStatement, DoWhileStatement, ExportDeclaration,
         ExportKind, Expression, ExpressionStatement, ForInStatement, ForOfStatement, ForStatement,
-        FunctionDeclaration, FunctionParam, IfStatement, ImportDeclaration, MethodDefinition,
-        MethodKind, ObjectPatternProperty, ObjectProperty, ParseGoal, ReturnStatement, SourceSpan,
-        Statement, SwitchCase, SwitchStatement, SyntaxTree, ThrowStatement, TryCatchStatement,
-        UnaryOperator, VariableDeclaration, VariableDeclarationKind, VariableDeclarator,
-        WhileStatement,
+        FunctionDeclaration, FunctionParam, IfStatement, ImportDeclaration, LabeledStatement,
+        MethodDefinition, MethodKind, ObjectPatternProperty, ObjectProperty, ParseGoal,
+        ReturnStatement, SourceSpan, Statement, SwitchCase, SwitchStatement, SyntaxTree,
+        ThrowStatement, TryCatchStatement, UnaryOperator, VariableDeclaration,
+        VariableDeclarationKind, VariableDeclarator, WhileStatement,
     };
     use crate::parser_gap_inventory::{ParserGapSiteId, UnsupportedSyntaxDiagnostic};
 
@@ -26203,13 +26327,13 @@ mod tests {
         // fixed pure programs, so any future arena/region change that perturbs ExecIR is
         // caught. Allocation-only changes must remain byte-identical; an explicit IR
         // schema migration may re-bless the header and content hash while the instruction
-        // body remains unchanged. These values include the bd-0k19b schema 0.6 header.
+        // body remains unchanged. These values include the bd-g73mg schema 0.7 header.
         let cases: Vec<(&str, Ir0Module, &str, &str)> = vec![
             (
                 "numeric_literal",
                 script_ir0(),
-                "07000000060000000d636f6e7374616e745f706f6f6c06000000000000000e66756e6374696f6e5f7461626c650600000001070000000500000005617269747901000000000000000000000005656e7472790100000000000000000000000a6672616d655f73697a650100000000000000020000000c69735f67656e657261746f720300000000046e616d6505000000046d61696e000000066865616465720700000004000000056c6576656c05000000036972330000000e736368656d615f76657273696f6e0700000003000000056d616a6f72010000000000000000000000056d696e6f720100000000000000060000000570617463680100000000000000000000000b736f757263655f686173680400000020861be764f5ac2229ce24cd02336170d00c71d5488c3d2deef0e4bf344186ccee0000000c736f757263655f6c6162656c050000000a666978747572652e6a730000000c696e737472756374696f6e730600000004070000000300000003647374010000000000000001000000026f7005000000086c6f61645f696e740000000576616c756502000000000000002a070000000300000003647374010000000000000000000000026f7005000000046d6f7665000000037372630100000000000000010700000002000000026f70050000000672657475726e0000000576616c75650100000000000000000700000001000000026f70050000000468616c740000001572657175697265645f6361706162696c697469657306000000000000000e7370656369616c697a6174696f6e08",
-                "sha256:eecf3653e51ccc5420b3b9214fc2cd5b936e769f0dddc0f25113d2f2981fc75b",
+                "07000000060000000d636f6e7374616e745f706f6f6c06000000000000000e66756e6374696f6e5f7461626c650600000001070000000500000005617269747901000000000000000000000005656e7472790100000000000000000000000a6672616d655f73697a650100000000000000020000000c69735f67656e657261746f720300000000046e616d6505000000046d61696e000000066865616465720700000004000000056c6576656c05000000036972330000000e736368656d615f76657273696f6e0700000003000000056d616a6f72010000000000000000000000056d696e6f720100000000000000070000000570617463680100000000000000000000000b736f757263655f6861736804000000200a75b289088c76c15f8e6038ed5d8e1c7be5a0a072bfd205f76e1e74c2da5fe00000000c736f757263655f6c6162656c050000000a666978747572652e6a730000000c696e737472756374696f6e730600000004070000000300000003647374010000000000000001000000026f7005000000086c6f61645f696e740000000576616c756502000000000000002a070000000300000003647374010000000000000000000000026f7005000000046d6f7665000000037372630100000000000000010700000002000000026f70050000000672657475726e0000000576616c75650100000000000000000700000001000000026f70050000000468616c740000001572657175697265645f6361706162696c697469657306000000000000000e7370656369616c697a6174696f6e08",
+                "sha256:afed96eb4f7f75e0c61a5b5113939554f39e127b425d4e565541623452b4fef5",
             ),
             (
                 "let_decl",
@@ -26229,8 +26353,8 @@ mod tests {
                     };
                     Ir0Module::from_syntax_tree(tree, "alien2_let.js")
                 },
-                "07000000060000000d636f6e7374616e745f706f6f6c06000000000000000e66756e6374696f6e5f7461626c650600000001070000000500000005617269747901000000000000000000000005656e7472790100000000000000000000000a6672616d655f73697a650100000000000000030000000c69735f67656e657261746f720300000000046e616d6505000000046d61696e000000066865616465720700000004000000056c6576656c05000000036972330000000e736368656d615f76657273696f6e0700000003000000056d616a6f72010000000000000000000000056d696e6f720100000000000000060000000570617463680100000000000000000000000b736f757263655f6861736804000000202670195bd6fe2047847c2f6cd756184faea46b57d92744af78903ab5456c1e130000000c736f757263655f6c6162656c050000000d616c69656e325f6c65742e6a730000000c696e737472756374696f6e730600000004070000000300000003647374010000000000000001000000026f7005000000086c6f61645f696e740000000576616c7565020000000000000007070000000300000003647374010000000000000002000000026f7005000000046d6f7665000000037372630100000000000000010700000002000000026f70050000000672657475726e0000000576616c75650100000000000000000700000001000000026f70050000000468616c740000001572657175697265645f6361706162696c697469657306000000000000000e7370656369616c697a6174696f6e08",
-                "sha256:6fc26e6d1be5c05ac472e4c90c13bb0f539026ac6836fa42cd2e19abb7b86699",
+                "07000000060000000d636f6e7374616e745f706f6f6c06000000000000000e66756e6374696f6e5f7461626c650600000001070000000500000005617269747901000000000000000000000005656e7472790100000000000000000000000a6672616d655f73697a650100000000000000030000000c69735f67656e657261746f720300000000046e616d6505000000046d61696e000000066865616465720700000004000000056c6576656c05000000036972330000000e736368656d615f76657273696f6e0700000003000000056d616a6f72010000000000000000000000056d696e6f720100000000000000070000000570617463680100000000000000000000000b736f757263655f6861736804000000209e4691ff6937ddf7afc244dae3eb70558e219a358c7ac01fb2482c1d1ff484600000000c736f757263655f6c6162656c050000000d616c69656e325f6c65742e6a730000000c696e737472756374696f6e730600000004070000000300000003647374010000000000000001000000026f7005000000086c6f61645f696e740000000576616c7565020000000000000007070000000300000003647374010000000000000002000000026f7005000000046d6f7665000000037372630100000000000000010700000002000000026f70050000000672657475726e0000000576616c75650100000000000000000700000001000000026f70050000000468616c740000001572657175697265645f6361706162696c697469657306000000000000000e7370656369616c697a6174696f6e08",
+                "sha256:d9efb348db5a8dc52460faf2e744d1ecd31370c3969181f3c3745fc57ea1547a",
             ),
             (
                 "const_decl",
@@ -26250,8 +26374,8 @@ mod tests {
                     };
                     Ir0Module::from_syntax_tree(tree, "alien2_const.js")
                 },
-                "07000000060000000d636f6e7374616e745f706f6f6c06000000000000000e66756e6374696f6e5f7461626c650600000001070000000500000005617269747901000000000000000000000005656e7472790100000000000000000000000a6672616d655f73697a650100000000000000030000000c69735f67656e657261746f720300000000046e616d6505000000046d61696e000000066865616465720700000004000000056c6576656c05000000036972330000000e736368656d615f76657273696f6e0700000003000000056d616a6f72010000000000000000000000056d696e6f720100000000000000060000000570617463680100000000000000000000000b736f757263655f68617368040000002070a7c45c32bd7e15c8fcdf50aae438f0335505ce95b8bb8ebd8c3f76ea0895210000000c736f757263655f6c6162656c050000000f616c69656e325f636f6e73742e6a730000000c696e737472756374696f6e730600000004070000000300000003647374010000000000000001000000026f7005000000086c6f61645f696e740000000576616c756502000000000000002a070000000300000003647374010000000000000002000000026f7005000000046d6f7665000000037372630100000000000000010700000002000000026f70050000000672657475726e0000000576616c75650100000000000000000700000001000000026f70050000000468616c740000001572657175697265645f6361706162696c697469657306000000000000000e7370656369616c697a6174696f6e08",
-                "sha256:f8bcac3b6220e714036205b02f601803da945a0a2e4ec544c397fd3a8da68d04",
+                "07000000060000000d636f6e7374616e745f706f6f6c06000000000000000e66756e6374696f6e5f7461626c650600000001070000000500000005617269747901000000000000000000000005656e7472790100000000000000000000000a6672616d655f73697a650100000000000000030000000c69735f67656e657261746f720300000000046e616d6505000000046d61696e000000066865616465720700000004000000056c6576656c05000000036972330000000e736368656d615f76657273696f6e0700000003000000056d616a6f72010000000000000000000000056d696e6f720100000000000000070000000570617463680100000000000000000000000b736f757263655f686173680400000020d099e38aaccaf33069ecc957d39f47d0665418c2e266f6d0c38cc7635315f4560000000c736f757263655f6c6162656c050000000f616c69656e325f636f6e73742e6a730000000c696e737472756374696f6e730600000004070000000300000003647374010000000000000001000000026f7005000000086c6f61645f696e740000000576616c756502000000000000002a070000000300000003647374010000000000000002000000026f7005000000046d6f7665000000037372630100000000000000010700000002000000026f70050000000672657475726e0000000576616c75650100000000000000000700000001000000026f70050000000468616c740000001572657175697265645f6361706162696c697469657306000000000000000e7370656369616c697a6174696f6e08",
+                "sha256:27be0b3f58853e49ee8966a4f3ea1e8b86010078e949324c6d75d9ca241373c8",
             ),
         ];
 
@@ -32887,10 +33011,10 @@ mod tests {
             ops.iter()
                 .filter(|op| matches!(op, Ir1Op::BeginTry { .. }))
                 .count(),
-            1,
-            "empty-body for-of needs only the synthetic head handler"
+            2,
+            "empty-body for-of needs synthetic head and body handlers"
         );
-        let head_error_label = match ops[begin_pos] {
+        let throw_close_label = match ops[begin_pos] {
             Ir1Op::BeginTry {
                 catch_label,
                 finally_label: Some(finally_label),
@@ -32921,15 +33045,21 @@ mod tests {
                 _ => None,
             })
             .collect();
-        assert_eq!(closes.len(), 2, "for-of must have exactly two close paths");
+        assert_eq!(
+            closes.len(),
+            3,
+            "for-of must have exactly three close paths"
+        );
         assert_eq!(closes[0].1, IteratorCloseReason::Break);
-        assert_eq!(closes[1].1, IteratorCloseReason::Throw);
+        assert_eq!(closes[1].1, IteratorCloseReason::Return);
+        assert_eq!(closes[2].1, IteratorCloseReason::Throw);
         let break_close_pos = closes[0].0;
-        let throw_close_pos = closes[1].0;
-        let head_error_pos = ops
+        let return_close_pos = closes[1].0;
+        let throw_close_pos = closes[2].0;
+        let throw_close_label_pos = ops
             .iter()
-            .position(|op| matches!(op, Ir1Op::Label { id } if *id == head_error_label))
-            .expect("missing loop-head catch label");
+            .position(|op| matches!(op, Ir1Op::Label { id } if *id == throw_close_label))
+            .expect("missing loop-head/body throw-close label");
         let end_pos = ops
             .iter()
             .position(|op| matches!(op, Ir1Op::Label { id } if *id == done_label))
@@ -32939,31 +33069,175 @@ mod tests {
             Some(Ir1Op::Jump { label_id }) if *label_id == done_label
         ));
         assert!(matches!(
-            ops.get(head_error_pos + 1),
+            ops.get(throw_close_label_pos + 1),
             Some(Ir1Op::EnterFinally)
         ));
         assert!(matches!(
-            ops.get(head_error_pos + 2),
+            ops.get(throw_close_label_pos + 2),
             Some(Ir1Op::LoadBinding { binding_id }) if *binding_id == iterator_binding_id
         ));
         assert!(matches!(
-            ops.get(head_error_pos + 3),
+            ops.get(throw_close_label_pos + 3),
             Some(Ir1Op::IteratorClose {
                 reason: IteratorCloseReason::Throw
             })
         ));
         assert!(matches!(
-            ops.get(head_error_pos + 4),
+            ops.get(throw_close_label_pos + 4),
             Some(Ir1Op::EndFinally)
         ));
-        let end_finally_pos = head_error_pos + 4;
+        let end_finally_pos = throw_close_label_pos + 4;
         assert!(
-            break_close_pos < head_error_pos
-                && head_error_pos < throw_close_pos
+            break_close_pos < return_close_pos
+                && return_close_pos < throw_close_label_pos
+                && throw_close_label_pos < throw_close_pos
                 && throw_close_pos < end_finally_pos
                 && end_finally_pos < end_pos,
-            "break must skip the out-of-line close-and-resume handler"
+            "break and return must skip the shared throw-close handler"
         );
+    }
+
+    #[test]
+    fn lower_for_of_body_preserves_throw_and_return_close_kinds_bd_g73mg() {
+        let ir0 = stmt_ir0(vec![Statement::ForOf(ForOfStatement {
+            binding: BindingPattern::Identifier("value".into()),
+            binding_kind: Some(VariableDeclarationKind::Const),
+            assignment_strictness: AssignmentStrictness::Sloppy,
+            iterable: Expression::Identifier("values".into()),
+            body: Box::new(Statement::Return(ReturnStatement {
+                argument: Some(Expression::Identifier("value".into())),
+                span: span(),
+            })),
+            span: span(),
+        })]);
+        let ir1 = lower_ir0_to_ir1(&ir0)
+            .expect("for-of return lowering")
+            .module;
+        let begin_tries: Vec<_> = ir1
+            .ops
+            .iter()
+            .filter_map(|op| match op {
+                Ir1Op::BeginTry {
+                    catch_label,
+                    finally_label,
+                } => Some((*catch_label, *finally_label)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(begin_tries.len(), 2, "head and body guards");
+        assert_eq!(begin_tries[0].1, Some(begin_tries[0].0));
+        let (throw_close_label, return_close_label) = begin_tries[1];
+        let return_close_label = return_close_label.expect("body return target");
+        assert_eq!(throw_close_label, begin_tries[0].0);
+        assert_ne!(throw_close_label, return_close_label);
+
+        let return_handler = ir1
+            .ops
+            .iter()
+            .position(|op| matches!(op, Ir1Op::Label { id } if *id == return_close_label))
+            .expect("return close handler");
+        assert!(matches!(
+            ir1.ops.get(return_handler + 2),
+            Some(Ir1Op::IteratorClose {
+                reason: IteratorCloseReason::Return
+            })
+        ));
+        assert!(matches!(
+            ir1.ops.get(return_handler + 3),
+            Some(Ir1Op::EnterFinally)
+        ));
+        assert!(matches!(
+            ir1.ops.get(return_handler + 4),
+            Some(Ir1Op::EndFinally)
+        ));
+
+        let throw_handler = ir1
+            .ops
+            .iter()
+            .position(|op| matches!(op, Ir1Op::Label { id } if *id == throw_close_label))
+            .expect("throw close handler");
+        assert!(matches!(
+            ir1.ops.get(throw_handler + 1),
+            Some(Ir1Op::EnterFinally)
+        ));
+        assert!(matches!(
+            ir1.ops.get(throw_handler + 3),
+            Some(Ir1Op::IteratorClose {
+                reason: IteratorCloseReason::Throw
+            })
+        ));
+
+        let ir2 = lower_ir1_to_ir2(&ir1).expect("IR1->IR2").module;
+        let ir3 = lower_ir2_to_ir3(&ir2).expect("IR2->IR3").module;
+        assert_eq!(
+            ir3.instructions
+                .iter()
+                .filter(|instruction| matches!(instruction, Ir3Instruction::EnterCatch { .. }))
+                .count(),
+            0,
+            "the distinct body Throw target is finally-style and must retain its exception"
+        );
+        assert!(ir3.instructions.iter().any(|instruction| matches!(
+            instruction,
+            Ir3Instruction::IteratorClose {
+                reason: IteratorCloseReason::Return,
+                ..
+            }
+        )));
+    }
+
+    #[test]
+    fn lower_for_of_outer_continue_preserves_continue_close_kind_bd_g73mg() {
+        let inner = Statement::ForOf(ForOfStatement {
+            binding: BindingPattern::Identifier("value".into()),
+            binding_kind: Some(VariableDeclarationKind::Const),
+            assignment_strictness: AssignmentStrictness::Sloppy,
+            iterable: Expression::Identifier("values".into()),
+            body: Box::new(Statement::Continue(ContinueStatement {
+                label: Some("outer".into()),
+                span: span(),
+            })),
+            span: span(),
+        });
+        let ir0 = stmt_ir0(vec![Statement::Labeled(LabeledStatement {
+            label: "outer".into(),
+            body: Box::new(Statement::While(WhileStatement {
+                condition: Expression::BooleanLiteral(true),
+                body: Box::new(Statement::Block(BlockStatement {
+                    body: vec![inner],
+                    span: span(),
+                })),
+                span: span(),
+            })),
+            span: span(),
+        })]);
+
+        let ir1 = lower_ir0_to_ir1(&ir0)
+            .expect("outer labelled continue lowering")
+            .module;
+        assert_eq!(
+            ir1.ops
+                .iter()
+                .filter(|op| matches!(
+                    op,
+                    Ir1Op::IteratorClose {
+                        reason: IteratorCloseReason::Continue
+                    }
+                ))
+                .count(),
+            1,
+            "the crossed iterator must retain Continue in replay-visible IR"
+        );
+
+        let ir2 = lower_ir1_to_ir2(&ir1).expect("IR1->IR2").module;
+        let ir3 = lower_ir2_to_ir3(&ir2).expect("IR2->IR3").module;
+        assert!(ir3.instructions.iter().any(|instruction| matches!(
+            instruction,
+            Ir3Instruction::IteratorClose {
+                reason: IteratorCloseReason::Continue,
+                ..
+            }
+        )));
     }
 
     #[test]

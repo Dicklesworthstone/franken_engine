@@ -196,13 +196,13 @@ fn enrichment_verifier_emits_error_events_on_failure() {
 fn enrichment_schema_version_current() {
     let v = IrSchemaVersion::CURRENT;
     assert_eq!(v.major, 0);
-    assert_eq!(v.minor, 6);
+    assert_eq!(v.minor, 7);
     assert_eq!(v.patch, 0);
 }
 
 #[test]
 fn enrichment_schema_version_display() {
-    assert_eq!(IrSchemaVersion::CURRENT.to_string(), "0.6.0");
+    assert_eq!(IrSchemaVersion::CURRENT.to_string(), "0.7.0");
     let custom = IrSchemaVersion {
         major: 2,
         minor: 3,
@@ -462,6 +462,7 @@ fn enrichment_ir1_property_key_serde() {
 fn enrichment_iterator_close_reason_as_str_all() {
     let reasons = [
         (IteratorCloseReason::Break, "break"),
+        (IteratorCloseReason::Continue, "continue"),
         (IteratorCloseReason::Return, "return"),
         (IteratorCloseReason::Throw, "throw"),
     ];
@@ -470,7 +471,7 @@ fn enrichment_iterator_close_reason_as_str_all() {
         assert_eq!(reason.as_str(), *expected);
         assert!(seen.insert(reason.as_str()));
     }
-    assert_eq!(seen.len(), 3);
+    assert_eq!(seen.len(), 4);
 }
 
 // =========================================================================

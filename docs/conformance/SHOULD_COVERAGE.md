@@ -58,7 +58,7 @@ the residual countable and to keep `SHOULD` gaps from masquerading as
 | §11.8.6 (Template literal lexical) | `template_literal` | `template-literal-unicode-escape` | Unicode-escape `SHOULD` rendering inside template parts. |
 | §12.2.9 (TemplateLiteral semantics) | `template_literal` | `template-literal-nested` | Nested template substitution — `SHOULD` rather than `MUST` because the spec leaves the optimiser hands free. |
 | §12.3.2.1 (OptionalExpression) | `optional_chaining` | `ES2020-12.3.2.1-symbol-property` | Symbol-keyed optional access — the **only** `SHOULD` outside the iteration / template surfaces. |
-| §13.2.6 (for-of) | `iteration_statements` | `for-of-iterator-throw-handling` | Iterator-throw cleanup path is `SHOULD`-tier. |
+| §13.2.6 (for-of) | `iteration_statements` | `for-of-iterator-throw-handling` | `next()` / IteratorStep error propagation and catchability; the iterator is not closed when acquiring the next result fails. |
 | §13.2.6 (for-of) | `iteration_statements` | `for-of-array-iterator-simple` | Specialised array iterator fast-path. |
 | §13.2.6 (for-of) | `iteration_statements` | `for-of-destructuring-defaults` | Destructuring with defaults — `SHOULD` because default evaluation order is observable but not load-bearing. |
 | §13.2.6 (for-of) | `iteration_statements` | `for-of-destructuring-rest` | Destructuring with rest. |
@@ -66,15 +66,15 @@ the residual countable and to keep `SHOULD` gaps from masquerading as
 | §13.12 (break) | `iteration_statements` | `labeled-break-statement` | Labelled break is `SHOULD` per ES2020 §13.12 production rules. |
 | §13.13 (continue) | `iteration_statements` | `labeled-continue-statement` | Labelled continue. |
 
-## High-density `SHOULD` surfaces still untouched
+## High-density `SHOULD` surface status
 
-The 10 cases above are concentrated on three §-sections. The audit
-flagged the following `SHOULD`-heavy surfaces as currently **dark**:
+The 10 cases above are concentrated on three §-sections. The audit records the
+mixed current status of the following `SHOULD`-heavy surfaces:
 
 | Surface | `SHOULD` debt (qualitative) | Tracking |
 | --- | --- | --- |
 | §12.4 / §12.5 (Postfix / unary expression evaluation order) | Engines `SHOULD` short-circuit per ABNF order. No tests. | none yet |
-| §13.7.5 (for-of completion) | Iterator close on abrupt completion is `SHOULD`. No tests. | overlaps with `bd-bg9l1.27` |
+| §13.7.5 (for-of completion) | Iterator close on boundary-crossing abrupt completion is covered for head assignment, body throw, function return, and outer labelled exits. | `bd-bg9l1.27`, `bd-cu3sz`, `bd-g73mg` |
 | §25.6.5 (Promise chaining order) | Microtask ordering between adjacent `.then` chains is `SHOULD`. Only `MUST` covered. | overlaps with `bd-hjfj1` (FIND-21) |
 | Annex B realm extensions | Out of scope per the spec-pin doc; included here only to flag that audit findings outside the §-tree are routinely classified as `SHOULD` upstream. | covered by FIND-4 `bd-w50mz` |
 

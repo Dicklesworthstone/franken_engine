@@ -819,7 +819,7 @@ fn scope_kind_serde_round_trip() {
 fn ir_schema_version_current_is_stable() {
     let v = IrSchemaVersion::CURRENT;
     assert_eq!(v.major, 0);
-    assert_eq!(v.minor, 6);
+    assert_eq!(v.minor, 7);
 }
 
 #[test]
@@ -1323,6 +1323,7 @@ fn enrichment_ir3_for_of_next_serde_roundtrip() {
 fn enrichment_ir3_iterator_close_all_reasons_serde_roundtrip() {
     for reason in [
         IteratorCloseReason::Break,
+        IteratorCloseReason::Continue,
         IteratorCloseReason::Return,
         IteratorCloseReason::Throw,
     ] {
@@ -1334,6 +1335,23 @@ fn enrichment_ir3_iterator_close_all_reasons_serde_roundtrip() {
         let recovered: Ir3Instruction = serde_json::from_str(&json).unwrap();
         assert_eq!(instr, recovered);
     }
+}
+
+#[test]
+fn enrichment_ir2_iterator_close_continue_serde_roundtrip_bd_g73mg() {
+    let op = Ir2Op {
+        inner: Ir1Op::IteratorClose {
+            reason: IteratorCloseReason::Continue,
+        },
+        effect: EffectBoundary::ReadEffect,
+        required_capability: None,
+        flow: None,
+        span: None,
+    };
+    let json = serde_json::to_string(&op).unwrap();
+    assert!(json.contains("Continue"));
+    let recovered: Ir2Op = serde_json::from_str(&json).unwrap();
+    assert_eq!(op, recovered);
 }
 
 // --- IR1 op serde round-trips ---
@@ -1877,6 +1895,7 @@ fn enrichment_ir1_property_key_dynamic_serde() {
 #[test]
 fn enrichment_iterator_close_reason_as_str_stable() {
     assert_eq!(IteratorCloseReason::Break.as_str(), "break");
+    assert_eq!(IteratorCloseReason::Continue.as_str(), "continue");
     assert_eq!(IteratorCloseReason::Return.as_str(), "return");
     assert_eq!(IteratorCloseReason::Throw.as_str(), "throw");
 }
@@ -1885,13 +1904,14 @@ fn enrichment_iterator_close_reason_as_str_stable() {
 fn enrichment_iterator_close_reason_all_unique() {
     let strs: std::collections::BTreeSet<&str> = [
         IteratorCloseReason::Break,
+        IteratorCloseReason::Continue,
         IteratorCloseReason::Return,
         IteratorCloseReason::Throw,
     ]
     .iter()
     .map(|r| r.as_str())
     .collect();
-    assert_eq!(strs.len(), 3);
+    assert_eq!(strs.len(), 4);
 }
 
 // --- ScopeKind additional coverage ---

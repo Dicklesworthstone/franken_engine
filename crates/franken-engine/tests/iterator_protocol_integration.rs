@@ -908,6 +908,7 @@ fn all_iteration_kinds_have_distinct_display() {
 fn all_close_reasons_serde_round_trip() {
     let reasons = vec![
         CloseReason::Break,
+        CloseReason::Continue,
         CloseReason::Return,
         CloseReason::Throw,
         CloseReason::DestructuringExhausted,
@@ -1193,6 +1194,7 @@ fn iteration_operation_value_serde() {
 fn iteration_operation_close_all_reasons_serde() {
     for reason in [
         CloseReason::Break,
+        CloseReason::Continue,
         CloseReason::Return,
         CloseReason::Throw,
         CloseReason::DestructuringExhausted,
@@ -1292,7 +1294,7 @@ fn multi_abrupt_trace_counts_all_abrupt_completions() {
 fn schema_version_is_stable() {
     assert_eq!(
         ITERATOR_PROTOCOL_SCHEMA_VERSION,
-        "franken-engine.iterator-protocol.v1"
+        "franken-engine.iterator-protocol.v2"
     );
 }
 

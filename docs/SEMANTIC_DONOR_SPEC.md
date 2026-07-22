@@ -104,7 +104,10 @@ Each entry below is binding for conformance and lockstep gates.
 
 ### Arrays/iterators/generators
 - `SEM-ARR-001`: sparse arrays preserve hole semantics in iteration and mapping methods.
-- `SEM-ITR-001`: iterator closing (`return`) runs on abrupt completion in `for...of`.
+- `SEM-ITR-001`: iterator closing (`return`) runs when an abrupt body,
+  loop-head binding, or labelled completion crosses a `for...of` boundary.
+  IteratorStep/IteratorValue failure, same-loop continue, and natural
+  exhaustion do not close that iterator.
 - `SEM-GEN-001`: generator resume/throw/return transitions preserve completion semantics.
 
 ### Promises/async/microtasks
@@ -149,7 +152,10 @@ Minimum edge-case families:
 - nested `then`, `queueMicrotask`, `await` interleavings with sync throw boundaries.
 
 3. Iterator abrupt completion.
-- `break`, `throw`, and `return` paths that should trigger iterator close.
+- `break`, `throw`, `return`, and labelled `continue` paths that cross a
+  `for..of` boundary should trigger iterator close; a continue targeting that
+  same loop should not. IteratorStep/IteratorValue failure before the protected
+  body or head-binding region must propagate without invoking `return()`.
 
 4. Module cycle behavior.
 - cycle resolution, partial initialization visibility, and error propagation.

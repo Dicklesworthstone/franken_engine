@@ -75,7 +75,7 @@ test reports, not buried in const sets (see DISC-005 below).
 - **Status:** RESOLVED (2026-05-30, bd-bg9l1.27.3)
 - **ES2020 ref:** §7.4.1 (GetIterator), §13.7.5.16 (Runtime Semantics: ForIn/OfHeadEvaluation)
 - **Affected harnesses:** `tests/iteration_statements_test262_conformance.rs`, `tests/iterator_protocol_test262_conformance.rs`
-- **Affected tests:** `for-of-custom-iterator-basic` (RESOLVED), `for-of-iterator-return-method` (RESOLVED, see DISC-009), `for-of-iterator-throw-handling` (still open, DISC-009)
+- **Affected tests:** `for-of-custom-iterator-basic` (RESOLVED), `for-of-iterator-return-method` (RESOLVED, see DISC-009), `for-of-iterator-throw-handling` (RESOLVED, see DISC-009)
 - **Symptom:** The interpreter did not invoke a user-defined `[Symbol.iterator]()` method on a for-of right-hand operand; it fell back to a built-in array iteration path.
 - **Resolution:** The root cause was three layers (SilentBass + CrimsonHarbor):
   (1) the parser had no object-method-shorthand branch, so `[Symbol.iterator]() {}`
@@ -172,17 +172,21 @@ test reports, not buried in const sets (see DISC-005 below).
 - **Reviewed:** 2026-05-28
 - **Next review:** 2026-06-28
 
-### DISC-009: Iterator `return()` / `throw()` cleanup methods not invoked on abrupt completion
+### DISC-009: Iterator `return()` omitted when abrupt completion exits a for-of
 
-- **Status:** RESOLVED (2026-05-30, bd-bg9l1.27.3 + bd-bg9l1.27.7)
+- **Status:** RESOLVED (2026-07-22, bd-bg9l1.27.3 + bd-bg9l1.27.7 + bd-cu3sz + bd-g73mg)
 - **ES2020 ref:** §7.4.6 (IteratorClose), §13.7.5.13 (Runtime Semantics: ForIn/OfBodyEvaluation)
 - **Affected harnesses:** `tests/iteration_statements_test262_conformance.rs`, `tests/iterator_protocol_test262_conformance.rs`
 - **Affected tests:** `for-of-iterator-return-method` (RESOLVED), `for-of-iterator-throw-handling` (RESOLVED)
-- **Symptom:** When a for-of body abruptly completes (break / throw / return), the iterator's `return()` method is not invoked, and any error from a throwing iterator next-step is not routed through `IteratorClose`.
-- **Resolution:** Two parts. (1) return-on-break: once `Symbol.iterator` resolved
+- **Symptom:** Historical coverage conflated two different paths: an abrupt body
+  completion that exits the for-of must run `IteratorClose` (which calls
+  `iterator.return()`), while an
+  `IteratorStep` / `IteratorValue` failure must propagate without closing.
+- **Resolution:** Four parts. (1) return-on-break: once `Symbol.iterator` resolved
   (DISC-003 / bd-bg9l1.27.3), `for-of-iterator-return-method` passed — the engine
   already invokes `iterator.return()` on a `break` early-exit; it was gated only
-  on the custom iterable being dispatched. (2) throw path (bd-bg9l1.27.7): a throw
+  on the custom iterable being dispatched. (2) next-error catchability
+  (bd-bg9l1.27.7): a throw
   from the iterator's `next()` was not catchable because for-of runs `next()` via
   `invoke_inline_method_call`, which isolates `catch_frames` and surfaced an
   uncaught throw as a value-less `UncaughtException` that escaped the loop. Fix:
@@ -192,9 +196,16 @@ test reports, not buried in const sets (see DISC-005 below).
   conformance case's `throw new Error(...)` additionally required declaring
   function-body builtin capabilities in `required_capabilities` (so `builtin:Error`
   inside `next()` is not capability-denied). Both cases are EXPECTED_PASS.
-- **Tracking bead:** bd-bg9l1.27.7
-- **Reviewed:** 2026-05-30
-- **Next review:** 2026-06-30
+  (3) loop-head assignment failures (bd-cu3sz) now close with a Throw completion
+  after a value has been yielded, while step/value failures remain outside the
+  protected region. (4) body Throw, function Return, and labelled break/continue
+  that cross a for-of boundary (bd-g73mg) now close exactly once per crossed
+  iterator, innermost-first, with Throw-vs-Return precedence preserved. Same-loop
+  continue, inner-label break, natural exhaustion, and step/value failure do not
+  close.
+- **Tracking bead:** bd-g73mg
+- **Reviewed:** 2026-07-22
+- **Next review:** 2026-08-22
 
 ### DISC-010: `for`-statement per-iteration block-scope isolation (`let`) — RESOLVED
 
@@ -298,11 +309,13 @@ test reports, not buried in const sets (see DISC-005 below).
   D801, and literal U+FFFD remain distinct through static lowering, for-in,
   Object key/value/entry/name consumers, ordinary Reflect/Proxy fallback and
   duplicate detection, assign/spread, JSON, querystring, and the project's
-  CommonJS namespace projection. Core IR `0.5.0` and engine IR `0.6.0` carry
+  CommonJS namespace projection. Core IR `0.5.0` and engine IR `0.7.0` carry
   exact IR1 static keys while preserving historical well-formed wire. Engine
   `0.5.0` is skipped because it identifies the incompatible core wire;
   `bd-0k19b` adds engine-only dynamic-name operations at `0.6.0`, including
   pre-RHS resolvability status for identifier assignment.
+  `bd-g73mg` adds the engine-only boundary-crossing `Continue` close reason at
+  `0.7.0`; `bd-t9n3s` tracks propagation into the core twin.
 - **Remaining symptom:** The engine's string-key-only executable baseline
   carrier still does not model executable Symbol keys; core already carries
   typed `Value::Symbol` / `RuntimePropertyKey::Symbol` identities, and the
@@ -339,6 +352,7 @@ test reports, not buried in const sets (see DISC-005 below).
 
 - **DISC-001** — `//` comment leak in `merge_logical_lines` — RESOLVED 2026-05-28 (bd-bg9l1.27.1).
 - **DISC-004** — for-of binding destructuring — RESOLVED 2026-05-28 (bd-bg9l1.27.1; symptom was the DISC-001 comment leak, not a lowering gap).
+- **DISC-009** — `IteratorClose` when abrupt completion exits a for-of — RESOLVED 2026-07-22 (bd-g73mg; builds on bd-bg9l1.27.3, bd-bg9l1.27.7, and bd-cu3sz).
 
 ## Out-of-spec features (intentional non-divergences)
 

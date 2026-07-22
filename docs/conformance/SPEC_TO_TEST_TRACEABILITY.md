@@ -45,8 +45,8 @@ Staleness is a bug to file against this document.
 | --- | ---: |
 | Harnesses with clause tags | **9** of 11 |
 | Distinct §-sections covered | **53** |
-| Total tagged test cases | **157** |
-| `MUST` cases | **90** |
+| Total tagged test cases | **160** |
+| `MUST` cases | **93** |
 | `SHOULD` cases | **1** |
 | Cases without a resolvable `requirement_level` | **66** |
 
@@ -97,7 +97,7 @@ either uses a non-enum encoding or is absent.
 | §7.2.15 (StrictEquality) | `abstract_operations` | MUST×3 | `ES2020-7.2.15-strict-equality-no-coercion`; `…nan-not-equal-to-itself`; `…positive-zero-strictly-equals-negative-zero` |
 | §7.4.1 (GetIterator) | `iterator_protocol` | MUST×2 | `ES2020-7.4.1-get-iterator-operation`; `…symbol-iterator-not-callable` |
 | §7.4.2 (IteratorNext) | `iterator_protocol` | MUST×1 | `ES2020-7.4.2-iterator-next-throws` |
-| §7.4.6 (IteratorClose) | `iterator_protocol` | MUST×1 | `ES2020-7.4.6-iterator-close-return` |
+| §7.4.6 (IteratorClose) | `iterator_protocol` + `async_promise` | MUST×3 | `ES2020-7.4.6-iterator-close-return`; `ES2020-7.4.6-async-for-of-return-close-typeerror-rejects`; `ES2020-7.4.6-async-for-of-return-close-throw-rejects` |
 | §8.1.1.2.1 (Strict declaration / `with` ban) | `strict_mode` | ?×2 | `ES2020-8.1.1.2.1-undeclared-assignment-global-strict`; `…function-strict` |
 | §8.4.1 (Microtask queue) | `async_promise` | MUST×2 | `ES2020-8.4.1-microtask-runs-after-script-sync`; `…settimeout-runs-after-microtask-checkpoint` |
 | §10.2.1 (Strict mode directive) | `strict_mode` | ?×3 | `ES2020-10.2.1-directive-string-literal`; `…function-scope`; `test-directive` |
@@ -129,7 +129,7 @@ either uses a non-enum encoding or is absent.
 | §14.2.1 (ArrowFunction grammar) | `arrow_function` | MUST×12 | `ES2020-14.2.1-basic-arrow` + 11 more |
 | §14.2.16 (Arrow lexical `this`) | `arrow_function` | MUST×2 | `ES2020-14.2.16-lexical-this`; `…arrow-in-method` |
 | §14.7 (Async arrow) | `arrow_function` | MUST×2 | `ES2020-14.7-async-arrow`; `…async-arrow-params` |
-| §15.8 (Async function semantics) | `async_promise` | MUST×2 | `ES2020-15.8-async-function-wraps-return-in-promise`; `…throw-becomes-rejection` |
+| §15.8 (Async function semantics) | `async_promise` | MUST×3 | `ES2020-15.8-async-function-wraps-return-in-promise`; `…throw-becomes-rejection`; `ES2020-15.8-async-for-of-body-throw-rejects` |
 | §15.8.4 (await) | `async_promise` | MUST×2 | `ES2020-15.8.4-await-rejected-promise-propagates-to-caller`; `…assimilates-thenable` |
 | §22.1.2.1 (`Array.from`) | `iterator_protocol` | MUST×1 | `ES2020-22.1.2.1-array-from-iterator` |
 | §25.1.1.1 (Iterator interface) | `iterator_protocol` | MUST×1 | `ES2020-25.1.1.1-iterator-interface-next` |

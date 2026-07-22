@@ -309,6 +309,45 @@ impl AsyncPromiseHarness {
                 },
             },
             AsyncPromiseTest {
+                id: "ES2020-7.4.6-async-for-of-return-close-typeerror-rejects".to_string(),
+                description:
+                    "A non-object iterator.return result replaces an async function return and rejects its promise without synchronously throwing to the caller."
+                        .to_string(),
+                es_section: "7.4.6".to_string(),
+                requirement_level: RequirementLevel::Must,
+                category: AsyncPromiseCategory::AsyncFunctionFulfillment,
+                source: "let iterator = { next() { return { value: 1, done: false }; }, return() { return 0; } }; let iterable = { [Symbol.iterator]() { return iterator; } }; async function f() { for (const value of iterable) { return value; } } f().catch(error => console.log(error.name));".to_string(),
+                expected_result: ExpectedResult::Success {
+                    output: "TypeError\n".to_string(),
+                },
+            },
+            AsyncPromiseTest {
+                id: "ES2020-7.4.6-async-for-of-return-close-throw-rejects".to_string(),
+                description:
+                    "An iterator.return throw replaces an async function return and rejects its promise without synchronously throwing to the caller."
+                        .to_string(),
+                es_section: "7.4.6".to_string(),
+                requirement_level: RequirementLevel::Must,
+                category: AsyncPromiseCategory::AsyncFunctionFulfillment,
+                source: "let iterator = { next() { return { value: 1, done: false }; }, return() { throw new Error('close-error'); } }; let iterable = { [Symbol.iterator]() { return iterator; } }; async function f() { for (const value of iterable) { return value; } } f().catch(error => console.log(error.message));".to_string(),
+                expected_result: ExpectedResult::Success {
+                    output: "close-error\n".to_string(),
+                },
+            },
+            AsyncPromiseTest {
+                id: "ES2020-15.8-async-for-of-body-throw-rejects".to_string(),
+                description:
+                    "A for-of body throw closes the iterator, retains the original throw, and rejects the async function Promise without entering a caller catch synchronously."
+                        .to_string(),
+                es_section: "15.8".to_string(),
+                requirement_level: RequirementLevel::Must,
+                category: AsyncPromiseCategory::AsyncFunctionFulfillment,
+                source: "let iterator = { closed: 0, next() { return { value: 1, done: false }; }, return() { this.closed++; throw new Error('close-error'); } }; let iterable = { [Symbol.iterator]() { return iterator; } }; async function f() { for (const value of iterable) { throw new Error('body-error'); } } function call() { try { f().catch(error => console.log(error.message + ':' + iterator.closed)); console.log('returned'); } catch (error) { console.log('sync:' + error.message); } } call();".to_string(),
+                expected_result: ExpectedResult::Success {
+                    output: "returned\nbody-error:1\n".to_string(),
+                },
+            },
+            AsyncPromiseTest {
                 id: "ES2020-15.8.4-await-rejected-promise-propagates-to-caller".to_string(),
                 description:
                     "await on a rejected promise rejects the containing async function's promise."
@@ -541,10 +580,12 @@ mod tests {
     use super::*;
 
     /// Pinned allow-list of MUST-tier async/promise cases known to fail.
-    /// Empty for the initial wave — if real engine gaps surface during
-    /// verification (tracked under follow-up bead), add `(id, "bd-...")`
-    /// entries here AND open the bead first.
-    const EXPECTED_FAILING_MUSTS: &[(&str, &str)] = &[];
+    /// Each entry requires a pre-existing follow-up bead; remove an entry as
+    /// soon as its named case passes so an obsolete waiver fails loudly.
+    const EXPECTED_FAILING_MUSTS: &[(&str, &str)] = &[(
+        "ES2020-25.6.1.3-promise-resolve-thenable-enqueues-nested-microtask",
+        "bd-iio0f",
+    )];
 
     fn must_tests(harness: &AsyncPromiseHarness) -> Vec<&AsyncPromiseTest> {
         harness
@@ -660,6 +701,27 @@ mod tests {
             unexpected_passes.len(),
             unexpected_passes.join("\n  "),
         );
+    }
+
+    #[test]
+    fn async_for_of_abrupt_close_rejections_bd_g73mg() {
+        let harness = AsyncPromiseHarness::new();
+        for id in [
+            "ES2020-7.4.6-async-for-of-return-close-typeerror-rejects",
+            "ES2020-7.4.6-async-for-of-return-close-throw-rejects",
+            "ES2020-15.8-async-for-of-body-throw-rejects",
+        ] {
+            let test = harness
+                .tests
+                .iter()
+                .find(|test| test.id == id)
+                .unwrap_or_else(|| panic!("missing bd-g73mg async case {id}"));
+            let result = test.evaluate();
+            assert!(
+                matches!(result, Test262Result::Pass),
+                "{id} must reject the returned promise without a synchronous throw: {result:?}"
+            );
+        }
     }
 
     /// bd-rqev5 (FIND-10): migrated from an inline serialize/deserialize/

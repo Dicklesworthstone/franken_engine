@@ -121,6 +121,7 @@ fn async_await_microtask_preservation() {
 fn iterator_close_on_every_exit_path() {
     for reason in [
         IteratorCloseReason::Break,
+        IteratorCloseReason::Continue,
         IteratorCloseReason::Return,
         IteratorCloseReason::Throw,
     ] {
@@ -145,6 +146,25 @@ fn iterator_close_on_every_exit_path() {
         vec![FeatureOpcode::ForOfInit, FeatureOpcode::ForOfNext],
     );
     assert!(leak.check_obligations().is_err());
+
+    let for_in = FeatureWitness::new(
+        "for_in",
+        FeatureClass::IteratorProtocol,
+        vec![FeatureOpcode::ForInInit, FeatureOpcode::ForInNext],
+    );
+    assert!(for_in.check_obligations().is_ok());
+    let invalid_for_in_close = FeatureWitness::new(
+        "for_in_with_close",
+        FeatureClass::IteratorProtocol,
+        vec![
+            FeatureOpcode::ForInInit,
+            FeatureOpcode::ForInNext,
+            FeatureOpcode::IteratorClose {
+                reason: IteratorCloseReason::Break,
+            },
+        ],
+    );
+    assert!(invalid_for_in_close.check_obligations().is_err());
 }
 
 #[test]

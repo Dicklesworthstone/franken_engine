@@ -257,12 +257,16 @@ fn single_for_of_produces_expected_trace() {
     assert_eq!(trace.for_of_next_count, 1, "exactly one ForOfNext");
     assert_eq!(trace.for_in_init_count, 0, "no ForInInit");
     assert_eq!(
-        trace.iterator_close_count, 2,
-        "break and head-throw paths each need an IteratorClose"
+        trace.iterator_close_count, 3,
+        "break, return, and throw paths each need an IteratorClose"
     );
     assert_eq!(
         trace.close_reasons,
-        vec![IteratorCloseReason::Break, IteratorCloseReason::Throw]
+        vec![
+            IteratorCloseReason::Break,
+            IteratorCloseReason::Return,
+            IteratorCloseReason::Throw,
+        ]
     );
     assert!(trace.label_count >= 4, "loop/continue/close/end labels");
     assert!(trace.binding_write_count >= 1, "binding write for val");
@@ -284,7 +288,7 @@ fn for_of_let_binding_trace() {
         "for_of_let",
     );
     assert_eq!(trace.for_of_init_count, 1);
-    assert_eq!(trace.iterator_close_count, 2);
+    assert_eq!(trace.iterator_close_count, 3);
 }
 
 #[test]
@@ -321,7 +325,7 @@ fn for_of_no_binding_kind_trace() {
         "for_of_none",
     );
     assert_eq!(trace.for_of_init_count, 1);
-    assert_eq!(trace.iterator_close_count, 2);
+    assert_eq!(trace.iterator_close_count, 3);
 }
 
 // ===========================================================================
@@ -354,11 +358,11 @@ fn mixed_for_in_for_of_trace() {
     assert_eq!(trace.for_in_next_count, 1);
     assert_eq!(trace.for_of_init_count, 1);
     assert_eq!(trace.for_of_next_count, 1);
-    assert_eq!(trace.iterator_close_count, 2);
+    assert_eq!(trace.iterator_close_count, 3);
 }
 
 #[test]
-fn two_for_of_loops_produce_four_close_ops() {
+fn two_for_of_loops_produce_six_close_ops() {
     let ir0 = ir0_from_stmts(
         vec![
             for_of_stmt(
@@ -382,13 +386,15 @@ fn two_for_of_loops_produce_four_close_ops() {
     );
     assert_eq!(trace.for_of_init_count, 2);
     assert_eq!(trace.for_of_next_count, 2);
-    assert_eq!(trace.iterator_close_count, 4);
+    assert_eq!(trace.iterator_close_count, 6);
     assert_eq!(
         trace.close_reasons,
         vec![
             IteratorCloseReason::Break,
+            IteratorCloseReason::Return,
             IteratorCloseReason::Throw,
             IteratorCloseReason::Break,
+            IteratorCloseReason::Return,
             IteratorCloseReason::Throw,
         ]
     );
@@ -768,6 +774,7 @@ fn for_of_ir1_serde_roundtrip() {
 #[test]
 fn iterator_close_reason_as_str_values() {
     assert_eq!(IteratorCloseReason::Break.as_str(), "break");
+    assert_eq!(IteratorCloseReason::Continue.as_str(), "continue");
     assert_eq!(IteratorCloseReason::Return.as_str(), "return");
     assert_eq!(IteratorCloseReason::Throw.as_str(), "throw");
 }
@@ -776,6 +783,7 @@ fn iterator_close_reason_as_str_values() {
 fn iterator_close_reason_serde_roundtrip() {
     for reason in [
         IteratorCloseReason::Break,
+        IteratorCloseReason::Continue,
         IteratorCloseReason::Return,
         IteratorCloseReason::Throw,
     ] {
@@ -793,7 +801,7 @@ fn iterator_close_reason_serde_roundtrip() {
 fn iterator_protocol_schema_version_is_stable() {
     assert_eq!(
         ITERATOR_PROTOCOL_SCHEMA_VERSION,
-        "franken-engine.iterator-protocol.v1"
+        "franken-engine.iterator-protocol.v2"
     );
 }
 
@@ -899,6 +907,7 @@ fn iteration_operation_all_variants_serde() {
 fn close_reason_all_variants() {
     let reasons = [
         CloseReason::Break,
+        CloseReason::Continue,
         CloseReason::Return,
         CloseReason::Throw,
         CloseReason::DestructuringExhausted,
@@ -1197,7 +1206,7 @@ fn for_of_between_two_expressions() {
     let trace = trace_ir1_ops(&result.module, "expr_forof_expr");
     assert_eq!(trace.for_of_init_count, 1);
     assert_eq!(trace.for_of_next_count, 1);
-    assert_eq!(trace.iterator_close_count, 2);
+    assert_eq!(trace.iterator_close_count, 3);
 }
 
 // ===========================================================================
@@ -1230,14 +1239,14 @@ fn trace_artifact_captures_all_counts() {
     assert_eq!(trace.for_in_next_count, 1);
     assert_eq!(trace.for_of_init_count, 1);
     assert_eq!(trace.for_of_next_count, 1);
-    assert_eq!(trace.iterator_close_count, 2);
-    // Total iteration ops: 1+1+1+1+2 = 6
+    assert_eq!(trace.iterator_close_count, 3);
+    // Total iteration ops: 1+1+1+1+3 = 7
     let total_iter_ops = trace.for_in_init_count
         + trace.for_in_next_count
         + trace.for_of_init_count
         + trace.for_of_next_count
         + trace.iterator_close_count;
-    assert_eq!(total_iter_ops, 6);
+    assert_eq!(total_iter_ops, 7);
     assert!(
         trace.ir1_op_count > total_iter_ops,
         "must have non-iteration ops too"

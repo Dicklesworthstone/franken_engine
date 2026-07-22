@@ -5,12 +5,14 @@
 //! `for..of` / `for..in` / `IteratorClose` are IR1 opcodes lowered by
 //! `iterator_protocol.rs`. G.6.D proves the lowering preserves ECMAScript
 //! iterator semantics, including the critical `IteratorClose` (`.return()`)
-//! call on *abrupt* completion (break / return / throw inside `for..of`).
+//! call on *abrupt* completion (break / boundary-crossing continue / return /
+//! throw inside `for..of`).
 //!
 //! ECMAScript semantics modelled here:
 //!   * `for..of` performs `GetIterator` (`[Symbol.iterator]()`), then repeated
 //!     `IteratorNext` (`.next()`) until `done`. On **abrupt** completion
-//!     (`break`, `return`, or a `throw`) it must perform `IteratorClose`
+//!     (`break`, a boundary-crossing labelled `continue`, `return`, or a
+//!     `throw`) it must perform `IteratorClose`
 //!     (`.return()`). On **normal** exhaustion (`done: true`) it must *not*
 //!     call `.return()`.
 //!   * `for..in` enumerates the own + inherited enumerable string keys (in
@@ -64,6 +66,10 @@ pub enum LoopExit {
     Complete,
     /// `break` at element index.
     BreakAt(usize),
+    /// A labelled `continue` whose target is outside this `for..of` loop.
+    /// A continue targeting this same loop is normal iteration and is not an
+    /// abrupt completion of the iterator boundary.
+    ContinueOuterAt(usize),
     /// `return` at element index.
     ReturnAt(usize),
     /// `throw` at element index (the body raises at `site`).
@@ -97,10 +103,11 @@ pub enum IterStmt {
 // ---------------------------------------------------------------------------
 
 /// Why an iterator was closed via `IteratorClose` (`.return()`). Mirrors the
-/// engine's abrupt `CloseReason` (Break / Return / Throw).
+/// engine's abrupt `CloseReason` (Break / Continue / Return / Throw).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum CloseReason {
     Break,
+    Continue,
     Return,
     Throw,
 }
@@ -145,6 +152,8 @@ pub enum IterEventKind {
     Complete,
     /// A `return` propagated out of the top level.
     ReturnOut,
+    /// A labelled `continue` propagated to an enclosing loop.
+    ContinueOut,
     /// A `throw` propagated out of the top level.
     Propagate { site: u32 },
 }
@@ -295,6 +304,7 @@ fn to_target_eval(stmts: &[LoweredIterStmt]) -> Vec<EvalStmt> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Completion {
     Normal,
+    Continuing,
     Returning,
     Throwing(u32),
 }
@@ -361,6 +371,9 @@ impl Interp {
             // Determine whether this step terminates the loop abruptly.
             let abrupt = match exit {
                 LoopExit::BreakAt(s) if s == step => Some((CloseReason::Break, Completion::Normal)),
+                LoopExit::ContinueOuterAt(s) if s == step => {
+                    Some((CloseReason::Continue, Completion::Continuing))
+                }
                 LoopExit::ReturnAt(s) if s == step => {
                     Some((CloseReason::Return, Completion::Returning))
                 }
@@ -401,6 +414,7 @@ impl Interp {
         for (idx, key) in keys.iter().enumerate() {
             let abrupt = match exit {
                 LoopExit::BreakAt(s) if s == idx => Some(Completion::Normal),
+                LoopExit::ContinueOuterAt(s) if s == idx => Some(Completion::Continuing),
                 LoopExit::ReturnAt(s) if s == idx => Some(Completion::Returning),
                 LoopExit::ThrowAt(s, site) if s == idx => Some(Completion::Throwing(site)),
                 _ => None,
@@ -419,6 +433,7 @@ fn interpret(stmts: &[EvalStmt]) -> IterTrace {
     let mut interp = Interp::new();
     match interp.run_seq(stmts) {
         Completion::Normal => interp.emit(IterEventKind::Complete),
+        Completion::Continuing => interp.emit(IterEventKind::ContinueOut),
         Completion::Returning => interp.emit(IterEventKind::ReturnOut),
         Completion::Throwing(site) => interp.emit(IterEventKind::Propagate { site }),
     }
@@ -749,6 +764,7 @@ pub enum IterCategory {
     ForOfCustom,
     ForInProtoChain,
     BreakInForOf,
+    ContinueOuterInForOf,
     ReturnInForOf,
     ThrowInForOf,
 }
@@ -763,7 +779,8 @@ pub struct IterTestProgram {
 
 /// Generate ≥50 iterator programs covering: for..of over Array / Map / Set /
 /// custom iterable, for..in over an object with a prototype chain, and
-/// break / return / throw inside for..of (each of which must call `.return()`).
+/// break / boundary-crossing continue / return / throw inside for..of (each of
+/// which must call `.return()`).
 pub fn generate_iterator_test_programs() -> Vec<IterTestProgram> {
     let mut out = Vec::new();
     let mut id = 0u32;
@@ -834,6 +851,20 @@ pub fn generate_iterator_test_programs() -> Vec<IterTestProgram> {
                     loop_id: lid,
                     source: IterSource::Custom(n),
                     exit: LoopExit::ReturnAt(1),
+                }],
+            });
+        }
+
+        // Labelled continue to an enclosing loop (must close with Continue).
+        {
+            let lid = fresh();
+            out.push(IterTestProgram {
+                name: format!("continue_outer_in_for_of_v{variant}"),
+                category: IterCategory::ContinueOuterInForOf,
+                program: vec![IterStmt::ForOf {
+                    loop_id: lid,
+                    source: IterSource::Custom(n),
+                    exit: LoopExit::ContinueOuterAt(1),
                 }],
             });
         }
@@ -926,6 +957,22 @@ mod tests {
     }
 
     #[test]
+    fn outer_continue_closes_with_continue_reason() {
+        let trace = reference_trace(&for_of(1, 5, LoopExit::ContinueOuterAt(1)));
+        assert!(trace.iter().any(|e| matches!(
+            e.kind,
+            IterEventKind::IteratorClose {
+                loop_id: 1,
+                reason: CloseReason::Continue
+            }
+        )));
+        assert!(matches!(
+            trace.last().unwrap().kind,
+            IterEventKind::ContinueOut
+        ));
+    }
+
+    #[test]
     fn throw_closes_with_throw_reason_and_propagates() {
         let trace = reference_trace(&for_of(1, 5, LoopExit::ThrowAt(1, 99)));
         assert!(trace.iter().any(|e| matches!(
@@ -946,6 +993,7 @@ mod tests {
         for exit in [
             LoopExit::Complete,
             LoopExit::BreakAt(1),
+            LoopExit::ContinueOuterAt(1),
             LoopExit::ReturnAt(1),
             LoopExit::ThrowAt(1, 7),
         ] {
@@ -1053,6 +1101,7 @@ mod tests {
             ForOfCustom,
             ForInProtoChain,
             BreakInForOf,
+            ContinueOuterInForOf,
             ReturnInForOf,
             ThrowInForOf,
         ] {

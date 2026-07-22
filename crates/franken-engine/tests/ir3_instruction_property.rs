@@ -27,6 +27,7 @@ fn capability() -> impl Strategy<Value = CapabilityTag> {
 fn close_reason() -> impl Strategy<Value = IteratorCloseReason> {
     prop_oneof![
         Just(IteratorCloseReason::Break),
+        Just(IteratorCloseReason::Continue),
         Just(IteratorCloseReason::Return),
         Just(IteratorCloseReason::Throw),
     ]

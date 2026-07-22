@@ -31,17 +31,18 @@ pub struct IrSchemaVersion {
 }
 
 impl IrSchemaVersion {
-    /// `0.6.0` adds explicit unresolved-name load/store operations to IR1 and
-    /// IR3. Engine minor `0.5.0` is intentionally skipped because that numeric
-    /// version already identifies the incompatible native `franken-core` IR
-    /// wire. `0.4.0` widened IR1 static property keys to exact UTF-16
+    /// `0.7.0` adds the boundary-crossing `Continue` reason to serialized IR1,
+    /// IR2, and IR3 `IteratorClose` operations. `0.6.0` added explicit
+    /// unresolved-name load/store operations. Engine minor `0.5.0` is intentionally skipped
+    /// because that numeric version already identifies the incompatible native
+    /// `franken-core` IR wire. `0.4.0` widened IR1 static property keys to exact UTF-16
     /// [`JsString`], while `0.3.0` widened IR1 module specifiers after `0.2.0`
     /// widened JavaScript literals and the IR3 constant pool. Historical
     /// well-formed strings retain their plain-string JSON wire shape;
     /// lone-surrogate values use `$wtf16`.
     pub const CURRENT: Self = Self {
         major: 0,
-        minor: 6,
+        minor: 7,
         patch: 0,
     };
 
@@ -382,6 +383,8 @@ impl AccessorKind {
 pub enum IteratorCloseReason {
     /// Normal loop exit via `break`.
     Break,
+    /// A `continue` targeting an enclosing loop crossed this iterator.
+    Continue,
     /// Early return from the enclosing function.
     Return,
     /// Exception thrown inside the loop body.
@@ -392,6 +395,7 @@ impl IteratorCloseReason {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Break => "break",
+            Self::Continue => "continue",
             Self::Return => "return",
             Self::Throw => "throw",
         }
@@ -3169,7 +3173,7 @@ mod tests {
 
     #[test]
     fn schema_version_display() {
-        assert_eq!(IrSchemaVersion::CURRENT.to_string(), "0.6.0");
+        assert_eq!(IrSchemaVersion::CURRENT.to_string(), "0.7.0");
     }
 
     #[test]
@@ -3969,7 +3973,7 @@ mod tests {
     fn ir_error_display() {
         let err = IrError::new(
             IrErrorCode::SchemaVersionMismatch,
-            "expected 0.6.0, got 0.7.0",
+            "expected 0.7.0, got 0.8.0",
             IrLevel::Ir1,
         );
         let display = err.to_string();
@@ -4730,6 +4734,9 @@ mod tests {
                 reason: IteratorCloseReason::Break,
             },
             Ir1Op::IteratorClose {
+                reason: IteratorCloseReason::Continue,
+            },
+            Ir1Op::IteratorClose {
                 reason: IteratorCloseReason::Return,
             },
             Ir1Op::IteratorClose {
@@ -5230,7 +5237,7 @@ mod tests {
     fn schema_version_current_value() {
         let v = IrSchemaVersion::CURRENT;
         assert_eq!(v.major, 0);
-        assert_eq!(v.minor, 6);
+        assert_eq!(v.minor, 7);
         assert_eq!(v.patch, 0);
     }
 
@@ -6069,7 +6076,7 @@ mod tests {
 
     #[test]
     fn verify_schema_version_accepts_historical_minor_versions_bd_lfq44() {
-        for minor in [1, 2, 3, 4] {
+        for minor in [1, 2, 3, 4, 6] {
             let header = IrHeader {
                 schema_version: IrSchemaVersion {
                     major: IrSchemaVersion::CURRENT.major,
@@ -6083,7 +6090,7 @@ mod tests {
 
             assert!(
                 verify_schema_version(&header).is_ok(),
-                "engine 0.6 readers retain compatibility with 0.{minor} artifacts"
+                "engine 0.7 readers retain compatibility with 0.{minor} artifacts"
             );
         }
     }
@@ -6171,7 +6178,7 @@ mod tests {
 
         // Verify error message contains specific version numbers
         assert!(err.message.contains("99.88.77"));
-        assert!(err.message.contains("0.6.0")); // current version
+        assert!(err.message.contains("0.7.0")); // current version
 
         // Verify error can be displayed and contains IR level
         let display = err.to_string();

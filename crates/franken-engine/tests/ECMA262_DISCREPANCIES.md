@@ -309,13 +309,15 @@ test reports, not buried in const sets (see DISC-005 below).
   D801, and literal U+FFFD remain distinct through static lowering, for-in,
   Object key/value/entry/name consumers, ordinary Reflect/Proxy fallback and
   duplicate detection, assign/spread, JSON, querystring, and the project's
-  CommonJS namespace projection. Core IR `0.5.0` and engine IR `0.7.0` carry
+  CommonJS namespace projection. Core IR `0.8.0` and engine IR `0.7.0` carry
   exact IR1 static keys while preserving historical well-formed wire. Engine
   `0.5.0` is skipped because it identifies the incompatible core wire;
   `bd-0k19b` adds engine-only dynamic-name operations at `0.6.0`, including
   pre-RHS resolvability status for identifier assignment.
-  `bd-g73mg` adds the engine-only boundary-crossing `Continue` close reason at
-  `0.7.0`; `bd-t9n3s` tracks propagation into the core twin.
+  `bd-g73mg` adds the boundary-crossing `Continue` close reason to engine
+  `0.7.0`; `bd-t9n3s` propagates it into core `0.8.0`. Core deliberately skips
+  `0.6.0` and `0.7.0` because those numbers identify the incompatible engine
+  wires and rejects them rather than treating them as historical core schemas.
 - **Remaining symptom:** The engine's string-key-only executable baseline
   carrier still does not model executable Symbol keys; core already carries
   typed `Value::Symbol` / `RuntimePropertyKey::Symbol` identities, and the

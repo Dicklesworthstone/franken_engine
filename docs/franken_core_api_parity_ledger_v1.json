@@ -439,7 +439,7 @@
       "engine_export_present": true,
       "file_relation": "different",
       "owner_rationale": "IR contract is central to parser/lowering/runtime compatibility and needs explicit parity.",
-      "test_expectation": "Core IR is 0.5.0 and engine IR is 0.7.0. Engine 0.5.0 is deliberately skipped because it identifies the incompatible core wire. bd-b12xs.6 widened Ir1PropertyKey::Static to JsString; bd-0k19b added engine-only LoadName, PutName, ResolveNameStatus, and PutNameWithStatus operations at 0.6.0; bd-g73mg adds engine-only IteratorCloseReason::Continue at 0.7.0 for labelled continues that cross a for-of boundary. Historical supported engine minors remain readable. bd-t9n3s tracks the core enum, lowering, runtime, and donor/oracle parity work, so ownership remains unsettled.",
+      "test_expectation": "Core IR is 0.8.0 and engine IR is 0.7.0. Engine 0.5.0 is deliberately skipped because it identifies the incompatible core wire; core 0.6.0 and 0.7.0 are explicitly rejected because they identify the incompatible engine unresolved-name and follow-on Continue wires. bd-b12xs.6 widened Ir1PropertyKey::Static to JsString; bd-0k19b added engine-only LoadName, PutName, ResolveNameStatus, and PutNameWithStatus operations at 0.6.0; bd-g73mg added IteratorCloseReason::Continue to engine 0.7.0. bd-t9n3s adds Continue to core 0.8.0 plus labelled lowering, runtime IteratorClose completion handling, and ordinary-JavaScript donor/oracle parity. Historical supported lane-specific minors remain readable, while ownership remains unsettled.",
       "known_beads": [
         "bd-f1ixz",
         "bd-lfq44",
@@ -479,7 +479,7 @@
       "engine_export_present": true,
       "file_relation": "different",
       "owner_rationale": "Lowering behavior directly affects executable runtime semantics. bd-b12xs.6 proves both lanes preserve exact static and computed property identity, but wider lowering ownership still requires representative parity evidence.",
-      "test_expectation": "Static/computed object, member, method, accessor, class, and destructuring keys now lower without projection; builtin recognizers remain deliberately well-formed-only. Engine for-of lowering now closes on body throw, function return, break, and boundary-crossing labelled exits while preserving same-loop continue. bd-t9n3s owns propagation of those ordinary control-flow semantics into core before the remaining representative AST-to-IR outputs can be called parity-proven.",
+      "test_expectation": "Static/computed object, member, method, accessor, class, and destructuring keys now lower without projection; builtin recognizers remain deliberately well-formed-only. Engine and core for-of lowering close on body throw, function return, break, and boundary-crossing labelled exits while preserving same-loop continue. bd-t9n3s supplies labelled lowering, completion-precedence, and IteratorClose donor/oracle evidence; wider representative AST-to-IR parity remains required before ownership can graduate.",
       "known_beads": [
         "bd-1vih6",
         "bd-b12xs.6",

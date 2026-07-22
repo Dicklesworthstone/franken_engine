@@ -16,7 +16,7 @@ use crate::js_string::JsString;
 /// Versioned canonical AST contract binding schema + hash semantics.
 pub const CANONICAL_AST_CONTRACT_VERSION: &str = "franken-engine.parser-ast.contract.v1";
 /// Versioned schema identifier for canonical AST structure and key ordering.
-pub const CANONICAL_AST_SCHEMA_VERSION: &str = "franken-engine.parser-ast.schema.v5";
+pub const CANONICAL_AST_SCHEMA_VERSION: &str = "franken-engine.parser-ast.schema.v7";
 /// Hash algorithm used by `SyntaxTree::canonical_hash`.
 pub const CANONICAL_AST_HASH_ALGORITHM: &str = "sha256";
 /// Prefix used in canonical AST hash strings.
@@ -166,6 +166,7 @@ pub enum Statement {
     ClassDeclaration(ClassDeclaration),
     ForIn(ForInStatement),
     ForOf(ForOfStatement),
+    Labeled(LabeledStatement),
 }
 
 impl Statement {
@@ -190,6 +191,7 @@ impl Statement {
             Self::ClassDeclaration(v) => &v.span,
             Self::ForIn(v) => &v.span,
             Self::ForOf(v) => &v.span,
+            Self::Labeled(v) => &v.span,
         }
     }
 
@@ -326,6 +328,13 @@ impl Statement {
                 map.insert(
                     "kind".to_string(),
                     CanonicalValue::String("for_of".to_string()),
+                );
+                map.insert("payload".to_string(), stmt.canonical_value());
+            }
+            Self::Labeled(stmt) => {
+                map.insert(
+                    "kind".to_string(),
+                    CanonicalValue::String("labeled".to_string()),
                 );
                 map.insert("payload".to_string(), stmt.canonical_value());
             }
@@ -1401,6 +1410,31 @@ impl ContinueStatement {
                 .map(|l| CanonicalValue::String(l.clone()))
                 .unwrap_or(CanonicalValue::Null),
         );
+        map.insert("span".to_string(), self.span.canonical_value());
+        CanonicalValue::Map(map)
+    }
+}
+
+/// A labelled statement: `label: <statement>` (ECMA-262 §14.13).
+///
+/// The label is in scope for `break label;` anywhere in `body`, and for
+/// `continue label;` only when `body` is (or resolves to) an iteration
+/// statement. The lowering pipeline resolves those two target classes.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LabeledStatement {
+    pub label: String,
+    pub body: Box<Statement>,
+    pub span: SourceSpan,
+}
+
+impl LabeledStatement {
+    pub fn canonical_value(&self) -> CanonicalValue {
+        let mut map = BTreeMap::new();
+        map.insert(
+            "label".to_string(),
+            CanonicalValue::String(self.label.clone()),
+        );
+        map.insert("body".to_string(), self.body.canonical_value());
         map.insert("span".to_string(), self.span.canonical_value());
         CanonicalValue::Map(map)
     }
@@ -2482,7 +2516,7 @@ mod tests {
         );
         assert_eq!(
             CANONICAL_AST_SCHEMA_VERSION,
-            "franken-engine.parser-ast.schema.v5"
+            "franken-engine.parser-ast.schema.v7"
         );
         assert_eq!(CANONICAL_AST_HASH_ALGORITHM, "sha256");
         assert_eq!(CANONICAL_AST_HASH_PREFIX, "sha256:");
@@ -4218,6 +4252,48 @@ mod tests {
             }
             _ => panic!("expected map"),
         }
+    }
+
+    #[test]
+    fn statement_labeled_canonical_value_and_serde_round_trip_bd_t9n3s() {
+        let stmt = Statement::Labeled(LabeledStatement {
+            label: "outer".to_string(),
+            body: Box::new(Statement::Break(BreakStatement {
+                label: Some("outer".to_string()),
+                span: make_span(),
+            })),
+            span: make_span(),
+        });
+
+        let CanonicalValue::Map(map) = stmt.canonical_value() else {
+            panic!("expected canonical map");
+        };
+        assert_eq!(
+            map.get("kind"),
+            Some(&CanonicalValue::String("labeled".to_string()))
+        );
+        let Some(CanonicalValue::Map(payload)) = map.get("payload") else {
+            panic!("expected labeled payload map");
+        };
+        assert_eq!(
+            payload.get("label"),
+            Some(&CanonicalValue::String("outer".to_string()))
+        );
+
+        let encoded = serde_json::to_string(&stmt).expect("labeled statement serializes");
+        let decoded: Statement =
+            serde_json::from_str(&encoded).expect("labeled statement deserializes");
+        assert_eq!(decoded, stmt);
+
+        let tree = SyntaxTree {
+            goal: ParseGoal::Script,
+            body: vec![stmt],
+            span: make_span(),
+        };
+        assert_eq!(
+            tree.canonical_hash(),
+            "sha256:e425fcb4e76b23ef52d082616f2b1c4c64b75e7fcbbb18d91108c7da73409fa8"
+        );
     }
 
     #[test]

@@ -88,10 +88,14 @@ they do not resolve the existing cross-seam ownership exception.
 `bd-g73mg` advances the engine IR again to `0.7.0` for the externally tagged
 `IteratorCloseReason::Continue` variant used by labelled continues that cross a
 `for..of` boundary. The engine iterator-protocol replay schema advances from
-`v1` to `v2` for the matching close reason. Core remains on IR `0.5.0` and its
-lowering does not yet model the complete body throw, function return, or outer
-labelled-exit close paths. `bd-t9n3s` records that explicit parity obligation;
-neither schema change settles ownership of the divergent IR/lowering rows.
+`v1` to `v2` for the matching close reason. `bd-t9n3s` adds the corresponding
+core IR variant and advances core from `0.5.0` to `0.8.0`. Core minors `0.6.0`
+and `0.7.0` are deliberately skipped because those numbers identify the
+incompatible engine unresolved-name and follow-on `Continue` wires. Core
+`0.8.0` readers retain historical core minors through `0.5.0` while explicitly
+rejecting engine-owned `0.6.x` and `0.7.x` artifacts. The matching core
+lowering/runtime work supplies the ordinary JavaScript parity obligation;
+neither schema change settles ownership of the otherwise divergent IR rows.
 
 ## Active Parity Exception: Executable Symbol Keys
 

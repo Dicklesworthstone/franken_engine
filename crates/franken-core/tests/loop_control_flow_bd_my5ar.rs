@@ -157,3 +157,329 @@ fn nested_iife_loops_multiply() {
     let src = "(function () { var t = 0; for (var i = 0; i < 3; i++) { for (var j = 0; j < 4; j++) { t += 1; } } return t; })();";
     assert_eq!(completion(src), Value::Int(12));
 }
+
+// --- IteratorClose parity (bd-t9n3s). --------------------------------------
+
+#[test]
+fn custom_iterator_break_calls_return_on_the_iterator_bd_t9n3s() {
+    let src = r#"
+        let nextCount = 0;
+        let closeCount = 0;
+        let iterator = {
+            next: function () {
+                nextCount = nextCount + 1;
+                return nextCount === 1
+                    ? { value: 7, done: false }
+                    : { done: true };
+            },
+            return: function () {
+                closeCount = closeCount + 1;
+                return {};
+            }
+        };
+        let iterable = { [Symbol.iterator]: function () { return iterator; } };
+        let value = 0;
+        for (const item of iterable) { value = item; break; }
+        value * 10 + closeCount;
+    "#;
+    assert_eq!(completion(src), Value::Int(71));
+}
+
+#[test]
+fn iterator_methods_receive_their_ordinary_receivers_bd_t9n3s() {
+    let src = r#"
+        let iterator = {
+            count: 0,
+            closed: 0,
+            next: function () {
+                this.count = this.count + 1;
+                return { value: 7, done: false };
+            },
+            return: function () {
+                this.closed = this.closed + 1;
+                return {};
+            }
+        };
+        let iterable = {
+            calls: 0,
+            [Symbol.iterator]: function () {
+                this.calls = this.calls + 1;
+                return iterator;
+            }
+        };
+        let seen = 0;
+        for (const value of iterable) { seen = value; break; }
+        seen * 1000 + iterable.calls * 100 + iterator.count * 10 + iterator.closed;
+    "#;
+    assert_eq!(completion(src), Value::Int(7111));
+}
+
+#[test]
+fn primitive_next_result_is_catchable_without_iterator_close_bd_t9n3s() {
+    let src = r#"
+        let closeCount = 0;
+        let iterator = {
+            next: function () { return 1; },
+            return: function () { closeCount = closeCount + 1; return {}; }
+        };
+        let iterable = { [Symbol.iterator]: function () { return iterator; } };
+        let caught = "";
+        try { for (const value of iterable) { value; } }
+        catch (error) { caught = error.name; }
+        caught + ":" + closeCount;
+    "#;
+    assert_eq!(completion(src), Value::str("TypeError:0"));
+}
+
+#[test]
+fn generator_function_is_a_callable_iterator_return_method_bd_t9n3s() {
+    let src = r#"
+        let iterator = {
+            next: function () { return { value: 7, done: false }; },
+            return: function* () { throw "body is lazy"; }
+        };
+        let iterable = { [Symbol.iterator]: function () { return iterator; } };
+        let value = 0;
+        let caught = false;
+        try { for (const item of iterable) { value = item; break; } }
+        catch (error) { caught = true; }
+        value + ":" + caught;
+    "#;
+    assert_eq!(completion(src), Value::str("7:false"));
+}
+
+#[test]
+fn body_throw_closes_once_and_original_throw_wins_bd_t9n3s() {
+    let src = r#"
+        let closeCount = 0;
+        let iterator = {
+            next: function () { return { value: 1, done: false }; },
+            return: function () { closeCount = closeCount + 1; throw "close"; }
+        };
+        let iterable = { [Symbol.iterator]: function () { return iterator; } };
+        let caught = "";
+        try { for (const value of iterable) { throw "body"; } }
+        catch (error) { caught = error; }
+        caught + ":" + closeCount;
+    "#;
+    assert_eq!(completion(src), Value::str("body:1"));
+}
+
+#[test]
+fn successful_function_return_closes_once_and_preserves_value_bd_t9n3s() {
+    let src = r#"
+        let closeCount = 0;
+        let iterator = {
+            next: function () { return { value: 7, done: false }; },
+            return: function () { closeCount = closeCount + 1; return {}; }
+        };
+        let iterable = { [Symbol.iterator]: function () { return iterator; } };
+        function f() {
+            for (const value of iterable) { return value; }
+            return 0;
+        }
+        f() + ":" + closeCount;
+    "#;
+    assert_eq!(completion(src), Value::str("7:1"));
+}
+
+#[test]
+fn return_close_primitive_replaces_return_and_is_catchable_bd_t9n3s() {
+    let src = r#"
+        let iterator = {
+            next: function () { return { value: 1, done: false }; },
+            return: function () { return 0; }
+        };
+        let iterable = { [Symbol.iterator]: function () { return iterator; } };
+        function f() {
+            try { for (const value of iterable) { return "old"; } }
+            catch (error) { return error.name; }
+        }
+        f();
+    "#;
+    assert_eq!(completion(src), Value::str("TypeError"));
+}
+
+#[test]
+fn next_throw_is_catchable_without_iterator_close_bd_t9n3s() {
+    let src = r#"
+        let closeCount = 0;
+        let iterator = {
+            next: function () { throw "step"; },
+            return: function () { closeCount = closeCount + 1; return {}; }
+        };
+        let iterable = { [Symbol.iterator]: function () { return iterator; } };
+        let caught = "";
+        try { for (const value of iterable) { value; } }
+        catch (error) { caught = error; }
+        caught + ":" + closeCount;
+    "#;
+    assert_eq!(completion(src), Value::str("step:0"));
+}
+
+#[test]
+fn labelled_break_closes_nested_iterators_innermost_first_bd_t9n3s() {
+    let src = r#"
+        let log = "";
+        let outerIterator = {
+            next: function () { return { value: 1, done: false }; },
+            return: function () { log = log + "o"; return {}; }
+        };
+        let innerIterator = {
+            next: function () { return { value: 1, done: false }; },
+            return: function () { log = log + "i"; return {}; }
+        };
+        let outerValues = { [Symbol.iterator]: function () { return outerIterator; } };
+        let innerValues = { [Symbol.iterator]: function () { return innerIterator; } };
+        outer: for (const x of outerValues) {
+            for (const y of innerValues) { break outer; }
+        }
+        log;
+    "#;
+    assert_eq!(completion(src), Value::str("io"));
+}
+
+#[test]
+fn inner_close_throw_still_closes_outer_and_keeps_inner_error_bd_t9n3s() {
+    let src = r#"
+        let log = "";
+        let outerIterator = {
+            next: function () { return { value: 1, done: false }; },
+            return: function () { log = log + "o"; throw "outer-close"; }
+        };
+        let innerIterator = {
+            next: function () { return { value: 1, done: false }; },
+            return: function () { log = log + "i"; throw "inner-close"; }
+        };
+        let outerValues = { [Symbol.iterator]: function () { return outerIterator; } };
+        let innerValues = { [Symbol.iterator]: function () { return innerIterator; } };
+        let caught = "";
+        try {
+            outer: for (const x of outerValues) {
+                for (const y of innerValues) { break outer; }
+            }
+        } catch (error) { caught = error; }
+        log + ":" + caught;
+    "#;
+    assert_eq!(completion(src), Value::str("io:inner-close"));
+}
+
+#[test]
+fn fallback_array_return_property_is_not_an_iterator_close_hook_bd_t9n3s() {
+    let src = r#"
+        let closeCount = 0;
+        let values = [7];
+        values.return = function () { closeCount = closeCount + 1; return {}; };
+        for (const value of values) { break; }
+        closeCount;
+    "#;
+    assert_eq!(completion(src), Value::Int(0));
+}
+
+#[test]
+fn same_loop_continue_and_exhaustion_do_not_close_bd_t9n3s() {
+    let src = r#"
+        let index = 0;
+        let closeCount = 0;
+        let iterator = {
+            next: function () {
+                index = index + 1;
+                return index < 3
+                    ? { value: index, done: false }
+                    : { done: true };
+            },
+            return: function () { closeCount = closeCount + 1; return {}; }
+        };
+        let iterable = { [Symbol.iterator]: function () { return iterator; } };
+        let sum = 0;
+        for (const value of iterable) { sum = sum + value; continue; }
+        sum * 10 + closeCount;
+    "#;
+    assert_eq!(completion(src), Value::Int(30));
+}
+
+#[test]
+fn labelled_continue_closes_inner_but_not_target_outer_iterator_bd_t9n3s() {
+    let src = r#"
+        let outerIndex = 0;
+        let log = "";
+        let outerIterator = {
+            next: function () {
+                outerIndex = outerIndex + 1;
+                return outerIndex < 3
+                    ? { value: outerIndex, done: false }
+                    : { done: true };
+            },
+            return: function () { log = log + "o"; return {}; }
+        };
+        let innerIterator = {
+            next: function () { return { value: 1, done: false }; },
+            return: function () { log = log + "i"; return {}; }
+        };
+        let outerValues = { [Symbol.iterator]: function () { return outerIterator; } };
+        let innerValues = { [Symbol.iterator]: function () { return innerIterator; } };
+        outer: for (const x of outerValues) {
+            for (const y of innerValues) { continue outer; }
+        }
+        log;
+    "#;
+    assert_eq!(completion(src), Value::str("ii"));
+}
+
+#[test]
+fn source_finally_runs_before_iterator_close_bd_t9n3s() {
+    let src = r#"
+        let log = "";
+        let iterator = {
+            next: function () { return { value: 1, done: false }; },
+            return: function () { log = log + "r"; return {}; }
+        };
+        let iterable = { [Symbol.iterator]: function () { return iterator; } };
+        for (const value of iterable) {
+            try { break; } finally { log = log + "f"; }
+        }
+        log;
+    "#;
+    assert_eq!(completion(src), Value::str("fr"));
+}
+
+#[test]
+fn caught_close_failure_inside_finally_preserves_outer_return_bd_t9n3s() {
+    let src = r#"
+        let closeCount = 0;
+        let iterator = {
+            next: function () { return { value: 1, done: false }; },
+            return: function () { closeCount = closeCount + 1; throw "close"; }
+        };
+        let iterable = { [Symbol.iterator]: function () { return iterator; } };
+        function f() {
+            try { return "old"; }
+            finally {
+                try { for (const value of iterable) { break; } }
+                catch (error) { error; }
+            }
+        }
+        f() + ":" + closeCount;
+    "#;
+    assert_eq!(completion(src), Value::str("old:1"));
+}
+
+#[test]
+fn uncaught_close_failure_inside_finally_replaces_outer_return_bd_t9n3s() {
+    let src = r#"
+        let closeCount = 0;
+        let iterator = {
+            next: function () { return { value: 1, done: false }; },
+            return: function () { closeCount = closeCount + 1; throw "close"; }
+        };
+        let iterable = { [Symbol.iterator]: function () { return iterator; } };
+        function f() {
+            try { return "old"; }
+            finally { for (const value of iterable) { break; } }
+        }
+        let caught = "";
+        try { f(); } catch (error) { caught = error; }
+        caught + ":" + closeCount;
+    "#;
+    assert_eq!(completion(src), Value::str("close:1"));
+}

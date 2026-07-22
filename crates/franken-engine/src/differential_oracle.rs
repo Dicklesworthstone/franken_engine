@@ -3159,6 +3159,46 @@ pub fn default_engine_core_corpus() -> Vec<EngineCoreCorpusCase> {
             "loop_accumulate",
             "(function () { var s = 0; for (var i = 0; i < 5; i++) { s += i; } return s; })();",
         ),
+        (
+            "for_of_custom_break_closes_iterator",
+            r#"let n=0,c=0; let it={next:function(){n=n+1;return n===1?{value:7,done:false}:{done:true};},return:function(){c=c+1;return {};}}; let xs={[Symbol.iterator]:function(){return it;}}; let v=0; for(const x of xs){v=x;break;} v*10+c;"#,
+        ),
+        (
+            "for_of_body_throw_keeps_original_completion",
+            r#"let c=0; let it={next:function(){return {value:1,done:false};},return:function(){c=c+1;throw "close";}}; let xs={[Symbol.iterator]:function(){return it;}}; let caught=""; try{for(const x of xs){throw "body";}}catch(e){caught=e;} caught+":"+c;"#,
+        ),
+        (
+            "for_of_nested_labelled_break_close_order",
+            r#"let log=""; let oi={next:function(){return {value:1,done:false};},return:function(){log=log+"o";return {};}}; let ii={next:function(){return {value:1,done:false};},return:function(){log=log+"i";return {};}}; let os={[Symbol.iterator]:function(){return oi;}}; let is={[Symbol.iterator]:function(){return ii;}}; outer:for(const x of os){for(const y of is){break outer;}} log;"#,
+        ),
+        (
+            "for_of_nested_labelled_continue_close_order",
+            r#"let n=0,log=""; let oi={next:function(){n=n+1;return n<3?{value:n,done:false}:{done:true};},return:function(){log=log+"o";return {};}}; let ii={next:function(){return {value:1,done:false};},return:function(){log=log+"i";return {};}}; let os={[Symbol.iterator]:function(){return oi;}}; let is={[Symbol.iterator]:function(){return ii;}}; outer:for(const x of os){for(const y of is){continue outer;}} log;"#,
+        ),
+        (
+            "for_of_return_close_primitive_replaces_return",
+            r#"let it={next:function(){return {value:1,done:false};},return:function(){return 0;}}; let xs={[Symbol.iterator]:function(){return it;}}; function f(){try{for(const x of xs){return "old";}}catch(e){return e.name;}} f();"#,
+        ),
+        (
+            "for_of_return_closes_and_preserves_value",
+            r#"let c=0; let it={next:function(){return {value:7,done:false};},return:function(){c=c+1;return {};}}; let xs={[Symbol.iterator]:function(){return it;}}; function f(){for(const x of xs){return x;}return 0;} f()+":"+c;"#,
+        ),
+        (
+            "for_of_break_close_throw_replaces_break",
+            r#"let it={next:function(){return {value:1,done:false};},return:function(){throw "close";}}; let xs={[Symbol.iterator]:function(){return it;}}; let caught=""; try{for(const x of xs){break;}}catch(e){caught=e;} caught;"#,
+        ),
+        (
+            "for_of_source_finally_precedes_iterator_close",
+            r#"let log=""; let it={next:function(){return {value:1,done:false};},return:function(){log=log+"r";return {};}}; let xs={[Symbol.iterator]:function(){return it;}}; for(const x of xs){try{break;}finally{log=log+"f";}} log;"#,
+        ),
+        (
+            "for_of_caught_close_failure_inside_finally_preserves_return",
+            r#"let c=0; let it={next:function(){return {value:1,done:false};},return:function(){c=c+1;throw "close";}}; let xs={[Symbol.iterator]:function(){return it;}}; function f(){try{return "old";}finally{try{for(const x of xs){break;}}catch(e){e;}}} f()+":"+c;"#,
+        ),
+        (
+            "for_of_uncaught_close_failure_inside_finally_replaces_return",
+            r#"let c=0; let it={next:function(){return {value:1,done:false};},return:function(){c=c+1;throw "close";}}; let xs={[Symbol.iterator]:function(){return it;}}; function f(){try{return "old";}finally{for(const x of xs){break;}}} let caught="";try{f();}catch(e){caught=e;}caught+":"+c;"#,
+        ),
         ("array_literal", "[1, 2, 3];"),
         ("object_literal", "({a: 1, b: 2});"),
         (

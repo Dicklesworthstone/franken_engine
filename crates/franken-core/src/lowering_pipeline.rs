@@ -494,6 +494,7 @@ pub fn validate_ir0_static_semantics(ir0: &Ir0Module) -> SemanticValidationResul
             | Statement::For(_)
             | Statement::ForIn(_)
             | Statement::ForOf(_)
+            | Statement::Labeled(_)
             | Statement::While(_)
             | Statement::DoWhile(_)
             | Statement::Return(_)
@@ -922,6 +923,7 @@ fn path_statement_contains_usage<F: Fn(&Expression) -> bool>(stmt: &Statement, u
         Statement::ForOf(for_of) => {
             uses(&for_of.iterable) || path_statement_contains_usage(&for_of.body, uses)
         }
+        Statement::Labeled(labeled) => path_statement_contains_usage(&labeled.body, uses),
         Statement::While(while_stmt) => {
             uses(&while_stmt.condition) || path_statement_contains_usage(&while_stmt.body, uses)
         }
@@ -1967,10 +1969,95 @@ fn alloc_label(counter: &mut u32) -> u32 {
     id
 }
 
+fn alloc_finally_forwarder(
+    forwarders: &mut Vec<(u32, u32)>,
+    target: Option<u32>,
+    label_counter: &mut u32,
+) -> Option<u32> {
+    let target = target?;
+    if let Some((via_label, _)) = forwarders
+        .iter()
+        .find(|(_, actual_target)| *actual_target == target)
+    {
+        return Some(*via_label);
+    }
+
+    let via_label = alloc_label(label_counter);
+    forwarders.push((via_label, target));
+    Some(via_label)
+}
+
 #[derive(Debug, Clone, Copy, Default)]
 struct ControlFlowTargets {
     break_label: Option<u32>,
     continue_label: Option<u32>,
+}
+
+#[derive(Debug, Clone)]
+struct LabelFrame {
+    name: String,
+    break_target: u32,
+    continue_target: Option<u32>,
+}
+
+#[derive(Debug, Clone, Default)]
+struct LabelContext {
+    frames: Vec<LabelFrame>,
+    pending: Vec<String>,
+}
+
+impl LabelContext {
+    fn resolve(&self, name: &str) -> Option<&LabelFrame> {
+        self.frames.iter().rev().find(|frame| frame.name == name)
+    }
+
+    fn contains(&self, name: &str) -> bool {
+        self.frames.iter().any(|frame| frame.name == name)
+            || self.pending.iter().any(|pending| pending == name)
+    }
+
+    fn with_pending(&self, label: String) -> Self {
+        let mut child = self.clone();
+        child.pending.push(label);
+        child
+    }
+
+    fn enter_loop(&self, break_target: u32, continue_target: u32) -> Self {
+        let mut child = self.clone();
+        for name in &self.pending {
+            child.frames.push(LabelFrame {
+                name: name.clone(),
+                break_target,
+                continue_target: Some(continue_target),
+            });
+        }
+        child.pending.clear();
+        child
+    }
+
+    fn remap_abrupt_targets(
+        &self,
+        break_forwarders: &[(u32, u32)],
+        continue_forwarders: &[(u32, u32)],
+    ) -> Self {
+        let mut child = self.clone();
+        for frame in &mut child.frames {
+            if let Some(via_label) = break_forwarders.iter().find_map(|(via_label, actual)| {
+                (*actual == frame.break_target).then_some(*via_label)
+            }) {
+                frame.break_target = via_label;
+            }
+            if let Some(continue_target) = frame.continue_target
+                && let Some(via_label) =
+                    continue_forwarders.iter().find_map(|(via_label, actual)| {
+                        (*actual == continue_target).then_some(*via_label)
+                    })
+            {
+                frame.continue_target = Some(via_label);
+            }
+        }
+        child
+    }
 }
 
 fn make_internal_binding_name(purpose: &str, index: u32) -> String {
@@ -2132,6 +2219,9 @@ fn reserve_hoisted_var_bindings(
                         visit(nested, binding_lookup, binding_index, declared);
                     }
                 }
+            }
+            Statement::Labeled(labeled) => {
+                visit(&labeled.body, binding_lookup, binding_index, declared);
             }
             Statement::FunctionDeclaration(_) | Statement::ClassDeclaration(_) => {}
             _ => {}
@@ -2386,6 +2476,7 @@ fn lower_lexical_statement_sequence(
     scope_id: ScopeId,
     label_counter: &mut u32,
     control_flow: ControlFlowTargets,
+    label_ctx: &LabelContext,
 ) -> Result<(), LoweringPipelineError> {
     let enclosing_bindings =
         reserve_block_lexical_bindings(statements, None, binding_lookup, binding_index);
@@ -2399,6 +2490,7 @@ fn lower_lexical_statement_sequence(
             scope_id,
             label_counter,
             control_flow,
+            label_ctx,
         )
     });
     restore_block_lexical_bindings(binding_lookup, enclosing_bindings);
@@ -3380,6 +3472,7 @@ fn lower_statement_to_ir1(
         scope_id,
         label_counter,
         ControlFlowTargets::default(),
+        &LabelContext::default(),
     )
 }
 
@@ -3393,6 +3486,7 @@ fn lower_statement_to_ir1_with_flow(
     scope_id: ScopeId,
     label_counter: &mut u32,
     control_flow: ControlFlowTargets,
+    label_ctx: &LabelContext,
 ) -> Result<(), LoweringPipelineError> {
     match statement {
         Statement::Expression(stmt) => {
@@ -3519,6 +3613,7 @@ fn lower_statement_to_ir1_with_flow(
                     scope_id,
                     label_counter,
                     control_flow,
+                    label_ctx,
                 )
             });
             restore_block_lexical_bindings(binding_lookup, enclosing_bindings);
@@ -3549,6 +3644,7 @@ fn lower_statement_to_ir1_with_flow(
                 scope_id,
                 label_counter,
                 control_flow,
+                label_ctx,
             )?;
             ops.push(Ir1Op::Jump {
                 label_id: end_label,
@@ -3564,6 +3660,7 @@ fn lower_statement_to_ir1_with_flow(
                     scope_id,
                     label_counter,
                     control_flow,
+                    label_ctx,
                 )?;
             }
             ops.push(Ir1Op::Label { id: end_label });
@@ -3588,6 +3685,7 @@ fn lower_statement_to_ir1_with_flow(
                     scope_id,
                     label_counter,
                     control_flow,
+                    label_ctx,
                 )?;
             }
             let loop_label = alloc_label(label_counter);
@@ -3621,6 +3719,7 @@ fn lower_statement_to_ir1_with_flow(
                     break_label: Some(end_label),
                     continue_label: Some(continue_label),
                 },
+                &label_ctx.enter_loop(end_label, continue_label),
             )?;
             ops.push(Ir1Op::Label { id: continue_label });
             if let Some(update) = &for_stmt.update {
@@ -3803,6 +3902,7 @@ fn lower_statement_to_ir1_with_flow(
                     break_label: Some(end_label),
                     continue_label: Some(continue_label),
                 },
+                &label_ctx.enter_loop(end_label, continue_label),
             )?;
             ops.push(Ir1Op::Label { id: continue_label });
             ops.push(Ir1Op::Jump {
@@ -3852,15 +3952,33 @@ fn lower_statement_to_ir1_with_flow(
                 label_counter,
             )?;
             ops.push(Ir1Op::ForOfInit);
+            let iterator_binding_id = alloc_internal_binding(
+                bindings,
+                binding_lookup,
+                binding_index,
+                scope_id,
+                "for_of_iterator",
+            )?;
+            ops.push(Ir1Op::StoreBinding {
+                binding_id: iterator_binding_id,
+            });
 
             let loop_label = alloc_label(label_counter);
             let continue_label = alloc_label(label_counter);
             let close_label = alloc_label(label_counter);
+            let throw_close_label = alloc_label(label_counter);
+            let return_close_label = alloc_label(label_counter);
             let end_label = alloc_label(label_counter);
 
             ops.push(Ir1Op::Label { id: loop_label });
             ops.push(Ir1Op::ForOfNext {
                 done_label: end_label,
+            });
+            // IteratorStep/IteratorValue failures do not close the iterator.
+            // Protect only the loop-head assignment once a value exists.
+            ops.push(Ir1Op::BeginTry {
+                catch_label: throw_close_label,
+                finally_label: Some(throw_close_label),
             });
 
             // Bind the yielded value to the loop variable.
@@ -3918,6 +4036,33 @@ fn lower_statement_to_ir1_with_flow(
                 )?;
             }
 
+            ops.push(Ir1Op::EndTry);
+
+            let mut outer_break_close_forwarders = Vec::new();
+            let mut outer_continue_close_forwarders = Vec::new();
+            for frame in &label_ctx.frames {
+                alloc_finally_forwarder(
+                    &mut outer_break_close_forwarders,
+                    Some(frame.break_target),
+                    label_counter,
+                );
+                alloc_finally_forwarder(
+                    &mut outer_continue_close_forwarders,
+                    frame.continue_target,
+                    label_counter,
+                );
+            }
+            let body_label_ctx = label_ctx
+                .remap_abrupt_targets(
+                    &outer_break_close_forwarders,
+                    &outer_continue_close_forwarders,
+                )
+                .enter_loop(close_label, continue_label);
+            ops.push(Ir1Op::BeginTry {
+                catch_label: throw_close_label,
+                finally_label: Some(return_close_label),
+            });
+
             lower_statement_to_ir1_with_flow(
                 &for_of_stmt.body,
                 ops,
@@ -3930,16 +4075,83 @@ fn lower_statement_to_ir1_with_flow(
                     break_label: Some(close_label),
                     continue_label: Some(continue_label),
                 },
+                &body_label_ctx,
             )?;
-            ops.push(Ir1Op::Label { id: continue_label });
+            ops.push(Ir1Op::EndTry);
             ops.push(Ir1Op::Jump {
                 label_id: loop_label,
             });
-            // Break path: close the iterator before exiting.
+
+            // Continuing this loop leaves the synthetic body frame but does
+            // not cross an iterator boundary.
+            ops.push(Ir1Op::Label { id: continue_label });
+            ops.push(Ir1Op::EndTry);
+            ops.push(Ir1Op::Jump {
+                label_id: loop_label,
+            });
+
             ops.push(Ir1Op::Label { id: close_label });
+            ops.push(Ir1Op::EndTry);
+            ops.push(Ir1Op::LoadBinding {
+                binding_id: iterator_binding_id,
+            });
             ops.push(Ir1Op::IteratorClose {
                 reason: IteratorCloseReason::Break,
             });
+            ops.push(Ir1Op::Jump {
+                label_id: end_label,
+            });
+
+            for (via_label, actual_target) in outer_break_close_forwarders {
+                ops.push(Ir1Op::Label { id: via_label });
+                ops.push(Ir1Op::EndTry);
+                ops.push(Ir1Op::LoadBinding {
+                    binding_id: iterator_binding_id,
+                });
+                ops.push(Ir1Op::IteratorClose {
+                    reason: IteratorCloseReason::Break,
+                });
+                ops.push(Ir1Op::Jump {
+                    label_id: actual_target,
+                });
+            }
+            for (via_label, actual_target) in outer_continue_close_forwarders {
+                ops.push(Ir1Op::Label { id: via_label });
+                ops.push(Ir1Op::EndTry);
+                ops.push(Ir1Op::LoadBinding {
+                    binding_id: iterator_binding_id,
+                });
+                ops.push(Ir1Op::IteratorClose {
+                    reason: IteratorCloseReason::Continue,
+                });
+                ops.push(Ir1Op::Jump {
+                    label_id: actual_target,
+                });
+            }
+
+            ops.push(Ir1Op::Label {
+                id: return_close_label,
+            });
+            ops.push(Ir1Op::EnterFinally);
+            ops.push(Ir1Op::LoadBinding {
+                binding_id: iterator_binding_id,
+            });
+            ops.push(Ir1Op::IteratorClose {
+                reason: IteratorCloseReason::Return,
+            });
+            ops.push(Ir1Op::EndFinally);
+
+            ops.push(Ir1Op::Label {
+                id: throw_close_label,
+            });
+            ops.push(Ir1Op::EnterFinally);
+            ops.push(Ir1Op::LoadBinding {
+                binding_id: iterator_binding_id,
+            });
+            ops.push(Ir1Op::IteratorClose {
+                reason: IteratorCloseReason::Throw,
+            });
+            ops.push(Ir1Op::EndFinally);
             ops.push(Ir1Op::Label { id: end_label });
             restore_block_lexical_bindings(binding_lookup, for_of_enclosing_bindings);
         }
@@ -3972,6 +4184,7 @@ fn lower_statement_to_ir1_with_flow(
                     break_label: Some(end_label),
                     continue_label: Some(loop_label),
                 },
+                &label_ctx.enter_loop(end_label, loop_label),
             )?;
             ops.push(Ir1Op::Jump {
                 label_id: loop_label,
@@ -3995,6 +4208,7 @@ fn lower_statement_to_ir1_with_flow(
                     break_label: Some(end_label),
                     continue_label: Some(continue_label),
                 },
+                &label_ctx.enter_loop(end_label, continue_label),
             )?;
             ops.push(Ir1Op::Label { id: continue_label });
             lower_expression_to_ir1(
@@ -4061,41 +4275,95 @@ fn lower_statement_to_ir1_with_flow(
             // when there is no finalizer. Otherwise a later throw/return can
             // re-enter the stale handler after control has left the try.
             let try_needs_abrupt_forwarders = has_handler || has_finalizer;
+            let mut try_break_forwarders = Vec::new();
+            let mut try_continue_forwarders = Vec::new();
+            let mut catch_break_forwarders = Vec::new();
+            let mut catch_continue_forwarders = Vec::new();
             let try_break_forwarder = if try_needs_abrupt_forwarders {
-                control_flow.break_label.map(|_| alloc_label(label_counter))
+                alloc_finally_forwarder(
+                    &mut try_break_forwarders,
+                    control_flow.break_label,
+                    label_counter,
+                )
             } else {
                 None
             };
             let try_continue_forwarder = if try_needs_abrupt_forwarders {
-                control_flow
-                    .continue_label
-                    .map(|_| alloc_label(label_counter))
+                alloc_finally_forwarder(
+                    &mut try_continue_forwarders,
+                    control_flow.continue_label,
+                    label_counter,
+                )
             } else {
                 None
             };
+            if try_needs_abrupt_forwarders {
+                for frame in &label_ctx.frames {
+                    alloc_finally_forwarder(
+                        &mut try_break_forwarders,
+                        Some(frame.break_target),
+                        label_counter,
+                    );
+                    alloc_finally_forwarder(
+                        &mut try_continue_forwarders,
+                        frame.continue_target,
+                        label_counter,
+                    );
+                }
+            }
             let try_control_flow = ControlFlowTargets {
                 break_label: try_break_forwarder.or(control_flow.break_label),
                 continue_label: try_continue_forwarder.or(control_flow.continue_label),
+            };
+            let try_label_ctx = if try_needs_abrupt_forwarders {
+                label_ctx.remap_abrupt_targets(&try_break_forwarders, &try_continue_forwarders)
+            } else {
+                label_ctx.clone()
             };
             // A catch body has no live frame unless it is guarded by the
             // nested try/finally used to route rethrows through `finally`.
             // Give that guard its own forwarders so each exit pops exactly
             // the frame that is active on its path.
             let catch_break_forwarder = if has_handler && has_finalizer {
-                control_flow.break_label.map(|_| alloc_label(label_counter))
+                alloc_finally_forwarder(
+                    &mut catch_break_forwarders,
+                    control_flow.break_label,
+                    label_counter,
+                )
             } else {
                 None
             };
             let catch_continue_forwarder = if has_handler && has_finalizer {
-                control_flow
-                    .continue_label
-                    .map(|_| alloc_label(label_counter))
+                alloc_finally_forwarder(
+                    &mut catch_continue_forwarders,
+                    control_flow.continue_label,
+                    label_counter,
+                )
             } else {
                 None
             };
+            if has_handler && has_finalizer {
+                for frame in &label_ctx.frames {
+                    alloc_finally_forwarder(
+                        &mut catch_break_forwarders,
+                        Some(frame.break_target),
+                        label_counter,
+                    );
+                    alloc_finally_forwarder(
+                        &mut catch_continue_forwarders,
+                        frame.continue_target,
+                        label_counter,
+                    );
+                }
+            }
             let catch_control_flow = ControlFlowTargets {
                 break_label: catch_break_forwarder.or(control_flow.break_label),
                 continue_label: catch_continue_forwarder.or(control_flow.continue_label),
+            };
+            let catch_label_ctx = if has_handler && has_finalizer {
+                label_ctx.remap_abrupt_targets(&catch_break_forwarders, &catch_continue_forwarders)
+            } else {
+                label_ctx.clone()
             };
             // When there is a catch handler, allocate a distinct catch label.
             // When there is only a finally (no catch), route exceptions
@@ -4122,21 +4390,20 @@ fn lower_statement_to_ir1_with_flow(
                     scope_id,
                     label_counter,
                     try_control_flow,
+                    &try_label_ctx,
                 )
             });
             restore_block_lexical_bindings(binding_lookup, try_enclosing_bindings);
             try_result?;
             let has_try_abrupt_forwarders =
-                try_break_forwarder.is_some() || try_continue_forwarder.is_some();
+                !try_break_forwarders.is_empty() || !try_continue_forwarders.is_empty();
             let normal_try_complete_label =
                 has_try_abrupt_forwarders.then(|| alloc_label(label_counter));
             if let Some(normal_try_complete_label) = normal_try_complete_label {
                 ops.push(Ir1Op::Jump {
                     label_id: normal_try_complete_label,
                 });
-                if let (Some(via_break_label), Some(actual_break_label)) =
-                    (try_break_forwarder, control_flow.break_label)
-                {
+                for (via_break_label, actual_break_label) in try_break_forwarders {
                     ops.push(Ir1Op::Label {
                         id: via_break_label,
                     });
@@ -4151,15 +4418,14 @@ fn lower_statement_to_ir1_with_flow(
                             scope_id,
                             label_counter,
                             control_flow,
+                            label_ctx,
                         )?;
                     }
                     ops.push(Ir1Op::Jump {
                         label_id: actual_break_label,
                     });
                 }
-                if let (Some(via_continue_label), Some(actual_continue_label)) =
-                    (try_continue_forwarder, control_flow.continue_label)
-                {
+                for (via_continue_label, actual_continue_label) in try_continue_forwarders {
                     ops.push(Ir1Op::Label {
                         id: via_continue_label,
                     });
@@ -4174,6 +4440,7 @@ fn lower_statement_to_ir1_with_flow(
                             scope_id,
                             label_counter,
                             control_flow,
+                            label_ctx,
                         )?;
                     }
                     ops.push(Ir1Op::Jump {
@@ -4242,6 +4509,7 @@ fn lower_statement_to_ir1_with_flow(
                                 scope_id,
                                 label_counter,
                                 catch_control_flow,
+                                &catch_label_ctx,
                             )?;
                         }
                         Ok(())
@@ -4251,16 +4519,14 @@ fn lower_statement_to_ir1_with_flow(
                 }
                 if catch_requires_finally_guard {
                     let has_catch_abrupt_forwarders =
-                        catch_break_forwarder.is_some() || catch_continue_forwarder.is_some();
+                        !catch_break_forwarders.is_empty() || !catch_continue_forwarders.is_empty();
                     let normal_catch_complete_label =
                         has_catch_abrupt_forwarders.then(|| alloc_label(label_counter));
                     if let Some(normal_catch_complete_label) = normal_catch_complete_label {
                         ops.push(Ir1Op::Jump {
                             label_id: normal_catch_complete_label,
                         });
-                        if let (Some(via_break_label), Some(actual_break_label)) =
-                            (catch_break_forwarder, control_flow.break_label)
-                        {
+                        for (via_break_label, actual_break_label) in catch_break_forwarders {
                             ops.push(Ir1Op::Label {
                                 id: via_break_label,
                             });
@@ -4275,14 +4541,14 @@ fn lower_statement_to_ir1_with_flow(
                                     scope_id,
                                     label_counter,
                                     control_flow,
+                                    label_ctx,
                                 )?;
                             }
                             ops.push(Ir1Op::Jump {
                                 label_id: actual_break_label,
                             });
                         }
-                        if let (Some(via_continue_label), Some(actual_continue_label)) =
-                            (catch_continue_forwarder, control_flow.continue_label)
+                        for (via_continue_label, actual_continue_label) in catch_continue_forwarders
                         {
                             ops.push(Ir1Op::Label {
                                 id: via_continue_label,
@@ -4298,6 +4564,7 @@ fn lower_statement_to_ir1_with_flow(
                                     scope_id,
                                     label_counter,
                                     control_flow,
+                                    label_ctx,
                                 )?;
                             }
                             ops.push(Ir1Op::Jump {
@@ -4325,15 +4592,38 @@ fn lower_statement_to_ir1_with_flow(
                 let fl = finally_label.ok_or(LoweringPipelineError::InvariantViolation {
                     detail: "Finalizer missing lowering label",
                 })?;
-                let finalizer_break_forwarder =
-                    control_flow.break_label.map(|_| alloc_label(label_counter));
-                let finalizer_continue_forwarder = control_flow
-                    .continue_label
-                    .map(|_| alloc_label(label_counter));
+                let mut finalizer_break_forwarders = Vec::new();
+                let mut finalizer_continue_forwarders = Vec::new();
+                let finalizer_break_forwarder = alloc_finally_forwarder(
+                    &mut finalizer_break_forwarders,
+                    control_flow.break_label,
+                    label_counter,
+                );
+                let finalizer_continue_forwarder = alloc_finally_forwarder(
+                    &mut finalizer_continue_forwarders,
+                    control_flow.continue_label,
+                    label_counter,
+                );
+                for frame in &label_ctx.frames {
+                    alloc_finally_forwarder(
+                        &mut finalizer_break_forwarders,
+                        Some(frame.break_target),
+                        label_counter,
+                    );
+                    alloc_finally_forwarder(
+                        &mut finalizer_continue_forwarders,
+                        frame.continue_target,
+                        label_counter,
+                    );
+                }
                 let finalizer_control_flow = ControlFlowTargets {
                     break_label: finalizer_break_forwarder.or(control_flow.break_label),
                     continue_label: finalizer_continue_forwarder.or(control_flow.continue_label),
                 };
+                let finalizer_label_ctx = label_ctx.remap_abrupt_targets(
+                    &finalizer_break_forwarders,
+                    &finalizer_continue_forwarders,
+                );
                 ops.push(Ir1Op::Label { id: fl });
                 ops.push(Ir1Op::EnterFinally);
                 lower_lexical_statement_sequence(
@@ -4345,18 +4635,17 @@ fn lower_statement_to_ir1_with_flow(
                     scope_id,
                     label_counter,
                     finalizer_control_flow,
+                    &finalizer_label_ctx,
                 )?;
-                let has_finalizer_abrupt_forwarders =
-                    finalizer_break_forwarder.is_some() || finalizer_continue_forwarder.is_some();
+                let has_finalizer_abrupt_forwarders = !finalizer_break_forwarders.is_empty()
+                    || !finalizer_continue_forwarders.is_empty();
                 let normal_finally_complete_label =
                     has_finalizer_abrupt_forwarders.then(|| alloc_label(label_counter));
                 if let Some(normal_finally_complete_label) = normal_finally_complete_label {
                     ops.push(Ir1Op::Jump {
                         label_id: normal_finally_complete_label,
                     });
-                    if let (Some(via_break_label), Some(actual_break_label)) =
-                        (finalizer_break_forwarder, control_flow.break_label)
-                    {
+                    for (via_break_label, actual_break_label) in finalizer_break_forwarders {
                         ops.push(Ir1Op::Label {
                             id: via_break_label,
                         });
@@ -4365,8 +4654,7 @@ fn lower_statement_to_ir1_with_flow(
                             label_id: actual_break_label,
                         });
                     }
-                    if let (Some(via_continue_label), Some(actual_continue_label)) =
-                        (finalizer_continue_forwarder, control_flow.continue_label)
+                    for (via_continue_label, actual_continue_label) in finalizer_continue_forwarders
                     {
                         ops.push(Ir1Op::Label {
                             id: via_continue_label,
@@ -4397,45 +4685,123 @@ fn lower_statement_to_ir1_with_flow(
                 scope_id,
                 label_counter,
                 control_flow,
+                label_ctx,
             )?;
         }
         Statement::Break(brk) => {
-            if let Some(label) = &brk.label {
-                return Err(LoweringPipelineError::SemanticViolation(
-                    SemanticError::new(
-                        SemanticErrorCode::UndefinedLabel,
-                        Some(label.clone()),
+            let label_id = if let Some(label) = &brk.label {
+                match label_ctx.resolve(label) {
+                    Some(frame) => frame.break_target,
+                    None => {
+                        return Err(LoweringPipelineError::SemanticViolation(
+                            SemanticError::new(
+                                SemanticErrorCode::UndefinedLabel,
+                                Some(label.clone()),
+                                Some(brk.span.clone()),
+                            ),
+                        ));
+                    }
+                }
+            } else {
+                control_flow.break_label.ok_or_else(|| {
+                    LoweringPipelineError::SemanticViolation(SemanticError::new(
+                        SemanticErrorCode::IllegalBreak,
+                        None,
                         Some(brk.span.clone()),
-                    ),
-                ));
-            }
-            let label_id = control_flow.break_label.ok_or_else(|| {
-                LoweringPipelineError::SemanticViolation(SemanticError::new(
-                    SemanticErrorCode::IllegalBreak,
-                    None,
-                    Some(brk.span.clone()),
-                ))
-            })?;
+                    ))
+                })?
+            };
             ops.push(Ir1Op::Jump { label_id });
         }
         Statement::Continue(cont) => {
-            if let Some(label) = &cont.label {
+            let label_id = if let Some(label) = &cont.label {
+                match label_ctx.resolve(label) {
+                    Some(frame) => frame.continue_target.ok_or_else(|| {
+                        LoweringPipelineError::SemanticViolation(SemanticError::new(
+                            SemanticErrorCode::IllegalContinue,
+                            Some(label.clone()),
+                            Some(cont.span.clone()),
+                        ))
+                    })?,
+                    None => {
+                        return Err(LoweringPipelineError::SemanticViolation(
+                            SemanticError::new(
+                                SemanticErrorCode::UndefinedLabel,
+                                Some(label.clone()),
+                                Some(cont.span.clone()),
+                            ),
+                        ));
+                    }
+                }
+            } else {
+                control_flow.continue_label.ok_or_else(|| {
+                    LoweringPipelineError::SemanticViolation(SemanticError::new(
+                        SemanticErrorCode::IllegalContinue,
+                        None,
+                        Some(cont.span.clone()),
+                    ))
+                })?
+            };
+            ops.push(Ir1Op::Jump { label_id });
+        }
+        Statement::Labeled(labeled) => {
+            if label_ctx.contains(&labeled.label) {
                 return Err(LoweringPipelineError::SemanticViolation(
                     SemanticError::new(
-                        SemanticErrorCode::UndefinedLabel,
-                        Some(label.clone()),
-                        Some(cont.span.clone()),
+                        SemanticErrorCode::DuplicateLabel,
+                        Some(labeled.label.clone()),
+                        Some(labeled.span.clone()),
                     ),
                 ));
             }
-            let label_id = control_flow.continue_label.ok_or_else(|| {
-                LoweringPipelineError::SemanticViolation(SemanticError::new(
-                    SemanticErrorCode::IllegalContinue,
-                    None,
-                    Some(cont.span.clone()),
-                ))
-            })?;
-            ops.push(Ir1Op::Jump { label_id });
+            let body = labeled.body.as_ref();
+            let defers_to_loop = matches!(
+                body,
+                Statement::For(_)
+                    | Statement::While(_)
+                    | Statement::DoWhile(_)
+                    | Statement::ForIn(_)
+                    | Statement::ForOf(_)
+                    | Statement::Labeled(_)
+            );
+            if defers_to_loop {
+                let child = label_ctx.with_pending(labeled.label.clone());
+                lower_statement_to_ir1_with_flow(
+                    body,
+                    ops,
+                    bindings,
+                    binding_lookup,
+                    binding_index,
+                    scope_id,
+                    label_counter,
+                    control_flow,
+                    &child,
+                )?;
+            } else {
+                let after_label = alloc_label(label_counter);
+                let mut child = label_ctx.clone();
+                let mut names = std::mem::take(&mut child.pending);
+                names.push(labeled.label.clone());
+                for name in names {
+                    child.frames.push(LabelFrame {
+                        name,
+                        break_target: after_label,
+                        continue_target: None,
+                    });
+                }
+                lower_statement_to_ir1_with_flow(
+                    body,
+                    ops,
+                    bindings,
+                    binding_lookup,
+                    binding_index,
+                    scope_id,
+                    label_counter,
+                    control_flow,
+                    &child,
+                )?;
+                ops.push(Ir1Op::Label { id: after_label });
+            }
         }
         Statement::FunctionDeclaration(func) => {
             let name = func.name.clone().unwrap_or_else(|| "anonymous".to_string());
@@ -4936,6 +5302,7 @@ fn lower_switch_to_ir1(
     scope_id: ScopeId,
     label_counter: &mut u32,
     control_flow: ControlFlowTargets,
+    label_ctx: &LabelContext,
 ) -> Result<(), LoweringPipelineError> {
     lower_expression_to_ir1(
         &switch_stmt.discriminant,
@@ -5028,6 +5395,7 @@ fn lower_switch_to_ir1(
                     scope_id,
                     label_counter,
                     switch_flow,
+                    label_ctx,
                 )?;
             }
         }
@@ -5544,6 +5912,14 @@ pub fn lower_ir2_to_ir3(
     let mut iterator_cleanup_labels = BTreeMap::<u32, Reg>::new();
     let mut pending_jumps = Vec::<PendingJump>::new();
     let mut catch_entry_labels = BTreeSet::<u32>::new();
+    let explicit_finally_entry_labels = ir2
+        .ops
+        .windows(2)
+        .filter_map(|pair| match (&pair[0].inner, &pair[1].inner) {
+            (Ir1Op::Label { id }, Ir1Op::EnterFinally) => Some(*id),
+            _ => None,
+        })
+        .collect::<BTreeSet<_>>();
     // Deferred function bodies:
     // (body_ir1_ops, param_names, name, free_vars, free_var_ids,
     //  is_generator, rest_param_index).
@@ -5922,7 +6298,9 @@ pub fn lower_ir2_to_ir3(
                 // catch, exceptions go directly to the finally block and
                 // EnterCatch must NOT be emitted — it would consume the pending
                 // exception before EndFinally can re-throw it.
-                if finally_label.as_ref() != Some(catch_label) {
+                if finally_label.as_ref() != Some(catch_label)
+                    && !explicit_finally_entry_labels.contains(catch_label)
+                {
                     catch_entry_labels.insert(*catch_label);
                 }
                 let instr_idx = ir3.instructions.len();
@@ -7017,6 +7395,13 @@ pub fn lower_ir2_to_ir3(
         let mut fn_label_targets = BTreeMap::<u32, u32>::new();
         let mut fn_pending_jumps = Vec::<PendingJump>::new();
         let mut fn_catch_entry_labels = BTreeSet::<u32>::new();
+        let fn_explicit_finally_entry_labels = body_ops
+            .windows(2)
+            .filter_map(|pair| match (&pair[0], &pair[1]) {
+                (Ir1Op::Label { id }, Ir1Op::EnterFinally) => Some(*id),
+                _ => None,
+            })
+            .collect::<BTreeSet<_>>();
         // Iterator registers to drop from the value stack when their loop's
         // done-label lands (bd-ddloz; mirrors the top-level pass).
         let mut fn_iterator_cleanup_labels = BTreeMap::<u32, Reg>::new();
@@ -7165,6 +7550,12 @@ pub fn lower_ir2_to_ir3(
         infer_ir2_flow_annotations_for_ops(&mut body_ir2_ops);
         for ir2_op in &body_ir2_ops {
             let body_ir1 = &ir2_op.inner;
+            // An explicit source return is encoded as `[value, Pop, Return]`.
+            // Treat the remembered Pop register as an adjacency marker so a
+            // control-flow carrier left below it on the linear value stack
+            // cannot replace the return value, and an older expression Pop
+            // cannot leak into a later synthetic fall-off return.
+            let return_value_from_preceding_pop = fn_last_popped.take();
             if matches!(ir2_op.effect, EffectBoundary::HostcallEffect) {
                 let capability = ir2_op
                     .required_capability
@@ -7337,11 +7728,12 @@ pub fn lower_ir2_to_ir3(
                     // bd-fqlfw.2.11.4: deliver the actual return value. The
                     // synthetic fall-off-end return (`[LoadLiteral Undefined,
                     // Return]`, no Pop — appended ~line 2164) leaves its value on
-                    // the stack, so prefer the stack top; an explicit `return X`
-                    // (`[eval X, Pop, Return]`) emptied the stack via its Pop, so
-                    // fall back to the register that Pop discarded
-                    // (`fn_last_popped`). `unwrap_or(0)` only as a last resort.
-                    let value = fn_value_stack.pop().or(fn_last_popped).unwrap_or(0);
+                    // the stack. An explicit `return X` (`[eval X, Pop, Return]`)
+                    // must prefer the immediately preceding Pop register over
+                    // any iterator/control carrier remaining below it.
+                    let value = return_value_from_preceding_pop
+                        .or_else(|| fn_value_stack.pop())
+                        .unwrap_or(0);
                     ir3.instructions.push(Ir3Instruction::Return { value });
                 }
                 Ir1Op::Call { arg_count } => {
@@ -7811,7 +8203,9 @@ pub fn lower_ir2_to_ir3(
                     catch_label,
                     finally_label,
                 } => {
-                    if finally_label.as_ref() != Some(catch_label) {
+                    if finally_label.as_ref() != Some(catch_label)
+                        && !fn_explicit_finally_entry_labels.contains(catch_label)
+                    {
                         fn_catch_entry_labels.insert(*catch_label);
                     }
                     let instruction_index = ir3.instructions.len();
@@ -11715,11 +12109,11 @@ mod tests {
         ArrowBody, AssignmentOperator, BinaryOperator, BindingPattern, BlockStatement,
         BreakStatement, CatchClause, ContinueStatement, DoWhileStatement, ExportDeclaration,
         ExportKind, Expression, ExpressionStatement, ForInStatement, ForOfStatement, ForStatement,
-        FunctionDeclaration, FunctionParam, IfStatement, ImportDeclaration, MethodDefinition,
-        MethodKind, ObjectPatternProperty, ObjectProperty, ParseGoal, ReturnStatement, SourceSpan,
-        Statement, SwitchCase, SwitchStatement, SyntaxTree, ThrowStatement, TryCatchStatement,
-        UnaryOperator, VariableDeclaration, VariableDeclarationKind, VariableDeclarator,
-        WhileStatement,
+        FunctionDeclaration, FunctionParam, IfStatement, ImportDeclaration, LabeledStatement,
+        MethodDefinition, MethodKind, ObjectPatternProperty, ObjectProperty, ParseGoal,
+        ReturnStatement, SourceSpan, Statement, SwitchCase, SwitchStatement, SyntaxTree,
+        ThrowStatement, TryCatchStatement, UnaryOperator, VariableDeclaration,
+        VariableDeclarationKind, VariableDeclarator, WhileStatement,
     };
     use crate::baseline_interpreter::{InterpreterConfig, QuickJsLane, Value};
     use crate::capability::RuntimeCapability;
@@ -15636,6 +16030,216 @@ mod tests {
                 .any(|op| matches!(op, Ir1Op::IteratorClose { .. })),
             "missing IteratorClose"
         );
+    }
+
+    #[test]
+    fn lower_for_of_head_and_body_have_distinct_close_handlers_bd_t9n3s() {
+        let ir0 = stmt_ir0(vec![Statement::ForOf(ForOfStatement {
+            binding: BindingPattern::Identifier("v".into()),
+            binding_kind: None,
+            iterable: Expression::Identifier("arr".into()),
+            body: Box::new(Statement::Block(BlockStatement {
+                body: Vec::new(),
+                span: span(),
+            })),
+            span: span(),
+        })]);
+        let ir1 = lower_ir0_to_ir1(&ir0)
+            .expect("for-of lowering should succeed")
+            .module;
+        let ops = &ir1.ops;
+        let init_pos = ops
+            .iter()
+            .position(|op| matches!(op, Ir1Op::ForOfInit))
+            .expect("missing ForOfInit");
+        let iterator_binding = match ops.get(init_pos + 1) {
+            Some(Ir1Op::StoreBinding { binding_id }) => *binding_id,
+            other => panic!("ForOfInit must retain its iterator, got {other:?}"),
+        };
+        let begin_tries = ops
+            .iter()
+            .filter_map(|op| match op {
+                Ir1Op::BeginTry {
+                    catch_label,
+                    finally_label,
+                } => Some((*catch_label, *finally_label)),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(begin_tries.len(), 2, "head and body guards");
+        assert_eq!(begin_tries[0].1, Some(begin_tries[0].0));
+        assert_eq!(begin_tries[1].0, begin_tries[0].0);
+        assert_ne!(begin_tries[1].1, Some(begin_tries[1].0));
+
+        let closes = ops
+            .iter()
+            .filter_map(|op| match op {
+                Ir1Op::IteratorClose { reason } => Some(*reason),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            closes,
+            vec![
+                IteratorCloseReason::Break,
+                IteratorCloseReason::Return,
+                IteratorCloseReason::Throw,
+            ]
+        );
+        assert!(ops.windows(2).any(|pair| matches!(
+            pair,
+            [
+                Ir1Op::LoadBinding { binding_id },
+                Ir1Op::IteratorClose {
+                    reason: IteratorCloseReason::Throw
+                }
+            ] if *binding_id == iterator_binding
+        )));
+        assert!(
+            ops.windows(3).any(|triple| matches!(
+                triple,
+                [
+                    Ir1Op::EnterFinally,
+                    Ir1Op::LoadBinding { binding_id },
+                    Ir1Op::IteratorClose {
+                        reason: IteratorCloseReason::Return
+                    }
+                ] if *binding_id == iterator_binding
+            )),
+            "return completion must be owned before iterator close"
+        );
+    }
+
+    #[test]
+    fn lower_for_of_return_handler_survives_ir3_without_enter_catch_bd_t9n3s() {
+        let ir0 = stmt_ir0(vec![Statement::ForOf(ForOfStatement {
+            binding: BindingPattern::Identifier("value".into()),
+            binding_kind: Some(VariableDeclarationKind::Const),
+            iterable: Expression::Identifier("values".into()),
+            body: Box::new(Statement::Return(ReturnStatement {
+                argument: Some(Expression::Identifier("value".into())),
+                span: span(),
+            })),
+            span: span(),
+        })]);
+        let ir1 = lower_ir0_to_ir1(&ir0)
+            .expect("for-of return lowering")
+            .module;
+        let ir2 = lower_ir1_to_ir2(&ir1).expect("IR1 to IR2").module;
+        let ir3 = lower_ir2_to_ir3(&ir2).expect("IR2 to IR3").module;
+        assert_eq!(
+            ir3.instructions
+                .iter()
+                .filter(|instruction| matches!(instruction, Ir3Instruction::EnterCatch { .. }))
+                .count(),
+            0,
+            "synthetic throw-close entries must retain their pending exception"
+        );
+        assert!(ir3.instructions.iter().any(|instruction| matches!(
+            instruction,
+            Ir3Instruction::IteratorClose {
+                reason: IteratorCloseReason::Return,
+                ..
+            }
+        )));
+    }
+
+    #[test]
+    fn lower_outer_labelled_continue_closes_only_crossed_iterator_bd_t9n3s() {
+        let inner = Statement::ForOf(ForOfStatement {
+            binding: BindingPattern::Identifier("value".into()),
+            binding_kind: Some(VariableDeclarationKind::Const),
+            iterable: Expression::Identifier("values".into()),
+            body: Box::new(Statement::Continue(ContinueStatement {
+                label: Some("outer".into()),
+                span: span(),
+            })),
+            span: span(),
+        });
+        let ir0 = stmt_ir0(vec![Statement::Labeled(LabeledStatement {
+            label: "outer".into(),
+            body: Box::new(Statement::While(WhileStatement {
+                condition: Expression::BooleanLiteral(true),
+                body: Box::new(Statement::Block(BlockStatement {
+                    body: vec![inner],
+                    span: span(),
+                })),
+                span: span(),
+            })),
+            span: span(),
+        })]);
+        let ir1 = lower_ir0_to_ir1(&ir0)
+            .expect("outer labelled continue lowering")
+            .module;
+        assert_eq!(
+            ir1.ops
+                .iter()
+                .filter(|op| matches!(
+                    op,
+                    Ir1Op::IteratorClose {
+                        reason: IteratorCloseReason::Continue
+                    }
+                ))
+                .count(),
+            1
+        );
+        let ir2 = lower_ir1_to_ir2(&ir1).expect("IR1 to IR2").module;
+        let ir3 = lower_ir2_to_ir3(&ir2).expect("IR2 to IR3").module;
+        assert!(ir3.instructions.iter().any(|instruction| matches!(
+            instruction,
+            Ir3Instruction::IteratorClose {
+                reason: IteratorCloseReason::Continue,
+                ..
+            }
+        )));
+    }
+
+    #[test]
+    fn lower_nested_duplicate_label_is_semantic_error_bd_t9n3s() {
+        let inner = Statement::Labeled(LabeledStatement {
+            label: "duplicate".into(),
+            body: Box::new(Statement::While(WhileStatement {
+                condition: Expression::BooleanLiteral(false),
+                body: Box::new(Statement::Block(BlockStatement {
+                    body: Vec::new(),
+                    span: span(),
+                })),
+                span: span(),
+            })),
+            span: span(),
+        });
+        let ir0 = stmt_ir0(vec![Statement::Labeled(LabeledStatement {
+            label: "duplicate".into(),
+            body: Box::new(inner),
+            span: span(),
+        })]);
+
+        let err = lower_ir0_to_ir1(&ir0).expect_err("nested duplicate label must fail");
+        assert!(matches!(
+            err,
+            LoweringPipelineError::SemanticViolation(SemanticError {
+                code: SemanticErrorCode::DuplicateLabel,
+                binding_name: Some(name),
+                ..
+            }) if name == "duplicate"
+        ));
+    }
+
+    #[test]
+    fn lower_sequential_label_name_reuse_is_allowed_bd_t9n3s() {
+        let labeled_expression = |value| {
+            Statement::Labeled(LabeledStatement {
+                label: "reusable".into(),
+                body: Box::new(Statement::Expression(ExpressionStatement {
+                    expression: Expression::NumericLiteral(value),
+                    span: span(),
+                })),
+                span: span(),
+            })
+        };
+        let ir0 = stmt_ir0(vec![labeled_expression(1), labeled_expression(2)]);
+
+        lower_ir0_to_ir1(&ir0).expect("sequential label scopes must not overlap");
     }
 
     #[test]

@@ -119,7 +119,7 @@ the owning type's module tier and Rust visibility rules.
 
 ### Stable Boundary Modules
 
-- `ast`: constants `CANONICAL_AST_CONTRACT_VERSION`, `CANONICAL_AST_SCHEMA_VERSION`, `CANONICAL_AST_HASH_ALGORITHM`, `CANONICAL_AST_HASH_PREFIX`; enums `ParseGoal`, `Statement`, `ImportClause`, `ExportKind`, `BindingPattern`, `VariableDeclarationKind`, `MethodKind`, `BinaryOperator`, `UnaryOperator`, `AssignmentOperator`, `ArrowBody`, `Expression`; structs `SourceSpan`, `SyntaxTree`, `ImportSpecifier`, `ImportDeclaration`, `NamedExportClause`, `ExportDeclaration`, `ObjectPatternProperty`, `VariableDeclarator`, `VariableDeclaration`, `ExpressionStatement`, `BlockStatement`, `IfStatement`, `ForStatement`, `ForInStatement`, `ForOfStatement`, `WhileStatement`, `DoWhileStatement`, `ReturnStatement`, `ThrowStatement`, `CatchClause`, `TryCatchStatement`, `SwitchCase`, `SwitchStatement`, `BreakStatement`, `ContinueStatement`, `FunctionParam`, `FunctionDeclaration`, `MethodDefinition`, `ClassDeclaration`, `ObjectProperty`.
+- `ast`: constants `CANONICAL_AST_CONTRACT_VERSION`, `CANONICAL_AST_SCHEMA_VERSION`, `CANONICAL_AST_HASH_ALGORITHM`, `CANONICAL_AST_HASH_PREFIX`; enums `ParseGoal`, `Statement`, `ImportClause`, `ExportKind`, `BindingPattern`, `VariableDeclarationKind`, `MethodKind`, `BinaryOperator`, `UnaryOperator`, `AssignmentOperator`, `ArrowBody`, `Expression`; structs `SourceSpan`, `SyntaxTree`, `ImportSpecifier`, `ImportDeclaration`, `NamedExportClause`, `ExportDeclaration`, `ObjectPatternProperty`, `VariableDeclarator`, `VariableDeclaration`, `ExpressionStatement`, `BlockStatement`, `IfStatement`, `ForStatement`, `ForInStatement`, `ForOfStatement`, `LabeledStatement`, `WhileStatement`, `DoWhileStatement`, `ReturnStatement`, `ThrowStatement`, `CatchClause`, `TryCatchStatement`, `SwitchCase`, `SwitchStatement`, `BreakStatement`, `ContinueStatement`, `FunctionParam`, `FunctionDeclaration`, `MethodDefinition`, `ClassDeclaration`, `ObjectProperty`.
 - `baseline_interpreter`: constants `DETERMINISTIC_PROFILE_LABEL`, `THROUGHPUT_PROFILE_LABEL`, `LEGACY_QUICKJS_PROFILE_LABEL`, `LEGACY_V8_PROFILE_LABEL`; type aliases `ExtensionId`, `ObjectRef`, `PropertyKey`; trait `InterpreterHook`; enums `Value`, `BuiltinFunctionKind`, `AllocKind`, `FunctionRef`, `HookAction`, `InterpreterError`, `ConsoleLevel`, `LaneChoice`, `LaneReason`; structs `ActiveTimer`, `Float64`, `BuiltinFunction`, `ObjectId`, `HeapObject`, `AccessorProperty`, `ChallengeToken`, `HookContext`, `DecisionReceipt`, `EvidenceLog`, `InterpreterConfig`, `InterpreterEvent`, `ConsoleEntry`, `ExecutionResult`, `ExecutionSeed`, `EagerExecutionSeed`, `InterpreterCore`, `QuickJsLane`, `V8Lane`, `RoutedResult`, `LaneRouter`.
 - `capability`: enums `RuntimeCapability`, `ProfileKind`; structs `CapabilityProfile`, `CapabilityDenied`; functions `require_capability`, `require_all`.
 - `closure_model`: enums `EnvValue`, `EnvironmentKind`, `ScopeError`; structs `ClosureHandle`, `EnvironmentHandle`, `BindingSlot`, `EnvironmentRecord`, `ClosureCapture`, `Closure`, `ScopeChain`, `ClosureStore`.
@@ -706,12 +706,29 @@ that new enum variant, the engine advances `IrSchemaVersion::CURRENT` from
 engine minors, including `0.6.0`; `0.5.0` remains deliberately skipped because
 it identifies the incompatible core wire.
 
-The replay-visible iterator protocol advances independently from
+The replay-visible engine iterator protocol advances independently from
 `franken-engine.iterator-protocol.v1` to `.v2` for the corresponding
 `CloseReason::Continue` variant. Neither schema change advances the unreleased
-Cargo package version. `franken-core` remains on IR `0.5.0` and does not yet
-carry the complete boundary-crossing lowering/runtime behavior; `bd-t9n3s`
-owns that explicit parity migration and its donor/oracle evidence.
+Cargo package version.
+
+The core parity migration `bd-t9n3s` first adds the public
+`Statement::Labeled(LabeledStatement)` AST shape required to retain labelled
+break and continue targets through lowering. Core advances its canonical AST
+schema from v5 directly to v7; v6 is deliberately skipped because that tag
+already identifies the incompatible engine assignment-strictness AST shape.
+Unlabelled canonical payload bytes remain unchanged, but artifacts must bind
+their hashes to the v7 schema tag.
+
+The same migration adds the externally tagged
+`IteratorCloseReason::Continue` variant to its IR1, IR2, and IR3 wire. Core
+advances from `0.5.0` to `0.8.0`: core minors `0.6.0` and `0.7.0` are
+deliberately skipped because those numbers already identify incompatible
+engine wires (`0.6.0` adds the engine-only unresolved-name operations and
+`0.7.0` adds `Continue` on top of that divergent shape). Core `0.8.0` readers
+retain historical core minors `0.1.0` through `0.5.0` and explicitly reject
+peer-owned `0.6.x` and `0.7.x` artifacts instead of accepting them through the
+minor-version compatibility window. This schema checkpoint does not claim
+that the otherwise divergent core and engine IR contracts are interchangeable.
 
 ## Cross-Crate Compatibility Matrix
 

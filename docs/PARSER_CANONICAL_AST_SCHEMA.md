@@ -250,6 +250,22 @@ accessors, classes, and destructuring retain exact property identity into the
 IR3 constant pool. Diagnostic function display names and well-formed-only
 builtin recognition remain separate from property-key identity.
 
+## FrankenCore Labelled-Statement Schema
+
+`bd-t9n3s` advances the native `franken-core` AST schema from v5 directly to
+`franken-engine.parser-ast.schema.v7`. Schema identifier v6 is deliberately
+skipped in the core lane because it already names the incompatible engine
+assignment-strictness shape described above. Reusing engine v6 for core's new
+shape would make schema-tagged artifacts ambiguous.
+
+Core v7 adds `Statement::Labeled` and its `LabeledStatement` payload, carrying
+the exact label name, wrapped statement, and source span. Trees without a
+labelled statement retain their existing canonical payload bytes and hashes,
+but consumers must bind those hashes to the v7 schema tag. Derived serde now
+accepts and emits the labelled variant; historical core v1 through v5 values
+remain identifiable by their original schema tags. This AST checkpoint is
+independent of the core IR `0.8.0` IteratorClose checkpoint.
+
 ## Compatibility Checks
 
 Pinned by tests:
@@ -268,11 +284,13 @@ Pinned by tests:
 - [`crates/franken-engine/src/parser_arena.rs`](../crates/franken-engine/src/parser_arena.rs)
   - exact string-literal arena round-trip without UTF-8 projection
 - [`crates/franken-core/src/ast.rs`](../crates/franken-core/src/ast.rs)
-  - core v5 carries forward the v3 lone-surrogate string-literal vector
+  - core v7 carries forward the v3 lone-surrogate string-literal vector
     (`D800`) ->
     `sha256:2d2912b4ee4142810f692d25a6f154e758dccf2aeb9926f5abebab7f5d63773a`
-  - core v5 carries forward the v3 Annex-B for-in vector ->
+  - core v7 carries forward the v3 Annex-B for-in vector ->
     `sha256:166c2e3ca50abc0b25c83ce8cfefb4be4a7eac33e7337809f1594e22ff9fe963`
+  - core v7 serializes and hashes the labelled-statement variant while v6
+    remains reserved for the incompatible engine assignment-strictness shape
 
 ## Replay Commands
 
@@ -282,6 +300,11 @@ Use `rch` for heavy runs:
 rch exec -- env RUSTUP_TOOLCHAIN=nightly \
   CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_parser_ast_contract \
   cargo test -p frankenengine-engine --test parser_trait_ast --test ast_integration
+
+rch exec -- env RUSTUP_TOOLCHAIN=nightly \
+  CARGO_TARGET_DIR=/tmp/rch_target_franken_core_parser_ast_contract \
+  cargo test -p frankenengine-core --lib \
+  statement_labeled_canonical_value_and_serde_round_trip_bd_t9n3s
 ```
 
 Parser phase0 gate (includes parser trait vectors):

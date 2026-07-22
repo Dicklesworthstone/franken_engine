@@ -1597,9 +1597,23 @@ struct RuntimeForInState {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct RuntimeForOfState {
     values: Vec<Value>,
+    /// Actual iterator object returned by `Symbol.iterator`. Indexed fallback
+    /// carriers leave this empty so an unrelated property named `return` on
+    /// the iterable is never mistaken for an iterator-close hook.
+    iterator_object: Option<ObjectId>,
+    /// Custom iterator `next` method. `None` selects the existing eager
+    /// string/indexed-object carrier.
+    next_method: Option<Value>,
     next_index: usize,
     done: bool,
     closed: bool,
+    return_called: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum InlineCallCompletion {
+    Value(Value),
+    Throw(LabeledException),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -4845,6 +4859,67 @@ impl InterpreterCore {
         Some(frame)
     }
 
+    /// Route an iterator-protocol JavaScript failure back through the caller's
+    /// active catch/finally frames. Explicit callback throws arrive with their
+    /// exact value re-armed in `pending_exception`; native TypeErrors are
+    /// materialized as small ordinary error objects for catch bindings.
+    fn route_iterator_protocol_error(
+        &mut self,
+        module: &Ir3Module,
+        error: InterpreterError,
+    ) -> Result<Option<InterpreterError>, InterpreterError> {
+        let thrown = if matches!(error, InterpreterError::UncaughtException { .. }) {
+            let Some(thrown) = self.pending_exception.take() else {
+                return Ok(Some(error));
+            };
+            thrown
+        } else if Self::is_js_catchable_error(&error) {
+            let name = match &error {
+                InterpreterError::RangeError { .. } => "RangeError",
+                InterpreterError::UninitializedBinding { .. } => "ReferenceError",
+                _ => "TypeError",
+            };
+            let object_id = self.alloc_object_with_prototype(None)?;
+            self.set_object_property(object_id, "name".to_string(), Value::str(name))?;
+            self.set_object_property(
+                object_id,
+                "message".to_string(),
+                Value::str(error.to_string()),
+            )?;
+            LabeledException {
+                value: Value::Object(object_id),
+                label: crate::ifc_artifacts::Label::Public,
+            }
+        } else {
+            return Ok(Some(error));
+        };
+
+        // A close failure replaces any Return/Break/Continue completion that
+        // brought execution to IteratorClose.
+        self.pending_return = None;
+        self.pending_finally_entry = None;
+        self.pending_exception = Some(thrown);
+        if let Some(frame) = self.pop_exception_target_frame() {
+            self.pending_finally_entry = (frame.finally_target == Some(frame.catch_target)
+                || matches!(
+                    module.instructions.get(frame.catch_target),
+                    Some(Ir3Instruction::EnterFinally)
+                ))
+            .then_some(PendingFinallyEntry {
+                target: frame.catch_target,
+                mode: FinallyMode::Exception,
+            });
+            self.ip = frame.catch_target;
+            Ok(None)
+        } else {
+            self.pending_exception = None;
+            self.pending_finally_entry = None;
+            self.finally_frames.clear();
+            self.discard_all_copy_data_properties_states();
+            Ok(Some(error))
+        }
+    }
+
     fn take_current_abrupt_completion(&mut self) -> Option<AbruptCompletion> {
         if let Some(exception) = self.pending_exception.take() {
             self.pending_return = None;
@@ -5907,9 +5982,16 @@ impl InterpreterCore {
                 }
                 Ir3Instruction::ForOfInit { src, dst } => {
                     let value = self.read_reg(src)?;
-                    let iterator = self.init_for_of_iterator(value)?;
-                    self.write_reg(dst, iterator)?;
-                    self.ip += 1;
+                    match self.init_for_of_iterator(Some(module), value) {
+                        Ok(iterator) => {
+                            self.write_reg(dst, iterator)?;
+                            self.ip += 1;
+                        }
+                        Err(error) => match self.route_iterator_protocol_error(module, error)? {
+                            None => continue,
+                            Some(error) => return Err(error),
+                        },
+                    }
                 }
                 Ir3Instruction::ForOfNext {
                     iterator,
@@ -5917,17 +5999,29 @@ impl InterpreterCore {
                     done_target,
                 } => {
                     let iterator = self.read_reg(iterator)?;
-                    if let Some(value) = self.advance_for_of_iterator(iterator)? {
-                        self.write_reg(value_dst, value)?;
-                        self.ip += 1;
-                    } else {
-                        self.ip = done_target as usize;
+                    match self.advance_for_of_iterator(Some(module), iterator) {
+                        Ok(Some(value)) => {
+                            self.write_reg(value_dst, value)?;
+                            self.ip += 1;
+                        }
+                        Ok(None) => {
+                            self.ip = done_target as usize;
+                        }
+                        Err(error) => match self.route_iterator_protocol_error(module, error)? {
+                            None => continue,
+                            Some(error) => return Err(error),
+                        },
                     }
                 }
                 Ir3Instruction::IteratorClose { iterator, reason } => {
                     let iterator = self.read_reg(iterator)?;
-                    self.close_iterator(iterator, reason)?;
-                    self.ip += 1;
+                    match self.close_iterator(module, iterator, reason) {
+                        Ok(()) => self.ip += 1,
+                        Err(error) => match self.route_iterator_protocol_error(module, error)? {
+                            None => continue,
+                            Some(error) => return Err(error),
+                        },
+                    }
                 }
                 Ir3Instruction::Move { dst, src } => {
                     let val = self.read_reg(src)?;
@@ -6337,7 +6431,10 @@ impl InterpreterCore {
 
                     let (func_idx, captured_env, closure_id) = match &callee_val {
                         Value::Function(idx) => (*idx, None, None),
-                        Value::Closure(closure_id) | Value::AsyncFunction(closure_id) => {
+                        Value::Closure(closure_id)
+                        | Value::GeneratorFunction(closure_id)
+                        | Value::AsyncFunction(closure_id)
+                        | Value::AsyncGeneratorFunction(closure_id) => {
                             let closure =
                                 self.closures.get(*closure_id as usize).ok_or_else(|| {
                                     InterpreterError::TypeError {
@@ -6365,6 +6462,72 @@ impl InterpreterCore {
                             table_size: module.function_table.len() as u32,
                         },
                     )?;
+
+                    // Method calls are still ordinary calls for generator
+                    // functions: invoking one creates the suspended generator
+                    // object without executing its body. IteratorClose relies
+                    // on that object result being accepted as a valid return.
+                    if let Value::GeneratorFunction(closure_id) = &callee_val {
+                        if func.rest_param_index.is_some() {
+                            return Err(InterpreterError::TypeError {
+                                expected: "generator call without unsupported rest metadata"
+                                    .to_string(),
+                                got: "generator rest parameters are not implemented".to_string(),
+                            });
+                        }
+                        let generator_id = u32::try_from(self.generators.len()).map_err(|_| {
+                            InterpreterError::TypeError {
+                                expected: "generator table capacity".into(),
+                                got: format!("exceeded u32::MAX ({})", self.generators.len()),
+                            }
+                        })?;
+                        self.generators.push(GeneratorObject {
+                            function_index: func_idx,
+                            closure_index: Some(*closure_id),
+                            saved_ip: 0,
+                            saved_registers: Vec::new(),
+                            saved_register_labels: Vec::new(),
+                            saved_register_base: 0,
+                            phase: GeneratorPhase::SuspendedStart,
+                        });
+                        self.write_reg(dst, Value::Generator(generator_id))?;
+                        self.ip += 1;
+                        continue;
+                    }
+
+                    if let Value::AsyncGeneratorFunction(closure_id) = &callee_val {
+                        if func.rest_param_index.is_some() {
+                            return Err(InterpreterError::TypeError {
+                                expected: "async-generator call without unsupported rest metadata"
+                                    .to_string(),
+                                got: "async-generator rest parameters are not implemented"
+                                    .to_string(),
+                            });
+                        }
+                        let generator_id =
+                            u32::try_from(self.async_generators.len()).map_err(|_| {
+                                InterpreterError::TypeError {
+                                    expected: "async generator table capacity".into(),
+                                    got: format!(
+                                        "exceeded u32::MAX ({})",
+                                        self.async_generators.len()
+                                    ),
+                                }
+                            })?;
+                        self.async_generators.push(AsyncGeneratorObject {
+                            function_index: func_idx,
+                            closure_index: Some(*closure_id),
+                            saved_ip: 0,
+                            saved_registers: Vec::new(),
+                            saved_register_labels: Vec::new(),
+                            saved_register_base: 0,
+                            phase: AsyncGeneratorPhase::SuspendedStart,
+                        });
+                        self.write_reg(dst, Value::AsyncGeneratorObject(generator_id))?;
+                        self.ip += 1;
+                        continue;
+                    }
+
                     self.validate_function_rest_param(func)?;
 
                     if self.call_stack.len() >= self.config.max_call_depth {
@@ -7425,7 +7588,11 @@ impl InterpreterCore {
                     // NOT frames below it (which belong to outer try blocks).
                     if let Some(frame) = self.pop_exception_target_frame() {
                         self.pending_finally_entry = (frame.finally_target
-                            == Some(frame.catch_target))
+                            == Some(frame.catch_target)
+                            || matches!(
+                                module.instructions.get(frame.catch_target),
+                                Some(Ir3Instruction::EnterFinally)
+                            ))
                         .then_some(PendingFinallyEntry {
                             target: frame.catch_target,
                             mode: FinallyMode::Exception,
@@ -7503,7 +7670,11 @@ impl InterpreterCore {
                             // Look for another catch frame to propagate to.
                             if let Some(frame) = self.pop_exception_target_frame() {
                                 self.pending_finally_entry = (frame.finally_target
-                                    == Some(frame.catch_target))
+                                    == Some(frame.catch_target)
+                                    || matches!(
+                                        module.instructions.get(frame.catch_target),
+                                        Some(Ir3Instruction::EnterFinally)
+                                    ))
                                 .then_some(PendingFinallyEntry {
                                     target: frame.catch_target,
                                     mode: FinallyMode::Exception,
@@ -8696,60 +8867,407 @@ impl InterpreterCore {
         }
     }
 
-    fn init_for_of_iterator(&mut self, value: Value) -> Result<Value, InterpreterError> {
-        let values = self.collect_for_of_values(&value)?;
+    fn init_for_of_iterator(
+        &mut self,
+        module: Option<&Ir3Module>,
+        value: Value,
+    ) -> Result<Value, InterpreterError> {
+        if matches!(value, Value::Iterator(_)) {
+            return Ok(value);
+        }
+
+        let mut iterator_object = None;
+        let mut next_method = None;
+        let values = if let (Some(module), Value::Object(iterable_object)) = (module, &value) {
+            let iterator_key = RuntimePropertyKey::Symbol(WellKnownSymbol::Iterator.id());
+            match self.prototype_chain_lookup_runtime_property(*iterable_object, &iterator_key)? {
+                None => self.collect_for_of_values(&value)?,
+                Some(property) => {
+                    let method_completion = self.read_runtime_property_inline(
+                        module,
+                        Value::Object(*iterable_object),
+                        Some(property),
+                    )?;
+                    let method = self.complete_inline_call(method_completion)?;
+                    if !Self::is_sync_callable(&method) {
+                        return Err(InterpreterError::TypeError {
+                            expected: "callable Symbol.iterator method".to_string(),
+                            got: method.type_name().to_string(),
+                        });
+                    }
+                    let iterator_completion = self.invoke_inline_method_call(
+                        module,
+                        method,
+                        Value::Object(*iterable_object),
+                    )?;
+                    let iterator = self.complete_inline_call(iterator_completion)?;
+                    match iterator {
+                        Value::Iterator(_) => return Ok(iterator),
+                        Value::Object(object_id) => {
+                            let next_property = self.prototype_chain_lookup_runtime_property(
+                                object_id,
+                                &RuntimePropertyKey::String(JsString::from("next")),
+                            )?;
+                            let next_completion = self.read_runtime_property_inline(
+                                module,
+                                Value::Object(object_id),
+                                next_property,
+                            )?;
+                            let next = self.complete_inline_call(next_completion)?;
+                            if !Self::is_sync_callable(&next) {
+                                return Err(InterpreterError::TypeError {
+                                    expected: "callable iterator.next".to_string(),
+                                    got: next.type_name().to_string(),
+                                });
+                            }
+                            iterator_object = Some(object_id);
+                            next_method = Some(next);
+                            Vec::new()
+                        }
+                        other => {
+                            return Err(InterpreterError::TypeError {
+                                expected: "object returned by Symbol.iterator".to_string(),
+                                got: other.type_name().to_string(),
+                            });
+                        }
+                    }
+                }
+            }
+        } else {
+            self.collect_for_of_values(&value)?
+        };
         let handle = self.alloc_iterator(RuntimeIteratorState::ForOf(RuntimeForOfState {
             values,
+            iterator_object,
+            next_method,
             next_index: 0,
             done: false,
             closed: false,
+            return_called: false,
         }))?;
         Ok(Value::Iterator(handle))
     }
 
     fn advance_for_of_iterator(
         &mut self,
+        module: Option<&Ir3Module>,
         iterator: Value,
     ) -> Result<Option<Value>, InterpreterError> {
         let handle = self.expect_iterator_handle(iterator)?;
-        match self.iterator_state_mut(handle)? {
+        let custom_step = match self.iterator_state_mut(handle)? {
             RuntimeIteratorState::ForOf(state) => {
                 if state.closed || state.done {
                     state.done = true;
                     return Ok(None);
                 }
-                if let Some(value) = state.values.get(state.next_index).cloned() {
+                if let Some(next_method) = state.next_method.clone() {
+                    let object_id =
+                        state
+                            .iterator_object
+                            .ok_or_else(|| InterpreterError::TypeError {
+                                expected: "custom iterator receiver".to_string(),
+                                got: "missing iterator object".to_string(),
+                            })?;
+                    Some((object_id, next_method))
+                } else if let Some(value) = state.values.get(state.next_index).cloned() {
                     state.next_index += 1;
-                    Ok(Some(value))
+                    return Ok(Some(value));
                 } else {
                     state.done = true;
-                    Ok(None)
+                    return Ok(None);
                 }
             }
-            RuntimeIteratorState::ForIn(_) => Err(InterpreterError::TypeError {
-                expected: "for..of iterator".to_string(),
-                got: "for..in iterator".to_string(),
-            }),
+            RuntimeIteratorState::ForIn(_) => {
+                return Err(InterpreterError::TypeError {
+                    expected: "for..of iterator".to_string(),
+                    got: "for..in iterator".to_string(),
+                });
+            }
+        };
+
+        let (iterator_object, next_method) =
+            custom_step.expect("custom for-of state selected a next method");
+        let module = module.ok_or_else(|| InterpreterError::TypeError {
+            expected: "module-backed custom iterator.next".to_string(),
+            got: "missing module context".to_string(),
+        })?;
+        let result_completion =
+            self.invoke_inline_method_call(module, next_method, Value::Object(iterator_object))?;
+        let result = self.complete_inline_call(result_completion)?;
+        let Value::Object(result_object) = result else {
+            return Err(InterpreterError::TypeError {
+                expected: "iterator result object".to_string(),
+                got: result.type_name().to_string(),
+            });
+        };
+        let done_property = self.prototype_chain_lookup_runtime_property(
+            result_object,
+            &RuntimePropertyKey::String(JsString::from("done")),
+        )?;
+        let done_completion =
+            self.read_runtime_property_inline(module, Value::Object(result_object), done_property)?;
+        let done = self.complete_inline_call(done_completion)?;
+        if done.is_truthy() {
+            if let RuntimeIteratorState::ForOf(state) = self.iterator_state_mut(handle)? {
+                state.done = true;
+            }
+            return Ok(None);
         }
+        let value_property = self.prototype_chain_lookup_runtime_property(
+            result_object,
+            &RuntimePropertyKey::String(JsString::from("value")),
+        )?;
+        let value_completion = self.read_runtime_property_inline(
+            module,
+            Value::Object(result_object),
+            value_property,
+        )?;
+        let value = self.complete_inline_call(value_completion)?;
+        Ok(Some(value))
     }
 
     fn close_iterator(
         &mut self,
+        module: &Ir3Module,
         iterator: Value,
-        _reason: IteratorCloseReason,
+        reason: IteratorCloseReason,
     ) -> Result<(), InterpreterError> {
         let handle = self.expect_iterator_handle(iterator)?;
-        match self.iterator_state_mut(handle)? {
+        let iterator_object = match self.iterator_state_mut(handle)? {
             RuntimeIteratorState::ForIn(state) => {
                 state.closed = true;
                 state.done = true;
+                None
             }
             RuntimeIteratorState::ForOf(state) => {
                 state.closed = true;
                 state.done = true;
+                if state.return_called {
+                    return Ok(());
+                }
+                state.iterator_object
             }
+        };
+
+        let Some(iterator_object) = iterator_object else {
+            return Ok(());
+        };
+        let return_property = self.prototype_chain_lookup_runtime_property(
+            iterator_object,
+            &RuntimePropertyKey::String(JsString::from("return")),
+        )?;
+        let return_method = match self.read_runtime_property_inline(
+            module,
+            Value::Object(iterator_object),
+            return_property,
+        ) {
+            Ok(InlineCallCompletion::Value(value)) => value,
+            Ok(InlineCallCompletion::Throw(thrown)) => {
+                if reason == IteratorCloseReason::Throw {
+                    return Ok(());
+                }
+                return Err(self.rearm_inline_throw(thrown));
+            }
+            Err(error)
+                if reason == IteratorCloseReason::Throw && Self::is_js_catchable_error(&error) =>
+            {
+                return Ok(());
+            }
+            Err(error) => return Err(error),
+        };
+        if return_method.is_nullish() {
+            return Ok(());
+        }
+        if !Self::is_sync_callable(&return_method) {
+            if reason == IteratorCloseReason::Throw {
+                return Ok(());
+            }
+            return Err(InterpreterError::TypeError {
+                expected: "callable iterator.return".to_string(),
+                got: return_method.type_name().to_string(),
+            });
+        }
+        if let RuntimeIteratorState::ForOf(state) = self.iterator_state_mut(handle)? {
+            state.return_called = true;
+        }
+
+        let close_value = match self.invoke_inline_method_call(
+            module,
+            return_method,
+            Value::Object(iterator_object),
+        ) {
+            Ok(InlineCallCompletion::Value(value)) => value,
+            Ok(InlineCallCompletion::Throw(thrown)) => {
+                if reason == IteratorCloseReason::Throw {
+                    return Ok(());
+                }
+                return Err(self.rearm_inline_throw(thrown));
+            }
+            Err(error)
+                if reason == IteratorCloseReason::Throw && Self::is_js_catchable_error(&error) =>
+            {
+                return Ok(());
+            }
+            Err(error) => return Err(error),
+        };
+        if !close_value.is_object_like() {
+            if reason == IteratorCloseReason::Throw {
+                return Ok(());
+            }
+            return Err(InterpreterError::TypeError {
+                expected: "iterator return method to return an object".to_string(),
+                got: close_value.type_name().to_string(),
+            });
         }
         Ok(())
+    }
+
+    fn is_sync_callable(value: &Value) -> bool {
+        matches!(
+            value,
+            Value::Function(_)
+                | Value::Closure(_)
+                | Value::GeneratorFunction(_)
+                | Value::AsyncFunction(_)
+                | Value::AsyncGeneratorFunction(_)
+                | Value::BuiltinFunction(_)
+        )
+    }
+
+    fn is_js_catchable_error(error: &InterpreterError) -> bool {
+        matches!(
+            error,
+            InterpreterError::TypeError { .. }
+                | InterpreterError::RangeError { .. }
+                | InterpreterError::UninitializedBinding { .. }
+                | InterpreterError::ConstAssignment { .. }
+                | InterpreterError::UncaughtException { .. }
+        )
+    }
+
+    fn read_runtime_property_inline(
+        &mut self,
+        module: &Ir3Module,
+        receiver: Value,
+        property: Option<RuntimeProperty>,
+    ) -> Result<InlineCallCompletion, InterpreterError> {
+        match property {
+            Some(RuntimeProperty::Data(value)) => Ok(InlineCallCompletion::Value(value)),
+            Some(RuntimeProperty::Accessor(accessor)) => match accessor.get {
+                Some(getter) => self.invoke_inline_method_call(module, getter, receiver),
+                None => Ok(InlineCallCompletion::Value(Value::Undefined)),
+            },
+            None => Ok(InlineCallCompletion::Value(Value::Undefined)),
+        }
+    }
+
+    fn complete_inline_call(
+        &mut self,
+        completion: InlineCallCompletion,
+    ) -> Result<Value, InterpreterError> {
+        match completion {
+            InlineCallCompletion::Value(value) => Ok(value),
+            InlineCallCompletion::Throw(thrown) => Err(self.rearm_inline_throw(thrown)),
+        }
+    }
+
+    fn rearm_inline_throw(&mut self, thrown: LabeledException) -> InterpreterError {
+        let description = Self::exception_description(&thrown.value);
+        self.pending_return = None;
+        self.pending_exception = Some(thrown);
+        InterpreterError::UncaughtException { value: description }
+    }
+
+    fn exception_description(value: &Value) -> String {
+        match value {
+            Value::Str(text) => text.to_string(),
+            Value::Int(value) => value.to_string(),
+            Value::Bool(value) => value.to_string(),
+            Value::Undefined => "undefined".to_string(),
+            Value::Null => "null".to_string(),
+            _ => "[object]".to_string(),
+        }
+    }
+
+    /// Execute a no-argument method without disturbing the caller's active
+    /// abrupt-completion/finally state. A synthetic catch records explicit
+    /// JavaScript throws as data so their exact value can be re-armed after
+    /// restoring the caller snapshot.
+    fn invoke_inline_method_call(
+        &mut self,
+        module: &Ir3Module,
+        callee: Value,
+        receiver: Value,
+    ) -> Result<InlineCallCompletion, InterpreterError> {
+        let mut wrapper = module.clone();
+        let wrapper_start = wrapper.instructions.len();
+        let catch_target = u32::try_from(wrapper_start.saturating_add(6)).map_err(|_| {
+            InterpreterError::InstructionOutOfBounds {
+                ip: wrapper_start,
+                count: wrapper.instructions.len(),
+            }
+        })?;
+        wrapper.instructions.push(Ir3Instruction::LoadBool {
+            dst: 2,
+            value: false,
+        });
+        wrapper.instructions.push(Ir3Instruction::BeginTry {
+            catch_target,
+            finally_target: None,
+        });
+        wrapper.instructions.push(Ir3Instruction::CallMethod {
+            receiver: 0,
+            callee: 1,
+            args: RegRange { start: 2, count: 0 },
+            dst: 0,
+        });
+        wrapper.instructions.push(Ir3Instruction::EndTry);
+        wrapper.instructions.push(Ir3Instruction::LoadBool {
+            dst: 2,
+            value: true,
+        });
+        wrapper
+            .instructions
+            .push(Ir3Instruction::Return { value: 0 });
+        wrapper
+            .instructions
+            .push(Ir3Instruction::EnterCatch { dst: 0 });
+        wrapper
+            .instructions
+            .push(Ir3Instruction::Return { value: 0 });
+
+        let snapshot = self.snapshot_module_execution();
+        let saved_active_cjs_context = self.active_cjs_context.clone();
+        let result = (|| -> Result<InlineCallCompletion, InterpreterError> {
+            self.registers.clear();
+            self.register_labels.clear();
+            self.clear_register_range(0, self.config.max_registers as usize);
+            self.call_stack.clear();
+            self.ip = wrapper_start;
+            self.register_base = 0;
+            self.catch_frames.clear();
+            self.pending_exception = None;
+            self.pending_return = None;
+            self.suspended_abrupt_completions.clear();
+            self.finally_frames.clear();
+            self.pending_finally_entry = None;
+            self.copy_data_properties_states.clear();
+            self.pending_captures.clear();
+            self.current_module_specifier = Some(module.header.source_label.clone());
+            self.sync_estimated_memory_bytes()?;
+            self.write_reg(0, receiver)?;
+            self.write_reg(1, callee)?;
+            let value = self.run_loop(&wrapper)?;
+            let label = self.read_reg_label(0)?;
+            Ok(if matches!(self.read_reg(2)?, Value::Bool(true)) {
+                InlineCallCompletion::Value(value)
+            } else {
+                InlineCallCompletion::Throw(LabeledException { value, label })
+            })
+        })();
+        self.restore_module_execution(snapshot);
+        self.active_cjs_context = saved_active_cjs_context;
+        result
     }
 
     fn prototype_chain_contains(
@@ -15184,6 +15702,21 @@ mod tests {
         InterpreterCore::new(test_quickjs_config(), "test-trace")
     }
 
+    fn custom_for_of_handle_for_close(core: &mut InterpreterCore, object: ObjectId) -> Value {
+        let handle = core
+            .alloc_iterator(RuntimeIteratorState::ForOf(RuntimeForOfState {
+                values: Vec::new(),
+                iterator_object: Some(object),
+                next_method: None,
+                next_index: 0,
+                done: false,
+                closed: false,
+                return_called: false,
+            }))
+            .expect("custom iterator handle");
+        Value::Iterator(handle)
+    }
+
     fn lower_symbol_source_bd_n8eta_4_3(source: &str) -> Ir3Module {
         let tree = CanonicalEs2020Parser
             .parse(source, ParseGoal::Script)
@@ -15522,6 +16055,160 @@ mod tests {
         let restored: HeapObject = serde_json::from_str(&wire).unwrap();
         assert_eq!(restored, object);
         assert_eq!(restored.properties.get_exact(&d800), Some(&Value::Int(8)));
+    }
+
+    #[test]
+    fn iterator_close_calls_object_return_once_and_preserves_heap_effects_bd_t9n3s() {
+        let module = test_module_with_pool_and_functions(
+            vec![
+                Ir3Instruction::LoadThis { dst: 0 },
+                Ir3Instruction::LoadStr {
+                    dst: 1,
+                    pool_index: 0,
+                },
+                Ir3Instruction::GetProperty {
+                    obj: 0,
+                    key: 1,
+                    dst: 2,
+                },
+                Ir3Instruction::LoadInt { dst: 3, value: 1 },
+                Ir3Instruction::Add {
+                    dst: 2,
+                    lhs: 2,
+                    rhs: 3,
+                },
+                Ir3Instruction::SetProperty {
+                    obj: 0,
+                    key: 1,
+                    val: 2,
+                },
+                Ir3Instruction::Return { value: 0 },
+            ],
+            vec!["closeCount".to_string()],
+            vec![Ir3FunctionDesc {
+                entry: 0,
+                arity: 0,
+                frame_size: 4,
+                name: Some("iterator_return".to_string()),
+                is_generator: false,
+                rest_param_index: None,
+            }],
+        );
+        let mut core = quickjs_test_core();
+        let iterable = core.alloc_object_with_prototype(None).unwrap();
+        core.set_object_property(iterable, "0".to_string(), Value::Int(7))
+            .unwrap();
+        core.set_object_property(iterable, "closeCount".to_string(), Value::Int(0))
+            .unwrap();
+        core.set_object_property(iterable, "return".to_string(), Value::Function(0))
+            .unwrap();
+        let iterator = custom_for_of_handle_for_close(&mut core, iterable);
+
+        core.close_iterator(&module, iterator.clone(), IteratorCloseReason::Break)
+            .unwrap();
+        core.close_iterator(&module, iterator, IteratorCloseReason::Return)
+            .unwrap();
+
+        assert_eq!(
+            core.prototype_chain_get(iterable, "closeCount").unwrap(),
+            Value::Int(1)
+        );
+    }
+
+    #[test]
+    fn iterator_close_validates_return_result_except_for_throw_bd_t9n3s() {
+        let module = test_module_with_functions(
+            vec![
+                Ir3Instruction::LoadInt { dst: 0, value: 7 },
+                Ir3Instruction::Return { value: 0 },
+            ],
+            vec![Ir3FunctionDesc {
+                entry: 0,
+                arity: 0,
+                frame_size: 1,
+                name: Some("primitive_iterator_return".to_string()),
+                is_generator: false,
+                rest_param_index: None,
+            }],
+        );
+
+        for (reason, should_fail) in [
+            (IteratorCloseReason::Break, true),
+            (IteratorCloseReason::Continue, true),
+            (IteratorCloseReason::Return, true),
+            (IteratorCloseReason::Throw, false),
+        ] {
+            let mut core = quickjs_test_core();
+            let iterable = core.alloc_object_with_prototype(None).unwrap();
+            core.set_object_property(iterable, "0".to_string(), Value::Int(1))
+                .unwrap();
+            core.set_object_property(iterable, "return".to_string(), Value::Function(0))
+                .unwrap();
+            let iterator = custom_for_of_handle_for_close(&mut core, iterable);
+
+            let result = core.close_iterator(&module, iterator, reason);
+            if should_fail {
+                assert!(matches!(result, Err(InterpreterError::TypeError { .. })));
+            } else {
+                result.expect("an in-flight throw must outrank a primitive close result");
+            }
+        }
+    }
+
+    #[test]
+    fn iterator_close_throw_precedence_restores_original_completion_bd_t9n3s() {
+        let module = test_module_with_pool_and_functions(
+            vec![
+                Ir3Instruction::LoadStr {
+                    dst: 0,
+                    pool_index: 0,
+                },
+                Ir3Instruction::Throw { value: 0 },
+            ],
+            vec!["close failure".to_string()],
+            vec![Ir3FunctionDesc {
+                entry: 0,
+                arity: 0,
+                frame_size: 1,
+                name: Some("throwing_iterator_return".to_string()),
+                is_generator: false,
+                rest_param_index: None,
+            }],
+        );
+
+        let mut break_core = quickjs_test_core();
+        let break_iterable = break_core.alloc_object_with_prototype(None).unwrap();
+        break_core
+            .set_object_property(break_iterable, "0".to_string(), Value::Int(1))
+            .unwrap();
+        break_core
+            .set_object_property(break_iterable, "return".to_string(), Value::Function(0))
+            .unwrap();
+        let break_iterator = custom_for_of_handle_for_close(&mut break_core, break_iterable);
+        assert!(matches!(
+            break_core.close_iterator(&module, break_iterator, IteratorCloseReason::Break),
+            Err(InterpreterError::UncaughtException { value }) if value == "close failure"
+        ));
+
+        let mut throw_core = quickjs_test_core();
+        let throw_iterable = throw_core.alloc_object_with_prototype(None).unwrap();
+        throw_core
+            .set_object_property(throw_iterable, "0".to_string(), Value::Int(1))
+            .unwrap();
+        throw_core
+            .set_object_property(throw_iterable, "return".to_string(), Value::Function(0))
+            .unwrap();
+        let throw_iterator = custom_for_of_handle_for_close(&mut throw_core, throw_iterable);
+        let original = LabeledException {
+            value: Value::str("original failure"),
+            label: crate::ifc_artifacts::Label::Secret,
+        };
+        throw_core.pending_exception = Some(original.clone());
+
+        throw_core
+            .close_iterator(&module, throw_iterator, IteratorCloseReason::Throw)
+            .expect("an in-flight throw must outrank a failing close hook");
+        assert_eq!(throw_core.pending_exception, Some(original));
     }
 
     #[test]

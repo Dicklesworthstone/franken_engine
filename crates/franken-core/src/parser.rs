@@ -19,9 +19,9 @@ use crate::ast::{
     CatchClause, ClassDeclaration, ContinueStatement, DoWhileStatement, ExportDeclaration,
     ExportKind, Expression, ExpressionStatement, ForInStatement, ForOfStatement, ForStatement,
     FunctionDeclaration, FunctionParam, IfStatement, ImportClause, ImportDeclaration,
-    ImportSpecifier, MethodDefinition, MethodKind, NamedExportClause, ObjectPatternProperty,
-    ObjectProperty, ReturnStatement, SourceSpan, Statement, SwitchCase, SwitchStatement,
-    SyntaxTree, ThrowStatement, TryCatchStatement, UnaryOperator, UpdateOperator,
+    ImportSpecifier, LabeledStatement, MethodDefinition, MethodKind, NamedExportClause,
+    ObjectPatternProperty, ObjectProperty, ReturnStatement, SourceSpan, Statement, SwitchCase,
+    SwitchStatement, SyntaxTree, ThrowStatement, TryCatchStatement, UnaryOperator, UpdateOperator,
     VariableDeclaration, VariableDeclarationKind, VariableDeclarator, WhileStatement,
 };
 use crate::deterministic_serde::{self, CanonicalValue};
@@ -1675,6 +1675,7 @@ fn statement_kind_label(statement: &Statement) -> &'static str {
         Statement::ClassDeclaration(_) => "class_declaration",
         Statement::ForIn(_) => "for_in",
         Statement::ForOf(_) => "for_of",
+        Statement::Labeled(_) => "labeled",
     }
 }
 
@@ -5272,6 +5273,36 @@ fn retire_completed_do_while_clauses(
     }
 }
 
+fn is_label_identifier_in_scan_context(name: &str, grammar_context: ScanGrammarContext) -> bool {
+    !is_always_reserved_word(name)
+        && !(grammar_context.strict && is_strict_reserved_word(name))
+        && !(name == "await" && grammar_context.await_mode != ContextualKeywordScanMode::Identifier)
+        && !(name == "yield" && grammar_context.yield_mode != ContextualKeywordScanMode::Identifier)
+}
+
+/// Strip one or more leading `label:` prefixes from a statement segment.
+///
+/// The segment splitter uses the returned inner statement solely to decide
+/// whether a closing brace terminates the segment. Keeping label recognition
+/// grammar-aware prevents a ternary or a contextually reserved word from being
+/// mistaken for a label while allowing nested labels around compound bodies.
+fn strip_leading_labels(segment: &str, grammar_context: ScanGrammarContext) -> &str {
+    let mut segment = trim_directive_trivia(segment).0;
+    loop {
+        let Some(colon_index) = find_top_level_colon_with_context(segment, grammar_context) else {
+            return segment;
+        };
+        let label_source = segment[..colon_index].trim();
+        let Some(label) = canonical_source_identifier_name(label_source) else {
+            return segment;
+        };
+        if !is_label_identifier_in_scan_context(&label, grammar_context) {
+            return segment;
+        }
+        segment = trim_directive_trivia(&segment[colon_index + 1..]).0;
+    }
+}
+
 #[cfg(test)]
 fn split_statement_segments_with_context(
     line: &str,
@@ -5545,17 +5576,18 @@ fn split_statement_segments_with_completion_limit_and_memo<'a>(
                 // embedded in larger expressions.
                 if was_positive && brace_depth == 0 && paren_depth == 0 && bracket_depth == 0 {
                     let seg = trim_directive_trivia(&line[segment_start..]).0;
-                    let starts_with_block = starts_with_keyword(seg, "function")
-                        || strip_async_function_keyword(seg).is_some()
-                        || seg.starts_with('{')
-                        || starts_with_keyword(seg, "if")
-                        || starts_with_keyword(seg, "for")
-                        || starts_with_keyword(seg, "while")
-                        || starts_with_keyword(seg, "with")
-                        || starts_with_keyword(seg, "do")
-                        || starts_with_keyword(seg, "try")
-                        || starts_with_keyword(seg, "switch")
-                        || starts_with_keyword(seg, "class");
+                    let segment_body = strip_leading_labels(seg, grammar_context);
+                    let starts_with_block = starts_with_keyword(segment_body, "function")
+                        || strip_async_function_keyword(segment_body).is_some()
+                        || segment_body.starts_with('{')
+                        || starts_with_keyword(segment_body, "if")
+                        || starts_with_keyword(segment_body, "for")
+                        || starts_with_keyword(segment_body, "while")
+                        || starts_with_keyword(segment_body, "with")
+                        || starts_with_keyword(segment_body, "do")
+                        || starts_with_keyword(segment_body, "try")
+                        || starts_with_keyword(segment_body, "switch")
+                        || starts_with_keyword(segment_body, "class");
                     if starts_with_block {
                         let after = index.saturating_add(1);
                         let rest_with_trivia = &line[after..];
@@ -5897,13 +5929,13 @@ fn parse_statement_inner(
         return self::parse_switch_statement(statement, goal, span, context);
     }
     if statement == "break" || statement.starts_with("break ") || statement.starts_with("break;") {
-        return self::parse_break_statement(statement, span);
+        return self::parse_break_statement(statement, span, context);
     }
     if statement == "continue"
         || statement.starts_with("continue ")
         || statement.starts_with("continue;")
     {
-        return self::parse_continue_statement(statement, span);
+        return self::parse_continue_statement(statement, span, context);
     }
     if starts_with_keyword(statement, "function")
         || strip_async_function_keyword(statement).is_some()
@@ -5915,6 +5947,40 @@ fn parse_statement_inner(
     }
     if statement.starts_with('{') && statement.ends_with('}') {
         return self::parse_block_statement(statement, goal, span, context);
+    }
+
+    // Labelled statement: `label: <statement>` (ECMA-262 §14.13). A top-level
+    // colon is a label delimiter only when its prefix is an IdentifierReference
+    // in the current grammar context; ternaries and object-literal properties
+    // therefore continue through the expression parser.
+    let grammar_context = ScanGrammarContext::from_execution_context(context);
+    if let Some(colon_index) = find_top_level_colon_with_context(statement, grammar_context) {
+        let label_source = statement[..colon_index].trim();
+        if let Some(label) = canonical_source_identifier_name(label_source) {
+            if !is_context_identifier_reference(&label, context) {
+                return Err(ParseError::new(
+                    ParseErrorCode::UnsupportedSyntax,
+                    "label must be an IdentifierReference in this grammar context",
+                    context.source_label.to_string(),
+                    Some(span),
+                ));
+            }
+            let body_source = statement[colon_index + 1..].trim();
+            if body_source.is_empty() {
+                return Err(ParseError::new(
+                    ParseErrorCode::UnsupportedSyntax,
+                    "labelled statement is missing its body",
+                    context.source_label.to_string(),
+                    Some(span),
+                ));
+            }
+            let body = parse_statement(body_source, goal, span.clone(), context)?;
+            return Ok(Statement::Labeled(LabeledStatement {
+                label,
+                body: Box::new(body),
+                span,
+            }));
+        }
     }
 
     let expression_source = statement.strip_suffix(';').unwrap_or(statement).trim();
@@ -13702,24 +13768,50 @@ fn split_at_next_case(s: &str) -> (&str, &str) {
     (s, "")
 }
 
-fn parse_break_statement(statement: &str, span: SourceSpan) -> ParseResult<Statement> {
+fn parse_break_statement(
+    statement: &str,
+    span: SourceSpan,
+    context: &ParseExecutionContext<'_>,
+) -> ParseResult<Statement> {
     let body = statement.strip_prefix("break").unwrap_or("").trim();
     let body = body.strip_suffix(';').unwrap_or(body).trim();
-    let label = if body.is_empty() || !is_identifier(body) {
+    let label = if body.is_empty() {
         None
     } else {
-        Some(body.to_string())
+        let label = canonical_source_identifier_name(body)
+            .filter(|label| is_context_identifier_reference(label, context));
+        Some(label.ok_or_else(|| {
+            ParseError::new(
+                ParseErrorCode::UnsupportedSyntax,
+                "break label must be an IdentifierReference",
+                context.source_label.to_string(),
+                Some(span.clone()),
+            )
+        })?)
     };
     Ok(Statement::Break(BreakStatement { label, span }))
 }
 
-fn parse_continue_statement(statement: &str, span: SourceSpan) -> ParseResult<Statement> {
+fn parse_continue_statement(
+    statement: &str,
+    span: SourceSpan,
+    context: &ParseExecutionContext<'_>,
+) -> ParseResult<Statement> {
     let body = statement.strip_prefix("continue").unwrap_or("").trim();
     let body = body.strip_suffix(';').unwrap_or(body).trim();
-    let label = if body.is_empty() || !is_identifier(body) {
+    let label = if body.is_empty() {
         None
     } else {
-        Some(body.to_string())
+        let label = canonical_source_identifier_name(body)
+            .filter(|label| is_context_identifier_reference(label, context));
+        Some(label.ok_or_else(|| {
+            ParseError::new(
+                ParseErrorCode::UnsupportedSyntax,
+                "continue label must be an IdentifierReference",
+                context.source_label.to_string(),
+                Some(span.clone()),
+            )
+        })?)
     };
     Ok(Statement::Continue(ContinueStatement { label, span }))
 }
@@ -21147,6 +21239,17 @@ strict"; var static = 1; }"#,
             "variable_declaration"
         );
         assert_eq!(
+            statement_kind_label(&Statement::Labeled(LabeledStatement {
+                label: "outer".to_string(),
+                body: Box::new(Statement::Block(BlockStatement {
+                    body: Vec::new(),
+                    span: span.clone(),
+                })),
+                span: span.clone(),
+            })),
+            "labeled"
+        );
+        assert_eq!(
             statement_kind_label(&Statement::Expression(ExpressionStatement {
                 expression: Expression::NullLiteral,
                 span,
@@ -22807,6 +22910,137 @@ strict"; var static = 1; }"#,
     #[test]
     fn find_top_level_colon_none() {
         assert_eq!(find_top_level_colon("abc"), None);
+    }
+
+    // -----------------------------------------------------------------------
+    // Labelled statements (§14.13) — bd-t9n3s
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn parse_labeled_loop_preserves_break_label_bd_t9n3s() {
+        let tree = parse_script("outer: while (false) { break outer; }");
+        let Statement::Labeled(labeled) = &tree.body[0] else {
+            panic!("expected labeled statement, got {:?}", tree.body[0]);
+        };
+        assert_eq!(labeled.label, "outer");
+        let Statement::While(while_statement) = labeled.body.as_ref() else {
+            panic!("expected labeled while statement");
+        };
+        let Statement::Block(block) = while_statement.body.as_ref() else {
+            panic!("expected while block body");
+        };
+        let Statement::Break(break_statement) = &block.body[0] else {
+            panic!("expected break statement, got {:?}", block.body[0]);
+        };
+        assert_eq!(break_statement.label.as_deref(), Some("outer"));
+    }
+
+    #[test]
+    fn nested_labels_wrap_for_of_and_preserve_continue_label_bd_t9n3s() {
+        let tree = parse_script("outer: inner: for (const value of values) { continue outer; }");
+        let Statement::Labeled(outer) = &tree.body[0] else {
+            panic!("expected outer labeled statement");
+        };
+        let Statement::Labeled(inner) = outer.body.as_ref() else {
+            panic!("expected inner labeled statement");
+        };
+        let Statement::ForOf(for_of) = inner.body.as_ref() else {
+            panic!("expected labeled for-of statement");
+        };
+        let Statement::Block(block) = for_of.body.as_ref() else {
+            panic!("expected for-of block body");
+        };
+        let Statement::Continue(continue_statement) = &block.body[0] else {
+            panic!("expected continue statement");
+        };
+        assert_eq!(outer.label, "outer");
+        assert_eq!(inner.label, "inner");
+        assert_eq!(continue_statement.label.as_deref(), Some("outer"));
+    }
+
+    #[test]
+    fn labeled_compound_statement_splits_before_following_statement_bd_t9n3s() {
+        let source = "outer: for (;;) { break outer; } tail;";
+        let segments = split_statement_segments(source);
+        assert_eq!(segments.len(), 2, "segments: {segments:?}");
+        assert_eq!(segments[0].2, "outer: for (;;) { break outer; }");
+        assert_eq!(segments[1].2, "tail");
+
+        let tree = parse_script(source);
+        assert_eq!(tree.body.len(), 2);
+        assert!(matches!(tree.body[0], Statement::Labeled(_)));
+        assert!(matches!(tree.body[1], Statement::Expression(_)));
+    }
+
+    #[test]
+    fn conditional_expression_is_not_a_labeled_statement_bd_t9n3s() {
+        let tree = parse_script("flag ? left : right;");
+        assert!(matches!(tree.body[0], Statement::Expression(_)));
+    }
+
+    #[test]
+    fn labelled_jumps_canonicalize_escaped_and_unicode_identifiers_bd_t9n3s() {
+        let escaped = parse_script(r"outer: while (false) { break \u006futer; }");
+        let Statement::Labeled(escaped_label) = &escaped.body[0] else {
+            panic!("expected escaped-label statement");
+        };
+        let Statement::While(escaped_loop) = escaped_label.body.as_ref() else {
+            panic!("expected escaped-label loop");
+        };
+        let Statement::Block(escaped_body) = escaped_loop.body.as_ref() else {
+            panic!("expected escaped-label loop body");
+        };
+        let Statement::Break(escaped_break) = &escaped_body.body[0] else {
+            panic!("expected escaped break");
+        };
+        assert_eq!(escaped_break.label.as_deref(), Some("outer"));
+
+        let unicode = parse_script("π: while (false) { continue π; }");
+        let Statement::Labeled(unicode_label) = &unicode.body[0] else {
+            panic!("expected Unicode-label statement");
+        };
+        let Statement::While(unicode_loop) = unicode_label.body.as_ref() else {
+            panic!("expected Unicode-label loop");
+        };
+        let Statement::Block(unicode_body) = unicode_loop.body.as_ref() else {
+            panic!("expected Unicode-label loop body");
+        };
+        let Statement::Continue(unicode_continue) = &unicode_body.body[0] else {
+            panic!("expected Unicode continue");
+        };
+        assert_eq!(unicode_label.label, "π");
+        assert_eq!(unicode_continue.label.as_deref(), Some("π"));
+    }
+
+    #[test]
+    fn invalid_nonempty_jump_label_is_not_silently_unlabelled_bd_t9n3s() {
+        let parser = CanonicalEs2020Parser;
+        for source in [
+            "outer: while (false) { break for; }",
+            "outer: while (false) { continue outer extra; }",
+        ] {
+            let error = parser
+                .parse(source, ParseGoal::Script)
+                .expect_err("invalid nonempty jump label must fail");
+            assert_eq!(error.code, ParseErrorCode::UnsupportedSyntax, "{source}");
+            assert!(error.message.contains("IdentifierReference"), "{source}");
+        }
+    }
+
+    #[test]
+    fn reserved_or_contextual_label_is_rejected_bd_t9n3s() {
+        let parser = CanonicalEs2020Parser;
+        for (source, goal) in [
+            ("for: value;", ParseGoal::Script),
+            ("\"use strict\"; let: value;", ParseGoal::Script),
+            ("await: value;", ParseGoal::Module),
+        ] {
+            let error = parser
+                .parse(source, goal)
+                .expect_err("invalid contextual label must fail");
+            assert_eq!(error.code, ParseErrorCode::UnsupportedSyntax, "{source}");
+            assert!(error.message.contains("IdentifierReference"), "{source}");
+        }
     }
 
     // -----------------------------------------------------------------------

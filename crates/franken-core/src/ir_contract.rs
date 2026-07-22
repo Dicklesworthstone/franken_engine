@@ -37,16 +37,20 @@ pub struct IrSchemaVersion {
 }
 
 impl IrSchemaVersion {
-    /// `0.5.0` widens IR1 static property keys to exact UTF-16 [`JsString`]
-    /// values. `0.4.0` widened IR1 module specifiers to exact UTF-16
-    /// [`JsString`] values. `0.3.0` adds dedicated object-rest `CopyDataProperties`
-    /// operations to IR1 and IR3. `0.2.0` widened JavaScript literal carriers and the IR3
-    /// constant pool to exact UTF-16 [`JsString`] values. Historical
+    /// `0.8.0` adds the boundary-crossing `Continue` reason to serialized IR1,
+    /// IR2, and IR3 `IteratorClose` operations. Core minors `0.6.0` and `0.7.0`
+    /// are intentionally skipped because those numeric versions identify
+    /// incompatible `franken-engine` IR wires. `0.5.0` widened IR1 static
+    /// property keys to exact UTF-16 [`JsString`] values. `0.4.0` widened IR1
+    /// module specifiers to exact UTF-16 [`JsString`] values. `0.3.0` adds
+    /// dedicated object-rest `CopyDataProperties` operations to IR1 and IR3.
+    /// `0.2.0` widened JavaScript literal carriers and the IR3 constant pool to
+    /// exact UTF-16 [`JsString`] values. Historical
     /// well-formed strings retain their plain-string JSON wire shape;
     /// lone-surrogate values use `$wtf16`.
     pub const CURRENT: Self = Self {
         major: 0,
-        minor: 5,
+        minor: 8,
         patch: 0,
     };
 
@@ -398,6 +402,8 @@ impl Ir1PropertyKey {
 pub enum IteratorCloseReason {
     /// Normal loop exit via `break`.
     Break,
+    /// A labelled `continue` crossing this iterator's loop boundary.
+    Continue,
     /// Early return from the enclosing function.
     Return,
     /// Exception thrown inside the loop body.
@@ -408,6 +414,7 @@ impl IteratorCloseReason {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Break => "break",
+            Self::Continue => "continue",
             Self::Return => "return",
             Self::Throw => "throw",
         }
@@ -3193,8 +3200,8 @@ pub fn verify_ir4_linkage(witness: &Ir4Module, ir3_hash: &ContentHash) -> Result
 /// Verify that an IR header can be read by the current core schema.
 ///
 /// Major versions must match, older minor versions remain readable, future
-/// minor versions are rejected, and patch differences do not affect wire
-/// compatibility.
+/// minor versions are rejected, incompatible peer-owned minor versions are
+/// rejected, and patch differences do not affect wire compatibility.
 pub fn verify_schema_version(header: &IrHeader) -> Result<(), IrError> {
     let current = IrSchemaVersion::CURRENT;
     let provided = &header.schema_version;
@@ -3204,6 +3211,22 @@ pub fn verify_schema_version(header: &IrHeader) -> Result<(), IrError> {
             IrErrorCode::SchemaVersionMismatch,
             format!(
                 "incompatible major version: current {}, provided {}",
+                current, provided
+            ),
+            header.level,
+        ));
+    }
+
+    // Core 0.6.0 and 0.7.0 never existed. Those numeric versions identify
+    // incompatible franken-engine IR shapes: engine 0.6 adds explicit
+    // unresolved-name operations, and engine 0.7 adds Continue on top of that
+    // divergent wire. Accepting either as a historical core artifact would
+    // make the schema gate ambiguous for the overlapping enum variants.
+    if provided.major == 0 && matches!(provided.minor, 6 | 7) {
+        return Err(IrError::new(
+            IrErrorCode::SchemaVersionMismatch,
+            format!(
+                "unsupported skipped core minor version: current {}, provided {}",
                 current, provided
             ),
             header.level,
@@ -3441,7 +3464,7 @@ mod tests {
 
     #[test]
     fn schema_version_display() {
-        assert_eq!(IrSchemaVersion::CURRENT.to_string(), "0.5.0");
+        assert_eq!(IrSchemaVersion::CURRENT.to_string(), "0.8.0");
     }
 
     #[test]
@@ -3462,7 +3485,7 @@ mod tests {
         };
 
         assert!(verify_schema_version(&header(IrSchemaVersion::CURRENT, IrLevel::Ir3)).is_ok());
-        for minor in [1, 2, 3, 4] {
+        for minor in [1, 2, 3, 4, 5] {
             assert!(
                 verify_schema_version(&header(
                     IrSchemaVersion {
@@ -3473,7 +3496,7 @@ mod tests {
                     IrLevel::Ir1,
                 ))
                 .is_ok(),
-                "core 0.5 readers retain compatibility with 0.{minor} artifacts"
+                "core 0.8 readers retain compatibility with 0.{minor} artifacts"
             );
         }
 
@@ -3506,10 +3529,110 @@ mod tests {
     }
 
     #[test]
+    fn schema_version_validation_rejects_skipped_engine_owned_minors_bd_t9n3s() {
+        for minor in [6, 7] {
+            let header = IrHeader {
+                schema_version: IrSchemaVersion {
+                    major: 0,
+                    minor,
+                    patch: u32::MAX,
+                },
+                level: IrLevel::Ir1,
+                source_hash: None,
+                source_label: "peer-engine-wire".to_string(),
+            };
+
+            let error = verify_schema_version(&header)
+                .expect_err("core readers must reject engine-owned IR minors");
+            assert_eq!(error.code, IrErrorCode::SchemaVersionMismatch);
+            assert_eq!(error.level, IrLevel::Ir1);
+            assert!(error.message.contains("skipped core minor"));
+            assert!(error.message.contains(&format!("0.{minor}.{}", u32::MAX)));
+        }
+    }
+
+    #[test]
     fn schema_version_canonical_deterministic() {
         let a = IrSchemaVersion::CURRENT.canonical_value();
         let b = IrSchemaVersion::CURRENT.canonical_value();
         assert_eq!(a, b);
+    }
+
+    #[test]
+    fn iterator_close_reason_wire_and_canonical_coverage_bd_t9n3s() {
+        let reasons = [
+            (IteratorCloseReason::Break, "break", r#""Break""#),
+            (IteratorCloseReason::Continue, "continue", r#""Continue""#),
+            (IteratorCloseReason::Return, "return", r#""Return""#),
+            (IteratorCloseReason::Throw, "throw", r#""Throw""#),
+        ];
+
+        for (reason, canonical_name, serde_wire) in reasons {
+            assert_eq!(reason.as_str(), canonical_name);
+            assert_eq!(
+                serde_json::to_string(&reason).expect("close reason should serialize"),
+                serde_wire
+            );
+            assert_eq!(
+                serde_json::from_str::<IteratorCloseReason>(serde_wire)
+                    .expect("close reason should deserialize"),
+                reason
+            );
+
+            let ir1 = Ir1Op::IteratorClose { reason };
+            let CanonicalValue::Map(ir1_canonical) = ir1.canonical_value() else {
+                panic!("IR1 IteratorClose canonical form should be a map");
+            };
+            assert_eq!(
+                ir1_canonical.get("reason"),
+                Some(&CanonicalValue::String(canonical_name.to_string()))
+            );
+            let ir1_json = serde_json::to_string(&ir1).expect("IR1 close should serialize");
+            assert_eq!(
+                serde_json::from_str::<Ir1Op>(&ir1_json).expect("IR1 close should deserialize"),
+                ir1
+            );
+
+            let ir2 = Ir2Op {
+                inner: Ir1Op::IteratorClose { reason },
+                effect: EffectBoundary::WriteEffect,
+                required_capability: None,
+                flow: None,
+            };
+            let CanonicalValue::Map(ir2_canonical) = ir2.canonical_value() else {
+                panic!("IR2 IteratorClose canonical form should be a map");
+            };
+            let Some(CanonicalValue::Map(ir2_inner)) = ir2_canonical.get("inner") else {
+                panic!("IR2 IteratorClose should retain its canonical IR1 operation");
+            };
+            assert_eq!(
+                ir2_inner.get("reason"),
+                Some(&CanonicalValue::String(canonical_name.to_string()))
+            );
+            let ir2_json = serde_json::to_string(&ir2).expect("IR2 close should serialize");
+            assert_eq!(
+                serde_json::from_str::<Ir2Op>(&ir2_json).expect("IR2 close should deserialize"),
+                ir2
+            );
+
+            let ir3 = Ir3Instruction::IteratorClose {
+                iterator: 7,
+                reason,
+            };
+            let CanonicalValue::Map(ir3_canonical) = ir3.canonical_value() else {
+                panic!("IR3 IteratorClose canonical form should be a map");
+            };
+            assert_eq!(
+                ir3_canonical.get("reason"),
+                Some(&CanonicalValue::String(canonical_name.to_string()))
+            );
+            let ir3_json = serde_json::to_string(&ir3).expect("IR3 close should serialize");
+            assert_eq!(
+                serde_json::from_str::<Ir3Instruction>(&ir3_json)
+                    .expect("IR3 close should deserialize"),
+                ir3
+            );
+        }
     }
 
     #[test]
@@ -5123,6 +5246,9 @@ mod tests {
                 reason: IteratorCloseReason::Break,
             },
             Ir1Op::IteratorClose {
+                reason: IteratorCloseReason::Continue,
+            },
+            Ir1Op::IteratorClose {
                 reason: IteratorCloseReason::Return,
             },
             Ir1Op::IteratorClose {
@@ -5579,7 +5705,7 @@ mod tests {
     fn schema_version_current_value() {
         let v = IrSchemaVersion::CURRENT;
         assert_eq!(v.major, 0);
-        assert_eq!(v.minor, 5);
+        assert_eq!(v.minor, 8);
         assert_eq!(v.patch, 0);
     }
 

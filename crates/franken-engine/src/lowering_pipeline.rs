@@ -5027,6 +5027,11 @@ fn lower_statement_to_ir1_with_flow(
             );
             let child_captured_locals =
                 collect_child_captured_locals(&body_lookup, &free_vars, &free_var_ids);
+            let local_lexical_bindings = collect_function_local_lexical_bindings(
+                &body_bindings,
+                &free_var_ids,
+                &runtime_global_loads,
+            );
 
             ops.push(Ir1Op::DeclareFunction {
                 name,
@@ -5037,6 +5042,7 @@ fn lower_statement_to_ir1_with_flow(
                 free_var_ids,
                 runtime_global_loads,
                 child_captured_locals,
+                local_lexical_bindings,
                 is_generator: func.is_generator,
                 is_async: func.is_async,
                 rest_param_index,
@@ -5186,6 +5192,11 @@ fn lower_statement_to_ir1_with_flow(
             );
             let ctor_child_captured_locals =
                 collect_child_captured_locals(&body_lookup, &ctor_free_vars, &ctor_free_var_ids);
+            let ctor_local_lexical_bindings = collect_function_local_lexical_bindings(
+                &body_bindings,
+                &ctor_free_var_ids,
+                &ctor_runtime_global_loads,
+            );
             ops.push(Ir1Op::DeclareFunction {
                 name: class_name,
                 binding_id: bid,
@@ -5195,6 +5206,7 @@ fn lower_statement_to_ir1_with_flow(
                 free_var_ids: ctor_free_var_ids,
                 runtime_global_loads: ctor_runtime_global_loads,
                 child_captured_locals: ctor_child_captured_locals,
+                local_lexical_bindings: ctor_local_lexical_bindings,
                 is_generator: false,
                 is_async: false,
                 rest_param_index,
@@ -5384,6 +5396,11 @@ fn lower_statement_to_ir1_with_flow(
                     &method_free_vars,
                     &method_free_var_ids,
                 );
+                let m_local_lexical_bindings = collect_function_local_lexical_bindings(
+                    &m_bindings,
+                    &method_free_var_ids,
+                    &method_runtime_global_loads,
+                );
                 ops.push(Ir1Op::CreateFunction {
                     name: Some(method_name.clone()),
                     param_names: m_param_names,
@@ -5392,6 +5409,7 @@ fn lower_statement_to_ir1_with_flow(
                     free_var_ids: method_free_var_ids,
                     runtime_global_loads: method_runtime_global_loads,
                     child_captured_locals: m_child_captured_locals,
+                    local_lexical_bindings: m_local_lexical_bindings,
                     is_generator: false,
                     is_async: false,
                     rest_param_index: m_rest_param_index,
@@ -5878,25 +5896,26 @@ pub fn lower_ir2_to_ir3(
     let mut iterator_cleanup_labels = BTreeMap::<u32, Reg>::new();
     let mut pending_jumps = Vec::<PendingJump>::new();
     let mut catch_entry_labels = BTreeSet::<u32>::new();
-    // Deferred function bodies:
-    // (body_ir1_ops, param_names, name, free_vars, free_var_ids,
-    //  runtime_global_loads, child_captured_locals, is_generator, is_async,
-    //  rest_param_index).
+    // Deferred function bodies retain their own binding-id namespace and exact
+    // local lexical metadata. A named carrier keeps nested enqueue sites from
+    // silently swapping fields as this execution contract evolves.
     // After the main code + Halt, each body is lowered into the instruction
     // stream and registered in function_table.  Index 0 is reserved for main.
-    #[allow(clippy::type_complexity)]
-    let mut deferred_functions: Vec<(
-        Vec<Ir1Op>,
-        Vec<String>,
-        Option<String>,
-        Vec<String>,
-        Vec<BindingId>,
-        Vec<(String, BindingId)>, // runtime_global_loads (bd-ylpdp)
-        Vec<(String, BindingId)>, // child_captured_locals (bd-suwvw)
-        bool,
-        bool,
-        Option<u32>, // rest_param_index (bd-zs4d5)
-    )> = Vec::new();
+    #[derive(Clone)]
+    struct DeferredFunction {
+        body_ops: Vec<Ir1Op>,
+        param_names: Vec<String>,
+        name: Option<String>,
+        free_vars: Vec<String>,
+        free_var_ids: Vec<BindingId>,
+        runtime_global_loads: Vec<(String, BindingId)>,
+        child_captured_locals: Vec<(String, BindingId)>,
+        local_lexical_bindings: Vec<ResolvedBinding>,
+        is_generator: bool,
+        is_async: bool,
+        rest_param_index: Option<u32>,
+    }
+    let mut deferred_functions = Vec::<DeferredFunction>::new();
 
     // Build name→BindingId lookup from the module's scope tree so the
     // IR3 lowering can resolve free-variable names to register indices.
@@ -7001,6 +7020,7 @@ pub fn lower_ir2_to_ir3(
                 free_var_ids,
                 runtime_global_loads,
                 child_captured_locals,
+                local_lexical_bindings,
                 is_generator,
                 is_async,
                 rest_param_index,
@@ -7036,18 +7056,19 @@ pub fn lower_ir2_to_ir3(
                         }
                     }
                     let function_index = deferred_functions.len() as u32 + 1;
-                    deferred_functions.push((
-                        body_ops.clone(),
-                        param_names.clone(),
-                        Some(name.clone()),
-                        free_vars.clone(),
-                        free_var_ids.clone(),
-                        runtime_global_loads.clone(),
-                        child_captured_locals.clone(),
-                        *is_generator,
-                        *is_async,
-                        *rest_param_index,
-                    ));
+                    deferred_functions.push(DeferredFunction {
+                        body_ops: body_ops.clone(),
+                        param_names: param_names.clone(),
+                        name: Some(name.clone()),
+                        free_vars: free_vars.clone(),
+                        free_var_ids: free_var_ids.clone(),
+                        runtime_global_loads: runtime_global_loads.clone(),
+                        child_captured_locals: child_captured_locals.clone(),
+                        local_lexical_bindings: local_lexical_bindings.clone(),
+                        is_generator: *is_generator,
+                        is_async: *is_async,
+                        rest_param_index: *rest_param_index,
+                    });
                     if *is_generator && *is_async {
                         ir3.instructions.push(Ir3Instruction::CreateAsyncGenerator {
                             dst,
@@ -7095,6 +7116,7 @@ pub fn lower_ir2_to_ir3(
                 free_var_ids,
                 runtime_global_loads,
                 child_captured_locals,
+                local_lexical_bindings,
                 is_generator,
                 is_async,
                 rest_param_index,
@@ -7133,18 +7155,19 @@ pub fn lower_ir2_to_ir3(
                     }
                 }
                 let function_index = deferred_functions.len() as u32 + 1;
-                deferred_functions.push((
-                    body_ops.clone(),
-                    param_names.clone(),
-                    name.clone(),
-                    free_vars.clone(),
-                    free_var_ids.clone(),
-                    runtime_global_loads.clone(),
-                    child_captured_locals.clone(),
-                    *is_generator,
-                    *is_async,
-                    *rest_param_index,
-                ));
+                deferred_functions.push(DeferredFunction {
+                    body_ops: body_ops.clone(),
+                    param_names: param_names.clone(),
+                    name: name.clone(),
+                    free_vars: free_vars.clone(),
+                    free_var_ids: free_var_ids.clone(),
+                    runtime_global_loads: runtime_global_loads.clone(),
+                    child_captured_locals: child_captured_locals.clone(),
+                    local_lexical_bindings: local_lexical_bindings.clone(),
+                    is_generator: *is_generator,
+                    is_async: *is_async,
+                    rest_param_index: *rest_param_index,
+                });
                 if *is_generator && *is_async {
                     ir3.instructions.push(Ir3Instruction::CreateAsyncGenerator {
                         dst,
@@ -7499,18 +7522,19 @@ pub fn lower_ir2_to_ir3(
     // body can push new entries without conflicting with the borrow.
     let mut deferred_idx = 0;
     while deferred_idx < deferred_functions.len() {
-        let (
+        let DeferredFunction {
             body_ops,
             param_names,
-            fn_name,
+            name: fn_name,
             free_vars,
             free_var_ids,
-            fn_runtime_global_loads,
-            fn_child_captured_locals,
-            fn_is_generator,
-            _fn_is_async,
-            fn_rest_param_index,
-        ) = deferred_functions[deferred_idx].clone();
+            runtime_global_loads: fn_runtime_global_loads,
+            child_captured_locals: fn_child_captured_locals,
+            local_lexical_bindings: fn_local_lexical_bindings,
+            is_generator: fn_is_generator,
+            is_async: _fn_is_async,
+            rest_param_index: fn_rest_param_index,
+        } = deferred_functions[deferred_idx].clone();
         deferred_idx += 1;
         let (body_ops, param_names, fn_name, free_vars, free_var_ids) =
             (&body_ops, &param_names, &fn_name, &free_vars, &free_var_ids);
@@ -7599,20 +7623,85 @@ pub fn lower_ir2_to_ir3(
             .iter()
             .map(|(name, id)| (*id, name.clone()))
             .collect();
-        let has_capturing_children = !child_capture_id_to_name.is_empty();
+
+        let local_lexical_binding_by_id: BTreeMap<BindingId, ResolvedBinding> =
+            fn_local_lexical_bindings
+                .iter()
+                .cloned()
+                .map(|binding| (binding.binding_id, binding))
+                .collect();
+        let mut first_local_access = BTreeMap::<BindingId, usize>::new();
+        let mut first_local_initializer = BTreeMap::<BindingId, usize>::new();
+        for (index, op) in body_ops.iter().enumerate() {
+            match op {
+                Ir1Op::LoadBinding { binding_id } | Ir1Op::AssignOp { binding_id, .. } => {
+                    first_local_access.entry(*binding_id).or_insert(index);
+                }
+                Ir1Op::StoreBinding { binding_id } | Ir1Op::InitializeBinding { binding_id } => {
+                    first_local_initializer.entry(*binding_id).or_insert(index);
+                }
+                _ => {}
+            }
+        }
+        let local_tdz_binding_ids = local_lexical_binding_by_id
+            .keys()
+            .filter(|binding_id| {
+                matches!(
+                    (
+                        first_local_access.get(binding_id),
+                        first_local_initializer.get(binding_id),
+                    ),
+                    (Some(access), Some(initializer)) if access < initializer
+                )
+            })
+            .copied()
+            .collect::<BTreeSet<_>>();
+        let local_const_assignment_ids = body_ops
+            .iter()
+            .filter_map(|op| match op {
+                Ir1Op::AssignOp { binding_id, .. }
+                    if local_lexical_binding_by_id
+                        .get(binding_id)
+                        .is_some_and(|binding| binding.kind == BindingKind::Const) =>
+                {
+                    Some(*binding_id)
+                }
+                _ => None,
+            })
+            .collect::<BTreeSet<_>>();
+        let mut runtime_local_binding_ids = local_tdz_binding_ids
+            .union(&local_const_assignment_ids)
+            .copied()
+            .collect::<BTreeSet<_>>();
+        runtime_local_binding_ids.extend(child_capture_id_to_name.keys().copied());
+        let runtime_local_id_to_name = runtime_local_binding_ids
+            .iter()
+            .filter_map(|binding_id| {
+                let name = if let Some(capture_name) = child_capture_id_to_name.get(binding_id) {
+                    capture_name.clone()
+                } else {
+                    let binding = local_lexical_binding_by_id.get(binding_id)?;
+                    runtime_lexical_binding_name(*binding_id, &binding.name)
+                };
+                Some((*binding_id, name))
+            })
+            .collect::<BTreeMap<_, _>>();
 
         // Child closures snapshot the current scope chain when created. Put
-        // every exact local capture cell in one function-entry frame before
-        // lowering any child, initializing parameters immediately and bridging
-        // the named-function-expression self seam when its inherited alias is
-        // intentionally source-named rather than canonical.
-        if has_capturing_children {
+        // every exact local capture, const-assignment, and TDZ cell in one
+        // function-entry frame before lowering any child. Parameters initialize
+        // immediately; lexical declarations remain uninitialized until their
+        // StoreBinding/InitializeBinding op executes. Free-variable bridges
+        // retain their inherited value and var-kind compatibility seam.
+        if !runtime_local_id_to_name.is_empty() {
             ir3.instructions.push(Ir3Instruction::PushScope);
-            for (binding_id, name) in &child_capture_id_to_name {
+            for (binding_id, name) in &runtime_local_id_to_name {
                 let pool_idx = push_constant_optimized(&mut constant_pool, name);
                 ir3.instructions.push(Ir3Instruction::DeclareBinding {
                     name_pool_index: pool_idx,
-                    kind: 0,
+                    kind: local_lexical_binding_by_id
+                        .get(binding_id)
+                        .map_or(0, |binding| runtime_scope_binding_kind(binding.kind)),
                 });
                 let initial_value = if let Some(own_name) = fv_id_to_name.get(binding_id) {
                     if own_name == name {
@@ -7688,10 +7777,10 @@ pub fn lower_ir2_to_ir3(
                 Ir1Op::LoadBinding { binding_id } => {
                     if let Some(name) = fv_id_to_name
                         .get(binding_id)
-                        .or_else(|| child_capture_id_to_name.get(binding_id))
+                        .or_else(|| runtime_local_id_to_name.get(binding_id))
                     {
-                        // Free variables and locals shared with a child both
-                        // live in an exact runtime capture cell.
+                        // Free variables and runtime-routed locals both live in
+                        // an exact scope-chain cell.
                         let dst = alloc_register(&mut fn_reg);
                         let pool_idx = push_constant_optimized(&mut constant_pool, name);
                         ir3.instructions.push(Ir3Instruction::LoadScoped {
@@ -7747,7 +7836,7 @@ pub fn lower_ir2_to_ir3(
                         fn_value_stack.push(src);
                         continue;
                     }
-                    if let Some(name) = child_capture_id_to_name.get(binding_id) {
+                    if let Some(name) = runtime_local_id_to_name.get(binding_id) {
                         let pool_idx = push_constant_optimized(&mut constant_pool, name);
                         ir3.instructions.push(Ir3Instruction::InitBinding {
                             name_pool_index: pool_idx,
@@ -7783,13 +7872,20 @@ pub fn lower_ir2_to_ir3(
                         fn_value_stack.push(src);
                         continue;
                     }
-                    if let Some(name) = child_capture_id_to_name.get(binding_id) {
+                    if let Some(name) = runtime_local_id_to_name.get(binding_id) {
                         let src = pop_lowering_value(&mut fn_value_stack)?;
                         let pool_idx = push_constant_optimized(&mut constant_pool, name);
-                        ir3.instructions.push(Ir3Instruction::StoreScoped {
-                            src,
-                            name_pool_index: pool_idx,
-                        });
+                        if local_lexical_binding_by_id.contains_key(binding_id) {
+                            ir3.instructions.push(Ir3Instruction::InitBinding {
+                                name_pool_index: pool_idx,
+                                src,
+                            });
+                        } else {
+                            ir3.instructions.push(Ir3Instruction::StoreScoped {
+                                src,
+                                name_pool_index: pool_idx,
+                            });
+                        }
                         fn_value_stack.push(src);
                         continue;
                     }
@@ -7807,7 +7903,7 @@ pub fn lower_ir2_to_ir3(
                 } => {
                     if let Some(name) = fv_id_to_name
                         .get(binding_id)
-                        .or_else(|| child_capture_id_to_name.get(binding_id))
+                        .or_else(|| runtime_local_id_to_name.get(binding_id))
                     {
                         let pool_idx = push_constant_optimized(&mut constant_pool, name);
                         ir3.instructions
@@ -7962,7 +8058,7 @@ pub fn lower_ir2_to_ir3(
                     let src = pop_lowering_value(&mut fn_value_stack)?;
                     if let Some(name) = fv_id_to_name
                         .get(binding_id)
-                        .or_else(|| child_capture_id_to_name.get(binding_id))
+                        .or_else(|| runtime_local_id_to_name.get(binding_id))
                     {
                         let pool_idx = push_constant_optimized(&mut constant_pool, name);
                         let result = if *operator == AssignmentOperator::Assign {
@@ -8220,6 +8316,7 @@ pub fn lower_ir2_to_ir3(
                     free_var_ids: inner_fv_ids,
                     runtime_global_loads: inner_runtime_global_loads,
                     child_captured_locals: inner_child_captured_locals,
+                    local_lexical_bindings: inner_local_lexical_bindings,
                     is_generator: inner_gen,
                     is_async: inner_async,
                     rest_param_index: inner_rest,
@@ -8253,18 +8350,19 @@ pub fn lower_ir2_to_ir3(
                         }
                     }
                     let function_index = deferred_functions.len() as u32 + 1;
-                    deferred_functions.push((
-                        inner_body.clone(),
-                        inner_params.clone(),
-                        Some(inner_name.clone()),
-                        inner_fv.clone(),
-                        inner_fv_ids.clone(),
-                        inner_runtime_global_loads.clone(),
-                        inner_child_captured_locals.clone(),
-                        *inner_gen,
-                        *inner_async,
-                        *inner_rest,
-                    ));
+                    deferred_functions.push(DeferredFunction {
+                        body_ops: inner_body.clone(),
+                        param_names: inner_params.clone(),
+                        name: Some(inner_name.clone()),
+                        free_vars: inner_fv.clone(),
+                        free_var_ids: inner_fv_ids.clone(),
+                        runtime_global_loads: inner_runtime_global_loads.clone(),
+                        child_captured_locals: inner_child_captured_locals.clone(),
+                        local_lexical_bindings: inner_local_lexical_bindings.clone(),
+                        is_generator: *inner_gen,
+                        is_async: *inner_async,
+                        rest_param_index: *inner_rest,
+                    });
                     if *inner_gen && *inner_async {
                         ir3.instructions.push(Ir3Instruction::CreateAsyncGenerator {
                             dst,
@@ -8316,6 +8414,7 @@ pub fn lower_ir2_to_ir3(
                     free_var_ids: inner_fv_ids,
                     runtime_global_loads: inner_runtime_global_loads,
                     child_captured_locals: inner_child_captured_locals,
+                    local_lexical_bindings: inner_local_lexical_bindings,
                     is_generator: inner_gen,
                     is_async: inner_async,
                     rest_param_index: inner_rest,
@@ -8349,18 +8448,19 @@ pub fn lower_ir2_to_ir3(
                         }
                     }
                     let function_index = deferred_functions.len() as u32 + 1;
-                    deferred_functions.push((
-                        inner_body.clone(),
-                        inner_params.clone(),
-                        inner_name.clone(),
-                        inner_fv.clone(),
-                        inner_fv_ids.clone(),
-                        inner_runtime_global_loads.clone(),
-                        inner_child_captured_locals.clone(),
-                        *inner_gen,
-                        *inner_async,
-                        *inner_rest,
-                    ));
+                    deferred_functions.push(DeferredFunction {
+                        body_ops: inner_body.clone(),
+                        param_names: inner_params.clone(),
+                        name: inner_name.clone(),
+                        free_vars: inner_fv.clone(),
+                        free_var_ids: inner_fv_ids.clone(),
+                        runtime_global_loads: inner_runtime_global_loads.clone(),
+                        child_captured_locals: inner_child_captured_locals.clone(),
+                        local_lexical_bindings: inner_local_lexical_bindings.clone(),
+                        is_generator: *inner_gen,
+                        is_async: *inner_async,
+                        rest_param_index: *inner_rest,
+                    });
                     if *inner_gen && *inner_async {
                         ir3.instructions.push(Ir3Instruction::CreateAsyncGenerator {
                             dst,
@@ -9499,6 +9599,39 @@ fn collect_child_captured_locals(
         .map(|(binding_id, runtime_name)| (runtime_name.to_string(), binding_id))
         .collect::<BTreeSet<_>>()
         .into_iter()
+        .collect()
+}
+
+/// Preserve the exact binding identity and kind needed when a function body is
+/// detached from the module scope tree for deferred IR3 lowering.
+///
+/// Free variables and runtime-injected globals have their own exact-ID
+/// carriers and must not be redeclared as locals. Ordinary `var`, parameter,
+/// and function bindings remain register-backed unless a child captures them;
+/// the existing child-capture metadata already supplies the required cell.
+fn collect_function_local_lexical_bindings(
+    bindings: &[ResolvedBinding],
+    free_var_ids: &[BindingId],
+    runtime_global_loads: &[(String, BindingId)],
+) -> Vec<ResolvedBinding> {
+    let excluded_ids = free_var_ids
+        .iter()
+        .copied()
+        .chain(
+            runtime_global_loads
+                .iter()
+                .map(|(_, binding_id)| *binding_id),
+        )
+        .collect::<BTreeSet<_>>();
+
+    bindings
+        .iter()
+        .filter(|binding| {
+            matches!(binding.kind, BindingKind::Let | BindingKind::Const)
+                && !is_internal_lowering_binding(&binding.name)
+                && !excluded_ids.contains(&binding.binding_id)
+        })
+        .cloned()
         .collect()
 }
 
@@ -13694,6 +13827,11 @@ fn lower_expression_to_ir1_inner(
             );
             let arrow_child_captured_locals =
                 collect_child_captured_locals(&body_lookup, &arrow_free_vars, &arrow_free_var_ids);
+            let arrow_local_lexical_bindings = collect_function_local_lexical_bindings(
+                &body_bindings,
+                &arrow_free_var_ids,
+                &arrow_runtime_global_loads,
+            );
             ops.push(Ir1Op::CreateFunction {
                 name: None,
                 param_names,
@@ -13702,6 +13840,7 @@ fn lower_expression_to_ir1_inner(
                 free_var_ids: arrow_free_var_ids,
                 runtime_global_loads: arrow_runtime_global_loads,
                 child_captured_locals: arrow_child_captured_locals,
+                local_lexical_bindings: arrow_local_lexical_bindings,
                 is_generator: false,
                 is_async: *is_async,
                 rest_param_index,
@@ -13872,6 +14011,11 @@ fn lower_expression_to_ir1_inner(
             }
             let fn_child_captured_locals =
                 collect_child_captured_locals(&body_lookup, &fn_free_vars, &fn_free_var_ids);
+            let fn_local_lexical_bindings = collect_function_local_lexical_bindings(
+                &body_bindings,
+                &fn_free_var_ids,
+                &fn_runtime_global_loads,
+            );
             ops.push(Ir1Op::CreateFunction {
                 name: name.clone(),
                 param_names,
@@ -13880,6 +14024,7 @@ fn lower_expression_to_ir1_inner(
                 free_var_ids: fn_free_var_ids,
                 runtime_global_loads: fn_runtime_global_loads,
                 child_captured_locals: fn_child_captured_locals,
+                local_lexical_bindings: fn_local_lexical_bindings,
                 is_generator: *is_generator,
                 is_async: *is_async,
                 rest_param_index,
@@ -14466,6 +14611,11 @@ fn lower_expression_to_ir1_inner(
             }
             let ctor_child_captured_locals =
                 collect_child_captured_locals(&body_lookup, &ctor_free_vars, &ctor_free_var_ids);
+            let ctor_local_lexical_bindings = collect_function_local_lexical_bindings(
+                &body_bindings,
+                &ctor_free_var_ids,
+                &ctor_runtime_global_loads,
+            );
             ops.push(Ir1Op::DeclareFunction {
                 name: class_name,
                 binding_id: bid,
@@ -14475,6 +14625,7 @@ fn lower_expression_to_ir1_inner(
                 free_var_ids: ctor_free_var_ids,
                 runtime_global_loads: ctor_runtime_global_loads,
                 child_captured_locals: ctor_child_captured_locals,
+                local_lexical_bindings: ctor_local_lexical_bindings,
                 is_generator: false,
                 is_async: false,
                 rest_param_index,
@@ -14677,6 +14828,11 @@ fn lower_expression_to_ir1_inner(
                     &method_free_vars,
                     &method_free_var_ids,
                 );
+                let m_local_lexical_bindings = collect_function_local_lexical_bindings(
+                    &m_bindings,
+                    &method_free_var_ids,
+                    &method_runtime_global_loads,
+                );
                 ops.push(Ir1Op::CreateFunction {
                     name: Some(method_name.clone()),
                     param_names: m_param_names,
@@ -14685,6 +14841,7 @@ fn lower_expression_to_ir1_inner(
                     free_var_ids: method_free_var_ids,
                     runtime_global_loads: method_runtime_global_loads,
                     child_captured_locals: m_child_captured_locals,
+                    local_lexical_bindings: m_local_lexical_bindings,
                     is_generator: false,
                     is_async: false,
                     rest_param_index: m_rest_param_index,
@@ -25200,6 +25357,7 @@ mod tests {
             free_var_ids: vec![0],
             runtime_global_loads: Vec::new(),
             child_captured_locals: Vec::new(),
+            local_lexical_bindings: Vec::new(),
             is_generator: false,
             is_async: false,
             rest_param_index: None,
@@ -25242,6 +25400,7 @@ mod tests {
             free_var_ids: Vec::new(),
             runtime_global_loads: Vec::new(),
             child_captured_locals: Vec::new(),
+            local_lexical_bindings: Vec::new(),
             is_generator: false,
             is_async: false,
             rest_param_index: None,
@@ -25286,6 +25445,7 @@ mod tests {
             free_var_ids: Vec::new(),
             runtime_global_loads: Vec::new(),
             child_captured_locals: Vec::new(),
+            local_lexical_bindings: Vec::new(),
             is_generator: false,
             is_async: false,
             rest_param_index: None,
@@ -25365,6 +25525,7 @@ mod tests {
             free_var_ids: vec![0],
             runtime_global_loads: Vec::new(),
             child_captured_locals: Vec::new(),
+            local_lexical_bindings: Vec::new(),
             is_generator: false,
             is_async: false,
             rest_param_index: None,
@@ -33645,6 +33806,174 @@ mod tests {
                 assign_index < init_index,
                 assignment_before_init,
                 "TDZ assignment ordering must follow source control flow"
+            );
+        }
+    }
+
+    #[test]
+    fn deferred_loop_assignment_preserves_local_lexical_metadata_bd_pimva() {
+        for (
+            source,
+            expected_name,
+            expected_binding_kind,
+            expected_runtime_kind,
+            assignment_before_init,
+        ) in [
+            (
+                "function run() { const fixed = 1; for (fixed of [2]) {} }",
+                "fixed",
+                BindingKind::Const,
+                2_u8,
+                false,
+            ),
+            (
+                "let run = () => { for (value of [1]) {} let value = 9; };",
+                "value",
+                BindingKind::Let,
+                1_u8,
+                true,
+            ),
+        ] {
+            let tree = crate::parser_api_stability::parse_script(source).expect("parse script");
+            let ir0 = Ir0Module::from_syntax_tree(tree, "bd-pimva-deferred-runtime.js");
+            let output = lower_ir0_to_ir3(&ir0, &LoweringContext::new("t", "d", "p"))
+                .expect("deferred runtime binding checks should lower");
+            let (body_ops, local_lexical_bindings) = output
+                .ir1
+                .ops
+                .iter()
+                .find_map(|op| match op {
+                    Ir1Op::DeclareFunction {
+                        body_ops,
+                        local_lexical_bindings,
+                        ..
+                    }
+                    | Ir1Op::CreateFunction {
+                        body_ops,
+                        local_lexical_bindings,
+                        ..
+                    } => Some((body_ops, local_lexical_bindings)),
+                    _ => None,
+                })
+                .expect("source must contain one deferred function body");
+            let matching_bindings = local_lexical_bindings
+                .iter()
+                .filter(|binding| binding.name == expected_name)
+                .collect::<Vec<_>>();
+            assert_eq!(
+                matching_bindings.len(),
+                1,
+                "{expected_name} must have exactly one exact-ID metadata entry"
+            );
+            let binding = matching_bindings[0];
+            assert_eq!(binding.kind, expected_binding_kind);
+            let initializer_indices = body_ops
+                .iter()
+                .enumerate()
+                .filter_map(|(index, op)| {
+                    matches!(
+                        op,
+                        Ir1Op::StoreBinding { binding_id }
+                            | Ir1Op::InitializeBinding { binding_id }
+                            if *binding_id == binding.binding_id
+                    )
+                    .then_some(index)
+                })
+                .collect::<Vec<_>>();
+            let assignment_indices = body_ops
+                .iter()
+                .enumerate()
+                .filter_map(|(index, op)| {
+                    matches!(
+                        op,
+                        Ir1Op::AssignOp { binding_id, .. }
+                            if *binding_id == binding.binding_id
+                    )
+                    .then_some(index)
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(initializer_indices.len(), 1);
+            assert_eq!(assignment_indices.len(), 1);
+            assert_eq!(
+                assignment_indices[0] < initializer_indices[0],
+                assignment_before_init,
+                "IR1 metadata and source-order operations must agree"
+            );
+
+            let function_desc = output
+                .ir3
+                .instructions
+                .iter()
+                .find_map(|instruction| match instruction {
+                    Ir3Instruction::CreateClosure { function_index, .. } => {
+                        output.ir3.function_table.get(*function_index as usize)
+                    }
+                    _ => None,
+                })
+                .expect("source must create a deferred closure body");
+            let function_body = &output.ir3.instructions[function_desc.entry as usize..];
+            let expected_runtime_name =
+                runtime_lexical_binding_name(binding.binding_id, expected_name);
+            let name_pool_index = u32::try_from(
+                output
+                    .ir3
+                    .constant_pool
+                    .iter()
+                    .position(|value| value == expected_runtime_name.as_str())
+                    .expect("exact ID-qualified runtime lexical name must be interned"),
+            )
+            .expect("constant-pool index must fit u32");
+            let declarations = function_body
+                .iter()
+                .enumerate()
+                .filter_map(|(index, instruction)| match instruction {
+                    Ir3Instruction::DeclareBinding {
+                        name_pool_index: candidate,
+                        kind,
+                    } if *candidate == name_pool_index => Some((index, *kind)),
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(declarations.len(), 1);
+            let (declare_index, actual_kind) = declarations[0];
+            assert_eq!(actual_kind, expected_runtime_kind);
+            let init_indices = function_body
+                .iter()
+                .enumerate()
+                .filter_map(|(index, instruction)| {
+                    matches!(
+                        instruction,
+                        Ir3Instruction::InitBinding {
+                            name_pool_index: candidate,
+                            ..
+                        } if *candidate == name_pool_index
+                    )
+                    .then_some(index)
+                })
+                .collect::<Vec<_>>();
+            let assign_indices = function_body
+                .iter()
+                .enumerate()
+                .filter_map(|(index, instruction)| {
+                    matches!(
+                        instruction,
+                        Ir3Instruction::StoreScoped {
+                            name_pool_index: candidate,
+                            ..
+                        } if *candidate == name_pool_index
+                    )
+                    .then_some(index)
+                })
+                .collect::<Vec<_>>();
+
+            assert_eq!(init_indices.len(), 1);
+            assert_eq!(assign_indices.len(), 1);
+            assert!(declare_index < init_indices[0]);
+            assert!(declare_index < assign_indices[0]);
+            assert_eq!(
+                assign_indices[0] < init_indices[0],
+                assignment_before_init,
+                "deferred TDZ assignment ordering must follow source control flow"
             );
         }
     }

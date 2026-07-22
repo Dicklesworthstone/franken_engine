@@ -741,6 +741,105 @@ mod tests {
         }
     }
 
+    #[test]
+    fn function_local_iteration_targets_preserve_binding_identity_bd_pimva() {
+        let cases = [
+            (
+                "function-local const with empty iterable",
+                "function run() { const fixed = 1; for (fixed of []) {} return fixed; } run();",
+                "1",
+            ),
+            (
+                "function-local predeclaration with empty iterable",
+                "function run() { for (value of []) {} let value = 9; return value; } run();",
+                "9",
+            ),
+            (
+                "nearest nested function-local binding",
+                "function run() { const value = 'outer'; let result = ''; { let value = 'block'; for (value of ['inner']) {} result = value; } return result + ':' + value; } run();",
+                "inner:outer",
+            ),
+            (
+                "function-local shared closure cell",
+                "function run() { let value = 0; let observe = () => value; for (value of [1, 2, 3]) {} return observe(); } run();",
+                "3",
+            ),
+            (
+                "explicit function-local const head creates fresh per-iteration cells",
+                "function run() { let first; let second; for (const item of [1, 2]) { if (item === 1) { first = () => item; } else { second = () => item; } } return first() * 10 + second(); } run();",
+                "12",
+            ),
+            (
+                "function-expression destructuring assignment",
+                "let run = function () { let left = 0; let right = 0; for ([left, right] of [[3, 4]]) {} return left * 10 + right; }; run();",
+                "34",
+            ),
+        ];
+
+        for (label, source, expected) in cases {
+            assert_eq!(
+                eval_value_bd_5p1dp(source),
+                expected,
+                "{label} must preserve the exact deferred-frame binding"
+            );
+        }
+    }
+
+    #[test]
+    fn function_local_iteration_targets_enforce_const_and_tdz_bd_pimva() {
+        let cases = [
+            (
+                "function-local for-of const assignment",
+                "function run() { const fixed = 1; for (fixed of [2]) {} } run();",
+                "assignment to constant variable",
+            ),
+            (
+                "arrow-local for-in const assignment",
+                "let run = () => { const fixed = ''; for (fixed in { key: 1 }) {} }; run();",
+                "assignment to constant variable",
+            ),
+            (
+                "function-local assignment before lexical declaration",
+                "function run() { for (value of [1]) {} let value = 9; } run();",
+                "before initialization",
+            ),
+            (
+                "function-local const TDZ precedes immutability",
+                "function run() { for (value of [1]) {} const value = 9; } run();",
+                "before initialization",
+            ),
+            (
+                "function-local destructuring const assignment",
+                "function run() { const fixed = 1; for ([fixed] of [[2]]) {} } run();",
+                "assignment to constant variable",
+            ),
+            (
+                "captured function-local const assignment",
+                "function run() { const fixed = 1; let observe = () => fixed; for (fixed of [2]) {} return observe(); } run();",
+                "assignment to constant variable",
+            ),
+            (
+                "nested-scope function-local const assignment",
+                "function run() { let value = 1; { const value = 2; for (value of [3]) {} } return value; } run();",
+                "assignment to constant variable",
+            ),
+        ];
+
+        for (label, source, expected_message) in cases {
+            let mut engine = HybridRouter::default();
+            let error = engine.eval(source).unwrap_err();
+            assert_eq!(
+                error.code,
+                EvalErrorCode::RuntimeFault,
+                "{label} must fail at runtime, not during parsing or lowering: {error}"
+            );
+            assert!(
+                error.message.contains(expected_message),
+                "{label} must report {expected_message:?}: {error}"
+            );
+        }
+    }
+
     /// Smoke test: the parser must at least accept this statement form. A
     /// `ParseError` means the grammar is unsupported (a real gap); a runtime
     /// `Fail` is an execution gap, not a parser gap, and is tolerated here.

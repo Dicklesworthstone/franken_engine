@@ -16,6 +16,7 @@
 use frankenengine_engine::ast::{
     Expression, ExpressionStatement, ParseGoal, SourceSpan, Statement, SyntaxTree,
 };
+use frankenengine_engine::deterministic_serde::CanonicalValue;
 use frankenengine_engine::hash_tiers::ContentHash;
 use frankenengine_engine::ifc_artifacts::Label;
 use frankenengine_engine::ir_contract::{
@@ -575,6 +576,75 @@ fn ir_level_ordering_is_pipeline_order() {
     ];
     for i in 0..levels.len() - 1 {
         assert!(levels[i] < levels[i + 1]);
+    }
+}
+
+#[test]
+fn function_local_lexical_metadata_is_backward_compatible_and_canonical_bd_pimva() {
+    fn function_op(declared: bool, local_lexical_bindings: Vec<ResolvedBinding>) -> Ir1Op {
+        if declared {
+            Ir1Op::DeclareFunction {
+                name: "run".to_string(),
+                binding_id: 0,
+                param_names: Vec::new(),
+                body_ops: Vec::new(),
+                free_vars: Vec::new(),
+                free_var_ids: Vec::new(),
+                runtime_global_loads: Vec::new(),
+                child_captured_locals: Vec::new(),
+                local_lexical_bindings,
+                is_generator: false,
+                is_async: false,
+                rest_param_index: None,
+            }
+        } else {
+            Ir1Op::CreateFunction {
+                name: Some("run".to_string()),
+                param_names: Vec::new(),
+                body_ops: Vec::new(),
+                free_vars: Vec::new(),
+                free_var_ids: Vec::new(),
+                runtime_global_loads: Vec::new(),
+                child_captured_locals: Vec::new(),
+                local_lexical_bindings,
+                is_generator: false,
+                is_async: false,
+                rest_param_index: None,
+            }
+        }
+    }
+
+    for declared in [false, true] {
+        let empty = function_op(declared, Vec::new());
+        let json = serde_json::to_string(&empty).expect("serialize function op");
+        assert!(!json.contains("local_lexical_bindings"));
+        let restored: Ir1Op = serde_json::from_str(&json).expect("deserialize legacy function op");
+        assert_eq!(restored, empty);
+        let CanonicalValue::Map(empty_fields) = empty.canonical_value() else {
+            panic!("function op canonical value must be a map");
+        };
+        assert!(!empty_fields.contains_key("local_lexical_bindings"));
+
+        let lexical = ResolvedBinding {
+            name: "value".to_string(),
+            binding_id: 7,
+            scope: ScopeId { depth: 1, index: 0 },
+            kind: BindingKind::Let,
+        };
+        let with_let = function_op(declared, vec![lexical.clone()]);
+        let with_const = function_op(
+            declared,
+            vec![ResolvedBinding {
+                kind: BindingKind::Const,
+                ..lexical
+            }],
+        );
+        let CanonicalValue::Map(let_fields) = with_let.canonical_value() else {
+            panic!("function op canonical value must be a map");
+        };
+        assert!(let_fields.contains_key("local_lexical_bindings"));
+        assert_ne!(empty.canonical_value(), with_let.canonical_value());
+        assert_ne!(with_let.canonical_value(), with_const.canonical_value());
     }
 }
 
@@ -1330,6 +1400,7 @@ fn enrichment_ir1_all_ops_serde_roundtrip() {
             free_var_ids: Vec::new(),
             runtime_global_loads: Vec::new(),
             child_captured_locals: Vec::new(),
+            local_lexical_bindings: Vec::new(),
             is_generator: false,
             is_async: false,
             rest_param_index: None,

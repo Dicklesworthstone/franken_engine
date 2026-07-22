@@ -219,6 +219,24 @@ impl ResolvedBinding {
     }
 }
 
+fn canonical_resolved_binding_array(bindings: &[ResolvedBinding]) -> CanonicalValue {
+    let mut bindings = bindings.to_vec();
+    bindings.sort_by(|left, right| {
+        left.binding_id
+            .cmp(&right.binding_id)
+            .then_with(|| left.name.cmp(&right.name))
+            .then_with(|| left.scope.depth.cmp(&right.scope.depth))
+            .then_with(|| left.scope.index.cmp(&right.scope.index))
+            .then_with(|| left.kind.as_str().cmp(right.kind.as_str()))
+    });
+    CanonicalValue::Array(
+        bindings
+            .iter()
+            .map(ResolvedBinding::canonical_value)
+            .collect(),
+    )
+}
+
 /// Classification of bindings in IR1.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum BindingKind {
@@ -525,6 +543,15 @@ pub enum Ir1Op {
         /// `free_var_ids`.
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         child_captured_locals: Vec<(String, BindingId)>,
+        /// Exact body-local lexical binding metadata required by deferred IR3
+        /// lowering. Function bodies use their own binding-id namespace, so
+        /// the enclosing module scope tree cannot recover `let`/`const` kind
+        /// or distinguish same-spelled nested bindings after the body is
+        /// detached. This compact carrier contains only genuine local lexical
+        /// bindings; free variables and runtime globals remain in their
+        /// dedicated vectors above (bd-pimva).
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        local_lexical_bindings: Vec<ResolvedBinding>,
         /// True when the source function is a generator (`function*`).
         is_generator: bool,
         /// True when the source function is async (`async function`).
@@ -554,6 +581,9 @@ pub enum Ir1Op {
         /// DeclareFunction; bd-suwvw).
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         child_captured_locals: Vec<(String, BindingId)>,
+        /// Exact body-local `let`/`const` metadata (see DeclareFunction).
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        local_lexical_bindings: Vec<ResolvedBinding>,
         /// True when the source function is a generator (`function*`).
         is_generator: bool,
         /// True when the source function is async (`async function` or `async () =>`).
@@ -768,38 +798,50 @@ impl Ir1Op {
                 free_var_ids: _,
                 runtime_global_loads: _,
                 child_captured_locals: _,
+                local_lexical_bindings,
                 is_generator,
                 is_async,
                 rest_param_index: _,
-            } => CanonicalValue::map_from_entries([
-                ("op", CanonicalValue::str("declare_function")),
-                ("name", CanonicalValue::str(name.clone())),
-                ("binding_id", CanonicalValue::U64(u64::from(*binding_id))),
-                (
-                    "param_names",
-                    CanonicalValue::Array(
-                        param_names
-                            .iter()
-                            .map(|s| CanonicalValue::str(s.clone()))
-                            .collect(),
+            } => {
+                let mut entries = vec![
+                    ("op", CanonicalValue::str("declare_function")),
+                    ("name", CanonicalValue::str(name.clone())),
+                    ("binding_id", CanonicalValue::U64(u64::from(*binding_id))),
+                    (
+                        "param_names",
+                        CanonicalValue::Array(
+                            param_names
+                                .iter()
+                                .map(|s| CanonicalValue::str(s.clone()))
+                                .collect(),
+                        ),
                     ),
-                ),
-                (
-                    "body_ops",
-                    CanonicalValue::Array(body_ops.iter().map(Ir1Op::canonical_value).collect()),
-                ),
-                (
-                    "free_vars",
-                    CanonicalValue::Array(
-                        free_vars
-                            .iter()
-                            .map(|s| CanonicalValue::str(s.clone()))
-                            .collect(),
+                    (
+                        "body_ops",
+                        CanonicalValue::Array(
+                            body_ops.iter().map(Ir1Op::canonical_value).collect(),
+                        ),
                     ),
-                ),
-                ("is_generator", CanonicalValue::Bool(*is_generator)),
-                ("is_async", CanonicalValue::Bool(*is_async)),
-            ]),
+                    (
+                        "free_vars",
+                        CanonicalValue::Array(
+                            free_vars
+                                .iter()
+                                .map(|s| CanonicalValue::str(s.clone()))
+                                .collect(),
+                        ),
+                    ),
+                    ("is_generator", CanonicalValue::Bool(*is_generator)),
+                    ("is_async", CanonicalValue::Bool(*is_async)),
+                ];
+                if !local_lexical_bindings.is_empty() {
+                    entries.push((
+                        "local_lexical_bindings",
+                        canonical_resolved_binding_array(local_lexical_bindings),
+                    ));
+                }
+                CanonicalValue::map_from_entries(entries)
+            }
             Self::CreateFunction {
                 name,
                 param_names,
@@ -808,41 +850,53 @@ impl Ir1Op {
                 free_var_ids: _,
                 runtime_global_loads: _,
                 child_captured_locals: _,
+                local_lexical_bindings,
                 is_generator,
                 is_async,
                 rest_param_index: _,
-            } => CanonicalValue::map_from_entries([
-                ("op", CanonicalValue::str("create_function")),
-                (
-                    "name",
-                    name.as_ref()
-                        .map_or(CanonicalValue::Null, |n| CanonicalValue::str(n.clone())),
-                ),
-                (
-                    "param_names",
-                    CanonicalValue::Array(
-                        param_names
-                            .iter()
-                            .map(|s| CanonicalValue::str(s.clone()))
-                            .collect(),
+            } => {
+                let mut entries = vec![
+                    ("op", CanonicalValue::str("create_function")),
+                    (
+                        "name",
+                        name.as_ref()
+                            .map_or(CanonicalValue::Null, |n| CanonicalValue::str(n.clone())),
                     ),
-                ),
-                (
-                    "body_ops",
-                    CanonicalValue::Array(body_ops.iter().map(Ir1Op::canonical_value).collect()),
-                ),
-                (
-                    "free_vars",
-                    CanonicalValue::Array(
-                        free_vars
-                            .iter()
-                            .map(|s| CanonicalValue::str(s.clone()))
-                            .collect(),
+                    (
+                        "param_names",
+                        CanonicalValue::Array(
+                            param_names
+                                .iter()
+                                .map(|s| CanonicalValue::str(s.clone()))
+                                .collect(),
+                        ),
                     ),
-                ),
-                ("is_generator", CanonicalValue::Bool(*is_generator)),
-                ("is_async", CanonicalValue::Bool(*is_async)),
-            ]),
+                    (
+                        "body_ops",
+                        CanonicalValue::Array(
+                            body_ops.iter().map(Ir1Op::canonical_value).collect(),
+                        ),
+                    ),
+                    (
+                        "free_vars",
+                        CanonicalValue::Array(
+                            free_vars
+                                .iter()
+                                .map(|s| CanonicalValue::str(s.clone()))
+                                .collect(),
+                        ),
+                    ),
+                    ("is_generator", CanonicalValue::Bool(*is_generator)),
+                    ("is_async", CanonicalValue::Bool(*is_async)),
+                ];
+                if !local_lexical_bindings.is_empty() {
+                    entries.push((
+                        "local_lexical_bindings",
+                        canonical_resolved_binding_array(local_lexical_bindings),
+                    ));
+                }
+                CanonicalValue::map_from_entries(entries)
+            }
             Self::BeginTry {
                 catch_label,
                 finally_label,

@@ -558,6 +558,7 @@ fn enrichment_ir1_op_all_variants_serde_sample() {
             free_var_ids: Vec::new(),
             runtime_global_loads: Vec::new(),
             child_captured_locals: Vec::new(),
+            local_lexical_bindings: Vec::new(),
             is_generator: false,
             is_async: false,
             rest_param_index: None,

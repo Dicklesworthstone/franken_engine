@@ -18420,7 +18420,6 @@ strict"; var static = 1; }"#,
         for source in [
             "var {0_1: value} = source",
             "var {a-b: value} = source",
-            r"var {\u0030bad: value} = source",
             r#"var {"a""b": value} = source"#,
             r"var {'a''b': value} = source",
             "var {'a\nb': value} = source",
@@ -18430,8 +18429,25 @@ strict"; var static = 1; }"#,
                 .parse(source, ParseGoal::Script)
                 .expect_err("malformed static property key must be rejected");
             assert_eq!(error.code, ParseErrorCode::UnsupportedSyntax);
-            assert!(error.message.contains("object-binding property key"));
+            assert!(
+                error.message.contains("object-binding property key"),
+                "{source:?}: {}",
+                error.message
+            );
         }
+
+        let source = r"var {\u0030bad: value} = source";
+        let error = parser
+            .parse(source, ParseGoal::Script)
+            .expect_err("escaped non-IdentifierStart binding key must be rejected");
+        assert_eq!(error.code, ParseErrorCode::UnsupportedSyntax);
+        assert!(
+            error
+                .message
+                .contains("unterminated comment or quoted literal in binding pattern"),
+            "{source:?}: {}",
+            error.message
+        );
     }
 
     #[test]
@@ -18634,8 +18650,21 @@ strict"; var static = 1; }"#,
     #[test]
     fn malformed_object_literal_shorthand_fails_closed_bd_y74cd() {
         let parser = CanonicalEs2020Parser;
+
+        let source = "let value = {[key: 7}";
+        let error = parser
+            .parse(source, ParseGoal::Script)
+            .expect_err("unbalanced computed property key must be rejected");
+        assert_eq!(error.code, ParseErrorCode::UnsupportedSyntax);
+        assert!(
+            error
+                .message
+                .contains("initializer has unterminated lexical trivia"),
+            "{source:?}: {}",
+            error.message
+        );
+
         for source in [
-            "let value = {[key: 7}",
             r#"let value = {"key"}"#,
             "let value = {1}",
             "let value = {if}",
@@ -18652,7 +18681,11 @@ strict"; var static = 1; }"#,
                 .parse(source, ParseGoal::Script)
                 .expect_err("non-identifier shorthand must be rejected");
             assert_eq!(error.code, ParseErrorCode::UnsupportedSyntax);
-            assert!(error.message.contains("object-literal shorthand property"));
+            assert!(
+                error.message.contains("object-literal shorthand property"),
+                "{source:?}: {}",
+                error.message
+            );
         }
 
         for source in ["({await})", "({static})"] {

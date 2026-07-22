@@ -9,7 +9,7 @@
 //! variable scoping in headers, break/continue semantics, and iterator protocol
 //! integration for for-in/for-of statements.
 
-use frankenengine_engine::HybridRouter;
+use frankenengine_engine::{EvalErrorCode, HybridRouter};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
@@ -575,6 +575,171 @@ impl IterationStatementConformanceHarness {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn eval_value_bd_5p1dp(source: &str) -> String {
+        let mut engine = HybridRouter::default();
+        engine
+            .eval(source)
+            .unwrap_or_else(|error| panic!("bd-5p1dp eval failed for {source:?}: {error}"))
+            .value
+            .to_string()
+    }
+
+    #[test]
+    fn bare_for_in_of_assignment_targets_observe_existing_bindings_bd_5p1dp() {
+        let cases = [
+            (
+                "for-in identifier",
+                "let key = ''; for (key in { alpha: 1, beta: 2 }) {} key;",
+                "beta",
+            ),
+            (
+                "for-in destructuring",
+                "let target = 'old'; for ({ missing: target } in { xy: 1 }) {} target === undefined;",
+                "true",
+            ),
+            (
+                "for-of identifier",
+                "let value = 0; for (value of [4, 7]) {} value;",
+                "7",
+            ),
+            (
+                "iterable reads existing target before assignment",
+                "let value = [1]; for (value of value) {} value;",
+                "1",
+            ),
+            (
+                "for-of destructuring",
+                "let left = 0; let right = 0; for ([left, right] of [[1, 2], [3, 4]]) {} left * 10 + right;",
+                "34",
+            ),
+            (
+                "nested default and rest assignment targets",
+                "let picked = 0; let rest = []; for ([{ p: picked } = { p: 9 }, ...rest] of [[undefined, 1, 2]]) {} picked * 10 + rest.length;",
+                "92",
+            ),
+            (
+                "assignment pattern may repeat a target",
+                "let value = 0; for ([value, value] of [[1, 2]]) {} value;",
+                "2",
+            ),
+            (
+                "nearest nested binding",
+                "let result = ''; let value = 'outer'; { let value = 'block'; for (value of ['inner']) {} result = value; } result + ':' + value;",
+                "inner:outer",
+            ),
+            (
+                "shared closure cell",
+                "let value = 0; let observe = () => value; for (value of [1, 2, 3]) {} observe();",
+                "3",
+            ),
+            (
+                "sloppy unresolved target",
+                "for (missing of [7]) {} missing;",
+                "7",
+            ),
+            (
+                "empty iterable does not assign const target",
+                "const fixed = 1; for (fixed of []) {} fixed;",
+                "1",
+            ),
+            (
+                "empty iterable does not enter target TDZ assignment",
+                "for (value of []) {} let value = 9; value;",
+                "9",
+            ),
+            (
+                "scope-routed const targets preserve shadow identity",
+                "const value = 1; for (value of []) {} { const value = 2; for (value of []) {} } value;",
+                "1",
+            ),
+            (
+                "explicit const head reinitializes per iteration",
+                "let total = 0; for (const item of [1, 2]) { if (false) item = 3; total += item; } total;",
+                "3",
+            ),
+            (
+                "break closes iterator after bare assignment",
+                r#"
+                    let value = -1;
+                    let iterator = {
+                        count: 0,
+                        closed: false,
+                        next() {
+                            return this.count < 10
+                                ? { value: this.count++, done: false }
+                                : { done: true };
+                        },
+                        return() {
+                            this.closed = true;
+                            return { done: true };
+                        }
+                    };
+                    let customIterable = {
+                        [Symbol.iterator]() { return iterator; }
+                    };
+                    for (value of customIterable) {
+                        if (value === 2) break;
+                    }
+                    (iterator.closed ? 10 : 0) + value;
+                "#,
+                "12",
+            ),
+        ];
+
+        for (label, source, expected) in cases {
+            assert_eq!(
+                eval_value_bd_5p1dp(source),
+                expected,
+                "{label} must use assignment semantics"
+            );
+        }
+    }
+
+    #[test]
+    fn bare_for_in_of_assignment_enforces_const_and_tdz_bd_5p1dp() {
+        let cases = [
+            (
+                "for-of const assignment",
+                "const fixed = 1; for (fixed of [2]) {}",
+                "assignment to constant variable",
+            ),
+            (
+                "captured const assignment",
+                "const fixed = 1; let observe = () => fixed; for (fixed of [2]) {}",
+                "assignment to constant variable",
+            ),
+            (
+                "for-in const assignment",
+                "const fixed = ''; for (fixed in { key: 1 }) {}",
+                "assignment to constant variable",
+            ),
+            (
+                "for-of assignment before lexical declaration",
+                "for (value of [1]) {} let value = 9;",
+                "before initialization",
+            ),
+            (
+                "for-in assignment before lexical declaration",
+                "for (value in { key: 1 }) {} let value = 9;",
+                "before initialization",
+            ),
+        ];
+
+        for (label, source, expected_message) in cases {
+            let mut engine = HybridRouter::default();
+            let error = engine.eval(source).unwrap_err();
+            assert_eq!(
+                error.code,
+                EvalErrorCode::RuntimeFault,
+                "{label} must fail at runtime, not during parsing or lowering: {error}"
+            );
+            assert!(
+                error.message.contains(expected_message),
+                "{label} must report {expected_message:?} when the first yielded value is assigned: {error}"
+            );
+        }
+    }
 
     /// Smoke test: the parser must at least accept this statement form. A
     /// `ParseError` means the grammar is unsupported (a real gap); a runtime

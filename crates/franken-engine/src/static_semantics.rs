@@ -1038,8 +1038,15 @@ fn analyze_statement(
             for bound_name in for_in_stmt.binding.binding_names() {
                 check_reserved(state, bound_name, &for_in_stmt.span);
             }
-            // Check for duplicate names within destructuring
-            check_destructuring_duplicates(state, &for_in_stmt.binding, &for_in_stmt.span);
+            // Lexical declaration patterns reject duplicate bound names. Bare
+            // assignment and `var` patterns may repeat a target and update it
+            // from left to right.
+            if matches!(
+                for_in_stmt.binding_kind,
+                Some(VariableDeclarationKind::Let | VariableDeclarationKind::Const)
+            ) {
+                check_destructuring_duplicates(state, &for_in_stmt.binding, &for_in_stmt.span);
+            }
             // Create scope for for-in binding if let/const
             let for_in_scope_id = state.alloc_scope_id(scope_id.depth + 1);
             let mut for_in_bindings: Vec<ResolvedBinding> = Vec::new();
@@ -1051,7 +1058,12 @@ fn analyze_statement(
                     VariableDeclarationKind::Let => BindingKind::Let,
                     VariableDeclarationKind::Const => BindingKind::Const,
                 };
+                let mut declared_var_names = BTreeSet::new();
                 for bound_name in for_in_stmt.binding.binding_names() {
+                    if bk == BindingKind::Var && !declared_var_names.insert(bound_name.to_string())
+                    {
+                        continue;
+                    }
                     let bid = state.alloc_binding_id();
                     for_in_bindings.push(ResolvedBinding {
                         name: bound_name.to_string(),
@@ -1088,8 +1100,15 @@ fn analyze_statement(
             for bound_name in for_of_stmt.binding.binding_names() {
                 check_reserved(state, bound_name, &for_of_stmt.span);
             }
-            // Check for duplicate names within destructuring
-            check_destructuring_duplicates(state, &for_of_stmt.binding, &for_of_stmt.span);
+            // Lexical declaration patterns reject duplicate bound names. Bare
+            // assignment and `var` patterns may repeat a target and update it
+            // from left to right.
+            if matches!(
+                for_of_stmt.binding_kind,
+                Some(VariableDeclarationKind::Let | VariableDeclarationKind::Const)
+            ) {
+                check_destructuring_duplicates(state, &for_of_stmt.binding, &for_of_stmt.span);
+            }
             // Create scope for for-of binding if let/const
             let for_of_scope_id = state.alloc_scope_id(scope_id.depth + 1);
             let mut for_of_bindings: Vec<ResolvedBinding> = Vec::new();
@@ -1101,7 +1120,12 @@ fn analyze_statement(
                     VariableDeclarationKind::Let => BindingKind::Let,
                     VariableDeclarationKind::Const => BindingKind::Const,
                 };
+                let mut declared_var_names = BTreeSet::new();
                 for bound_name in for_of_stmt.binding.binding_names() {
+                    if bk == BindingKind::Var && !declared_var_names.insert(bound_name.to_string())
+                    {
+                        continue;
+                    }
                     let bid = state.alloc_binding_id();
                     for_of_bindings.push(ResolvedBinding {
                         name: bound_name.to_string(),
@@ -5703,6 +5727,84 @@ mod tests {
                 .any(|e| e.kind == StaticErrorKind::DuplicateDestructuringBinding),
             "duplicate x in for-of destructuring should be flagged"
         );
+    }
+
+    #[test]
+    fn for_of_nonlexical_duplicate_targets_pass_bd_5p1dp() {
+        use crate::ast::{BindingPattern, ForOfStatement};
+        for binding_kind in [None, Some(VariableDeclarationKind::Var)] {
+            let tree = make_tree(
+                ParseGoal::Script,
+                vec![Statement::ForOf(ForOfStatement {
+                    binding: BindingPattern::ArrayPattern(vec![
+                        Some(BindingPattern::Identifier("value".to_string())),
+                        Some(BindingPattern::Identifier("value".to_string())),
+                    ]),
+                    binding_kind,
+                    iterable: Expression::Identifier("pairs".to_string()),
+                    body: Box::new(expr_stmt(Expression::Identifier("value".to_string()), 2)),
+                    span: span(1),
+                })],
+            );
+            let result = analyze(&tree);
+            assert!(
+                !result
+                    .errors
+                    .iter()
+                    .any(|error| error.kind == StaticErrorKind::DuplicateDestructuringBinding),
+                "assignment and var patterns may repeat a target; kind={binding_kind:?}"
+            );
+            if binding_kind == Some(VariableDeclarationKind::Var) {
+                assert_eq!(
+                    result
+                        .bindings
+                        .iter()
+                        .filter(|binding| binding.name == "value")
+                        .count(),
+                    1,
+                    "repeated var targets must retain one binding identity"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn for_in_nonlexical_duplicate_targets_pass_bd_5p1dp() {
+        use crate::ast::{BindingPattern, ForInStatement};
+        for binding_kind in [None, Some(VariableDeclarationKind::Var)] {
+            let tree = make_tree(
+                ParseGoal::Script,
+                vec![Statement::ForIn(ForInStatement {
+                    binding: BindingPattern::ArrayPattern(vec![
+                        Some(BindingPattern::Identifier("key".to_string())),
+                        Some(BindingPattern::Identifier("key".to_string())),
+                    ]),
+                    binding_kind,
+                    object: Expression::Identifier("object".to_string()),
+                    body: Box::new(expr_stmt(Expression::Identifier("key".to_string()), 2)),
+                    span: span(1),
+                })],
+            );
+            let result = analyze(&tree);
+            assert!(
+                !result
+                    .errors
+                    .iter()
+                    .any(|error| error.kind == StaticErrorKind::DuplicateDestructuringBinding),
+                "assignment and var patterns may repeat a target; kind={binding_kind:?}"
+            );
+            if binding_kind == Some(VariableDeclarationKind::Var) {
+                assert_eq!(
+                    result
+                        .bindings
+                        .iter()
+                        .filter(|binding| binding.name == "key")
+                        .count(),
+                    1,
+                    "repeated var targets must retain one binding identity"
+                );
+            }
+        }
     }
 
     // -----------------------------------------------------------------------

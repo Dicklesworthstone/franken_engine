@@ -81,6 +81,7 @@ const CAPTURE_ORIGIN_SENTINEL_PREFIX: &str = "\0capture-origin\0";
 const CAPTURE_CELL_NAME_PREFIX: &str = "\0capture-cell\0";
 const CLASS_EXPRESSION_SELF_CAPTURE_PREFIX: &str = "\0class-expression-self\0";
 const CHILD_CAPTURE_BINDING_SENTINEL_PREFIX: &str = "\0child-capture\0";
+const RUNTIME_LEXICAL_BINDING_NAME_PREFIX: &str = "\0runtime-lexical\0";
 
 /// Maximum number of IR1 ops to preallocate based on AST size (prevents pathological growth).
 const MAX_PREALLOC_OPS: usize = 1_000_000; // 1M ops max
@@ -126,14 +127,16 @@ fn parse_child_capture_binding_sentinel(name: &str) -> Option<(BindingId, &str)>
     Some((binding_id.parse().ok()?, runtime_name))
 }
 
+fn runtime_lexical_binding_name(binding_id: BindingId, source_name: &str) -> String {
+    format!("{RUNTIME_LEXICAL_BINDING_NAME_PREFIX}{binding_id}\0{source_name}")
+}
+
 fn runtime_scope_binding_name(
     binding_id: BindingId,
-    capture_names: &BTreeMap<BindingId, String>,
-    source_names: &BTreeMap<BindingId, String>,
+    runtime_names: &BTreeMap<BindingId, String>,
 ) -> String {
-    capture_names
+    runtime_names
         .get(&binding_id)
-        .or_else(|| source_names.get(&binding_id))
         .cloned()
         .unwrap_or_else(|| format!("__binding_{binding_id}"))
 }
@@ -2545,6 +2548,39 @@ fn alloc_pattern_primary_binding(
     Ok(first_user_binding.unwrap_or(0))
 }
 
+/// Resolve the identifiers in a bare `for-in`/`for-of` assignment target.
+///
+/// A loop head without `let`/`const`/`var` updates existing references instead
+/// of declaring a loop-local lexical. Match ordinary sloppy assignment by
+/// materializing an unresolved target in the current root environment.
+fn resolve_assignment_pattern_primary_binding(
+    bindings: &mut Vec<ResolvedBinding>,
+    binding_lookup: &mut BTreeMap<String, BindingId>,
+    binding_index: &mut BindingId,
+    scope_id: ScopeId,
+    pattern: &BindingPattern,
+) -> Result<BindingId, SemanticError> {
+    let mut first_target = None;
+
+    for name in pattern.binding_names() {
+        let binding_id = if let Some(existing) = binding_lookup.get(name) {
+            *existing
+        } else {
+            alloc_binding(
+                bindings,
+                binding_lookup,
+                binding_index,
+                scope_id,
+                name,
+                BindingKind::Let,
+            )?
+        };
+        first_target.get_or_insert(binding_id);
+    }
+
+    Ok(first_target.unwrap_or(0))
+}
+
 fn object_pattern_static_key(
     prop: &ObjectPatternProperty,
     fallback_name: Option<&str>,
@@ -2555,8 +2591,12 @@ fn object_pattern_static_key(
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum DestructuringTargetStore {
+    /// Declaration/parameter store using the existing IR1 `StoreBinding` path.
     Assign,
+    /// Fresh lexical-cell initialization for explicit `let`/`const` loop heads.
     Initialize,
+    /// Assignment to an existing reference, with runtime const/TDZ checks.
+    ReferenceAssign,
 }
 
 fn push_destructuring_target_store(
@@ -2567,6 +2607,10 @@ fn push_destructuring_target_store(
     ops.push(match store {
         DestructuringTargetStore::Assign => Ir1Op::StoreBinding { binding_id },
         DestructuringTargetStore::Initialize => Ir1Op::InitializeBinding { binding_id },
+        DestructuringTargetStore::ReferenceAssign => Ir1Op::AssignOp {
+            binding_id,
+            operator: AssignmentOperator::Assign,
+        },
     });
 }
 
@@ -3793,14 +3837,17 @@ fn lower_statement_to_ir1_with_flow(
             //   2. ForInInit → pop object, push enumerator
             //   3. loop_label:
             //   4. ForInNext { done_label: end } → push next key (or jump)
-            //   5. StoreBinding(k) → bind key to loop variable
+            //   5. Initialize or assign the loop-head target
             //   6. Pop
             //   7. body
             //   8. Jump → loop_label
             //   9. end_label:
             //  10. IteratorClose (break path wired through control_flow)
             let lexical_marker_snapshot = source_lexical_marker_snapshot(binding_lookup);
-            let lexical_names = if for_in_stmt.binding_kind != Some(VariableDeclarationKind::Var) {
+            let lexical_names = if matches!(
+                for_in_stmt.binding_kind,
+                Some(VariableDeclarationKind::Let | VariableDeclarationKind::Const)
+            ) {
                 for_in_stmt
                     .binding
                     .binding_names()
@@ -3815,14 +3862,16 @@ fn lower_statement_to_ir1_with_flow(
             suppress_net_module_sentinels(binding_lookup, &lexical_names);
             suppress_zlib_module_sentinels(binding_lookup, &lexical_names);
             suppress_cluster_module_sentinels(binding_lookup, &lexical_names);
-            for name in for_in_stmt.binding.binding_names() {
-                let binding_id = if for_in_stmt.binding_kind == Some(VariableDeclarationKind::Var) {
-                    reserve_binding_id(binding_lookup, binding_index, name)
-                } else {
-                    reserve_fresh_binding_id(binding_lookup, binding_index, name)
-                };
-                binding_lookup.insert(lexical_binding_sentinel(name), 0);
-                binding_lookup.insert(capture_origin_sentinel(name), binding_id);
+            if let Some(binding_kind) = for_in_stmt.binding_kind {
+                for name in for_in_stmt.binding.binding_names() {
+                    let binding_id = if binding_kind == VariableDeclarationKind::Var {
+                        reserve_binding_id(binding_lookup, binding_index, name)
+                    } else {
+                        reserve_fresh_binding_id(binding_lookup, binding_index, name)
+                    };
+                    binding_lookup.insert(lexical_binding_sentinel(name), 0);
+                    binding_lookup.insert(capture_origin_sentinel(name), binding_id);
+                }
             }
 
             lower_expression_to_ir1(
@@ -3847,19 +3896,23 @@ fn lower_statement_to_ir1_with_flow(
             });
 
             // Bind the yielded key to the loop variable.
-            let binding_kind = match for_in_stmt.binding_kind {
-                Some(VariableDeclarationKind::Let) | None => BindingKind::Let,
-                Some(VariableDeclarationKind::Const) => BindingKind::Const,
-                Some(VariableDeclarationKind::Var) => BindingKind::Var,
-            };
-            let bid = alloc_pattern_primary_binding(
-                bindings,
-                binding_lookup,
-                binding_index,
-                scope_id,
-                &for_in_stmt.binding,
-                binding_kind,
-            )
+            let bid = match for_in_stmt.binding_kind {
+                None => resolve_assignment_pattern_primary_binding(
+                    bindings,
+                    binding_lookup,
+                    binding_index,
+                    scope_id,
+                    &for_in_stmt.binding,
+                ),
+                Some(kind) => alloc_pattern_primary_binding(
+                    bindings,
+                    binding_lookup,
+                    binding_index,
+                    scope_id,
+                    &for_in_stmt.binding,
+                    binding_kind_for_variable_declaration(kind),
+                ),
+            }
             .map_err(LoweringPipelineError::SemanticViolation)?;
             // For simple identifier patterns, store to the primary binding.
             // For destructuring patterns, use a dedicated internal source binding.
@@ -3897,8 +3950,19 @@ fn lower_statement_to_ir1_with_flow(
             }
 
             if matches!(for_in_stmt.binding, BindingPattern::Identifier(_)) {
-                ops.push(Ir1Op::InitializeBinding {
-                    binding_id: source_binding_id,
+                ops.push(match for_in_stmt.binding_kind {
+                    None => Ir1Op::AssignOp {
+                        binding_id: source_binding_id,
+                        operator: AssignmentOperator::Assign,
+                    },
+                    Some(VariableDeclarationKind::Let | VariableDeclarationKind::Const) => {
+                        Ir1Op::InitializeBinding {
+                            binding_id: source_binding_id,
+                        }
+                    }
+                    Some(VariableDeclarationKind::Var) => Ir1Op::StoreBinding {
+                        binding_id: source_binding_id,
+                    },
                 });
             } else {
                 ops.push(Ir1Op::StoreBinding {
@@ -3917,7 +3981,13 @@ fn lower_statement_to_ir1_with_flow(
                     scope_id,
                     label_counter,
                     span_table,
-                    DestructuringTargetStore::Initialize,
+                    match for_in_stmt.binding_kind {
+                        None => DestructuringTargetStore::ReferenceAssign,
+                        Some(VariableDeclarationKind::Let | VariableDeclarationKind::Const) => {
+                            DestructuringTargetStore::Initialize
+                        }
+                        Some(VariableDeclarationKind::Var) => DestructuringTargetStore::Assign,
+                    },
                 )?;
             }
 
@@ -3950,13 +4020,16 @@ fn lower_statement_to_ir1_with_flow(
             //   2. ForOfInit → pop iterable, call @@iterator, push iterator
             //   3. loop_label:
             //   4. ForOfNext { done_label: end } → push next value (or jump)
-            //   5. StoreBinding(v) → bind value to loop variable
+            //   5. Initialize or assign the loop-head target
             //   6. Pop
             //   7. body (break path calls IteratorClose)
             //   8. Jump → loop_label
             //   9. end_label:
             let lexical_marker_snapshot = source_lexical_marker_snapshot(binding_lookup);
-            let lexical_names = if for_of_stmt.binding_kind != Some(VariableDeclarationKind::Var) {
+            let lexical_names = if matches!(
+                for_of_stmt.binding_kind,
+                Some(VariableDeclarationKind::Let | VariableDeclarationKind::Const)
+            ) {
                 for_of_stmt
                     .binding
                     .binding_names()
@@ -3971,14 +4044,16 @@ fn lower_statement_to_ir1_with_flow(
             suppress_net_module_sentinels(binding_lookup, &lexical_names);
             suppress_zlib_module_sentinels(binding_lookup, &lexical_names);
             suppress_cluster_module_sentinels(binding_lookup, &lexical_names);
-            for name in for_of_stmt.binding.binding_names() {
-                let binding_id = if for_of_stmt.binding_kind == Some(VariableDeclarationKind::Var) {
-                    reserve_binding_id(binding_lookup, binding_index, name)
-                } else {
-                    reserve_fresh_binding_id(binding_lookup, binding_index, name)
-                };
-                binding_lookup.insert(lexical_binding_sentinel(name), 0);
-                binding_lookup.insert(capture_origin_sentinel(name), binding_id);
+            if let Some(binding_kind) = for_of_stmt.binding_kind {
+                for name in for_of_stmt.binding.binding_names() {
+                    let binding_id = if binding_kind == VariableDeclarationKind::Var {
+                        reserve_binding_id(binding_lookup, binding_index, name)
+                    } else {
+                        reserve_fresh_binding_id(binding_lookup, binding_index, name)
+                    };
+                    binding_lookup.insert(lexical_binding_sentinel(name), 0);
+                    binding_lookup.insert(capture_origin_sentinel(name), binding_id);
+                }
             }
 
             lower_expression_to_ir1(
@@ -4004,19 +4079,23 @@ fn lower_statement_to_ir1_with_flow(
             });
 
             // Bind the yielded value to the loop variable.
-            let binding_kind = match for_of_stmt.binding_kind {
-                Some(VariableDeclarationKind::Let) | None => BindingKind::Let,
-                Some(VariableDeclarationKind::Const) => BindingKind::Const,
-                Some(VariableDeclarationKind::Var) => BindingKind::Var,
-            };
-            let bid = alloc_pattern_primary_binding(
-                bindings,
-                binding_lookup,
-                binding_index,
-                scope_id,
-                &for_of_stmt.binding,
-                binding_kind,
-            )
+            let bid = match for_of_stmt.binding_kind {
+                None => resolve_assignment_pattern_primary_binding(
+                    bindings,
+                    binding_lookup,
+                    binding_index,
+                    scope_id,
+                    &for_of_stmt.binding,
+                ),
+                Some(kind) => alloc_pattern_primary_binding(
+                    bindings,
+                    binding_lookup,
+                    binding_index,
+                    scope_id,
+                    &for_of_stmt.binding,
+                    binding_kind_for_variable_declaration(kind),
+                ),
+            }
             .map_err(LoweringPipelineError::SemanticViolation)?;
             // For simple identifier patterns, store to the primary binding.
             // For destructuring patterns, use a dedicated internal source binding.
@@ -4054,8 +4133,19 @@ fn lower_statement_to_ir1_with_flow(
             }
 
             if matches!(for_of_stmt.binding, BindingPattern::Identifier(_)) {
-                ops.push(Ir1Op::InitializeBinding {
-                    binding_id: source_binding_id,
+                ops.push(match for_of_stmt.binding_kind {
+                    None => Ir1Op::AssignOp {
+                        binding_id: source_binding_id,
+                        operator: AssignmentOperator::Assign,
+                    },
+                    Some(VariableDeclarationKind::Let | VariableDeclarationKind::Const) => {
+                        Ir1Op::InitializeBinding {
+                            binding_id: source_binding_id,
+                        }
+                    }
+                    Some(VariableDeclarationKind::Var) => Ir1Op::StoreBinding {
+                        binding_id: source_binding_id,
+                    },
                 });
             } else {
                 ops.push(Ir1Op::StoreBinding {
@@ -4074,7 +4164,13 @@ fn lower_statement_to_ir1_with_flow(
                     scope_id,
                     label_counter,
                     span_table,
-                    DestructuringTargetStore::Initialize,
+                    match for_of_stmt.binding_kind {
+                        None => DestructuringTargetStore::ReferenceAssign,
+                        Some(VariableDeclarationKind::Let | VariableDeclarationKind::Const) => {
+                            DestructuringTargetStore::Initialize
+                        }
+                        Some(VariableDeclarationKind::Var) => DestructuringTargetStore::Assign,
+                    },
                 )?;
             }
 
@@ -5782,10 +5878,6 @@ pub fn lower_ir2_to_ir3(
     let mut iterator_cleanup_labels = BTreeMap::<u32, Reg>::new();
     let mut pending_jumps = Vec::<PendingJump>::new();
     let mut catch_entry_labels = BTreeSet::<u32>::new();
-    // bd-8enww.4.3 (YTBG-D3): tracks TDZ-tracked lexical bindings whose
-    // dead-zone-clearing first store (InitBinding) has already been emitted, so
-    // subsequent assignments fall through to StoreScoped.
-    let mut tdz_initialized = BTreeSet::<BindingId>::new();
     // Deferred function bodies:
     // (body_ir1_ops, param_names, name, free_vars, free_var_ids,
     //  runtime_global_loads, child_captured_locals, is_generator, is_async,
@@ -5810,6 +5902,7 @@ pub fn lower_ir2_to_ir3(
     // IR3 lowering can resolve free-variable names to register indices.
     let mut name_to_binding_id = BTreeMap::<String, BindingId>::new();
     let mut binding_id_to_name = BTreeMap::<BindingId, String>::new();
+    let mut binding_kind_by_id = BTreeMap::<BindingId, BindingKind>::new();
     for scope in &ir2.scopes {
         for binding in &scope.bindings {
             name_to_binding_id
@@ -5818,6 +5911,9 @@ pub fn lower_ir2_to_ir3(
             binding_id_to_name
                 .entry(binding.binding_id)
                 .or_insert(binding.name.clone());
+            binding_kind_by_id
+                .entry(binding.binding_id)
+                .or_insert(binding.kind);
         }
     }
     let is_commonjs = Path::new(&ir2.header.source_label)
@@ -5886,16 +5982,11 @@ pub fn lower_ir2_to_ir3(
         scoped_runtime_binding_ids.insert(*binding_id);
     }
 
-    // bd-8enww.4.3 (YTBG-D3): temporal-dead-zone tracking. A lexical
-    // (`let`/`const`) binding that is *read before it is first stored* in linear
-    // IR2 order is in its temporal dead zone at that read (e.g. the `x;` in
-    // `x; let x = 1;`). Route such bindings through the runtime scope chain so
-    // the read lowers to `LoadScoped`, whose uninitialized-binding check raises a
-    // JS-catchable ReferenceError, instead of a register move that would yield a
-    // stale value. Their declaration's first store lowers to `InitBinding`
-    // (clearing the dead zone); later assignments use `StoreScoped`. Captures,
-    // loop variables, and ordinary declare-before-use bindings store before they
-    // load and so are never tracked here.
+    // bd-8enww.4.3 (YTBG-D3) + bd-5p1dp: temporal-dead-zone tracking. A lexical
+    // (`let`/`const`) binding that is read OR assigned before its declaration's
+    // first initializer is in its temporal dead zone. Route such bindings
+    // through the runtime scope chain so both LoadScoped and StoreScoped observe
+    // the uninitialized binding. AssignOp must never clear the dead zone.
     let lexical_binding_ids: BTreeSet<BindingId> = ir2
         .scopes
         .iter()
@@ -5905,12 +5996,12 @@ pub fn lower_ir2_to_ir3(
         .collect();
     let mut tdz_binding_ids = BTreeSet::<BindingId>::new();
     if !lexical_binding_ids.is_empty() {
-        let mut first_load = BTreeMap::<BindingId, usize>::new();
+        let mut first_access = BTreeMap::<BindingId, usize>::new();
         let mut first_store = BTreeMap::<BindingId, usize>::new();
         for (index, op) in ir2.ops.iter().enumerate() {
             match &op.inner {
-                Ir1Op::LoadBinding { binding_id } => {
-                    first_load.entry(*binding_id).or_insert(index);
+                Ir1Op::LoadBinding { binding_id } | Ir1Op::AssignOp { binding_id, .. } => {
+                    first_access.entry(*binding_id).or_insert(index);
                 }
                 Ir1Op::StoreBinding { binding_id } | Ir1Op::InitializeBinding { binding_id } => {
                     first_store.entry(*binding_id).or_insert(index);
@@ -5919,49 +6010,99 @@ pub fn lower_ir2_to_ir3(
             }
         }
         for id in &lexical_binding_ids {
-            if let (Some(&load_at), Some(&store_at)) = (first_load.get(id), first_store.get(id))
-                && load_at < store_at
+            if let (Some(&access_at), Some(&store_at)) = (first_access.get(id), first_store.get(id))
+                && access_at < store_at
             {
                 tdz_binding_ids.insert(*id);
             }
         }
     }
-    for id in &tdz_binding_ids {
+
+    // A const targeted by AssignOp must retain its kind at runtime so the
+    // scope-chain store rejects the assignment when that control-flow edge is
+    // reached. Explicit `for (const x of ...)` initialization uses
+    // InitializeBinding instead and remains valid once per iteration.
+    let const_assignment_binding_ids = ir2
+        .ops
+        .iter()
+        .filter_map(|op| match &op.inner {
+            Ir1Op::AssignOp { binding_id, .. }
+                if binding_kind_by_id.get(binding_id) == Some(&BindingKind::Const) =>
+            {
+                Some(*binding_id)
+            }
+            _ => None,
+        })
+        .collect::<BTreeSet<_>>();
+    let runtime_lexical_binding_ids = tdz_binding_ids
+        .union(&const_assignment_binding_ids)
+        .copied()
+        .collect::<BTreeSet<_>>();
+    for id in &runtime_lexical_binding_ids {
         scoped_runtime_binding_ids.insert(*id);
     }
-    let tdz_decl_names: Vec<(BindingId, String)> = tdz_binding_ids
+
+    // Every scope-routed operation for one binding must use the same exact
+    // runtime name. Captured cells already encode their BindingId; other
+    // runtime lexicals get an identity-qualified name so same-spelled shadowed
+    // bindings cannot alias inside the main runtime scope. Ambient runtime
+    // globals keep their host-visible source names.
+    let runtime_scope_binding_names_by_id = scoped_runtime_binding_ids
+        .iter()
+        .map(|binding_id| {
+            let runtime_name =
+                if let Some(capture_name) = shared_top_level_capture_names_by_id.get(binding_id) {
+                    capture_name.clone()
+                } else if let Some(source_name) = binding_id_to_name.get(binding_id) {
+                    if runtime_lexical_binding_ids.contains(binding_id) {
+                        runtime_lexical_binding_name(*binding_id, source_name)
+                    } else {
+                        source_name.clone()
+                    }
+                } else {
+                    format!("__binding_{binding_id}")
+                };
+            (*binding_id, runtime_name)
+        })
+        .collect::<BTreeMap<_, _>>();
+    let runtime_lexical_declarations: Vec<(BindingId, String, u8)> = runtime_lexical_binding_ids
         .iter()
         .map(|id| {
-            (
-                *id,
-                runtime_scope_binding_name(
-                    *id,
-                    &shared_top_level_capture_names_by_id,
-                    &binding_id_to_name,
-                ),
-            )
+            let kind = match binding_kind_by_id.get(id) {
+                Some(BindingKind::Const) => 2,
+                _ => 1,
+            };
+            let name = runtime_scope_binding_name(*id, &runtime_scope_binding_names_by_id);
+            (*id, name, kind)
         })
         .collect();
 
     let main_scope_pushed =
-        !shared_top_level_capture_names.is_empty() || !tdz_decl_names.is_empty();
+        !shared_top_level_capture_names.is_empty() || !runtime_lexical_declarations.is_empty();
     if main_scope_pushed {
         ir3.instructions.push(Ir3Instruction::PushScope);
         for (binding_id, name) in &shared_top_level_capture_names_by_id {
             let pool_idx = push_constant_optimized(&mut constant_pool, name);
             ir3.instructions.push(Ir3Instruction::DeclareBinding {
                 name_pool_index: pool_idx,
-                kind: u8::from(tdz_binding_ids.contains(binding_id)),
+                kind: if runtime_lexical_binding_ids.contains(binding_id) {
+                    match binding_kind_by_id.get(binding_id) {
+                        Some(BindingKind::Const) => 2,
+                        _ => 1,
+                    }
+                } else {
+                    0
+                },
             });
         }
-        for (binding_id, name) in &tdz_decl_names {
+        for (binding_id, name, kind) in &runtime_lexical_declarations {
             if shared_top_level_capture_names_by_id.contains_key(binding_id) {
                 continue;
             }
             let pool_idx = push_constant_optimized(&mut constant_pool, name);
             ir3.instructions.push(Ir3Instruction::DeclareBinding {
                 name_pool_index: pool_idx,
-                kind: 1,
+                kind: *kind,
             });
         }
     }
@@ -6072,11 +6213,8 @@ pub fn lower_ir2_to_ir3(
             }
             Ir1Op::LoadBinding { binding_id } => {
                 if scoped_runtime_binding_ids.contains(binding_id) {
-                    let name = runtime_scope_binding_name(
-                        *binding_id,
-                        &shared_top_level_capture_names_by_id,
-                        &binding_id_to_name,
-                    );
+                    let name =
+                        runtime_scope_binding_name(*binding_id, &runtime_scope_binding_names_by_id);
                     let dst = alloc_register(&mut register_cursor);
                     let pool_index = push_constant_optimized(&mut constant_pool, &name);
                     ir3.instructions.push(Ir3Instruction::LoadScoped {
@@ -6099,11 +6237,8 @@ pub fn lower_ir2_to_ir3(
             Ir1Op::InitializeBinding { binding_id } => {
                 let src = pop_lowering_value(&mut value_stack)?;
                 if scoped_runtime_binding_ids.contains(binding_id) {
-                    let name = runtime_scope_binding_name(
-                        *binding_id,
-                        &shared_top_level_capture_names_by_id,
-                        &binding_id_to_name,
-                    );
+                    let name =
+                        runtime_scope_binding_name(*binding_id, &runtime_scope_binding_names_by_id);
                     let pool_index = push_constant_optimized(&mut constant_pool, &name);
                     ir3.instructions.push(Ir3Instruction::InitBinding {
                         name_pool_index: pool_index,
@@ -6120,17 +6255,12 @@ pub fn lower_ir2_to_ir3(
             }
             Ir1Op::StoreBinding { binding_id } => {
                 let src = pop_lowering_value(&mut value_stack)?;
-                if tdz_binding_ids.contains(binding_id) && tdz_initialized.insert(*binding_id) {
-                    // bd-8enww.4.3 (YTBG-D3): the first store to a TDZ-tracked
-                    // lexical is its initializer — clear the dead zone with
-                    // InitBinding (StoreScoped rejects a still-uninitialized
-                    // binding). `BTreeSet::insert` returns true only on the first
-                    // store, so later assignments fall through to StoreScoped.
-                    let name = runtime_scope_binding_name(
-                        *binding_id,
-                        &shared_top_level_capture_names_by_id,
-                        &binding_id_to_name,
-                    );
+                if runtime_lexical_binding_ids.contains(binding_id) {
+                    // Declaration stores initialize scope-routed lexical
+                    // bindings. Bare loop-head updates use AssignOp below and
+                    // can therefore never clear a TDZ or reinitialize a const.
+                    let name =
+                        runtime_scope_binding_name(*binding_id, &runtime_scope_binding_names_by_id);
                     let pool_index = push_constant_optimized(&mut constant_pool, &name);
                     ir3.instructions.push(Ir3Instruction::InitBinding {
                         name_pool_index: pool_index,
@@ -6138,11 +6268,8 @@ pub fn lower_ir2_to_ir3(
                     });
                     value_stack.push(src);
                 } else if scoped_runtime_binding_ids.contains(binding_id) {
-                    let name = runtime_scope_binding_name(
-                        *binding_id,
-                        &shared_top_level_capture_names_by_id,
-                        &binding_id_to_name,
-                    );
+                    let name =
+                        runtime_scope_binding_name(*binding_id, &runtime_scope_binding_names_by_id);
                     let pool_index = push_constant_optimized(&mut constant_pool, &name);
                     ir3.instructions.push(Ir3Instruction::StoreScoped {
                         src,
@@ -6163,11 +6290,8 @@ pub fn lower_ir2_to_ir3(
                 preserve_state,
             } => {
                 if scoped_runtime_binding_ids.contains(binding_id) {
-                    let name = runtime_scope_binding_name(
-                        *binding_id,
-                        &shared_top_level_capture_names_by_id,
-                        &binding_id_to_name,
-                    );
+                    let name =
+                        runtime_scope_binding_name(*binding_id, &runtime_scope_binding_names_by_id);
                     let pool_index = push_constant_optimized(&mut constant_pool, &name);
                     ir3.instructions
                         .push(Ir3Instruction::CreatePerIterationBinding {
@@ -6419,36 +6543,21 @@ pub fn lower_ir2_to_ir3(
                 // bd-8enww.4.4: a closure-captured / runtime / TDZ-tracked binding
                 // lives in the scope chain, not a register. Its reads already lower
                 // to `LoadScoped` (see `Ir1Op::LoadBinding` above); without the
-                // matching `StoreScoped`/`InitBinding` here, an assignment
+                // matching `StoreScoped` here, an assignment
                 // expression would write a dead register and silently drop the
                 // update (the subsequent `LoadScoped` re-reads the stale value).
-                // Mirror the deferred-function-body `AssignOp` handler.
+                // AssignOp is never an initializer: a TDZ binding must reject it.
                 if scoped_runtime_binding_ids.contains(binding_id) {
                     let src = pop_lowering_value(&mut value_stack)?;
-                    let name = runtime_scope_binding_name(
-                        *binding_id,
-                        &shared_top_level_capture_names_by_id,
-                        &binding_id_to_name,
-                    );
+                    let name =
+                        runtime_scope_binding_name(*binding_id, &runtime_scope_binding_names_by_id);
                     match operator {
                         AssignmentOperator::Assign => {
                             let pool_index = push_constant_optimized(&mut constant_pool, &name);
-                            if tdz_binding_ids.contains(binding_id)
-                                && tdz_initialized.insert(*binding_id)
-                            {
-                                // First store to a still-uninitialized TDZ lexical is
-                                // its initializer — clear the dead zone (StoreScoped
-                                // would reject it). Mirrors the StoreBinding handler.
-                                ir3.instructions.push(Ir3Instruction::InitBinding {
-                                    name_pool_index: pool_index,
-                                    src,
-                                });
-                            } else {
-                                ir3.instructions.push(Ir3Instruction::StoreScoped {
-                                    src,
-                                    name_pool_index: pool_index,
-                                });
-                            }
+                            ir3.instructions.push(Ir3Instruction::StoreScoped {
+                                src,
+                                name_pool_index: pool_index,
+                            });
                             value_stack.push(src);
                         }
                         AssignmentOperator::LogicalAndAssign
@@ -9458,6 +9567,7 @@ fn rewrite_unresolved_function_body_loads(
         match op {
             Ir1Op::StoreBinding { binding_id }
             | Ir1Op::InitializeBinding { binding_id }
+            | Ir1Op::AssignOp { binding_id, .. }
             | Ir1Op::DeclareFunction { binding_id, .. } => {
                 locally_defined_ids.insert(*binding_id);
             }
@@ -33376,21 +33486,167 @@ mod tests {
     }
 
     #[test]
-    fn for_in_without_binding_kind_defaults_to_let() {
-        let ir0 = stmt_ir0(vec![Statement::ForIn(ForInStatement {
-            binding: BindingPattern::Identifier("k".into()),
-            binding_kind: None,
-            object: Expression::Identifier("obj".into()),
-            body: Box::new(Statement::Expression(ExpressionStatement {
-                expression: Expression::NumericLiteral(1),
-                span: span(),
-            })),
-            span: span(),
-        })]);
-        let result =
-            lower_ir0_to_ir1(&ir0).expect("for-in with no binding_kind should default to Let");
-        let ops = &result.module.ops;
-        assert!(ops.iter().any(|op| matches!(op, Ir1Op::ForInInit)));
+    fn bare_for_in_of_targets_reuse_assignment_bindings_bd_5p1dp() {
+        let source = r#"
+            let key = "";
+            for (key in { alpha: 1 }) {}
+            let first = "";
+            let second = "";
+            for ([first, second] in { xy: 1 }) {}
+            let value = 0;
+            for (value of [3]) {}
+            let left = 0;
+            const right = 0;
+            for ([left, right] of [[4, 5]]) {}
+            let picked = 0;
+            let rest = [];
+            for ([{ p: picked } = { p: 9 }, ...rest] of [[undefined, 1, 2]]) {}
+            for (missing of [7]) {}
+        "#;
+        let tree = crate::parser_api_stability::parse_script(source).expect("parse script");
+        let ir0 = Ir0Module::from_syntax_tree(tree, "bd-5p1dp.js");
+        let result = lower_ir0_to_ir1(&ir0).expect("bare loop targets should lower");
+
+        let expected = [
+            ("key", BindingKind::Let, 1_usize, 1_usize),
+            ("first", BindingKind::Let, 1, 1),
+            ("second", BindingKind::Let, 1, 1),
+            ("value", BindingKind::Let, 1, 1),
+            ("left", BindingKind::Let, 1, 1),
+            ("right", BindingKind::Const, 1, 1),
+            // A default pattern has one target write on each mutually
+            // exclusive control-flow branch.
+            ("picked", BindingKind::Let, 1, 2),
+            ("rest", BindingKind::Let, 1, 1),
+            // The baseline's ordinary sloppy-assignment posture materializes
+            // an unresolved target once, but it is still an assignment target,
+            // never a loop-local declaration.
+            ("missing", BindingKind::Let, 0, 1),
+        ];
+
+        for (name, expected_kind, expected_initializers, expected_assignments) in expected {
+            let matching = result
+                .module
+                .scopes
+                .iter()
+                .flat_map(|scope| scope.bindings.iter())
+                .filter(|binding| binding.name == name)
+                .collect::<Vec<_>>();
+            assert_eq!(
+                matching.len(),
+                1,
+                "{name} must retain exactly one binding identity"
+            );
+            let binding = matching[0];
+            assert_eq!(binding.kind, expected_kind, "{name} kind must be preserved");
+
+            let initializer_count = result
+                .module
+                .ops
+                .iter()
+                .filter(|op| {
+                    matches!(
+                        op,
+                        Ir1Op::StoreBinding { binding_id }
+                            if *binding_id == binding.binding_id
+                    )
+                })
+                .count();
+            assert_eq!(
+                initializer_count, expected_initializers,
+                "{name} must not receive a declaration-style loop store"
+            );
+
+            let assignment_count = result
+                .module
+                .ops
+                .iter()
+                .filter(|op| {
+                    matches!(
+                        op,
+                        Ir1Op::AssignOp {
+                            binding_id,
+                            operator: AssignmentOperator::Assign,
+                        } if *binding_id == binding.binding_id
+                    )
+                })
+                .count();
+            assert_eq!(
+                assignment_count, expected_assignments,
+                "{name} must receive only its loop-head assignment ops"
+            );
+        }
+
+        assert!(
+            result
+                .module
+                .ops
+                .iter()
+                .any(|op| matches!(op, Ir1Op::ForInInit))
+        );
+        assert!(
+            result
+                .module
+                .ops
+                .iter()
+                .any(|op| matches!(op, Ir1Op::ForOfInit))
+        );
+    }
+
+    #[test]
+    fn bare_loop_assignment_preserves_runtime_const_and_tdz_ops_bd_5p1dp() {
+        for (source, expected_kind, assignment_before_init) in [
+            ("const fixed = 1; for (fixed of [2]) {}", 2_u8, false),
+            ("for (value of [1]) {} let value = 9;", 1_u8, true),
+        ] {
+            let tree = crate::parser_api_stability::parse_script(source).expect("parse script");
+            let ir0 = Ir0Module::from_syntax_tree(tree, "bd-5p1dp-runtime.js");
+            let output = lower_ir0_to_ir3(&ir0, &LoweringContext::new("t", "d", "p"))
+                .expect("runtime binding checks should lower");
+            let instructions = &output.ir3.instructions;
+            let (declare_index, name_pool_index) = instructions
+                .iter()
+                .enumerate()
+                .find_map(|(index, instruction)| match instruction {
+                    Ir3Instruction::DeclareBinding {
+                        name_pool_index,
+                        kind,
+                    } if *kind == expected_kind => Some((index, *name_pool_index)),
+                    _ => None,
+                })
+                .expect("scope-routed lexical target must retain its runtime kind");
+            let init_index = instructions
+                .iter()
+                .position(|instruction| {
+                    matches!(
+                        instruction,
+                        Ir3Instruction::InitBinding {
+                            name_pool_index: candidate,
+                            ..
+                        } if *candidate == name_pool_index
+                    )
+                })
+                .expect("declaration store must initialize the lexical target");
+            let assign_index = instructions
+                .iter()
+                .position(|instruction| {
+                    matches!(
+                        instruction,
+                        Ir3Instruction::StoreScoped {
+                            name_pool_index: candidate,
+                            ..
+                        } if *candidate == name_pool_index
+                    )
+                })
+                .expect("loop AssignOp must remain a checked runtime assignment");
+
+            assert!(declare_index < init_index && declare_index < assign_index);
+            assert_eq!(
+                assign_index < init_index,
+                assignment_before_init,
+                "TDZ assignment ordering must follow source control flow"
+            );
+        }
     }
 
     #[test]

@@ -109,7 +109,7 @@ struct IterationTraceArtifact {
     close_reasons: Vec<IteratorCloseReason>,
     label_count: usize,
     jump_count: usize,
-    store_binding_count: usize,
+    binding_write_count: usize,
     ir1_content_hash: ContentHash,
 }
 
@@ -125,7 +125,7 @@ fn trace_ir1_ops(module: &Ir1Module, label: &str) -> IterationTraceArtifact {
         close_reasons: Vec::new(),
         label_count: 0,
         jump_count: 0,
-        store_binding_count: 0,
+        binding_write_count: 0,
         ir1_content_hash: module.content_hash(),
     };
 
@@ -141,7 +141,9 @@ fn trace_ir1_ops(module: &Ir1Module, label: &str) -> IterationTraceArtifact {
             }
             Ir1Op::Label { .. } => artifact.label_count += 1,
             Ir1Op::Jump { .. } => artifact.jump_count += 1,
-            Ir1Op::StoreBinding { .. } => artifact.store_binding_count += 1,
+            Ir1Op::StoreBinding { .. }
+            | Ir1Op::InitializeBinding { .. }
+            | Ir1Op::AssignOp { .. } => artifact.binding_write_count += 1,
             _ => {}
         }
     }
@@ -173,7 +175,7 @@ fn single_for_in_produces_expected_trace() {
     assert_eq!(trace.iterator_close_count, 0, "no IteratorClose for for-in");
     assert!(trace.label_count >= 3, "loop/continue/end labels");
     assert!(trace.jump_count >= 1, "back-edge jump");
-    assert!(trace.store_binding_count >= 1, "binding store for key");
+    assert!(trace.binding_write_count >= 1, "binding write for key");
 }
 
 #[test]
@@ -253,12 +255,15 @@ fn single_for_of_produces_expected_trace() {
     assert_eq!(trace.for_of_next_count, 1, "exactly one ForOfNext");
     assert_eq!(trace.for_in_init_count, 0, "no ForInInit");
     assert_eq!(
-        trace.iterator_close_count, 1,
-        "one IteratorClose for break path"
+        trace.iterator_close_count, 2,
+        "break and head-throw paths each need an IteratorClose"
     );
-    assert_eq!(trace.close_reasons, vec![IteratorCloseReason::Break]);
+    assert_eq!(
+        trace.close_reasons,
+        vec![IteratorCloseReason::Break, IteratorCloseReason::Throw]
+    );
     assert!(trace.label_count >= 4, "loop/continue/close/end labels");
-    assert!(trace.store_binding_count >= 1, "binding store for val");
+    assert!(trace.binding_write_count >= 1, "binding write for val");
 }
 
 #[test]
@@ -277,7 +282,7 @@ fn for_of_let_binding_trace() {
         "for_of_let",
     );
     assert_eq!(trace.for_of_init_count, 1);
-    assert_eq!(trace.iterator_close_count, 1);
+    assert_eq!(trace.iterator_close_count, 2);
 }
 
 #[test]
@@ -314,7 +319,7 @@ fn for_of_no_binding_kind_trace() {
         "for_of_none",
     );
     assert_eq!(trace.for_of_init_count, 1);
-    assert_eq!(trace.iterator_close_count, 1);
+    assert_eq!(trace.iterator_close_count, 2);
 }
 
 // ===========================================================================
@@ -347,11 +352,11 @@ fn mixed_for_in_for_of_trace() {
     assert_eq!(trace.for_in_next_count, 1);
     assert_eq!(trace.for_of_init_count, 1);
     assert_eq!(trace.for_of_next_count, 1);
-    assert_eq!(trace.iterator_close_count, 1);
+    assert_eq!(trace.iterator_close_count, 2);
 }
 
 #[test]
-fn two_for_of_loops_produce_two_close_ops() {
+fn two_for_of_loops_produce_four_close_ops() {
     let ir0 = ir0_from_stmts(
         vec![
             for_of_stmt(
@@ -375,10 +380,15 @@ fn two_for_of_loops_produce_two_close_ops() {
     );
     assert_eq!(trace.for_of_init_count, 2);
     assert_eq!(trace.for_of_next_count, 2);
-    assert_eq!(trace.iterator_close_count, 2);
+    assert_eq!(trace.iterator_close_count, 4);
     assert_eq!(
         trace.close_reasons,
-        vec![IteratorCloseReason::Break, IteratorCloseReason::Break]
+        vec![
+            IteratorCloseReason::Break,
+            IteratorCloseReason::Throw,
+            IteratorCloseReason::Break,
+            IteratorCloseReason::Throw,
+        ]
     );
 }
 
@@ -1185,7 +1195,7 @@ fn for_of_between_two_expressions() {
     let trace = trace_ir1_ops(&result.module, "expr_forof_expr");
     assert_eq!(trace.for_of_init_count, 1);
     assert_eq!(trace.for_of_next_count, 1);
-    assert_eq!(trace.iterator_close_count, 1);
+    assert_eq!(trace.iterator_close_count, 2);
 }
 
 // ===========================================================================
@@ -1218,14 +1228,14 @@ fn trace_artifact_captures_all_counts() {
     assert_eq!(trace.for_in_next_count, 1);
     assert_eq!(trace.for_of_init_count, 1);
     assert_eq!(trace.for_of_next_count, 1);
-    assert_eq!(trace.iterator_close_count, 1);
-    // Total iteration ops: 1+1+1+1+1 = 5
+    assert_eq!(trace.iterator_close_count, 2);
+    // Total iteration ops: 1+1+1+1+2 = 6
     let total_iter_ops = trace.for_in_init_count
         + trace.for_in_next_count
         + trace.for_of_init_count
         + trace.for_of_next_count
         + trace.iterator_close_count;
-    assert_eq!(total_iter_ops, 5);
+    assert_eq!(total_iter_ops, 6);
     assert!(
         trace.ir1_op_count > total_iter_ops,
         "must have non-iteration ops too"

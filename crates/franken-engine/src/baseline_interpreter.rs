@@ -14193,7 +14193,7 @@ impl InterpreterCore {
                 };
                 self.replace_pending_abrupt_slots(Some((thrown.clone(), emission_label)), None)?;
                 return Err(InterpreterError::UncaughtException {
-                    value: Self::uncaught_exception_description(&thrown),
+                    value: self.uncaught_exception_description(&thrown),
                 });
             }
             return Ok(settled_waiter);
@@ -28169,12 +28169,12 @@ impl InterpreterCore {
             Ok(true)
         } else {
             Err(InterpreterError::UncaughtException {
-                value: Self::uncaught_exception_description(&error_value),
+                value: self.uncaught_exception_description(&error_value),
             })
         }
     }
 
-    fn uncaught_exception_description(value: &Value) -> String {
+    fn uncaught_exception_description(&self, value: &Value) -> String {
         match value {
             Value::Str(s) => s.to_string(),
             Value::Int(n) => n.to_string(),
@@ -28182,6 +28182,9 @@ impl InterpreterCore {
             Value::Bool(b) => b.to_string(),
             Value::Undefined => "undefined".to_string(),
             Value::Null => "null".to_string(),
+            Value::Object(id) => self
+                .error_object_to_string(*id)
+                .unwrap_or_else(|| "[object]".to_string()),
             _ => "[object]".to_string(),
         }
     }
@@ -29093,7 +29096,7 @@ impl InterpreterCore {
             // own `UncaughtException` value (both use `uncaught_exception_description`).
             self.clear_suspended_abrupt_completions();
             Ok(Some(InterpreterError::UncaughtException {
-                value: Self::uncaught_exception_description(&thrown),
+                value: self.uncaught_exception_description(&thrown),
             }))
         }
     }
@@ -29133,7 +29136,7 @@ impl InterpreterCore {
                             // an uncaught exception rather than the host error.
                             self.clear_suspended_abrupt_completions();
                             return Err(InterpreterError::UncaughtException {
-                                value: Self::uncaught_exception_description(&thrown),
+                                value: self.uncaught_exception_description(&thrown),
                             });
                         }
                     }
@@ -29371,7 +29374,7 @@ impl InterpreterCore {
                                 }
                                 self.clear_suspended_abrupt_completions();
                                 return Err(InterpreterError::UncaughtException {
-                                    value: Self::uncaught_exception_description(&thrown),
+                                    value: self.uncaught_exception_description(&thrown),
                                 });
                             }
                         }
@@ -29379,8 +29382,43 @@ impl InterpreterCore {
                 }
                 Ir3Instruction::IteratorClose { iterator, reason } => {
                     let iterator = self.read_reg(iterator)?;
-                    self.close_iterator(module, iterator, reason)?;
-                    self.ip += 1;
+                    // A finally-style throw-close handler keeps the original
+                    // exception in pending-completion state. An isolated
+                    // iterator.return call may temporarily replace that slot
+                    // with its own throw, so retain the original explicitly.
+                    let preserved_throw = if reason == IteratorCloseReason::Throw {
+                        self.pending_exception
+                            .clone()
+                            .map(|value| (value, self.pending_exception_label.clone()))
+                    } else {
+                        None
+                    };
+                    match self.close_iterator(module, iterator, reason) {
+                        Ok(()) => {
+                            if let Some((value, label)) = preserved_throw {
+                                self.replace_pending_abrupt_slots(Some((value, label)), None)?;
+                            }
+                            self.ip += 1;
+                        }
+                        Err(err) => {
+                            // IteratorClose(iterator, throwCompletion) preserves
+                            // the original throw even when `return` itself throws
+                            // or returns a non-object. Suppress only ordinary JS
+                            // close failures; engine/resource faults still escape.
+                            let explicit_throw =
+                                matches!(&err, InterpreterError::UncaughtException { .. })
+                                    && self.pending_exception.is_some();
+                            if reason == IteratorCloseReason::Throw
+                                && (explicit_throw || Self::js_catchable_error_name(&err).is_some())
+                                && let Some((value, label)) = preserved_throw
+                            {
+                                self.replace_pending_abrupt_slots(Some((value, label)), None)?;
+                                self.ip += 1;
+                                continue;
+                            }
+                            return Err(err);
+                        }
+                    }
                 }
                 Ir3Instruction::Move { dst, src } => {
                     let result_label = self.unary_operation_label(src)?;
@@ -31502,7 +31540,7 @@ impl InterpreterCore {
                         }
                         self.clear_suspended_abrupt_completions();
                         return Err(InterpreterError::UncaughtException {
-                            value: Self::uncaught_exception_description(&thrown),
+                            value: self.uncaught_exception_description(&thrown),
                         });
                     }
                 }
@@ -31536,14 +31574,7 @@ impl InterpreterCore {
                         FinallyMode::Exception => {
                             // Re-throw the pending exception after finally completes.
                             if let Some(thrown) = self.pending_exception.clone() {
-                                let desc = match &thrown {
-                                    Value::Str(s) => s.to_string(),
-                                    Value::Int(n) => n.to_string(),
-                                    Value::Bool(b) => b.to_string(),
-                                    Value::Undefined => "undefined".to_string(),
-                                    Value::Null => "null".to_string(),
-                                    _ => "[object]".to_string(),
-                                };
+                                let desc = self.uncaught_exception_description(&thrown);
                                 // Look for another catch frame to propagate to.
                                 if let Some(frame) = self.pop_exception_target_frame()? {
                                     self.ip = frame.catch_target;
@@ -39345,7 +39376,7 @@ impl InterpreterCore {
         self.pending_exception = Some(thrown.clone());
         self.pending_exception_label = Label::Public;
         InterpreterError::UncaughtException {
-            value: Self::uncaught_exception_description(&thrown),
+            value: self.uncaught_exception_description(&thrown),
         }
     }
 
@@ -42078,7 +42109,7 @@ impl InterpreterCore {
                     let thrown = Self::read_local_register(&local_registers, value)?;
                     self.replace_pending_abrupt_slots(Some((thrown.clone(), Label::Public)), None)?;
                     return Err(InterpreterError::UncaughtException {
-                        value: Self::uncaught_exception_description(&thrown),
+                        value: self.uncaught_exception_description(&thrown),
                     });
                 }
                 other => {
@@ -42280,7 +42311,7 @@ impl InterpreterCore {
                     let thrown = Self::read_local_register(&local_registers, value)?;
                     self.replace_pending_abrupt_slots(Some((thrown.clone(), Label::Public)), None)?;
                     return Err(InterpreterError::UncaughtException {
-                        value: Self::uncaught_exception_description(&thrown),
+                        value: self.uncaught_exception_description(&thrown),
                     });
                 }
                 other => {
@@ -43633,7 +43664,7 @@ impl InterpreterCore {
         self.pending_exception = Some(thrown.clone());
         self.pending_exception_label = Label::Public;
         InterpreterError::UncaughtException {
-            value: Self::uncaught_exception_description(&thrown),
+            value: self.uncaught_exception_description(&thrown),
         }
     }
 
@@ -44635,7 +44666,7 @@ impl InterpreterCore {
         self.pending_exception = Some(thrown.clone());
         self.pending_exception_label = next_pending_label;
         InterpreterError::UncaughtException {
-            value: Self::uncaught_exception_description(&thrown),
+            value: self.uncaught_exception_description(&thrown),
         }
     }
 
@@ -45237,7 +45268,7 @@ impl InterpreterCore {
         self.pending_exception = Some(thrown.clone());
         self.pending_exception_label = next_pending_label;
         InterpreterError::UncaughtException {
-            value: Self::uncaught_exception_description(&thrown),
+            value: self.uncaught_exception_description(&thrown),
         }
     }
 
@@ -47080,7 +47111,7 @@ impl InterpreterCore {
             let thrown = self.native_error_to_thrown_value(error)?;
             self.replace_pending_abrupt_slots(Some((thrown.clone(), label)), None)?;
             Ok(InterpreterError::UncaughtException {
-                value: Self::uncaught_exception_description(&thrown),
+                value: self.uncaught_exception_description(&thrown),
             })
         })();
         if result.is_err() {
@@ -47116,7 +47147,7 @@ impl InterpreterCore {
             };
             self.replace_pending_abrupt_slots(Some((thrown.clone(), error_label)), None)?;
             Ok(InterpreterError::UncaughtException {
-                value: Self::uncaught_exception_description(&thrown),
+                value: self.uncaught_exception_description(&thrown),
             })
         })();
         if result.is_err() {
@@ -47433,7 +47464,7 @@ impl InterpreterCore {
         // exception label (bd-8enww.4.8 throw-path mirror).
         self.pending_exception_label = Label::Public;
         InterpreterError::UncaughtException {
-            value: Self::uncaught_exception_description(&thrown),
+            value: self.uncaught_exception_description(&thrown),
         }
     }
 
@@ -47704,7 +47735,7 @@ impl InterpreterCore {
         self.pending_exception = Some(thrown.clone());
         self.pending_exception_label = Label::Public;
         InterpreterError::UncaughtException {
-            value: Self::uncaught_exception_description(&thrown),
+            value: self.uncaught_exception_description(&thrown),
         }
     }
 
@@ -47790,7 +47821,7 @@ impl InterpreterCore {
         self.pending_exception = Some(thrown.clone());
         self.pending_exception_label = Label::Public;
         InterpreterError::UncaughtException {
-            value: Self::uncaught_exception_description(&thrown),
+            value: self.uncaught_exception_description(&thrown),
         }
     }
 

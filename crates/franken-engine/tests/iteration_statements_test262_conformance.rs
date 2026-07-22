@@ -585,6 +585,14 @@ mod tests {
             .to_string()
     }
 
+    fn eval_error_bd_cu3sz(source: &str) -> String {
+        let mut engine = HybridRouter::default();
+        match engine.eval(source) {
+            Ok(value) => panic!("bd-cu3sz expected eval failure, got {}", value.value),
+            Err(error) => error.to_string(),
+        }
+    }
+
     #[test]
     fn bare_for_in_of_assignment_targets_observe_existing_bindings_bd_5p1dp() {
         let cases = [
@@ -739,6 +747,280 @@ mod tests {
                 "{label} must report {expected_message:?} when the first yielded value is assigned: {error}"
             );
         }
+    }
+
+    #[test]
+    fn abrupt_for_of_head_assignment_closes_iterator_bd_cu3sz() {
+        let cases = [
+            (
+                "const assignment",
+                r#"
+                    let iterator = {
+                        closed: 0,
+                        next() { return { value: 2, done: false }; },
+                        return() {
+                            this.closed++;
+                            return { done: true };
+                        }
+                    };
+                    let iterable = { [Symbol.iterator]() { return iterator; } };
+                    let caught = false;
+                    try {
+                        const fixed = 1;
+                        for (fixed of iterable) {}
+                    } catch (error) {
+                        caught = true;
+                    }
+                    (caught ? 10 : 0) + iterator.closed;
+                "#,
+                "11",
+            ),
+            (
+                "temporal dead zone",
+                r#"
+                    let iterator = {
+                        closed: 0,
+                        next() { return { value: 2, done: false }; },
+                        return() {
+                            this.closed++;
+                            return { done: true };
+                        }
+                    };
+                    let iterable = { [Symbol.iterator]() { return iterator; } };
+                    let caught = false;
+                    try {
+                        for (value of iterable) {}
+                        let value = 9;
+                    } catch (error) {
+                        caught = true;
+                    }
+                    (caught ? 10 : 0) + iterator.closed;
+                "#,
+                "11",
+            ),
+            (
+                "function-local const assignment",
+                r#"
+                    function run() {
+                        let iterator = {
+                            closed: 0,
+                            next() { return { value: 2, done: false }; },
+                            return() {
+                                this.closed++;
+                                return { done: true };
+                            }
+                        };
+                        let iterable = { [Symbol.iterator]() { return iterator; } };
+                        let caught = false;
+                        try {
+                            const fixed = 1;
+                            for (fixed of iterable) {}
+                        } catch (error) {
+                            caught = true;
+                        }
+                        return (caught ? 10 : 0) + iterator.closed;
+                    }
+                    run();
+                "#,
+                "11",
+            ),
+        ];
+
+        for (label, source, expected) in cases {
+            assert_eq!(
+                eval_value_bd_5p1dp(source),
+                expected,
+                "{label} must close the iterator before propagating the head error"
+            );
+        }
+
+        let diagnostics = [
+            (
+                "const assignment",
+                r#"
+                    let iterator = {
+                        next() { return { value: 2, done: false }; },
+                        return() { return { done: true }; }
+                    };
+                    let iterable = { [Symbol.iterator]() { return iterator; } };
+                    const fixed = 1;
+                    for (fixed of iterable) {}
+                "#,
+                "assignment to constant variable",
+            ),
+            (
+                "temporal dead zone",
+                r#"
+                    let iterator = {
+                        next() { return { value: 2, done: false }; },
+                        return() { return { done: true }; }
+                    };
+                    let iterable = { [Symbol.iterator]() { return iterator; } };
+                    for (value of iterable) {}
+                    let value = 9;
+                "#,
+                "before initialization",
+            ),
+        ];
+        for (label, source, expected) in diagnostics {
+            let error = eval_error_bd_cu3sz(source);
+            assert!(
+                error.contains(expected),
+                "{label} must preserve its original diagnostic after close: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn abrupt_destructuring_head_closes_after_prior_targets_bd_cu3sz() {
+        assert_eq!(
+            eval_value_bd_5p1dp(
+                r#"
+                    let left = 0;
+                    const fixed = 9;
+                    let iterator = {
+                        closed: 0,
+                        next() { return { value: [1, 2], done: false }; },
+                        return() {
+                            this.closed++;
+                            return { done: true };
+                        }
+                    };
+                    let iterable = { [Symbol.iterator]() { return iterator; } };
+                    let caught = false;
+                    try {
+                        for ([left, fixed] of iterable) {}
+                    } catch (error) {
+                        caught = true;
+                    }
+                    left * 100 + (caught ? 10 : 0) + iterator.closed;
+                "#,
+            ),
+            "111",
+            "destructuring must retain earlier stores, close once, then propagate the later error"
+        );
+    }
+
+    #[test]
+    fn abrupt_head_error_wins_over_iterator_return_failures_bd_cu3sz() {
+        assert_eq!(
+            eval_value_bd_5p1dp(
+                r#"
+                    let iterator = {
+                        closed: 0,
+                        next() { return { value: 2, done: false }; },
+                        return() {
+                            this.closed++;
+                            throw new Error("close-error");
+                        }
+                    };
+                    let iterable = { [Symbol.iterator]() { return iterator; } };
+                    let original_error = false;
+                    try {
+                        const fixed = 1;
+                        for (fixed of iterable) {}
+                    } catch (error) {
+                        original_error = true;
+                    }
+                    (original_error ? 10 : 0) + iterator.closed;
+                "#,
+            ),
+            "11",
+            "IteratorClose with a throw completion must preserve the original head error"
+        );
+        assert_eq!(
+            eval_value_bd_5p1dp(
+                r#"
+                    let iterator = {
+                        closed: 0,
+                        next() { return { value: 2, done: false }; },
+                        return() {
+                            this.closed++;
+                            return 0;
+                        }
+                    };
+                    let iterable = { [Symbol.iterator]() { return iterator; } };
+                    let original_error = false;
+                    try {
+                        const fixed = 1;
+                        for (fixed of iterable) {}
+                    } catch (error) {
+                        original_error = true;
+                    }
+                    (original_error ? 10 : 0) + iterator.closed;
+                "#,
+            ),
+            "11",
+            "a non-object close result must not replace the original head error"
+        );
+
+        let precedence_cases = [
+            (
+                "throwing return",
+                r#"
+                    let iterator = {
+                        next() { return { value: 2, done: false }; },
+                        return() { throw new Error("close-error"); }
+                    };
+                    let iterable = { [Symbol.iterator]() { return iterator; } };
+                    const fixed = 1;
+                    for (fixed of iterable) {}
+                "#,
+                "close-error",
+            ),
+            (
+                "non-object return",
+                r#"
+                    let iterator = {
+                        next() { return { value: 2, done: false }; },
+                        return() { return 0; }
+                    };
+                    let iterable = { [Symbol.iterator]() { return iterator; } };
+                    const fixed = 1;
+                    for (fixed of iterable) {}
+                "#,
+                "object returned by iterator.return",
+            ),
+        ];
+        for (label, source, displaced_diagnostic) in precedence_cases {
+            let error = eval_error_bd_cu3sz(source);
+            assert!(
+                error.contains("assignment to constant variable"),
+                "{label} must preserve the original assignment failure: {error}"
+            );
+            assert!(
+                !error.contains(displaced_diagnostic),
+                "{label} must not replace the original failure: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn non_abrupt_unresolved_head_exhausts_without_closing_bd_cu3sz() {
+        assert_eq!(
+            eval_value_bd_5p1dp(
+                r#"
+                    let iterator = {
+                        step: 0,
+                        closed: 0,
+                        next() {
+                            return this.step++ === 0
+                                ? { value: 7, done: false }
+                                : { done: true };
+                        },
+                        return() {
+                            this.closed++;
+                            return { done: true };
+                        }
+                    };
+                    let iterable = { [Symbol.iterator]() { return iterator; } };
+                    for (missing of iterable) { continue; }
+                    missing * 10 + iterator.closed;
+                "#,
+            ),
+            "70",
+            "sloppy unresolved assignment is normal completion and must not close"
+        );
     }
 
     #[test]

@@ -4067,15 +4067,36 @@ fn lower_statement_to_ir1_with_flow(
                 span_table,
             )?;
             ops.push(Ir1Op::ForOfInit);
+            let iterator_binding_id = alloc_internal_binding(
+                bindings,
+                binding_lookup,
+                binding_index,
+                scope_id,
+                "for_of_iterator",
+            )?;
+            ops.push(Ir1Op::StoreBinding {
+                binding_id: iterator_binding_id,
+            });
 
             let loop_label = alloc_label(label_counter);
             let continue_label = alloc_label(label_counter);
             let close_label = alloc_label(label_counter);
+            let head_error_label = alloc_label(label_counter);
             let end_label = alloc_label(label_counter);
 
             ops.push(Ir1Op::Label { id: loop_label });
             ops.push(Ir1Op::ForOfNext {
                 done_label: end_label,
+            });
+            // IteratorStep/IteratorValue failures do not close the iterator.
+            // Begin the protected region only once a yielded value exists, and
+            // end it before the body so continue/body abrupt paths are unchanged.
+            ops.push(Ir1Op::BeginTry {
+                catch_label: head_error_label,
+                // Route directly to a finally-style handler. Unlike a catch,
+                // this preserves the pending exception for EndFinally instead
+                // of materializing it as a new user-value Throw.
+                finally_label: Some(head_error_label),
             });
 
             // Bind the yielded value to the loop variable.
@@ -4173,6 +4194,7 @@ fn lower_statement_to_ir1_with_flow(
                     },
                 )?;
             }
+            ops.push(Ir1Op::EndTry);
 
             lower_statement_to_ir1_with_flow(
                 &for_of_stmt.body,
@@ -4193,11 +4215,29 @@ fn lower_statement_to_ir1_with_flow(
             ops.push(Ir1Op::Jump {
                 label_id: loop_label,
             });
-            // Break path: close the iterator before exiting.
+            // Break path: close the iterator before exiting, then skip the
+            // out-of-line assignment-error finalizer below.
             ops.push(Ir1Op::Label { id: close_label });
             ops.push(Ir1Op::IteratorClose {
                 reason: IteratorCloseReason::Break,
             });
+            ops.push(Ir1Op::Jump {
+                label_id: end_label,
+            });
+            ops.push(Ir1Op::Label {
+                id: head_error_label,
+            });
+            // The finally-style entry keeps the original exception pending.
+            // Close against the iterator retained by ForOfNext, then let
+            // EndFinally propagate that exact completion to the outer handler.
+            ops.push(Ir1Op::EnterFinally);
+            ops.push(Ir1Op::LoadBinding {
+                binding_id: iterator_binding_id,
+            });
+            ops.push(Ir1Op::IteratorClose {
+                reason: IteratorCloseReason::Throw,
+            });
+            ops.push(Ir1Op::EndFinally);
             ops.push(Ir1Op::Label { id: end_label });
             restore_binding_entries(binding_lookup, lexical_binding_snapshot);
             restore_source_lexical_markers(binding_lookup, &lexical_marker_snapshot);
@@ -32603,6 +32643,124 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn lower_for_of_head_assignment_has_throw_close_path_bd_cu3sz() {
+        let ir0 = stmt_ir0(vec![Statement::ForOf(ForOfStatement {
+            binding: BindingPattern::Identifier("v".into()),
+            binding_kind: None,
+            iterable: Expression::Identifier("arr".into()),
+            body: Box::new(Statement::Block(BlockStatement {
+                body: Vec::new(),
+                span: span(),
+            })),
+            span: span(),
+        })]);
+        let result = lower_ir0_to_ir1(&ir0).expect("for-of lowering should succeed");
+        let ops = &result.module.ops;
+        let next_pos = ops
+            .iter()
+            .position(|op| matches!(op, Ir1Op::ForOfNext { .. }))
+            .expect("missing ForOfNext");
+        let init_pos = ops
+            .iter()
+            .position(|op| matches!(op, Ir1Op::ForOfInit))
+            .expect("missing ForOfInit");
+        let iterator_binding_id = match ops.get(init_pos + 1) {
+            Some(Ir1Op::StoreBinding { binding_id }) => *binding_id,
+            _ => panic!("ForOfInit must preserve its iterator in an internal register"),
+        };
+        assert!(init_pos < next_pos);
+        let done_label = match ops[next_pos] {
+            Ir1Op::ForOfNext { done_label } => done_label,
+            _ => unreachable!(),
+        };
+        let begin_pos = ops
+            .iter()
+            .position(|op| matches!(op, Ir1Op::BeginTry { .. }))
+            .expect("missing loop-head handler");
+        assert_eq!(
+            ops.iter()
+                .filter(|op| matches!(op, Ir1Op::BeginTry { .. }))
+                .count(),
+            1,
+            "empty-body for-of needs only the synthetic head handler"
+        );
+        let head_error_label = match ops[begin_pos] {
+            Ir1Op::BeginTry {
+                catch_label,
+                finally_label: Some(finally_label),
+            } if catch_label == finally_label => catch_label,
+            Ir1Op::BeginTry { .. } => {
+                panic!("loop-head errors must route through a finally-style handler")
+            }
+            _ => unreachable!(),
+        };
+        let assign_pos = ops
+            .iter()
+            .position(|op| matches!(op, Ir1Op::AssignOp { .. }))
+            .expect("missing bare-target assignment");
+        let end_try_pos = ops
+            .iter()
+            .position(|op| matches!(op, Ir1Op::EndTry))
+            .expect("missing loop-head EndTry");
+        assert!(
+            next_pos < begin_pos && begin_pos < assign_pos && assign_pos < end_try_pos,
+            "only the loop-head assignment belongs inside the protected region"
+        );
+
+        let closes: Vec<_> = ops
+            .iter()
+            .enumerate()
+            .filter_map(|(position, op)| match op {
+                Ir1Op::IteratorClose { reason } => Some((position, *reason)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(closes.len(), 2, "for-of must have exactly two close paths");
+        assert_eq!(closes[0].1, IteratorCloseReason::Break);
+        assert_eq!(closes[1].1, IteratorCloseReason::Throw);
+        let break_close_pos = closes[0].0;
+        let throw_close_pos = closes[1].0;
+        let head_error_pos = ops
+            .iter()
+            .position(|op| matches!(op, Ir1Op::Label { id } if *id == head_error_label))
+            .expect("missing loop-head catch label");
+        let end_pos = ops
+            .iter()
+            .position(|op| matches!(op, Ir1Op::Label { id } if *id == done_label))
+            .expect("missing normal exhaustion label");
+        assert!(matches!(
+            ops.get(break_close_pos + 1),
+            Some(Ir1Op::Jump { label_id }) if *label_id == done_label
+        ));
+        assert!(matches!(
+            ops.get(head_error_pos + 1),
+            Some(Ir1Op::EnterFinally)
+        ));
+        assert!(matches!(
+            ops.get(head_error_pos + 2),
+            Some(Ir1Op::LoadBinding { binding_id }) if *binding_id == iterator_binding_id
+        ));
+        assert!(matches!(
+            ops.get(head_error_pos + 3),
+            Some(Ir1Op::IteratorClose {
+                reason: IteratorCloseReason::Throw
+            })
+        ));
+        assert!(matches!(
+            ops.get(head_error_pos + 4),
+            Some(Ir1Op::EndFinally)
+        ));
+        let end_finally_pos = head_error_pos + 4;
+        assert!(
+            break_close_pos < head_error_pos
+                && head_error_pos < throw_close_pos
+                && throw_close_pos < end_finally_pos
+                && end_finally_pos < end_pos,
+            "break must skip the out-of-line close-and-resume handler"
+        );
     }
 
     #[test]

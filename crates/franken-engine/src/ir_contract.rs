@@ -633,8 +633,11 @@ pub enum Ir1Op {
     /// {value, done} pair.  If done, pushes `undefined` value and jumps to
     /// `done_label`.
     ForOfNext { done_label: u32 },
-    /// Close an iterator (for..of abrupt completion path): pop iterator record,
-    /// call `.return()` if the method exists.  `reason` is a replay-visible tag.
+    /// Close an iterator on a for-of abrupt-completion path: pop the iterator
+    /// record and call `.return()` when present. Throw-handler lowering runs
+    /// inside a finally-style pending-completion region, so the original
+    /// exception remains outside the value stack for [`Ir1Op::EndFinally`] to
+    /// propagate. `reason` is a replay-visible tag.
     IteratorClose { reason: IteratorCloseReason },
     /// Construct (new): pop callee + N args, invoke as constructor, push result.
     Construct { arg_count: u32 },

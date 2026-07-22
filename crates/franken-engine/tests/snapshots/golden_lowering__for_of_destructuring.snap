@@ -17,17 +17,25 @@ constant_pool:
 instructions:
   0000: {"Move":{"dst":2,"src":1}}
   0001: {"ForOfInit":{"src":2,"dst":3}}
-  0002: {"ForOfNext":{"iterator":3,"value_dst":4,"done_target":14}}
-  0003: {"Move":{"dst":5,"src":4}}
-  0004: {"Move":{"dst":0,"src":5}}
+  0002: {"Move":{"dst":4,"src":3}}
+  0003: {"ForOfNext":{"iterator":4,"value_dst":5,"done_target":22}}
+  0004: {"BeginTry":{"catch_target":18,"finally_target":18}}
   0005: {"Move":{"dst":6,"src":5}}
-  0006: {"LoadStr":{"dst":7,"pool_index":0}}
-  0007: {"GetProperty":{"obj":6,"key":7,"dst":8}}
-  0008: {"Move":{"dst":9,"src":8}}
-  0009: {"Move":{"dst":0,"src":9}}
+  0006: {"Move":{"dst":0,"src":6}}
+  0007: {"Move":{"dst":7,"src":6}}
+  0008: {"LoadStr":{"dst":8,"pool_index":0}}
+  0009: {"GetProperty":{"obj":7,"key":8,"dst":9}}
   0010: {"Move":{"dst":10,"src":9}}
   0011: {"Move":{"dst":0,"src":10}}
-  0012: {"Jump":{"target":2}}
-  0013: {"IteratorClose":{"iterator":3,"reason":"Break"}}
-  0014: {"Return":{"value":0}}
-  0015: "Halt"
+  0012: "EndTry"
+  0013: {"Move":{"dst":11,"src":10}}
+  0014: {"Move":{"dst":0,"src":11}}
+  0015: {"Jump":{"target":3}}
+  0016: {"IteratorClose":{"iterator":4,"reason":"Break"}}
+  0017: {"Jump":{"target":22}}
+  0018: "EnterFinally"
+  0019: {"Move":{"dst":12,"src":4}}
+  0020: {"IteratorClose":{"iterator":12,"reason":"Throw"}}
+  0021: "EndFinally"
+  0022: {"Return":{"value":0}}
+  0023: "Halt"

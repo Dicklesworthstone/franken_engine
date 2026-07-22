@@ -2269,7 +2269,7 @@ fn for_of_lowering_produces_for_of_init_next_and_close() {
 }
 
 #[test]
-fn for_of_close_reason_is_break() {
+fn for_of_close_reasons_cover_break_and_throw() {
     let ir0 = for_of_ir0(Some(VariableDeclarationKind::Let));
     let result = lower_ir0_to_ir1(&ir0).expect("for-of break close");
     let close_ops: Vec<_> = result
@@ -2284,7 +2284,10 @@ fn for_of_close_reason_is_break() {
             }
         })
         .collect();
-    assert_eq!(close_ops, vec![IteratorCloseReason::Break]);
+    assert_eq!(
+        close_ops,
+        vec![IteratorCloseReason::Break, IteratorCloseReason::Throw]
+    );
 }
 
 #[test]

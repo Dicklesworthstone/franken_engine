@@ -136,3 +136,112 @@ fn no_param_function_return_after_expression_statement() {
     let src = "function c(){ var x = 10; x+1; return x; } c();";
     assert_eq!(completion(src), Value::Int(10));
 }
+
+// --- bd-it65u: deferred functions must write through live capture cells ---
+
+#[test]
+fn deferred_assignment_updates_an_outer_binding() {
+    let src = "let hits=0; function f(){ hits=hits+1; } f(); hits;";
+    assert_eq!(completion(src), Value::Int(1));
+}
+
+#[test]
+fn compound_and_update_writes_are_visible_to_an_existing_child_closure() {
+    let src = concat!(
+        "function make(){",
+        "  let n=1;",
+        "  function read(){ return n; }",
+        "  n+=2; n++;",
+        "  return read;",
+        "}",
+        "make()();",
+    );
+    assert_eq!(completion(src), Value::Int(4));
+}
+
+#[test]
+fn captured_outer_writes_are_visible_to_a_preexisting_closure() {
+    let src = concat!(
+        "let value=3;",
+        "function read(){ return value; }",
+        "function write(){ value=9; }",
+        "write(); read();",
+    );
+    assert_eq!(completion(src), Value::Int(9));
+}
+
+#[test]
+fn captured_write_survives_exception_unwind() {
+    let src = concat!(
+        "let value=1;",
+        "function write(){ value=8; throw 0; }",
+        "try { write(); } catch (error) {}",
+        "value;",
+    );
+    assert_eq!(completion(src), Value::Int(8));
+}
+
+#[test]
+fn child_created_before_local_initialization_observes_the_live_cell() {
+    let src = concat!(
+        "function make(){",
+        "  function read(){ return n; }",
+        "  let n=7;",
+        "  return read;",
+        "}",
+        "make()();",
+    );
+    assert_eq!(completion(src), Value::Int(7));
+}
+
+#[test]
+fn separate_factory_activations_keep_independent_capture_cells() {
+    let src = concat!(
+        "function make(){",
+        "  let n=0;",
+        "  return function(){ n++; return n; };",
+        "}",
+        "let a=make(); let b=make();",
+        "a(); a(); b();",
+    );
+    assert_eq!(completion(src), Value::Int(1));
+}
+
+#[test]
+fn same_spelled_top_level_lexicals_keep_distinct_capture_cells() {
+    let src = concat!(
+        "let first;",
+        "{ let value=1; first=function(){ return value; }; }",
+        "let second;",
+        "{ let value=2; second=function(){ return value; }; }",
+        "first()*10+second();",
+    );
+    assert_eq!(completion(src), Value::Int(12));
+}
+
+#[test]
+fn same_spelled_nested_lexicals_keep_distinct_capture_cells() {
+    let src = concat!(
+        "function make(){",
+        "  let first;",
+        "  { let value=3; first=function(){ return value; }; }",
+        "  let second;",
+        "  { let value=4; second=function(){ return value; }; }",
+        "  return first()*10+second();",
+        "}",
+        "make();",
+    );
+    assert_eq!(completion(src), Value::Int(34));
+}
+
+#[test]
+fn recursive_function_binding_remains_callable() {
+    let src = "function fact(n){ if(n<2){ return 1; } return n*fact(n-1); } fact(5);";
+    assert_eq!(completion(src), Value::Int(120));
+}
+
+#[test]
+fn true_local_assignments_still_use_the_function_register_path() {
+    let src = "function local(){ let n=1; n+=2; n++; return n; } local();";
+    assert_eq!(completion(src), Value::Int(4));
+}

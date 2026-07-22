@@ -27,6 +27,7 @@ use crate::bayesian_posterior::{
     BayesianPosteriorUpdater, Evidence, Posterior, RiskState, UpdateResult,
 };
 use crate::capability::RuntimeCapability;
+use crate::checkpoint::CancellationToken;
 use crate::containment_executor::{
     ContainmentContext, ContainmentError, ContainmentExecutor, ContainmentReceipt, SandboxPolicy,
 };
@@ -582,6 +583,8 @@ pub struct ExecutionOrchestrator {
     /// (bd-f5b04.2.7). `None` keeps the fail-closed baseline (no host effects).
     host_io: Option<Arc<dyn HostIoProvider>>,
     host_io_recorder: Option<Arc<dyn HostIoRecorder>>,
+    /// Optional per-run cancellation signal supplied by the product supervisor.
+    cancellation_token: Option<CancellationToken>,
     /// Optional data-contract IFC ingress binding (bd-fqlfw.8.2): the labeled
     /// run input plus declared sinks/routes. When set, `execute` gates every
     /// declared sink against the ingress label fail-closed and records flow
@@ -687,6 +690,7 @@ impl ExecutionOrchestrator {
             execution_counter: 0,
             host_io: None,
             host_io_recorder: None,
+            cancellation_token: None,
             data_contract_ingress: None,
             data_contract_flow_events: Vec::new(),
             #[cfg(test)]
@@ -732,6 +736,25 @@ impl ExecutionOrchestrator {
     ) {
         self.host_io = Some(provider);
         self.host_io_recorder = recorder;
+    }
+
+    /// Install a per-run cooperative cancellation signal for both interpreter
+    /// lanes. Reused orchestrators must receive a fresh token for each newly
+    /// supervised execution.
+    pub fn set_cancellation_token(&mut self, cancellation_token: CancellationToken) {
+        self.cancellation_token = Some(cancellation_token);
+    }
+
+    fn ensure_not_cancelled(&self) -> Result<(), OrchestratorError> {
+        if self
+            .cancellation_token
+            .as_ref()
+            .is_some_and(CancellationToken::is_cancelled)
+        {
+            Err(OrchestratorError::Interpreter(InterpreterError::Cancelled))
+        } else {
+            Ok(())
+        }
     }
 
     /// Access the runtime configuration.
@@ -854,6 +877,7 @@ impl ExecutionOrchestrator {
     ) -> Result<OrchestratorResult, OrchestratorError> {
         // Step 0: Validate.
         Self::validate_package(package)?;
+        self.ensure_not_cancelled()?;
         // Commit attacker-controlled capability metadata before any execution
         // or host effect. The post-effect evidence phase consumes only this
         // fixed-size summary, so containment cannot be delayed by re-hashing an
@@ -864,6 +888,7 @@ impl ExecutionOrchestrator {
         let (attempt_index, trace_id, decision_id) =
             self.take_or_allocate_execution_context(package)?;
         let prepared = self.prepare_lowering_output(package, &trace_id, &decision_id)?;
+        self.ensure_not_cancelled()?;
         let PreparedLoweringOutput {
             source_label,
             source_ingestion,
@@ -886,6 +911,7 @@ impl ExecutionOrchestrator {
         self.phase_enforce_runtime_flow_guards(&lowering_output.ir2_flow_proof_artifact)?;
         self.phase_enforce_data_contract_ingress(&trace_id, &decision_id)?;
         let ir3_schedule_cost = Self::estimate_ir3_schedule_cost(&lowering_output.ir3)?;
+        self.ensure_not_cancelled()?;
 
         // Step 6: Execute IR3. Establish the recorder boundary before the
         // interpreter can perform any live host effect. Unsupported recorders
@@ -918,6 +944,7 @@ impl ExecutionOrchestrator {
             Vec::new()
         };
         let (routed, guardplane_report) = execution?;
+        self.ensure_not_cancelled()?;
         let lane = routed.lane;
         let lane_reason = routed.reason;
         let exec_result = routed.result;
@@ -1182,7 +1209,10 @@ impl ExecutionOrchestrator {
         Some((root_string, canonical_root))
     }
 
-    fn lane_router_for_execution(package: &ExtensionPackage) -> LaneRouter {
+    fn lane_router_for_execution(
+        package: &ExtensionPackage,
+        cancellation_token: Option<&CancellationToken>,
+    ) -> LaneRouter {
         // Console is granted by default because orchestrated console output is
         // capture-only: it lands in `OrchestratorResult::console_output` and the
         // evidence stream, never an ambient host sink. Requiring packages to
@@ -1205,6 +1235,7 @@ impl ExecutionOrchestrator {
         let mut quickjs_config = InterpreterConfig::quickjs_defaults();
         quickjs_config.granted_capabilities = granted_capabilities.clone();
         quickjs_config.extension_id = Some(package.extension_id.clone());
+        quickjs_config.cancellation_token = cancellation_token.cloned();
         if let Some((root, canonical_root)) = module_root.as_ref() {
             quickjs_config.module_root = Some(root.clone());
             quickjs_config.canonical_module_root = canonical_root.clone();
@@ -1213,6 +1244,7 @@ impl ExecutionOrchestrator {
         let mut v8_config = InterpreterConfig::v8_defaults();
         v8_config.granted_capabilities = granted_capabilities;
         v8_config.extension_id = Some(package.extension_id.clone());
+        v8_config.cancellation_token = cancellation_token.cloned();
         if let Some((root, canonical_root)) = module_root {
             v8_config.module_root = Some(root);
             v8_config.canonical_module_root = canonical_root;
@@ -1234,7 +1266,8 @@ impl ExecutionOrchestrator {
         });
         // Package capabilities remain user-scoped; the orchestrator adds only
         // the minimal VM capabilities needed to run the already-lowered module.
-        let mut lane_router = Self::lane_router_for_execution(package);
+        let mut lane_router =
+            Self::lane_router_for_execution(package, self.cancellation_token.as_ref());
         // bd-f5b04.2.7: thread the installed sandboxed host-I/O provider (+ recorder)
         // into whichever lane runs, so authorized `fs:` hostcalls perform and record
         // real host effects through the algebraic-effects stack.
@@ -2821,6 +2854,43 @@ mod tests {
             capabilities: execution_capabilities(),
             version: "1.0.0".to_string(),
             metadata: BTreeMap::new(),
+        }
+    }
+
+    #[test]
+    fn bd_61y6z_pre_cancelled_orchestrator_refuses_before_pipeline_work() {
+        let cancellation = CancellationToken::new();
+        cancellation.cancel();
+        let mut orchestrator = ExecutionOrchestrator::with_defaults();
+        orchestrator.set_cancellation_token(cancellation);
+
+        let error = orchestrator
+            .execute(&simple_package())
+            .expect_err("a pre-cancelled run must fail closed");
+        assert!(matches!(
+            error,
+            OrchestratorError::Interpreter(InterpreterError::Cancelled)
+        ));
+        assert_eq!(orchestrator.execution_count(), 0);
+    }
+
+    #[test]
+    fn bd_61y6z_cancellation_reaches_both_interpreter_lanes() {
+        use crate::ir_contract::Ir3Instruction;
+
+        let package = simple_package();
+        let mut module = Ir3Module::new(ContentHash::compute(b"bd-61y6z-loop"), "cancel-loop");
+        module.instructions.push(Ir3Instruction::Jump { target: 0 });
+
+        for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+            let cancellation = CancellationToken::new();
+            cancellation.cancel();
+            let router =
+                ExecutionOrchestrator::lane_router_for_execution(&package, Some(&cancellation));
+            let error = router
+                .execute(&module, "bd-61y6z-trace", Some(lane))
+                .expect_err("the cancelled jump loop must drain");
+            assert_eq!(error, InterpreterError::Cancelled, "lane {lane}");
         }
     }
 

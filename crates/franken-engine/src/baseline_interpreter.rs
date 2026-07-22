@@ -31650,6 +31650,7 @@ impl InterpreterCore {
                         AllocKind::Closure,
                         capture_count as usize,
                     )?;
+                    let previous_estimated_memory_bytes = self.estimated_memory_bytes;
                     let captured_env = self.snapshot_scope_chain()?;
                     let closure_id = u32::try_from(self.closures.len()).map_err(|_| {
                         InterpreterError::TypeError {
@@ -31673,8 +31674,13 @@ impl InterpreterCore {
                         self.closure_module_origins.remove(&closure_id);
                         return Err(err);
                     }
+                    if let Err(err) = self.write_reg(dst, Value::GeneratorFunction(closure_id)) {
+                        self.closures.pop();
+                        self.closure_module_origins.remove(&closure_id);
+                        self.estimated_memory_bytes = previous_estimated_memory_bytes;
+                        return Err(err);
+                    }
                     self.pending_captures.clear();
-                    self.write_reg(dst, Value::GeneratorFunction(closure_id))?;
                     self.ip += 1;
                 }
                 Ir3Instruction::CreateAsyncFunction {
@@ -31687,6 +31693,7 @@ impl InterpreterCore {
                         AllocKind::Closure,
                         capture_count as usize,
                     )?;
+                    let previous_estimated_memory_bytes = self.estimated_memory_bytes;
                     let captured_env = self.snapshot_scope_chain()?;
                     let closure_id = u32::try_from(self.closures.len()).map_err(|_| {
                         InterpreterError::TypeError {
@@ -31710,8 +31717,13 @@ impl InterpreterCore {
                         self.closure_module_origins.remove(&closure_id);
                         return Err(err);
                     }
+                    if let Err(err) = self.write_reg(dst, Value::AsyncFunction(closure_id)) {
+                        self.closures.pop();
+                        self.closure_module_origins.remove(&closure_id);
+                        self.estimated_memory_bytes = previous_estimated_memory_bytes;
+                        return Err(err);
+                    }
                     self.pending_captures.clear();
-                    self.write_reg(dst, Value::AsyncFunction(closure_id))?;
                     self.ip += 1;
                 }
                 Ir3Instruction::CreateAsyncGenerator {
@@ -31724,6 +31736,7 @@ impl InterpreterCore {
                         AllocKind::Closure,
                         capture_count as usize,
                     )?;
+                    let previous_estimated_memory_bytes = self.estimated_memory_bytes;
                     let captured_env = self.snapshot_scope_chain()?;
                     let closure_id = u32::try_from(self.closures.len()).map_err(|_| {
                         InterpreterError::TypeError {
@@ -31747,8 +31760,14 @@ impl InterpreterCore {
                         self.closure_module_origins.remove(&closure_id);
                         return Err(err);
                     }
+                    if let Err(err) = self.write_reg(dst, Value::AsyncGeneratorFunction(closure_id))
+                    {
+                        self.closures.pop();
+                        self.closure_module_origins.remove(&closure_id);
+                        self.estimated_memory_bytes = previous_estimated_memory_bytes;
+                        return Err(err);
+                    }
                     self.pending_captures.clear();
-                    self.write_reg(dst, Value::AsyncGeneratorFunction(closure_id))?;
                     self.ip += 1;
                 }
                 Ir3Instruction::Yield {
@@ -85845,34 +85864,57 @@ mod tests {
     }
 
     #[test]
-    fn create_closure_destination_failure_rolls_back_publication() {
-        let mut config = test_quickjs_config();
-        config.max_registers = 1;
-        let mut core = InterpreterCore::new(config, "closure-publication-rollback");
-        let module = test_module(vec![
+    fn callable_creation_destination_failures_roll_back_publication() {
+        let instructions = [
             Ir3Instruction::CreateClosure {
                 dst: 1,
                 function_index: 0,
-                capture_count: 0,
+                capture_count: 1,
             },
-            Ir3Instruction::Halt,
-        ]);
+            Ir3Instruction::CreateGenerator {
+                dst: 1,
+                function_index: 0,
+                capture_count: 1,
+            },
+            Ir3Instruction::CreateAsyncFunction {
+                dst: 1,
+                function_index: 0,
+                capture_count: 1,
+            },
+            Ir3Instruction::CreateAsyncGenerator {
+                dst: 1,
+                function_index: 0,
+                capture_count: 1,
+            },
+        ];
 
-        let err = core.execute(&module).unwrap_err();
-        assert!(matches!(
-            err,
-            InterpreterError::RegisterOutOfBounds {
-                register: 1,
-                max: 1
-            }
-        ));
-        assert!(core.closures.is_empty());
-        assert!(core.closure_module_origins.is_empty());
-        assert!(core.pending_captures.is_empty());
-        assert_eq!(
-            core.estimated_memory_bytes(),
-            core.recompute_estimated_memory_bytes()
-        );
+        for instruction in instructions {
+            let mut config = test_quickjs_config();
+            config.max_registers = 1;
+            let mut core = InterpreterCore::new(config, "callable-publication-rollback");
+            let module = test_module(vec![instruction, Ir3Instruction::Halt]);
+            core.prepare_execution(&module)
+                .expect("module setup should succeed");
+            core.pending_captures.push(7);
+            core.sync_estimated_memory_bytes()
+                .expect("pending capture should fit memory budget");
+
+            let err = core.run_loop(&module).unwrap_err();
+            assert!(matches!(
+                err,
+                InterpreterError::RegisterOutOfBounds {
+                    register: 1,
+                    max: 1
+                }
+            ));
+            assert!(core.closures.is_empty());
+            assert!(core.closure_module_origins.is_empty());
+            assert_eq!(core.pending_captures, vec![7]);
+            assert_eq!(
+                core.estimated_memory_bytes(),
+                core.recompute_estimated_memory_bytes()
+            );
+        }
     }
 
     #[test]

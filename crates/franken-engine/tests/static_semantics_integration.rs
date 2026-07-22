@@ -17,9 +17,9 @@
 )]
 
 use frankenengine_engine::ast::{
-    AssignmentOperator, BindingPattern, BlockStatement, BreakStatement, ContinueStatement,
-    ExportDeclaration, ExportKind, Expression, ExpressionStatement, ForInStatement,
-    FunctionDeclaration, FunctionParam, ImportClause, ImportDeclaration, ParseGoal,
+    AssignmentOperator, AssignmentStrictness, BindingPattern, BlockStatement, BreakStatement,
+    ContinueStatement, ExportDeclaration, ExportKind, Expression, ExpressionStatement,
+    ForInStatement, FunctionDeclaration, FunctionParam, ImportClause, ImportDeclaration, ParseGoal,
     ReturnStatement, SourceSpan, Statement, SyntaxTree, UnaryOperator, VariableDeclaration,
     VariableDeclarationKind, VariableDeclarator,
 };
@@ -1322,6 +1322,7 @@ fn assignment_to_const_detected() {
                     operator: AssignmentOperator::Assign,
                     left: Box::new(Expression::Identifier("x".to_string())),
                     right: Box::new(Expression::NumericLiteral(2)),
+                    assignment_strictness: AssignmentStrictness::Sloppy,
                 },
                 2,
             ),
@@ -1767,6 +1768,7 @@ fn for_in_with_var_initializer_detected_in_module() {
         vec![Statement::ForIn(ForInStatement {
             binding: BindingPattern::Identifier("x".to_string()),
             binding_kind: Some(VariableDeclarationKind::Var),
+            assignment_strictness: AssignmentStrictness::Sloppy,
             object: Expression::Identifier("obj".to_string()),
             body: Box::new(Statement::Expression(ExpressionStatement {
                 expression: Expression::NumericLiteral(1),

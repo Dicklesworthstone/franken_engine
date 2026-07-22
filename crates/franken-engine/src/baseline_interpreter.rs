@@ -5409,6 +5409,32 @@ struct ScopeBinding {
     state: Rc<RefCell<ScopeBindingState>>,
 }
 
+/// Exact Reference identity captured before an assignment RHS is evaluated.
+///
+/// The IR status register carries an opaque table index rather than the cell
+/// itself. This keeps [`Value`] JavaScript-facing while allowing generators,
+/// async functions, module wrappers, and inline callbacks to preserve the
+/// original environment-record target in their ordinary saved registers.
+#[derive(Debug, Clone)]
+enum RuntimeNameReference {
+    Unresolvable,
+    RealmGlobal,
+    Resolved(ScopeBinding),
+}
+
+impl RuntimeNameReference {
+    fn same_identity(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Unresolvable, Self::Unresolvable) => true,
+            (Self::RealmGlobal, Self::RealmGlobal) => true,
+            (Self::Resolved(left), Self::Resolved(right)) => {
+                left.kind == right.kind && Rc::ptr_eq(&left.state, &right.state)
+            }
+            _ => false,
+        }
+    }
+}
+
 impl ScopeBinding {
     fn new(kind: BindingKind) -> Self {
         Self::with_state(kind, Value::Undefined, kind.is_hoisted())
@@ -6358,6 +6384,8 @@ pub enum InterpreterError {
     UncaughtException { value: String },
     /// Access to a let/const binding before initialization (TDZ).
     UninitializedBinding { name: String },
+    /// A dynamically resolved name was absent from every visible environment.
+    UndefinedBinding { name: String },
     /// Assignment to a const binding.
     ConstAssignment { name: String },
     /// String allocation size exceeded.
@@ -6471,6 +6499,9 @@ impl fmt::Display for InterpreterError {
                     f,
                     "cannot access '{name}' before initialization (temporal dead zone)"
                 )
+            }
+            Self::UndefinedBinding { name } => {
+                write!(f, "{name} is not defined")
             }
             Self::ConstAssignment { name } => {
                 write!(f, "assignment to constant variable '{name}'")
@@ -7998,6 +8029,17 @@ pub struct InterpreterCore {
     last_post_run_seed: Option<std::rc::Rc<std::cell::RefCell<ExecutionSeed>>>,
     /// Runtime scope chain for lexical variable resolution.
     scope_chain: ScopeChain,
+    /// Realm-owned bindings created by sloppy writes to unresolvable names.
+    ///
+    /// This map is deliberately outside closure, generator, generated-code,
+    /// and module execution snapshots: those mechanisms replace the active
+    /// lexical scope structure, but they all share one realm global
+    /// environment for the duration of the interpreter core.
+    realm_dynamic_globals: BTreeMap<String, ScopeBinding>,
+    /// Exact pre-RHS identifier References indexed by opaque integer tokens in
+    /// internal status registers. Entries are identity-deduplicated, so loops
+    /// do not grow this table once they keep resolving to the same cell.
+    runtime_name_references: Vec<RuntimeNameReference>,
     /// Closure store: maps closure IDs to captured environments.
     closures: Vec<ClosureValue>,
     /// Program provenance for closures created by the live interpreter. Test
@@ -8241,6 +8283,224 @@ impl InterpreterCore {
             .unwrap_or_else(|| Cow::Owned(format!("__binding_{name_pool_index}")))
     }
 
+    /// Resolve a runtime name without manufacturing a lexical binding.
+    ///
+    /// Snapshot-backed execution modes can structurally replace the active
+    /// scope chain. Realm-created sloppy globals therefore live in a separate
+    /// shared map, while ordinary lexical resolution always retains priority.
+    fn resolve_runtime_name_binding(&self, name: &str) -> Option<ScopeBinding> {
+        self.scope_chain
+            .resolve(name)
+            .map(|(_, binding)| binding.clone())
+            .or_else(|| self.realm_dynamic_globals.get(name).cloned())
+    }
+
+    fn capture_runtime_name_reference(&mut self, name: &str) -> Result<u32, InterpreterError> {
+        let reference = if let Some((_, binding)) = self.scope_chain.resolve(name) {
+            RuntimeNameReference::Resolved(binding.clone())
+        } else if self.realm_dynamic_globals.contains_key(name) {
+            // A global-object Reference retains the realm object and property
+            // name, not the current property cell. If RHS code replaces that
+            // property, PutValue must target the replacement.
+            RuntimeNameReference::RealmGlobal
+        } else {
+            RuntimeNameReference::Unresolvable
+        };
+        if let Some(index) = self
+            .runtime_name_references
+            .iter()
+            .position(|existing| existing.same_identity(&reference))
+        {
+            return u32::try_from(index).map_err(|_| InterpreterError::InternalError {
+                details: "runtime name reference index exceeds u32".to_string(),
+            });
+        }
+
+        let token = u32::try_from(self.runtime_name_references.len()).map_err(|_| {
+            InterpreterError::MemoryBudgetExceeded {
+                requested_bytes: u64::MAX,
+                max_bytes: self.config.max_total_memory_bytes,
+                requested_heap_objects: self.heap_object_count_u32(),
+                max_heap_objects: self.config.max_heap_objects,
+            }
+        })?;
+        let previous_bytes = self.runtime_name_references_memory_bytes();
+        self.runtime_name_references.push(reference);
+        let next_bytes = self.runtime_name_references_memory_bytes();
+        if let Err(error) = self.apply_memory_component_delta(previous_bytes, next_bytes) {
+            self.runtime_name_references.pop();
+            return Err(error);
+        }
+        Ok(token)
+    }
+
+    fn runtime_name_reference_token(value: Value) -> Result<u32, InterpreterError> {
+        let Value::Int(token) = value else {
+            return Err(InterpreterError::InternalError {
+                details: "dynamic name resolution status register is not an integer token"
+                    .to_string(),
+            });
+        };
+        u32::try_from(token).map_err(|_| InterpreterError::InternalError {
+            details: "dynamic name resolution status token is outside u32 range".to_string(),
+        })
+    }
+
+    fn load_runtime_name(
+        &self,
+        name: &str,
+        allow_missing: bool,
+    ) -> Result<Value, InterpreterError> {
+        if let Some(binding) = self.resolve_runtime_name_binding(name) {
+            let state = binding.state()?;
+            if !state.initialized {
+                return Err(InterpreterError::UninitializedBinding {
+                    name: name.to_string(),
+                });
+            }
+            return Ok(state.value.clone());
+        }
+
+        if let Some(context) = self.active_cjs_context.as_ref() {
+            let (filename, dirname) = self.cjs_filename_dirname(Some(&context.module_specifier));
+            match name {
+                "__filename" => return Ok(filename),
+                "__dirname" => return Ok(dirname),
+                _ => {}
+            }
+        }
+
+        if allow_missing {
+            Ok(Value::Undefined)
+        } else {
+            Err(InterpreterError::UndefinedBinding {
+                name: name.to_string(),
+            })
+        }
+    }
+
+    fn put_resolved_runtime_name_binding(
+        &mut self,
+        name: &str,
+        binding: ScopeBinding,
+        value: Value,
+    ) -> Result<(), InterpreterError> {
+        let previous_scope_bytes = self.scope_chain_memory_bytes();
+        let previous_closure_bytes = self.closures_memory_bytes();
+        let previous_call_stack_bytes = self.call_stack_memory_bytes();
+        let previous_realm_global_bytes = self.realm_dynamic_globals_memory_bytes();
+        let previous_state = binding.snapshot_state()?;
+        if !previous_state.initialized {
+            return Err(InterpreterError::UninitializedBinding {
+                name: name.to_string(),
+            });
+        }
+        if binding.kind == BindingKind::Const {
+            return Err(InterpreterError::ConstAssignment {
+                name: name.to_string(),
+            });
+        }
+        binding.state_mut()?.value = value;
+        if let Err(error) = self.apply_scope_closure_call_stack_realm_memory_delta(
+            previous_scope_bytes,
+            previous_closure_bytes,
+            previous_call_stack_bytes,
+            previous_realm_global_bytes,
+        ) {
+            binding.restore_state(previous_state)?;
+            return Err(error);
+        }
+        Ok(())
+    }
+
+    fn put_unresolvable_runtime_name(
+        &mut self,
+        name: &str,
+        value: Value,
+        strict: bool,
+    ) -> Result<(), InterpreterError> {
+        if strict {
+            return Err(InterpreterError::UndefinedBinding {
+                name: name.to_string(),
+            });
+        }
+
+        self.put_realm_runtime_name(name, value)
+    }
+
+    fn put_realm_runtime_name(&mut self, name: &str, value: Value) -> Result<(), InterpreterError> {
+        // Write the realm global object directly. If RHS code created or
+        // replaced this property after the Reference was captured, it is still
+        // the property this PutValue updates; a newly appearing lexical binding
+        // must not steal the write.
+        if let Some(binding) = self.realm_dynamic_globals.get(name).cloned() {
+            return self.put_resolved_runtime_name_binding(name, binding, value);
+        }
+
+        let previous_scope_bytes = self.scope_chain_memory_bytes();
+        let previous_closure_bytes = self.closures_memory_bytes();
+        let previous_call_stack_bytes = self.call_stack_memory_bytes();
+        let previous_realm_global_bytes = self.realm_dynamic_globals_memory_bytes();
+        let binding = ScopeBinding::with_state(BindingKind::Var, value, true);
+        debug_assert!(!self.realm_dynamic_globals.contains_key(name));
+        self.realm_dynamic_globals.insert(name.to_string(), binding);
+
+        if let Err(error) = self.apply_scope_closure_call_stack_realm_memory_delta(
+            previous_scope_bytes,
+            previous_closure_bytes,
+            previous_call_stack_bytes,
+            previous_realm_global_bytes,
+        ) {
+            self.realm_dynamic_globals.remove(name);
+            return Err(error);
+        }
+
+        Ok(())
+    }
+
+    /// Implement ECMAScript PutValue when target resolution and the write are
+    /// adjacent (loop/destructuring leaves and direct IR clients).
+    fn put_runtime_name(
+        &mut self,
+        name: &str,
+        value: Value,
+        strict: bool,
+    ) -> Result<(), InterpreterError> {
+        if let Some(binding) = self.resolve_runtime_name_binding(name) {
+            self.put_resolved_runtime_name_binding(name, binding, value)
+        } else {
+            self.put_unresolvable_runtime_name(name, value, strict)
+        }
+    }
+
+    /// Complete a dynamic PutValue using the exact Reference captured before
+    /// RHS evaluation. The token remains stable when execution temporarily
+    /// replaces the active scope chain or resumes under a same-named binding.
+    fn put_runtime_name_with_status(
+        &mut self,
+        name: &str,
+        value: Value,
+        strict: bool,
+        reference_token: u32,
+    ) -> Result<(), InterpreterError> {
+        let reference = self
+            .runtime_name_references
+            .get(reference_token as usize)
+            .cloned()
+            .ok_or_else(|| InterpreterError::InternalError {
+                details: format!("unknown runtime name reference token {reference_token}"),
+            })?;
+        match reference {
+            RuntimeNameReference::Resolved(binding) => {
+                self.put_resolved_runtime_name_binding(name, binding, value)
+            }
+            RuntimeNameReference::RealmGlobal => self.put_realm_runtime_name(name, value),
+            RuntimeNameReference::Unresolvable => {
+                self.put_unresolvable_runtime_name(name, value, strict)
+            }
+        }
+    }
+
     /// Create a new interpreter core with the given configuration.
     pub fn new(config: InterpreterConfig, trace_id: impl Into<String>) -> Self {
         let max_regs = config.max_registers as usize;
@@ -8290,6 +8550,8 @@ impl InterpreterCore {
             last_pre_run_seed: None,
             last_post_run_seed: None,
             scope_chain,
+            realm_dynamic_globals: BTreeMap::new(),
+            runtime_name_references: Vec::new(),
             closures: Vec::new(),
             closure_module_origins: BTreeMap::new(),
             module_reentrant_call_depth: 0,
@@ -31999,6 +32261,25 @@ impl InterpreterCore {
                     self.write_reg(dst, val)?;
                     self.ip += 1;
                 }
+                Ir3Instruction::LoadName {
+                    dst,
+                    name_pool_index,
+                    allow_missing,
+                } => {
+                    let name = Self::scoped_constant_name(module, name_pool_index);
+                    let val = self.load_runtime_name(name.as_ref(), allow_missing)?;
+                    self.write_reg(dst, val)?;
+                    self.ip += 1;
+                }
+                Ir3Instruction::ResolveNameStatus {
+                    dst,
+                    name_pool_index,
+                } => {
+                    let name = Self::scoped_constant_name(module, name_pool_index);
+                    let reference_token = self.capture_runtime_name_reference(name.as_ref())?;
+                    self.write_reg(dst, Value::Int(i64::from(reference_token)))?;
+                    self.ip += 1;
+                }
                 Ir3Instruction::StoreScoped {
                     src,
                     name_pool_index,
@@ -32036,6 +32317,29 @@ impl InterpreterCore {
                         }
                         return Err(err);
                     }
+                    self.ip += 1;
+                }
+                Ir3Instruction::PutName {
+                    src,
+                    name_pool_index,
+                    strict,
+                } => {
+                    let name = Self::scoped_constant_name(module, name_pool_index);
+                    let val = self.read_reg(src)?;
+                    self.put_runtime_name(name.as_ref(), val, strict)?;
+                    self.ip += 1;
+                }
+                Ir3Instruction::PutNameWithStatus {
+                    src,
+                    status,
+                    name_pool_index,
+                    strict,
+                } => {
+                    let name = Self::scoped_constant_name(module, name_pool_index);
+                    let val = self.read_reg(src)?;
+                    let reference_token =
+                        Self::runtime_name_reference_token(self.read_reg(status)?)?;
+                    self.put_runtime_name_with_status(name.as_ref(), val, strict, reference_token)?;
                     self.ip += 1;
                 }
                 Ir3Instruction::InitBinding {
@@ -33231,7 +33535,8 @@ impl InterpreterCore {
             InterpreterError::HostFilesystem { .. } => Some("Error"),
             // Temporal-dead-zone access of a `let`/`const` binding is a
             // `ReferenceError` per ES semantics.
-            InterpreterError::UninitializedBinding { .. } => Some("ReferenceError"),
+            InterpreterError::UninitializedBinding { .. }
+            | InterpreterError::UndefinedBinding { .. } => Some("ReferenceError"),
             _ => None,
         }
     }
@@ -42021,6 +42326,58 @@ impl InterpreterCore {
                     Self::write_local_register(&mut local_registers, dst, Value::Undefined)?;
                     instruction_pointer += 1;
                 }
+                Ir3Instruction::LoadName {
+                    dst,
+                    name_pool_index,
+                    allow_missing,
+                } => {
+                    let name = Self::scoped_constant_name(module, name_pool_index);
+                    let value = self.load_runtime_name(name.as_ref(), allow_missing)?;
+                    Self::write_local_register(&mut local_registers, dst, value)?;
+                    instruction_pointer += 1;
+                }
+                Ir3Instruction::ResolveNameStatus {
+                    dst,
+                    name_pool_index,
+                } => {
+                    let name = Self::scoped_constant_name(module, name_pool_index);
+                    let reference_token = self.capture_runtime_name_reference(name.as_ref())?;
+                    Self::write_local_register(
+                        &mut local_registers,
+                        dst,
+                        Value::Int(i64::from(reference_token)),
+                    )?;
+                    instruction_pointer += 1;
+                }
+                Ir3Instruction::PutName {
+                    src,
+                    name_pool_index,
+                    strict,
+                } => {
+                    let name = Self::scoped_constant_name(module, name_pool_index);
+                    let value = Self::read_local_register(&local_registers, src)?;
+                    self.put_runtime_name(name.as_ref(), value, strict)?;
+                    instruction_pointer += 1;
+                }
+                Ir3Instruction::PutNameWithStatus {
+                    src,
+                    status,
+                    name_pool_index,
+                    strict,
+                } => {
+                    let name = Self::scoped_constant_name(module, name_pool_index);
+                    let value = Self::read_local_register(&local_registers, src)?;
+                    let reference_token = Self::runtime_name_reference_token(
+                        Self::read_local_register(&local_registers, status)?,
+                    )?;
+                    self.put_runtime_name_with_status(
+                        name.as_ref(),
+                        value,
+                        strict,
+                        reference_token,
+                    )?;
+                    instruction_pointer += 1;
+                }
                 Ir3Instruction::LoadNewTarget { dst } => {
                     Self::write_local_register(&mut local_registers, dst, Value::Undefined)?;
                     instruction_pointer += 1;
@@ -42225,6 +42582,58 @@ impl InterpreterCore {
                 }
                 Ir3Instruction::LoadUndefined { dst } => {
                     Self::write_local_register(&mut local_registers, dst, Value::Undefined)?;
+                    instruction_pointer += 1;
+                }
+                Ir3Instruction::LoadName {
+                    dst,
+                    name_pool_index,
+                    allow_missing,
+                } => {
+                    let name = Self::scoped_constant_name(module, name_pool_index);
+                    let value = self.load_runtime_name(name.as_ref(), allow_missing)?;
+                    Self::write_local_register(&mut local_registers, dst, value)?;
+                    instruction_pointer += 1;
+                }
+                Ir3Instruction::ResolveNameStatus {
+                    dst,
+                    name_pool_index,
+                } => {
+                    let name = Self::scoped_constant_name(module, name_pool_index);
+                    let reference_token = self.capture_runtime_name_reference(name.as_ref())?;
+                    Self::write_local_register(
+                        &mut local_registers,
+                        dst,
+                        Value::Int(i64::from(reference_token)),
+                    )?;
+                    instruction_pointer += 1;
+                }
+                Ir3Instruction::PutName {
+                    src,
+                    name_pool_index,
+                    strict,
+                } => {
+                    let name = Self::scoped_constant_name(module, name_pool_index);
+                    let value = Self::read_local_register(&local_registers, src)?;
+                    self.put_runtime_name(name.as_ref(), value, strict)?;
+                    instruction_pointer += 1;
+                }
+                Ir3Instruction::PutNameWithStatus {
+                    src,
+                    status,
+                    name_pool_index,
+                    strict,
+                } => {
+                    let name = Self::scoped_constant_name(module, name_pool_index);
+                    let value = Self::read_local_register(&local_registers, src)?;
+                    let reference_token = Self::runtime_name_reference_token(
+                        Self::read_local_register(&local_registers, status)?,
+                    )?;
+                    self.put_runtime_name_with_status(
+                        name.as_ref(),
+                        value,
+                        strict,
+                        reference_token,
+                    )?;
                     instruction_pointer += 1;
                 }
                 Ir3Instruction::LoadThis { dst } => {
@@ -57837,6 +58246,7 @@ impl InterpreterCore {
             | InterpreterError::CapabilityDenied { capability: key }
             | InterpreterError::UnsupportedMembershipSemantics { operator: key }
             | InterpreterError::UninitializedBinding { name: key }
+            | InterpreterError::UndefinedBinding { name: key }
             | InterpreterError::ConstAssignment { name: key } => string(key),
             InterpreterError::ModuleResolutionFailed { specifier, reason } => string(specifier)
                 .saturating_add(match reason {
@@ -57937,8 +58347,8 @@ impl InterpreterCore {
             .saturating_add(Self::estimate_label_bytes(&state.lifecycle_label))
     }
 
-    fn estimate_scope_frame_bytes(frame: &ScopeFrame) -> u64 {
-        let bindings = Self::saturating_sum(frame.bindings.iter().map(|(name, binding)| {
+    fn estimate_scope_bindings_bytes(bindings: &BTreeMap<String, ScopeBinding>) -> u64 {
+        Self::saturating_sum(bindings.iter().map(|(name, binding)| {
             let value_bytes = binding
                 .state
                 .try_borrow()
@@ -57947,8 +58357,12 @@ impl InterpreterCore {
             MEMORY_ESTIMATE_SCOPE_BINDING_BASE_BYTES
                 .saturating_add(Self::estimate_string_bytes(name))
                 .saturating_add(value_bytes)
-        }));
-        MEMORY_ESTIMATE_SCOPE_FRAME_BASE_BYTES.saturating_add(bindings)
+        }))
+    }
+
+    fn estimate_scope_frame_bytes(frame: &ScopeFrame) -> u64 {
+        MEMORY_ESTIMATE_SCOPE_FRAME_BASE_BYTES
+            .saturating_add(Self::estimate_scope_bindings_bytes(&frame.bindings))
     }
 
     fn estimate_scope_chain_bytes(frames: &[ScopeFrame]) -> u64 {
@@ -58148,13 +58562,38 @@ impl InterpreterCore {
         Self::estimate_scope_chain_bytes(&self.scope_chain.frames)
     }
 
+    fn realm_dynamic_globals_memory_bytes(&self) -> u64 {
+        Self::estimate_scope_bindings_bytes(&self.realm_dynamic_globals)
+    }
+
+    fn runtime_name_references_memory_bytes(&self) -> u64 {
+        Self::saturating_sum(self.runtime_name_references.iter().map(|reference| {
+            let retained_value_bytes = match reference {
+                RuntimeNameReference::Resolved(binding) => binding
+                    .state
+                    .try_borrow()
+                    .map(|state| Self::estimate_value_bytes(&state.value))
+                    .unwrap_or(u64::MAX),
+                RuntimeNameReference::Unresolvable | RuntimeNameReference::RealmGlobal => 0,
+            };
+            (std::mem::size_of::<RuntimeNameReference>() as u64)
+                .saturating_add(retained_value_bytes)
+        }))
+    }
+
     fn closures_memory_bytes(&self) -> u64 {
-        Self::estimate_closures_bytes(&self.closures).saturating_add(Self::saturating_sum(
-            self.closure_module_origins.values().map(|origin| {
-                (std::mem::size_of::<u32>() as u64)
-                    .saturating_add(Self::estimate_string_bytes(origin))
-            }),
-        ))
+        Self::estimate_closures_bytes(&self.closures)
+            .saturating_add(Self::saturating_sum(
+                self.closure_module_origins.values().map(|origin| {
+                    (std::mem::size_of::<u32>() as u64)
+                        .saturating_add(Self::estimate_string_bytes(origin))
+                }),
+            ))
+            // Exact name References share the same mutable-cell accounting
+            // problem as closures. Folding them into this component ensures
+            // every existing scope/closure write delta observes value-size
+            // changes while a Reference token retains the cell.
+            .saturating_add(self.runtime_name_references_memory_bytes())
     }
 
     fn call_stack_frame_memory_bytes(&self) -> u64 {
@@ -58400,6 +58839,7 @@ impl InterpreterCore {
             ))
             .saturating_add(self.register_context_labels_memory_bytes())
             .saturating_add(Self::estimate_scope_chain_bytes(&self.scope_chain.frames))
+            .saturating_add(self.realm_dynamic_globals_memory_bytes())
             .saturating_add(self.closures_memory_bytes())
             .saturating_add(self.call_stack_memory_bytes())
             .saturating_add(Self::saturating_sum(
@@ -58531,6 +58971,25 @@ impl InterpreterCore {
             self.scope_chain_memory_bytes()
                 .saturating_add(self.closures_memory_bytes())
                 .saturating_add(self.call_stack_memory_bytes()),
+        )
+    }
+
+    fn apply_scope_closure_call_stack_realm_memory_delta(
+        &mut self,
+        previous_scope_bytes: u64,
+        previous_closure_bytes: u64,
+        previous_call_stack_bytes: u64,
+        previous_realm_global_bytes: u64,
+    ) -> Result<u64, InterpreterError> {
+        self.apply_memory_component_delta(
+            previous_scope_bytes
+                .saturating_add(previous_closure_bytes)
+                .saturating_add(previous_call_stack_bytes)
+                .saturating_add(previous_realm_global_bytes),
+            self.scope_chain_memory_bytes()
+                .saturating_add(self.closures_memory_bytes())
+                .saturating_add(self.call_stack_memory_bytes())
+                .saturating_add(self.realm_dynamic_globals_memory_bytes()),
         )
     }
 
@@ -86027,6 +86486,309 @@ mod tests {
     }
 
     #[test]
+    fn load_name_distinguishes_typeof_style_missing_from_reference_error() {
+        let allow_missing = test_module_with_pool(
+            vec![
+                Ir3Instruction::LoadName {
+                    dst: 0,
+                    name_pool_index: 0,
+                    allow_missing: true,
+                },
+                Ir3Instruction::Halt,
+            ],
+            vec!["bd_0k19b_missing".to_string()],
+        );
+        assert_eq!(
+            quickjs_execute(&allow_missing)
+                .expect("allow-missing name load")
+                .value,
+            Value::Undefined
+        );
+
+        let required = test_module_with_pool(
+            vec![
+                Ir3Instruction::LoadName {
+                    dst: 0,
+                    name_pool_index: 0,
+                    allow_missing: false,
+                },
+                Ir3Instruction::Halt,
+            ],
+            vec!["bd_0k19b_missing".to_string()],
+        );
+        assert!(matches!(
+            quickjs_execute(&required),
+            Err(InterpreterError::UndefinedBinding { name })
+                if name == "bd_0k19b_missing"
+        ));
+        assert_eq!(
+            InterpreterCore::js_catchable_error_name(&InterpreterError::UndefinedBinding {
+                name: "bd_0k19b_missing".to_string(),
+            }),
+            Some("ReferenceError")
+        );
+    }
+
+    #[test]
+    fn put_name_strict_missing_throws_and_sloppy_missing_creates_global() {
+        let strict = test_module_with_pool(
+            vec![
+                Ir3Instruction::LoadInt { dst: 0, value: 7 },
+                Ir3Instruction::PutName {
+                    src: 0,
+                    name_pool_index: 0,
+                    strict: true,
+                },
+                Ir3Instruction::Halt,
+            ],
+            vec!["bd_0k19b_strict_missing".to_string()],
+        );
+        assert!(matches!(
+            quickjs_execute(&strict),
+            Err(InterpreterError::UndefinedBinding { name })
+                if name == "bd_0k19b_strict_missing"
+        ));
+
+        let sloppy = test_module_with_pool(
+            vec![
+                Ir3Instruction::LoadInt { dst: 0, value: 7 },
+                Ir3Instruction::PutName {
+                    src: 0,
+                    name_pool_index: 0,
+                    strict: false,
+                },
+                Ir3Instruction::LoadName {
+                    dst: 0,
+                    name_pool_index: 0,
+                    allow_missing: false,
+                },
+                Ir3Instruction::Halt,
+            ],
+            vec!["bd_0k19b_sloppy_global".to_string()],
+        );
+        let mut core = InterpreterCore::new(test_quickjs_config(), "bd-0k19b-sloppy-global");
+        let result = core.execute(&sloppy).expect("sloppy PutName execution");
+        assert_eq!(result.value, Value::Int(7));
+        let binding = core
+            .realm_dynamic_globals
+            .get("bd_0k19b_sloppy_global")
+            .expect("sloppy PutName global binding");
+        assert_eq!(binding.kind, BindingKind::Var);
+        assert_eq!(
+            binding.value().expect("global binding value"),
+            Value::Int(7)
+        );
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+    }
+
+    #[test]
+    fn put_name_status_freezes_pre_rhs_unresolvable_state() {
+        let module = test_module_with_pool(
+            vec![
+                Ir3Instruction::ResolveNameStatus {
+                    dst: 3,
+                    name_pool_index: 0,
+                },
+                Ir3Instruction::LoadInt { dst: 0, value: 2 },
+                Ir3Instruction::LoadInt { dst: 1, value: 1 },
+                Ir3Instruction::PutName {
+                    src: 1,
+                    name_pool_index: 0,
+                    strict: false,
+                },
+                Ir3Instruction::PutNameWithStatus {
+                    src: 0,
+                    status: 3,
+                    name_pool_index: 0,
+                    strict: true,
+                },
+                Ir3Instruction::Halt,
+            ],
+            vec!["bd_0k19b_frozen_missing".to_string()],
+        );
+        let mut core = InterpreterCore::new(test_quickjs_config(), "bd-0k19b-frozen-missing");
+        assert!(matches!(
+            core.execute(&module),
+            Err(InterpreterError::UndefinedBinding { name })
+                if name == "bd_0k19b_frozen_missing"
+        ));
+        assert_eq!(
+            core.realm_dynamic_globals
+                .get("bd_0k19b_frozen_missing")
+                .expect("RHS-created realm global survives the strict PutValue error")
+                .value()
+                .expect("realm global value"),
+            Value::Int(1)
+        );
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+    }
+
+    #[test]
+    fn put_name_status_preserves_exact_scoped_binding_across_shadowing() {
+        let mut core = InterpreterCore::new(test_quickjs_config(), "bd-0k19b-exact-scope");
+        let outer = ScopeBinding::with_state(BindingKind::Var, Value::Int(1), true);
+        core.scope_chain.frames[0]
+            .bindings
+            .insert("bd_0k19b_exact_scope".to_string(), outer.clone());
+        core.sync_estimated_memory_bytes()
+            .expect("seed outer binding accounting");
+
+        let reference_token = core
+            .capture_runtime_name_reference("bd_0k19b_exact_scope")
+            .expect("capture exact outer binding");
+        core.scope_chain
+            .push(core.config.max_scope_depth)
+            .expect("push shadowing scope");
+        let inner = ScopeBinding::with_state(BindingKind::Param, Value::Int(99), true);
+        core.scope_chain
+            .current_mut()
+            .expect("shadowing scope")
+            .bindings
+            .insert("bd_0k19b_exact_scope".to_string(), inner.clone());
+        core.sync_estimated_memory_bytes()
+            .expect("seed shadowing binding accounting");
+
+        core.put_runtime_name_with_status(
+            "bd_0k19b_exact_scope",
+            Value::Int(2),
+            true,
+            reference_token,
+        )
+        .expect("write captured outer binding");
+
+        assert_eq!(outer.value().expect("outer value"), Value::Int(2));
+        assert_eq!(inner.value().expect("inner value"), Value::Int(99));
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+    }
+
+    #[test]
+    fn sloppy_put_name_inside_closure_survives_scope_restore() {
+        let mut module = test_module_with_pool(
+            vec![
+                Ir3Instruction::CreateClosure {
+                    dst: 1,
+                    function_index: 0,
+                    capture_count: 0,
+                },
+                Ir3Instruction::Call {
+                    callee: 1,
+                    args: RegRange {
+                        start: 10,
+                        count: 0,
+                    },
+                    dst: 2,
+                },
+                Ir3Instruction::LoadName {
+                    dst: 0,
+                    name_pool_index: 0,
+                    allow_missing: false,
+                },
+                Ir3Instruction::Halt,
+                Ir3Instruction::LoadInt { dst: 0, value: 9 },
+                Ir3Instruction::PutName {
+                    src: 0,
+                    name_pool_index: 0,
+                    strict: false,
+                },
+                Ir3Instruction::Return { value: 0 },
+            ],
+            vec!["bd_0k19b_closure_global".to_string()],
+        );
+        module.function_table.push(Ir3FunctionDesc {
+            entry: 4,
+            arity: 0,
+            frame_size: 2,
+            name: Some("create_sloppy_global".to_string()),
+            is_generator: false,
+            rest_param_index: None,
+        });
+
+        assert_eq!(
+            quickjs_execute(&module)
+                .expect("closure-created sloppy global")
+                .value,
+            Value::Int(9)
+        );
+    }
+
+    #[test]
+    fn put_name_preserves_existing_binding_tdz_and_const_rules() {
+        let mut core = InterpreterCore::new(test_quickjs_config(), "bd-0k19b-existing-names");
+        let global = core
+            .scope_chain
+            .frames
+            .first_mut()
+            .expect("global scope frame");
+        global.bindings.insert(
+            "mutable".to_string(),
+            ScopeBinding::with_state(BindingKind::Var, Value::Int(1), true),
+        );
+        global.bindings.insert(
+            "constant".to_string(),
+            ScopeBinding::with_state(BindingKind::Const, Value::Int(2), true),
+        );
+        global.bindings.insert(
+            "uninitialized".to_string(),
+            ScopeBinding::new(BindingKind::Let),
+        );
+        core.sync_estimated_memory_bytes()
+            .expect("seed existing binding accounting");
+
+        core.put_runtime_name("mutable", Value::Int(3), true)
+            .expect("strict put to an existing mutable binding");
+        assert_eq!(
+            core.resolve_runtime_name_binding("mutable")
+                .expect("mutable binding")
+                .value()
+                .expect("mutable binding value"),
+            Value::Int(3)
+        );
+        assert!(matches!(
+            core.put_runtime_name("constant", Value::Int(4), false),
+            Err(InterpreterError::ConstAssignment { name }) if name == "constant"
+        ));
+        assert!(matches!(
+            core.put_runtime_name("uninitialized", Value::Int(5), false),
+            Err(InterpreterError::UninitializedBinding { name }) if name == "uninitialized"
+        ));
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+    }
+
+    #[test]
+    fn sloppy_put_name_memory_refusal_rolls_back_global_binding() {
+        let mut core = InterpreterCore::new(test_quickjs_config(), "bd-0k19b-global-rollback");
+        let baseline = core.estimated_memory_bytes();
+        core.config.max_total_memory_bytes = baseline;
+
+        let error = core
+            .put_runtime_name("bd_0k19b_refused_global", Value::Int(1), false)
+            .expect_err("new global binding must exceed a zero-headroom budget");
+        assert!(matches!(
+            error,
+            InterpreterError::MemoryBudgetExceeded { .. }
+        ));
+        assert!(
+            !core
+                .realm_dynamic_globals
+                .contains_key("bd_0k19b_refused_global")
+        );
+        assert_eq!(core.estimated_memory_bytes(), baseline);
+        assert_eq!(baseline, core.recompute_estimated_memory_bytes());
+    }
+
+    #[test]
     fn instruction_budget_and_memory_budget_are_independent() {
         let budget_module = test_module(vec![Ir3Instruction::Jump { target: 0 }]);
         let mut budget_config = test_quickjs_config();
@@ -86707,6 +87469,9 @@ mod tests {
             },
             InterpreterError::UninitializedBinding {
                 name: "late".to_string(),
+            },
+            InterpreterError::UndefinedBinding {
+                name: "missing".to_string(),
             },
             InterpreterError::ConstAssignment {
                 name: "CONST_X".to_string(),

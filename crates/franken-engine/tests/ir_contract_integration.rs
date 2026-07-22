@@ -182,13 +182,13 @@ fn build_full_pipeline() -> (Ir0Module, Ir1Module, Ir2Module, Ir3Module, Ir4Modu
 fn schema_version_current_values() {
     let v = IrSchemaVersion::CURRENT;
     assert_eq!(v.major, 0);
-    assert_eq!(v.minor, 4);
+    assert_eq!(v.minor, 6);
     assert_eq!(v.patch, 0);
 }
 
 #[test]
 fn schema_version_display() {
-    assert_eq!(IrSchemaVersion::CURRENT.to_string(), "0.4.0");
+    assert_eq!(IrSchemaVersion::CURRENT.to_string(), "0.6.0");
     let custom = IrSchemaVersion {
         major: 2,
         minor: 3,
@@ -246,7 +246,7 @@ fn schema_version_ordering() {
 }
 
 #[test]
-fn schema_version_040_retains_historical_minor_compatibility_bd_b12xs_6() {
+fn schema_version_060_accepts_engine_history_but_rejects_core_owned_050_bd_0k19b() {
     let header = |minor| IrHeader {
         schema_version: IrSchemaVersion {
             major: 0,
@@ -261,10 +261,15 @@ fn schema_version_040_retains_historical_minor_compatibility_bd_b12xs_6() {
     assert!(verify_schema_version(&header(1)).is_ok());
     assert!(verify_schema_version(&header(2)).is_ok());
     assert!(verify_schema_version(&header(3)).is_ok());
-    verify_schema_version(&header(4)).expect("current minor must be accepted");
-    let error = verify_schema_version(&header(5)).expect_err("future minor must be rejected");
+    verify_schema_version(&header(4)).expect("historical 0.4 minor must remain accepted");
+    let skipped = verify_schema_version(&header(5))
+        .expect_err("core-owned 0.5 must not be accepted as an engine artifact");
+    assert_eq!(skipped.code, IrErrorCode::SchemaVersionMismatch);
+    assert!(skipped.message.contains("skipped engine minor"));
+    verify_schema_version(&header(6)).expect("current minor must be accepted");
+    let error = verify_schema_version(&header(7)).expect_err("future minor must be rejected");
     assert_eq!(error.code, IrErrorCode::SchemaVersionMismatch);
-    assert!(error.message.contains("0.4.0"));
+    assert!(error.message.contains("0.6.0"));
 }
 
 // ============================================================================

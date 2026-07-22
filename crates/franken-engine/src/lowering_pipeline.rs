@@ -42,9 +42,10 @@ impl ConstantPool {
 use serde::{Deserialize, Serialize};
 
 use crate::ast::{
-    ArrowBody, AssignmentOperator, BinaryOperator, BindingPattern, BlockStatement, ExportKind,
-    Expression, FunctionParam, ImportClause, MethodKind, ObjectPatternProperty, ObjectPropertyKind,
-    ParseGoal, SourceSpan, Statement, UnaryOperator, VariableDeclarationKind,
+    ArrowBody, AssignmentOperator, AssignmentStrictness, BinaryOperator, BindingPattern,
+    BlockStatement, ExportKind, Expression, FunctionParam, ImportClause, MethodKind,
+    ObjectPatternProperty, ObjectPropertyKind, ParseGoal, SourceSpan, Statement, UnaryOperator,
+    VariableDeclarationKind,
 };
 use crate::effect_set::{EffectKind, EffectSet};
 use crate::flow_lattice::{
@@ -82,6 +83,7 @@ const CAPTURE_CELL_NAME_PREFIX: &str = "\0capture-cell\0";
 const CLASS_EXPRESSION_SELF_CAPTURE_PREFIX: &str = "\0class-expression-self\0";
 const CHILD_CAPTURE_BINDING_SENTINEL_PREFIX: &str = "\0child-capture\0";
 const RUNTIME_LEXICAL_BINDING_NAME_PREFIX: &str = "\0runtime-lexical\0";
+const TYPEOF_DYNAMIC_NAME_SENTINEL_PREFIX: &str = "\0typeof-dynamic\0";
 
 /// Maximum number of IR1 ops to preallocate based on AST size (prevents pathological growth).
 const MAX_PREALLOC_OPS: usize = 1_000_000; // 1M ops max
@@ -91,6 +93,10 @@ const MAX_PREALLOC_BINDINGS: usize = 250_000; // 250K bindings max
 
 fn lexical_binding_sentinel(name: &str) -> String {
     format!("{LEXICAL_BINDING_SENTINEL_PREFIX}{name}")
+}
+
+fn typeof_dynamic_name_sentinel(name: &str) -> String {
+    format!("{TYPEOF_DYNAMIC_NAME_SENTINEL_PREFIX}{name}")
 }
 
 fn capture_origin_sentinel(name: &str) -> String {
@@ -145,8 +151,57 @@ fn has_source_lexical_binding(binding_lookup: &BTreeMap<String, BindingId>, name
     binding_lookup.contains_key(&lexical_binding_sentinel(name))
 }
 
+/// Materialize the body-local bridge used to address a source lexical binding
+/// inherited from an enclosing lowering unit.
+///
+/// Fresh function bodies copy lexical-visibility sentinels, but intentionally
+/// do not copy ordinary name entries. The first actual read or write allocates
+/// this deterministic bridge; `collect_free_vars` later connects it to the
+/// enclosing cell. Truly unresolved names never reach this helper.
+fn materialize_source_binding_id(
+    bindings: &mut Vec<ResolvedBinding>,
+    binding_lookup: &mut BTreeMap<String, BindingId>,
+    binding_index: &mut BindingId,
+    scope_id: ScopeId,
+    name: &str,
+) -> Result<BindingId, LoweringPipelineError> {
+    if let Some(&binding_id) = binding_lookup.get(name) {
+        return Ok(binding_id);
+    }
+    if !has_source_lexical_binding(binding_lookup, name) {
+        return Err(LoweringPipelineError::InvariantViolation {
+            detail: "cannot materialize a non-lexical source binding",
+        });
+    }
+
+    let binding_id = *binding_index;
+    *binding_index = binding_index.saturating_add(1);
+    bindings.push(ResolvedBinding {
+        name: name.to_string(),
+        binding_id,
+        scope: scope_id,
+        kind: BindingKind::Let,
+    });
+    binding_lookup.insert(name.to_string(), binding_id);
+    Ok(binding_id)
+}
+
+fn assignment_strictness_is_strict(
+    assignment_strictness: AssignmentStrictness,
+) -> Result<bool, LoweringPipelineError> {
+    match assignment_strictness {
+        AssignmentStrictness::Sloppy => Ok(false),
+        AssignmentStrictness::Strict => Ok(true),
+        AssignmentStrictness::Unknown => Err(LoweringPipelineError::InvariantViolation {
+            detail: "unresolved assignment target has unknown strictness provenance; reparse the source with the current AST schema",
+        }),
+    }
+}
+
 fn is_lexically_shadowed(binding_lookup: &BTreeMap<String, BindingId>, name: &str) -> bool {
-    binding_lookup.contains_key(name) || has_source_lexical_binding(binding_lookup, name)
+    binding_lookup.contains_key(name)
+        || has_source_lexical_binding(binding_lookup, name)
+        || binding_lookup.contains_key(&typeof_dynamic_name_sentinel(name))
 }
 
 fn is_internal_lowering_binding(name: &str) -> bool {
@@ -2548,39 +2603,6 @@ fn alloc_pattern_primary_binding(
     Ok(first_user_binding.unwrap_or(0))
 }
 
-/// Resolve the identifiers in a bare `for-in`/`for-of` assignment target.
-///
-/// A loop head without `let`/`const`/`var` updates existing references instead
-/// of declaring a loop-local lexical. Match ordinary sloppy assignment by
-/// materializing an unresolved target in the current root environment.
-fn resolve_assignment_pattern_primary_binding(
-    bindings: &mut Vec<ResolvedBinding>,
-    binding_lookup: &mut BTreeMap<String, BindingId>,
-    binding_index: &mut BindingId,
-    scope_id: ScopeId,
-    pattern: &BindingPattern,
-) -> Result<BindingId, SemanticError> {
-    let mut first_target = None;
-
-    for name in pattern.binding_names() {
-        let binding_id = if let Some(existing) = binding_lookup.get(name) {
-            *existing
-        } else {
-            alloc_binding(
-                bindings,
-                binding_lookup,
-                binding_index,
-                scope_id,
-                name,
-                BindingKind::Let,
-            )?
-        };
-        first_target.get_or_insert(binding_id);
-    }
-
-    Ok(first_target.unwrap_or(0))
-}
-
 fn object_pattern_static_key(
     prop: &ObjectPatternProperty,
     fallback_name: Option<&str>,
@@ -2595,23 +2617,109 @@ enum DestructuringTargetStore {
     Assign,
     /// Fresh lexical-cell initialization for explicit `let`/`const` loop heads.
     Initialize,
-    /// Assignment to an existing reference, with runtime const/TDZ checks.
-    ReferenceAssign,
+    /// Assignment to a reference. Source-resolved bindings retain `AssignOp`;
+    /// an unresolvable name uses runtime name resolution with this parser-authored
+    /// strictness provenance.
+    ReferenceAssign {
+        assignment_strictness: AssignmentStrictness,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct PreparedDynamicNameStatus {
+    status_id: u32,
+    strict: bool,
+}
+
+fn prepare_destructuring_target_status(
+    ops: &mut Vec<Ir1Op>,
+    bindings: &mut Vec<ResolvedBinding>,
+    binding_lookup: &mut BTreeMap<String, BindingId>,
+    binding_index: &mut BindingId,
+    scope_id: ScopeId,
+    target_name: &str,
+    store: DestructuringTargetStore,
+) -> Result<Option<PreparedDynamicNameStatus>, LoweringPipelineError> {
+    let DestructuringTargetStore::ReferenceAssign {
+        assignment_strictness,
+    } = store
+    else {
+        return Ok(None);
+    };
+    if has_source_lexical_binding(binding_lookup, target_name) {
+        materialize_source_binding_id(
+            bindings,
+            binding_lookup,
+            binding_index,
+            scope_id,
+            target_name,
+        )?;
+        return Ok(None);
+    }
+
+    let status_id = *binding_index;
+    *binding_index = binding_index.saturating_add(1);
+    let strict = assignment_strictness_is_strict(assignment_strictness)?;
+    ops.push(Ir1Op::ResolveNameStatus {
+        name: target_name.to_string(),
+        status_id,
+    });
+    Ok(Some(PreparedDynamicNameStatus { status_id, strict }))
 }
 
 fn push_destructuring_target_store(
     ops: &mut Vec<Ir1Op>,
-    binding_id: BindingId,
+    binding_lookup: &BTreeMap<String, BindingId>,
+    target_name: &str,
     store: DestructuringTargetStore,
-) {
-    ops.push(match store {
-        DestructuringTargetStore::Assign => Ir1Op::StoreBinding { binding_id },
-        DestructuringTargetStore::Initialize => Ir1Op::InitializeBinding { binding_id },
-        DestructuringTargetStore::ReferenceAssign => Ir1Op::AssignOp {
-            binding_id,
-            operator: AssignmentOperator::Assign,
-        },
-    });
+    prepared_status: Option<PreparedDynamicNameStatus>,
+) -> Result<(), LoweringPipelineError> {
+    let resolved_binding_id = || {
+        binding_lookup
+            .get(target_name)
+            .copied()
+            .ok_or(LoweringPipelineError::InvariantViolation {
+                detail: "destructuring target is missing its resolved binding id",
+            })
+    };
+    match store {
+        DestructuringTargetStore::Assign => ops.push(Ir1Op::StoreBinding {
+            binding_id: resolved_binding_id()?,
+        }),
+        DestructuringTargetStore::Initialize => ops.push(Ir1Op::InitializeBinding {
+            binding_id: resolved_binding_id()?,
+        }),
+        DestructuringTargetStore::ReferenceAssign {
+            assignment_strictness,
+        } => {
+            if has_source_lexical_binding(binding_lookup, target_name) {
+                if prepared_status.is_some() {
+                    return Err(LoweringPipelineError::InvariantViolation {
+                        detail: "resolved destructuring target unexpectedly has dynamic status",
+                    });
+                }
+                ops.push(Ir1Op::AssignOp {
+                    binding_id: resolved_binding_id()?,
+                    operator: AssignmentOperator::Assign,
+                });
+            } else {
+                let prepared_status =
+                    prepared_status.ok_or(LoweringPipelineError::InvariantViolation {
+                        detail: "dynamic destructuring target was not resolved before GetValue",
+                    })?;
+                debug_assert_eq!(
+                    prepared_status.strict,
+                    assignment_strictness_is_strict(assignment_strictness)?
+                );
+                ops.push(Ir1Op::PutNameWithStatus {
+                    name: target_name.to_string(),
+                    status_id: prepared_status.status_id,
+                    strict: prepared_status.strict,
+                });
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Emit IR1 ops to destructure a value (already stored in `source_bid`) into
@@ -2631,6 +2739,7 @@ fn lower_destructuring_to_ir1(
     label_counter: &mut u32,
     span_table: &mut Vec<Ir1OpSpanEntry>,
     target_store: DestructuringTargetStore,
+    prepared_status: Option<PreparedDynamicNameStatus>,
 ) -> Result<(), LoweringPipelineError> {
     match pattern {
         BindingPattern::Identifier(_) => {
@@ -2645,34 +2754,37 @@ fn lower_destructuring_to_ir1(
                         Some(n) => *n,
                         None => continue,
                     };
+                    let rest_status = matches!(inner.as_ref(), BindingPattern::Identifier(_))
+                        .then(|| {
+                            prepare_destructuring_target_status(
+                                ops,
+                                bindings,
+                                binding_lookup,
+                                binding_index,
+                                scope_id,
+                                target_name,
+                                target_store,
+                            )
+                        })
+                        .transpose()?
+                        .flatten();
 
-                    let rest_bid = if matches!(inner.as_ref(), BindingPattern::Identifier(_)) {
-                        match binding_lookup.get(target_name) {
-                            Some(bid) => *bid,
-                            None => continue,
-                        }
-                    } else {
-                        alloc_internal_binding(
-                            bindings,
-                            binding_lookup,
-                            binding_index,
-                            scope_id,
-                            "destructure_rest",
-                        )?
-                    };
+                    let rest_bid = alloc_internal_binding(
+                        bindings,
+                        binding_lookup,
+                        binding_index,
+                        scope_id,
+                        "destructure_rest",
+                    )?;
 
                     ops.push(Ir1Op::NewObject { count: 0 });
                     ops.push(Ir1Op::LoadBinding {
                         binding_id: source_bid,
                     });
                     ops.push(Ir1Op::SpreadIntoObject);
-                    if matches!(inner.as_ref(), BindingPattern::Identifier(_)) {
-                        push_destructuring_target_store(ops, rest_bid, target_store);
-                    } else {
-                        ops.push(Ir1Op::StoreBinding {
-                            binding_id: rest_bid,
-                        });
-                    }
+                    ops.push(Ir1Op::StoreBinding {
+                        binding_id: rest_bid,
+                    });
                     ops.push(Ir1Op::Pop);
 
                     for key in &rest_excluded_keys {
@@ -2685,7 +2797,19 @@ fn lower_destructuring_to_ir1(
                         ops.push(Ir1Op::Pop);
                     }
 
-                    if !matches!(inner.as_ref(), BindingPattern::Identifier(_)) {
+                    if matches!(inner.as_ref(), BindingPattern::Identifier(_)) {
+                        ops.push(Ir1Op::LoadBinding {
+                            binding_id: rest_bid,
+                        });
+                        push_destructuring_target_store(
+                            ops,
+                            binding_lookup,
+                            target_name,
+                            target_store,
+                            rest_status,
+                        )?;
+                        ops.push(Ir1Op::Pop);
+                    } else {
                         lower_destructuring_to_ir1(
                             inner,
                             rest_bid,
@@ -2697,6 +2821,7 @@ fn lower_destructuring_to_ir1(
                             label_counter,
                             span_table,
                             target_store,
+                            None,
                         )?;
                     }
 
@@ -2711,9 +2836,30 @@ fn lower_destructuring_to_ir1(
                     Some(n) => *n,
                     None => continue,
                 };
-                let target_bid = match binding_lookup.get(target_name) {
-                    Some(bid) => *bid,
-                    None => continue,
+                let property_status = match &prop.value {
+                    BindingPattern::Identifier(_) => prepare_destructuring_target_status(
+                        ops,
+                        bindings,
+                        binding_lookup,
+                        binding_index,
+                        scope_id,
+                        target_name,
+                        target_store,
+                    )?,
+                    BindingPattern::AssignmentPattern { left, .. }
+                        if matches!(left.as_ref(), BindingPattern::Identifier(_)) =>
+                    {
+                        prepare_destructuring_target_status(
+                            ops,
+                            bindings,
+                            binding_lookup,
+                            binding_index,
+                            scope_id,
+                            target_name,
+                            target_store,
+                        )?
+                    }
+                    _ => None,
                 };
 
                 let key_str = excluded_key;
@@ -2728,7 +2874,13 @@ fn lower_destructuring_to_ir1(
 
                 match &prop.value {
                     BindingPattern::Identifier(_) => {
-                        push_destructuring_target_store(ops, target_bid, target_store);
+                        push_destructuring_target_store(
+                            ops,
+                            binding_lookup,
+                            target_name,
+                            target_store,
+                            property_status,
+                        )?;
                         ops.push(Ir1Op::Pop);
                     }
                     _ => {
@@ -2754,6 +2906,7 @@ fn lower_destructuring_to_ir1(
                             label_counter,
                             span_table,
                             target_store,
+                            property_status,
                         )?;
                     }
                 }
@@ -2776,27 +2929,37 @@ fn lower_destructuring_to_ir1(
                         Some(n) => *n,
                         None => continue,
                     };
-                    if let Some(&target_bid) = binding_lookup.get(target_name) {
-                        // Rest collects remaining elements by slicing the source array
-                        // from the current index to the end.
-
-                        // Load the source array
-                        ops.push(Ir1Op::LoadBinding {
-                            binding_id: source_bid,
-                        });
-
-                        // Load the start index (current position in destructuring)
-                        ops.push(Ir1Op::LoadLiteral {
-                            value: Ir1Literal::Integer(index as i64),
-                        });
-
-                        // Emit ArraySlice operation (will be lowered to IR3 later)
-                        ops.push(Ir1Op::ArraySlice);
-
-                        // Store the result array to the rest binding
-                        push_destructuring_target_store(ops, target_bid, target_store);
-                        ops.push(Ir1Op::Pop);
-                    }
+                    let rest_status = matches!(inner.as_ref(), BindingPattern::Identifier(_))
+                        .then(|| {
+                            prepare_destructuring_target_status(
+                                ops,
+                                bindings,
+                                binding_lookup,
+                                binding_index,
+                                scope_id,
+                                target_name,
+                                target_store,
+                            )
+                        })
+                        .transpose()?
+                        .flatten();
+                    // Rest collects remaining elements by slicing the source array
+                    // from the current index to the end.
+                    ops.push(Ir1Op::LoadBinding {
+                        binding_id: source_bid,
+                    });
+                    ops.push(Ir1Op::LoadLiteral {
+                        value: Ir1Literal::Integer(index as i64),
+                    });
+                    ops.push(Ir1Op::ArraySlice);
+                    push_destructuring_target_store(
+                        ops,
+                        binding_lookup,
+                        target_name,
+                        target_store,
+                        rest_status,
+                    )?;
+                    ops.push(Ir1Op::Pop);
                     continue;
                 }
 
@@ -2805,9 +2968,30 @@ fn lower_destructuring_to_ir1(
                     Some(n) => *n,
                     None => continue,
                 };
-                let target_bid = match binding_lookup.get(target_name) {
-                    Some(bid) => *bid,
-                    None => continue,
+                let element_status = match element {
+                    BindingPattern::Identifier(_) => prepare_destructuring_target_status(
+                        ops,
+                        bindings,
+                        binding_lookup,
+                        binding_index,
+                        scope_id,
+                        target_name,
+                        target_store,
+                    )?,
+                    BindingPattern::AssignmentPattern { left, .. }
+                        if matches!(left.as_ref(), BindingPattern::Identifier(_)) =>
+                    {
+                        prepare_destructuring_target_status(
+                            ops,
+                            bindings,
+                            binding_lookup,
+                            binding_index,
+                            scope_id,
+                            target_name,
+                            target_store,
+                        )?
+                    }
+                    _ => None,
                 };
 
                 // Load source array, get element by index string.
@@ -2819,7 +3003,13 @@ fn lower_destructuring_to_ir1(
                 });
                 match element {
                     BindingPattern::Identifier(_) => {
-                        push_destructuring_target_store(ops, target_bid, target_store);
+                        push_destructuring_target_store(
+                            ops,
+                            binding_lookup,
+                            target_name,
+                            target_store,
+                            element_status,
+                        )?;
                         ops.push(Ir1Op::Pop);
                     }
                     _ => {
@@ -2845,6 +3035,7 @@ fn lower_destructuring_to_ir1(
                             label_counter,
                             span_table,
                             target_store,
+                            element_status,
                         )?;
                     }
                 }
@@ -2859,6 +3050,22 @@ fn lower_destructuring_to_ir1(
             // the default (not null).
             let default_label = alloc_label(label_counter);
             let end_label = alloc_label(label_counter);
+            let prepared_status = if let BindingPattern::Identifier(name) = left.as_ref() {
+                match prepared_status {
+                    Some(prepared_status) => Some(prepared_status),
+                    None => prepare_destructuring_target_status(
+                        ops,
+                        bindings,
+                        binding_lookup,
+                        binding_index,
+                        scope_id,
+                        name,
+                        target_store,
+                    )?,
+                }
+            } else {
+                None
+            };
 
             ops.push(Ir1Op::LoadBinding {
                 binding_id: source_bid,
@@ -2875,13 +3082,17 @@ fn lower_destructuring_to_ir1(
 
             match left.as_ref() {
                 BindingPattern::Identifier(name) => {
-                    if let Some(&target_bid) = binding_lookup.get(name.as_str()) {
-                        ops.push(Ir1Op::LoadBinding {
-                            binding_id: source_bid,
-                        });
-                        push_destructuring_target_store(ops, target_bid, target_store);
-                        ops.push(Ir1Op::Pop);
-                    }
+                    ops.push(Ir1Op::LoadBinding {
+                        binding_id: source_bid,
+                    });
+                    push_destructuring_target_store(
+                        ops,
+                        binding_lookup,
+                        name,
+                        target_store,
+                        prepared_status,
+                    )?;
+                    ops.push(Ir1Op::Pop);
                 }
                 _ => {
                     lower_destructuring_to_ir1(
@@ -2895,6 +3106,7 @@ fn lower_destructuring_to_ir1(
                         label_counter,
                         span_table,
                         target_store,
+                        None,
                     )?;
                 }
             }
@@ -2919,13 +3131,17 @@ fn lower_destructuring_to_ir1(
             ops.push(Ir1Op::Pop);
             match left.as_ref() {
                 BindingPattern::Identifier(name) => {
-                    if let Some(&target_bid) = binding_lookup.get(name.as_str()) {
-                        ops.push(Ir1Op::LoadBinding {
-                            binding_id: source_bid,
-                        });
-                        push_destructuring_target_store(ops, target_bid, target_store);
-                        ops.push(Ir1Op::Pop);
-                    }
+                    ops.push(Ir1Op::LoadBinding {
+                        binding_id: source_bid,
+                    });
+                    push_destructuring_target_store(
+                        ops,
+                        binding_lookup,
+                        name,
+                        target_store,
+                        prepared_status,
+                    )?;
+                    ops.push(Ir1Op::Pop);
                 }
                 _ => {
                     lower_destructuring_to_ir1(
@@ -2939,6 +3155,7 @@ fn lower_destructuring_to_ir1(
                         label_counter,
                         span_table,
                         target_store,
+                        None,
                     )?;
                 }
             }
@@ -2958,6 +3175,7 @@ fn lower_destructuring_to_ir1(
                 label_counter,
                 span_table,
                 target_store,
+                prepared_status,
             )?;
         }
     }
@@ -3063,6 +3281,7 @@ fn lower_function_parameter_prologue(
             body_label_counter,
             &mut Vec::new(),
             DestructuringTargetStore::Assign,
+            None,
         )?;
     }
 
@@ -3638,6 +3857,7 @@ fn lower_statement_to_ir1_with_flow(
                         label_counter,
                         span_table,
                         DestructuringTargetStore::Assign,
+                        None,
                     )?;
                 }
             }
@@ -3897,23 +4117,32 @@ fn lower_statement_to_ir1_with_flow(
 
             // Bind the yielded key to the loop variable.
             let bid = match for_in_stmt.binding_kind {
-                None => resolve_assignment_pattern_primary_binding(
-                    bindings,
-                    binding_lookup,
-                    binding_index,
-                    scope_id,
-                    &for_in_stmt.binding,
+                None => match &for_in_stmt.binding {
+                    BindingPattern::Identifier(name)
+                        if has_source_lexical_binding(binding_lookup, name) =>
+                    {
+                        Some(materialize_source_binding_id(
+                            bindings,
+                            binding_lookup,
+                            binding_index,
+                            scope_id,
+                            name,
+                        )?)
+                    }
+                    _ => None,
+                },
+                Some(kind) => Some(
+                    alloc_pattern_primary_binding(
+                        bindings,
+                        binding_lookup,
+                        binding_index,
+                        scope_id,
+                        &for_in_stmt.binding,
+                        binding_kind_for_variable_declaration(kind),
+                    )
+                    .map_err(LoweringPipelineError::SemanticViolation)?,
                 ),
-                Some(kind) => alloc_pattern_primary_binding(
-                    bindings,
-                    binding_lookup,
-                    binding_index,
-                    scope_id,
-                    &for_in_stmt.binding,
-                    binding_kind_for_variable_declaration(kind),
-                ),
-            }
-            .map_err(LoweringPipelineError::SemanticViolation)?;
+            };
             // For simple identifier patterns, store to the primary binding.
             // For destructuring patterns, use a dedicated internal source binding.
             let source_binding_id = if matches!(for_in_stmt.binding, BindingPattern::Identifier(_))
@@ -3922,15 +4151,17 @@ fn lower_statement_to_ir1_with_flow(
             } else {
                 // Allocate a dedicated internal binding to avoid source-overwrite bugs
                 let source_name = make_internal_binding_name("for_in_source", *binding_index);
-                alloc_binding(
-                    bindings,
-                    binding_lookup,
-                    binding_index,
-                    scope_id,
-                    &source_name,
-                    BindingKind::Let,
+                Some(
+                    alloc_binding(
+                        bindings,
+                        binding_lookup,
+                        binding_index,
+                        scope_id,
+                        &source_name,
+                        BindingKind::Let,
+                    )
+                    .map_err(LoweringPipelineError::SemanticViolation)?,
                 )
-                .map_err(LoweringPipelineError::SemanticViolation)?
             };
 
             if let Some(kind) = match for_in_stmt.binding_kind {
@@ -3950,30 +4181,48 @@ fn lower_statement_to_ir1_with_flow(
             }
 
             if matches!(for_in_stmt.binding, BindingPattern::Identifier(_)) {
-                ops.push(match for_in_stmt.binding_kind {
-                    None => Ir1Op::AssignOp {
-                        binding_id: source_binding_id,
+                let BindingPattern::Identifier(name) = &for_in_stmt.binding else {
+                    return Err(LoweringPipelineError::InvariantViolation {
+                        detail: "identifier loop target changed shape during lowering",
+                    });
+                };
+                ops.push(match (for_in_stmt.binding_kind, source_binding_id) {
+                    (None, Some(binding_id)) => Ir1Op::AssignOp {
+                        binding_id,
                         operator: AssignmentOperator::Assign,
                     },
-                    Some(VariableDeclarationKind::Let | VariableDeclarationKind::Const) => {
-                        Ir1Op::InitializeBinding {
-                            binding_id: source_binding_id,
-                        }
-                    }
-                    Some(VariableDeclarationKind::Var) => Ir1Op::StoreBinding {
-                        binding_id: source_binding_id,
+                    (None, None) => Ir1Op::PutName {
+                        name: name.clone(),
+                        strict: assignment_strictness_is_strict(for_in_stmt.assignment_strictness)?,
+                    },
+                    (
+                        Some(VariableDeclarationKind::Let | VariableDeclarationKind::Const),
+                        binding_id,
+                    ) => Ir1Op::InitializeBinding {
+                        binding_id: binding_id.ok_or(
+                            LoweringPipelineError::InvariantViolation {
+                                detail: "declared loop target is missing its binding id",
+                            },
+                        )?,
+                    },
+                    (Some(VariableDeclarationKind::Var), binding_id) => Ir1Op::StoreBinding {
+                        binding_id: binding_id.ok_or(
+                            LoweringPipelineError::InvariantViolation {
+                                detail: "declared loop target is missing its binding id",
+                            },
+                        )?,
                     },
                 });
             } else {
                 ops.push(Ir1Op::StoreBinding {
-                    binding_id: source_binding_id,
+                    binding_id: source_binding_id.expect("destructuring source binding exists"),
                 });
             }
             ops.push(Ir1Op::Pop);
             if !matches!(for_in_stmt.binding, BindingPattern::Identifier(_)) {
                 lower_destructuring_to_ir1(
                     &for_in_stmt.binding,
-                    source_binding_id,
+                    source_binding_id.expect("destructuring source binding exists"),
                     ops,
                     bindings,
                     binding_lookup,
@@ -3982,12 +4231,15 @@ fn lower_statement_to_ir1_with_flow(
                     label_counter,
                     span_table,
                     match for_in_stmt.binding_kind {
-                        None => DestructuringTargetStore::ReferenceAssign,
+                        None => DestructuringTargetStore::ReferenceAssign {
+                            assignment_strictness: for_in_stmt.assignment_strictness,
+                        },
                         Some(VariableDeclarationKind::Let | VariableDeclarationKind::Const) => {
                             DestructuringTargetStore::Initialize
                         }
                         Some(VariableDeclarationKind::Var) => DestructuringTargetStore::Assign,
                     },
+                    None,
                 )?;
             }
 
@@ -4101,23 +4353,32 @@ fn lower_statement_to_ir1_with_flow(
 
             // Bind the yielded value to the loop variable.
             let bid = match for_of_stmt.binding_kind {
-                None => resolve_assignment_pattern_primary_binding(
-                    bindings,
-                    binding_lookup,
-                    binding_index,
-                    scope_id,
-                    &for_of_stmt.binding,
+                None => match &for_of_stmt.binding {
+                    BindingPattern::Identifier(name)
+                        if has_source_lexical_binding(binding_lookup, name) =>
+                    {
+                        Some(materialize_source_binding_id(
+                            bindings,
+                            binding_lookup,
+                            binding_index,
+                            scope_id,
+                            name,
+                        )?)
+                    }
+                    _ => None,
+                },
+                Some(kind) => Some(
+                    alloc_pattern_primary_binding(
+                        bindings,
+                        binding_lookup,
+                        binding_index,
+                        scope_id,
+                        &for_of_stmt.binding,
+                        binding_kind_for_variable_declaration(kind),
+                    )
+                    .map_err(LoweringPipelineError::SemanticViolation)?,
                 ),
-                Some(kind) => alloc_pattern_primary_binding(
-                    bindings,
-                    binding_lookup,
-                    binding_index,
-                    scope_id,
-                    &for_of_stmt.binding,
-                    binding_kind_for_variable_declaration(kind),
-                ),
-            }
-            .map_err(LoweringPipelineError::SemanticViolation)?;
+            };
             // For simple identifier patterns, store to the primary binding.
             // For destructuring patterns, use a dedicated internal source binding.
             let source_binding_id = if matches!(for_of_stmt.binding, BindingPattern::Identifier(_))
@@ -4126,15 +4387,17 @@ fn lower_statement_to_ir1_with_flow(
             } else {
                 // Allocate a dedicated internal binding to avoid source-overwrite bugs
                 let source_name = make_internal_binding_name("for_of_source", *binding_index);
-                alloc_binding(
-                    bindings,
-                    binding_lookup,
-                    binding_index,
-                    scope_id,
-                    &source_name,
-                    BindingKind::Let,
+                Some(
+                    alloc_binding(
+                        bindings,
+                        binding_lookup,
+                        binding_index,
+                        scope_id,
+                        &source_name,
+                        BindingKind::Let,
+                    )
+                    .map_err(LoweringPipelineError::SemanticViolation)?,
                 )
-                .map_err(LoweringPipelineError::SemanticViolation)?
             };
 
             if let Some(kind) = match for_of_stmt.binding_kind {
@@ -4154,30 +4417,48 @@ fn lower_statement_to_ir1_with_flow(
             }
 
             if matches!(for_of_stmt.binding, BindingPattern::Identifier(_)) {
-                ops.push(match for_of_stmt.binding_kind {
-                    None => Ir1Op::AssignOp {
-                        binding_id: source_binding_id,
+                let BindingPattern::Identifier(name) = &for_of_stmt.binding else {
+                    return Err(LoweringPipelineError::InvariantViolation {
+                        detail: "identifier loop target changed shape during lowering",
+                    });
+                };
+                ops.push(match (for_of_stmt.binding_kind, source_binding_id) {
+                    (None, Some(binding_id)) => Ir1Op::AssignOp {
+                        binding_id,
                         operator: AssignmentOperator::Assign,
                     },
-                    Some(VariableDeclarationKind::Let | VariableDeclarationKind::Const) => {
-                        Ir1Op::InitializeBinding {
-                            binding_id: source_binding_id,
-                        }
-                    }
-                    Some(VariableDeclarationKind::Var) => Ir1Op::StoreBinding {
-                        binding_id: source_binding_id,
+                    (None, None) => Ir1Op::PutName {
+                        name: name.clone(),
+                        strict: assignment_strictness_is_strict(for_of_stmt.assignment_strictness)?,
+                    },
+                    (
+                        Some(VariableDeclarationKind::Let | VariableDeclarationKind::Const),
+                        binding_id,
+                    ) => Ir1Op::InitializeBinding {
+                        binding_id: binding_id.ok_or(
+                            LoweringPipelineError::InvariantViolation {
+                                detail: "declared loop target is missing its binding id",
+                            },
+                        )?,
+                    },
+                    (Some(VariableDeclarationKind::Var), binding_id) => Ir1Op::StoreBinding {
+                        binding_id: binding_id.ok_or(
+                            LoweringPipelineError::InvariantViolation {
+                                detail: "declared loop target is missing its binding id",
+                            },
+                        )?,
                     },
                 });
             } else {
                 ops.push(Ir1Op::StoreBinding {
-                    binding_id: source_binding_id,
+                    binding_id: source_binding_id.expect("destructuring source binding exists"),
                 });
             }
             ops.push(Ir1Op::Pop);
             if !matches!(for_of_stmt.binding, BindingPattern::Identifier(_)) {
                 lower_destructuring_to_ir1(
                     &for_of_stmt.binding,
-                    source_binding_id,
+                    source_binding_id.expect("destructuring source binding exists"),
                     ops,
                     bindings,
                     binding_lookup,
@@ -4186,12 +4467,15 @@ fn lower_statement_to_ir1_with_flow(
                     label_counter,
                     span_table,
                     match for_of_stmt.binding_kind {
-                        None => DestructuringTargetStore::ReferenceAssign,
+                        None => DestructuringTargetStore::ReferenceAssign {
+                            assignment_strictness: for_of_stmt.assignment_strictness,
+                        },
                         Some(VariableDeclarationKind::Let | VariableDeclarationKind::Const) => {
                             DestructuringTargetStore::Initialize
                         }
                         Some(VariableDeclarationKind::Var) => DestructuringTargetStore::Assign,
                     },
+                    None,
                 )?;
             }
             ops.push(Ir1Op::EndTry);
@@ -5922,6 +6206,7 @@ pub fn lower_ir2_to_ir3(
     // (bd-fqlfw.2.11.1: "expected function, got boolean").
     let mut register_cursor: Reg = 1;
     let mut binding_registers = BTreeMap::<BindingId, Reg>::new();
+    let mut name_status_registers = BTreeMap::<u32, Reg>::new();
     let mut required_capabilities = BTreeSet::<String>::new();
     // ALIEN-2.2 (bd-o4cbn.10.2): region arena scoped to this IR2→IR3 pass. The
     // evaluation stack is pure scratch (audit top candidate, lives end-of-pass;
@@ -6293,6 +6578,28 @@ pub fn lower_ir2_to_ir3(
                     value_stack.push(dst);
                 }
             }
+            Ir1Op::LoadName {
+                name,
+                allow_missing,
+            } => {
+                let dst = alloc_register(&mut register_cursor);
+                let name_pool_index = push_constant_optimized(&mut constant_pool, name);
+                ir3.instructions.push(Ir3Instruction::LoadName {
+                    dst,
+                    name_pool_index,
+                    allow_missing: *allow_missing,
+                });
+                value_stack.push(dst);
+            }
+            Ir1Op::ResolveNameStatus { name, status_id } => {
+                let dst = alloc_register(&mut register_cursor);
+                let name_pool_index = push_constant_optimized(&mut constant_pool, name);
+                name_status_registers.insert(*status_id, dst);
+                ir3.instructions.push(Ir3Instruction::ResolveNameStatus {
+                    dst,
+                    name_pool_index,
+                });
+            }
             Ir1Op::InitializeBinding { binding_id } => {
                 let src = pop_lowering_value(&mut value_stack)?;
                 if scoped_runtime_binding_ids.contains(binding_id) {
@@ -6342,6 +6649,36 @@ pub fn lower_ir2_to_ir3(
                     ir3.instructions.push(Ir3Instruction::Move { dst, src });
                     value_stack.push(dst);
                 }
+            }
+            Ir1Op::PutName { name, strict } => {
+                let src = pop_lowering_value(&mut value_stack)?;
+                let name_pool_index = push_constant_optimized(&mut constant_pool, name);
+                ir3.instructions.push(Ir3Instruction::PutName {
+                    src,
+                    name_pool_index,
+                    strict: *strict,
+                });
+                value_stack.push(src);
+            }
+            Ir1Op::PutNameWithStatus {
+                name,
+                status_id,
+                strict,
+            } => {
+                let src = pop_lowering_value(&mut value_stack)?;
+                let status = *name_status_registers.get(status_id).ok_or(
+                    LoweringPipelineError::InvariantViolation {
+                        detail: "dynamic name put is missing its pre-RHS status register",
+                    },
+                )?;
+                let name_pool_index = push_constant_optimized(&mut constant_pool, name);
+                ir3.instructions.push(Ir3Instruction::PutNameWithStatus {
+                    src,
+                    status,
+                    name_pool_index,
+                    strict: *strict,
+                });
+                value_stack.push(src);
             }
             Ir1Op::CreatePerIterationBinding {
                 binding_id,
@@ -7582,6 +7919,7 @@ pub fn lower_ir2_to_ir3(
         let arity = param_names.len() as u32;
         let mut fn_reg: Reg = 0;
         let mut fn_binding_regs = BTreeMap::<BindingId, Reg>::new();
+        let mut fn_name_status_registers = BTreeMap::<u32, Reg>::new();
         // perf: pre-size function value stack for expression nesting.
         // ALIEN-2.2: this per-deferred-body evaluation stack is the same pure
         // end-of-pass scratch as the top-level `value_stack`, served from the
@@ -7855,6 +8193,28 @@ pub fn lower_ir2_to_ir3(
                         fn_value_stack.push(dst);
                     }
                 }
+                Ir1Op::LoadName {
+                    name,
+                    allow_missing,
+                } => {
+                    let dst = alloc_register(&mut fn_reg);
+                    let name_pool_index = push_constant_optimized(&mut constant_pool, name);
+                    ir3.instructions.push(Ir3Instruction::LoadName {
+                        dst,
+                        name_pool_index,
+                        allow_missing: *allow_missing,
+                    });
+                    fn_value_stack.push(dst);
+                }
+                Ir1Op::ResolveNameStatus { name, status_id } => {
+                    let dst = alloc_register(&mut fn_reg);
+                    let name_pool_index = push_constant_optimized(&mut constant_pool, name);
+                    fn_name_status_registers.insert(*status_id, dst);
+                    ir3.instructions.push(Ir3Instruction::ResolveNameStatus {
+                        dst,
+                        name_pool_index,
+                    });
+                }
                 Ir1Op::InitializeBinding { binding_id } => {
                     let src = pop_lowering_value(&mut fn_value_stack)?;
                     if let Some(name) = fv_id_to_name.get(binding_id) {
@@ -7935,6 +8295,36 @@ pub fn lower_ir2_to_ir3(
                     let src = pop_lowering_value(&mut fn_value_stack)?;
                     ir3.instructions.push(Ir3Instruction::Move { dst, src });
                     fn_value_stack.push(dst);
+                }
+                Ir1Op::PutName { name, strict } => {
+                    let src = pop_lowering_value(&mut fn_value_stack)?;
+                    let name_pool_index = push_constant_optimized(&mut constant_pool, name);
+                    ir3.instructions.push(Ir3Instruction::PutName {
+                        src,
+                        name_pool_index,
+                        strict: *strict,
+                    });
+                    fn_value_stack.push(src);
+                }
+                Ir1Op::PutNameWithStatus {
+                    name,
+                    status_id,
+                    strict,
+                } => {
+                    let src = pop_lowering_value(&mut fn_value_stack)?;
+                    let status = *fn_name_status_registers.get(status_id).ok_or(
+                        LoweringPipelineError::InvariantViolation {
+                            detail: "dynamic name put is missing its pre-RHS status register",
+                        },
+                    )?;
+                    let name_pool_index = push_constant_optimized(&mut constant_pool, name);
+                    ir3.instructions.push(Ir3Instruction::PutNameWithStatus {
+                        src,
+                        status,
+                        name_pool_index,
+                        strict: *strict,
+                    });
+                    fn_value_stack.push(src);
                 }
                 Ir1Op::CreatePerIterationBinding {
                     binding_id,
@@ -9945,27 +10335,18 @@ fn lower_typeof_operand_suppressing_ambient(
     span_table: &mut Vec<Ir1OpSpanEntry>,
 ) -> Result<bool, LoweringPipelineError> {
     match argument {
-        Expression::Identifier(name)
-            if !has_source_lexical_binding(binding_lookup, name)
-                && required_effect_for_ambient_authority(name, None).is_some() =>
-        {
-            // Plain binding load (a forward-ref placeholder resolved later to the
-            // runtime global), skipping the Identifier arm's ambient check.
-            let id = if let Some(existing) = binding_lookup.get(name.as_str()) {
-                *existing
-            } else {
-                let id = *binding_index;
-                *binding_index = binding_index.saturating_add(1);
-                bindings.push(ResolvedBinding {
-                    name: name.clone(),
-                    binding_id: id,
-                    scope: root_scope_id,
-                    kind: BindingKind::Let,
-                });
-                binding_lookup.insert(name.clone(), id);
-                id
-            };
-            ops.push(Ir1Op::LoadBinding { binding_id: id });
+        Expression::Identifier(name) if !has_source_lexical_binding(binding_lookup, name) => {
+            // `typeof` is the one identifier-read form that tolerates a missing
+            // dynamic name. The runtime still resolves an injected or previously
+            // created global before falling back to undefined. Remember that the
+            // name was only probed dynamically so a later builtin shortcut does
+            // not reinterpret the probe as a user declaration; the later
+            // ordinary identifier path must still perform its ambient check.
+            binding_lookup.insert(typeof_dynamic_name_sentinel(name), 0);
+            ops.push(Ir1Op::LoadName {
+                name: name.clone(),
+                allow_missing: true,
+            });
             Ok(true)
         }
         Expression::Member {
@@ -9986,28 +10367,32 @@ fn lower_typeof_operand_suppressing_ambient(
             {
                 return Ok(false);
             }
+            binding_lookup.insert(typeof_dynamic_name_sentinel(obj_name), 0);
             // Load the object identifier WITHOUT its own ambient check (mirrors the
             // bare-identifier arm above): lowering the receiver through the normal
             // path would re-trigger the gate on the bare `process`/`require`/…
             // object (e.g. `typeof process.env` faulting on `process`). Then read
             // `.prop`, also skipping the member arm's check.
-            let obj_binding = if let Some(existing) = binding_lookup.get(obj_name.as_str()) {
-                *existing
-            } else {
-                let id = *binding_index;
-                *binding_index = binding_index.saturating_add(1);
-                bindings.push(ResolvedBinding {
-                    name: obj_name.clone(),
-                    binding_id: id,
-                    scope: root_scope_id,
-                    kind: BindingKind::Let,
+            if has_source_lexical_binding(binding_lookup, obj_name) {
+                let obj_binding = materialize_source_binding_id(
+                    bindings,
+                    binding_lookup,
+                    binding_index,
+                    root_scope_id,
+                    obj_name,
+                )?;
+                ops.push(Ir1Op::LoadBinding {
+                    binding_id: obj_binding,
                 });
-                binding_lookup.insert(obj_name.clone(), id);
-                id
-            };
-            ops.push(Ir1Op::LoadBinding {
-                binding_id: obj_binding,
-            });
+            } else {
+                ops.push(Ir1Op::LoadName {
+                    name: obj_name.clone(),
+                    // `typeof missing` is the only unresolvable-reference
+                    // exception. A member operand still performs GetValue on
+                    // its base before `typeof` observes the property value.
+                    allow_missing: false,
+                });
+            }
             let key = lower_member_property_key_to_ir1(
                 property,
                 false,
@@ -10485,25 +10870,27 @@ fn lower_expression_to_ir1_inner(
                 });
             }
 
-            // Identifier references look up an existing binding or create
-            // a forward-reference placeholder.  This must NOT trigger the
-            // duplicate-declaration conflict check that applies only to
-            // actual VariableDeclaration / Import sites.
-            let binding_id = if let Some(existing) = binding_lookup.get(name.as_str()) {
-                *existing
+            if has_source_lexical_binding(binding_lookup, name) {
+                // Source declarations are reserved before expression lowering,
+                // including forward references and captured outer bindings.
+                let binding_id = materialize_source_binding_id(
+                    bindings,
+                    binding_lookup,
+                    binding_index,
+                    root_scope_id,
+                    name,
+                )?;
+                ops.push(Ir1Op::LoadBinding { binding_id });
             } else {
-                let id = *binding_index;
-                *binding_index = binding_index.saturating_add(1);
-                bindings.push(ResolvedBinding {
+                // An unresolvable ECMAScript Reference is not a synthetic lexical
+                // binding. Resolve it dynamically so a global created by an
+                // earlier sloppy assignment (or injected by the realm) remains
+                // visible, while a genuinely missing ordinary read throws.
+                ops.push(Ir1Op::LoadName {
                     name: name.clone(),
-                    binding_id: id,
-                    scope: root_scope_id,
-                    kind: BindingKind::Let,
+                    allow_missing: false,
                 });
-                binding_lookup.insert(name.clone(), id);
-                id
-            };
-            ops.push(Ir1Op::LoadBinding { binding_id });
+            }
         }
         Expression::StringLiteral(value) => {
             ops.push(Ir1Op::LoadLiteral {
@@ -10819,6 +11206,17 @@ fn lower_expression_to_ir1_inner(
                         )?;
                         ops.push(Ir1Op::DeleteProperty { key });
                     }
+                    Expression::Identifier(name)
+                        if !has_source_lexical_binding(binding_lookup, name) =>
+                    {
+                        // `delete` does not perform GetValue on an
+                        // unresolvable identifier reference. In sloppy code it
+                        // succeeds without attempting a dynamic name load;
+                        // strict delete-identifier syntax is rejected earlier.
+                        ops.push(Ir1Op::LoadLiteral {
+                            value: Ir1Literal::Boolean(true),
+                        });
+                    }
                     _ => {
                         lower_expression_to_ir1(
                             argument,
@@ -10896,22 +11294,29 @@ fn lower_expression_to_ir1_inner(
             operator,
             left,
             right,
+            assignment_strictness,
         } => {
             if let Expression::Identifier(name) = left.as_ref() {
-                let binding_id = if let Some(existing) = binding_lookup.get(name.as_str()) {
-                    *existing
+                let resolved_binding_id = if has_source_lexical_binding(binding_lookup, name) {
+                    Some(materialize_source_binding_id(
+                        bindings,
+                        binding_lookup,
+                        binding_index,
+                        root_scope_id,
+                        name,
+                    )?)
                 } else {
-                    let id = *binding_index;
-                    *binding_index = binding_index.saturating_add(1);
-                    bindings.push(ResolvedBinding {
-                        name: name.clone(),
-                        binding_id: id,
-                        scope: root_scope_id,
-                        kind: BindingKind::Let,
-                    });
-                    binding_lookup.insert(name.clone(), id);
-                    id
+                    None
                 };
+                let dynamic_strict = resolved_binding_id
+                    .is_none()
+                    .then(|| assignment_strictness_is_strict(*assignment_strictness))
+                    .transpose()?;
+                let dynamic_status_id = resolved_binding_id.is_none().then(|| {
+                    let status_id = *binding_index;
+                    *binding_index = binding_index.saturating_add(1);
+                    status_id
+                });
 
                 match operator {
                     AssignmentOperator::LogicalAndAssign
@@ -10920,7 +11325,18 @@ fn lower_expression_to_ir1_inner(
                         let eval_rhs_label = alloc_label(label_counter);
                         let end_label = alloc_label(label_counter);
 
-                        ops.push(Ir1Op::LoadBinding { binding_id });
+                        if let Some(binding_id) = resolved_binding_id {
+                            ops.push(Ir1Op::LoadBinding { binding_id });
+                        } else {
+                            ops.push(Ir1Op::ResolveNameStatus {
+                                name: name.clone(),
+                                status_id: dynamic_status_id.expect("dynamic target status exists"),
+                            });
+                            ops.push(Ir1Op::LoadName {
+                                name: name.clone(),
+                                allow_missing: false,
+                            });
+                        }
                         match operator {
                             AssignmentOperator::LogicalAndAssign => {
                                 ops.push(Ir1Op::JumpIfTruthy {
@@ -10957,32 +11373,103 @@ fn lower_expression_to_ir1_inner(
                             label_counter,
                             span_table,
                         )?;
-                        ops.push(Ir1Op::AssignOp {
-                            binding_id,
-                            operator: AssignmentOperator::Assign,
-                        });
+                        if let Some(binding_id) = resolved_binding_id {
+                            ops.push(Ir1Op::AssignOp {
+                                binding_id,
+                                operator: AssignmentOperator::Assign,
+                            });
+                        } else {
+                            ops.push(Ir1Op::PutNameWithStatus {
+                                name: name.clone(),
+                                status_id: dynamic_status_id.expect("dynamic target status exists"),
+                                strict: dynamic_strict.expect("dynamic target strictness exists"),
+                            });
+                        }
                         ops.push(Ir1Op::Pop);
                         ops.push(Ir1Op::Label { id: end_label });
-                        ops.push(Ir1Op::LoadBinding { binding_id });
+                        if let Some(binding_id) = resolved_binding_id {
+                            ops.push(Ir1Op::LoadBinding { binding_id });
+                        } else {
+                            ops.push(Ir1Op::LoadName {
+                                name: name.clone(),
+                                allow_missing: false,
+                            });
+                        }
                         return Ok(());
                     }
                     _ => {}
                 }
 
-                lower_expression_to_ir1(
-                    right,
-                    ops,
-                    bindings,
-                    binding_lookup,
-                    binding_index,
-                    root_scope_id,
-                    label_counter,
-                    span_table,
-                )?;
-                ops.push(Ir1Op::AssignOp {
-                    binding_id,
-                    operator: *operator,
-                });
+                if let Some(binding_id) = resolved_binding_id {
+                    lower_expression_to_ir1(
+                        right,
+                        ops,
+                        bindings,
+                        binding_lookup,
+                        binding_index,
+                        root_scope_id,
+                        label_counter,
+                        span_table,
+                    )?;
+                    ops.push(Ir1Op::AssignOp {
+                        binding_id,
+                        operator: *operator,
+                    });
+                } else if *operator == AssignmentOperator::Assign {
+                    // ResolveBinding precedes RHS evaluation even though
+                    // PutValue occurs afterward. The status register prevents
+                    // an RHS-created realm global from turning a formerly
+                    // unresolvable strict Reference into a resolved write.
+                    ops.push(Ir1Op::ResolveNameStatus {
+                        name: name.clone(),
+                        status_id: dynamic_status_id.expect("dynamic target status exists"),
+                    });
+                    lower_expression_to_ir1(
+                        right,
+                        ops,
+                        bindings,
+                        binding_lookup,
+                        binding_index,
+                        root_scope_id,
+                        label_counter,
+                        span_table,
+                    )?;
+                    ops.push(Ir1Op::PutNameWithStatus {
+                        name: name.clone(),
+                        status_id: dynamic_status_id.expect("dynamic target status exists"),
+                        strict: dynamic_strict.expect("dynamic target strictness exists"),
+                    });
+                } else {
+                    // Compound assignment performs GetValue on the reference
+                    // before evaluating its RHS, so a missing name throws before
+                    // any RHS side effect.
+                    ops.push(Ir1Op::ResolveNameStatus {
+                        name: name.clone(),
+                        status_id: dynamic_status_id.expect("dynamic target status exists"),
+                    });
+                    ops.push(Ir1Op::LoadName {
+                        name: name.clone(),
+                        allow_missing: false,
+                    });
+                    lower_expression_to_ir1(
+                        right,
+                        ops,
+                        bindings,
+                        binding_lookup,
+                        binding_index,
+                        root_scope_id,
+                        label_counter,
+                        span_table,
+                    )?;
+                    ops.push(Ir1Op::BinaryOp {
+                        operator: compound_assignment_binary_operator(*operator)?,
+                    });
+                    ops.push(Ir1Op::PutNameWithStatus {
+                        name: name.clone(),
+                        status_id: dynamic_status_id.expect("dynamic target status exists"),
+                        strict: dynamic_strict.expect("dynamic target strictness exists"),
+                    });
+                }
             } else if let Expression::Member {
                 object,
                 property,
@@ -11362,15 +11849,54 @@ fn lower_expression_to_ir1_inner(
                     let Some(target) = element else {
                         continue; // elision / hole: nothing to assign
                     };
+                    let element_value = Expression::Member {
+                        object: Box::new(Expression::Identifier(temp_name.clone())),
+                        property: Box::new(Expression::NumericLiteral(index as i64)),
+                        computed: true,
+                        span: None,
+                    };
+                    // Destructuring resolves a direct assignment target after
+                    // the outer RHS but before obtaining this element value.
+                    // Lower the bare identifier leaf directly so its status
+                    // register straddles the element GetValue.
+                    if let Expression::Identifier(name) = target {
+                        let target_store = DestructuringTargetStore::ReferenceAssign {
+                            assignment_strictness: *assignment_strictness,
+                        };
+                        let prepared_status = prepare_destructuring_target_status(
+                            ops,
+                            bindings,
+                            binding_lookup,
+                            binding_index,
+                            root_scope_id,
+                            name,
+                            target_store,
+                        )?;
+                        lower_expression_to_ir1(
+                            &element_value,
+                            ops,
+                            bindings,
+                            binding_lookup,
+                            binding_index,
+                            root_scope_id,
+                            label_counter,
+                            span_table,
+                        )?;
+                        push_destructuring_target_store(
+                            ops,
+                            binding_lookup,
+                            name,
+                            target_store,
+                            prepared_status,
+                        )?;
+                        ops.push(Ir1Op::Pop);
+                        continue;
+                    }
                     let element_assign = Expression::Assignment {
                         operator: AssignmentOperator::Assign,
                         left: Box::new(target.clone()),
-                        right: Box::new(Expression::Member {
-                            object: Box::new(Expression::Identifier(temp_name.clone())),
-                            property: Box::new(Expression::NumericLiteral(index as i64)),
-                            computed: true,
-                            span: None,
-                        }),
+                        right: Box::new(element_value),
+                        assignment_strictness: *assignment_strictness,
                     };
                     lower_expression_to_ir1(
                         &element_assign,
@@ -22488,6 +23014,12 @@ fn classify_ir1_op(
     Option<FlowAnnotation>,
 ) {
     match op {
+        Ir1Op::LoadName { .. } | Ir1Op::ResolveNameStatus { .. } => {
+            (EffectBoundary::ReadEffect, None, None)
+        }
+        Ir1Op::PutName { .. } | Ir1Op::PutNameWithStatus { .. } => {
+            (EffectBoundary::WriteEffect, None, None)
+        }
         Ir1Op::ImportModule { .. } => (
             EffectBoundary::ReadEffect,
             Some(CapabilityTag("module.import".to_string())),
@@ -23020,9 +23552,12 @@ fn ir1_exception_flow_label(
         Ir1Op::NewArray { .. } | Ir1Op::NewObject { .. } | Ir1Op::ArraySlice => {
             Some(Label::Internal.join(inferred_label))
         }
-        Ir1Op::TemplateLiteral { .. } | Ir1Op::AssignOp { .. } => {
-            Some(Label::Internal.join(inferred_label))
-        }
+        Ir1Op::TemplateLiteral { .. }
+        | Ir1Op::AssignOp { .. }
+        | Ir1Op::LoadName { .. }
+        | Ir1Op::ResolveNameStatus { .. }
+        | Ir1Op::PutName { .. }
+        | Ir1Op::PutNameWithStatus { .. } => Some(Label::Internal.join(inferred_label)),
         _ => None,
     }
 }
@@ -23088,6 +23623,12 @@ fn simulate_ir2_flow_labels(
                 value_stack.push(value);
                 label
             }
+            Ir1Op::LoadName { .. } => {
+                let label = Label::Internal;
+                value_stack.push(fresh_flow_value(label.clone(), &mut next_identity));
+                label
+            }
+            Ir1Op::ResolveNameStatus { .. } => Label::Internal,
             Ir1Op::StoreBinding { binding_id } | Ir1Op::InitializeBinding { binding_id } => {
                 let mut value = pop_flow_value(&mut value_stack)?;
                 bindings_changed |= join_binding_label(binding_labels, *binding_id, &value.label);
@@ -23097,6 +23638,13 @@ fn simulate_ir2_flow_labels(
                 // The binding retains a straight-line closed-shape proof until
                 // an operation below can mutate or escape it. The assignment
                 // expression's stack copy is no longer a fresh value.
+                invalidate_nonprimitive_flow_shapes(std::slice::from_mut(&mut value));
+                value_stack.push(value);
+                label
+            }
+            Ir1Op::PutName { .. } | Ir1Op::PutNameWithStatus { .. } => {
+                let mut value = pop_flow_value(&mut value_stack)?;
+                let label = value.label.clone();
                 invalidate_nonprimitive_flow_shapes(std::slice::from_mut(&mut value));
                 value_stack.push(value);
                 label
@@ -26027,13 +26575,13 @@ mod tests {
         // fixed pure programs, so any future arena/region change that perturbs ExecIR is
         // caught. Allocation-only changes must remain byte-identical; an explicit IR
         // schema migration may re-bless the header and content hash while the instruction
-        // body remains unchanged. These values include the bd-lfq44 schema 0.3 header.
+        // body remains unchanged. These values include the bd-0k19b schema 0.6 header.
         let cases: Vec<(&str, Ir0Module, &str, &str)> = vec![
             (
                 "numeric_literal",
                 script_ir0(),
-                "07000000060000000d636f6e7374616e745f706f6f6c06000000000000000e66756e6374696f6e5f7461626c650600000001070000000500000005617269747901000000000000000000000005656e7472790100000000000000000000000a6672616d655f73697a650100000000000000020000000c69735f67656e657261746f720300000000046e616d6505000000046d61696e000000066865616465720700000004000000056c6576656c05000000036972330000000e736368656d615f76657273696f6e0700000003000000056d616a6f72010000000000000000000000056d696e6f720100000000000000030000000570617463680100000000000000000000000b736f757263655f686173680400000020fc480d8eee9030c3e48eec5ea84f38eba286337531dac032473ca4f069f21ae30000000c736f757263655f6c6162656c050000000a666978747572652e6a730000000c696e737472756374696f6e730600000004070000000300000003647374010000000000000001000000026f7005000000086c6f61645f696e740000000576616c756502000000000000002a070000000300000003647374010000000000000000000000026f7005000000046d6f7665000000037372630100000000000000010700000002000000026f70050000000672657475726e0000000576616c75650100000000000000000700000001000000026f70050000000468616c740000001572657175697265645f6361706162696c697469657306000000000000000e7370656369616c697a6174696f6e08",
-                "sha256:dc1610f09f2defc8e46c24f1bdc652982c62d022eedf9137f19ea9c42ea02711",
+                "07000000060000000d636f6e7374616e745f706f6f6c06000000000000000e66756e6374696f6e5f7461626c650600000001070000000500000005617269747901000000000000000000000005656e7472790100000000000000000000000a6672616d655f73697a650100000000000000020000000c69735f67656e657261746f720300000000046e616d6505000000046d61696e000000066865616465720700000004000000056c6576656c05000000036972330000000e736368656d615f76657273696f6e0700000003000000056d616a6f72010000000000000000000000056d696e6f720100000000000000060000000570617463680100000000000000000000000b736f757263655f686173680400000020861be764f5ac2229ce24cd02336170d00c71d5488c3d2deef0e4bf344186ccee0000000c736f757263655f6c6162656c050000000a666978747572652e6a730000000c696e737472756374696f6e730600000004070000000300000003647374010000000000000001000000026f7005000000086c6f61645f696e740000000576616c756502000000000000002a070000000300000003647374010000000000000000000000026f7005000000046d6f7665000000037372630100000000000000010700000002000000026f70050000000672657475726e0000000576616c75650100000000000000000700000001000000026f70050000000468616c740000001572657175697265645f6361706162696c697469657306000000000000000e7370656369616c697a6174696f6e08",
+                "sha256:eecf3653e51ccc5420b3b9214fc2cd5b936e769f0dddc0f25113d2f2981fc75b",
             ),
             (
                 "let_decl",
@@ -26053,8 +26601,8 @@ mod tests {
                     };
                     Ir0Module::from_syntax_tree(tree, "alien2_let.js")
                 },
-                "07000000060000000d636f6e7374616e745f706f6f6c06000000000000000e66756e6374696f6e5f7461626c650600000001070000000500000005617269747901000000000000000000000005656e7472790100000000000000000000000a6672616d655f73697a650100000000000000030000000c69735f67656e657261746f720300000000046e616d6505000000046d61696e000000066865616465720700000004000000056c6576656c05000000036972330000000e736368656d615f76657273696f6e0700000003000000056d616a6f72010000000000000000000000056d696e6f720100000000000000030000000570617463680100000000000000000000000b736f757263655f6861736804000000204d5db6a71870692af53861f9c11bc9e52d77b6717b3b410cfef40dee570e59a40000000c736f757263655f6c6162656c050000000d616c69656e325f6c65742e6a730000000c696e737472756374696f6e730600000004070000000300000003647374010000000000000001000000026f7005000000086c6f61645f696e740000000576616c7565020000000000000007070000000300000003647374010000000000000002000000026f7005000000046d6f7665000000037372630100000000000000010700000002000000026f70050000000672657475726e0000000576616c75650100000000000000000700000001000000026f70050000000468616c740000001572657175697265645f6361706162696c697469657306000000000000000e7370656369616c697a6174696f6e08",
-                "sha256:c31bd2904c5ef75544f694f69e633cb0b2d5b679c207f87c3d2f966dd1e31f7e",
+                "07000000060000000d636f6e7374616e745f706f6f6c06000000000000000e66756e6374696f6e5f7461626c650600000001070000000500000005617269747901000000000000000000000005656e7472790100000000000000000000000a6672616d655f73697a650100000000000000030000000c69735f67656e657261746f720300000000046e616d6505000000046d61696e000000066865616465720700000004000000056c6576656c05000000036972330000000e736368656d615f76657273696f6e0700000003000000056d616a6f72010000000000000000000000056d696e6f720100000000000000060000000570617463680100000000000000000000000b736f757263655f6861736804000000202670195bd6fe2047847c2f6cd756184faea46b57d92744af78903ab5456c1e130000000c736f757263655f6c6162656c050000000d616c69656e325f6c65742e6a730000000c696e737472756374696f6e730600000004070000000300000003647374010000000000000001000000026f7005000000086c6f61645f696e740000000576616c7565020000000000000007070000000300000003647374010000000000000002000000026f7005000000046d6f7665000000037372630100000000000000010700000002000000026f70050000000672657475726e0000000576616c75650100000000000000000700000001000000026f70050000000468616c740000001572657175697265645f6361706162696c697469657306000000000000000e7370656369616c697a6174696f6e08",
+                "sha256:6fc26e6d1be5c05ac472e4c90c13bb0f539026ac6836fa42cd2e19abb7b86699",
             ),
             (
                 "const_decl",
@@ -26074,8 +26622,8 @@ mod tests {
                     };
                     Ir0Module::from_syntax_tree(tree, "alien2_const.js")
                 },
-                "07000000060000000d636f6e7374616e745f706f6f6c06000000000000000e66756e6374696f6e5f7461626c650600000001070000000500000005617269747901000000000000000000000005656e7472790100000000000000000000000a6672616d655f73697a650100000000000000030000000c69735f67656e657261746f720300000000046e616d6505000000046d61696e000000066865616465720700000004000000056c6576656c05000000036972330000000e736368656d615f76657273696f6e0700000003000000056d616a6f72010000000000000000000000056d696e6f720100000000000000030000000570617463680100000000000000000000000b736f757263655f68617368040000002095283e2d6bf7e5ac85bc939aad7bf97e5aabc4675c0e0edb1098ac2296afea660000000c736f757263655f6c6162656c050000000f616c69656e325f636f6e73742e6a730000000c696e737472756374696f6e730600000004070000000300000003647374010000000000000001000000026f7005000000086c6f61645f696e740000000576616c756502000000000000002a070000000300000003647374010000000000000002000000026f7005000000046d6f7665000000037372630100000000000000010700000002000000026f70050000000672657475726e0000000576616c75650100000000000000000700000001000000026f70050000000468616c740000001572657175697265645f6361706162696c697469657306000000000000000e7370656369616c697a6174696f6e08",
-                "sha256:a7135ba7d555fb703436e2033955a13313c40cfc91c7968394bda3de2963d98a",
+                "07000000060000000d636f6e7374616e745f706f6f6c06000000000000000e66756e6374696f6e5f7461626c650600000001070000000500000005617269747901000000000000000000000005656e7472790100000000000000000000000a6672616d655f73697a650100000000000000030000000c69735f67656e657261746f720300000000046e616d6505000000046d61696e000000066865616465720700000004000000056c6576656c05000000036972330000000e736368656d615f76657273696f6e0700000003000000056d616a6f72010000000000000000000000056d696e6f720100000000000000060000000570617463680100000000000000000000000b736f757263655f68617368040000002070a7c45c32bd7e15c8fcdf50aae438f0335505ce95b8bb8ebd8c3f76ea0895210000000c736f757263655f6c6162656c050000000f616c69656e325f636f6e73742e6a730000000c696e737472756374696f6e730600000004070000000300000003647374010000000000000001000000026f7005000000086c6f61645f696e740000000576616c756502000000000000002a070000000300000003647374010000000000000002000000026f7005000000046d6f7665000000037372630100000000000000010700000002000000026f70050000000672657475726e0000000576616c75650100000000000000000700000001000000026f70050000000468616c740000001572657175697265645f6361706162696c697469657306000000000000000e7370656369616c697a6174696f6e08",
+                "sha256:f8bcac3b6220e714036205b02f601803da945a0a2e4ec544c397fd3a8da68d04",
             ),
         ];
 
@@ -31437,11 +31985,12 @@ mod tests {
     }
 
     #[test]
-    fn lower_assignment_to_identifier() {
+    fn lower_assignment_to_unresolved_identifier_uses_sloppy_put_bd_0k19b() {
         let ir0 = expr_ir0(Expression::Assignment {
             operator: AssignmentOperator::Assign,
             left: Box::new(Expression::Identifier("x".into())),
             right: Box::new(Expression::NumericLiteral(42)),
+            assignment_strictness: AssignmentStrictness::Sloppy,
         });
         let result = lower_ir0_to_ir1(&ir0).expect("assignment should lower");
         assert!(
@@ -31449,8 +31998,28 @@ mod tests {
                 .module
                 .ops
                 .iter()
-                .any(|op| matches!(op, Ir1Op::AssignOp { .. }))
+                .any(|op| matches!(op, Ir1Op::ResolveNameStatus { name, .. } if name == "x"))
         );
+        assert!(result.module.ops.iter().any(
+            |op| matches!(op, Ir1Op::PutNameWithStatus { name, strict: false, .. } if name == "x")
+        ));
+    }
+
+    #[test]
+    fn unresolved_assignment_rejects_legacy_unknown_strictness_bd_0k19b() {
+        let ir0 = expr_ir0(Expression::Assignment {
+            operator: AssignmentOperator::Assign,
+            left: Box::new(Expression::Identifier("legacy_missing".into())),
+            right: Box::new(Expression::NumericLiteral(1)),
+            assignment_strictness: AssignmentStrictness::Unknown,
+        });
+        let error = lower_ir0_to_ir1(&ir0)
+            .expect_err("legacy unresolved target must not guess strictness semantics");
+        assert!(matches!(
+            error,
+            LoweringPipelineError::InvariantViolation { detail }
+                if detail.contains("unknown strictness provenance")
+        ));
     }
 
     #[test]
@@ -31464,6 +32033,7 @@ mod tests {
                 span: None,
             }),
             right: Box::new(Expression::NumericLiteral(1)),
+            assignment_strictness: AssignmentStrictness::Sloppy,
         });
         let result = lower_ir0_to_ir1(&ir0).expect("member assignment should lower");
         assert!(result.module.ops.iter().any(|op| matches!(
@@ -32196,6 +32766,7 @@ mod tests {
                 body: vec![Statement::ForOf(ForOfStatement {
                     binding: BindingPattern::Identifier("value".into()),
                     binding_kind: Some(VariableDeclarationKind::Const),
+                    assignment_strictness: AssignmentStrictness::Sloppy,
                     iterable: Expression::ArrayLiteral(vec![Some(Expression::NumericLiteral(1))]),
                     body: Box::new(Statement::Expression(ExpressionStatement {
                         expression: Expression::Identifier("value".into()),
@@ -32408,6 +32979,7 @@ mod tests {
                 span: None,
             }),
             right: Box::new(Expression::NumericLiteral(7)),
+            assignment_strictness: AssignmentStrictness::Sloppy,
         });
         let result = lower_ir0_to_ir1(&ir0).expect("computed member assignment should lower");
         assert!(result.module.ops.iter().any(|op| matches!(
@@ -32582,6 +33154,7 @@ mod tests {
         let ir0 = stmt_ir0(vec![Statement::ForIn(ForInStatement {
             binding: BindingPattern::Identifier("k".into()),
             binding_kind: Some(VariableDeclarationKind::Let),
+            assignment_strictness: AssignmentStrictness::Sloppy,
             object: Expression::Identifier("obj".into()),
             body: Box::new(Statement::Expression(ExpressionStatement {
                 expression: Expression::Identifier("k".into()),
@@ -32607,6 +33180,7 @@ mod tests {
         let ir0 = stmt_ir0(vec![Statement::ForOf(ForOfStatement {
             binding: BindingPattern::Identifier("v".into()),
             binding_kind: Some(VariableDeclarationKind::Const),
+            assignment_strictness: AssignmentStrictness::Sloppy,
             iterable: Expression::Identifier("arr".into()),
             body: Box::new(Statement::Expression(ExpressionStatement {
                 expression: Expression::Identifier("v".into()),
@@ -32650,6 +33224,7 @@ mod tests {
         let ir0 = stmt_ir0(vec![Statement::ForOf(ForOfStatement {
             binding: BindingPattern::Identifier("v".into()),
             binding_kind: None,
+            assignment_strictness: AssignmentStrictness::Strict,
             iterable: Expression::Identifier("arr".into()),
             body: Box::new(Statement::Block(BlockStatement {
                 body: Vec::new(),
@@ -32699,7 +33274,7 @@ mod tests {
         };
         let assign_pos = ops
             .iter()
-            .position(|op| matches!(op, Ir1Op::AssignOp { .. }))
+            .position(|op| matches!(op, Ir1Op::PutName { name, strict: true } if name == "v"))
             .expect("missing bare-target assignment");
         let end_try_pos = ops
             .iter()
@@ -33694,25 +34269,21 @@ mod tests {
     }
 
     #[test]
-    fn lower_identifier_creates_binding() {
+    fn lower_unresolved_identifier_uses_dynamic_name_lookup_bd_0k19b() {
         let ir0 = expr_ir0(Expression::Identifier("myVar".into()));
         let result = lower_ir0_to_ir1(&ir0).expect("identifier should lower");
+        assert!(result.module.ops.iter().any(
+            |op| matches!(op, Ir1Op::LoadName { name, allow_missing: false } if name == "myVar")
+        ));
         assert!(
             result
                 .module
-                .ops
+                .scopes
                 .iter()
-                .any(|op| matches!(op, Ir1Op::LoadBinding { .. }))
+                .flat_map(|scope| scope.bindings.iter())
+                .all(|binding| binding.name != "myVar"),
+            "an unresolvable reference must not become a synthetic lexical binding"
         );
-        let binding = result
-            .module
-            .scopes
-            .first()
-            .expect("scope")
-            .bindings
-            .iter()
-            .find(|b| b.name == "myVar");
-        assert!(binding.is_some());
     }
 
     #[test]
@@ -33736,6 +34307,7 @@ mod tests {
             Statement::ForIn(ForInStatement {
                 binding: BindingPattern::Identifier("k".into()),
                 binding_kind: Some(VariableDeclarationKind::Let),
+                assignment_strictness: AssignmentStrictness::Sloppy,
                 object: Expression::Identifier("obj".into()),
                 body: Box::new(Statement::Expression(ExpressionStatement {
                     expression: Expression::NumericLiteral(1),
@@ -33746,6 +34318,7 @@ mod tests {
             Statement::ForOf(ForOfStatement {
                 binding: BindingPattern::Identifier("v".into()),
                 binding_kind: Some(VariableDeclarationKind::Const),
+                assignment_strictness: AssignmentStrictness::Sloppy,
                 iterable: Expression::Identifier("arr".into()),
                 body: Box::new(Statement::Expression(ExpressionStatement {
                     expression: Expression::NumericLiteral(2),
@@ -33837,10 +34410,6 @@ mod tests {
             // exclusive control-flow branch.
             ("picked", BindingKind::Let, 1, 2),
             ("rest", BindingKind::Let, 1, 1),
-            // The baseline's ordinary sloppy-assignment posture materializes
-            // an unresolved target once, but it is still an assignment target,
-            // never a loop-local declaration.
-            ("missing", BindingKind::Let, 0, 1),
         ];
 
         for (name, expected_kind, expected_initializers, expected_assignments) in expected {
@@ -33895,6 +34464,28 @@ mod tests {
                 "{name} must receive only its loop-head assignment ops"
             );
         }
+
+        assert!(
+            result
+                .module
+                .scopes
+                .iter()
+                .flat_map(|scope| scope.bindings.iter())
+                .all(|binding| binding.name != "missing"),
+            "an unresolved loop target is a dynamic reference, not a fake Let binding"
+        );
+        assert_eq!(
+            result
+                .module
+                .ops
+                .iter()
+                .filter(
+                    |op| matches!(op, Ir1Op::PutName { name, strict: false } if name == "missing")
+                )
+                .count(),
+            1,
+            "the yielded value must perform exactly one sloppy dynamic put"
+        );
 
         assert!(
             result
@@ -35779,6 +36370,7 @@ mod tests {
                     operator: AssignmentOperator::AddAssign,
                     left: Box::new(Expression::Identifier("i".to_string())),
                     right: Box::new(Expression::NumericLiteral(1)),
+                    assignment_strictness: AssignmentStrictness::Sloppy,
                 }),
                 body: Box::new(Statement::Expression(ExpressionStatement {
                     expression: Expression::Call {

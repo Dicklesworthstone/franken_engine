@@ -819,7 +819,7 @@ fn scope_kind_serde_round_trip() {
 fn ir_schema_version_current_is_stable() {
     let v = IrSchemaVersion::CURRENT;
     assert_eq!(v.major, 0);
-    assert_eq!(v.minor, 4);
+    assert_eq!(v.minor, 6);
 }
 
 #[test]

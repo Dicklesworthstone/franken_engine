@@ -22,9 +22,9 @@
 use std::collections::BTreeSet;
 
 use frankenengine_engine::ast::{
-    BindingPattern, ExportDeclaration, ExportKind, Expression, ExpressionStatement, ImportClause,
-    ImportDeclaration, NamedExportClause, ParseGoal, SourceSpan, Statement, SyntaxTree,
-    VariableDeclaration, VariableDeclarationKind, VariableDeclarator,
+    AssignmentStrictness, BindingPattern, ExportDeclaration, ExportKind, Expression,
+    ExpressionStatement, ImportClause, ImportDeclaration, NamedExportClause, ParseGoal, SourceSpan,
+    Statement, SyntaxTree, VariableDeclaration, VariableDeclarationKind, VariableDeclarator,
 };
 use frankenengine_engine::hash_tiers::ContentHash;
 use frankenengine_engine::ifc_artifacts::Label;
@@ -485,18 +485,21 @@ fn ir0_to_ir1_identifier_expression() {
     let ir0 = Ir0Module::from_syntax_tree(tree, "ident.js");
     let result = lower_ir0_to_ir1(&ir0).expect("should succeed");
 
-    let has_load_binding = result
-        .module
-        .ops
-        .iter()
-        .any(|op| matches!(op, Ir1Op::LoadBinding { .. }));
-    assert!(has_load_binding);
+    let has_dynamic_load =
+        result.module.ops.iter().any(
+            |op| matches!(op, Ir1Op::LoadName { name, allow_missing: false } if name == "myVar"),
+        );
+    assert!(has_dynamic_load);
 
-    // Check scope has binding named "myVar"
-    assert!(!result.module.scopes.is_empty());
-    let root_scope = &result.module.scopes[0];
-    let has_binding = root_scope.bindings.iter().any(|b| b.name == "myVar");
-    assert!(has_binding);
+    assert!(
+        result
+            .module
+            .scopes
+            .iter()
+            .flat_map(|scope| scope.bindings.iter())
+            .all(|binding| binding.name != "myVar"),
+        "an unresolved identifier read must not synthesize a lexical binding"
+    );
 }
 
 #[test]
@@ -2177,6 +2180,7 @@ fn for_in_ir0(binding_kind: Option<VariableDeclarationKind>) -> Ir0Module {
         body: vec![Statement::ForIn(ForInStatement {
             binding: BindingPattern::Identifier("k".into()),
             binding_kind,
+            assignment_strictness: AssignmentStrictness::Sloppy,
             object: Expression::Identifier("obj".into()),
             body: Box::new(Statement::Expression(ExpressionStatement {
                 expression: Expression::Identifier("k".into()),
@@ -2195,6 +2199,7 @@ fn for_of_ir0(binding_kind: Option<VariableDeclarationKind>) -> Ir0Module {
         body: vec![Statement::ForOf(ForOfStatement {
             binding: BindingPattern::Identifier("v".into()),
             binding_kind,
+            assignment_strictness: AssignmentStrictness::Sloppy,
             iterable: Expression::Identifier("arr".into()),
             body: Box::new(Statement::Expression(ExpressionStatement {
                 expression: Expression::Identifier("v".into()),
@@ -2217,7 +2222,7 @@ fn for_in_lowering_produces_for_in_init_and_next() {
 }
 
 #[test]
-fn for_in_lowering_no_binding_kind_defaults_to_let() {
+fn for_in_lowering_no_binding_kind_uses_sloppy_dynamic_write_bd_0k19b() {
     let ir0 = for_in_ir0(None);
     let result = lower_ir0_to_ir1(&ir0).expect("for-in None binding_kind");
     assert!(
@@ -2226,6 +2231,20 @@ fn for_in_lowering_no_binding_kind_defaults_to_let() {
             .ops
             .iter()
             .any(|op| matches!(op, Ir1Op::ForInInit))
+    );
+    assert!(
+        result
+            .module
+            .ops
+            .iter()
+            .any(|op| matches!(op, Ir1Op::PutName { name, strict: false } if name == "k"))
+    );
+    assert!(
+        result.module.scopes[0]
+            .bindings
+            .iter()
+            .all(|binding| binding.name != "k"),
+        "a bare loop target is an assignment reference, not an implicit declaration"
     );
 }
 
@@ -2304,7 +2323,7 @@ fn for_of_lowering_var_binding() {
 }
 
 #[test]
-fn for_of_lowering_no_binding_kind() {
+fn for_of_lowering_no_binding_kind_uses_sloppy_dynamic_write_bd_0k19b() {
     let ir0 = for_of_ir0(None);
     let result = lower_ir0_to_ir1(&ir0).expect("for-of None binding_kind");
     assert!(
@@ -2313,6 +2332,20 @@ fn for_of_lowering_no_binding_kind() {
             .ops
             .iter()
             .any(|op| matches!(op, Ir1Op::ForOfInit))
+    );
+    assert!(
+        result
+            .module
+            .ops
+            .iter()
+            .any(|op| matches!(op, Ir1Op::PutName { name, strict: false } if name == "v"))
+    );
+    assert!(
+        result.module.scopes[0]
+            .bindings
+            .iter()
+            .all(|binding| binding.name != "v"),
+        "a bare loop target is an assignment reference, not an implicit declaration"
     );
 }
 

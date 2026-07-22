@@ -217,10 +217,38 @@ fn scope_instruction() -> BoxedStrategy<Ir3Instruction> {
             dst,
             name_pool_index,
         }),
+        (reg(), 0u32..128, any::<bool>()).prop_map(|(dst, name_pool_index, allow_missing)| {
+            Ir3Instruction::LoadName {
+                dst,
+                name_pool_index,
+                allow_missing,
+            }
+        },),
+        (reg(), 0u32..128).prop_map(|(dst, name_pool_index)| {
+            Ir3Instruction::ResolveNameStatus {
+                dst,
+                name_pool_index,
+            }
+        }),
         (reg(), 0u32..128).prop_map(|(src, name_pool_index)| Ir3Instruction::StoreScoped {
             src,
             name_pool_index,
         }),
+        (reg(), 0u32..128, any::<bool>()).prop_map(|(src, name_pool_index, strict)| {
+            Ir3Instruction::PutName {
+                src,
+                name_pool_index,
+                strict,
+            }
+        },),
+        (reg(), reg(), 0u32..128, any::<bool>()).prop_map(
+            |(src, status, name_pool_index, strict)| Ir3Instruction::PutNameWithStatus {
+                src,
+                status,
+                name_pool_index,
+                strict,
+            },
+        ),
         (0u32..128, reg()).prop_map(|(name_pool_index, src)| Ir3Instruction::InitBinding {
             name_pool_index,
             src,

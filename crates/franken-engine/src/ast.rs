@@ -14,7 +14,7 @@ use crate::js_string::{JsString, canonical_js_string_value};
 /// Versioned canonical AST contract binding schema + hash semantics.
 pub const CANONICAL_AST_CONTRACT_VERSION: &str = "franken-engine.parser-ast.contract.v1";
 /// Versioned schema identifier for canonical AST structure and key ordering.
-pub const CANONICAL_AST_SCHEMA_VERSION: &str = "franken-engine.parser-ast.schema.v4";
+pub const CANONICAL_AST_SCHEMA_VERSION: &str = "franken-engine.parser-ast.schema.v6";
 /// Hash algorithm used by `SyntaxTree::canonical_hash`.
 pub const CANONICAL_AST_HASH_ALGORITHM: &str = "sha256";
 /// Prefix used in canonical AST hash strings.
@@ -921,6 +921,10 @@ impl ForStatement {
 pub struct ForInStatement {
     pub binding: BindingPattern,
     pub binding_kind: Option<VariableDeclarationKind>,
+    /// Effective strictness at this assignment target. `Unknown` is reserved
+    /// for legacy serialized ASTs that predate strictness provenance.
+    #[serde(default)]
+    pub assignment_strictness: AssignmentStrictness,
     pub object: Expression,
     pub body: Box<Statement>,
     pub span: SourceSpan,
@@ -937,6 +941,10 @@ impl ForInStatement {
                     .map(|k| CanonicalValue::str(k.as_str()))
                     .unwrap_or(CanonicalValue::Null),
             ),
+            (
+                "assignment_strictness",
+                CanonicalValue::str(self.assignment_strictness.as_str()),
+            ),
             ("object", self.object.canonical_value()),
             ("body", self.body.canonical_value()),
             ("span", self.span.canonical_value()),
@@ -948,6 +956,10 @@ impl ForInStatement {
 pub struct ForOfStatement {
     pub binding: BindingPattern,
     pub binding_kind: Option<VariableDeclarationKind>,
+    /// Effective strictness at this assignment target. `Unknown` is reserved
+    /// for legacy serialized ASTs that predate strictness provenance.
+    #[serde(default)]
+    pub assignment_strictness: AssignmentStrictness,
     pub iterable: Expression,
     pub body: Box<Statement>,
     pub span: SourceSpan,
@@ -963,6 +975,10 @@ impl ForOfStatement {
                     .as_ref()
                     .map(|k| CanonicalValue::str(k.as_str()))
                     .unwrap_or(CanonicalValue::Null),
+            ),
+            (
+                "assignment_strictness",
+                CanonicalValue::str(self.assignment_strictness.as_str()),
             ),
             ("iterable", self.iterable.canonical_value()),
             ("body", self.body.canonical_value()),
@@ -1491,6 +1507,39 @@ pub enum AssignmentOperator {
     NullishCoalescingAssign,
 }
 
+/// Effective strict-mode provenance for assignment targets.
+///
+/// The parser always emits `Sloppy` or `Strict`. `Unknown` exists only so a
+/// legacy serialized AST can be decoded without silently claiming sloppy-mode
+/// semantics; lowering must reject an unresolved target whose provenance is
+/// still unknown.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AssignmentStrictness {
+    #[default]
+    Unknown,
+    Sloppy,
+    Strict,
+}
+
+impl AssignmentStrictness {
+    pub const fn from_strict_mode(strict_mode: bool) -> Self {
+        if strict_mode {
+            Self::Strict
+        } else {
+            Self::Sloppy
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Unknown => "unknown",
+            Self::Sloppy => "sloppy",
+            Self::Strict => "strict",
+        }
+    }
+}
+
 impl AssignmentOperator {
     pub fn as_str(self) -> &'static str {
         match self {
@@ -1593,6 +1642,10 @@ pub enum Expression {
         operator: AssignmentOperator,
         left: Box<Expression>,
         right: Box<Expression>,
+        /// Effective strictness at this assignment target. `Unknown` is
+        /// reserved for legacy serialized ASTs.
+        #[serde(default)]
+        assignment_strictness: AssignmentStrictness,
     },
     Conditional {
         test: Box<Expression>,
@@ -1749,11 +1802,16 @@ impl Expression {
                 operator,
                 left,
                 right,
+                assignment_strictness,
             } => CanonicalValue::map_from_entries([
                 ("kind", CanonicalValue::str("assignment")),
                 ("operator", CanonicalValue::str(operator.as_str())),
                 ("left", left.canonical_value()),
                 ("right", right.canonical_value()),
+                (
+                    "assignment_strictness",
+                    CanonicalValue::str(assignment_strictness.as_str()),
+                ),
             ]),
             Self::Conditional {
                 test,
@@ -2200,7 +2258,7 @@ mod tests {
         );
         assert_eq!(
             CANONICAL_AST_SCHEMA_VERSION,
-            "franken-engine.parser-ast.schema.v4"
+            "franken-engine.parser-ast.schema.v6"
         );
         assert_eq!(CANONICAL_AST_HASH_ALGORITHM, "sha256");
         assert_eq!(CANONICAL_AST_HASH_PREFIX, "sha256:");
@@ -3401,6 +3459,7 @@ mod tests {
             operator: AssignmentOperator::AddAssign,
             left: Box::new(Expression::Identifier("x".to_string())),
             right: Box::new(Expression::NumericLiteral(5)),
+            assignment_strictness: AssignmentStrictness::Sloppy,
         };
         match expr.canonical_value() {
             CanonicalValue::Map(map) => {
@@ -3412,9 +3471,82 @@ mod tests {
                     map.get("operator"),
                     Some(&CanonicalValue::String("+=".to_string()))
                 );
+                assert_eq!(
+                    map.get("assignment_strictness"),
+                    Some(&CanonicalValue::String("sloppy".to_string()))
+                );
             }
             _ => panic!("expected map"),
         }
+    }
+
+    #[test]
+    fn assignment_strictness_legacy_serde_defaults_to_unknown() {
+        assert_eq!(
+            serde_json::to_string(&AssignmentStrictness::Strict).expect("serialize strictness"),
+            r#""strict""#
+        );
+
+        let mut assignment = serde_json::to_value(Expression::Assignment {
+            operator: AssignmentOperator::Assign,
+            left: Box::new(Expression::Identifier("x".to_string())),
+            right: Box::new(Expression::NumericLiteral(1)),
+            assignment_strictness: AssignmentStrictness::Strict,
+        })
+        .expect("serialize assignment");
+        assignment["Assignment"]
+            .as_object_mut()
+            .expect("assignment payload")
+            .remove("assignment_strictness");
+        let restored: Expression =
+            serde_json::from_value(assignment).expect("deserialize legacy assignment");
+        assert!(matches!(
+            restored,
+            Expression::Assignment {
+                assignment_strictness: AssignmentStrictness::Unknown,
+                ..
+            }
+        ));
+
+        let mut for_in = serde_json::to_value(ForInStatement {
+            binding: BindingPattern::Identifier("key".to_string()),
+            binding_kind: None,
+            assignment_strictness: AssignmentStrictness::Strict,
+            object: Expression::Identifier("obj".to_string()),
+            body: Box::new(make_expr_stmt(Expression::NullLiteral)),
+            span: make_span(),
+        })
+        .expect("serialize for-in");
+        for_in
+            .as_object_mut()
+            .expect("for-in payload")
+            .remove("assignment_strictness");
+        let restored: ForInStatement =
+            serde_json::from_value(for_in).expect("deserialize legacy for-in");
+        assert_eq!(
+            restored.assignment_strictness,
+            AssignmentStrictness::Unknown
+        );
+
+        let mut for_of = serde_json::to_value(ForOfStatement {
+            binding: BindingPattern::Identifier("value".to_string()),
+            binding_kind: None,
+            assignment_strictness: AssignmentStrictness::Strict,
+            iterable: Expression::Identifier("values".to_string()),
+            body: Box::new(make_expr_stmt(Expression::NullLiteral)),
+            span: make_span(),
+        })
+        .expect("serialize for-of");
+        for_of
+            .as_object_mut()
+            .expect("for-of payload")
+            .remove("assignment_strictness");
+        let restored: ForOfStatement =
+            serde_json::from_value(for_of).expect("deserialize legacy for-of");
+        assert_eq!(
+            restored.assignment_strictness,
+            AssignmentStrictness::Unknown
+        );
     }
 
     #[test]
@@ -3752,6 +3884,7 @@ mod tests {
                 operator: AssignmentOperator::Assign,
                 left: Box::new(Expression::Identifier("y".to_string())),
                 right: Box::new(Expression::NumericLiteral(10)),
+                assignment_strictness: AssignmentStrictness::Sloppy,
             },
             Expression::Conditional {
                 test: Box::new(Expression::BooleanLiteral(true)),
@@ -3880,6 +4013,7 @@ mod tests {
                 operator: AssignmentOperator::AddAssign,
                 left: Box::new(Expression::Identifier("i".to_string())),
                 right: Box::new(Expression::NumericLiteral(1)),
+                assignment_strictness: AssignmentStrictness::Sloppy,
             }),
             body: Box::new(Statement::Block(make_block_stmt(vec![]))),
             span: make_span(),
@@ -3919,6 +4053,7 @@ mod tests {
         let stmt = Statement::ForIn(ForInStatement {
             binding: BindingPattern::Identifier("key".to_string()),
             binding_kind: Some(VariableDeclarationKind::Const),
+            assignment_strictness: AssignmentStrictness::Sloppy,
             object: Expression::Identifier("obj".to_string()),
             body: Box::new(Statement::Block(make_block_stmt(vec![]))),
             span: make_span(),
@@ -3939,6 +4074,7 @@ mod tests {
         let stmt = Statement::ForOf(ForOfStatement {
             binding: BindingPattern::Identifier("item".to_string()),
             binding_kind: Some(VariableDeclarationKind::Let),
+            assignment_strictness: AssignmentStrictness::Sloppy,
             iterable: Expression::Identifier("arr".to_string()),
             body: Box::new(Statement::Block(make_block_stmt(vec![]))),
             span: make_span(),
@@ -4321,6 +4457,7 @@ mod tests {
             Statement::ForIn(ForInStatement {
                 binding: BindingPattern::Identifier("k".to_string()),
                 binding_kind: None,
+                assignment_strictness: AssignmentStrictness::Sloppy,
                 object: Expression::NullLiteral,
                 body: Box::new(make_expr_stmt(Expression::NullLiteral)),
                 span: span.clone(),
@@ -4328,6 +4465,7 @@ mod tests {
             Statement::ForOf(ForOfStatement {
                 binding: BindingPattern::Identifier("v".to_string()),
                 binding_kind: None,
+                assignment_strictness: AssignmentStrictness::Sloppy,
                 iterable: Expression::NullLiteral,
                 body: Box::new(make_expr_stmt(Expression::NullLiteral)),
                 span,
@@ -4424,6 +4562,7 @@ mod tests {
             Statement::ForIn(ForInStatement {
                 binding: BindingPattern::Identifier("k".to_string()),
                 binding_kind: None,
+                assignment_strictness: AssignmentStrictness::Sloppy,
                 object: Expression::NullLiteral,
                 body: Box::new(make_expr_stmt(Expression::NullLiteral)),
                 span: span.clone(),
@@ -4431,6 +4570,7 @@ mod tests {
             Statement::ForOf(ForOfStatement {
                 binding: BindingPattern::Identifier("v".to_string()),
                 binding_kind: None,
+                assignment_strictness: AssignmentStrictness::Sloppy,
                 iterable: Expression::NullLiteral,
                 body: Box::new(make_expr_stmt(Expression::NullLiteral)),
                 span: span.clone(),
@@ -4596,12 +4736,17 @@ mod tests {
         let stmt = ForInStatement {
             binding: BindingPattern::Identifier("k".to_string()),
             binding_kind: None,
+            assignment_strictness: AssignmentStrictness::Sloppy,
             object: Expression::Identifier("obj".to_string()),
             body: Box::new(make_expr_stmt(Expression::NullLiteral)),
             span: make_span(),
         };
         if let CanonicalValue::Map(map) = stmt.canonical_value() {
             assert_eq!(map["binding_kind"], CanonicalValue::Null);
+            assert_eq!(
+                map["assignment_strictness"],
+                CanonicalValue::String("sloppy".to_string())
+            );
             assert!(map.contains_key("binding"));
         } else {
             panic!("expected map");
@@ -4613,12 +4758,17 @@ mod tests {
         let stmt = ForOfStatement {
             binding: BindingPattern::Identifier("v".to_string()),
             binding_kind: None,
+            assignment_strictness: AssignmentStrictness::Sloppy,
             iterable: Expression::Identifier("arr".to_string()),
             body: Box::new(make_expr_stmt(Expression::NullLiteral)),
             span: make_span(),
         };
         if let CanonicalValue::Map(map) = stmt.canonical_value() {
             assert_eq!(map["binding_kind"], CanonicalValue::Null);
+            assert_eq!(
+                map["assignment_strictness"],
+                CanonicalValue::String("sloppy".to_string())
+            );
         } else {
             panic!("expected map");
         }
@@ -4774,6 +4924,7 @@ mod tests {
                 operator: AssignmentOperator::Assign,
                 left: Box::new(Expression::Identifier("x".to_string())),
                 right: Box::new(Expression::NumericLiteral(1)),
+                assignment_strictness: AssignmentStrictness::Sloppy,
             },
             Expression::Conditional {
                 test: Box::new(Expression::BooleanLiteral(true)),
@@ -4923,6 +5074,7 @@ mod tests {
             Statement::ForIn(ForInStatement {
                 binding: BindingPattern::Identifier("k".to_string()),
                 binding_kind: Some(VariableDeclarationKind::Let),
+                assignment_strictness: AssignmentStrictness::Sloppy,
                 object: Expression::Identifier("obj".to_string()),
                 body: Box::new(make_expr_stmt(Expression::NullLiteral)),
                 span: make_span(),
@@ -4930,6 +5082,7 @@ mod tests {
             Statement::ForOf(ForOfStatement {
                 binding: BindingPattern::Identifier("v".to_string()),
                 binding_kind: Some(VariableDeclarationKind::Const),
+                assignment_strictness: AssignmentStrictness::Sloppy,
                 iterable: Expression::Identifier("arr".to_string()),
                 body: Box::new(make_expr_stmt(Expression::NullLiteral)),
                 span: make_span(),
@@ -5260,6 +5413,7 @@ mod tests {
                 operator: AssignmentOperator::AddAssign,
                 left: Box::new(Expression::Identifier("i".to_string())),
                 right: Box::new(Expression::NumericLiteral(1)),
+                assignment_strictness: AssignmentStrictness::Sloppy,
             }),
             body: Box::new(Statement::Block(make_block_stmt(vec![]))),
             span: make_span(),
@@ -5415,6 +5569,7 @@ mod tests {
         let stmt = ForInStatement {
             binding: BindingPattern::Identifier("key".to_string()),
             binding_kind: Some(VariableDeclarationKind::Const),
+            assignment_strictness: AssignmentStrictness::Sloppy,
             object: Expression::Identifier("obj".to_string()),
             body: Box::new(make_expr_stmt(Expression::NullLiteral)),
             span: make_span(),
@@ -5434,6 +5589,7 @@ mod tests {
         let stmt = ForOfStatement {
             binding: BindingPattern::Identifier("val".to_string()),
             binding_kind: Some(VariableDeclarationKind::Let),
+            assignment_strictness: AssignmentStrictness::Sloppy,
             iterable: Expression::Identifier("items".to_string()),
             body: Box::new(make_expr_stmt(Expression::NullLiteral)),
             span: make_span(),

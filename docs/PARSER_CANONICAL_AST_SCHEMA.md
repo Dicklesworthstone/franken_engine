@@ -94,7 +94,8 @@ string representation.
 The historical engine v1 vector remains available for artifact identification;
 `GoldenVersionVector::v2()` records this exact-string checkpoint. The later
 EOF-coordinate migration is recorded by `v3()`, and the exact module-source
-migration makes `v4()` live while preserving both historical vectors. The
+migration is recorded by `v4()`. Assignment strictness provenance makes
+`v6()` live while preserving all historical vectors. The
 pinned v2 `D800` syntax-tree vector is:
 
 `sha256:2d2912b4ee4142810f692d25a6f154e758dccf2aeb9926f5abebab7f5d63773a`
@@ -159,7 +160,8 @@ unchanged. Historical AST JSON with `end_column: 1` therefore remains readable
 and reproduces its historical hash. Engine `GoldenVersionVector::v1()` and
 `v2()` remain available for artifact identification; `v3()` records the
 corrected coordinate checkpoint. The later module-source `v4()` vector and
-`current()` carry those same coordinate semantics. Consumers must never compare
+assignment-strictness `v6()`/`current()` vectors carry those same coordinate
+semantics. Consumers must never compare
 canonical hashes across AST schema versions without an explicit migration.
 
 Source-backed Parse Event IR readers retain a narrow historical path for the
@@ -206,6 +208,34 @@ Runtime execution retains that exact value until the explicit UTF-8 filesystem
 path boundary, where a non-well-formed value is rejected without a lossy
 lookup.
 
+## Effective Assignment-Strictness Migration
+
+`bd-0k19b` advances the compatibility engine AST schema directly from v4 to
+`franken-engine.parser-ast.schema.v6`. Schema identifier v5 is intentionally
+skipped in this lane because it already names the incompatible native
+`franken-core` exact-module-source shape described above. Reusing v5 for a
+different engine shape would make schema-tagged artifacts ambiguous.
+
+Schema v6 adds `assignment_strictness` to `Expression::Assignment`,
+`ForInStatement`, and `ForOfStatement`. Its canonical value is always one of
+`"unknown"`, `"sloppy"`, or `"strict"`. Parser-produced trees always carry
+the effective inherited mode as `"sloppy"` or `"strict"`; this includes module
+code, nested functions, arrow bodies, class methods, update-expression
+desugaring, and bare for-in/for-of assignment heads.
+
+Derived serde defaults a missing field to `"unknown"` so historical JSON can
+still be decoded without falsely claiming sloppy semantics. `"unknown"` is a
+legacy carrier only: lowering must reject a genuinely unresolved assignment
+target with unknown provenance rather than guessing. This is necessary because
+old cooked AST strings cannot distinguish an exact `"use strict"` directive
+from an escaped spelling such as `"use\x20strict"`.
+
+The new field affects runtime semantics and is therefore included in canonical
+maps and hashes. Consumers must bind v6 hashes to the schema tag and regenerate
+assignment-containing fixtures. Historical vectors remain available through
+`GoldenVersionVector::v1()` through `v4()`; `GoldenVersionVector::v6()` and
+`current()` identify the live engine shape.
+
 ## Exact Static-Property IR Checkpoint
 
 `bd-b12xs.6` found no additional AST projection: quoted property names already
@@ -226,14 +256,14 @@ Pinned by tests:
 
 - [`crates/franken-engine/tests/parser_trait_ast.rs`](../crates/franken-engine/tests/parser_trait_ast.rs)
   - contract constants/accessors are stable
-  - live schema-v4 hash vectors (ordinary canonical bytes carried forward):
+  - live schema-v6 hash vectors (ordinary canonical bytes carried forward):
     - `-7` (script) -> `sha256:8fbc2bb1f3f8fbf7c6e7fc08a89dc768a0ac973390555ecae9b215d442e604c7`
     - `import dep from "pkg"` (module) -> `sha256:58af3ebe9640c16302cc30b9ac25be14d592d62ffd33595310a2cacf0a7c11be`
     - `export default true` (module) -> `sha256:3165b53e61ee5a66ab81a15b52e6ff84ebd4de83501dbb6e64629dbefe294b36`
   - the corresponding schema-v2 hashes remain asserted after reconstructing
     the historical root column, including a serde reader round-trip
 - [`crates/franken-engine/tests/ast_integration.rs`](../crates/franken-engine/tests/ast_integration.rs)
-  - engine v4 contract constants/accessors and hash prefix checks
+  - engine v6 contract constants/accessors and hash prefix checks
   - exact `D800` serde, canonical-value, and pinned hash checks
 - [`crates/franken-engine/src/parser_arena.rs`](../crates/franken-engine/src/parser_arena.rs)
   - exact string-literal arena round-trip without UTF-8 projection

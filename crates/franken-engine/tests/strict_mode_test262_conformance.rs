@@ -14,6 +14,7 @@
 #![forbid(unsafe_code)]
 #![allow(clippy::needless_borrows_for_generic_args, clippy::too_many_arguments)]
 
+use frankenengine_engine::HybridRouter;
 use frankenengine_engine::baseline_interpreter::{InterpreterConfig, InterpreterCore};
 use frankenengine_engine::capability::RuntimeCapability;
 use frankenengine_engine::ir_contract::Ir0Module;
@@ -388,9 +389,136 @@ mod tests {
         "ES2020-12.5.4.2-delete-identifier-global-strict",
         "ES2020-14.1.2-duplicate-param-function-strict",
         "ES2020-14.1.2-duplicate-param-global-strict",
-        "ES2020-8.1.1.2.1-undeclared-assignment-function-strict",
-        "ES2020-8.1.1.2.1-undeclared-assignment-global-strict",
     ];
+
+    fn eval_value_bd_0k19b(source: &str) -> String {
+        let mut engine = HybridRouter::default();
+        engine
+            .eval(source)
+            .unwrap_or_else(|error| panic!("bd-0k19b eval failed for {source:?}: {error}"))
+            .value
+            .to_string()
+    }
+
+    #[test]
+    fn unresolved_assignment_observes_parser_authored_strictness_bd_0k19b() {
+        let cases = [
+            (
+                "sloppy script creates a readable global",
+                "missing_bd_0k19b = 41; missing_bd_0k19b + 1;",
+                "42",
+            ),
+            (
+                "sloppy assignment itself supplies the script completion value",
+                "0; completion_global_bd_0k19b = 7;",
+                "7",
+            ),
+            (
+                "sloppy assignment remains readable after supplying completion",
+                "0; readable_completion_bd_0k19b = 7; readable_completion_bd_0k19b;",
+                "7",
+            ),
+            (
+                "sloppy assignment updates its previously created realm global",
+                "updated_global_bd_0k19b = 1; updated_global_bd_0k19b = 2; updated_global_bd_0k19b;",
+                "2",
+            ),
+            (
+                "sloppy function creates a realm global",
+                "function write(){ function_global_bd_0k19b = 7; } write(); function_global_bd_0k19b;",
+                "7",
+            ),
+            (
+                "sloppy generator write survives resumption snapshots",
+                "function* write(){ generator_global_bd_0k19b = 8; } write().next(); generator_global_bd_0k19b;",
+                "8",
+            ),
+            (
+                "suspended generator observes a later realm-global creation",
+                "function* read(){ yield late_generator_global_bd_0k19b; } let iterator = read(); late_generator_global_bd_0k19b = 7; iterator.next().value;",
+                "7",
+            ),
+            (
+                "sloppy generated-function write survives module snapshots",
+                r#"Function("generated_global_bd_0k19b = 9")(); generated_global_bd_0k19b;"#,
+                "9",
+            ),
+            (
+                "strict function updates a preexisting sloppy global",
+                "shared_bd_0k19b = 1; function write(){ 'use strict'; shared_bd_0k19b = 9; } write(); shared_bd_0k19b;",
+                "9",
+            ),
+            (
+                "captured outer lexical is materialized on its first write",
+                "let captured_bd_0k19b = 0; function write(){ captured_bd_0k19b = 1; } write(); captured_bd_0k19b;",
+                "1",
+            ),
+            (
+                "suspended assignment retains its realm binding",
+                "shared_resume_bd_0k19b = 1; function* write(){ shared_resume_bd_0k19b = (yield 0) || 2; } let iterator = write(); iterator.next(); iterator.next(); shared_resume_bd_0k19b;",
+                "2",
+            ),
+            (
+                "escaped faux directive remains sloppy",
+                r#""use\x20strict"; escaped_bd_0k19b = 3; escaped_bd_0k19b;"#,
+                "3",
+            ),
+            (
+                "typeof a missing dynamic name remains non-throwing",
+                "typeof never_created_bd_0k19b;",
+                "undefined",
+            ),
+            (
+                "an ordinary missing-name read throws",
+                r#"let result = ""; try { never_read_bd_0k19b; } catch (error) { result = error.name; } result;"#,
+                "ReferenceError",
+            ),
+            (
+                "sloppy delete of a missing name does not read it",
+                "delete never_deleted_bd_0k19b;",
+                "true",
+            ),
+        ];
+
+        for (label, source, expected) in cases {
+            assert_eq!(eval_value_bd_0k19b(source), expected, "{label}");
+        }
+    }
+
+    #[test]
+    fn strict_missing_assignment_throws_reference_error_at_putvalue_bd_0k19b() {
+        let cases = [
+            (
+                "script directive",
+                r#""use strict"; let side = 0; let result = ""; try { missing_script_bd_0k19b = (side = 1); } catch (error) { result = error.name + ":" + side; } result;"#,
+                "ReferenceError:1",
+            ),
+            (
+                "function directive",
+                r#"function run(){ "use strict"; try { missing_function_bd_0k19b = 1; } catch (error) { return error.name; } } run();"#,
+                "ReferenceError",
+            ),
+            (
+                "inherited script strictness",
+                r#""use strict"; function run(){ try { missing_inherited_bd_0k19b = 1; } catch (error) { return error.name; } } run();"#,
+                "ReferenceError",
+            ),
+            (
+                "simple assignment keeps its pre-rhs unresolvable reference",
+                r#"function make(){ frozen_reference_bd_0k19b = 1; return 2; } function run(){ "use strict"; let kind = ""; try { frozen_reference_bd_0k19b = make(); } catch (error) { kind = error.name; } return kind + ":" + frozen_reference_bd_0k19b; } run();"#,
+                "ReferenceError:1",
+            ),
+            (
+                "pre-rhs status survives generator suspension",
+                r#"let result = ""; function* run(){ "use strict"; try { suspended_reference_bd_0k19b = yield 0; } catch (error) { result = error.name; } } let iterator = run(); iterator.next(); suspended_reference_bd_0k19b = 1; iterator.next(2); result + ":" + suspended_reference_bd_0k19b;"#,
+                "ReferenceError:1",
+            ),
+        ];
+
+        for (label, source, expected) in cases {
+            assert_eq!(eval_value_bd_0k19b(source), expected, "{label}");
+        }
+    }
 
     #[test]
     fn strict_mode_full_matrix_matches_known_gap_set() {

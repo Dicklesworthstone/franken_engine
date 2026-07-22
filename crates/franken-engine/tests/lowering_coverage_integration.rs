@@ -23,13 +23,13 @@
 )]
 
 use frankenengine_engine::ast::{
-    ArrowBody, AssignmentOperator, BinaryOperator, BindingPattern, BlockStatement, BreakStatement,
-    CatchClause, ContinueStatement, DoWhileStatement, ExportDeclaration, ExportKind, Expression,
-    ExpressionStatement, ForStatement, FunctionDeclaration, FunctionParam, IfStatement,
-    ImportClause, ImportDeclaration, ObjectProperty, ObjectPropertyKind, ParseGoal,
-    ReturnStatement, SourceSpan, Statement, SwitchCase, SwitchStatement, SyntaxTree,
-    ThrowStatement, TryCatchStatement, UnaryOperator, VariableDeclaration, VariableDeclarationKind,
-    VariableDeclarator, WhileStatement,
+    ArrowBody, AssignmentOperator, AssignmentStrictness, BinaryOperator, BindingPattern,
+    BlockStatement, BreakStatement, CatchClause, ContinueStatement, DoWhileStatement,
+    ExportDeclaration, ExportKind, Expression, ExpressionStatement, ForStatement,
+    FunctionDeclaration, FunctionParam, IfStatement, ImportClause, ImportDeclaration,
+    ObjectProperty, ObjectPropertyKind, ParseGoal, ReturnStatement, SourceSpan, Statement,
+    SwitchCase, SwitchStatement, SyntaxTree, ThrowStatement, TryCatchStatement, UnaryOperator,
+    VariableDeclaration, VariableDeclarationKind, VariableDeclarator, WhileStatement,
 };
 use frankenengine_engine::ir_contract::{
     BindingKind, Ir0Module, Ir1Op, Ir1PropertyKey, Ir3Instruction, IrLevel, ScopeKind,
@@ -1777,6 +1777,7 @@ fn lowering_logical_compound_identifier_assignment_uses_short_circuit_ops() {
                 operator,
                 left: Box::new(Expression::Identifier("value".to_string())),
                 right: Box::new(Expression::NumericLiteral(1)),
+                assignment_strictness: AssignmentStrictness::Sloppy,
             })],
         );
         let ir1 = lower_ir0_to_ir1(&ir0).unwrap();
@@ -1993,6 +1994,7 @@ fn lowering_computed_member_assignment() {
                 span: None,
             }),
             right: Box::new(Expression::NumericLiteral(7)),
+            assignment_strictness: AssignmentStrictness::Sloppy,
         })],
     );
     let output = run_full(&ir0);
@@ -2048,6 +2050,7 @@ fn lowering_logical_compound_member_assignment_uses_short_circuit_ops() {
                 span: None,
             }),
             right: Box::new(Expression::NumericLiteral(7)),
+            assignment_strictness: AssignmentStrictness::Sloppy,
         }));
 
         let ir1 = lower_ir0_to_ir1(&make_ir0(ParseGoal::Script, body)).unwrap();

@@ -2126,6 +2126,7 @@ fn ir3_destination_register(instr: &Ir3Instruction) -> Option<u32> {
         | Ir3Instruction::LoadFloat { dst, .. }
         | Ir3Instruction::LoadUndefined { dst }
         | Ir3Instruction::LoadNull { dst }
+        | Ir3Instruction::LoadName { dst, .. }
         | Ir3Instruction::Add { dst, .. }
         | Ir3Instruction::Sub { dst, .. }
         | Ir3Instruction::Mul { dst, .. }
@@ -2169,7 +2170,9 @@ fn ir3_destination_register(instr: &Ir3Instruction) -> Option<u32> {
         | Ir3Instruction::TemplateLiteral { dst, .. }
         | Ir3Instruction::Call { dst, .. }
         | Ir3Instruction::HostCall { dst, .. }
-        | Ir3Instruction::EnterCatch { dst } => Some(*dst),
+        | Ir3Instruction::EnterCatch { dst }
+        | Ir3Instruction::PutName { src: dst, .. }
+        | Ir3Instruction::PutNameWithStatus { src: dst, .. } => Some(*dst),
         _ => None,
     }
 }

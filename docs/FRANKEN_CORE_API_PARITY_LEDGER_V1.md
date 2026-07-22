@@ -78,6 +78,13 @@ carries exact `JsString`. The engine mirror still lacks the
 reconcile the versioned wire, lowering, and execution behavior before changing
 that status.
 
+`bd-0k19b` subsequently advances only the engine IR to `0.6.0` for explicit
+`LoadName`/`PutName` plus pre-RHS `ResolveNameStatus`/`PutNameWithStatus`
+operations. Engine `0.5.0` is intentionally skipped because
+that numeric version already identifies the incompatible core wire. The new
+engine operations preserve parser-authored strict/sloppy assignment semantics;
+they do not resolve the existing cross-seam ownership exception.
+
 ## Active Parity Exception: Executable Symbol Keys
 
 `bd-n8eta.4.1` records a wire-additive but Rust-source-breaking versioned

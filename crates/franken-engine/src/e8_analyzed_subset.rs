@@ -122,6 +122,8 @@ const UNPROVEN_ITERATOR: &str = "iterator-protocol label propagation (for..in / 
      within the explicit_flow_ifc_v1 analyzed subset; fail closed";
 const UNPROVEN_MODULE_GRAPH: &str = "module-graph edges pull code the scan did not analyze (dynamic require / import); fail \
      closed";
+const UNPROVEN_DYNAMIC_NAME: &str = "dynamic name resolution is not certified within the explicit_flow_ifc_v1 analyzed \
+     subset; fail closed";
 
 /// Classify one IR1 op kind against the explicit-flow analyzed subset.
 ///
@@ -142,7 +144,11 @@ pub fn classify_op(op: &Ir1Op) -> OpClassification {
     match op {
         Ir1Op::LoadLiteral { .. } => analyzed("load_literal", ANALYZED_VALUE_JOIN),
         Ir1Op::LoadBinding { .. } => analyzed("load_binding", ANALYZED_VALUE_JOIN),
+        Ir1Op::LoadName { .. } => unproven("load_name", UNPROVEN_DYNAMIC_NAME),
+        Ir1Op::ResolveNameStatus { .. } => unproven("resolve_name_status", UNPROVEN_DYNAMIC_NAME),
         Ir1Op::StoreBinding { .. } => analyzed("store_binding", ANALYZED_VALUE_JOIN),
+        Ir1Op::PutName { .. } => unproven("put_name", UNPROVEN_DYNAMIC_NAME),
+        Ir1Op::PutNameWithStatus { .. } => unproven("put_name_with_status", UNPROVEN_DYNAMIC_NAME),
         Ir1Op::InitializeBinding { .. } => analyzed("initialize_binding", ANALYZED_VALUE_JOIN),
         Ir1Op::CreatePerIterationBinding { .. } => {
             analyzed("create_per_iteration_binding", ANALYZED_VALUE_JOIN)

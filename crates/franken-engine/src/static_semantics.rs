@@ -1914,9 +1914,9 @@ impl StaticSemanticsEvent {
 mod tests {
     use super::*;
     use crate::ast::{
-        BindingPattern, ExportDeclaration, ExportKind, ExpressionStatement, ImportClause,
-        ImportDeclaration, ParseGoal, SourceSpan, Statement, SyntaxTree, VariableDeclaration,
-        VariableDeclarationKind, VariableDeclarator,
+        AssignmentStrictness, BindingPattern, ExportDeclaration, ExportKind, ExpressionStatement,
+        ImportClause, ImportDeclaration, ParseGoal, SourceSpan, Statement, SyntaxTree,
+        VariableDeclaration, VariableDeclarationKind, VariableDeclarator,
     };
 
     fn span(line: u64) -> SourceSpan {
@@ -2552,6 +2552,7 @@ mod tests {
             operator: crate::ast::AssignmentOperator::Assign,
             left: Box::new(Expression::Identifier(name.to_string())),
             right: Box::new(value),
+            assignment_strictness: AssignmentStrictness::Sloppy,
         }
     }
 
@@ -3319,6 +3320,7 @@ mod tests {
                         operator: crate::ast::AssignmentOperator::Assign,
                         left: Box::new(Expression::Identifier("x".to_string())),
                         right: Box::new(Expression::NumericLiteral(2)),
+                        assignment_strictness: AssignmentStrictness::Sloppy,
                     },
                     2,
                 ),
@@ -3350,6 +3352,7 @@ mod tests {
                         operator: crate::ast::AssignmentOperator::Assign,
                         left: Box::new(Expression::Identifier("x".to_string())),
                         right: Box::new(Expression::NumericLiteral(2)),
+                        assignment_strictness: AssignmentStrictness::Sloppy,
                     },
                     2,
                 ),
@@ -3380,6 +3383,7 @@ mod tests {
                         operator: crate::ast::AssignmentOperator::AddAssign,
                         left: Box::new(Expression::Identifier("x".to_string())),
                         right: Box::new(Expression::NumericLiteral(5)),
+                        assignment_strictness: AssignmentStrictness::Sloppy,
                     },
                     2,
                 ),
@@ -4282,6 +4286,7 @@ mod tests {
                                     operator: crate::ast::AssignmentOperator::Assign,
                                     left: Box::new(Expression::Identifier("x".to_string())),
                                     right: Box::new(Expression::NumericLiteral(2)),
+                                    assignment_strictness: AssignmentStrictness::Sloppy,
                                 },
                                 3,
                             ),
@@ -4385,6 +4390,7 @@ mod tests {
             vec![Statement::ForIn(ForInStatement {
                 binding: BindingPattern::Identifier("k".to_string()),
                 binding_kind: Some(VariableDeclarationKind::Let),
+                assignment_strictness: AssignmentStrictness::Sloppy,
                 object: Expression::Identifier("obj".to_string()),
                 body: Box::new(Statement::Break(BreakStatement {
                     label: None,
@@ -4412,6 +4418,7 @@ mod tests {
             vec![Statement::ForOf(ForOfStatement {
                 binding: BindingPattern::Identifier("v".to_string()),
                 binding_kind: Some(VariableDeclarationKind::Const),
+                assignment_strictness: AssignmentStrictness::Sloppy,
                 iterable: Expression::Identifier("arr".to_string()),
                 body: Box::new(Statement::Continue(ContinueStatement {
                     label: None,
@@ -4437,6 +4444,7 @@ mod tests {
             vec![Statement::ForIn(ForInStatement {
                 binding: BindingPattern::Identifier("k".to_string()),
                 binding_kind: None,
+                assignment_strictness: AssignmentStrictness::Sloppy,
                 object: Expression::Identifier("obj".to_string()),
                 body: Box::new(expr_stmt(Expression::Identifier("k".to_string()), 2)),
                 span: span(1),
@@ -4943,6 +4951,7 @@ mod tests {
             operator: crate::ast::AssignmentOperator::Assign,
             left: Box::new(Expression::Identifier("a".to_string())),
             right: Box::new(Expression::Identifier("b".to_string())),
+            assignment_strictness: AssignmentStrictness::Sloppy,
         };
         let mut refs = Vec::new();
         collect_identifier_refs(&expr, &mut refs);
@@ -5092,6 +5101,7 @@ mod tests {
                     right: Box::new(Expression::Await(Box::new(Expression::Identifier(
                         "p".to_string(),
                     )))),
+                    assignment_strictness: AssignmentStrictness::Sloppy,
                 },
                 1,
             )],
@@ -5497,6 +5507,7 @@ mod tests {
                                     operator: crate::ast::AssignmentOperator::Assign,
                                     left: Box::new(Expression::Identifier("x".to_string())),
                                     right: Box::new(Expression::NumericLiteral(2)),
+                                    assignment_strictness: AssignmentStrictness::Sloppy,
                                 },
                                 3,
                             ),
@@ -5641,6 +5652,7 @@ mod tests {
             vec![Statement::ForIn(ForInStatement {
                 binding: BindingPattern::Identifier("key".to_string()),
                 binding_kind: Some(VariableDeclarationKind::Let),
+                assignment_strictness: AssignmentStrictness::Sloppy,
                 object: Expression::Identifier("obj".to_string()),
                 body: Box::new(expr_stmt(Expression::Identifier("key".to_string()), 2)),
                 span: span(1),
@@ -5667,6 +5679,7 @@ mod tests {
             vec![Statement::ForOf(ForOfStatement {
                 binding: BindingPattern::Identifier("item".to_string()),
                 binding_kind: Some(VariableDeclarationKind::Const),
+                assignment_strictness: AssignmentStrictness::Sloppy,
                 iterable: Expression::Identifier("arr".to_string()),
                 body: Box::new(expr_stmt(Expression::Identifier("item".to_string()), 2)),
                 span: span(1),
@@ -5688,6 +5701,7 @@ mod tests {
             vec![Statement::ForIn(ForInStatement {
                 binding: BindingPattern::Identifier("eval".to_string()),
                 binding_kind: Some(VariableDeclarationKind::Let),
+                assignment_strictness: AssignmentStrictness::Sloppy,
                 object: Expression::Identifier("obj".to_string()),
                 body: Box::new(expr_stmt(Expression::NumericLiteral(1), 2)),
                 span: span(1),
@@ -5714,6 +5728,7 @@ mod tests {
                     Some(BindingPattern::Identifier("x".to_string())),
                 ]),
                 binding_kind: Some(VariableDeclarationKind::Let),
+                assignment_strictness: AssignmentStrictness::Sloppy,
                 iterable: Expression::Identifier("pairs".to_string()),
                 body: Box::new(expr_stmt(Expression::NumericLiteral(1), 2)),
                 span: span(1),
@@ -5741,6 +5756,7 @@ mod tests {
                         Some(BindingPattern::Identifier("value".to_string())),
                     ]),
                     binding_kind,
+                    assignment_strictness: AssignmentStrictness::Sloppy,
                     iterable: Expression::Identifier("pairs".to_string()),
                     body: Box::new(expr_stmt(Expression::Identifier("value".to_string()), 2)),
                     span: span(1),
@@ -5780,6 +5796,7 @@ mod tests {
                         Some(BindingPattern::Identifier("key".to_string())),
                     ]),
                     binding_kind,
+                    assignment_strictness: AssignmentStrictness::Sloppy,
                     object: Expression::Identifier("object".to_string()),
                     body: Box::new(expr_stmt(Expression::Identifier("key".to_string()), 2)),
                     span: span(1),
@@ -5940,6 +5957,7 @@ mod tests {
                         body: vec![Statement::ForIn(ForInStatement {
                             binding: BindingPattern::Identifier("k".to_string()),
                             binding_kind: Some(VariableDeclarationKind::Const),
+                            assignment_strictness: AssignmentStrictness::Sloppy,
                             object: Expression::Identifier("obj".to_string()),
                             body: Box::new(Statement::Continue(ContinueStatement {
                                 label: None,
@@ -6203,6 +6221,7 @@ mod tests {
             vec![Statement::ForOf(ForOfStatement {
                 binding: BindingPattern::Identifier("item".to_string()),
                 binding_kind: Some(VariableDeclarationKind::Const),
+                assignment_strictness: AssignmentStrictness::Sloppy,
                 iterable: Expression::Identifier("items".to_string()),
                 body: Box::new(Statement::Block(BlockStatement {
                     body: vec![],
@@ -6228,6 +6247,7 @@ mod tests {
             vec![Statement::ForIn(ForInStatement {
                 binding: BindingPattern::Identifier("package".to_string()),
                 binding_kind: Some(VariableDeclarationKind::Let),
+                assignment_strictness: AssignmentStrictness::Sloppy,
                 object: Expression::Identifier("obj".to_string()),
                 body: Box::new(Statement::Block(BlockStatement {
                     body: vec![],
@@ -6267,6 +6287,7 @@ mod tests {
                     },
                 ]),
                 binding_kind: Some(VariableDeclarationKind::Const),
+                assignment_strictness: AssignmentStrictness::Sloppy,
                 iterable: Expression::Identifier("arr".to_string()),
                 body: Box::new(Statement::Block(BlockStatement {
                     body: vec![],

@@ -809,6 +809,7 @@ fn enrichment_for_in_with_const_binding() {
     let stmt = ForInStatement {
         binding: BindingPattern::Identifier("key".to_string()),
         binding_kind: Some(VariableDeclarationKind::Const),
+        assignment_strictness: AssignmentStrictness::Sloppy,
         object: id("obj"),
         body: Box::new(expr_stmt(Expression::Call {
             callee: Box::new(Expression::Member {
@@ -835,6 +836,7 @@ fn enrichment_for_of_without_binding_kind() {
             Some(BindingPattern::Identifier("v".to_string())),
         ]),
         binding_kind: None,
+        assignment_strictness: AssignmentStrictness::Sloppy,
         iterable: Expression::Call {
             callee: Box::new(Expression::Member {
                 object: Box::new(id("map")),
@@ -883,6 +885,7 @@ fn enrichment_do_while_serde() {
             operator: AssignmentOperator::AddAssign,
             left: Box::new(id("sum")),
             right: Box::new(num(1)),
+            assignment_strictness: AssignmentStrictness::Sloppy,
         })),
         condition: Expression::Binary {
             operator: BinaryOperator::LessThan,
@@ -1005,7 +1008,7 @@ fn enrichment_constants_are_stable() {
     );
     assert_eq!(
         CANONICAL_AST_SCHEMA_VERSION,
-        "franken-engine.parser-ast.schema.v4"
+        "franken-engine.parser-ast.schema.v6"
     );
     assert_eq!(CANONICAL_AST_HASH_ALGORITHM, "sha256");
     assert_eq!(CANONICAL_AST_HASH_PREFIX, "sha256:");
@@ -1215,6 +1218,7 @@ fn enrichment_statement_span_returns_correct_for_all_18_variants() {
         Statement::ForIn(ForInStatement {
             binding: BindingPattern::Identifier("k".to_string()),
             binding_kind: None,
+            assignment_strictness: AssignmentStrictness::Sloppy,
             object: Expression::NullLiteral,
             body: Box::new(expr_stmt(Expression::NullLiteral)),
             span: target,
@@ -1222,6 +1226,7 @@ fn enrichment_statement_span_returns_correct_for_all_18_variants() {
         Statement::ForOf(ForOfStatement {
             binding: BindingPattern::Identifier("v".to_string()),
             binding_kind: None,
+            assignment_strictness: AssignmentStrictness::Sloppy,
             iterable: Expression::NullLiteral,
             body: Box::new(expr_stmt(Expression::NullLiteral)),
             span: target,
@@ -1322,6 +1327,7 @@ fn enrichment_all_18_statement_canonical_kinds_unique() {
         Statement::ForIn(ForInStatement {
             binding: BindingPattern::Identifier("k".to_string()),
             binding_kind: None,
+            assignment_strictness: AssignmentStrictness::Sloppy,
             object: Expression::NullLiteral,
             body: Box::new(expr_stmt(Expression::NullLiteral)),
             span: s0(),
@@ -1329,6 +1335,7 @@ fn enrichment_all_18_statement_canonical_kinds_unique() {
         Statement::ForOf(ForOfStatement {
             binding: BindingPattern::Identifier("v".to_string()),
             binding_kind: None,
+            assignment_strictness: AssignmentStrictness::Sloppy,
             iterable: Expression::NullLiteral,
             body: Box::new(expr_stmt(Expression::NullLiteral)),
             span: s0(),
@@ -1602,6 +1609,7 @@ fn enrichment_all_expression_canonical_kinds_unique() {
             operator: AssignmentOperator::Assign,
             left: Box::new(id("x")),
             right: Box::new(num(1)),
+            assignment_strictness: AssignmentStrictness::Sloppy,
         },
         Expression::Conditional {
             test: Box::new(Expression::BooleanLiteral(true)),
@@ -1720,6 +1728,7 @@ fn enrichment_syntax_tree_with_all_statement_types_round_trips() {
             Statement::ForIn(ForInStatement {
                 binding: BindingPattern::Identifier("k".to_string()),
                 binding_kind: Some(VariableDeclarationKind::Const),
+                assignment_strictness: AssignmentStrictness::Sloppy,
                 object: id("obj"),
                 body: Box::new(expr_stmt(id("k"))),
                 span: s0(),
@@ -1727,6 +1736,7 @@ fn enrichment_syntax_tree_with_all_statement_types_round_trips() {
             Statement::ForOf(ForOfStatement {
                 binding: BindingPattern::Identifier("v".to_string()),
                 binding_kind: Some(VariableDeclarationKind::Let),
+                assignment_strictness: AssignmentStrictness::Sloppy,
                 iterable: id("arr"),
                 body: Box::new(expr_stmt(id("v"))),
                 span: s0(),

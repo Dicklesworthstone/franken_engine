@@ -1,6 +1,7 @@
 use frankenengine_engine::ast::{
-    AssignmentOperator, BinaryOperator, BlockStatement, Expression, FunctionDeclaration, ParseGoal,
-    ReturnStatement, SourceSpan, Statement, SyntaxTree, UnaryOperator,
+    AssignmentOperator, AssignmentStrictness, BinaryOperator, BlockStatement, Expression,
+    FunctionDeclaration, ParseGoal, ReturnStatement, SourceSpan, Statement, SyntaxTree,
+    UnaryOperator,
 };
 use frankenengine_engine::hash_tiers::ContentHash;
 use frankenengine_engine::ir_contract::{Ir0Module, Ir3Instruction, Ir3Module};
@@ -114,6 +115,7 @@ fn test_nullish_coalescing_assignment_in_function_body() {
         operator: AssignmentOperator::NullishCoalescingAssign,
         left: Box::new(Expression::Identifier("a".to_string())),
         right: Box::new(Expression::Identifier("b".to_string())),
+        assignment_strictness: AssignmentStrictness::Sloppy,
     };
 
     let func_decl = create_function_with_expression(nullish_assign);

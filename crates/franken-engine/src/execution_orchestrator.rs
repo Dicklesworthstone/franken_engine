@@ -2283,7 +2283,11 @@ impl ExecutionOrchestrator {
             crate::ir_contract::Ir3Instruction::PopScope => "pop_scope",
             crate::ir_contract::Ir3Instruction::DeclareBinding { .. } => "declare_binding",
             crate::ir_contract::Ir3Instruction::LoadScoped { .. } => "load_scoped",
+            crate::ir_contract::Ir3Instruction::LoadName { .. } => "load_name",
+            crate::ir_contract::Ir3Instruction::ResolveNameStatus { .. } => "resolve_name_status",
             crate::ir_contract::Ir3Instruction::StoreScoped { .. } => "store_scoped",
+            crate::ir_contract::Ir3Instruction::PutName { .. } => "put_name",
+            crate::ir_contract::Ir3Instruction::PutNameWithStatus { .. } => "put_name_with_status",
             crate::ir_contract::Ir3Instruction::InitBinding { .. } => "init_binding",
             crate::ir_contract::Ir3Instruction::CreatePerIterationBinding { .. } => {
                 "create_per_iteration_binding"

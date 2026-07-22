@@ -21,9 +21,9 @@
 )]
 
 use frankenengine_engine::ast::{
-    BindingPattern, Expression, ExpressionStatement, ForInStatement, ForOfStatement, ParseGoal,
-    SourceSpan, Statement, SyntaxTree, VariableDeclaration, VariableDeclarationKind,
-    VariableDeclarator,
+    AssignmentStrictness, BindingPattern, Expression, ExpressionStatement, ForInStatement,
+    ForOfStatement, ParseGoal, SourceSpan, Statement, SyntaxTree, VariableDeclaration,
+    VariableDeclarationKind, VariableDeclarator,
 };
 use frankenengine_engine::engine_object_id::{self, ObjectDomain, SchemaId};
 use frankenengine_engine::hash_tiers::ContentHash;
@@ -57,6 +57,7 @@ fn for_in_stmt(
     Statement::ForIn(ForInStatement {
         binding: BindingPattern::Identifier(binding.into()),
         binding_kind: kind,
+        assignment_strictness: AssignmentStrictness::Sloppy,
         object: Expression::Identifier(object.into()),
         body: Box::new(body),
         span: span(),
@@ -72,6 +73,7 @@ fn for_of_stmt(
     Statement::ForOf(ForOfStatement {
         binding: BindingPattern::Identifier(binding.into()),
         binding_kind: kind,
+        assignment_strictness: AssignmentStrictness::Sloppy,
         iterable: Expression::Identifier(iterable.into()),
         body: Box::new(body),
         span: span(),

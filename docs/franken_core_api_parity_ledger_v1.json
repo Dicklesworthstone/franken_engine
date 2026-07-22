@@ -439,11 +439,12 @@
       "engine_export_present": true,
       "file_relation": "different",
       "owner_rationale": "IR contract is central to parser/lowering/runtime compatibility and needs explicit parity.",
-      "test_expectation": "Core IR is 0.5.0 and engine IR is 0.4.0 after bd-b12xs.6 widened Ir1PropertyKey::Static to JsString. Historical well-formed static-key wire remains unchanged and exact-only keys use $wtf16. The engine still lacks core's additive CopyDataProperties variants, so ownership remains unsettled.",
+      "test_expectation": "Core IR is 0.5.0 and engine IR is 0.6.0. Engine 0.5.0 is deliberately skipped because it identifies the incompatible core wire. bd-b12xs.6 widened Ir1PropertyKey::Static to JsString; bd-0k19b adds engine-only LoadName, PutName, ResolveNameStatus, and PutNameWithStatus operations for unresolved identifier references. Historical well-formed static-key wire remains unchanged and exact-only keys use $wtf16. Each seam still has additive operations absent from the other, so ownership remains unsettled.",
       "known_beads": [
         "bd-f1ixz",
         "bd-lfq44",
-        "bd-b12xs.6"
+        "bd-b12xs.6",
+        "bd-0k19b"
       ]
     },
     {

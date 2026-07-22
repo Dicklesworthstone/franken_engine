@@ -750,6 +750,108 @@ mod tests {
     }
 
     #[test]
+    fn bare_loop_targets_observe_strictness_and_empty_iteration_bd_0k19b() {
+        let cases = [
+            (
+                "strict empty for-of performs no put",
+                r#""use strict"; for (missing_empty_of_bd_0k19b of []) {} typeof missing_empty_of_bd_0k19b;"#,
+                "undefined",
+            ),
+            (
+                "strict empty for-in performs no put",
+                r#""use strict"; for (missing_empty_in_bd_0k19b in {}) {} typeof missing_empty_in_bd_0k19b;"#,
+                "undefined",
+            ),
+            (
+                "sloppy destructuring creates globals left to right",
+                "for ([left_global_bd_0k19b, right_global_bd_0k19b] of [[2, 3]]) {} left_global_bd_0k19b * 10 + right_global_bd_0k19b;",
+                "23",
+            ),
+            (
+                "sloppy for-in destructuring creates an unresolved global",
+                "for ({ length: key_length_bd_0k19b } in { xy: 1 }) {} key_length_bd_0k19b;",
+                "2",
+            ),
+            (
+                "strict destructuring keeps prior resolved writes",
+                r#""use strict"; let existing_bd_0k19b = 0; let caught = false; try { for ([existing_bd_0k19b, missing_destructure_bd_0k19b] of [[4, 5]]) {} } catch (error) { caught = true; } existing_bd_0k19b + ":" + caught;"#,
+                "4:true",
+            ),
+            (
+                "destructuring freezes its target before a default initializer",
+                r#""use strict"; let caught = false; let make = Function("default_created_bd_0k19b = 1; return 2;"); try { for ([default_created_bd_0k19b = make()] of [[undefined]]) {} } catch (error) { caught = true; } caught + ":" + default_created_bd_0k19b;"#,
+                "true:1",
+            ),
+            (
+                "empty destructuring runs neither default nor put",
+                r#""use strict"; let side = 0; for ([missing_default_bd_0k19b = (side = 1)] of []) {} side + ":" + typeof missing_default_bd_0k19b;"#,
+                "0:undefined",
+            ),
+        ];
+
+        for (label, source, expected) in cases {
+            assert_eq!(eval_value_bd_5p1dp(source), expected, "{label}");
+        }
+
+        for (label, source, missing_name) in [
+            (
+                "strict for-of identifier",
+                r#""use strict"; for (missing_for_of_bd_0k19b of [7]) {}"#,
+                "missing_for_of_bd_0k19b",
+            ),
+            (
+                "strict for-in identifier",
+                r#""use strict"; for (missing_for_in_bd_0k19b in { key: 1 }) {}"#,
+                "missing_for_in_bd_0k19b",
+            ),
+            (
+                "strict destructuring identifier",
+                r#""use strict"; for ([missing_destructure_error_bd_0k19b] of [[5]]) {}"#,
+                "missing_destructure_error_bd_0k19b",
+            ),
+        ] {
+            let mut engine = HybridRouter::default();
+            let error = engine.eval(source).unwrap_err();
+            assert_eq!(error.code, EvalErrorCode::RuntimeFault, "{label}: {error}");
+            assert!(
+                error
+                    .message
+                    .contains(&format!("{missing_name} is not defined")),
+                "{label} must report the unresolved loop-head target: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn strict_for_of_head_reference_error_closes_iterator_once_bd_0k19b() {
+        assert_eq!(
+            eval_value_bd_5p1dp(
+                r#"
+                    "use strict";
+                    let iterator = {
+                        closed: 0,
+                        next() { return { value: 7, done: false }; },
+                        return() {
+                            this.closed++;
+                            return { done: true };
+                        }
+                    };
+                    let iterable = { [Symbol.iterator]() { return iterator; } };
+                    let caught = false;
+                    try {
+                        for (missing_close_bd_0k19b of iterable) {}
+                    } catch (error) {
+                        caught = true;
+                    }
+                    caught + ":" + iterator.closed;
+                "#,
+            ),
+            "true:1",
+            "a strict unresolved loop-head put must close before propagating"
+        );
+    }
+
+    #[test]
     fn abrupt_for_of_head_assignment_closes_iterator_bd_cu3sz() {
         let cases = [
             (

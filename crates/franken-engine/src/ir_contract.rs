@@ -31,14 +31,17 @@ pub struct IrSchemaVersion {
 }
 
 impl IrSchemaVersion {
-    /// `0.4.0` widens IR1 static property keys to exact UTF-16 [`JsString`].
-    /// `0.3.0` widened IR1 module specifiers, after `0.2.0` widened JavaScript
-    /// literals and the IR3 constant pool. Historical well-formed strings
-    /// retain their plain-string JSON wire shape; lone-surrogate values use
-    /// `$wtf16`.
+    /// `0.6.0` adds explicit unresolved-name load/store operations to IR1 and
+    /// IR3. Engine minor `0.5.0` is intentionally skipped because that numeric
+    /// version already identifies the incompatible native `franken-core` IR
+    /// wire. `0.4.0` widened IR1 static property keys to exact UTF-16
+    /// [`JsString`], while `0.3.0` widened IR1 module specifiers after `0.2.0`
+    /// widened JavaScript literals and the IR3 constant pool. Historical
+    /// well-formed strings retain their plain-string JSON wire shape;
+    /// lone-surrogate values use `$wtf16`.
     pub const CURRENT: Self = Self {
         major: 0,
-        minor: 4,
+        minor: 6,
         patch: 0,
     };
 
@@ -402,8 +405,27 @@ pub enum Ir1Op {
     LoadLiteral { value: Ir1Literal },
     /// Reference a resolved binding.
     LoadBinding { binding_id: BindingId },
+    /// Resolve a name dynamically through the runtime scope chain.
+    ///
+    /// `allow_missing` is reserved for the non-throwing `typeof identifier`
+    /// path. Every other unresolved name load raises `ReferenceError`.
+    LoadName { name: String, allow_missing: bool },
+    /// Record whether a dynamic identifier target is resolvable before its
+    /// right-hand side is evaluated.
+    ResolveNameStatus { name: String, status_id: u32 },
     /// Store to a resolved binding.
     StoreBinding { binding_id: BindingId },
+    /// Put a value through a dynamically resolved name reference.
+    ///
+    /// Missing names raise `ReferenceError` in strict code and create a
+    /// mutable realm-global binding in sloppy code.
+    PutName { name: String, strict: bool },
+    /// Put using pre-RHS dynamic-name resolution status.
+    PutNameWithStatus {
+        name: String,
+        status_id: u32,
+        strict: bool,
+    },
     /// Initialize a resolved lexical binding, clearing its temporal dead zone.
     InitializeBinding { binding_id: BindingId },
     /// Create the lexical cell for the next loop iteration.
@@ -660,9 +682,37 @@ impl Ir1Op {
                 ("op", CanonicalValue::str("load_binding")),
                 ("binding_id", CanonicalValue::U64(u64::from(*binding_id))),
             ]),
+            Self::LoadName {
+                name,
+                allow_missing,
+            } => CanonicalValue::map_from_entries([
+                ("op", CanonicalValue::str("load_name")),
+                ("name", CanonicalValue::str(name.clone())),
+                ("allow_missing", CanonicalValue::Bool(*allow_missing)),
+            ]),
+            Self::ResolveNameStatus { name, status_id } => CanonicalValue::map_from_entries([
+                ("op", CanonicalValue::str("resolve_name_status")),
+                ("name", CanonicalValue::str(name.clone())),
+                ("status_id", CanonicalValue::U64(u64::from(*status_id))),
+            ]),
             Self::StoreBinding { binding_id } => CanonicalValue::map_from_entries([
                 ("op", CanonicalValue::str("store_binding")),
                 ("binding_id", CanonicalValue::U64(u64::from(*binding_id))),
+            ]),
+            Self::PutName { name, strict } => CanonicalValue::map_from_entries([
+                ("op", CanonicalValue::str("put_name")),
+                ("name", CanonicalValue::str(name.clone())),
+                ("strict", CanonicalValue::Bool(*strict)),
+            ]),
+            Self::PutNameWithStatus {
+                name,
+                status_id,
+                strict,
+            } => CanonicalValue::map_from_entries([
+                ("op", CanonicalValue::str("put_name_with_status")),
+                ("name", CanonicalValue::str(name.clone())),
+                ("status_id", CanonicalValue::U64(u64::from(*status_id))),
+                ("strict", CanonicalValue::Bool(*strict)),
             ]),
             Self::InitializeBinding { binding_id } => CanonicalValue::map_from_entries([
                 ("op", CanonicalValue::str("initialize_binding")),
@@ -1545,8 +1595,29 @@ pub enum Ir3Instruction {
     DeclareBinding { name_pool_index: u32, kind: u8 },
     /// Load a variable from the scope chain by name (walking outward).
     LoadScoped { dst: Reg, name_pool_index: u32 },
+    /// Resolve a name dynamically, optionally returning undefined when absent.
+    LoadName {
+        dst: Reg,
+        name_pool_index: u32,
+        allow_missing: bool,
+    },
+    /// Record an opaque pre-RHS dynamic-name Reference token in a normal value register.
+    ResolveNameStatus { dst: Reg, name_pool_index: u32 },
     /// Store a value into a variable in the scope chain by name.
     StoreScoped { src: Reg, name_pool_index: u32 },
+    /// Put a value through a dynamically resolved name reference.
+    PutName {
+        src: Reg,
+        name_pool_index: u32,
+        strict: bool,
+    },
+    /// Put using the exact pre-RHS Reference token in `status`.
+    PutNameWithStatus {
+        src: Reg,
+        status: Reg,
+        name_pool_index: u32,
+        strict: bool,
+    },
     /// Initialize a let/const binding (move it out of TDZ).
     InitBinding { name_pool_index: u32, src: Reg },
     /// Replace one resolved lexical binding with a fresh per-iteration cell.
@@ -2078,6 +2149,30 @@ impl Ir3Instruction {
                     CanonicalValue::U64(u64::from(*name_pool_index)),
                 ),
             ]),
+            Self::LoadName {
+                dst,
+                name_pool_index,
+                allow_missing,
+            } => CanonicalValue::map_from_entries([
+                ("op", CanonicalValue::str("load_name")),
+                ("dst", CanonicalValue::U64(u64::from(*dst))),
+                (
+                    "name_pool_index",
+                    CanonicalValue::U64(u64::from(*name_pool_index)),
+                ),
+                ("allow_missing", CanonicalValue::Bool(*allow_missing)),
+            ]),
+            Self::ResolveNameStatus {
+                dst,
+                name_pool_index,
+            } => CanonicalValue::map_from_entries([
+                ("op", CanonicalValue::str("resolve_name_status")),
+                ("dst", CanonicalValue::U64(u64::from(*dst))),
+                (
+                    "name_pool_index",
+                    CanonicalValue::U64(u64::from(*name_pool_index)),
+                ),
+            ]),
             Self::StoreScoped {
                 src,
                 name_pool_index,
@@ -2088,6 +2183,34 @@ impl Ir3Instruction {
                     "name_pool_index",
                     CanonicalValue::U64(u64::from(*name_pool_index)),
                 ),
+            ]),
+            Self::PutName {
+                src,
+                name_pool_index,
+                strict,
+            } => CanonicalValue::map_from_entries([
+                ("op", CanonicalValue::str("put_name")),
+                ("src", CanonicalValue::U64(u64::from(*src))),
+                (
+                    "name_pool_index",
+                    CanonicalValue::U64(u64::from(*name_pool_index)),
+                ),
+                ("strict", CanonicalValue::Bool(*strict)),
+            ]),
+            Self::PutNameWithStatus {
+                src,
+                status,
+                name_pool_index,
+                strict,
+            } => CanonicalValue::map_from_entries([
+                ("op", CanonicalValue::str("put_name_with_status")),
+                ("src", CanonicalValue::U64(u64::from(*src))),
+                ("status", CanonicalValue::U64(u64::from(*status))),
+                (
+                    "name_pool_index",
+                    CanonicalValue::U64(u64::from(*name_pool_index)),
+                ),
+                ("strict", CanonicalValue::Bool(*strict)),
             ]),
             Self::InitBinding {
                 name_pool_index,
@@ -2779,7 +2902,8 @@ pub fn verify_ir4_linkage(witness: &Ir4Module, ir3_hash: &ContentHash) -> Result
 ///
 /// This implements semantic versioning compatibility rules:
 /// - Major version must match exactly (breaking changes)
-/// - Minor version can be forward-compatible (current >= header)
+/// - Minor version can be forward-compatible (current >= header), except for
+///   explicitly skipped engine minors that identify an incompatible peer wire
 /// - Patch version is ignored for compatibility
 pub fn verify_schema_version(header: &IrHeader) -> Result<(), IrError> {
     let current = IrSchemaVersion::CURRENT;
@@ -2791,6 +2915,21 @@ pub fn verify_schema_version(header: &IrHeader) -> Result<(), IrError> {
             IrErrorCode::SchemaVersionMismatch,
             format!(
                 "incompatible major version: current {}, provided {}",
+                current, provided
+            ),
+            header.level,
+        ));
+    }
+
+    // Engine 0.5.0 never existed: that numeric version belongs to the
+    // incompatible native franken-core IR shape. Accepting it here would let a
+    // peer artifact pass the version gate whenever it happened to use only the
+    // overlapping enum variants.
+    if provided.major == 0 && provided.minor == 5 {
+        return Err(IrError::new(
+            IrErrorCode::SchemaVersionMismatch,
+            format!(
+                "unsupported skipped engine minor version: current {}, provided {}",
                 current, provided
             ),
             header.level,
@@ -3030,7 +3169,7 @@ mod tests {
 
     #[test]
     fn schema_version_display() {
-        assert_eq!(IrSchemaVersion::CURRENT.to_string(), "0.4.0");
+        assert_eq!(IrSchemaVersion::CURRENT.to_string(), "0.6.0");
     }
 
     #[test]
@@ -3238,7 +3377,24 @@ mod tests {
                 value: Ir1Literal::Undefined,
             },
             Ir1Op::LoadBinding { binding_id: 0 },
+            Ir1Op::LoadName {
+                name: "dynamic_read".to_string(),
+                allow_missing: false,
+            },
+            Ir1Op::ResolveNameStatus {
+                name: "dynamic_target".to_string(),
+                status_id: 7,
+            },
             Ir1Op::StoreBinding { binding_id: 1 },
+            Ir1Op::PutName {
+                name: "dynamic_write".to_string(),
+                strict: true,
+            },
+            Ir1Op::PutNameWithStatus {
+                name: "dynamic_target".to_string(),
+                status_id: 7,
+                strict: true,
+            },
             Ir1Op::InitializeBinding { binding_id: 1 },
             Ir1Op::CreatePerIterationBinding {
                 binding_id: 1,
@@ -3416,6 +3572,26 @@ mod tests {
             },
             Ir3Instruction::LoadNull { dst: 0 },
             Ir3Instruction::LoadUndefined { dst: 0 },
+            Ir3Instruction::LoadName {
+                dst: 0,
+                name_pool_index: 0,
+                allow_missing: false,
+            },
+            Ir3Instruction::ResolveNameStatus {
+                dst: 1,
+                name_pool_index: 0,
+            },
+            Ir3Instruction::PutName {
+                src: 0,
+                name_pool_index: 0,
+                strict: true,
+            },
+            Ir3Instruction::PutNameWithStatus {
+                src: 0,
+                status: 1,
+                name_pool_index: 0,
+                strict: true,
+            },
             Ir3Instruction::Add {
                 dst: 0,
                 lhs: 1,
@@ -3793,7 +3969,7 @@ mod tests {
     fn ir_error_display() {
         let err = IrError::new(
             IrErrorCode::SchemaVersionMismatch,
-            "expected 0.4.0, got 0.5.0",
+            "expected 0.6.0, got 0.7.0",
             IrLevel::Ir1,
         );
         let display = err.to_string();
@@ -5054,7 +5230,7 @@ mod tests {
     fn schema_version_current_value() {
         let v = IrSchemaVersion::CURRENT;
         assert_eq!(v.major, 0);
-        assert_eq!(v.minor, 4);
+        assert_eq!(v.minor, 6);
         assert_eq!(v.patch, 0);
     }
 
@@ -5893,7 +6069,7 @@ mod tests {
 
     #[test]
     fn verify_schema_version_accepts_historical_minor_versions_bd_lfq44() {
-        for minor in [1, 2, 3] {
+        for minor in [1, 2, 3, 4] {
             let header = IrHeader {
                 schema_version: IrSchemaVersion {
                     major: IrSchemaVersion::CURRENT.major,
@@ -5907,9 +6083,29 @@ mod tests {
 
             assert!(
                 verify_schema_version(&header).is_ok(),
-                "engine 0.4 readers retain compatibility with 0.{minor} artifacts"
+                "engine 0.6 readers retain compatibility with 0.{minor} artifacts"
             );
         }
+    }
+
+    #[test]
+    fn verify_schema_version_rejects_skipped_engine_minor_050_bd_0k19b() {
+        let header = IrHeader {
+            schema_version: IrSchemaVersion {
+                major: 0,
+                minor: 5,
+                patch: 0,
+            },
+            level: IrLevel::Ir1,
+            source_hash: None,
+            source_label: "peer-core-wire".to_string(),
+        };
+
+        let error = verify_schema_version(&header)
+            .expect_err("engine readers must reject the skipped core-owned 0.5 wire");
+        assert_eq!(error.code, IrErrorCode::SchemaVersionMismatch);
+        assert!(error.message.contains("skipped engine minor"));
+        assert!(error.message.contains("0.5.0"));
     }
 
     #[test]
@@ -5975,7 +6171,7 @@ mod tests {
 
         // Verify error message contains specific version numbers
         assert!(err.message.contains("99.88.77"));
-        assert!(err.message.contains("0.4.0")); // current version
+        assert!(err.message.contains("0.6.0")); // current version
 
         // Verify error can be displayed and contains IR level
         let display = err.to_string();

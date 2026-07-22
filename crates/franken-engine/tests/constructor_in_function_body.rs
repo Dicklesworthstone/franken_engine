@@ -1,7 +1,7 @@
 use frankenengine_engine::ast::{
-    AssignmentOperator, BinaryOperator, BlockStatement, Expression, FunctionDeclaration,
-    ObjectProperty, ObjectPropertyKind, ParseGoal, ReturnStatement, SourceSpan, Statement,
-    SyntaxTree, UnaryOperator,
+    AssignmentOperator, AssignmentStrictness, BinaryOperator, BlockStatement, Expression,
+    FunctionDeclaration, ObjectProperty, ObjectPropertyKind, ParseGoal, ReturnStatement,
+    SourceSpan, Statement, SyntaxTree, UnaryOperator,
 };
 use frankenengine_engine::hash_tiers::ContentHash;
 use frankenengine_engine::ir_contract::{Ir0Module, Ir3Instruction, Ir3Module};
@@ -147,6 +147,7 @@ fn test_constructor_stored_to_local() {
         operator: AssignmentOperator::Assign,
         left: Box::new(Expression::Identifier("x".to_string())),
         right: Box::new(constructor_call),
+        assignment_strictness: AssignmentStrictness::Sloppy,
     };
 
     let func_decl = create_function_with_constructor(assignment);

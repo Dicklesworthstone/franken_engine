@@ -1,6 +1,5 @@
 ---
 source: crates/franken-engine/tests/ast_parser_golden_integration.rs
-assertion_line: 79
 expression: scrubbed_actual
 ---
 {
@@ -200,7 +199,8 @@ expression: scrubbed_actual
                 },
                 "right": {
                   "NumericLiteral": 1
-                }
+                },
+                "assignment_strictness": "sloppy"
               }
             },
             "right": {

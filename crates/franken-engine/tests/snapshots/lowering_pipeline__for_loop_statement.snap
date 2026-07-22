@@ -1,6 +1,5 @@
 ---
 source: crates/franken-engine/src/lowering_pipeline.rs
-assertion_line: 34903
 expression: actual_json
 ---
 {
@@ -8,43 +7,43 @@ expression: actual_json
     "header": {
       "schema_version": {
         "major": 0,
-        "minor": 4,
+        "minor": 6,
         "patch": 0
       },
       "level": "Ir1",
       "source_hash": [
-        63,
-        18,
-        233,
-        191,
-        101,
+        210,
         91,
-        95,
-        0,
-        246,
-        232,
-        135,
-        47,
-        233,
-        217,
-        252,
-        32,
-        29,
-        152,
-        164,
-        161,
-        166,
-        48,
-        5,
-        48,
-        216,
         64,
-        134,
-        246,
-        55,
-        205,
-        85,
-        37
+        179,
+        56,
+        129,
+        31,
+        164,
+        58,
+        5,
+        5,
+        76,
+        164,
+        129,
+        112,
+        34,
+        106,
+        137,
+        183,
+        45,
+        195,
+        60,
+        209,
+        16,
+        157,
+        221,
+        22,
+        182,
+        38,
+        20,
+        128,
+        95
       ],
       "source_label": "loop.js"
     },
@@ -60,15 +59,6 @@ expression: actual_json
           {
             "name": "i",
             "binding_id": 0,
-            "scope": {
-              "depth": 0,
-              "index": 0
-            },
-            "kind": "Let"
-          },
-          {
-            "name": "log",
-            "binding_id": 1,
             "scope": {
               "depth": 0,
               "index": 0
@@ -128,8 +118,9 @@ expression: actual_json
       },
       "Pop",
       {
-        "LoadBinding": {
-          "binding_id": 1
+        "LoadName": {
+          "name": "log",
+          "allow_missing": false
         }
       },
       {
@@ -186,43 +177,43 @@ expression: actual_json
     "header": {
       "schema_version": {
         "major": 0,
-        "minor": 4,
+        "minor": 6,
         "patch": 0
       },
       "level": "Ir2",
       "source_hash": [
-        203,
-        28,
-        168,
-        195,
-        243,
-        18,
-        157,
-        228,
-        147,
-        124,
-        216,
-        206,
-        122,
-        3,
-        39,
-        255,
-        137,
-        35,
-        216,
-        148,
-        81,
-        13,
-        36,
-        130,
+        165,
+        156,
+        6,
+        180,
+        235,
+        106,
+        164,
+        240,
+        59,
+        182,
+        15,
+        178,
         38,
-        205,
-        2,
-        216,
-        8,
-        108,
-        252,
-        231
+        128,
+        12,
+        185,
+        56,
+        228,
+        179,
+        178,
+        179,
+        138,
+        13,
+        84,
+        220,
+        85,
+        193,
+        89,
+        4,
+        227,
+        179,
+        134
       ],
       "source_label": "loop.js"
     },
@@ -238,15 +229,6 @@ expression: actual_json
           {
             "name": "i",
             "binding_id": 0,
-            "scope": {
-              "depth": 0,
-              "index": 0
-            },
-            "kind": "Let"
-          },
-          {
-            "name": "log",
-            "binding_id": 1,
             "scope": {
               "depth": 0,
               "index": 0
@@ -357,13 +339,18 @@ expression: actual_json
       },
       {
         "inner": {
-          "LoadBinding": {
-            "binding_id": 1
+          "LoadName": {
+            "name": "log",
+            "allow_missing": false
           }
         },
-        "effect": "Pure",
+        "effect": "ReadEffect",
         "required_capability": null,
-        "flow": null
+        "flow": {
+          "data_label": "Internal",
+          "sink_clearance": "Internal",
+          "declassification_required": false
+        }
       },
       {
         "inner": {
@@ -475,43 +462,43 @@ expression: actual_json
     "header": {
       "schema_version": {
         "major": 0,
-        "minor": 4,
+        "minor": 6,
         "patch": 0
       },
       "level": "Ir3",
       "source_hash": [
-        8,
-        184,
-        71,
-        80,
-        17,
-        94,
-        172,
-        198,
-        154,
-        252,
-        137,
-        82,
-        9,
-        122,
-        54,
-        180,
+        43,
+        169,
+        232,
+        255,
+        249,
+        140,
+        117,
+        62,
+        53,
         20,
-        149,
-        39,
-        151,
-        247,
-        178,
-        224,
-        244,
-        223,
-        214,
-        186,
-        159,
-        7,
+        181,
+        3,
+        78,
         69,
-        190,
-        228
+        42,
+        245,
+        87,
+        67,
+        124,
+        237,
+        131,
+        103,
+        115,
+        68,
+        54,
+        55,
+        46,
+        1,
+        171,
+        83,
+        136,
+        243
       ],
       "source_label": "loop.js"
     },
@@ -565,42 +552,43 @@ expression: actual_json
         }
       },
       {
-        "Move": {
-          "dst": 7,
-          "src": 6
+        "LoadName": {
+          "dst": 6,
+          "name_pool_index": 0,
+          "allow_missing": false
         }
       },
       {
         "Move": {
-          "dst": 8,
+          "dst": 7,
           "src": 2
         }
       },
       {
         "Move": {
-          "dst": 9,
-          "src": 8
+          "dst": 8,
+          "src": 7
         }
       },
       {
         "Call": {
-          "callee": 7,
+          "callee": 6,
           "args": {
-            "start": 9,
+            "start": 8,
             "count": 1
           },
-          "dst": 10
+          "dst": 9
         }
       },
       {
         "Move": {
           "dst": 0,
-          "src": 10
+          "src": 9
         }
       },
       {
         "LoadInt": {
-          "dst": 11,
+          "dst": 10,
           "value": 1
         }
       },
@@ -608,7 +596,7 @@ expression: actual_json
         "Add": {
           "dst": 2,
           "lhs": 2,
-          "rhs": 11
+          "rhs": 10
         }
       },
       {
@@ -629,12 +617,14 @@ expression: actual_json
       },
       "Halt"
     ],
-    "constant_pool": [],
+    "constant_pool": [
+      "log"
+    ],
     "function_table": [
       {
         "entry": 0,
         "arity": 0,
-        "frame_size": 12,
+        "frame_size": 11,
         "name": "main",
         "is_generator": false
       }
@@ -644,12 +634,20 @@ expression: actual_json
   },
   "ir2_flow_proof_artifact": {
     "schema_version": "frankenengine.ir2_flow_proof_witness.v1",
-    "artifact_id": "sha256:02f7711d9d4d809bfbd12e50f89190a2b5b7a1b1dfa647c0cf5ccfc20df15674",
+    "artifact_id": "sha256:dce189572552c9a03a228480b13812f76cf4362690c67e9e843ac6614646785b",
     "trace_id": "golden_test_for_loop_statement",
     "decision_id": "decision_for_loop_statement",
     "policy_id": "policy_for_loop_statement",
     "module_id": "loop.js",
-    "proved_flows": [],
+    "proved_flows": [
+      {
+        "op_index": 10,
+        "source_label": "Internal",
+        "sink_clearance": "Internal",
+        "capability": null,
+        "proof_method": "StaticAnalysis"
+      }
+    ],
     "denied_flows": [],
     "required_declassifications": [],
     "runtime_checkpoints": []
@@ -657,9 +655,9 @@ expression: actual_json
   "witnesses": [
     {
       "pass_id": "ir0_to_ir1",
-      "input_hash": "sha256:3f12e9bf655b5f00f6e8872fe9d9fc201d98a4a1a6300530d84086f637cd5525",
-      "output_hash": "sha256:cb1ca8c3f3129de4937cd8ce7a0327ff8923d894510d248226cd02d8086cfce7",
-      "rollback_token": "sha256:3f12e9bf655b5f00f6e8872fe9d9fc201d98a4a1a6300530d84086f637cd5525",
+      "input_hash": "sha256:d25b40b338811fa43a05054ca48170226a89b72dc33cd1109ddd16b62614805f",
+      "output_hash": "sha256:a59c06b4eb6aa4f03bb60fb226800cb938e4b3b2b38a0d54dc55c15904e3b386",
+      "rollback_token": "sha256:d25b40b338811fa43a05054ca48170226a89b72dc33cd1109ddd16b62614805f",
       "invariant_checks": [
         {
           "name": "source_hash_linkage",
@@ -675,9 +673,9 @@ expression: actual_json
     },
     {
       "pass_id": "ir1_to_ir2",
-      "input_hash": "sha256:cb1ca8c3f3129de4937cd8ce7a0327ff8923d894510d248226cd02d8086cfce7",
-      "output_hash": "sha256:08b84750115eacc69afc8952097a36b414952797f7b2e0f4dfd6ba9f0745bee4",
-      "rollback_token": "sha256:cb1ca8c3f3129de4937cd8ce7a0327ff8923d894510d248226cd02d8086cfce7",
+      "input_hash": "sha256:a59c06b4eb6aa4f03bb60fb226800cb938e4b3b2b38a0d54dc55c15904e3b386",
+      "output_hash": "sha256:2ba9e8fff98c753e3514b5034e452af557437ced8367734436372e01ab5388f3",
+      "rollback_token": "sha256:a59c06b4eb6aa4f03bb60fb226800cb938e4b3b2b38a0d54dc55c15904e3b386",
       "invariant_checks": [
         {
           "name": "source_hash_linkage",
@@ -692,20 +690,20 @@ expression: actual_json
         {
           "name": "ir2_flow_metrics_consistent",
           "passed": true,
-          "detail": "flow_ops=0 static_proven=0 runtime_checks=0"
+          "detail": "flow_ops=1 static_proven=1 runtime_checks=0"
         },
         {
           "name": "ir2_static_flow_coverage_ratio",
           "passed": true,
-          "detail": "static_coverage_millionths=0 static_proven=0 total_flow_ops=0"
+          "detail": "static_coverage_millionths=1000000 static_proven=1 total_flow_ops=1"
         }
       ]
     },
     {
       "pass_id": "ir2_to_ir3",
-      "input_hash": "sha256:08b84750115eacc69afc8952097a36b414952797f7b2e0f4dfd6ba9f0745bee4",
-      "output_hash": "sha256:d8979204a48c9dc4b435abdd09e41546eda9d2e6a4f83c94622450ef2982f922",
-      "rollback_token": "sha256:08b84750115eacc69afc8952097a36b414952797f7b2e0f4dfd6ba9f0745bee4",
+      "input_hash": "sha256:2ba9e8fff98c753e3514b5034e452af557437ced8367734436372e01ab5388f3",
+      "output_hash": "sha256:6dd66e34015efe4d26e98e991cdf3e544fb2936bef8341b39b1b09711bb9b68f",
+      "rollback_token": "sha256:2ba9e8fff98c753e3514b5034e452af557437ced8367734436372e01ab5388f3",
       "invariant_checks": [
         {
           "name": "source_hash_linkage",
@@ -733,22 +731,22 @@ expression: actual_json
   "isomorphism_ledger": [
     {
       "pass_id": "ir0_to_ir1",
-      "input_hash": "sha256:3f12e9bf655b5f00f6e8872fe9d9fc201d98a4a1a6300530d84086f637cd5525",
-      "output_hash": "sha256:cb1ca8c3f3129de4937cd8ce7a0327ff8923d894510d248226cd02d8086cfce7",
+      "input_hash": "sha256:d25b40b338811fa43a05054ca48170226a89b72dc33cd1109ddd16b62614805f",
+      "output_hash": "sha256:a59c06b4eb6aa4f03bb60fb226800cb938e4b3b2b38a0d54dc55c15904e3b386",
       "input_op_count": 1,
       "output_op_count": 22
     },
     {
       "pass_id": "ir1_to_ir2",
-      "input_hash": "sha256:cb1ca8c3f3129de4937cd8ce7a0327ff8923d894510d248226cd02d8086cfce7",
-      "output_hash": "sha256:08b84750115eacc69afc8952097a36b414952797f7b2e0f4dfd6ba9f0745bee4",
+      "input_hash": "sha256:a59c06b4eb6aa4f03bb60fb226800cb938e4b3b2b38a0d54dc55c15904e3b386",
+      "output_hash": "sha256:2ba9e8fff98c753e3514b5034e452af557437ced8367734436372e01ab5388f3",
       "input_op_count": 22,
       "output_op_count": 22
     },
     {
       "pass_id": "ir2_to_ir3",
-      "input_hash": "sha256:08b84750115eacc69afc8952097a36b414952797f7b2e0f4dfd6ba9f0745bee4",
-      "output_hash": "sha256:d8979204a48c9dc4b435abdd09e41546eda9d2e6a4f83c94622450ef2982f922",
+      "input_hash": "sha256:2ba9e8fff98c753e3514b5034e452af557437ced8367734436372e01ab5388f3",
+      "output_hash": "sha256:6dd66e34015efe4d26e98e991cdf3e544fb2936bef8341b39b1b09711bb9b68f",
       "input_op_count": 22,
       "output_op_count": 19
     }

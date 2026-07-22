@@ -16,15 +16,15 @@ use sha2::{Digest, Sha256};
 
 pub use crate::ast::ParseGoal;
 use crate::ast::{
-    ArrowBody, AssignmentOperator, BinaryOperator, BindingPattern, BlockStatement, BreakStatement,
-    CatchClause, ClassDeclaration, ContinueStatement, DoWhileStatement, ExportDeclaration,
-    ExportKind, Expression, ExpressionStatement, ForInStatement, ForOfStatement, ForStatement,
-    FunctionDeclaration, FunctionParam, IfStatement, ImportClause, ImportDeclaration,
-    ImportSpecifier, LabeledStatement, MethodDefinition, MethodKind, NamedExportClause,
-    ObjectPatternProperty, ObjectProperty, ObjectPropertyKind, ReturnStatement, SourceSpan,
-    Statement, SwitchCase, SwitchStatement, SyntaxTree, ThrowStatement, TryCatchStatement,
-    UnaryOperator, VariableDeclaration, VariableDeclarationKind, VariableDeclarator,
-    WhileStatement, WithStatement,
+    ArrowBody, AssignmentOperator, AssignmentStrictness, BinaryOperator, BindingPattern,
+    BlockStatement, BreakStatement, CatchClause, ClassDeclaration, ContinueStatement,
+    DoWhileStatement, ExportDeclaration, ExportKind, Expression, ExpressionStatement,
+    ForInStatement, ForOfStatement, ForStatement, FunctionDeclaration, FunctionParam, IfStatement,
+    ImportClause, ImportDeclaration, ImportSpecifier, LabeledStatement, MethodDefinition,
+    MethodKind, NamedExportClause, ObjectPatternProperty, ObjectProperty, ObjectPropertyKind,
+    ReturnStatement, SourceSpan, Statement, SwitchCase, SwitchStatement, SyntaxTree,
+    ThrowStatement, TryCatchStatement, UnaryOperator, VariableDeclaration, VariableDeclarationKind,
+    VariableDeclarator, WhileStatement, WithStatement,
 };
 use crate::deterministic_serde::{self, CanonicalValue};
 use crate::js_string::JsString;
@@ -5437,6 +5437,7 @@ fn try_parse_assignment(
                 operator: op,
                 left: Box::new(left),
                 right: Box::new(right),
+                assignment_strictness: AssignmentStrictness::from_strict_mode(context.strict_mode),
             }));
         }
         i += 1;
@@ -6163,6 +6164,7 @@ fn try_parse_update(
             operator: op,
             left: Box::new(target),
             right: Box::new(Expression::NumericLiteral(1)),
+            assignment_strictness: AssignmentStrictness::from_strict_mode(context.strict_mode),
         }));
     }
 
@@ -6189,6 +6191,7 @@ fn try_parse_update(
             operator: assign_op,
             left: Box::new(target),
             right: Box::new(Expression::NumericLiteral(1)),
+            assignment_strictness: AssignmentStrictness::from_strict_mode(context.strict_mode),
         };
         return Some(Ok(Expression::Binary {
             operator: adjust_op,
@@ -6311,6 +6314,9 @@ fn try_parse_postfix(
                                     span: None,
                                 }),
                                 right: Box::new(Expression::ArrayLiteral(raw_strings)),
+                                assignment_strictness: AssignmentStrictness::from_strict_mode(
+                                    context.strict_mode,
+                                ),
                             },
                             span: span.clone(),
                         }),
@@ -9378,6 +9384,7 @@ fn try_parse_for_in_of(
         Ok(Some(Statement::ForIn(ForInStatement {
             binding,
             binding_kind,
+            assignment_strictness: AssignmentStrictness::from_strict_mode(context.strict_mode),
             object,
             body: Box::new(body),
             span: span.clone(),
@@ -9387,6 +9394,7 @@ fn try_parse_for_in_of(
         Ok(Some(Statement::ForOf(ForOfStatement {
             binding,
             binding_kind,
+            assignment_strictness: AssignmentStrictness::from_strict_mode(context.strict_mode),
             iterable,
             body: Box::new(body),
             span: span.clone(),
@@ -15121,8 +15129,10 @@ mod tests {
                 operator,
                 left,
                 right,
+                assignment_strictness,
             } => {
                 assert_eq!(*operator, AssignmentOperator::Assign);
+                assert_eq!(*assignment_strictness, AssignmentStrictness::Sloppy);
                 assert!(matches!(left.as_ref(), Expression::Identifier(n) if n == "x"));
                 assert!(matches!(right.as_ref(), Expression::NumericLiteral(42)));
             }
@@ -15139,6 +15149,106 @@ mod tests {
             }
             other => panic!("expected Assignment, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn assignment_strictness_preserves_exact_directive_provenance_bd_0k19b() {
+        let strict = parse_script(r#""use strict"; target = 1;"#);
+        assert!(matches!(
+            &strict.body[1],
+            Statement::Expression(ExpressionStatement {
+                expression: Expression::Assignment {
+                    assignment_strictness: AssignmentStrictness::Strict,
+                    ..
+                },
+                ..
+            })
+        ));
+
+        let escaped = parse_script(r#""use\x20strict"; target = 1;"#);
+        assert!(matches!(
+            &escaped.body[1],
+            Statement::Expression(ExpressionStatement {
+                expression: Expression::Assignment {
+                    assignment_strictness: AssignmentStrictness::Sloppy,
+                    ..
+                },
+                ..
+            })
+        ));
+
+        let module = CanonicalEs2020Parser
+            .parse("target = 1;", ParseGoal::Module)
+            .expect("module assignment should parse");
+        assert!(matches!(
+            &module.body[0],
+            Statement::Expression(ExpressionStatement {
+                expression: Expression::Assignment {
+                    assignment_strictness: AssignmentStrictness::Strict,
+                    ..
+                },
+                ..
+            })
+        ));
+
+        let inherited = parse_script(r#""use strict"; function f() { target = 1; }"#);
+        let Statement::FunctionDeclaration(function) = &inherited.body[1] else {
+            panic!("expected function declaration");
+        };
+        assert!(matches!(
+            &function.body.body[0],
+            Statement::Expression(ExpressionStatement {
+                expression: Expression::Assignment {
+                    assignment_strictness: AssignmentStrictness::Strict,
+                    ..
+                },
+                ..
+            })
+        ));
+
+        let function_local = parse_script(r#"function f() { "use strict"; target = 1; }"#);
+        let Statement::FunctionDeclaration(function) = &function_local.body[0] else {
+            panic!("expected function declaration");
+        };
+        assert!(matches!(
+            &function.body.body[1],
+            Statement::Expression(ExpressionStatement {
+                expression: Expression::Assignment {
+                    assignment_strictness: AssignmentStrictness::Strict,
+                    ..
+                },
+                ..
+            })
+        ));
+
+        let strict_loops =
+            parse_script(r#""use strict"; for (key in object) {} for (value of values) {}"#);
+        assert!(matches!(
+            &strict_loops.body[1],
+            Statement::ForIn(ForInStatement {
+                assignment_strictness: AssignmentStrictness::Strict,
+                ..
+            })
+        ));
+        assert!(matches!(
+            &strict_loops.body[2],
+            Statement::ForOf(ForOfStatement {
+                assignment_strictness: AssignmentStrictness::Strict,
+                ..
+            })
+        ));
+
+        let strict_update = parse_script(r#""use strict"; ++target;"#);
+        assert!(matches!(
+            &strict_update.body[1],
+            Statement::Expression(ExpressionStatement {
+                expression: Expression::Assignment {
+                    assignment_strictness: AssignmentStrictness::Strict,
+                    ..
+                },
+                ..
+            })
+        ));
     }
 
     #[test]

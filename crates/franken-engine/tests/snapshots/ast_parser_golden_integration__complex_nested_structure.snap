@@ -1,5 +1,5 @@
 ---
-source: tests/ast_parser_golden_integration.rs
+source: crates/franken-engine/tests/ast_parser_golden_integration.rs
 expression: scrubbed_actual
 ---
 {
@@ -43,12 +43,21 @@ expression: scrubbed_actual
                             "property": {
                               "Identifier": "baseUrl"
                             },
-                            "computed": false
+                            "computed": false,
+                            "span": {
+                              "start_offset": "[START_OFFSET]",
+                              "end_offset": "[END_OFFSET]",
+                              "start_line": "[START_LINE]",
+                              "start_column": "[START_COLUMN]",
+                              "end_line": "[END_LINE]",
+                              "end_column": "[END_COLUMN]"
+                            }
                           }
                         },
                         "right": {
                           "Identifier": "baseUrl"
-                        }
+                        },
+                        "assignment_strictness": "strict"
                       }
                     },
                     "span": {
@@ -72,12 +81,21 @@ expression: scrubbed_actual
                             "property": {
                               "Identifier": "interceptors"
                             },
-                            "computed": false
+                            "computed": false,
+                            "span": {
+                              "start_offset": "[START_OFFSET]",
+                              "end_offset": "[END_OFFSET]",
+                              "start_line": "[START_LINE]",
+                              "start_column": "[START_COLUMN]",
+                              "end_line": "[END_LINE]",
+                              "end_column": "[END_COLUMN]"
+                            }
                           }
                         },
                         "right": {
                           "ArrayLiteral": []
-                        }
+                        },
+                        "assignment_strictness": "strict"
                       }
                     },
                     "span": {
@@ -186,7 +204,15 @@ expression: scrubbed_actual
                                   "property": {
                                     "Identifier": "baseUrl"
                                   },
-                                  "computed": false
+                                  "computed": false,
+                                  "span": {
+                                    "start_offset": "[START_OFFSET]",
+                                    "end_offset": "[END_OFFSET]",
+                                    "start_line": "[START_LINE]",
+                                    "start_column": "[START_COLUMN]",
+                                    "end_line": "[END_LINE]",
+                                    "end_column": "[END_COLUMN]"
+                                  }
                                 }
                               },
                               {
@@ -233,7 +259,8 @@ expression: scrubbed_actual
                                 "Identifier": "method"
                               },
                               "computed": false,
-                              "shorthand": true
+                              "shorthand": true,
+                              "kind": "Data"
                             },
                             {
                               "key": {
@@ -249,12 +276,14 @@ expression: scrubbed_actual
                                       "StringLiteral": "application/json"
                                     },
                                     "computed": false,
-                                    "shorthand": false
+                                    "shorthand": false,
+                                    "kind": "Data"
                                   }
                                 ]
                               },
                               "computed": false,
-                              "shorthand": false
+                              "shorthand": false,
+                              "kind": "Data"
                             },
                             {
                               "key": {
@@ -280,18 +309,35 @@ expression: scrubbed_actual
                                                   "property": {
                                                     "Identifier": "stringify"
                                                   },
-                                                  "computed": false
+                                                  "computed": false,
+                                                  "span": {
+                                                    "start_offset": "[START_OFFSET]",
+                                                    "end_offset": "[END_OFFSET]",
+                                                    "start_line": "[START_LINE]",
+                                                    "start_column": "[START_COLUMN]",
+                                                    "end_line": "[END_LINE]",
+                                                    "end_column": "[END_COLUMN]"
+                                                  }
                                                 }
                                               },
                                               "arguments": [
                                                 {
                                                   "Identifier": "data"
                                                 }
-                                              ]
+                                              ],
+                                              "span": {
+                                                "start_offset": "[START_OFFSET]",
+                                                "end_offset": "[END_OFFSET]",
+                                                "start_line": "[START_LINE]",
+                                                "start_column": "[START_COLUMN]",
+                                                "end_line": "[END_LINE]",
+                                                "end_column": "[END_COLUMN]"
+                                              }
                                             }
                                           },
                                           "computed": false,
-                                          "shorthand": false
+                                          "shorthand": false,
+                                          "kind": "Data"
                                         }
                                       ]
                                     }
@@ -321,18 +367,35 @@ expression: scrubbed_actual
                                                   "property": {
                                                     "Identifier": "stringify"
                                                   },
-                                                  "computed": false
+                                                  "computed": false,
+                                                  "span": {
+                                                    "start_offset": "[START_OFFSET]",
+                                                    "end_offset": "[END_OFFSET]",
+                                                    "start_line": "[START_LINE]",
+                                                    "start_column": "[START_COLUMN]",
+                                                    "end_line": "[END_LINE]",
+                                                    "end_column": "[END_COLUMN]"
+                                                  }
                                                 }
                                               },
                                               "arguments": [
                                                 {
                                                   "Identifier": "data"
                                                 }
-                                              ]
+                                              ],
+                                              "span": {
+                                                "start_offset": "[START_OFFSET]",
+                                                "end_offset": "[END_OFFSET]",
+                                                "start_line": "[START_LINE]",
+                                                "start_column": "[START_COLUMN]",
+                                                "end_line": "[END_LINE]",
+                                                "end_column": "[END_COLUMN]"
+                                              }
                                             }
                                           },
                                           "computed": false,
-                                          "shorthand": false
+                                          "shorthand": false,
+                                          "kind": "Data"
                                         }
                                       ]
                                     }
@@ -340,7 +403,8 @@ expression: scrubbed_actual
                                 }
                               },
                               "computed": false,
-                              "shorthand": true
+                              "shorthand": true,
+                              "kind": "Data"
                             }
                           ]
                         },
@@ -389,7 +453,15 @@ expression: scrubbed_actual
                                         {
                                           "Identifier": "options"
                                         }
-                                      ]
+                                      ],
+                                      "span": {
+                                        "start_offset": "[START_OFFSET]",
+                                        "end_offset": "[END_OFFSET]",
+                                        "start_line": "[START_LINE]",
+                                        "start_column": "[START_COLUMN]",
+                                        "end_line": "[END_LINE]",
+                                        "end_column": "[END_COLUMN]"
+                                      }
                                     }
                                   }
                                 },
@@ -426,7 +498,15 @@ expression: scrubbed_actual
                                     "property": {
                                       "Identifier": "ok"
                                     },
-                                    "computed": false
+                                    "computed": false,
+                                    "span": {
+                                      "start_offset": "[START_OFFSET]",
+                                      "end_offset": "[END_OFFSET]",
+                                      "start_line": "[START_LINE]",
+                                      "start_column": "[START_COLUMN]",
+                                      "end_line": "[END_LINE]",
+                                      "end_column": "[END_COLUMN]"
+                                    }
                                   }
                                 }
                               }
@@ -458,7 +538,15 @@ expression: scrubbed_actual
                                                       "property": {
                                                         "Identifier": "status"
                                                       },
-                                                      "computed": false
+                                                      "computed": false,
+                                                      "span": {
+                                                        "start_offset": "[START_OFFSET]",
+                                                        "end_offset": "[END_OFFSET]",
+                                                        "start_line": "[START_LINE]",
+                                                        "start_column": "[START_COLUMN]",
+                                                        "end_line": "[END_LINE]",
+                                                        "end_column": "[END_COLUMN]"
+                                                      }
                                                     }
                                                   },
                                                   {
@@ -469,7 +557,15 @@ expression: scrubbed_actual
                                                       "property": {
                                                         "Identifier": "statusText"
                                                       },
-                                                      "computed": false
+                                                      "computed": false,
+                                                      "span": {
+                                                        "start_offset": "[START_OFFSET]",
+                                                        "end_offset": "[END_OFFSET]",
+                                                        "start_line": "[START_LINE]",
+                                                        "start_column": "[START_COLUMN]",
+                                                        "end_line": "[END_LINE]",
+                                                        "end_column": "[END_COLUMN]"
+                                                      }
                                                     }
                                                   }
                                                 ]
@@ -523,10 +619,26 @@ expression: scrubbed_actual
                                       "property": {
                                         "Identifier": "json"
                                       },
-                                      "computed": false
+                                      "computed": false,
+                                      "span": {
+                                        "start_offset": "[START_OFFSET]",
+                                        "end_offset": "[END_OFFSET]",
+                                        "start_line": "[START_LINE]",
+                                        "start_column": "[START_COLUMN]",
+                                        "end_line": "[END_LINE]",
+                                        "end_column": "[END_COLUMN]"
+                                      }
                                     }
                                   },
-                                  "arguments": []
+                                  "arguments": [],
+                                  "span": {
+                                    "start_offset": "[START_OFFSET]",
+                                    "end_offset": "[END_OFFSET]",
+                                    "start_line": "[START_LINE]",
+                                    "start_column": "[START_COLUMN]",
+                                    "end_line": "[END_LINE]",
+                                    "end_column": "[END_COLUMN]"
+                                  }
                                 }
                               }
                             },
@@ -564,14 +676,30 @@ expression: scrubbed_actual
                                       "property": {
                                         "Identifier": "handleError"
                                       },
-                                      "computed": false
+                                      "computed": false,
+                                      "span": {
+                                        "start_offset": "[START_OFFSET]",
+                                        "end_offset": "[END_OFFSET]",
+                                        "start_line": "[START_LINE]",
+                                        "start_column": "[START_COLUMN]",
+                                        "end_line": "[END_LINE]",
+                                        "end_column": "[END_COLUMN]"
+                                      }
                                     }
                                   },
                                   "arguments": [
                                     {
                                       "Identifier": "error"
                                     }
-                                  ]
+                                  ],
+                                  "span": {
+                                    "start_offset": "[START_OFFSET]",
+                                    "end_offset": "[END_OFFSET]",
+                                    "start_line": "[START_LINE]",
+                                    "start_column": "[START_COLUMN]",
+                                    "end_line": "[END_LINE]",
+                                    "end_column": "[END_COLUMN]"
+                                  }
                                 }
                               },
                               "span": {
@@ -684,7 +812,15 @@ expression: scrubbed_actual
                             "property": {
                               "Identifier": "error"
                             },
-                            "computed": false
+                            "computed": false,
+                            "span": {
+                              "start_offset": "[START_OFFSET]",
+                              "end_offset": "[END_OFFSET]",
+                              "start_line": "[START_LINE]",
+                              "start_column": "[START_COLUMN]",
+                              "end_line": "[END_LINE]",
+                              "end_column": "[END_COLUMN]"
+                            }
                           }
                         },
                         "arguments": [
@@ -699,10 +835,26 @@ expression: scrubbed_actual
                               "property": {
                                 "Identifier": "message"
                               },
-                              "computed": false
+                              "computed": false,
+                              "span": {
+                                "start_offset": "[START_OFFSET]",
+                                "end_offset": "[END_OFFSET]",
+                                "start_line": "[START_LINE]",
+                                "start_column": "[START_COLUMN]",
+                                "end_line": "[END_LINE]",
+                                "end_column": "[END_COLUMN]"
+                              }
                             }
                           }
-                        ]
+                        ],
+                        "span": {
+                          "start_offset": "[START_OFFSET]",
+                          "end_offset": "[END_OFFSET]",
+                          "start_line": "[START_LINE]",
+                          "start_column": "[START_COLUMN]",
+                          "end_line": "[END_LINE]",
+                          "end_column": "[END_COLUMN]"
+                        }
                       }
                     },
                     "span": {
@@ -727,13 +879,29 @@ expression: scrubbed_actual
                                 "property": {
                                   "Identifier": "interceptors"
                                 },
-                                "computed": false
+                                "computed": false,
+                                "span": {
+                                  "start_offset": "[START_OFFSET]",
+                                  "end_offset": "[END_OFFSET]",
+                                  "start_line": "[START_LINE]",
+                                  "start_column": "[START_COLUMN]",
+                                  "end_line": "[END_LINE]",
+                                  "end_column": "[END_COLUMN]"
+                                }
                               }
                             },
                             "property": {
                               "Identifier": "forEach"
                             },
-                            "computed": false
+                            "computed": false,
+                            "span": {
+                              "start_offset": "[START_OFFSET]",
+                              "end_offset": "[END_OFFSET]",
+                              "start_line": "[START_LINE]",
+                              "start_column": "[START_COLUMN]",
+                              "end_line": "[END_LINE]",
+                              "end_column": "[END_COLUMN]"
+                            }
                           }
                         },
                         "arguments": [
@@ -767,7 +935,15 @@ expression: scrubbed_actual
                                             "property": {
                                               "Identifier": "onError"
                                             },
-                                            "computed": false
+                                            "computed": false,
+                                            "span": {
+                                              "start_offset": "[START_OFFSET]",
+                                              "end_offset": "[END_OFFSET]",
+                                              "start_line": "[START_LINE]",
+                                              "start_column": "[START_COLUMN]",
+                                              "end_line": "[END_LINE]",
+                                              "end_column": "[END_COLUMN]"
+                                            }
                                           }
                                         },
                                         "consequent": {
@@ -785,14 +961,30 @@ expression: scrubbed_actual
                                                           "property": {
                                                             "Identifier": "onError"
                                                           },
-                                                          "computed": false
+                                                          "computed": false,
+                                                          "span": {
+                                                            "start_offset": "[START_OFFSET]",
+                                                            "end_offset": "[END_OFFSET]",
+                                                            "start_line": "[START_LINE]",
+                                                            "start_column": "[START_COLUMN]",
+                                                            "end_line": "[END_LINE]",
+                                                            "end_column": "[END_COLUMN]"
+                                                          }
                                                         }
                                                       },
                                                       "arguments": [
                                                         {
                                                           "Identifier": "error"
                                                         }
-                                                      ]
+                                                      ],
+                                                      "span": {
+                                                        "start_offset": "[START_OFFSET]",
+                                                        "end_offset": "[END_OFFSET]",
+                                                        "start_line": "[START_LINE]",
+                                                        "start_column": "[START_COLUMN]",
+                                                        "end_line": "[END_LINE]",
+                                                        "end_column": "[END_COLUMN]"
+                                                      }
                                                     }
                                                   },
                                                   "span": {
@@ -841,7 +1033,15 @@ expression: scrubbed_actual
                               "is_async": false
                             }
                           }
-                        ]
+                        ],
+                        "span": {
+                          "start_offset": "[START_OFFSET]",
+                          "end_offset": "[END_OFFSET]",
+                          "start_line": "[START_LINE]",
+                          "start_column": "[START_COLUMN]",
+                          "end_line": "[END_LINE]",
+                          "end_column": "[END_COLUMN]"
+                        }
                       }
                     },
                     "span": {

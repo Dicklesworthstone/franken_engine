@@ -211,8 +211,8 @@ fn enrichment_golden_v1_serde_roundtrip() {
 #[test]
 fn enrichment_golden_current_check_detects_multiple_drift() {
     let mut g = GoldenVersionVector::current();
-    assert_eq!(g, GoldenVersionVector::v4());
-    assert_eq!(g.ast_schema, "franken-engine.parser-ast.schema.v4");
+    assert_eq!(g, GoldenVersionVector::v6());
+    assert_eq!(g.ast_schema, "franken-engine.parser-ast.schema.v6");
     g.ast_contract = "wrong".into();
     g.event_ir_contract = "wrong".into();
     let mismatches = g.check_against_live();

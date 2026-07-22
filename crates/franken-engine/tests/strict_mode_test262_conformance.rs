@@ -520,6 +520,155 @@ mod tests {
         }
     }
 
+    fn eval_value_bd_1piai(source: &str) -> String {
+        let mut engine = HybridRouter::default();
+        engine
+            .eval(source)
+            .unwrap_or_else(|error| panic!("bd-1piai eval failed for {source:?}: {error}"))
+            .value
+            .to_string()
+    }
+
+    #[test]
+    fn builtin_global_rebinding_uses_runtime_name_resolution_bd_1piai() {
+        let cases = [
+            (
+                "strict Date assignment updates the existing realm binding",
+                r#""use strict"; Date = 0; Date;"#,
+                "0",
+            ),
+            (
+                "typeof observes a strict Date replacement",
+                r#""use strict"; Date = 0; typeof Date;"#,
+                "number",
+            ),
+            (
+                "strict Math assignment updates the existing realm binding",
+                r#""use strict"; Math = 1; Math;"#,
+                "1",
+            ),
+            (
+                "strict Promise assignment updates the existing realm binding",
+                r#""use strict"; Promise = 2; Promise;"#,
+                "2",
+            ),
+            (
+                "Date replacement controls a later static call",
+                "Date = { now: () => 17 }; Date.now();",
+                "17",
+            ),
+            (
+                "Math replacement controls a later static call",
+                "Math = { abs: value => value + 42 }; Math.abs(-1);",
+                "41",
+            ),
+            (
+                "Promise replacement controls a later static call",
+                "Promise = { resolve: value => value + 1 }; Promise.resolve(4);",
+                "5",
+            ),
+            (
+                "lexical Promise shadowing bypasses the realm builtin",
+                "let Promise = { resolve: value => value + 2 }; Promise.resolve(3);",
+                "5",
+            ),
+            (
+                "nested writes remain visible after the function returns",
+                "function replace(){ Promise = { resolve: value => value + 1 }; } replace(); Promise.resolve(4);",
+                "5",
+            ),
+            (
+                "generator writes remain visible after resumption",
+                "function* replace(){ Promise = { resolve: value => value + 1 }; } replace().next(); Promise.resolve(4);",
+                "5",
+            ),
+        ];
+
+        for (label, source, expected) in cases {
+            assert_eq!(eval_value_bd_1piai(source), expected, "{label}");
+        }
+    }
+
+    #[test]
+    fn builtin_global_objects_keep_writable_properties_and_defaults_bd_1piai() {
+        let cases = [
+            (
+                "Math method properties are writable",
+                "Math.abs = value => 7; Math.abs(-1);",
+                "7",
+            ),
+            (
+                "Math aliases share object identity",
+                "let mathAlias = Math; mathAlias.abs = value => 9; Math.abs(-1);",
+                "9",
+            ),
+            (
+                "Date static properties are writable",
+                "Date.now = () => 7; Date.now();",
+                "7",
+            ),
+            (
+                "Date aliases share callable property identity",
+                "let dateAlias = Date; dateAlias.now = () => 8; Date.now();",
+                "8",
+            ),
+            (
+                "Promise static properties are writable",
+                "Promise.resolve = value => value + 1; Promise.resolve(4);",
+                "5",
+            ),
+            (
+                "Date static properties are configurable",
+                "delete Date.now; typeof Date.now;",
+                "undefined",
+            ),
+            (
+                "default global shapes remain available",
+                "typeof Date + ':' + typeof Math + ':' + typeof Promise;",
+                "function:object:object",
+            ),
+            (
+                "default Math methods remain callable through aliases",
+                "let abs = Math.abs; abs(-2);",
+                "2",
+            ),
+            (
+                "default Math constants remain readable",
+                "Math.PI > 3;",
+                "true",
+            ),
+            (
+                "default Date construction remains available",
+                "new Date(0).getTime();",
+                "0",
+            ),
+            (
+                "default Date construction accepts spread arguments",
+                "new Date(...[0]).getTime();",
+                "0",
+            ),
+            (
+                "Reflect.construct accepts the Date builtin",
+                "Reflect.construct(Date, [0]).getTime();",
+                "0",
+            ),
+            (
+                "default Date.now remains callable",
+                "typeof Date.now();",
+                "number",
+            ),
+            (
+                "default Promise methods still create promises",
+                "typeof Promise.resolve(1).then;",
+                "function",
+            ),
+        ];
+
+        for (label, source, expected) in cases {
+            assert_eq!(eval_value_bd_1piai(source), expected, "{label}");
+        }
+    }
+
     #[test]
     fn strict_mode_full_matrix_matches_known_gap_set() {
         let report = StrictModeConformanceHarness::run_conformance_suite();

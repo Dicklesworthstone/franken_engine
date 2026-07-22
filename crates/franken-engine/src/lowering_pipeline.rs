@@ -9169,7 +9169,7 @@ pub fn lower_ir2_to_ir3(
                 }
                 // HostCall in a function body — same lowering as module level
                 // (bd-bg9l1.27.10). A builtin recognized at lowering (e.g.
-                // `Math.PI`, `Symbol.iterator`, `new Error(...)`) can appear inside
+                // `Symbol.iterator` or `new Error(...)`) can appear inside
                 // any function, so this must mirror the module-level arm rather
                 // than panic.
                 Ir1Op::HostCall {
@@ -9332,7 +9332,7 @@ pub fn lower_ir2_to_ir3(
         });
     }
 
-    // Function-body `HostCall`s (e.g. `Math.PI` / `Symbol.iterator` / `new Error()`
+    // Function-body `HostCall`s (e.g. `Symbol.iterator` / `new Error()`
     // used inside a function) are emitted by the per-function lowering above and
     // are NOT recorded in `required_capabilities` by the module-level pass. Scan
     // the final instruction stream so every emitted HostCall capability is
@@ -12002,12 +12002,9 @@ fn lower_expression_to_ir1_inner(
             // the spread into positional args. Build the argument array (reusing
             // the array-literal spread lowering) and dispatch via
             // `builtin:ReflectApply(f, thisArg, argsArray)` (which already
-            // unpacks an array into a call). Scoped to FREE (non-member) callees,
-            // where thisArg is `undefined`; member-call spread needs the receiver
-            // as `this` (evaluated once) and is a follow-up. Placed before the
-            // builtin-capability checks: a builtin callee with spread (rare, e.g.
-            // `Math.max(...xs)`) falls through here and stays as-is — it was
-            // already broken, so no regression, while regular `f(...xs)` works.
+            // unpacks an array into a call). Free callees use `undefined` as
+            // thisArg; the generic member-callee path below evaluates and
+            // preserves its receiver exactly once.
             let has_spread_argument = arguments
                 .iter()
                 .any(|arg| matches!(arg, Expression::SpreadElement(_)));
@@ -12016,24 +12013,9 @@ fn lower_expression_to_ir1_inner(
                 Expression::Member { .. } | Expression::OptionalMember { .. }
             );
             if has_spread_argument {
-                if let Some(capability) = math_builtin_call_capability(callee, binding_lookup) {
-                    lower_spread_apply_hostcall_to_ir1(
-                        capability,
-                        &[],
-                        arguments,
-                        ops,
-                        bindings,
-                        binding_lookup,
-                        binding_index,
-                        root_scope_id,
-                        label_counter,
-                        span_table,
-                    )?;
-                    return Ok(());
-                }
                 // bd-tu0c3: `path.join(...xs)` / `path.resolve(...xs)` spread
-                // forms route through ReflectApply exactly like Math.* so the
-                // variadic path builtins receive unpacked positional args.
+                // forms route through ReflectApply so the variadic path builtins
+                // receive unpacked positional args.
                 if let Some(capability) = path_builtin_call_capability(callee, binding_lookup) {
                     lower_spread_apply_hostcall_to_ir1(
                         capability,
@@ -12084,37 +12066,7 @@ fn lower_expression_to_ir1_inner(
                     )?;
                     return Ok(());
                 }
-                if let Some(capability) = date_builtin_call_capability(callee, binding_lookup) {
-                    lower_spread_apply_hostcall_to_ir1(
-                        capability,
-                        &[],
-                        arguments,
-                        ops,
-                        bindings,
-                        binding_lookup,
-                        binding_index,
-                        root_scope_id,
-                        label_counter,
-                        span_table,
-                    )?;
-                    return Ok(());
-                }
                 if let Some(capability) = console_builtin_call_capability(callee, binding_lookup) {
-                    lower_spread_apply_hostcall_to_ir1(
-                        capability,
-                        &[],
-                        arguments,
-                        ops,
-                        bindings,
-                        binding_lookup,
-                        binding_index,
-                        root_scope_id,
-                        label_counter,
-                        span_table,
-                    )?;
-                    return Ok(());
-                }
-                if let Some(capability) = promise_builtin_call_capability(callee, binding_lookup) {
                     lower_spread_apply_hostcall_to_ir1(
                         capability,
                         &[],
@@ -12386,38 +12338,12 @@ fn lower_expression_to_ir1_inner(
                 });
                 return Ok(());
             }
-            if let Some(capability) = math_builtin_call_capability(callee, binding_lookup) {
-                let arg_count = arguments.len();
-                if arg_count > u32::MAX as usize {
-                    return Err(LoweringPipelineError::TooManyArguments {
-                        count: arg_count,
-                        max: u32::MAX as usize,
-                    });
-                }
-                for arg in arguments {
-                    lower_expression_to_ir1(
-                        arg,
-                        ops,
-                        bindings,
-                        binding_lookup,
-                        binding_index,
-                        root_scope_id,
-                        label_counter,
-                        span_table,
-                    )?;
-                }
-                ops.push(Ir1Op::HostCall {
-                    capability: capability.to_string(),
-                    arg_count: arg_count as u32,
-                });
-                return Ok(());
-            }
             if let Some(capability) = path_builtin_call_capability(callee, binding_lookup) {
                 // bd-tu0c3: pure-compute Node `path` builtins. Recognized member
                 // calls on a confirmed path-module alias (`const path =
                 // require('path')`), on its `.posix`/`.win32` namespaces, or on an
                 // inline `require('path')` receiver lower to `builtin:Path*`
-                // HostCalls, exactly like the static `Math.*` interception above.
+                // HostCalls through their dedicated lowering-only seam.
                 // The receiver is deliberately NOT lowered — there is no real
                 // path module object (the recognized require declaration is
                 // elided) and recognition is purely syntactic. Arity is validated
@@ -12507,9 +12433,8 @@ fn lower_expression_to_ir1_inner(
                 // `require('fs').writeFileSync(path, data)` (Sync) lower to an
                 // `fs:`-tagged HostCall so the interpreter's host-I/O seam performs
                 // and records a real, capability-gated host effect (the source the
-                // run --json effect ledger renders). Like the static `Math.*`
-                // interception above we do NOT lower the inner `require('fs')`
-                // receiver — there is no real fs module object and that path would
+                // run --json effect ledger renders). We do NOT lower the inner
+                // `require('fs')` receiver — there is no real fs module object and that path would
                 // fault at runtime; recognition is purely syntactic. Arg order is
                 // source order (path, then data), matching `dispatch_host_io_hostcall`
                 // (arg[0]=path, arg[1]=content/encoding). Arity: writeFileSync is
@@ -12757,65 +12682,7 @@ fn lower_expression_to_ir1_inner(
                     return Ok(());
                 }
             }
-            if let Some(capability) = date_builtin_call_capability(callee, binding_lookup) {
-                // `Date.now()` — the `Date` global has no eval-scope binding, so
-                // (like the Math-static interception) recognize the bare static
-                // member call and route to the `builtin:DateNow` hostcall, whose
-                // impl already exists in `dispatch_builtin_hostcall_inner`. No
-                // receiver placeholder; arg_count is exactly `arguments.len()`
-                // (bd-cseei).
-                let arg_count = arguments.len();
-                if arg_count > u32::MAX as usize {
-                    return Err(LoweringPipelineError::TooManyArguments {
-                        count: arg_count,
-                        max: u32::MAX as usize,
-                    });
-                }
-                for arg in arguments {
-                    lower_expression_to_ir1(
-                        arg,
-                        ops,
-                        bindings,
-                        binding_lookup,
-                        binding_index,
-                        root_scope_id,
-                        label_counter,
-                        span_table,
-                    )?;
-                }
-                ops.push(Ir1Op::HostCall {
-                    capability: capability.to_string(),
-                    arg_count: arg_count as u32,
-                });
-                return Ok(());
-            }
             if let Some(capability) = console_builtin_call_capability(callee, binding_lookup) {
-                let arg_count = arguments.len();
-                if arg_count > u32::MAX as usize {
-                    return Err(LoweringPipelineError::TooManyArguments {
-                        count: arg_count,
-                        max: u32::MAX as usize,
-                    });
-                }
-                for arg in arguments {
-                    lower_expression_to_ir1(
-                        arg,
-                        ops,
-                        bindings,
-                        binding_lookup,
-                        binding_index,
-                        root_scope_id,
-                        label_counter,
-                        span_table,
-                    )?;
-                }
-                ops.push(Ir1Op::HostCall {
-                    capability: capability.to_string(),
-                    arg_count: arg_count as u32,
-                });
-                return Ok(());
-            }
-            if let Some(capability) = promise_builtin_call_capability(callee, binding_lookup) {
                 let arg_count = arguments.len();
                 if arg_count > u32::MAX as usize {
                     return Err(LoweringPipelineError::TooManyArguments {
@@ -12845,7 +12712,7 @@ fn lower_expression_to_ir1_inner(
                 // `Reflect.has/get/set/deleteProperty/apply/construct/ownKeys(...)`
                 // — the `Reflect` global has no eval-scope binding; route the
                 // static member call to the matching `builtin:Reflect*` hostcall
-                // (Math convention: no receiver, arg_count == arguments.len())
+                // (no receiver; arg_count equals arguments.len())
                 // (bd-v93ds).
                 let arg_count = arguments.len();
                 if arg_count > u32::MAX as usize {
@@ -12875,13 +12742,12 @@ fn lower_expression_to_ir1_inner(
             if let Some(capability) = number_static_builtin_call_capability(callee, binding_lookup)
             {
                 // `Number.isInteger/isFinite/isNaN/parseInt/parseFloat` — the
-                // `Number` global has no eval-scope binding, so (like the
-                // Object/JSON/Math interceptions) recognize the bare static
-                // member-call here and route to the canonical `builtin:Number*`
+                // `Number` global has no eval-scope binding, so recognize the
+                // bare static member-call here and route to the canonical `builtin:Number*`
                 // hostcall whose impl already exists in
                 // `dispatch_builtin_hostcall_inner` (bd-6kkg6). These read their
                 // arguments from slot 0 (no receiver placeholder), the same
-                // convention as the Math/Object builtins.
+                // convention as the Object builtins.
                 let arg_count = arguments.len();
                 if arg_count > u32::MAX as usize {
                     return Err(LoweringPipelineError::TooManyArguments {
@@ -12941,12 +12807,11 @@ fn lower_expression_to_ir1_inner(
             if let Some(capability) = object_json_builtin_call_capability(callee, binding_lookup) {
                 // `Object.keys/values/entries` and `JSON.parse/stringify` —
                 // the `Object`/`JSON` globals have no eval-scope binding, so
-                // (like Math/global-function interception) recognize the bare
-                // member-call here and route to the canonical `builtin:*`
-                // hostcall whose impl already exists in
+                // recognize the bare member-call here and route to the canonical
+                // `builtin:*` hostcall whose impl already exists in
                 // `dispatch_builtin_hostcall_inner` (bd-9a8cz.2). These read
                 // their argument from slot 0 (no receiver placeholder), the
-                // same convention as the Math builtins.
+                // same convention as the other lowering-only static builtins.
                 let arg_count = arguments.len();
                 if arg_count > u32::MAX as usize {
                     return Err(LoweringPipelineError::TooManyArguments {
@@ -13063,8 +12928,8 @@ fn lower_expression_to_ir1_inner(
             if let Some(capability) = global_function_call_capability(callee, binding_lookup) {
                 // Bare global function builtins (`parseInt`/`parseFloat`/`isNaN`/
                 // `isFinite`) have no eval-scope binding; dispatch them as host
-                // calls (bd-n5lhl), mirroring the Math-builtin convention — the
-                // handlers read arguments from `args.start` with no receiver
+                // calls (bd-n5lhl), using the lowering-only builtin convention —
+                // the handlers read arguments from `args.start` with no receiver
                 // placeholder, so arg_count is exactly `arguments.len()`.
                 let arg_count = arguments.len();
                 if arg_count > u32::MAX as usize {
@@ -13607,14 +13472,6 @@ fn lower_expression_to_ir1_inner(
                 return Ok(());
             }
 
-            if math_object_property_name(object, property, *computed, binding_lookup) == Some("PI")
-            {
-                ops.push(Ir1Op::HostCall {
-                    capability: "builtin:MathPI".to_string(),
-                    arg_count: 0,
-                });
-                return Ok(());
-            }
             // bd-2dmnn: fold the two supported static `events` constants. Both
             // receivers are confirmed provenance sentinels, so no ambient
             // `require` or synthetic module/constructor object is evaluated.
@@ -13760,20 +13617,11 @@ fn lower_expression_to_ir1_inner(
                 )?;
                 return Ok(());
             }
-            if let Some(capability) =
-                promise_static_member_capability(object, property, *computed, binding_lookup)
-            {
-                ops.push(Ir1Op::HostCall {
-                    capability: capability.to_string(),
-                    arg_count: 0,
-                });
-                return Ok(());
-            }
             // `Symbol.iterator` resolves to the engine's canonical typed
             // well-known Symbol value (id 1). There is no global `Symbol` binding
-            // in the eval scope — like `Math.*`, it is recognized here at
-            // lowering. Emitting the builtin rather than the legacy
-            // `"@@iterator"` string keeps computed object keys and member reads on
+            // in the eval scope, so it is recognized here at lowering. Emitting
+            // the builtin rather than the legacy `"@@iterator"` string keeps
+            // computed object keys and member reads on
             // the same Symbol identity used by the runtime property sidecar
             // (bd-n8eta.4.2).
             if symbol_iterator_member(object, property, *computed, binding_lookup) {
@@ -14659,9 +14507,9 @@ fn lower_expression_to_ir1_inner(
             }
             // `new Error(msg)` / error subclasses have no global binding on the
             // eval scope path; recognize the constructor and route to the
-            // `builtin:<Name>` hostcall (bd-bg9l1.27.10), mirroring the Math/Symbol
-            // interceptions. Args are lowered onto the value stack; the callee is
-            // NOT loaded (it would resolve to undefined).
+            // `builtin:<Name>` hostcall (bd-bg9l1.27.10), mirroring the other
+            // lowering-only constructors. Args are lowered onto the value stack;
+            // the callee is NOT loaded (it would resolve to undefined).
             if let Some(capability) = error_constructor_capability(callee, binding_lookup) {
                 let arg_count = arguments.len();
                 if arg_count > u32::MAX as usize {
@@ -14695,37 +14543,6 @@ fn lower_expression_to_ir1_inner(
             // (bd-juodx). The optional iterable arg lowers onto the stack at
             // args.start, matching the constructor impls.
             if let Some(capability) = collection_constructor_capability(callee, binding_lookup) {
-                let arg_count = arguments.len();
-                if arg_count > u32::MAX as usize {
-                    return Err(LoweringPipelineError::TooManyArguments {
-                        count: arg_count,
-                        max: u32::MAX as usize,
-                    });
-                }
-                for arg in arguments {
-                    lower_expression_to_ir1(
-                        arg,
-                        ops,
-                        bindings,
-                        binding_lookup,
-                        binding_index,
-                        root_scope_id,
-                        label_counter,
-                        span_table,
-                    )?;
-                }
-                ops.push(Ir1Op::HostCall {
-                    capability: capability.to_string(),
-                    arg_count: arg_count as u32,
-                });
-                return Ok(());
-            }
-            // `new Date([ms])` likewise has no eval binding; route to the
-            // `builtin:Date` constructor hostcall (which allocates a Date object
-            // with its `__type`/`__timestamp` internals), mirroring the
-            // collection-constructor interception. The optional millisecond arg
-            // lowers onto the stack at args.start (bd-cseei).
-            if let Some(capability) = date_constructor_capability(callee, binding_lookup) {
                 let arg_count = arguments.len();
                 if arg_count > u32::MAX as usize {
                     return Err(LoweringPipelineError::TooManyArguments {
@@ -14874,7 +14691,7 @@ fn lower_expression_to_ir1_inner(
             // `new Proxy(target, handler)` likewise has no eval binding; route to
             // the `builtin:Proxy` constructor hostcall (which allocates the proxy
             // object; member access then flows through the already-wired
-            // `proxy_aware_*` runtime seam), mirroring the collection/Date
+            // `proxy_aware_*` runtime seam), mirroring the collection/error
             // constructor interception. Args lower onto the stack at args.start
             // (target=arg0, handler=arg1) (bd-v93ds).
             if let Some(capability) = proxy_constructor_capability(callee, binding_lookup) {
@@ -15496,28 +15313,10 @@ fn property_key_function_display_name(key: &JsString) -> String {
     display
 }
 
-fn math_object_property_name<'a>(
-    object: &'a Expression,
-    property: &'a Expression,
-    computed: bool,
-    binding_lookup: &BTreeMap<String, BindingId>,
-) -> Option<&'a str> {
-    if !matches!(object, Expression::Identifier(name) if name == "Math")
-        || is_lexically_shadowed(binding_lookup, "Math")
-    {
-        return None;
-    }
-
-    match computed {
-        false => well_formed_static_name(property),
-        true => well_formed_string_literal(property),
-    }
-}
-
 /// Recognize `Symbol.iterator` member access (the well-known iterator symbol).
 ///
-/// Mirrors `math_object_property_name`: `Symbol` has no global binding in the
-/// eval scope, so the access is resolved here at lowering. Returns `false` when
+/// `Symbol` has no global binding in the eval scope, so the access is resolved
+/// here at lowering. Returns `false` when
 /// `Symbol` is shadowed by a user binding (`let Symbol = …`). Both the static
 /// `Symbol.iterator` and quoted `Symbol["iterator"]` forms are accepted.
 fn symbol_iterator_member(
@@ -15583,8 +15382,9 @@ fn builtin_constructor_name(
 }
 
 /// Capability string for `new <Name>(...)` on a known global error constructor
-/// (bd-bg9l1.27.10). Like `Symbol`/`Math`, the error constructors have no global
-/// binding on the `HybridRouter::eval` scope path, so `new Error(msg)` would
+/// (bd-bg9l1.27.10). Like other lowering-only constructors, the error
+/// constructors have no global binding on the `HybridRouter::eval` scope path,
+/// so `new Error(msg)` would
 /// otherwise resolve its callee to `undefined` and fault
 /// ("expected function, got undefined"). Recognize them here and route to the
 /// `builtin:<Name>` hostcall. Returns `None` when the name is shadowed by a user
@@ -15631,27 +15431,6 @@ fn collection_constructor_capability(
         "Set" => Some("builtin:Set"),
         "WeakMap" => Some("builtin:WeakMap"),
         "WeakSet" => Some("builtin:WeakSet"),
-        _ => None,
-    }
-}
-
-/// Capability for a `new Date([ms])` constructor (bd-cseei). Like the error and
-/// collection constructors, the bare `Date` global has no binding on the eval
-/// scope, so recognize the bare-identifier callee and route to the
-/// `builtin:Date` constructor hostcall. Returns `None` when shadowed by a user
-/// binding in scope (`let Date = …`).
-fn date_constructor_capability(
-    callee: &Expression,
-    binding_lookup: &BTreeMap<String, BindingId>,
-) -> Option<&'static str> {
-    let Expression::Identifier(name) = callee else {
-        return None;
-    };
-    if is_lexically_shadowed(binding_lookup, name) {
-        return None;
-    }
-    match name.as_str() {
-        "Date" => Some("builtin:Date"),
         _ => None,
     }
 }
@@ -15733,8 +15512,7 @@ fn data_view_constructor_capability(
 fn known_constructor_typeof_name(name: &str) -> bool {
     matches!(
         name,
-        "Date"
-            | "Symbol"
+        "Symbol"
             | "URL"
             | "URLSearchParams"
             | "ArrayBuffer"
@@ -15743,75 +15521,6 @@ fn known_constructor_typeof_name(name: &str) -> bool {
             | "Uint32Array"
             | "DataView"
     )
-}
-
-/// Capability for a `Date.now()` static member call (bd-cseei). Mirrors
-/// `math_builtin_call_capability`: the `Date` global has no eval-scope binding,
-/// so recognize the `Date.now` member callee and route to the `builtin:DateNow`
-/// hostcall. Returns `None` when `Date` is shadowed by a user binding in scope.
-fn date_builtin_call_capability(
-    callee: &Expression,
-    binding_lookup: &BTreeMap<String, BindingId>,
-) -> Option<&'static str> {
-    let Expression::Member {
-        object,
-        property,
-        computed,
-        ..
-    } = callee
-    else {
-        return None;
-    };
-    if !matches!(object.as_ref(), Expression::Identifier(name) if name == "Date")
-        || is_lexically_shadowed(binding_lookup, "Date")
-    {
-        return None;
-    }
-    let method = match *computed {
-        false => well_formed_static_name(property)?,
-        true => well_formed_string_literal(property)?,
-    };
-    match method {
-        "now" => Some("builtin:DateNow"),
-        _ => None,
-    }
-}
-
-/// Capability for `Promise.resolve/reject/all/race/allSettled/any(...)`
-/// static calls (bd-bpf76). These route directly to the internal `promise:*`
-/// model so source-level Promise APIs create real runtime promise handles
-/// rather than the older simplified `builtin:Promise*` objects.
-fn promise_builtin_call_capability(
-    callee: &Expression,
-    binding_lookup: &BTreeMap<String, BindingId>,
-) -> Option<&'static str> {
-    let Expression::Member {
-        object,
-        property,
-        computed,
-        ..
-    } = callee
-    else {
-        return None;
-    };
-    if !matches!(object.as_ref(), Expression::Identifier(name) if name == "Promise")
-        || is_lexically_shadowed(binding_lookup, "Promise")
-    {
-        return None;
-    }
-    let method = match *computed {
-        false => well_formed_static_name(property)?,
-        true => well_formed_string_literal(property)?,
-    };
-    match method {
-        "resolve" => Some("promise:resolve"),
-        "reject" => Some("promise:reject"),
-        "all" => Some("promise:all"),
-        "race" => Some("promise:race"),
-        "allSettled" => Some("promise:allSettled"),
-        "any" => Some("promise:any"),
-        _ => None,
-    }
 }
 
 fn console_builtin_call_capability(
@@ -16387,8 +16096,8 @@ fn path_builtin_call_capability(
 
 /// bd-tu0c3: recognize a `path` constant property READ (`path.sep`,
 /// `path.delimiter`, `path.posix.sep`, `path.win32.delimiter`, …) and return
-/// the string constant it lowers to. Accepts the same static/quoted property
-/// shapes as [`math_object_property_name`].
+/// the string constant it lowers to. Accepts both static and quoted property
+/// shapes.
 fn path_member_constant(
     object: &Expression,
     property: &Expression,
@@ -22439,39 +22148,8 @@ fn confirmed_fs_promises_destructure_locals(
     any_confirmed.then_some(locals)
 }
 
-/// Capability for bare Promise static member reads (`Promise.all`,
-/// `Promise.resolve`, ...). Unbound globals are not runtime bindings in IR1, so
-/// a member read needs a lowering-time shim that returns the corresponding
-/// builtin function value. Static calls still use `promise_builtin_call_capability`
-/// above so they create real promise handles directly.
-fn promise_static_member_capability(
-    object: &Expression,
-    property: &Expression,
-    computed: bool,
-    binding_lookup: &BTreeMap<String, BindingId>,
-) -> Option<&'static str> {
-    if !matches!(object, Expression::Identifier(name) if name == "Promise")
-        || is_lexically_shadowed(binding_lookup, "Promise")
-    {
-        return None;
-    }
-    let method = match computed {
-        false => well_formed_static_name(property)?,
-        true => well_formed_string_literal(property)?,
-    };
-    match method {
-        "resolve" => Some("builtin:PromiseResolveFunction"),
-        "reject" => Some("builtin:PromiseRejectFunction"),
-        "all" => Some("builtin:PromiseAllFunction"),
-        "race" => Some("builtin:PromiseRaceFunction"),
-        "allSettled" => Some("builtin:PromiseAllSettledFunction"),
-        "any" => Some("builtin:PromiseAnyFunction"),
-        _ => None,
-    }
-}
-
 /// Capability for a `new Proxy(target, handler)` constructor (bd-v93ds). Like the
-/// Date/collection/error constructors, the bare `Proxy` global has no binding on
+/// collection/error constructors, the bare `Proxy` global has no binding on
 /// the eval scope, so route the bare-identifier callee to the `builtin:Proxy`
 /// constructor hostcall (which allocates the proxy object; member access then
 /// flows through the already-wired `proxy_aware_*` runtime seam). Returns `None`
@@ -22493,11 +22171,10 @@ fn proxy_constructor_capability(
 }
 
 /// Capability for a `Reflect.<method>(...)` static member call (bd-v93ds).
-/// Mirrors `math_builtin_call_capability`: the `Reflect` global has no eval-scope
-/// binding, so recognize the `Reflect.<method>` member callee and route to the
-/// matching `builtin:Reflect*` hostcall (impls already exist in
-/// `dispatch_builtin_hostcall_inner`). Returns `None` when `Reflect` is shadowed
-/// by a user binding in scope.
+/// The `Reflect` global has no eval-scope binding, so recognize the member
+/// callee and route to the matching `builtin:Reflect*` hostcall (whose
+/// implementations already exist in `dispatch_builtin_hostcall_inner`). Returns
+/// `None` when `Reflect` is shadowed by a user binding in scope.
 fn reflect_builtin_call_capability(
     callee: &Expression,
     binding_lookup: &BTreeMap<String, BindingId>,
@@ -22568,7 +22245,7 @@ fn timers_module_export_global(name: &str) -> Option<&'static str> {
 /// or a member call on the timers module (`require('timers').setTimeout(...)`
 /// / a confirmed `const timers = require('timers')` alias — bd-suwvw).
 ///
-/// Unlike the `Math.*`/string/array builtins, the globals are invoked as bare
+/// Unlike member-call string/array builtins, the globals are invoked as bare
 /// identifiers rather than member access, so they are not recognized by the
 /// member-callee capability helpers. Returns `None` when the identifier is
 /// shadowed by a user binding in scope (e.g. `let setTimeout = …`), so a
@@ -22609,7 +22286,7 @@ fn timer_builtin_call_capability(
 /// Capability for a bare global function-builtin call (`parseInt("42")`,
 /// `parseFloat("3.5")`, `isNaN(x)`, `isFinite(x)`, `String(value)`). These
 /// standard globals have no binding on the eval scope, so — like the
-/// Math/timer/error interceptions — recognize the bare identifier callee and
+/// timer/error interceptions — recognize the bare identifier callee and
 /// route to the canonical `builtin:<name>` hostcall. Returns `None` when the
 /// name is shadowed by a user binding in scope, so a local declaration is never
 /// reinterpreted as the host builtin (bd-n5lhl, bd-wgezf).
@@ -22651,55 +22328,6 @@ fn global_function_call_capability(
     }
 }
 
-fn math_builtin_call_capability(
-    callee: &Expression,
-    binding_lookup: &BTreeMap<String, BindingId>,
-) -> Option<&'static str> {
-    let Expression::Member {
-        object,
-        property,
-        computed,
-        ..
-    } = callee
-    else {
-        return None;
-    };
-
-    match math_object_property_name(object, property, *computed, binding_lookup)? {
-        "abs" => Some("builtin:MathAbs"),
-        "ceil" => Some("builtin:MathCeil"),
-        "floor" => Some("builtin:MathFloor"),
-        "round" => Some("builtin:MathRound"),
-        "max" => Some("builtin:MathMax"),
-        "min" => Some("builtin:MathMin"),
-        "random" => Some("builtin:MathRandom"),
-        "pow" => Some("builtin:MathPow"),
-        "sqrt" => Some("builtin:MathSqrt"),
-        "sin" => Some("builtin:MathSin"),
-        "cos" => Some("builtin:MathCos"),
-        "log" => Some("builtin:MathLog"),
-        "exp" => Some("builtin:MathExp"),
-        "tan" => Some("builtin:MathTan"),
-        "trunc" => Some("builtin:MathTrunc"),
-        "sign" => Some("builtin:MathSign"),
-        "atan2" => Some("builtin:MathAtan2"),
-        "asin" => Some("builtin:MathAsin"),
-        "acos" => Some("builtin:MathAcos"),
-        "hypot" => Some("builtin:MathHypot"),
-        "imul" => Some("builtin:MathImul"),
-        "atan" => Some("builtin:MathAtan"),
-        "log10" => Some("builtin:MathLog10"),
-        "log2" => Some("builtin:MathLog2"),
-        "cbrt" => Some("builtin:MathCbrt"),
-        "clz32" => Some("builtin:MathClz32"),
-        "fround" => Some("builtin:MathFround"),
-        "acosh" => Some("builtin:MathAcosh"),
-        "asinh" => Some("builtin:MathAsinh"),
-        "atanh" => Some("builtin:MathAtanh"),
-        _ => None,
-    }
-}
-
 /// Recognize the one supported first-class static builtin member read.
 ///
 /// The engine intentionally has no materialized `Array` global object, so an
@@ -22731,7 +22359,7 @@ fn static_builtin_member_factory_capability(
 
 /// Recognize calls to the standard `Object.*` / `JSON.*` / `Array.*` / `String.*`
 /// STATIC methods whose receiver is the bare (unbound) global identifier. These
-/// globals have no binding on the eval scope, so — like the Math/timer/Number/
+/// globals have no binding on the eval scope, so — like the timer/Number/
 /// global-function interceptions — route the recognized member call to the
 /// canonical `builtin:*` hostcall whose impl already exists in
 /// `dispatch_builtin_hostcall_inner` (bd-9a8cz.2 seeded Object/JSON; bd-tvpjk
@@ -22851,7 +22479,7 @@ fn object_receiver_static_call_capability(
 /// Recognize calls to the standard `Number.*` STATIC methods whose receiver is
 /// the bare (unbound) global identifier `Number` — `Number.isInteger(x)`,
 /// `Number.isFinite(x)`, `Number.isNaN(x)`, `Number.parseInt(s)`,
-/// `Number.parseFloat(s)`. Like `Object`/`JSON`/`Math`, the `Number` global has
+/// `Number.parseFloat(s)`. Like `Object`/`JSON`, the `Number` global has
 /// no binding on the eval scope, so the member-call must be recognized here and
 /// routed to the canonical `builtin:Number*` hostcall whose impl already exists
 /// in `dispatch_builtin_hostcall_inner` (bd-6kkg6 — execution + id-registry were
@@ -34284,6 +33912,41 @@ mod tests {
                 .all(|binding| binding.name != "myVar"),
             "an unresolvable reference must not become a synthetic lexical binding"
         );
+    }
+
+    #[test]
+    fn writable_builtin_globals_bypass_lowering_shortcuts_bd_1piai() {
+        let ops = lower_script_source_ops(
+            "Math.abs(-1); Math.PI; Date.now(); new Date(0); Promise.resolve(1);",
+            "writable_builtin_globals_bd_1piai.js",
+        );
+
+        for capability in [
+            "builtin:MathAbs",
+            "builtin:MathPI",
+            "builtin:DateNow",
+            "builtin:Date",
+            "promise:resolve",
+            "builtin:PromiseResolveFunction",
+        ] {
+            assert_eq!(
+                count_hostcall_deep(&ops, capability),
+                0,
+                "writable realm global must not lower through {capability}"
+            );
+        }
+        for name in ["Math", "Date", "Promise"] {
+            assert!(
+                ops_deep_match(&ops, &|op| matches!(
+                    op,
+                    Ir1Op::LoadName {
+                        name: loaded,
+                        allow_missing: false
+                    } if loaded == name
+                )),
+                "{name} must flow through runtime name resolution"
+            );
+        }
     }
 
     #[test]

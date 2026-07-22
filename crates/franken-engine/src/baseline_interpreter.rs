@@ -2817,17 +2817,56 @@ pub enum BuiltinFunctionKind {
     CryptoCipherFinal,
     CryptoGetAuthTag,
     CryptoSetAuthTag,
+    /// The writable global `Date` constructor (bd-1piai). Kept at the true
+    /// enum tail because builtin discriminants participate in deterministic
+    /// register hashes.
+    DateConstructor,
+    /// First-class `Date.now` method exposed by [`Self::DateConstructor`].
+    DateNow,
+    /// First-class methods on the writable global `Math` object (bd-1piai).
+    /// These remain at the true enum tail for deterministic ordinal stability.
+    MathAbs,
+    MathCeil,
+    MathFloor,
+    MathRound,
+    MathMax,
+    MathMin,
+    MathRandom,
+    MathPow,
+    MathSqrt,
+    MathSin,
+    MathCos,
+    MathLog,
+    MathExp,
+    MathTan,
+    MathTrunc,
+    MathSign,
+    MathAtan2,
+    MathAsin,
+    MathAcos,
+    MathHypot,
+    MathImul,
+    MathAtan,
+    MathLog10,
+    MathLog2,
+    MathCbrt,
+    MathClz32,
+    MathFround,
+    MathAcosh,
+    MathAsinh,
+    MathAtanh,
 }
 
 impl BuiltinFunctionKind {
     /// Whether this first-class builtin implements ECMAScript `[[Construct]]`.
     ///
     /// Most builtins exposed by this interpreter are callable methods. The
-    /// `Function` constructor is the sole constructible builtin value; other
-    /// global constructors lower directly to dedicated hostcalls instead of
-    /// passing through [`Value::BuiltinFunction`] (bd-zyndq).
+    /// `Function` and the materialized writable `Date` global are constructible
+    /// builtin values; other global constructors still lower directly to
+    /// dedicated hostcalls instead of passing through [`Value::BuiltinFunction`]
+    /// (bd-zyndq, bd-1piai).
     const fn is_constructible(self) -> bool {
-        matches!(self, Self::FunctionConstructor)
+        matches!(self, Self::FunctionConstructor | Self::DateConstructor)
     }
 }
 
@@ -2881,6 +2920,15 @@ impl BuiltinFunction {
 
     fn function_constructor() -> Self {
         Self::new_kind(BuiltinFunctionKind::FunctionConstructor)
+    }
+
+    fn date_constructor(property_object: ObjectId) -> Self {
+        Self {
+            kind: BuiltinFunctionKind::DateConstructor,
+            module_specifier: Arc::from(""),
+            iterator_handle: None,
+            bound_object: Some(property_object.0),
+        }
     }
 
     fn generated_function(artifact_id: u32) -> Self {
@@ -4275,6 +4323,38 @@ impl BuiltinFunction {
             BuiltinFunctionKind::CryptoCipherFinal => "final",
             BuiltinFunctionKind::CryptoGetAuthTag => "getAuthTag",
             BuiltinFunctionKind::CryptoSetAuthTag => "setAuthTag",
+            BuiltinFunctionKind::DateConstructor => "Date",
+            BuiltinFunctionKind::DateNow => "now",
+            BuiltinFunctionKind::MathAbs => "abs",
+            BuiltinFunctionKind::MathCeil => "ceil",
+            BuiltinFunctionKind::MathFloor => "floor",
+            BuiltinFunctionKind::MathRound => "round",
+            BuiltinFunctionKind::MathMax => "max",
+            BuiltinFunctionKind::MathMin => "min",
+            BuiltinFunctionKind::MathRandom => "random",
+            BuiltinFunctionKind::MathPow => "pow",
+            BuiltinFunctionKind::MathSqrt => "sqrt",
+            BuiltinFunctionKind::MathSin => "sin",
+            BuiltinFunctionKind::MathCos => "cos",
+            BuiltinFunctionKind::MathLog => "log",
+            BuiltinFunctionKind::MathExp => "exp",
+            BuiltinFunctionKind::MathTan => "tan",
+            BuiltinFunctionKind::MathTrunc => "trunc",
+            BuiltinFunctionKind::MathSign => "sign",
+            BuiltinFunctionKind::MathAtan2 => "atan2",
+            BuiltinFunctionKind::MathAsin => "asin",
+            BuiltinFunctionKind::MathAcos => "acos",
+            BuiltinFunctionKind::MathHypot => "hypot",
+            BuiltinFunctionKind::MathImul => "imul",
+            BuiltinFunctionKind::MathAtan => "atan",
+            BuiltinFunctionKind::MathLog10 => "log10",
+            BuiltinFunctionKind::MathLog2 => "log2",
+            BuiltinFunctionKind::MathCbrt => "cbrt",
+            BuiltinFunctionKind::MathClz32 => "clz32",
+            BuiltinFunctionKind::MathFround => "fround",
+            BuiltinFunctionKind::MathAcosh => "acosh",
+            BuiltinFunctionKind::MathAsinh => "asinh",
+            BuiltinFunctionKind::MathAtanh => "atanh",
         }
     }
 }
@@ -23848,32 +23928,220 @@ impl InterpreterCore {
                 Value::BuiltinFunction(BuiltinFunction::console_info()),
             ),
         ])?);
-        let promise = Value::Object(self.alloc_object_with_properties(&[
-            (
-                "resolve",
-                Value::BuiltinFunction(BuiltinFunction::promise_resolve()),
-            ),
-            (
-                "reject",
-                Value::BuiltinFunction(BuiltinFunction::promise_reject()),
-            ),
-            (
-                "all",
-                Value::BuiltinFunction(BuiltinFunction::promise_all()),
-            ),
-            (
-                "race",
-                Value::BuiltinFunction(BuiltinFunction::promise_race()),
-            ),
-            (
-                "allSettled",
-                Value::BuiltinFunction(BuiltinFunction::promise_all_settled()),
-            ),
-            (
-                "any",
-                Value::BuiltinFunction(BuiltinFunction::promise_any()),
-            ),
-        ])?);
+        // bd-1piai: these ordinary JavaScript globals live in the realm-owned
+        // name map, not in the replaceable module scope. Seed each one exactly
+        // once so assignments, aliases, and nested module execution all observe
+        // the same mutable binding and object identity.
+        let promise = if self.realm_dynamic_globals.contains_key("Promise") {
+            None
+        } else {
+            Some(Value::Object(self.alloc_object_with_properties(&[
+                (
+                    "resolve",
+                    Value::BuiltinFunction(BuiltinFunction::promise_resolve()),
+                ),
+                (
+                    "reject",
+                    Value::BuiltinFunction(BuiltinFunction::promise_reject()),
+                ),
+                (
+                    "all",
+                    Value::BuiltinFunction(BuiltinFunction::promise_all()),
+                ),
+                (
+                    "race",
+                    Value::BuiltinFunction(BuiltinFunction::promise_race()),
+                ),
+                (
+                    "allSettled",
+                    Value::BuiltinFunction(BuiltinFunction::promise_all_settled()),
+                ),
+                (
+                    "any",
+                    Value::BuiltinFunction(BuiltinFunction::promise_any()),
+                ),
+            ])?))
+        };
+        let math = if self.realm_dynamic_globals.contains_key("Math") {
+            None
+        } else {
+            Some(Value::Object(self.alloc_object_with_properties(&[
+                (
+                    "abs",
+                    Value::BuiltinFunction(BuiltinFunction::new_kind(BuiltinFunctionKind::MathAbs)),
+                ),
+                (
+                    "ceil",
+                    Value::BuiltinFunction(BuiltinFunction::new_kind(
+                        BuiltinFunctionKind::MathCeil,
+                    )),
+                ),
+                (
+                    "floor",
+                    Value::BuiltinFunction(BuiltinFunction::new_kind(
+                        BuiltinFunctionKind::MathFloor,
+                    )),
+                ),
+                (
+                    "round",
+                    Value::BuiltinFunction(BuiltinFunction::new_kind(
+                        BuiltinFunctionKind::MathRound,
+                    )),
+                ),
+                (
+                    "max",
+                    Value::BuiltinFunction(BuiltinFunction::new_kind(BuiltinFunctionKind::MathMax)),
+                ),
+                (
+                    "min",
+                    Value::BuiltinFunction(BuiltinFunction::new_kind(BuiltinFunctionKind::MathMin)),
+                ),
+                (
+                    "random",
+                    Value::BuiltinFunction(BuiltinFunction::new_kind(
+                        BuiltinFunctionKind::MathRandom,
+                    )),
+                ),
+                (
+                    "pow",
+                    Value::BuiltinFunction(BuiltinFunction::new_kind(BuiltinFunctionKind::MathPow)),
+                ),
+                (
+                    "sqrt",
+                    Value::BuiltinFunction(BuiltinFunction::new_kind(
+                        BuiltinFunctionKind::MathSqrt,
+                    )),
+                ),
+                (
+                    "sin",
+                    Value::BuiltinFunction(BuiltinFunction::new_kind(BuiltinFunctionKind::MathSin)),
+                ),
+                (
+                    "cos",
+                    Value::BuiltinFunction(BuiltinFunction::new_kind(BuiltinFunctionKind::MathCos)),
+                ),
+                (
+                    "log",
+                    Value::BuiltinFunction(BuiltinFunction::new_kind(BuiltinFunctionKind::MathLog)),
+                ),
+                (
+                    "exp",
+                    Value::BuiltinFunction(BuiltinFunction::new_kind(BuiltinFunctionKind::MathExp)),
+                ),
+                (
+                    "tan",
+                    Value::BuiltinFunction(BuiltinFunction::new_kind(BuiltinFunctionKind::MathTan)),
+                ),
+                (
+                    "trunc",
+                    Value::BuiltinFunction(BuiltinFunction::new_kind(
+                        BuiltinFunctionKind::MathTrunc,
+                    )),
+                ),
+                (
+                    "sign",
+                    Value::BuiltinFunction(BuiltinFunction::new_kind(
+                        BuiltinFunctionKind::MathSign,
+                    )),
+                ),
+                (
+                    "atan2",
+                    Value::BuiltinFunction(BuiltinFunction::new_kind(
+                        BuiltinFunctionKind::MathAtan2,
+                    )),
+                ),
+                (
+                    "asin",
+                    Value::BuiltinFunction(BuiltinFunction::new_kind(
+                        BuiltinFunctionKind::MathAsin,
+                    )),
+                ),
+                (
+                    "acos",
+                    Value::BuiltinFunction(BuiltinFunction::new_kind(
+                        BuiltinFunctionKind::MathAcos,
+                    )),
+                ),
+                (
+                    "hypot",
+                    Value::BuiltinFunction(BuiltinFunction::new_kind(
+                        BuiltinFunctionKind::MathHypot,
+                    )),
+                ),
+                (
+                    "imul",
+                    Value::BuiltinFunction(BuiltinFunction::new_kind(
+                        BuiltinFunctionKind::MathImul,
+                    )),
+                ),
+                (
+                    "atan",
+                    Value::BuiltinFunction(BuiltinFunction::new_kind(
+                        BuiltinFunctionKind::MathAtan,
+                    )),
+                ),
+                (
+                    "log10",
+                    Value::BuiltinFunction(BuiltinFunction::new_kind(
+                        BuiltinFunctionKind::MathLog10,
+                    )),
+                ),
+                (
+                    "log2",
+                    Value::BuiltinFunction(BuiltinFunction::new_kind(
+                        BuiltinFunctionKind::MathLog2,
+                    )),
+                ),
+                (
+                    "cbrt",
+                    Value::BuiltinFunction(BuiltinFunction::new_kind(
+                        BuiltinFunctionKind::MathCbrt,
+                    )),
+                ),
+                (
+                    "clz32",
+                    Value::BuiltinFunction(BuiltinFunction::new_kind(
+                        BuiltinFunctionKind::MathClz32,
+                    )),
+                ),
+                (
+                    "fround",
+                    Value::BuiltinFunction(BuiltinFunction::new_kind(
+                        BuiltinFunctionKind::MathFround,
+                    )),
+                ),
+                (
+                    "acosh",
+                    Value::BuiltinFunction(BuiltinFunction::new_kind(
+                        BuiltinFunctionKind::MathAcosh,
+                    )),
+                ),
+                (
+                    "asinh",
+                    Value::BuiltinFunction(BuiltinFunction::new_kind(
+                        BuiltinFunctionKind::MathAsinh,
+                    )),
+                ),
+                (
+                    "atanh",
+                    Value::BuiltinFunction(BuiltinFunction::new_kind(
+                        BuiltinFunctionKind::MathAtanh,
+                    )),
+                ),
+                ("PI", Value::Float(Float64::new(std::f64::consts::PI))),
+            ])?))
+        };
+        let date = if self.realm_dynamic_globals.contains_key("Date") {
+            None
+        } else {
+            let properties = self.alloc_object_with_properties(&[(
+                "now",
+                Value::BuiltinFunction(BuiltinFunction::new_kind(BuiltinFunctionKind::DateNow)),
+            )])?;
+            Some(Value::BuiltinFunction(BuiltinFunction::date_constructor(
+                properties,
+            )))
+        };
         let performance = Value::Object(self.alloc_object_with_properties(&[(
             "now",
             Value::BuiltinFunction(BuiltinFunction::performance_now()),
@@ -23881,8 +24149,16 @@ impl InterpreterCore {
 
         self.inject_runtime_global_binding("process", process)?;
         self.inject_runtime_global_binding("console", console)?;
-        self.inject_runtime_global_binding("Promise", promise)?;
         self.inject_runtime_global_binding("performance", performance)?;
+        if let Some(promise) = promise {
+            self.put_realm_runtime_name("Promise", promise)?;
+        }
+        if let Some(math) = math {
+            self.put_realm_runtime_name("Math", math)?;
+        }
+        if let Some(date) = date {
+            self.put_realm_runtime_name("Date", date)?;
+        }
         self.inject_runtime_global_binding(
             "Function",
             Value::BuiltinFunction(BuiltinFunction::function_constructor()),
@@ -26695,6 +26971,102 @@ impl InterpreterCore {
                     return Ok(Value::Undefined);
                 };
                 self.collection_clear(set_id, "Set", "__values")
+            }
+            BuiltinFunctionKind::DateConstructor => {
+                self.dispatch_builtin_hostcall("builtin:Date", args, Some(module))
+            }
+            BuiltinFunctionKind::DateNow => {
+                self.dispatch_builtin_hostcall("builtin:DateNow", args, Some(module))
+            }
+            BuiltinFunctionKind::MathAbs => {
+                self.dispatch_builtin_hostcall("builtin:MathAbs", args, Some(module))
+            }
+            BuiltinFunctionKind::MathCeil => {
+                self.dispatch_builtin_hostcall("builtin:MathCeil", args, Some(module))
+            }
+            BuiltinFunctionKind::MathFloor => {
+                self.dispatch_builtin_hostcall("builtin:MathFloor", args, Some(module))
+            }
+            BuiltinFunctionKind::MathRound => {
+                self.dispatch_builtin_hostcall("builtin:MathRound", args, Some(module))
+            }
+            BuiltinFunctionKind::MathMax => {
+                self.dispatch_builtin_hostcall("builtin:MathMax", args, Some(module))
+            }
+            BuiltinFunctionKind::MathMin => {
+                self.dispatch_builtin_hostcall("builtin:MathMin", args, Some(module))
+            }
+            BuiltinFunctionKind::MathRandom => {
+                self.dispatch_builtin_hostcall("builtin:MathRandom", args, Some(module))
+            }
+            BuiltinFunctionKind::MathPow => {
+                self.dispatch_builtin_hostcall("builtin:MathPow", args, Some(module))
+            }
+            BuiltinFunctionKind::MathSqrt => {
+                self.dispatch_builtin_hostcall("builtin:MathSqrt", args, Some(module))
+            }
+            BuiltinFunctionKind::MathSin => {
+                self.dispatch_builtin_hostcall("builtin:MathSin", args, Some(module))
+            }
+            BuiltinFunctionKind::MathCos => {
+                self.dispatch_builtin_hostcall("builtin:MathCos", args, Some(module))
+            }
+            BuiltinFunctionKind::MathLog => {
+                self.dispatch_builtin_hostcall("builtin:MathLog", args, Some(module))
+            }
+            BuiltinFunctionKind::MathExp => {
+                self.dispatch_builtin_hostcall("builtin:MathExp", args, Some(module))
+            }
+            BuiltinFunctionKind::MathTan => {
+                self.dispatch_builtin_hostcall("builtin:MathTan", args, Some(module))
+            }
+            BuiltinFunctionKind::MathTrunc => {
+                self.dispatch_builtin_hostcall("builtin:MathTrunc", args, Some(module))
+            }
+            BuiltinFunctionKind::MathSign => {
+                self.dispatch_builtin_hostcall("builtin:MathSign", args, Some(module))
+            }
+            BuiltinFunctionKind::MathAtan2 => {
+                self.dispatch_builtin_hostcall("builtin:MathAtan2", args, Some(module))
+            }
+            BuiltinFunctionKind::MathAsin => {
+                self.dispatch_builtin_hostcall("builtin:MathAsin", args, Some(module))
+            }
+            BuiltinFunctionKind::MathAcos => {
+                self.dispatch_builtin_hostcall("builtin:MathAcos", args, Some(module))
+            }
+            BuiltinFunctionKind::MathHypot => {
+                self.dispatch_builtin_hostcall("builtin:MathHypot", args, Some(module))
+            }
+            BuiltinFunctionKind::MathImul => {
+                self.dispatch_builtin_hostcall("builtin:MathImul", args, Some(module))
+            }
+            BuiltinFunctionKind::MathAtan => {
+                self.dispatch_builtin_hostcall("builtin:MathAtan", args, Some(module))
+            }
+            BuiltinFunctionKind::MathLog10 => {
+                self.dispatch_builtin_hostcall("builtin:MathLog10", args, Some(module))
+            }
+            BuiltinFunctionKind::MathLog2 => {
+                self.dispatch_builtin_hostcall("builtin:MathLog2", args, Some(module))
+            }
+            BuiltinFunctionKind::MathCbrt => {
+                self.dispatch_builtin_hostcall("builtin:MathCbrt", args, Some(module))
+            }
+            BuiltinFunctionKind::MathClz32 => {
+                self.dispatch_builtin_hostcall("builtin:MathClz32", args, Some(module))
+            }
+            BuiltinFunctionKind::MathFround => {
+                self.dispatch_builtin_hostcall("builtin:MathFround", args, Some(module))
+            }
+            BuiltinFunctionKind::MathAcosh => {
+                self.dispatch_builtin_hostcall("builtin:MathAcosh", args, Some(module))
+            }
+            BuiltinFunctionKind::MathAsinh => {
+                self.dispatch_builtin_hostcall("builtin:MathAsinh", args, Some(module))
+            }
+            BuiltinFunctionKind::MathAtanh => {
+                self.dispatch_builtin_hostcall("builtin:MathAtanh", args, Some(module))
             }
             BuiltinFunctionKind::DateGetTime => {
                 // `Date.prototype.getTime()` — read the receiver Date object's
@@ -30923,6 +31295,26 @@ impl InterpreterCore {
                                 Value::Undefined
                             }
                         }
+                        Value::BuiltinFunction(builtin) => {
+                            if let Some(property_object) =
+                                Self::builtin_function_property_object(&builtin)
+                            {
+                                self.run_pre_runtime_property_access_hook(
+                                    module,
+                                    property_object,
+                                    &property_key,
+                                )?;
+                                self.proxy_aware_get_runtime_property(
+                                    Some(module),
+                                    property_object,
+                                    &property_key,
+                                    Value::Object(property_object),
+                                    0,
+                                )?
+                            } else {
+                                Value::Undefined
+                            }
+                        }
                         Value::Generator(gen_id) => {
                             // Generator iterator-protocol member access (bd-v6cv1).
                             // Previously a generator had no arm here, so `it.next`
@@ -31061,6 +31453,34 @@ impl InterpreterCore {
                                 self.maintain_array_index_assignment(oid, index)?;
                             }
                         }
+                        Value::BuiltinFunction(builtin) => {
+                            let Some(property_object) =
+                                Self::builtin_function_property_object(&builtin)
+                            else {
+                                return Err(InterpreterError::TypeError {
+                                    expected: "object with writable properties".to_string(),
+                                    got: builtin.display_name().to_string(),
+                                });
+                            };
+                            self.run_pre_runtime_property_access_hook(
+                                module,
+                                property_object,
+                                &property_key,
+                            )?;
+                            if !self.proxy_aware_set_runtime_property(
+                                Some(module),
+                                property_object,
+                                &property_key,
+                                set_val,
+                                Value::Object(property_object),
+                                0,
+                            )? {
+                                return Err(InterpreterError::TypeError {
+                                    expected: "successful builtin property write".to_string(),
+                                    got: "falsy set result".to_string(),
+                                });
+                            }
+                        }
                         _ => {
                             return Err(InterpreterError::TypeError {
                                 expected: "object".to_string(),
@@ -31120,6 +31540,28 @@ impl InterpreterCore {
                             if deleted && let Some(property_key) = property_key.string() {
                                 self.mark_deleted_for_in_iterators(oid, property_key);
                             }
+                            self.write_reg(dst, Value::Bool(deleted))?;
+                        }
+                        Value::BuiltinFunction(builtin) => {
+                            let Some(property_object) =
+                                Self::builtin_function_property_object(&builtin)
+                            else {
+                                return Err(InterpreterError::TypeError {
+                                    expected: "object with configurable properties".to_string(),
+                                    got: builtin.display_name().to_string(),
+                                });
+                            };
+                            self.run_pre_runtime_property_access_hook(
+                                module,
+                                property_object,
+                                &property_key,
+                            )?;
+                            let deleted = self.proxy_aware_delete_runtime_property(
+                                Some(module),
+                                property_object,
+                                &property_key,
+                                0,
+                            )?;
                             self.write_reg(dst, Value::Bool(deleted))?;
                         }
                         _ => {
@@ -42178,6 +42620,16 @@ impl InterpreterCore {
             Value::Int(_) | Value::Float(_) => Ok(key
                 .as_str()
                 .map_or(Value::Undefined, Self::number_property_value)),
+            Value::BuiltinFunction(builtin) => {
+                let Some(property_object) = Self::builtin_function_property_object(&builtin) else {
+                    return Ok(Value::Undefined);
+                };
+                Ok(self
+                    .heap
+                    .get(property_object.0 as usize)
+                    .and_then(|object| object.own_runtime_property_value(&key))
+                    .unwrap_or(Value::Undefined))
+            }
             other => Err(InterpreterError::TypeError {
                 expected: "object".to_string(),
                 got: other.type_name().to_string(),
@@ -42193,11 +42645,19 @@ impl InterpreterCore {
     ) -> Result<(), InterpreterError> {
         let key = self.executable_property_key_from_value(key_value);
         self.preflight_runtime_property_key_for_hook(&key)?;
-        let Value::Object(object_id) = object_value else {
-            return Err(InterpreterError::TypeError {
-                expected: "object".to_string(),
-                got: object_value.type_name().to_string(),
-            });
+        let object_id = match &object_value {
+            Value::Object(object_id) => *object_id,
+            Value::BuiltinFunction(builtin) => Self::builtin_function_property_object(builtin)
+                .ok_or_else(|| InterpreterError::TypeError {
+                    expected: "object with writable properties".to_string(),
+                    got: object_value.type_name().to_string(),
+                })?,
+            _ => {
+                return Err(InterpreterError::TypeError {
+                    expected: "object".to_string(),
+                    got: object_value.type_name().to_string(),
+                });
+            }
         };
         if let Some(key) = key.as_str()
             && self
@@ -51993,7 +52453,12 @@ impl InterpreterCore {
                     });
                 }
                 let target = self.read_reg(args.start)?;
-                if !matches!(target, Value::Function(_) | Value::Closure(_)) {
+                let is_constructor = match &target {
+                    Value::Function(_) | Value::Closure(_) => true,
+                    Value::BuiltinFunction(builtin) => builtin.kind.is_constructible(),
+                    _ => false,
+                };
+                if !is_constructor {
                     return Err(InterpreterError::TypeError {
                         expected: "constructor function".to_string(),
                         got: target.type_name().to_string(),
@@ -60617,6 +61082,17 @@ impl InterpreterCore {
         } else {
             Ok(Value::Undefined)
         }
+    }
+
+    /// Return the ordinary-property backing object for a builtin function that
+    /// also acts as a mutable JavaScript object. `Date` is the first such
+    /// materialized global: aliases share this object, so writes to `Date.now`
+    /// remain visible through every reference (bd-1piai).
+    fn builtin_function_property_object(builtin: &BuiltinFunction) -> Option<ObjectId> {
+        (builtin.kind == BuiltinFunctionKind::DateConstructor)
+            .then_some(builtin.bound_object)
+            .flatten()
+            .map(ObjectId)
     }
 
     /// Resolve the function index backing a closure handle, erroring if the
@@ -86577,6 +87053,94 @@ mod tests {
         assert_eq!(
             binding.value().expect("global binding value"),
             Value::Int(7)
+        );
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+    }
+
+    #[test]
+    fn writable_builtin_realm_seeding_is_idempotent_bd_1piai() {
+        let mut core = InterpreterCore::new(test_quickjs_config(), "bd-1piai-realm-seeding");
+        core.inject_runtime_globals()
+            .expect("initial runtime-global injection");
+        assert_eq!(core.realm_dynamic_globals.len(), 3);
+        for name in ["Date", "Math", "Promise"] {
+            assert!(
+                core.realm_dynamic_globals.contains_key(name),
+                "missing {name}"
+            );
+        }
+
+        let original_globals = ["Date", "Math", "Promise"].map(|name| {
+            (
+                name,
+                core.load_runtime_name(name, false)
+                    .expect("seeded realm global"),
+            )
+        });
+        core.inject_runtime_globals()
+            .expect("idempotent runtime-global injection");
+        for (name, expected) in &original_globals {
+            assert_eq!(
+                core.load_runtime_name(name, false)
+                    .expect("preserved realm global"),
+                expected.clone(),
+                "repeated injection must preserve {name} identity"
+            );
+        }
+
+        core.put_runtime_name("Date", Value::Int(1), true)
+            .expect("strict Date replacement");
+        core.put_runtime_name("Math", Value::Int(2), true)
+            .expect("strict Math replacement");
+        core.put_runtime_name("Promise", Value::Int(3), true)
+            .expect("strict Promise replacement");
+        core.inject_runtime_globals()
+            .expect("repeated runtime-global injection");
+
+        for (name, expected) in [("Date", 1), ("Math", 2), ("Promise", 3)] {
+            assert_eq!(
+                core.load_runtime_name(name, false)
+                    .expect("materialized realm global"),
+                Value::Int(expected),
+                "repeated preparation must not replace {name}"
+            );
+        }
+        assert_eq!(core.realm_dynamic_globals.len(), 3);
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+    }
+
+    #[test]
+    fn date_backing_object_is_visible_to_callback_property_helpers_bd_1piai() {
+        let mut core = InterpreterCore::new(test_quickjs_config(), "bd-1piai-date-properties");
+        core.inject_runtime_globals()
+            .expect("runtime-global injection");
+        let date = core
+            .load_runtime_name("Date", false)
+            .expect("Date realm global");
+
+        let original = core
+            .simple_callback_get_property(date.clone(), &Value::str("now"))
+            .expect("read Date.now through callback helper");
+        assert!(matches!(
+            original,
+            Value::BuiltinFunction(BuiltinFunction {
+                kind: BuiltinFunctionKind::DateNow,
+                ..
+            })
+        ));
+
+        core.simple_callback_set_property(date.clone(), &Value::str("now"), Value::Int(17))
+            .expect("write Date.now through callback helper");
+        assert_eq!(
+            core.simple_callback_get_property(date, &Value::str("now"))
+                .expect("read replaced Date.now through callback helper"),
+            Value::Int(17)
         );
         assert_eq!(
             core.estimated_memory_bytes(),

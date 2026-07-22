@@ -2553,6 +2553,23 @@ fn object_pattern_static_key(
         .unwrap_or_else(|_| fallback_name.unwrap_or_default().into()))
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DestructuringTargetStore {
+    Assign,
+    Initialize,
+}
+
+fn push_destructuring_target_store(
+    ops: &mut Vec<Ir1Op>,
+    binding_id: BindingId,
+    store: DestructuringTargetStore,
+) {
+    ops.push(match store {
+        DestructuringTargetStore::Assign => Ir1Op::StoreBinding { binding_id },
+        DestructuringTargetStore::Initialize => Ir1Op::InitializeBinding { binding_id },
+    });
+}
+
 /// Emit IR1 ops to destructure a value (already stored in `source_bid`) into
 /// the individual bindings declared by `pattern`. For object patterns this
 /// emits `LoadBinding(source) + GetProperty(key) + StoreBinding(target) + Pop`
@@ -2569,6 +2586,7 @@ fn lower_destructuring_to_ir1(
     scope_id: ScopeId,
     label_counter: &mut u32,
     span_table: &mut Vec<Ir1OpSpanEntry>,
+    target_store: DestructuringTargetStore,
 ) -> Result<(), LoweringPipelineError> {
     match pattern {
         BindingPattern::Identifier(_) => {
@@ -2604,9 +2622,13 @@ fn lower_destructuring_to_ir1(
                         binding_id: source_bid,
                     });
                     ops.push(Ir1Op::SpreadIntoObject);
-                    ops.push(Ir1Op::StoreBinding {
-                        binding_id: rest_bid,
-                    });
+                    if matches!(inner.as_ref(), BindingPattern::Identifier(_)) {
+                        push_destructuring_target_store(ops, rest_bid, target_store);
+                    } else {
+                        ops.push(Ir1Op::StoreBinding {
+                            binding_id: rest_bid,
+                        });
+                    }
                     ops.push(Ir1Op::Pop);
 
                     for key in &rest_excluded_keys {
@@ -2630,6 +2652,7 @@ fn lower_destructuring_to_ir1(
                             scope_id,
                             label_counter,
                             span_table,
+                            target_store,
                         )?;
                     }
 
@@ -2661,9 +2684,7 @@ fn lower_destructuring_to_ir1(
 
                 match &prop.value {
                     BindingPattern::Identifier(_) => {
-                        ops.push(Ir1Op::StoreBinding {
-                            binding_id: target_bid,
-                        });
+                        push_destructuring_target_store(ops, target_bid, target_store);
                         ops.push(Ir1Op::Pop);
                     }
                     _ => {
@@ -2688,6 +2709,7 @@ fn lower_destructuring_to_ir1(
                             scope_id,
                             label_counter,
                             span_table,
+                            target_store,
                         )?;
                     }
                 }
@@ -2728,9 +2750,7 @@ fn lower_destructuring_to_ir1(
                         ops.push(Ir1Op::ArraySlice);
 
                         // Store the result array to the rest binding
-                        ops.push(Ir1Op::StoreBinding {
-                            binding_id: target_bid,
-                        });
+                        push_destructuring_target_store(ops, target_bid, target_store);
                         ops.push(Ir1Op::Pop);
                     }
                     continue;
@@ -2755,9 +2775,7 @@ fn lower_destructuring_to_ir1(
                 });
                 match element {
                     BindingPattern::Identifier(_) => {
-                        ops.push(Ir1Op::StoreBinding {
-                            binding_id: target_bid,
-                        });
+                        push_destructuring_target_store(ops, target_bid, target_store);
                         ops.push(Ir1Op::Pop);
                     }
                     _ => {
@@ -2782,6 +2800,7 @@ fn lower_destructuring_to_ir1(
                             scope_id,
                             label_counter,
                             span_table,
+                            target_store,
                         )?;
                     }
                 }
@@ -2816,9 +2835,7 @@ fn lower_destructuring_to_ir1(
                         ops.push(Ir1Op::LoadBinding {
                             binding_id: source_bid,
                         });
-                        ops.push(Ir1Op::StoreBinding {
-                            binding_id: target_bid,
-                        });
+                        push_destructuring_target_store(ops, target_bid, target_store);
                         ops.push(Ir1Op::Pop);
                     }
                 }
@@ -2833,6 +2850,7 @@ fn lower_destructuring_to_ir1(
                         scope_id,
                         label_counter,
                         span_table,
+                        target_store,
                     )?;
                 }
             }
@@ -2861,9 +2879,7 @@ fn lower_destructuring_to_ir1(
                         ops.push(Ir1Op::LoadBinding {
                             binding_id: source_bid,
                         });
-                        ops.push(Ir1Op::StoreBinding {
-                            binding_id: target_bid,
-                        });
+                        push_destructuring_target_store(ops, target_bid, target_store);
                         ops.push(Ir1Op::Pop);
                     }
                 }
@@ -2878,6 +2894,7 @@ fn lower_destructuring_to_ir1(
                         scope_id,
                         label_counter,
                         span_table,
+                        target_store,
                     )?;
                 }
             }
@@ -2896,6 +2913,7 @@ fn lower_destructuring_to_ir1(
                 scope_id,
                 label_counter,
                 span_table,
+                target_store,
             )?;
         }
     }
@@ -3000,6 +3018,7 @@ fn lower_function_parameter_prologue(
             body_scope,
             body_label_counter,
             &mut Vec::new(),
+            DestructuringTargetStore::Assign,
         )?;
     }
 
@@ -3574,6 +3593,7 @@ fn lower_statement_to_ir1_with_flow(
                         scope_id,
                         label_counter,
                         span_table,
+                        DestructuringTargetStore::Assign,
                     )?;
                 }
             }
@@ -3678,6 +3698,32 @@ fn lower_statement_to_ir1_with_flow(
                     label_ctx,
                 )?;
             }
+            let per_iteration_bindings: Vec<BindingId> = for_stmt
+                .init
+                .as_deref()
+                .and_then(|initializer| match initializer {
+                    Statement::VariableDeclaration(declaration)
+                        if declaration.kind == VariableDeclarationKind::Let =>
+                    {
+                        Some(
+                            declaration
+                                .declarations
+                                .iter()
+                                .flat_map(|declarator| declarator.pattern.binding_names())
+                                .filter_map(|name| binding_lookup.get(name).copied())
+                                .collect(),
+                        )
+                    }
+                    _ => None,
+                })
+                .unwrap_or_default();
+            for &binding_id in &per_iteration_bindings {
+                ops.push(Ir1Op::CreatePerIterationBinding {
+                    binding_id,
+                    kind: BindingKind::Let,
+                    preserve_state: true,
+                });
+            }
             let loop_label = alloc_label(label_counter);
             let continue_label = alloc_label(label_counter);
             let end_label = alloc_label(label_counter);
@@ -3714,6 +3760,13 @@ fn lower_statement_to_ir1_with_flow(
                 &label_ctx.enter_loop(end_label, continue_label),
             )?;
             ops.push(Ir1Op::Label { id: continue_label });
+            for &binding_id in &per_iteration_bindings {
+                ops.push(Ir1Op::CreatePerIterationBinding {
+                    binding_id,
+                    kind: BindingKind::Let,
+                    preserve_state: true,
+                });
+            }
             if let Some(update) = &for_stmt.update {
                 lower_expression_to_ir1(
                     update,
@@ -3827,9 +3880,31 @@ fn lower_statement_to_ir1_with_flow(
                 .map_err(LoweringPipelineError::SemanticViolation)?
             };
 
-            ops.push(Ir1Op::StoreBinding {
-                binding_id: source_binding_id,
-            });
+            if let Some(kind) = match for_in_stmt.binding_kind {
+                Some(VariableDeclarationKind::Let) => Some(BindingKind::Let),
+                Some(VariableDeclarationKind::Const) => Some(BindingKind::Const),
+                Some(VariableDeclarationKind::Var) | None => None,
+            } {
+                for name in for_in_stmt.binding.binding_names() {
+                    if let Some(&binding_id) = binding_lookup.get(name) {
+                        ops.push(Ir1Op::CreatePerIterationBinding {
+                            binding_id,
+                            kind,
+                            preserve_state: false,
+                        });
+                    }
+                }
+            }
+
+            if matches!(for_in_stmt.binding, BindingPattern::Identifier(_)) {
+                ops.push(Ir1Op::InitializeBinding {
+                    binding_id: source_binding_id,
+                });
+            } else {
+                ops.push(Ir1Op::StoreBinding {
+                    binding_id: source_binding_id,
+                });
+            }
             ops.push(Ir1Op::Pop);
             if !matches!(for_in_stmt.binding, BindingPattern::Identifier(_)) {
                 lower_destructuring_to_ir1(
@@ -3842,6 +3917,7 @@ fn lower_statement_to_ir1_with_flow(
                     scope_id,
                     label_counter,
                     span_table,
+                    DestructuringTargetStore::Initialize,
                 )?;
             }
 
@@ -3961,9 +4037,31 @@ fn lower_statement_to_ir1_with_flow(
                 .map_err(LoweringPipelineError::SemanticViolation)?
             };
 
-            ops.push(Ir1Op::StoreBinding {
-                binding_id: source_binding_id,
-            });
+            if let Some(kind) = match for_of_stmt.binding_kind {
+                Some(VariableDeclarationKind::Let) => Some(BindingKind::Let),
+                Some(VariableDeclarationKind::Const) => Some(BindingKind::Const),
+                Some(VariableDeclarationKind::Var) | None => None,
+            } {
+                for name in for_of_stmt.binding.binding_names() {
+                    if let Some(&binding_id) = binding_lookup.get(name) {
+                        ops.push(Ir1Op::CreatePerIterationBinding {
+                            binding_id,
+                            kind,
+                            preserve_state: false,
+                        });
+                    }
+                }
+            }
+
+            if matches!(for_of_stmt.binding, BindingPattern::Identifier(_)) {
+                ops.push(Ir1Op::InitializeBinding {
+                    binding_id: source_binding_id,
+                });
+            } else {
+                ops.push(Ir1Op::StoreBinding {
+                    binding_id: source_binding_id,
+                });
+            }
             ops.push(Ir1Op::Pop);
             if !matches!(for_of_stmt.binding, BindingPattern::Identifier(_)) {
                 lower_destructuring_to_ir1(
@@ -3976,6 +4074,7 @@ fn lower_statement_to_ir1_with_flow(
                     scope_id,
                     label_counter,
                     span_table,
+                    DestructuringTargetStore::Initialize,
                 )?;
             }
 
@@ -5369,6 +5468,16 @@ fn binding_kind_for_variable_declaration(kind: VariableDeclarationKind) -> Bindi
     }
 }
 
+fn runtime_scope_binding_kind(kind: BindingKind) -> u8 {
+    match kind {
+        BindingKind::Var => 0,
+        BindingKind::Let => 1,
+        BindingKind::Const | BindingKind::Import => 2,
+        BindingKind::Parameter => 3,
+        BindingKind::FunctionDecl => 4,
+    }
+}
+
 pub fn lower_ir1_to_ir2(
     ir1: &Ir1Module,
 ) -> Result<LoweringPassResult<Ir2Module>, LoweringPipelineError> {
@@ -5803,7 +5912,7 @@ pub fn lower_ir2_to_ir3(
                 Ir1Op::LoadBinding { binding_id } => {
                     first_load.entry(*binding_id).or_insert(index);
                 }
-                Ir1Op::StoreBinding { binding_id } => {
+                Ir1Op::StoreBinding { binding_id } | Ir1Op::InitializeBinding { binding_id } => {
                     first_store.entry(*binding_id).or_insert(index);
                 }
                 _ => {}
@@ -5987,6 +6096,28 @@ pub fn lower_ir2_to_ir3(
                     value_stack.push(dst);
                 }
             }
+            Ir1Op::InitializeBinding { binding_id } => {
+                let src = pop_lowering_value(&mut value_stack)?;
+                if scoped_runtime_binding_ids.contains(binding_id) {
+                    let name = runtime_scope_binding_name(
+                        *binding_id,
+                        &shared_top_level_capture_names_by_id,
+                        &binding_id_to_name,
+                    );
+                    let pool_index = push_constant_optimized(&mut constant_pool, &name);
+                    ir3.instructions.push(Ir3Instruction::InitBinding {
+                        name_pool_index: pool_index,
+                        src,
+                    });
+                    value_stack.push(src);
+                } else {
+                    let dst = *binding_registers
+                        .entry(*binding_id)
+                        .or_insert_with(|| alloc_register(&mut register_cursor));
+                    ir3.instructions.push(Ir3Instruction::Move { dst, src });
+                    value_stack.push(dst);
+                }
+            }
             Ir1Op::StoreBinding { binding_id } => {
                 let src = pop_lowering_value(&mut value_stack)?;
                 if tdz_binding_ids.contains(binding_id) && tdz_initialized.insert(*binding_id) {
@@ -6024,6 +6155,26 @@ pub fn lower_ir2_to_ir3(
                         .or_insert_with(|| alloc_register(&mut register_cursor));
                     ir3.instructions.push(Ir3Instruction::Move { dst, src });
                     value_stack.push(dst);
+                }
+            }
+            Ir1Op::CreatePerIterationBinding {
+                binding_id,
+                kind,
+                preserve_state,
+            } => {
+                if scoped_runtime_binding_ids.contains(binding_id) {
+                    let name = runtime_scope_binding_name(
+                        *binding_id,
+                        &shared_top_level_capture_names_by_id,
+                        &binding_id_to_name,
+                    );
+                    let pool_index = push_constant_optimized(&mut constant_pool, &name);
+                    ir3.instructions
+                        .push(Ir3Instruction::CreatePerIterationBinding {
+                            name_pool_index: pool_index,
+                            kind: runtime_scope_binding_kind(*kind),
+                            preserve_state: *preserve_state,
+                        });
                 }
             }
             Ir1Op::Call { arg_count } => {
@@ -6840,22 +6991,30 @@ pub fn lower_ir2_to_ir3(
                 rest_param_index,
             } => {
                 let dst = alloc_register(&mut register_cursor);
+                let self_capture_name = name
+                    .as_ref()
+                    .filter(|self_name| free_vars.iter().any(|free_var| free_var == *self_name));
                 let temp_free_vars: Vec<&String> = free_vars
                     .iter()
-                    .filter(|fv| !shared_top_level_capture_names.contains(*fv))
+                    .filter(|fv| {
+                        self_capture_name == Some(*fv)
+                            || !shared_top_level_capture_names.contains(*fv)
+                    })
                     .collect();
                 // If the function has free variables, put them on the
                 // scope chain before capturing.
                 if !temp_free_vars.is_empty() {
                     ir3.instructions.push(Ir3Instruction::PushScope);
                     for &fv in &temp_free_vars {
+                        let is_self_capture = self_capture_name == Some(fv);
                         let pool_idx = push_constant_optimized(&mut constant_pool, fv);
                         ir3.instructions.push(Ir3Instruction::DeclareBinding {
                             name_pool_index: pool_idx,
-                            kind: 0,
+                            kind: if is_self_capture { 2 } else { 0 },
                         });
-                        if let Some(&reg) =
-                            binding_registers.get(&name_to_binding_id.get(fv).copied().unwrap_or(0))
+                        if !is_self_capture
+                            && let Some(&reg) = binding_registers
+                                .get(&name_to_binding_id.get(fv).copied().unwrap_or(0))
                         {
                             ir3.instructions.push(Ir3Instruction::StoreScoped {
                                 src: reg,
@@ -6900,6 +7059,13 @@ pub fn lower_ir2_to_ir3(
                         dst,
                         function_index,
                         capture_count: free_vars.len() as u32,
+                    });
+                }
+                if let Some(self_name) = self_capture_name {
+                    let pool_idx = push_constant_optimized(&mut constant_pool, self_name);
+                    ir3.instructions.push(Ir3Instruction::InitBinding {
+                        name_pool_index: pool_idx,
+                        src: dst,
                     });
                 }
                 if !temp_free_vars.is_empty() {
@@ -7451,6 +7617,42 @@ pub fn lower_ir2_to_ir3(
                         fn_value_stack.push(dst);
                     }
                 }
+                Ir1Op::InitializeBinding { binding_id } => {
+                    let src = pop_lowering_value(&mut fn_value_stack)?;
+                    if let Some(name) = fv_id_to_name.get(binding_id) {
+                        let pool_idx = push_constant_optimized(&mut constant_pool, name);
+                        ir3.instructions.push(Ir3Instruction::InitBinding {
+                            name_pool_index: pool_idx,
+                            src,
+                        });
+                        if let Some(child_name) = child_capture_id_to_name.get(binding_id)
+                            && child_name != name
+                        {
+                            let child_pool_idx =
+                                push_constant_optimized(&mut constant_pool, child_name);
+                            ir3.instructions.push(Ir3Instruction::InitBinding {
+                                name_pool_index: child_pool_idx,
+                                src,
+                            });
+                        }
+                        fn_value_stack.push(src);
+                        continue;
+                    }
+                    if let Some(name) = child_capture_id_to_name.get(binding_id) {
+                        let pool_idx = push_constant_optimized(&mut constant_pool, name);
+                        ir3.instructions.push(Ir3Instruction::InitBinding {
+                            name_pool_index: pool_idx,
+                            src,
+                        });
+                        fn_value_stack.push(src);
+                        continue;
+                    }
+                    let dst = *fn_binding_regs
+                        .entry(*binding_id)
+                        .or_insert_with(|| alloc_register(&mut fn_reg));
+                    ir3.instructions.push(Ir3Instruction::Move { dst, src });
+                    fn_value_stack.push(dst);
+                }
                 Ir1Op::StoreBinding { binding_id } => {
                     if let Some(name) = fv_id_to_name.get(binding_id) {
                         let src = pop_lowering_value(&mut fn_value_stack)?;
@@ -7488,6 +7690,24 @@ pub fn lower_ir2_to_ir3(
                     let src = pop_lowering_value(&mut fn_value_stack)?;
                     ir3.instructions.push(Ir3Instruction::Move { dst, src });
                     fn_value_stack.push(dst);
+                }
+                Ir1Op::CreatePerIterationBinding {
+                    binding_id,
+                    kind,
+                    preserve_state,
+                } => {
+                    if let Some(name) = fv_id_to_name
+                        .get(binding_id)
+                        .or_else(|| child_capture_id_to_name.get(binding_id))
+                    {
+                        let pool_idx = push_constant_optimized(&mut constant_pool, name);
+                        ir3.instructions
+                            .push(Ir3Instruction::CreatePerIterationBinding {
+                                name_pool_index: pool_idx,
+                                kind: runtime_scope_binding_kind(*kind),
+                                preserve_state: *preserve_state,
+                            });
+                    }
                 }
                 Ir1Op::BinaryOp { operator } => {
                     let rhs = pop_lowering_value(&mut fn_value_stack)?;
@@ -7997,18 +8217,25 @@ pub fn lower_ir2_to_ir3(
                         .chain(child_capture_id_to_name.values())
                         .map(String::as_str)
                         .collect();
+                    let self_capture_name = inner_name
+                        .as_ref()
+                        .filter(|self_name| inner_fv.iter().any(|free_var| free_var == *self_name));
                     let temp_free_vars: Vec<&String> = inner_fv
                         .iter()
-                        .filter(|name| !available_capture_names.contains(name.as_str()))
+                        .filter(|name| {
+                            self_capture_name == Some(*name)
+                                || !available_capture_names.contains(name.as_str())
+                        })
                         .collect();
                     if !temp_free_vars.is_empty() {
                         ir3.instructions.push(Ir3Instruction::PushScope);
                         for name in &temp_free_vars {
+                            let is_self_capture = self_capture_name == Some(*name);
                             let pool_idx =
                                 push_constant_optimized(&mut constant_pool, name.as_str());
                             ir3.instructions.push(Ir3Instruction::DeclareBinding {
                                 name_pool_index: pool_idx,
-                                kind: 0,
+                                kind: if is_self_capture { 2 } else { 0 },
                             });
                         }
                     }
@@ -8048,6 +8275,13 @@ pub fn lower_ir2_to_ir3(
                             dst,
                             function_index,
                             capture_count: inner_fv.len() as u32,
+                        });
+                    }
+                    if let Some(self_name) = self_capture_name {
+                        let pool_idx = push_constant_optimized(&mut constant_pool, self_name);
+                        ir3.instructions.push(Ir3Instruction::InitBinding {
+                            name_pool_index: pool_idx,
+                            src: dst,
                         });
                     }
                     if !temp_free_vars.is_empty() {
@@ -8982,9 +9216,14 @@ fn demote_forward_ref_phantom(
     // A real prior declaration of this id always emits a `StoreBinding` for its
     // initializer (an explicit value or `undefined`). Its presence means this is
     // a genuine redeclaration, not a forward reference — leave it to conflict.
-    let already_stored = ops
-        .iter()
-        .any(|op| matches!(op, Ir1Op::StoreBinding { binding_id } if *binding_id == id));
+    let already_stored = ops.iter().any(|op| {
+        matches!(
+            op,
+            Ir1Op::StoreBinding { binding_id }
+                | Ir1Op::InitializeBinding { binding_id }
+                if *binding_id == id
+        )
+    });
     if already_stored {
         return;
     }
@@ -9217,7 +9456,9 @@ fn rewrite_unresolved_function_body_loads(
     let mut locally_defined_ids = BTreeSet::new();
     for op in body_ops.iter() {
         match op {
-            Ir1Op::StoreBinding { binding_id } | Ir1Op::DeclareFunction { binding_id, .. } => {
+            Ir1Op::StoreBinding { binding_id }
+            | Ir1Op::InitializeBinding { binding_id }
+            | Ir1Op::DeclareFunction { binding_id, .. } => {
                 locally_defined_ids.insert(*binding_id);
             }
             _ => {}
@@ -22540,7 +22781,7 @@ fn simulate_ir2_flow_labels(
                 value_stack.push(value);
                 label
             }
-            Ir1Op::StoreBinding { binding_id } => {
+            Ir1Op::StoreBinding { binding_id } | Ir1Op::InitializeBinding { binding_id } => {
                 let mut value = pop_flow_value(&mut value_stack)?;
                 bindings_changed |= join_binding_label(binding_labels, *binding_id, &value.label);
                 binding_crypto_origins.insert(*binding_id, value.crypto_origin);
@@ -22553,6 +22794,10 @@ fn simulate_ir2_flow_labels(
                 value_stack.push(value);
                 label
             }
+            Ir1Op::CreatePerIterationBinding { binding_id, .. } => binding_labels
+                .get(binding_id)
+                .cloned()
+                .unwrap_or(Label::Internal),
             Ir1Op::Call { arg_count } => {
                 let mut inputs = pop_flow_values(&mut value_stack, *arg_count as usize)?;
                 inputs.push(pop_flow_value(&mut value_stack)?);
@@ -23210,7 +23455,7 @@ fn infer_data_label_for_op(
             .get(binding_id)
             .cloned()
             .unwrap_or(Label::Internal),
-        Ir1Op::StoreBinding { .. } => last_label,
+        Ir1Op::StoreBinding { .. } | Ir1Op::InitializeBinding { .. } => last_label,
         Ir1Op::ImportModule { .. } | Ir1Op::Await | Ir1Op::Yield { .. } => Label::Internal,
         Ir1Op::Call { .. } => last_label,
         Ir1Op::ExportBinding { .. } => last_label,
@@ -31983,6 +32228,42 @@ mod tests {
             .filter(|op| matches!(op, Ir1Op::Jump { .. }))
             .count();
         assert!(jump_count >= 1); // back-edge
+
+        let markers: Vec<(BindingId, BindingKind, bool)> = result
+            .module
+            .ops
+            .iter()
+            .filter_map(|op| match op {
+                Ir1Op::CreatePerIterationBinding {
+                    binding_id,
+                    kind,
+                    preserve_state,
+                } => Some((*binding_id, *kind, *preserve_state)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(markers.len(), 2);
+        assert_eq!(markers[0], markers[1]);
+        assert_eq!(markers[0].1, BindingKind::Let);
+        assert!(markers[0].2);
+
+        let mut const_ir0 = ir0.clone();
+        let Statement::For(const_for) = &mut const_ir0.tree.body[0] else {
+            panic!("expected for statement");
+        };
+        let Some(Statement::VariableDeclaration(declaration)) = const_for.init.as_deref_mut()
+        else {
+            panic!("expected declaration initializer");
+        };
+        declaration.kind = VariableDeclarationKind::Const;
+        let const_result = lower_ir0_to_ir1(&const_ir0).expect("const for should lower");
+        assert!(
+            !const_result
+                .module
+                .ops
+                .iter()
+                .any(|op| matches!(op, Ir1Op::CreatePerIterationBinding { .. }))
+        );
     }
 
     #[test]
@@ -32038,6 +32319,19 @@ mod tests {
                 .any(|op| matches!(op, Ir1Op::IteratorClose { .. })),
             "missing IteratorClose"
         );
+        let markers: Vec<_> = ops
+            .iter()
+            .filter(|op| matches!(op, Ir1Op::CreatePerIterationBinding { .. }))
+            .collect();
+        assert_eq!(markers.len(), 1);
+        assert!(matches!(
+            markers[0],
+            Ir1Op::CreatePerIterationBinding {
+                kind: BindingKind::Const,
+                preserve_state: false,
+                ..
+            }
+        ));
     }
 
     #[test]

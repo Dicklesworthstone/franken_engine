@@ -2252,6 +2252,9 @@ impl ExecutionOrchestrator {
             crate::ir_contract::Ir3Instruction::LoadScoped { .. } => "load_scoped",
             crate::ir_contract::Ir3Instruction::StoreScoped { .. } => "store_scoped",
             crate::ir_contract::Ir3Instruction::InitBinding { .. } => "init_binding",
+            crate::ir_contract::Ir3Instruction::CreatePerIterationBinding { .. } => {
+                "create_per_iteration_binding"
+            }
             crate::ir_contract::Ir3Instruction::ImportModule { .. } => "import_module",
             crate::ir_contract::Ir3Instruction::ExportBinding { .. } => "export_binding",
             crate::ir_contract::Ir3Instruction::LoadThis { .. } => "load_this",

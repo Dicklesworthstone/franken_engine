@@ -143,6 +143,10 @@ pub fn classify_op(op: &Ir1Op) -> OpClassification {
         Ir1Op::LoadLiteral { .. } => analyzed("load_literal", ANALYZED_VALUE_JOIN),
         Ir1Op::LoadBinding { .. } => analyzed("load_binding", ANALYZED_VALUE_JOIN),
         Ir1Op::StoreBinding { .. } => analyzed("store_binding", ANALYZED_VALUE_JOIN),
+        Ir1Op::InitializeBinding { .. } => analyzed("initialize_binding", ANALYZED_VALUE_JOIN),
+        Ir1Op::CreatePerIterationBinding { .. } => {
+            analyzed("create_per_iteration_binding", ANALYZED_VALUE_JOIN)
+        }
         Ir1Op::Call { .. } => analyzed("call", ANALYZED_CALL),
         Ir1Op::CallMethod { .. } => analyzed("call_method", ANALYZED_CALL),
         Ir1Op::Construct { .. } => analyzed("construct", ANALYZED_CALL),

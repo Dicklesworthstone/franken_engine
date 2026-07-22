@@ -37,12 +37,14 @@
 )]
 
 use std::borrow::Cow;
+use std::cell::{Ref, RefCell, RefMut};
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet, LinkedList, VecDeque};
 use std::fmt;
 use std::fs;
 use std::io::{Cursor, Read, Write};
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 use std::sync::{Arc, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -5388,17 +5390,83 @@ impl BindingKind {
     }
 }
 
-/// A single binding in a scope environment.
+/// Mutable state shared by every scope/closure view of one lexical binding.
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct ScopeBinding {
+struct ScopeBindingState {
     value: Value,
-    kind: BindingKind,
     /// `true` once initialized (let/const start uninitialized in TDZ).
     initialized: bool,
 }
 
+/// A single binding in a scope environment.
+///
+/// Cloning a scope frame must preserve lexical binding identity. A fresh
+/// declaration creates a fresh cell, while closure/snapshot clones share the
+/// existing cell so reads and writes remain live across every view.
+#[derive(Debug, Clone)]
+struct ScopeBinding {
+    kind: BindingKind,
+    state: Rc<RefCell<ScopeBindingState>>,
+}
+
+impl ScopeBinding {
+    fn new(kind: BindingKind) -> Self {
+        Self::with_state(kind, Value::Undefined, kind.is_hoisted())
+    }
+
+    fn with_state(kind: BindingKind, value: Value, initialized: bool) -> Self {
+        Self {
+            kind,
+            state: Rc::new(RefCell::new(ScopeBindingState { value, initialized })),
+        }
+    }
+
+    fn state(&self) -> Result<Ref<'_, ScopeBindingState>, InterpreterError> {
+        self.state
+            .try_borrow()
+            .map_err(|_| InterpreterError::InternalError {
+                details: "scope binding state is already mutably borrowed".to_string(),
+            })
+    }
+
+    fn state_mut(&self) -> Result<RefMut<'_, ScopeBindingState>, InterpreterError> {
+        self.state
+            .try_borrow_mut()
+            .map_err(|_| InterpreterError::InternalError {
+                details: "scope binding state is already borrowed".to_string(),
+            })
+    }
+
+    fn snapshot_state(&self) -> Result<ScopeBindingState, InterpreterError> {
+        Ok(self.state()?.clone())
+    }
+
+    fn detached_clone(&self) -> Result<Self, InterpreterError> {
+        let state = self.snapshot_state()?;
+        Ok(Self::with_state(self.kind, state.value, state.initialized))
+    }
+
+    fn restore_state(&self, previous: ScopeBindingState) -> Result<(), InterpreterError> {
+        *self.state_mut()? = previous;
+        Ok(())
+    }
+
+    #[cfg(test)]
+    fn set_state(&self, value: Value, initialized: bool) -> Result<(), InterpreterError> {
+        let mut state = self.state_mut()?;
+        state.value = value;
+        state.initialized = initialized;
+        Ok(())
+    }
+
+    #[cfg(test)]
+    fn value(&self) -> Result<Value, InterpreterError> {
+        Ok(self.state()?.value.clone())
+    }
+}
+
 /// A single scope frame in the environment chain.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 struct ScopeFrame {
     bindings: BTreeMap<String, ScopeBinding>,
 }
@@ -5416,15 +5484,7 @@ impl ScopeFrame {
         {
             return Some(existing.clone());
         }
-        let initialized = kind.is_hoisted();
-        self.bindings.insert(
-            name,
-            ScopeBinding {
-                value: Value::Undefined,
-                kind,
-                initialized,
-            },
-        )
+        self.bindings.insert(name, ScopeBinding::new(kind))
     }
 
     fn get(&self, name: &str) -> Option<&ScopeBinding> {
@@ -5482,22 +5542,6 @@ impl ScopeChain {
     fn resolve(&self, name: &str) -> Option<(usize, &ScopeBinding)> {
         for (idx, frame) in self.frames.iter().enumerate().rev() {
             if let Some(binding) = frame.get(name) {
-                return Some((idx, binding));
-            }
-        }
-        None
-    }
-
-    /// Resolve a mutable binding by walking outward from innermost scope.
-    fn resolve_mut(&mut self, name: &str) -> Option<&mut ScopeBinding> {
-        self.resolve_mut_with_index(name)
-            .map(|(_, binding)| binding)
-    }
-
-    /// Resolve a mutable binding and report the frame index it came from.
-    fn resolve_mut_with_index(&mut self, name: &str) -> Option<(usize, &mut ScopeBinding)> {
-        for (idx, frame) in self.frames.iter_mut().enumerate().rev() {
-            if let Some(binding) = frame.get_mut(name) {
                 return Some((idx, binding));
             }
         }
@@ -5571,11 +5615,6 @@ struct CallFrame {
     /// the chain with the captured environment. `None` for plain function
     /// calls where the chain is only extended, not replaced.
     saved_scope_chain: Option<Vec<ScopeFrame>>,
-    /// Closure store index for calls that execute captured environments.
-    closure_id: Option<u32>,
-    /// Number of frames from the active scope chain that belong to the
-    /// closure capture. Callee-local frames are not written back.
-    captured_scope_depth: usize,
     /// Async function object that owns the result promise for this frame.
     async_function_id: Option<u32>,
 }
@@ -23335,7 +23374,7 @@ impl InterpreterCore {
                     .unwrap_or(u64::MAX)
                     .saturating_mul(std::mem::size_of::<CallFrame>() as u64),
             )
-            .saturating_add(self.call_stack_memory_bytes())
+            .saturating_add(self.module_snapshot_call_stack_memory_bytes())
             .saturating_add(
                 u64::try_from(self.catch_frames.len())
                     .unwrap_or(u64::MAX)
@@ -23346,7 +23385,9 @@ impl InterpreterCore {
                     .unwrap_or(u64::MAX)
                     .saturating_mul(std::mem::size_of::<FinallyMode>() as u64),
             )
-            .saturating_add(self.scope_chain_memory_bytes())
+            .saturating_add(Self::estimate_scope_chain_shallow_clone_bytes(
+                &self.scope_chain.frames,
+            ))
             .saturating_add(
                 u64::try_from(self.pending_captures.len())
                     .unwrap_or(u64::MAX)
@@ -23464,8 +23505,8 @@ impl InterpreterCore {
     }
 
     /// Commit work protected by a module-execution rollback snapshot.
-    /// Dropping the clone releases its separately-accounted physical owner;
-    /// the live execution state remains unchanged.
+    /// Dropping the cloned structure releases its map/key/handle charge; shared
+    /// lexical-cell payloads remain owned and charged by the live runtime views.
     fn discard_module_execution_snapshot(&mut self, snapshot: ModuleExecutionSnapshot) {
         let accounted_bytes = snapshot.accounted_bytes;
         self.module_snapshot_in_flight_bytes = self
@@ -23614,21 +23655,29 @@ impl InterpreterCore {
         value: Value,
     ) -> Result<(), InterpreterError> {
         let previous_scope_bytes = self.scope_chain_memory_bytes();
-        let replaced = {
+        let (replaced, replaced_state) = {
             let frame = self.scope_chain.current_mut()?;
             let binding_name = name.to_string();
             // perf: hot path - do get_mut first to avoid clone for declare()
             let replaced = frame.declare(binding_name, BindingKind::Var);
+            let replaced_state = replaced
+                .as_ref()
+                .map(ScopeBinding::snapshot_state)
+                .transpose()?;
             if let Some(binding) = frame.get_mut(name) {
-                binding.value = value;
-                binding.initialized = true;
+                let mut state = binding.state_mut()?;
+                state.value = value;
+                state.initialized = true;
             }
-            replaced
+            (replaced, replaced_state)
         };
 
         if let Err(err) = self.apply_scope_chain_memory_delta(previous_scope_bytes) {
             if let Ok(frame) = self.scope_chain.current_mut() {
                 if let Some(old_binding) = replaced {
+                    if let Some(old_state) = replaced_state {
+                        old_binding.restore_state(old_state)?;
+                    }
                     frame.bindings.insert(name.to_string(), old_binding);
                 } else {
                     frame.bindings.remove(name);
@@ -23665,17 +23714,25 @@ impl InterpreterCore {
             ] {
                 let name = name.to_string();
                 let replaced_binding = frame.declare(name.clone(), BindingKind::Var);
+                let replaced_state = replaced_binding
+                    .as_ref()
+                    .map(ScopeBinding::snapshot_state)
+                    .transpose()?;
                 if let Some(binding) = frame.get_mut(&name) {
-                    binding.value = value;
-                    binding.initialized = true;
+                    let mut state = binding.state_mut()?;
+                    state.value = value;
+                    state.initialized = true;
                 }
-                replaced.push((name, replaced_binding));
+                replaced.push((name, replaced_binding, replaced_state));
             }
         }
         if let Err(err) = self.apply_scope_chain_memory_delta(previous_scope_bytes) {
             if let Ok(current) = self.scope_chain.current_mut() {
-                for (name, old) in replaced {
+                for (name, old, old_state) in replaced {
                     if let Some(old_binding) = old {
+                        if let Some(old_state) = old_state {
+                            old_binding.restore_state(old_state)?;
+                        }
                         current.bindings.insert(name, old_binding);
                     } else {
                         current.bindings.remove(&name);
@@ -27727,7 +27784,6 @@ impl InterpreterCore {
         self.suspended_abrupt_completions
             .truncate(frame.saved_suspended_abrupt_depth);
         self.finally_modes.truncate(frame.saved_finally_mode_depth);
-        self.persist_closure_capture_updates(frame);
         self.restore_scope_chain_for_frame(frame);
         self.pending_exception = frame.saved_pending_exception.clone();
         self.pending_exception_label = frame.saved_pending_exception_label.clone();
@@ -28130,92 +28186,12 @@ impl InterpreterCore {
         }
     }
 
-    fn persist_closure_capture_updates(&mut self, frame: &CallFrame) {
-        let Some(closure_id) = frame.closure_id else {
-            return;
-        };
-        let Some(previous_env) = self
-            .closures
-            .get(closure_id as usize)
-            .map(|closure| closure.captured_env.clone())
-        else {
-            return;
-        };
-        let captured_depth = frame
-            .captured_scope_depth
-            .min(self.scope_chain.frames.len());
-        let updated_env = self.scope_chain.frames[..captured_depth].to_vec();
-
-        for closure in &mut self.closures {
-            if closure.captured_env == previous_env {
-                closure.captured_env = updated_env.clone();
-            }
-        }
-    }
-
-    fn propagate_scope_binding_update_to_closure_captures(
-        &mut self,
-        frame_index: usize,
-        name: &str,
-        value: &Value,
-    ) -> Vec<(usize, ScopeBinding)> {
-        let mut previous = Vec::new();
-        for (closure_index, closure) in self.closures.iter_mut().enumerate() {
-            if let Some(frame) = closure.captured_env.get_mut(frame_index)
-                && let Some(binding) = frame.get_mut(name)
-            {
-                previous.push((closure_index, binding.clone()));
-                binding.value = value.clone();
-                binding.initialized = true;
-            }
-        }
-        previous
-    }
-
-    fn restore_closure_capture_bindings(
-        &mut self,
-        frame_index: usize,
-        name: &str,
-        previous: Vec<(usize, ScopeBinding)>,
-    ) {
-        for (closure_index, old_binding) in previous {
-            if let Some(binding) = self
-                .closures
-                .get_mut(closure_index)
-                .and_then(|closure| closure.captured_env.get_mut(frame_index))
-                .and_then(|frame| frame.get_mut(name))
-            {
-                *binding = old_binding;
-            }
-        }
-    }
-
-    fn merge_captured_scope_frames_into_saved_chain(
-        saved: &mut [ScopeFrame],
-        captured: &[ScopeFrame],
-        captured_depth: usize,
-    ) {
-        let merge_depth = captured_depth.min(saved.len()).min(captured.len());
-        for frame_index in 0..merge_depth {
-            for (name, captured_binding) in &captured[frame_index].bindings {
-                if let Some(saved_binding) = saved[frame_index].get_mut(name) {
-                    *saved_binding = captured_binding.clone();
-                }
-            }
-        }
-    }
-
     fn restore_scope_chain_for_frame(&mut self, frame: &CallFrame) {
-        // Restore scope chain. For closure calls, restore the full saved chain;
-        // for plain calls, just pop to the caller depth.
+        // Closure and caller scope snapshots share lexical binding cells, so
+        // assignments are already visible in the saved chain. Restoring the
+        // caller is therefore a structural frame swap, not a value merge.
         if let Some(saved) = &frame.saved_scope_chain {
-            let mut restored = saved.clone();
-            Self::merge_captured_scope_frames_into_saved_chain(
-                &mut restored,
-                &self.scope_chain.frames,
-                frame.captured_scope_depth,
-            );
-            self.scope_chain.frames = restored;
+            self.scope_chain.frames = saved.clone();
         } else {
             while self.scope_chain.depth() > frame.saved_scope_depth {
                 self.scope_chain.pop();
@@ -28235,7 +28211,6 @@ impl InterpreterCore {
         let mut restored_suspended_abrupt_depth = None;
         while self.call_stack.len() > target_depth {
             if let Some(frame) = self.call_stack.pop() {
-                self.persist_closure_capture_updates(&frame);
                 self.register_base = frame.register_base;
                 self.finally_modes.truncate(frame.saved_finally_mode_depth);
                 self.restore_scope_chain_for_frame(&frame);
@@ -29559,8 +29534,8 @@ impl InterpreterCore {
                     }
 
                     // Resolve function index and optional captured environment.
-                    let (func_idx, captured_env, closure_id) = match &callee_val {
-                        Value::Function(idx) => (*idx, None, None),
+                    let (func_idx, captured_env) = match &callee_val {
+                        Value::Function(idx) => (*idx, None),
                         Value::Closure(closure_id)
                         | Value::GeneratorFunction(closure_id)
                         | Value::AsyncFunction(closure_id)
@@ -29575,7 +29550,6 @@ impl InterpreterCore {
                             (
                                 closure.function_index,
                                 Some(self.clone_scope_frames_with_budget(&closure.captured_env)?),
-                                Some(*closure_id),
                             )
                         }
                         _ => {
@@ -29682,7 +29656,6 @@ impl InterpreterCore {
                                 .as_ref()
                                 .map(|env| Self::estimate_scope_chain_bytes(env))
                                 .unwrap_or(0);
-                            let captured_scope_depth = captured_env.as_ref().map_or(0, Vec::len);
                             let saved_chain = if captured_env.is_some() {
                                 Some(self.snapshot_scope_chain_with_temporary_budget(
                                     captured_env_bytes,
@@ -29727,8 +29700,6 @@ impl InterpreterCore {
                                 saved_finally_mode_depth: self.finally_modes.len(),
                                 saved_scope_depth: scope_depth,
                                 saved_scope_chain: saved_chain,
-                                closure_id,
-                                captured_scope_depth,
                                 async_function_id: Some(async_id),
                             });
 
@@ -29870,7 +29841,6 @@ impl InterpreterCore {
                                 .as_ref()
                                 .map(|env| Self::estimate_scope_chain_bytes(env))
                                 .unwrap_or(0);
-                            let captured_scope_depth = captured_env.as_ref().map_or(0, Vec::len);
                             let saved_chain = if captured_env.is_some() {
                                 Some(self.snapshot_scope_chain_with_temporary_budget(
                                     captured_env_bytes,
@@ -29918,8 +29888,6 @@ impl InterpreterCore {
                                 saved_finally_mode_depth: self.finally_modes.len(),
                                 saved_scope_depth: scope_depth,
                                 saved_scope_chain: saved_chain,
-                                closure_id,
-                                captured_scope_depth,
                                 async_function_id: None,
                             });
 
@@ -30098,8 +30066,8 @@ impl InterpreterCore {
                         continue;
                     }
 
-                    let (func_idx, captured_env, closure_id) = match &callee_val {
-                        Value::Function(idx) => (*idx, None, None),
+                    let (func_idx, captured_env) = match &callee_val {
+                        Value::Function(idx) => (*idx, None),
                         Value::Closure(closure_id)
                         | Value::GeneratorFunction(closure_id)
                         | Value::AsyncFunction(closure_id)
@@ -30114,7 +30082,6 @@ impl InterpreterCore {
                             (
                                 closure.function_index,
                                 Some(self.clone_scope_frames_with_budget(&closure.captured_env)?),
-                                Some(*closure_id),
                             )
                         }
                         _ => {
@@ -30200,7 +30167,6 @@ impl InterpreterCore {
                                 .as_ref()
                                 .map(|env| Self::estimate_scope_chain_bytes(env))
                                 .unwrap_or(0);
-                            let captured_scope_depth = captured_env.as_ref().map_or(0, Vec::len);
                             let saved_chain = if captured_env.is_some() {
                                 Some(self.snapshot_scope_chain_with_temporary_budget(
                                     captured_env_bytes,
@@ -30236,8 +30202,6 @@ impl InterpreterCore {
                                 saved_finally_mode_depth: self.finally_modes.len(),
                                 saved_scope_depth: scope_depth,
                                 saved_scope_chain: saved_chain,
-                                closure_id,
-                                captured_scope_depth,
                                 async_function_id: Some(async_id),
                             });
 
@@ -30336,7 +30300,6 @@ impl InterpreterCore {
                         .as_ref()
                         .map(|env| Self::estimate_scope_chain_bytes(env))
                         .unwrap_or(0);
-                    let captured_scope_depth = captured_env.as_ref().map_or(0, Vec::len);
                     let saved_chain = if captured_env.is_some() {
                         Some(self.snapshot_scope_chain_with_temporary_budget(captured_env_bytes)?)
                     } else {
@@ -30367,8 +30330,6 @@ impl InterpreterCore {
                         saved_finally_mode_depth: self.finally_modes.len(),
                         saved_scope_depth: scope_depth,
                         saved_scope_chain: saved_chain,
-                        closure_id,
-                        captured_scope_depth,
                         async_function_id: None,
                     });
 
@@ -31248,8 +31209,8 @@ impl InterpreterCore {
                     }
 
                     // Resolve function index and optional captured environment.
-                    let (func_idx, captured_env, closure_id) = match &callee_val {
-                        Value::Function(idx) => (*idx, None, None),
+                    let (func_idx, captured_env) = match &callee_val {
+                        Value::Function(idx) => (*idx, None),
                         Value::Closure(closure_id) => {
                             let closure =
                                 self.closures.get(*closure_id as usize).ok_or_else(|| {
@@ -31261,7 +31222,6 @@ impl InterpreterCore {
                             (
                                 closure.function_index,
                                 Some(self.clone_scope_frames_with_budget(&closure.captured_env)?),
-                                Some(*closure_id),
                             )
                         }
                         _ => {
@@ -31332,7 +31292,6 @@ impl InterpreterCore {
                                 .as_ref()
                                 .map(|env| Self::estimate_scope_chain_bytes(env))
                                 .unwrap_or(0);
-                            let captured_scope_depth = captured_env.as_ref().map_or(0, Vec::len);
                             let saved_chain = if captured_env.is_some() {
                                 Some(self.snapshot_scope_chain_with_temporary_budget(
                                     captured_env_bytes,
@@ -31365,8 +31324,6 @@ impl InterpreterCore {
                                 saved_finally_mode_depth: self.finally_modes.len(),
                                 saved_scope_depth: scope_depth,
                                 saved_scope_chain: saved_chain,
-                                closure_id,
-                                captured_scope_depth,
                                 async_function_id: None,
                             });
 
@@ -31648,42 +31605,15 @@ impl InterpreterCore {
                     // accumulated by prior PushCapture instructions but
                     // the scope chain snapshot already contains those
                     // bindings, so we just clear them.
-                    let mut captured_env = self.snapshot_scope_chain()?;
+                    let previous_estimated_memory_bytes = self.estimated_memory_bytes;
+                    let previous_closure_bytes = self.closures_memory_bytes();
+                    let captured_env = self.snapshot_scope_chain()?;
                     let closure_id = u32::try_from(self.closures.len()).map_err(|_| {
                         InterpreterError::TypeError {
                             expected: "closure table capacity".into(),
                             got: format!("exceeded u32::MAX ({})", self.closures.len()),
                         }
                     })?;
-                    // bd-g0aok: a named function declaration/expression refers to
-                    // itself by name inside its own body, but the self-name's scope
-                    // binding is StoreScoped from the closure register BEFORE this
-                    // CreateClosure assigns it (module/closure prologue order), so the
-                    // captured snapshot records the name as `undefined`. The body
-                    // resolves the recursive callee via `LoadScoped(name)` against this
-                    // captured scope, sees `undefined`, and faults ("expected function,
-                    // got undefined"). Self-bind the function's own name in the captured
-                    // environment to this very closure so self-recursion and
-                    // named-function-expression recursion resolve. (A function's own
-                    // name resolving to the function is also correct ES semantics, so
-                    // this is a no-op for non-recursive functions.) Mutual recursion
-                    // between sibling declarations, and recursive generator/async
-                    // function values (other Create* arms), need by-reference capture
-                    // and are tracked separately.
-                    if let Some(self_name) = module
-                        .function_table
-                        .get(function_index as usize)
-                        .and_then(|desc| desc.name.clone())
-                    {
-                        for frame in captured_env.iter_mut().rev() {
-                            if let Some(binding) = frame.get_mut(&self_name) {
-                                binding.value = Value::Closure(closure_id);
-                                binding.initialized = true;
-                                break;
-                            }
-                        }
-                    }
-                    let previous_closure_bytes = self.closures_memory_bytes();
                     self.closures.push(ClosureValue {
                         function_index,
                         captured_env,
@@ -31699,10 +31629,15 @@ impl InterpreterCore {
                         self.closure_module_origins.remove(&closure_id);
                         return Err(err);
                     }
-                    self.pending_captures.clear();
                     // Store the closure ID (not function_index) so Call can
                     // look up the correct closure instance.
-                    self.write_reg(dst, Value::Closure(closure_id))?;
+                    if let Err(err) = self.write_reg(dst, Value::Closure(closure_id)) {
+                        self.closures.pop();
+                        self.closure_module_origins.remove(&closure_id);
+                        self.estimated_memory_bytes = previous_estimated_memory_bytes;
+                        return Err(err);
+                    }
+                    self.pending_captures.clear();
                     self.ip += 1;
                 }
                 Ir3Instruction::CreateGenerator {
@@ -31993,12 +31928,13 @@ impl InterpreterCore {
                 } => {
                     let name = Self::scoped_constant_name(module, name_pool_index);
                     let val = if let Some((_, binding)) = self.scope_chain.resolve(name.as_ref()) {
-                        if !binding.initialized {
+                        let state = binding.state()?;
+                        if !state.initialized {
                             return Err(InterpreterError::UninitializedBinding {
                                 name: name.into_owned(),
                             });
                         }
-                        binding.value.clone()
+                        state.value.clone()
                     } else if let Some(context) = self.active_cjs_context.as_ref() {
                         let (filename, dirname) =
                             self.cjs_filename_dirname(Some(&context.module_specifier));
@@ -32021,13 +31957,11 @@ impl InterpreterCore {
                     let val = self.read_reg(src)?;
                     let previous_scope_bytes = self.scope_chain_memory_bytes();
                     let previous_closure_bytes = self.closures_memory_bytes();
+                    let previous_call_stack_bytes = self.call_stack_memory_bytes();
                     let mut previous = None;
-                    let mut closure_previous = Vec::new();
-                    let mut frame_index = None;
-                    if let Some((resolved_frame_index, binding)) =
-                        self.scope_chain.resolve_mut_with_index(name.as_ref())
-                    {
-                        if !binding.initialized {
+                    if let Some((_, binding)) = self.scope_chain.resolve(name.as_ref()) {
+                        let previous_state = binding.snapshot_state()?;
+                        if !previous_state.initialized {
                             return Err(InterpreterError::UninitializedBinding {
                                 name: name.into_owned(),
                             });
@@ -32037,32 +31971,18 @@ impl InterpreterCore {
                                 name: name.into_owned(),
                             });
                         }
-                        previous = Some(binding.clone());
-                        binding.value = val.clone();
-                        frame_index = Some(resolved_frame_index);
-                        closure_previous = self.propagate_scope_binding_update_to_closure_captures(
-                            resolved_frame_index,
-                            name.as_ref(),
-                            &val,
-                        );
+                        previous = Some((binding.clone(), previous_state));
+                        binding.state_mut()?.value = val;
                     }
                     // Silently ignore stores to undeclared variables
                     // (strict mode would throw, but baseline is lenient).
-                    if let Err(err) = self.apply_scope_and_closure_memory_delta(
+                    if let Err(err) = self.apply_scope_closure_call_stack_memory_delta(
                         previous_scope_bytes,
                         previous_closure_bytes,
+                        previous_call_stack_bytes,
                     ) {
-                        if let Some(old_binding) = previous
-                            && let Some(binding) = self.scope_chain.resolve_mut(name.as_ref())
-                        {
-                            *binding = old_binding;
-                        }
-                        if let Some(frame_index) = frame_index {
-                            self.restore_closure_capture_bindings(
-                                frame_index,
-                                name.as_ref(),
-                                closure_previous,
-                            );
+                        if let Some((binding, old_state)) = previous {
+                            binding.restore_state(old_state)?;
                         }
                         return Err(err);
                     }
@@ -32075,18 +31995,63 @@ impl InterpreterCore {
                     let name = Self::scoped_constant_name(module, name_pool_index);
                     let val = self.read_reg(src)?;
                     let previous_scope_bytes = self.scope_chain_memory_bytes();
+                    let previous_closure_bytes = self.closures_memory_bytes();
+                    let previous_call_stack_bytes = self.call_stack_memory_bytes();
                     let mut previous = None;
-                    if let Some(binding) = self.scope_chain.resolve_mut(name.as_ref()) {
-                        previous = Some(binding.clone());
-                        binding.value = val;
-                        binding.initialized = true;
+                    if let Some((_, binding)) = self.scope_chain.resolve(name.as_ref()) {
+                        previous = Some((binding.clone(), binding.snapshot_state()?));
+                        let mut state = binding.state_mut()?;
+                        state.value = val;
+                        state.initialized = true;
                     }
-                    if let Err(err) = self.apply_scope_chain_memory_delta(previous_scope_bytes) {
-                        if let Some(old_binding) = previous
-                            && let Some(binding) = self.scope_chain.resolve_mut(name.as_ref())
-                        {
-                            *binding = old_binding;
+                    if let Err(err) = self.apply_scope_closure_call_stack_memory_delta(
+                        previous_scope_bytes,
+                        previous_closure_bytes,
+                        previous_call_stack_bytes,
+                    ) {
+                        if let Some((binding, old_state)) = previous {
+                            binding.restore_state(old_state)?;
                         }
+                        return Err(err);
+                    }
+                    self.ip += 1;
+                }
+                Ir3Instruction::CreatePerIterationBinding {
+                    name_pool_index,
+                    kind,
+                    preserve_state,
+                } => {
+                    let name = Self::scoped_constant_name(module, name_pool_index);
+                    let binding_kind = BindingKind::from_u8(kind)?;
+                    let previous_scope_bytes = self.scope_chain_memory_bytes();
+                    let previous_closure_bytes = self.closures_memory_bytes();
+                    let previous_call_stack_bytes = self.call_stack_memory_bytes();
+                    let (frame_index, previous_binding) = self
+                        .scope_chain
+                        .resolve(name.as_ref())
+                        .map(|(frame_index, binding)| (frame_index, binding.clone()))
+                        .ok_or_else(|| InterpreterError::InternalError {
+                            details: format!(
+                                "per-iteration binding '{}' is not present in the scope chain",
+                                name
+                            ),
+                        })?;
+                    let next_binding = if preserve_state {
+                        previous_binding.detached_clone()?
+                    } else {
+                        ScopeBinding::new(binding_kind)
+                    };
+                    self.scope_chain.frames[frame_index]
+                        .bindings
+                        .insert(name.to_string(), next_binding);
+                    if let Err(err) = self.apply_scope_closure_call_stack_memory_delta(
+                        previous_scope_bytes,
+                        previous_closure_bytes,
+                        previous_call_stack_bytes,
+                    ) {
+                        self.scope_chain.frames[frame_index]
+                            .bindings
+                            .insert(name.into_owned(), previous_binding);
                         return Err(err);
                     }
                     self.ip += 1;
@@ -57924,15 +57889,35 @@ impl InterpreterCore {
 
     fn estimate_scope_frame_bytes(frame: &ScopeFrame) -> u64 {
         let bindings = Self::saturating_sum(frame.bindings.iter().map(|(name, binding)| {
+            let value_bytes = binding
+                .state
+                .try_borrow()
+                .map(|state| Self::estimate_value_bytes(&state.value))
+                .unwrap_or(u64::MAX);
             MEMORY_ESTIMATE_SCOPE_BINDING_BASE_BYTES
                 .saturating_add(Self::estimate_string_bytes(name))
-                .saturating_add(Self::estimate_value_bytes(&binding.value))
+                .saturating_add(value_bytes)
         }));
         MEMORY_ESTIMATE_SCOPE_FRAME_BASE_BYTES.saturating_add(bindings)
     }
 
     fn estimate_scope_chain_bytes(frames: &[ScopeFrame]) -> u64 {
         Self::saturating_sum(frames.iter().map(Self::estimate_scope_frame_bytes))
+    }
+
+    /// Bytes allocated by cloning scope-frame structure while sharing each
+    /// binding cell. Mutable cell payloads are deliberately excluded: charging
+    /// them here would make a fixed snapshot charge drift whenever the shared
+    /// live binding changes size.
+    fn estimate_scope_chain_shallow_clone_bytes(frames: &[ScopeFrame]) -> u64 {
+        Self::saturating_sum(frames.iter().map(|frame| {
+            MEMORY_ESTIMATE_SCOPE_FRAME_BASE_BYTES.saturating_add(Self::saturating_sum(
+                frame.bindings.keys().map(|name| {
+                    MEMORY_ESTIMATE_SCOPE_BINDING_BASE_BYTES
+                        .saturating_add(Self::estimate_string_bytes(name))
+                }),
+            ))
+        }))
     }
 
     fn estimate_call_frame_bytes(frame: &CallFrame) -> u64 {
@@ -57971,6 +57956,41 @@ impl InterpreterCore {
                     .as_ref()
                     .map_or(0, |frames| Self::estimate_scope_chain_bytes(frames)),
             )
+    }
+
+    fn estimate_call_frame_snapshot_clone_bytes(frame: &CallFrame) -> u64 {
+        MEMORY_ESTIMATE_CALL_FRAME_BASE_BYTES
+            .saturating_add(Self::estimate_value_bytes(&frame.this_value))
+            .saturating_add(Self::estimate_label_bytes(&frame.this_label))
+            .saturating_add(Self::estimate_value_bytes(&frame.new_target_value))
+            .saturating_add(Self::estimate_value_bytes(&frame.super_value))
+            .saturating_add(
+                frame
+                    .construct_this
+                    .as_ref()
+                    .map(Self::estimate_value_bytes)
+                    .unwrap_or(0),
+            )
+            .saturating_add(
+                frame
+                    .saved_pending_exception
+                    .as_ref()
+                    .map(Self::estimate_value_bytes)
+                    .unwrap_or(0),
+            )
+            .saturating_add(Self::estimate_label_bytes(
+                &frame.saved_pending_exception_label,
+            ))
+            .saturating_add(
+                frame
+                    .saved_pending_return
+                    .as_ref()
+                    .map(Self::estimate_value_bytes)
+                    .unwrap_or(0),
+            )
+            .saturating_add(frame.saved_scope_chain.as_ref().map_or(0, |frames| {
+                Self::estimate_scope_chain_shallow_clone_bytes(frames)
+            }))
     }
 
     fn estimate_heap_object_bytes(object: &HeapObject) -> u64 {
@@ -58098,6 +58118,15 @@ impl InterpreterCore {
     fn call_stack_memory_bytes(&self) -> u64 {
         self.call_stack_frame_memory_bytes()
             .saturating_add(self.abrupt_completion_memory_bytes())
+    }
+
+    fn module_snapshot_call_stack_memory_bytes(&self) -> u64 {
+        Self::saturating_sum(
+            self.call_stack
+                .iter()
+                .map(Self::estimate_call_frame_snapshot_clone_bytes),
+        )
+        .saturating_add(self.abrupt_completion_memory_bytes())
     }
 
     fn generators_memory_bytes(&self) -> u64 {
@@ -58437,18 +58466,6 @@ impl InterpreterCore {
     ) -> Result<u64, InterpreterError> {
         let next_promise_bytes = self.promise_runtime_memory_bytes();
         self.apply_memory_component_delta(previous_promise_bytes, next_promise_bytes)
-    }
-
-    fn apply_scope_and_closure_memory_delta(
-        &mut self,
-        previous_scope_bytes: u64,
-        previous_closure_bytes: u64,
-    ) -> Result<u64, InterpreterError> {
-        self.apply_memory_component_delta(
-            previous_scope_bytes.saturating_add(previous_closure_bytes),
-            self.scope_chain_memory_bytes()
-                .saturating_add(self.closures_memory_bytes()),
-        )
     }
 
     fn apply_scope_closure_call_stack_memory_delta(
@@ -64025,11 +64042,7 @@ mod async_runtime_tests_current {
             .bindings
             .insert(
                 "log".to_string(),
-                ScopeBinding {
-                    value: Value::Object(log),
-                    kind: BindingKind::Var,
-                    initialized: true,
-                },
+                ScopeBinding::with_state(BindingKind::Var, Value::Object(log), true),
             );
         core.sync_estimated_memory_bytes()
             .expect("Writable order log accounting");
@@ -68504,8 +68517,6 @@ mod async_runtime_tests_current {
             saved_finally_mode_depth: 0,
             saved_scope_depth: core.scope_chain.depth(),
             saved_scope_chain: None,
-            closure_id: None,
-            captured_scope_depth: 0,
             async_function_id: None,
         };
         let frame_bytes = InterpreterCore::estimate_call_frame_bytes(&frame);
@@ -85371,8 +85382,9 @@ mod tests {
                 .expect("current scope should exist")
                 .get_mut("payload")
                 .expect("declared binding should exist");
-            binding.value = Value::str("hello world");
-            binding.initialized = true;
+            binding
+                .set_state(Value::str("hello world"), true)
+                .expect("scope binding update");
         }
         core.apply_scope_chain_memory_delta(previous_scope_bytes)
             .expect("binding growth should fit memory budget");
@@ -85410,8 +85422,9 @@ mod tests {
                 .expect("current scope should exist")
                 .get_mut("payload")
                 .expect("declared binding should exist");
-            binding.value = Value::str("short");
-            binding.initialized = true;
+            binding
+                .set_state(Value::str("short"), true)
+                .expect("scope binding update");
         }
         core.sync_estimated_memory_bytes()
             .expect("seed scope binding should fit memory budget");
@@ -85425,25 +85438,19 @@ mod tests {
 
         let previous_scope_bytes = core.scope_chain_memory_bytes();
         let previous_closure_bytes = core.closures_memory_bytes();
+        let previous_call_stack_bytes = core.call_stack_memory_bytes();
         let replacement = Value::str("a longer captured payload");
-        let frame_index = if let Some((frame_index, binding)) =
-            core.scope_chain.resolve_mut_with_index("payload")
-        {
-            binding.value = replacement.clone();
-            binding.initialized = true;
-            Some(frame_index)
-        } else {
-            None
-        };
-        if let Some(frame_index) = frame_index {
-            core.propagate_scope_binding_update_to_closure_captures(
-                frame_index,
-                "payload",
-                &replacement,
-            );
+        if let Some((_, binding)) = core.scope_chain.resolve("payload") {
+            binding
+                .set_state(replacement, true)
+                .expect("scope binding update");
         }
-        core.apply_scope_and_closure_memory_delta(previous_scope_bytes, previous_closure_bytes)
-            .expect("scope and closure capture growth should fit memory budget");
+        core.apply_scope_closure_call_stack_memory_delta(
+            previous_scope_bytes,
+            previous_closure_bytes,
+            previous_call_stack_bytes,
+        )
+        .expect("scope and closure capture growth should fit memory budget");
         assert_eq!(
             core.recompute_estimated_memory_bytes(),
             core.estimated_memory_bytes(),
@@ -85466,8 +85473,9 @@ mod tests {
                 .expect("current scope should exist")
                 .get_mut("payload")
                 .expect("declared binding should exist");
-            binding.value = Value::str("captured payload");
-            binding.initialized = true;
+            binding
+                .set_state(Value::str("captured payload"), true)
+                .expect("scope binding update");
         }
         core.sync_estimated_memory_bytes()
             .expect("seed scope binding should fit memory budget");
@@ -85509,8 +85517,9 @@ mod tests {
                 .expect("current scope should exist")
                 .get_mut("payload")
                 .expect("declared binding should exist");
-            binding.value = Value::str("short");
-            binding.initialized = true;
+            binding
+                .set_state(Value::str("short"), true)
+                .expect("scope binding update");
         }
         let saved_scope = core.scope_chain.snapshot();
         core.closures.push(ClosureValue {
@@ -85525,8 +85534,9 @@ mod tests {
                 .expect("current scope should exist")
                 .get_mut("payload")
                 .expect("declared binding should exist");
-            binding.value = Value::str("expanded captured payload");
-            binding.initialized = true;
+            binding
+                .set_state(Value::str("expanded captured payload"), true)
+                .expect("scope binding update");
         }
         core.call_stack.push(CallFrame {
             return_ip: 123,
@@ -85545,8 +85555,6 @@ mod tests {
             saved_finally_mode_depth: 0,
             saved_scope_depth: saved_scope.len(),
             saved_scope_chain: Some(saved_scope),
-            closure_id: Some(0),
-            captured_scope_depth: 1,
             async_function_id: None,
         });
         core.sync_estimated_memory_bytes()
@@ -85584,8 +85592,9 @@ mod tests {
                 .expect("current scope should exist")
                 .get_mut("payload")
                 .expect("declared binding should exist");
-            binding.value = Value::str("short");
-            binding.initialized = true;
+            binding
+                .set_state(Value::str("short"), true)
+                .expect("scope binding update");
         }
         let saved_scope = core.scope_chain.snapshot();
         core.closures.push(ClosureValue {
@@ -85600,8 +85609,9 @@ mod tests {
                 .expect("current scope should exist")
                 .get_mut("payload")
                 .expect("declared binding should exist");
-            binding.value = Value::str("expanded async payload");
-            binding.initialized = true;
+            binding
+                .set_state(Value::str("expanded async payload"), true)
+                .expect("scope binding update");
         }
         let result_promise = core.promise_store.create().0;
         let async_function_id = core.async_functions.len() as u32;
@@ -85631,8 +85641,6 @@ mod tests {
             saved_finally_mode_depth: 0,
             saved_scope_depth: saved_scope.len(),
             saved_scope_chain: Some(saved_scope),
-            closure_id: Some(0),
-            captured_scope_depth: 1,
             async_function_id: Some(async_function_id),
         });
         core.sync_estimated_memory_bytes()
@@ -85681,8 +85689,9 @@ mod tests {
                 .expect("current scope should exist")
                 .get_mut("payload")
                 .expect("declared binding should exist");
-            binding.value = Value::str("short");
-            binding.initialized = true;
+            binding
+                .set_state(Value::str("short"), true)
+                .expect("scope binding update");
         }
         let saved_scope = core.scope_chain.snapshot();
         core.closures.push(ClosureValue {
@@ -85697,8 +85706,9 @@ mod tests {
                 .expect("current scope should exist")
                 .get_mut("payload")
                 .expect("declared binding should exist");
-            binding.value = Value::str("expanded unwind payload");
-            binding.initialized = true;
+            binding
+                .set_state(Value::str("expanded unwind payload"), true)
+                .expect("scope binding update");
         }
         core.suspended_abrupt_completions
             .push(AbruptCompletion::Return(Value::str("inner")));
@@ -85719,8 +85729,6 @@ mod tests {
             saved_finally_mode_depth: 0,
             saved_scope_depth: saved_scope.len(),
             saved_scope_chain: Some(saved_scope),
-            closure_id: Some(0),
-            captured_scope_depth: 1,
             async_function_id: None,
         });
         core.sync_estimated_memory_bytes()
@@ -85759,8 +85767,9 @@ mod tests {
                 .expect("current scope should exist")
                 .get_mut("payload")
                 .expect("declared binding should exist");
-            binding.value = Value::str("caller payload");
-            binding.initialized = true;
+            binding
+                .set_state(Value::str("caller payload"), true)
+                .expect("scope binding update");
         }
         let saved_scope = core.scope_chain.snapshot();
         core.closures.push(ClosureValue {
@@ -85768,15 +85777,23 @@ mod tests {
             captured_env: saved_scope.clone(),
         });
 
+        core.scope_chain
+            .push(core.config.max_scope_depth)
+            .expect("callee scope should fit depth budget");
+        core.scope_chain
+            .current_mut()
+            .expect("callee scope should exist")
+            .declare("payload".to_string(), BindingKind::Let);
         {
             let binding = core
                 .scope_chain
                 .current_mut()
-                .expect("current scope should exist")
+                .expect("callee scope should exist")
                 .get_mut("payload")
-                .expect("declared binding should exist");
-            binding.value = Value::str("callee setup payload that must roll back");
-            binding.initialized = true;
+                .expect("callee binding should exist");
+            binding
+                .set_state(Value::str("callee setup payload that must roll back"), true)
+                .expect("scope binding update");
         }
         core.suspended_abrupt_completions
             .push(AbruptCompletion::Return(Value::str("inner")));
@@ -85798,8 +85815,6 @@ mod tests {
             saved_finally_mode_depth: 0,
             saved_scope_depth: saved_scope.len(),
             saved_scope_chain: Some(saved_scope),
-            closure_id: Some(0),
-            captured_scope_depth: 1,
             async_function_id: None,
         });
         core.sync_estimated_memory_bytes()
@@ -85816,12 +85831,47 @@ mod tests {
             .frames
             .last()
             .and_then(|frame| frame.get("payload"))
-            .map(|binding| binding.value.clone());
+            .map(|binding| {
+                binding
+                    .value()
+                    .expect("restored binding should be readable")
+            });
         assert_eq!(restored_payload, Some(Value::str("caller payload")));
         assert_eq!(
             core.recompute_estimated_memory_bytes(),
             core.estimated_memory_bytes,
             "rollback deltas must match full recompute"
+        );
+    }
+
+    #[test]
+    fn create_closure_destination_failure_rolls_back_publication() {
+        let mut config = test_quickjs_config();
+        config.max_registers = 1;
+        let mut core = InterpreterCore::new(config, "closure-publication-rollback");
+        let module = test_module(vec![
+            Ir3Instruction::CreateClosure {
+                dst: 1,
+                function_index: 0,
+                capture_count: 0,
+            },
+            Ir3Instruction::Halt,
+        ]);
+
+        let err = core.execute(&module).unwrap_err();
+        assert!(matches!(
+            err,
+            InterpreterError::RegisterOutOfBounds {
+                register: 1,
+                max: 1
+            }
+        ));
+        assert!(core.closures.is_empty());
+        assert!(core.closure_module_origins.is_empty());
+        assert!(core.pending_captures.is_empty());
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
         );
     }
 
@@ -85960,6 +86010,87 @@ mod tests {
     }
 
     #[test]
+    fn module_snapshot_charge_stays_stable_when_shared_binding_payload_changes() {
+        let mut core = quickjs_test_core();
+        core.scope_chain
+            .current_mut()
+            .unwrap()
+            .declare("payload".to_string(), BindingKind::Let);
+        let binding = core
+            .scope_chain
+            .resolve("payload")
+            .map(|(_, binding)| binding.clone())
+            .expect("payload binding");
+        binding
+            .set_state(Value::str("short"), true)
+            .expect("seed binding state");
+        let saved_scope = core.scope_chain.snapshot();
+        core.call_stack.push(CallFrame {
+            return_ip: 1,
+            return_reg: 0,
+            register_base: 0,
+            function_index: None,
+            this_value: Value::Undefined,
+            this_label: Label::Public,
+            new_target_value: Value::Undefined,
+            super_value: Value::Undefined,
+            construct_this: None,
+            saved_pending_exception: None,
+            saved_pending_exception_label: Label::Public,
+            saved_pending_return: None,
+            saved_suspended_abrupt_depth: 0,
+            saved_finally_mode_depth: 0,
+            saved_scope_depth: saved_scope.len(),
+            saved_scope_chain: Some(saved_scope),
+            async_function_id: None,
+        });
+        core.sync_estimated_memory_bytes()
+            .expect("seed shared binding fixture");
+
+        let snapshot = core
+            .snapshot_module_execution()
+            .expect("module snapshot should fit");
+        let fixed_snapshot_charge = snapshot.accounted_bytes;
+        assert_eq!(
+            fixed_snapshot_charge,
+            core.module_execution_snapshot_memory_bytes()
+        );
+
+        let previous_scope_bytes = core.scope_chain_memory_bytes();
+        let previous_closure_bytes = core.closures_memory_bytes();
+        let previous_call_stack_bytes = core.call_stack_memory_bytes();
+        binding
+            .set_state(
+                Value::str("expanded shared binding payload".repeat(64)),
+                true,
+            )
+            .expect("grow shared binding state");
+        core.apply_scope_closure_call_stack_memory_delta(
+            previous_scope_bytes,
+            previous_closure_bytes,
+            previous_call_stack_bytes,
+        )
+        .expect("shared binding growth should fit");
+
+        assert_eq!(snapshot.accounted_bytes, fixed_snapshot_charge);
+        assert_eq!(
+            core.module_execution_snapshot_memory_bytes(),
+            fixed_snapshot_charge,
+            "snapshot structure charge must exclude mutable shared-cell payloads"
+        );
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+        core.discard_module_execution_snapshot(snapshot);
+        assert_eq!(core.module_snapshot_in_flight_bytes, 0);
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+    }
+
+    #[test]
     fn scope_chain_snapshot_respects_memory_budget() {
         let mut config = InterpreterConfig::quickjs_defaults();
         config.max_scope_depth = 4;
@@ -85969,11 +86100,7 @@ mod tests {
             .expect("operation should succeed for valid inputs");
         core.scope_chain.current_mut().unwrap().bindings.insert(
             "payload".to_string(),
-            ScopeBinding {
-                value: Value::str("x".repeat(128)),
-                kind: BindingKind::Var,
-                initialized: true,
-            },
+            ScopeBinding::with_state(BindingKind::Var, Value::str("x".repeat(128)), true),
         );
         core.sync_estimated_memory_bytes()
             .expect("operation should succeed for valid inputs");
@@ -85987,16 +86114,29 @@ mod tests {
     }
 
     #[test]
+    fn per_iteration_binding_clone_detaches_identity_and_preserves_state() {
+        let original =
+            ScopeBinding::with_state(BindingKind::Let, Value::str("iteration payload"), true);
+        let detached = original.detached_clone().expect("detached clone");
+
+        assert_eq!(detached.kind, BindingKind::Let);
+        assert_eq!(detached.snapshot_state(), original.snapshot_state());
+        assert!(!Rc::ptr_eq(&original.state, &detached.state));
+
+        detached
+            .set_state(Value::str("next iteration"), true)
+            .expect("mutate detached cell");
+        assert_eq!(original.value().unwrap(), Value::str("iteration payload"));
+        assert_eq!(detached.value().unwrap(), Value::str("next iteration"));
+    }
+
+    #[test]
     fn temporary_scope_clone_budget_counts_existing_snapshot() {
         let config = InterpreterConfig::quickjs_defaults();
         let mut core = InterpreterCore::new(config, "temporary-scope-clone-budget");
         core.scope_chain.current_mut().unwrap().bindings.insert(
             "payload".to_string(),
-            ScopeBinding {
-                value: Value::str("x".repeat(128)),
-                kind: BindingKind::Var,
-                initialized: true,
-            },
+            ScopeBinding::with_state(BindingKind::Var, Value::str("x".repeat(128)), true),
         );
         core.sync_estimated_memory_bytes()
             .expect("operation should succeed for valid inputs");
@@ -86370,11 +86510,7 @@ mod tests {
             let binding_value = format!("value{}", i);
             core.scope_chain.current_mut().unwrap().bindings.insert(
                 binding_name.clone(),
-                ScopeBinding {
-                    value: Value::str(binding_value.clone()),
-                    kind: BindingKind::Var,
-                    initialized: true,
-                },
+                ScopeBinding::with_state(BindingKind::Var, Value::str(binding_value.clone()), true),
             );
         }
 
@@ -86391,7 +86527,7 @@ mod tests {
             let binding_name = format!("var{}", level);
             let expected_value = format!("value{}", level);
             if let Some(binding) = frame.bindings.get(&binding_name) {
-                assert_eq!(binding.value, Value::str(expected_value));
+                assert_eq!(binding.value().unwrap(), Value::str(expected_value));
             } else {
                 panic!("Missing binding {} at scope level {}", binding_name, level);
             }
@@ -94022,36 +94158,24 @@ mod memory_accounting_tests {
                 Self::BindCurrentScope { name, value } => {
                     let previous_scope_bytes = core.scope_chain_memory_bytes();
                     let previous_closure_bytes = core.closures_memory_bytes();
+                    let previous_call_stack_bytes = core.call_stack_memory_bytes();
                     let replacement = value.to_runtime_value();
-                    let frame_index = if let Some((frame_index, binding)) =
-                        core.scope_chain.resolve_mut_with_index(name)
-                    {
-                        binding.value = replacement.clone();
-                        binding.initialized = true;
-                        Some(frame_index)
+                    let binding = if let Some((_, binding)) = core.scope_chain.resolve(name) {
+                        binding.clone()
                     } else {
-                        let frame_index = core.scope_chain.frames.len().saturating_sub(1);
                         let current = core.scope_chain.current_mut()?;
                         current.declare(name.clone(), BindingKind::Let);
-                        let binding = current.get_mut(name).ok_or_else(|| {
+                        current.get(name).cloned().ok_or_else(|| {
                             InterpreterError::InternalError {
                                 details: format!("missing declared test binding {name}"),
                             }
-                        })?;
-                        binding.value = replacement.clone();
-                        binding.initialized = true;
-                        Some(frame_index)
+                        })?
                     };
-                    if let Some(frame_index) = frame_index {
-                        core.propagate_scope_binding_update_to_closure_captures(
-                            frame_index,
-                            name,
-                            &replacement,
-                        );
-                    }
-                    core.apply_scope_and_closure_memory_delta(
+                    binding.set_state(replacement, true)?;
+                    core.apply_scope_closure_call_stack_memory_delta(
                         previous_scope_bytes,
                         previous_closure_bytes,
+                        previous_call_stack_bytes,
                     )?;
                     Ok(())
                 }

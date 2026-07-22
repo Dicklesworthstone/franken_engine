@@ -386,6 +386,18 @@ pub enum Ir1Op {
     LoadBinding { binding_id: BindingId },
     /// Store to a resolved binding.
     StoreBinding { binding_id: BindingId },
+    /// Initialize a resolved lexical binding, clearing its temporal dead zone.
+    InitializeBinding { binding_id: BindingId },
+    /// Create the lexical cell for the next loop iteration.
+    ///
+    /// Classic `for (let ...)` copies the current state into a detached cell;
+    /// `for-in` / `for-of` instead request a fresh uninitialized cell whose
+    /// following `StoreBinding` is lowered as initialization.
+    CreatePerIterationBinding {
+        binding_id: BindingId,
+        kind: BindingKind,
+        preserve_state: bool,
+    },
     /// Call a function value.
     Call { arg_count: u32 },
     /// Call a method on an object: the receiver (below callee on the value
@@ -618,6 +630,20 @@ impl Ir1Op {
             Self::StoreBinding { binding_id } => CanonicalValue::map_from_entries([
                 ("op", CanonicalValue::str("store_binding")),
                 ("binding_id", CanonicalValue::U64(u64::from(*binding_id))),
+            ]),
+            Self::InitializeBinding { binding_id } => CanonicalValue::map_from_entries([
+                ("op", CanonicalValue::str("initialize_binding")),
+                ("binding_id", CanonicalValue::U64(u64::from(*binding_id))),
+            ]),
+            Self::CreatePerIterationBinding {
+                binding_id,
+                kind,
+                preserve_state,
+            } => CanonicalValue::map_from_entries([
+                ("op", CanonicalValue::str("create_per_iteration_binding")),
+                ("binding_id", CanonicalValue::U64(u64::from(*binding_id))),
+                ("kind", CanonicalValue::str(kind.as_str())),
+                ("preserve_state", CanonicalValue::Bool(*preserve_state)),
             ]),
             Self::Call { arg_count } => CanonicalValue::map_from_entries([
                 ("op", CanonicalValue::str("call")),
@@ -1466,6 +1492,15 @@ pub enum Ir3Instruction {
     StoreScoped { src: Reg, name_pool_index: u32 },
     /// Initialize a let/const binding (move it out of TDZ).
     InitBinding { name_pool_index: u32, src: Reg },
+    /// Replace one resolved lexical binding with a fresh per-iteration cell.
+    /// When `preserve_state` is true the value and initialization state are
+    /// copied; otherwise the new cell starts uninitialized for iterator-head
+    /// binding initialization.
+    CreatePerIterationBinding {
+        name_pool_index: u32,
+        kind: u8,
+        preserve_state: bool,
+    },
     /// Load (and evaluate) an ES module; returns the namespace object.
     ImportModule { specifier: Reg, dst: Reg },
     /// Register an export binding for the current module.
@@ -2007,6 +2042,19 @@ impl Ir3Instruction {
                     CanonicalValue::U64(u64::from(*name_pool_index)),
                 ),
                 ("src", CanonicalValue::U64(u64::from(*src))),
+            ]),
+            Self::CreatePerIterationBinding {
+                name_pool_index,
+                kind,
+                preserve_state,
+            } => CanonicalValue::map_from_entries([
+                ("op", CanonicalValue::str("create_per_iteration_binding")),
+                (
+                    "name_pool_index",
+                    CanonicalValue::U64(u64::from(*name_pool_index)),
+                ),
+                ("kind", CanonicalValue::U64(u64::from(*kind))),
+                ("preserve_state", CanonicalValue::Bool(*preserve_state)),
             ]),
             Self::ImportModule { specifier, dst } => CanonicalValue::map_from_entries([
                 ("op", CanonicalValue::str("import_module")),
@@ -3134,6 +3182,12 @@ mod tests {
             },
             Ir1Op::LoadBinding { binding_id: 0 },
             Ir1Op::StoreBinding { binding_id: 1 },
+            Ir1Op::InitializeBinding { binding_id: 1 },
+            Ir1Op::CreatePerIterationBinding {
+                binding_id: 1,
+                kind: BindingKind::Let,
+                preserve_state: true,
+            },
             Ir1Op::Call { arg_count: 2 },
             Ir1Op::Return,
             Ir1Op::ImportModule {
@@ -4418,6 +4472,12 @@ mod tests {
             },
             Ir1Op::LoadBinding { binding_id: 0 },
             Ir1Op::StoreBinding { binding_id: 1 },
+            Ir1Op::InitializeBinding { binding_id: 1 },
+            Ir1Op::CreatePerIterationBinding {
+                binding_id: 1,
+                kind: BindingKind::Let,
+                preserve_state: true,
+            },
             Ir1Op::Call { arg_count: 3 },
             Ir1Op::Return,
             Ir1Op::ImportModule {

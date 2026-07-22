@@ -1,5 +1,6 @@
 ---
-source: src/lowering_pipeline.rs
+source: crates/franken-engine/src/lowering_pipeline.rs
+assertion_line: 34903
 expression: actual_json
 ---
 {
@@ -92,6 +93,13 @@ expression: actual_json
       },
       "Discard",
       {
+        "CreatePerIterationBinding": {
+          "binding_id": 0,
+          "kind": "Let",
+          "preserve_state": true
+        }
+      },
+      {
         "Label": {
           "id": 0
         }
@@ -141,6 +149,13 @@ expression: actual_json
         }
       },
       {
+        "CreatePerIterationBinding": {
+          "binding_id": 0,
+          "kind": "Let",
+          "preserve_state": true
+        }
+      },
+      {
         "LoadLiteral": {
           "value": {
             "Integer": 1
@@ -176,38 +191,38 @@ expression: actual_json
       },
       "level": "Ir2",
       "source_hash": [
-        77,
-        100,
-        176,
-        32,
-        121,
-        57,
-        32,
-        245,
-        194,
-        37,
-        175,
-        239,
-        57,
-        177,
-        226,
-        21,
-        115,
-        119,
-        250,
-        47,
-        37,
-        57,
-        183,
-        137,
-        53,
-        155,
-        151,
-        214,
-        56,
+        203,
+        28,
+        168,
+        195,
+        243,
+        18,
+        157,
+        228,
+        147,
+        124,
+        216,
+        206,
+        122,
         3,
-        6,
-        72
+        39,
+        255,
+        137,
+        35,
+        216,
+        148,
+        81,
+        13,
+        36,
+        130,
+        38,
+        205,
+        2,
+        216,
+        8,
+        108,
+        252,
+        231
       ],
       "source_label": "loop.js"
     },
@@ -266,6 +281,18 @@ expression: actual_json
       },
       {
         "inner": "Discard",
+        "effect": "Pure",
+        "required_capability": null,
+        "flow": null
+      },
+      {
+        "inner": {
+          "CreatePerIterationBinding": {
+            "binding_id": 0,
+            "kind": "Let",
+            "preserve_state": true
+          }
+        },
         "effect": "Pure",
         "required_capability": null,
         "flow": null
@@ -376,6 +403,18 @@ expression: actual_json
       },
       {
         "inner": {
+          "CreatePerIterationBinding": {
+            "binding_id": 0,
+            "kind": "Let",
+            "preserve_state": true
+          }
+        },
+        "effect": "Pure",
+        "required_capability": null,
+        "flow": null
+      },
+      {
+        "inner": {
           "LoadLiteral": {
             "value": {
               "Integer": 1
@@ -441,38 +480,38 @@ expression: actual_json
       },
       "level": "Ir3",
       "source_hash": [
-        225,
-        108,
-        90,
-        143,
-        159,
-        39,
-        84,
-        200,
-        148,
-        178,
-        245,
-        20,
-        51,
-        224,
-        152,
-        198,
-        12,
-        151,
-        20,
+        8,
+        184,
         71,
-        93,
-        177,
-        235,
-        140,
-        18,
-        193,
-        197,
-        185,
-        53,
-        211,
-        207,
-        11
+        80,
+        17,
+        94,
+        172,
+        198,
+        154,
+        252,
+        137,
+        82,
+        9,
+        122,
+        54,
+        180,
+        20,
+        149,
+        39,
+        151,
+        247,
+        178,
+        224,
+        244,
+        223,
+        214,
+        186,
+        159,
+        7,
+        69,
+        190,
+        228
       ],
       "source_label": "loop.js"
     },
@@ -619,7 +658,7 @@ expression: actual_json
     {
       "pass_id": "ir0_to_ir1",
       "input_hash": "sha256:3f12e9bf655b5f00f6e8872fe9d9fc201d98a4a1a6300530d84086f637cd5525",
-      "output_hash": "sha256:4d64b020793920f5c225afef39b1e2157377fa2f2539b789359b97d638030648",
+      "output_hash": "sha256:cb1ca8c3f3129de4937cd8ce7a0327ff8923d894510d248226cd02d8086cfce7",
       "rollback_token": "sha256:3f12e9bf655b5f00f6e8872fe9d9fc201d98a4a1a6300530d84086f637cd5525",
       "invariant_checks": [
         {
@@ -636,9 +675,9 @@ expression: actual_json
     },
     {
       "pass_id": "ir1_to_ir2",
-      "input_hash": "sha256:4d64b020793920f5c225afef39b1e2157377fa2f2539b789359b97d638030648",
-      "output_hash": "sha256:e16c5a8f9f2754c894b2f51433e098c60c9714475db1eb8c12c1c5b935d3cf0b",
-      "rollback_token": "sha256:4d64b020793920f5c225afef39b1e2157377fa2f2539b789359b97d638030648",
+      "input_hash": "sha256:cb1ca8c3f3129de4937cd8ce7a0327ff8923d894510d248226cd02d8086cfce7",
+      "output_hash": "sha256:08b84750115eacc69afc8952097a36b414952797f7b2e0f4dfd6ba9f0745bee4",
+      "rollback_token": "sha256:cb1ca8c3f3129de4937cd8ce7a0327ff8923d894510d248226cd02d8086cfce7",
       "invariant_checks": [
         {
           "name": "source_hash_linkage",
@@ -664,9 +703,9 @@ expression: actual_json
     },
     {
       "pass_id": "ir2_to_ir3",
-      "input_hash": "sha256:e16c5a8f9f2754c894b2f51433e098c60c9714475db1eb8c12c1c5b935d3cf0b",
-      "output_hash": "sha256:9177ee067ac35d4a8c5110f008baa0eaafc77133424fe2c4ab76b0c6b4afb62c",
-      "rollback_token": "sha256:e16c5a8f9f2754c894b2f51433e098c60c9714475db1eb8c12c1c5b935d3cf0b",
+      "input_hash": "sha256:08b84750115eacc69afc8952097a36b414952797f7b2e0f4dfd6ba9f0745bee4",
+      "output_hash": "sha256:d8979204a48c9dc4b435abdd09e41546eda9d2e6a4f83c94622450ef2982f922",
+      "rollback_token": "sha256:08b84750115eacc69afc8952097a36b414952797f7b2e0f4dfd6ba9f0745bee4",
       "invariant_checks": [
         {
           "name": "source_hash_linkage",
@@ -695,22 +734,22 @@ expression: actual_json
     {
       "pass_id": "ir0_to_ir1",
       "input_hash": "sha256:3f12e9bf655b5f00f6e8872fe9d9fc201d98a4a1a6300530d84086f637cd5525",
-      "output_hash": "sha256:4d64b020793920f5c225afef39b1e2157377fa2f2539b789359b97d638030648",
+      "output_hash": "sha256:cb1ca8c3f3129de4937cd8ce7a0327ff8923d894510d248226cd02d8086cfce7",
       "input_op_count": 1,
-      "output_op_count": 20
+      "output_op_count": 22
     },
     {
       "pass_id": "ir1_to_ir2",
-      "input_hash": "sha256:4d64b020793920f5c225afef39b1e2157377fa2f2539b789359b97d638030648",
-      "output_hash": "sha256:e16c5a8f9f2754c894b2f51433e098c60c9714475db1eb8c12c1c5b935d3cf0b",
-      "input_op_count": 20,
-      "output_op_count": 20
+      "input_hash": "sha256:cb1ca8c3f3129de4937cd8ce7a0327ff8923d894510d248226cd02d8086cfce7",
+      "output_hash": "sha256:08b84750115eacc69afc8952097a36b414952797f7b2e0f4dfd6ba9f0745bee4",
+      "input_op_count": 22,
+      "output_op_count": 22
     },
     {
       "pass_id": "ir2_to_ir3",
-      "input_hash": "sha256:e16c5a8f9f2754c894b2f51433e098c60c9714475db1eb8c12c1c5b935d3cf0b",
-      "output_hash": "sha256:9177ee067ac35d4a8c5110f008baa0eaafc77133424fe2c4ab76b0c6b4afb62c",
-      "input_op_count": 20,
+      "input_hash": "sha256:08b84750115eacc69afc8952097a36b414952797f7b2e0f4dfd6ba9f0745bee4",
+      "output_hash": "sha256:d8979204a48c9dc4b435abdd09e41546eda9d2e6a4f83c94622450ef2982f922",
+      "input_op_count": 22,
       "output_op_count": 19
     }
   ],

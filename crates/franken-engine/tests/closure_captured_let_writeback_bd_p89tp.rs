@@ -111,6 +111,18 @@ fn equal_factory_activations_keep_distinct_bindings() {
 }
 
 #[test]
+fn sibling_closures_share_only_their_factory_activation_bd_e7t2b() {
+    assert_eq!(
+        eval_value(concat!(
+            "function make(x) { return [() => x, value => x = value]; } ",
+            "let a = make(1); let b = make(2); a[1](9); ",
+            "a[0]() + ':' + b[0]();"
+        )),
+        "9:2"
+    );
+}
+
+#[test]
 fn closure_observes_later_same_scope_initialization() {
     assert_eq!(
         eval_value("let read = function() { return x; }; let x = 42; read();"),

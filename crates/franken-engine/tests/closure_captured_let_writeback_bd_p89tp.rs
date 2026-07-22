@@ -4,6 +4,8 @@
 //! closure never incremented the value observed by the enclosing code
 //! (`inc(); inc(); c` stayed 0). Exact canonical capture cells now make both
 //! sides observe the same live binding.
+//! bd-it65u extends that proof to deferred parents which mutate bindings already
+//! captured by child closures while preserving the register path for true locals.
 //!
 //! Value-asserting through HybridRouter::eval.
 
@@ -63,6 +65,35 @@ fn outer_write_is_visible_to_preexisting_closure() {
     assert_eq!(
         eval_value("let x = 1; let read = () => x; x = 2; read();"),
         "2"
+    );
+}
+
+#[test]
+fn deferred_function_assignment_updates_outer_capture() {
+    assert_eq!(
+        eval_value("let hits = 0; function record() { hits = hits + 1; } record(); hits;"),
+        "1"
+    );
+}
+
+#[test]
+fn deferred_parent_updates_reach_preexisting_child_capture() {
+    assert_eq!(
+        eval_value(concat!(
+            "function make() { let n = 1; let read = () => n; ",
+            "n += 2; n++; return read; } make()();"
+        )),
+        "4"
+    );
+}
+
+#[test]
+fn deferred_local_assignment_keeps_register_path() {
+    assert_eq!(
+        eval_value(
+            "function updateLocal() { let n = 1; n = n + 2; n++; return n; } updateLocal();"
+        ),
+        "4"
     );
 }
 

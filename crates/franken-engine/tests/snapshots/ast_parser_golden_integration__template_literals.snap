@@ -1,5 +1,6 @@
 ---
-source: tests/ast_parser_golden_integration.rs
+source: crates/franken-engine/tests/ast_parser_golden_integration.rs
+assertion_line: 79
 expression: scrubbed_actual
 ---
 {
@@ -93,8 +94,8 @@ expression: scrubbed_actual
             "initializer": {
               "TemplateLiteral": {
                 "quasis": [
-                  "   Line 1   Line 2   Value: ",
-                  " "
+                  "\n  Line 1\n  Line 2\n  Value: ",
+                  "\n"
                 ],
                 "expressions": [
                   {

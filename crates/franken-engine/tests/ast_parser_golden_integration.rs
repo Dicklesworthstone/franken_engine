@@ -23,7 +23,7 @@ static SCRUB_SPAN_FIELD: LazyLock<Regex> = LazyLock::new(|| {
     .unwrap()
 });
 
-use frankenengine_engine::ast::{ParseGoal, SyntaxTree};
+use frankenengine_engine::ast::{Expression, ParseGoal, Statement, SyntaxTree};
 use frankenengine_engine::parser::{
     CanonicalEs2020Parser, ParseError, ParserBudget, ParserMode, ParserOptions,
 };
@@ -296,6 +296,21 @@ const multiline = `
     let tree = parser
         .parse_with_options(source, ParseGoal::Script, &opts)
         .expect("Should parse template literals");
+
+    let Statement::VariableDeclaration(multiline) = &tree.body[2] else {
+        panic!("expected multiline variable declaration");
+    };
+    let Some(Expression::TemplateLiteral {
+        quasis,
+        expressions,
+    }) = multiline.declarations[0].initializer.as_ref()
+    else {
+        panic!("expected multiline template literal initializer");
+    };
+    assert_eq!(quasis.len(), 2);
+    assert_eq!(quasis[0], "\n  Line 1\n  Line 2\n  Value: ");
+    assert_eq!(quasis[1], "\n");
+    assert_eq!(expressions.len(), 1);
 
     assert_ast_snapshot("template_literals", &tree);
 }

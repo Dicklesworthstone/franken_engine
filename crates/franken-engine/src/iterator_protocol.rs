@@ -308,7 +308,7 @@ pub enum IterationCompletion {
     Normal,
     /// The iterable did not have a `@@iterator` method.
     NotIterable,
-    /// The `next()` method returned a non-object result.
+    /// The `next()` or `return()` method returned a non-object result.
     InvalidResult,
     /// The `return()` method (for IteratorClose) threw an exception.
     CloseThrew,

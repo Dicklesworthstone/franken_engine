@@ -33681,6 +33681,20 @@ impl InterpreterCore {
         }
     }
 
+    fn record_iterator_close_event(
+        &mut self,
+        trace_index: usize,
+        reason: CloseReason,
+        return_called: bool,
+        completion: IterationCompletion,
+    ) {
+        self.record_iteration_event(trace_index, |record_id, step_index| {
+            let mut event = make_close_event(record_id, step_index, reason, return_called);
+            event.completion = completion;
+            event
+        });
+    }
+
     fn init_for_in_iterator(&mut self, value: Value) -> Result<Value, InterpreterError> {
         let Value::Object(object_id) = value else {
             return Err(InterpreterError::TypeError {
@@ -35195,9 +35209,12 @@ impl InterpreterCore {
         let close_reason = Self::close_reason_from_ir(reason);
 
         let Some(iterator_object) = return_target else {
-            self.record_iteration_event(trace_index, |record_id, step_index| {
-                make_close_event(record_id, step_index, close_reason, false)
-            });
+            self.record_iterator_close_event(
+                trace_index,
+                close_reason,
+                false,
+                IterationCompletion::Normal,
+            );
             return Ok(());
         };
         let receiver = Value::Object(iterator_object);
@@ -35208,26 +35225,62 @@ impl InterpreterCore {
             receiver.clone(),
         )?
         else {
-            self.record_iteration_event(trace_index, |record_id, step_index| {
-                make_close_event(record_id, step_index, close_reason, false)
-            });
+            self.record_iterator_close_event(
+                trace_index,
+                close_reason,
+                false,
+                IterationCompletion::Normal,
+            );
             return Ok(());
         };
 
         if let RuntimeIteratorState::ForOf(state) = self.iterator_state_mut(handle)? {
             state.return_called = true;
         }
-        let result =
-            self.invoke_inline_method_call(Some(module), return_method, receiver, Vec::new())?;
+        let (invocation, callback_started) = self
+            .invoke_inline_method_call_tracking_callback_start(
+                Some(module),
+                return_method,
+                receiver,
+                Vec::new(),
+                None,
+            );
+        let result = match invocation {
+            Ok((result, _label)) => result,
+            Err(error) => {
+                if callback_started {
+                    self.record_iterator_close_event(
+                        trace_index,
+                        close_reason,
+                        true,
+                        IterationCompletion::CloseThrew,
+                    );
+                }
+                return Err(error);
+            }
+        };
         if !result.is_object_like() {
+            if callback_started {
+                self.record_iterator_close_event(
+                    trace_index,
+                    close_reason,
+                    true,
+                    IterationCompletion::InvalidResult,
+                );
+            }
             return Err(InterpreterError::TypeError {
                 expected: "object returned by iterator.return".to_string(),
                 got: result.type_name().to_string(),
             });
         }
-        self.record_iteration_event(trace_index, |record_id, step_index| {
-            make_close_event(record_id, step_index, close_reason, true)
-        });
+        if callback_started {
+            self.record_iterator_close_event(
+                trace_index,
+                close_reason,
+                true,
+                IterationCompletion::Normal,
+            );
+        }
         Ok(())
     }
 
@@ -64398,6 +64451,315 @@ mod active_builtin_regressions {
             "no denial should be recorded on a clean run"
         );
         assert!(core.security_observability().logs().is_empty());
+    }
+
+    fn iterator_return_value_module() -> Ir3Module {
+        let mut module = halted_test_module();
+        module.constant_pool = vec!["result".into()];
+        module.instructions = vec![
+            Ir3Instruction::LoadScoped {
+                dst: 0,
+                name_pool_index: 0,
+            },
+            Ir3Instruction::Return { value: 0 },
+        ];
+        module.function_table = vec![crate::ir_contract::Ir3FunctionDesc {
+            entry: 0,
+            arity: 0,
+            frame_size: 1,
+            name: Some("iterator_return_value".to_string()),
+            is_generator: false,
+            rest_param_index: None,
+        }];
+        module
+    }
+
+    fn iterator_return_throw_module() -> Ir3Module {
+        let mut module = halted_test_module();
+        module.constant_pool = vec!["close-error".into()];
+        module.instructions = vec![
+            Ir3Instruction::LoadStr {
+                dst: 0,
+                pool_index: 0,
+            },
+            Ir3Instruction::Throw { value: 0 },
+        ];
+        module.function_table = vec![crate::ir_contract::Ir3FunctionDesc {
+            entry: 0,
+            arity: 0,
+            frame_size: 1,
+            name: Some("iterator_return_throw".to_string()),
+            is_generator: false,
+            rest_param_index: None,
+        }];
+        module
+    }
+
+    fn closable_iterator_with_return_value(
+        core: &mut InterpreterCore,
+        result: Value,
+        discriminator: &str,
+    ) -> (u32, usize) {
+        let iterator_object = core
+            .alloc_object_with_prototype(None)
+            .expect("test iterator object allocation should succeed");
+        core.set_object_property(iterator_object, "return".to_string(), Value::Function(0))
+            .expect("test iterator return method write should succeed");
+        core.scope_chain
+            .current_mut()
+            .expect("global test scope should exist")
+            .bindings
+            .insert(
+                "result".to_string(),
+                ScopeBinding::with_state(BindingKind::Var, result, true),
+            );
+        let trace_index = core.start_iteration_trace(
+            IterationKind::ForOf,
+            format!("test:iterator-return:{discriminator}"),
+        );
+        let handle = core
+            .alloc_iterator(RuntimeIteratorState::ForOf(RuntimeForOfState {
+                values: vec![Value::Int(1)],
+                next_index: 0,
+                typed_array: None,
+                iterator_object: Some(iterator_object),
+                next_method: None,
+                timers_interval: None,
+                done: false,
+                closed: false,
+                return_called: false,
+                trace_index,
+            }))
+            .expect("test iterator allocation should succeed");
+        (handle, trace_index)
+    }
+
+    fn value_object_like_cases(core: &mut InterpreterCore) -> Vec<(&'static str, Value, bool)> {
+        let object = core
+            .alloc_object_with_prototype(None)
+            .expect("test result object allocation should succeed");
+        vec![
+            ("undefined", Value::Undefined, false),
+            ("null", Value::Null, false),
+            ("boolean", Value::Bool(false), false),
+            ("integer", Value::Int(0), false),
+            ("bigint", Value::BigInt(Arc::from("0")), false),
+            ("float", Value::Float(Float64::new(0.5)), false),
+            ("string", Value::str(""), false),
+            ("symbol", Value::Symbol(SymbolId(99)), false),
+            ("object", Value::Object(object), true),
+            ("function", Value::Function(0), true),
+            ("closure", Value::Closure(0), true),
+            ("iterator", Value::Iterator(0), true),
+            ("generator-function", Value::GeneratorFunction(0), true),
+            ("generator", Value::Generator(0), true),
+            ("async-function", Value::AsyncFunction(0), true),
+            ("async-function-object", Value::AsyncFunctionObject(0), true),
+            (
+                "async-generator-function",
+                Value::AsyncGeneratorFunction(0),
+                true,
+            ),
+            (
+                "async-generator-object",
+                Value::AsyncGeneratorObject(0),
+                true,
+            ),
+            ("promise", Value::Promise(0), true),
+            (
+                "builtin-function",
+                Value::BuiltinFunction(BuiltinFunction::function_constructor()),
+                true,
+            ),
+            (
+                "accessor",
+                Value::Accessor {
+                    get: Some(Arc::new(Value::Function(0))),
+                    set: None,
+                },
+                true,
+            ),
+        ]
+    }
+
+    #[test]
+    fn value_object_like_classifier_covers_every_variant_bd_7vfkc() {
+        let mut core = test_core();
+        for (name, value, expected) in value_object_like_cases(&mut core) {
+            #[allow(clippy::match_like_matches_macro)]
+            let exhaustive_expected = match &value {
+                Value::Undefined
+                | Value::Null
+                | Value::Bool(_)
+                | Value::Int(_)
+                | Value::BigInt(_)
+                | Value::Float(_)
+                | Value::Str(_)
+                | Value::Symbol(_) => false,
+                Value::Object(_)
+                | Value::Function(_)
+                | Value::Closure(_)
+                | Value::Iterator(_)
+                | Value::GeneratorFunction(_)
+                | Value::Generator(_)
+                | Value::AsyncFunction(_)
+                | Value::AsyncFunctionObject(_)
+                | Value::AsyncGeneratorFunction(_)
+                | Value::AsyncGeneratorObject(_)
+                | Value::Promise(_)
+                | Value::BuiltinFunction(_)
+                | Value::Accessor { .. } => true,
+            };
+            assert_eq!(
+                exhaustive_expected, expected,
+                "fixture classification: {name}"
+            );
+            assert_eq!(
+                value.is_object_like(),
+                expected,
+                "runtime classification: {name}"
+            );
+        }
+    }
+
+    #[test]
+    fn iterator_close_accepts_every_object_like_value_carrier_bd_7vfkc() {
+        let module = iterator_return_value_module();
+        let mut core = test_core();
+        for (name, result, object_like) in value_object_like_cases(&mut core) {
+            if !object_like {
+                continue;
+            }
+            let (handle, trace_index) =
+                closable_iterator_with_return_value(&mut core, result, name);
+            core.close_iterator(&module, Value::Iterator(handle), IteratorCloseReason::Break)
+                .unwrap_or_else(|error| panic!("{name}: object-like result was rejected: {error}"));
+            core.close_iterator(&module, Value::Iterator(handle), IteratorCloseReason::Break)
+                .unwrap_or_else(|error| panic!("{name}: repeated close failed: {error}"));
+
+            let trace = &core.iteration_traces[trace_index];
+            let called_events = trace
+                .events
+                .iter()
+                .filter(|event| {
+                    matches!(
+                        &event.operation,
+                        IterationOperation::IteratorClose {
+                            reason: CloseReason::Break,
+                            return_called: true,
+                        }
+                    )
+                })
+                .count();
+            assert_eq!(
+                called_events, 1,
+                "{name}: return must be called exactly once"
+            );
+            assert_eq!(
+                trace.events[0].completion,
+                IterationCompletion::Normal,
+                "{name}"
+            );
+        }
+    }
+
+    #[test]
+    fn iterator_close_rejects_every_primitive_value_carrier_bd_7vfkc() {
+        let module = iterator_return_value_module();
+        let mut core = test_core();
+        for (name, result, object_like) in value_object_like_cases(&mut core) {
+            if object_like {
+                continue;
+            }
+            let expected_type = result.type_name();
+            let (handle, trace_index) =
+                closable_iterator_with_return_value(&mut core, result, name);
+            let error = core
+                .close_iterator(&module, Value::Iterator(handle), IteratorCloseReason::Break)
+                .expect_err("primitive iterator.return result must be rejected");
+            match error {
+                InterpreterError::TypeError { expected, got } => {
+                    assert_eq!(expected, "object returned by iterator.return", "{name}");
+                    assert_eq!(got, expected_type, "{name}");
+                }
+                other => panic!("{name}: expected TypeError, got {other:?}"),
+            }
+            core.close_iterator(&module, Value::Iterator(handle), IteratorCloseReason::Break)
+                .unwrap_or_else(|error| panic!("{name}: repeated close failed: {error}"));
+
+            let trace = &core.iteration_traces[trace_index];
+            assert!(matches!(
+                trace.events.first(),
+                Some(IterationEvent {
+                    operation: IterationOperation::IteratorClose {
+                        reason: CloseReason::Break,
+                        return_called: true,
+                    },
+                    completion: IterationCompletion::InvalidResult,
+                    ..
+                })
+            ));
+            let called_events = trace
+                .events
+                .iter()
+                .filter(|event| {
+                    matches!(
+                        &event.operation,
+                        IterationOperation::IteratorClose {
+                            return_called: true,
+                            ..
+                        }
+                    )
+                })
+                .count();
+            assert_eq!(
+                called_events, 1,
+                "{name}: return must be called exactly once"
+            );
+        }
+    }
+
+    #[test]
+    fn iterator_close_traces_throwing_return_exactly_once_bd_7vfkc() {
+        let module = iterator_return_throw_module();
+        let mut core = test_core();
+        let (handle, trace_index) =
+            closable_iterator_with_return_value(&mut core, Value::Undefined, "throw");
+
+        assert!(matches!(
+            core.close_iterator(&module, Value::Iterator(handle), IteratorCloseReason::Break,),
+            Err(InterpreterError::UncaughtException { .. })
+        ));
+        core.close_iterator(&module, Value::Iterator(handle), IteratorCloseReason::Break)
+            .expect("a repeated close must not invoke iterator.return again");
+
+        let trace = &core.iteration_traces[trace_index];
+        assert!(matches!(
+            trace.events.first(),
+            Some(IterationEvent {
+                operation: IterationOperation::IteratorClose {
+                    reason: CloseReason::Break,
+                    return_called: true,
+                },
+                completion: IterationCompletion::CloseThrew,
+                ..
+            })
+        ));
+        assert_eq!(
+            trace
+                .events
+                .iter()
+                .filter(|event| matches!(
+                    &event.operation,
+                    IterationOperation::IteratorClose {
+                        return_called: true,
+                        ..
+                    }
+                ))
+                .count(),
+            1,
+            "a throwing iterator.return must be traced exactly once"
+        );
     }
 
     #[test]

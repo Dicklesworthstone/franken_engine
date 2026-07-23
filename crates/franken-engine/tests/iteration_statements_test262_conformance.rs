@@ -1297,6 +1297,151 @@ mod tests {
     }
 
     #[test]
+    fn for_of_close_accepts_representative_source_object_like_carriers_bd_7vfkc() {
+        for (case, prelude, result_expression) in [
+            ("ordinary object", "", "{}"),
+            (
+                "ordinary function",
+                "function ordinary() { return 1; }",
+                "ordinary",
+            ),
+            (
+                "capturing closure",
+                "let captured = 1; let closure = function() { return captured; };",
+                "closure",
+            ),
+            ("builtin function", "", "Array.isArray"),
+            ("Promise", "", "Promise.resolve(0)"),
+            ("iterator", "", "[1][Symbol.iterator]()"),
+            (
+                "generator object",
+                "function* values() { yield 1; } let generator = values();",
+                "generator",
+            ),
+            (
+                "generator function",
+                "function* values() { yield 1; }",
+                "values",
+            ),
+            (
+                "async function",
+                "async function asyncValue() { return 1; }",
+                "asyncValue",
+            ),
+            (
+                "async generator object",
+                "async function* asyncValues() { yield 1; } let asyncGenerator = asyncValues();",
+                "asyncGenerator",
+            ),
+            (
+                "async generator function",
+                "async function* asyncValues() { yield 1; }",
+                "asyncValues",
+            ),
+        ] {
+            let source = r#"
+                    __PRELUDE__
+                    let iterator = {
+                        closed: 0,
+                        next() { return { value: 1, done: false }; },
+                        return() {
+                            this.closed++;
+                            return __RESULT_EXPRESSION__;
+                        }
+                    };
+                    let iterable = { [Symbol.iterator]() { return iterator; } };
+                    for (const value of iterable) { break; }
+                    iterator.closed;
+                "#
+            .replace("__PRELUDE__", prelude)
+            .replace("__RESULT_EXPRESSION__", result_expression);
+            assert_eq!(
+                eval_value_bd_5p1dp(&source),
+                "1",
+                "{case}: every ECMAScript object-like return carrier must be accepted"
+            );
+        }
+    }
+
+    #[test]
+    fn for_of_close_rejects_every_source_primitive_carrier_bd_7vfkc() {
+        for (case, result_expression) in [
+            ("undefined", "undefined"),
+            ("null", "null"),
+            ("boolean", "false"),
+            ("integer number", "0"),
+            ("floating-point number", "0.5"),
+            ("bigint", "1n"),
+            ("string", "'primitive'"),
+            ("symbol", "Symbol('primitive')"),
+        ] {
+            let source = r#"
+                    let iterator = {
+                        closed: 0,
+                        next() { return { value: 1, done: false }; },
+                        return() {
+                            this.closed++;
+                            return __RESULT_EXPRESSION__;
+                        }
+                    };
+                    let iterable = { [Symbol.iterator]() { return iterator; } };
+                    function run() {
+                        try {
+                            for (const value of iterable) { break; }
+                            return "miss";
+                        } catch (error) {
+                            return error.name;
+                        }
+                    }
+                    run() + ":" + iterator.closed;
+                "#
+            .replace("__RESULT_EXPRESSION__", result_expression);
+            assert_eq!(
+                eval_value_bd_5p1dp(&source),
+                "TypeError:1",
+                "{case}: a primitive return must throw TypeError after exactly one close call"
+            );
+        }
+    }
+
+    #[test]
+    fn for_of_throw_completion_wins_and_closes_once_bd_7vfkc() {
+        for (case, return_body) in [
+            ("primitive return", "return 0;"),
+            ("throwing return", "throw new Error('close-error');"),
+        ] {
+            let source = r#"
+                    let iterator = {
+                        closed: 0,
+                        next() { return { value: 1, done: false }; },
+                        return() {
+                            this.closed++;
+                            __RETURN_BODY__
+                        }
+                    };
+                    let iterable = { [Symbol.iterator]() { return iterator; } };
+                    function run() {
+                        try {
+                            for (const value of iterable) {
+                                throw new Error("body-error");
+                            }
+                            return "miss";
+                        } catch (error) {
+                            return error.message;
+                        }
+                    }
+                    run() + ":" + iterator.closed;
+                "#
+            .replace("__RETURN_BODY__", return_body);
+            assert_eq!(
+                eval_value_bd_5p1dp(&source),
+                "body-error:1",
+                "{case}: Throw completion must win while iterator.return is called once"
+            );
+        }
+    }
+
+    #[test]
     fn for_of_crossing_labels_close_innermost_first_bd_g73mg() {
         assert_eq!(
             eval_value_bd_5p1dp(

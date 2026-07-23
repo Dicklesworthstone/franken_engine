@@ -42,6 +42,10 @@ const LEXICAL_CAPTURE_CELL_PREFIX: &str = "\0lexical-capture\0";
 pub(crate) const CLASS_EXPRESSION_CONSTRUCTOR_SELF_CAPTURE_PREFIX: &str =
     "\0class-expression-constructor-self\0";
 const CLASS_EXPRESSION_METHOD_SELF_CAPTURE_PREFIX: &str = "\0class-expression-method-self\0";
+pub(crate) const FUNCTION_EXPRESSION_SELF_CAPTURE_PREFIX: &str = "\0function-expression-self\0";
+const ARROW_LEXICAL_THIS_CAPTURE: &str = "\0arrow-lexical-this\0";
+const ARROW_LEXICAL_NEW_TARGET_CAPTURE: &str = "\0arrow-lexical-new-target\0";
+const ARROW_LEXICAL_SUPER_CAPTURE: &str = "\0arrow-lexical-super\0";
 
 fn lexical_capture_cell_name(name: &str, binding_id: BindingId) -> String {
     format!("{LEXICAL_CAPTURE_CELL_PREFIX}{binding_id}\0{name}")
@@ -53,6 +57,10 @@ fn class_expression_constructor_self_capture_name(name: &str, origin_id: Binding
 
 fn class_expression_method_self_capture_name(name: &str, origin_id: BindingId) -> String {
     format!("{CLASS_EXPRESSION_METHOD_SELF_CAPTURE_PREFIX}{origin_id}\0{name}")
+}
+
+fn function_expression_self_capture_name(name: &str, origin_id: BindingId) -> String {
+    format!("{FUNCTION_EXPRESSION_SELF_CAPTURE_PREFIX}{origin_id}\0{name}")
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -2363,8 +2371,8 @@ fn emit_parameter_tdz_throw(ops: &mut Vec<Ir1Op>, name: &str) {
 
 /// Rewrite only the operations emitted for a parameter default expression.
 /// The surrounding default branch remains intact, so an access in a dead
-/// branch does not throw. Function bodies are opaque here: capturing defaults
-/// continue to use their dedicated fail-closed frontier until bd-wqbac.
+/// branch does not throw. Function bodies are opaque here: their reads resolve
+/// through the live, source-ordered parameter cells captured at runtime.
 fn rewrite_parameter_tdz_accesses(ops: &mut Vec<Ir1Op>, start: usize, state: &ParameterTdzState) {
     let default_ops = ops.drain(start..).collect::<Vec<_>>();
     for op in default_ops {
@@ -2444,25 +2452,21 @@ fn rewrite_unresolved_class_body_loads(
     unresolved_names
 }
 
-/// Give a class-expression self capture a runtime-private name while retaining
-/// its exact body and outer binding IDs. Constructor and method markers are
-/// deliberately distinct: only a constructor marker is initialized to the new
-/// closure at runtime, while methods capture the already-created class value.
-fn rewrite_class_expression_self_capture(
-    body_lookup: &BTreeMap<String, BindingId>,
-    self_name: &str,
+/// Give a named function/class-expression self capture a runtime-private name
+/// while retaining its exact body and outer binding IDs. Constructor and
+/// method markers are deliberately distinct: only cyclic constructor/function
+/// markers are initialized to the new closure at runtime, while methods capture
+/// the already-created class value.
+fn rewrite_private_self_capture(
+    private_outer_binding: BindingId,
     runtime_name: String,
     free_vars: &mut [String],
-    free_var_ids: &[BindingId],
+    free_var_outer_ids: &[BindingId],
 ) {
-    let Some(self_binding) = body_lookup.get(self_name) else {
-        return;
-    };
-    let Some(index) = free_var_ids.iter().position(|id| id == self_binding) else {
-        return;
-    };
-    if let Some(free_var) = free_vars.get_mut(index) {
-        *free_var = runtime_name;
+    for (free_var, outer_id) in free_vars.iter_mut().zip(free_var_outer_ids) {
+        if *outer_id == private_outer_binding {
+            free_var.clone_from(&runtime_name);
+        }
     }
 }
 
@@ -2586,7 +2590,7 @@ fn validate_rest_parameter_abi(
 #[derive(Default)]
 struct FunctionParameterPlan<'a> {
     param_names: Vec<String>,
-    destructure_params: Vec<(usize, String, &'a BindingPattern, &'a SourceSpan)>,
+    parameter_steps: Vec<(usize, String, &'a BindingPattern)>,
     parameter_bindings: Vec<(usize, BindingId, String)>,
     rest_param_index: Option<u32>,
 }
@@ -2665,16 +2669,41 @@ fn parameter_prologue_referenced_binding_ids(ops: &[Ir1Op]) -> BTreeSet<BindingI
     referenced
 }
 
-fn arrow_body_uses_lexical_call_context(ops: &[Ir1Op]) -> bool {
-    ops.iter().any(|op| match op {
-        Ir1Op::LoadThis | Ir1Op::LoadNewTarget | Ir1Op::LoadSuper => true,
-        Ir1Op::CreateFunction {
-            body_ops,
-            is_arrow: true,
-            ..
-        } => arrow_body_uses_lexical_call_context(body_ops),
-        _ => false,
-    })
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct ArrowLexicalContextUsage {
+    this_value: bool,
+    new_target: bool,
+    super_value: bool,
+}
+
+impl ArrowLexicalContextUsage {
+    fn include(&mut self, other: Self) {
+        self.this_value |= other.this_value;
+        self.new_target |= other.new_target;
+        self.super_value |= other.super_value;
+    }
+
+    fn is_empty(self) -> bool {
+        !self.this_value && !self.new_target && !self.super_value
+    }
+}
+
+fn arrow_lexical_context_usage(ops: &[Ir1Op]) -> ArrowLexicalContextUsage {
+    let mut usage = ArrowLexicalContextUsage::default();
+    for op in ops {
+        match op {
+            Ir1Op::LoadThis => usage.this_value = true,
+            Ir1Op::LoadNewTarget => usage.new_target = true,
+            Ir1Op::LoadSuper => usage.super_value = true,
+            Ir1Op::CreateFunction {
+                body_ops,
+                is_arrow: true,
+                ..
+            } => usage.include(arrow_lexical_context_usage(body_ops)),
+            _ => {}
+        }
+    }
+    usage
 }
 
 fn allocate_function_parameter_bindings<'a>(
@@ -2686,36 +2715,39 @@ fn allocate_function_parameter_bindings<'a>(
 ) -> Result<FunctionParameterPlan<'a>, LoweringPipelineError> {
     let rest_param_index = validate_rest_parameter_abi(params)?;
     let mut param_names = Vec::with_capacity(params.len());
-    let mut destructure_params = Vec::with_capacity(params.len());
+    let mut parameter_steps = Vec::with_capacity(params.len());
+
+    // Keep raw argument registers behind private carrier bindings. Source
+    // parameter bindings are allocated separately below and initialized in
+    // formal order by the prologue. This prevents a later raw argument in rN
+    // from becoming visible before its BindingInitialization step.
     for (index, param) in params.iter().enumerate() {
-        if let BindingPattern::Rest(inner) = &param.pattern
+        let abi_name = if let BindingPattern::Rest(inner) = &param.pattern
             && let Some(name) = inner.as_identifier()
         {
-            param_names.push(name.to_string());
-            continue;
-        }
-        if let Some(name) = param.name() {
-            param_names.push(name.to_string());
+            name.to_string()
+        } else if let Some(name) = param.name() {
+            name.to_string()
         } else {
-            let synthetic_name = format!("@@franken_internal_param_{index}");
-            param_names.push(synthetic_name.clone());
-            destructure_params.push((index, synthetic_name, &param.pattern, &param.span));
-        }
-    }
+            format!("@@franken_internal_param_{index}")
+        };
+        param_names.push(abi_name);
 
-    for param_name in &param_names {
+        let carrier_name = format!("@@franken_internal_param_{index}");
         let _ = alloc_binding(
             body_bindings,
             body_lookup,
             body_binding_index,
             body_scope,
-            param_name,
+            &carrier_name,
             BindingKind::Parameter,
         )
         .map_err(LoweringPipelineError::SemanticViolation)?;
+        parameter_steps.push((index, carrier_name, &param.pattern));
     }
-    for (_, _, pattern, _) in &destructure_params {
-        for bound_name in pattern.binding_names() {
+
+    for param in params {
+        for bound_name in param.pattern.binding_names() {
             let _ = alloc_binding(
                 body_bindings,
                 body_lookup,
@@ -2741,7 +2773,7 @@ fn allocate_function_parameter_bindings<'a>(
     }
     Ok(FunctionParameterPlan {
         param_names,
-        destructure_params,
+        parameter_steps,
         parameter_bindings,
         rest_param_index,
     })
@@ -2749,7 +2781,7 @@ fn allocate_function_parameter_bindings<'a>(
 
 #[allow(clippy::too_many_arguments)]
 fn lower_function_parameter_prologue(
-    destructure_params: &[(usize, String, &BindingPattern, &SourceSpan)],
+    parameter_steps: &[(usize, String, &BindingPattern)],
     parameter_bindings: &[(usize, BindingId, String)],
     outer_lookup: &BTreeMap<String, BindingId>,
     body_ops: &mut Vec<Ir1Op>,
@@ -2759,58 +2791,55 @@ fn lower_function_parameter_prologue(
     body_scope: ScopeId,
     body_label_counter: &mut u32,
 ) -> Result<Vec<(String, BindingId)>, LoweringPipelineError> {
-    if destructure_params.is_empty() {
+    if parameter_steps.is_empty() {
         return Ok(Vec::new());
     }
     let parameter_binding_names = parameter_lookup.keys().cloned().collect::<BTreeSet<_>>();
     let mut prologue_lookup = parameter_lookup.clone();
     seed_function_outer_static_bindings(outer_lookup, &mut prologue_lookup, body_binding_index);
     let prologue_start = body_ops.len();
-    for (formal_index, synthetic_name, pattern, span) in destructure_params {
-        let source_binding_id = *prologue_lookup.get(synthetic_name).ok_or(
+    for (formal_index, carrier_name, pattern) in parameter_steps {
+        let source_binding_id = *prologue_lookup.get(carrier_name).ok_or(
             LoweringPipelineError::InvariantViolation {
-                detail: "synthetic parameter source binding must be allocated before its prologue",
+                detail: "parameter carrier binding must be allocated before its prologue",
             },
         )?;
-        let prologue_op_start = body_ops.len();
         let mut parameter_tdz = ParameterTdzState::at_formal(parameter_bindings, *formal_index);
-        lower_destructuring_to_ir1_with_parameter_tdz(
-            pattern,
-            source_binding_id,
-            body_ops,
-            body_bindings,
-            &mut prologue_lookup,
-            body_binding_index,
-            body_scope,
-            body_label_counter,
-            DestructuringWriteMode::Initialize,
-            Some(&mut parameter_tdz),
-        )?;
-        if body_ops[prologue_op_start..].iter().any(|op| match op {
-            Ir1Op::CreateFunction {
-                name,
+        let direct_name = match pattern {
+            BindingPattern::Identifier(name) => Some(name.as_str()),
+            BindingPattern::Rest(inner) => inner.as_identifier(),
+            _ => None,
+        };
+        if let Some(name) = direct_name {
+            let target_binding_id =
+                *prologue_lookup
+                    .get(name)
+                    .ok_or(LoweringPipelineError::InvariantViolation {
+                        detail: "direct parameter binding must be allocated before its prologue",
+                    })?;
+            body_ops.push(Ir1Op::LoadBinding {
+                binding_id: source_binding_id,
+            });
+            emit_destructuring_target_write(
                 body_ops,
-                free_var_ids,
-                is_arrow,
-                ..
-            } => {
-                let referenced = parameter_prologue_referenced_binding_ids(body_ops);
-                name.is_some()
-                    || (*is_arrow && arrow_body_uses_lexical_call_context(body_ops))
-                    || free_var_ids
-                        .iter()
-                        .any(|binding_id| referenced.contains(binding_id))
-            }
-            Ir1Op::DeclareFunction { .. } => true,
-            _ => false,
-        }) {
-            return Err(unsupported_frontier_expression_error(
-                "function_parameter_default_closure",
-                "FE-LOWER-UNSUPPORTED-PARAM-DEFAULT-CLOSURE-0001",
-                "core.function_parameter_default_closure",
-                "capturing, self-named, or lexical-context parameter-default closures require persistent environment cells",
-                Some((*span).clone()),
-            ));
+                target_binding_id,
+                DestructuringWriteMode::Initialize,
+            );
+            body_ops.push(Ir1Op::Pop);
+            parameter_tdz.mark_binding_initialized(name, &prologue_lookup);
+        } else {
+            lower_destructuring_to_ir1_with_parameter_tdz(
+                pattern,
+                source_binding_id,
+                body_ops,
+                body_bindings,
+                &mut prologue_lookup,
+                body_binding_index,
+                body_scope,
+                body_label_counter,
+                DestructuringWriteMode::Initialize,
+                Some(&mut parameter_tdz),
+            )?;
         }
     }
     let referenced_binding_ids =
@@ -2822,23 +2851,6 @@ fn lower_function_parameter_prologue(
         })
         .filter(|(_, binding_id)| referenced_binding_ids.contains(binding_id))
         .collect())
-}
-
-fn reject_self_referential_parameter_capture(
-    captures: &[(String, BindingId)],
-    self_name: &str,
-    span: SourceSpan,
-) -> Result<(), LoweringPipelineError> {
-    if captures.iter().any(|(name, _)| name == self_name) {
-        return Err(unsupported_frontier_expression_error(
-            "self_referential_parameter_default",
-            "FE-LOWER-UNSUPPORTED-SELF-PARAM-DEFAULT-0001",
-            "core.self_referential_parameter_default",
-            "self-referential parameter defaults require a live function-name environment",
-            Some(span),
-        ));
-    }
-    Ok(())
 }
 
 fn parse_named_export_clause_bindings(clause: &str) -> Vec<(String, String)> {
@@ -4927,7 +4939,7 @@ fn lower_statement_to_ir1_with_flow(
             let mut body_label_counter: u32 = 0;
             let FunctionParameterPlan {
                 param_names,
-                destructure_params,
+                parameter_steps,
                 parameter_bindings,
                 rest_param_index,
             } = allocate_function_parameter_bindings(
@@ -4948,7 +4960,7 @@ fn lower_statement_to_ir1_with_flow(
             }
             let parameter_binding_names = body_lookup.keys().cloned().collect();
             let parameter_prologue_captures = lower_function_parameter_prologue(
-                &destructure_params,
+                &parameter_steps,
                 &parameter_bindings,
                 binding_lookup,
                 &mut body_ops,
@@ -4957,11 +4969,6 @@ fn lower_statement_to_ir1_with_flow(
                 &mut body_binding_index,
                 body_scope,
                 &mut body_label_counter,
-            )?;
-            reject_self_referential_parameter_capture(
-                &parameter_prologue_captures,
-                &name,
-                func.span.clone(),
             )?;
             let pre_lower_names = prepare_function_body_bindings(
                 Some(&func.body.body),
@@ -5038,6 +5045,18 @@ fn lower_statement_to_ir1_with_flow(
         }
         Statement::ClassDeclaration(cls) => {
             let class_name = cls.name.clone().unwrap_or_else(|| "anonymous".to_string());
+            // The class binding is the live self cell for constructor and
+            // method parameter defaults. Allocate it before lowering those
+            // prologues so self references resolve to this exact outer cell.
+            let bid = alloc_binding(
+                bindings,
+                binding_lookup,
+                binding_index,
+                scope_id,
+                &class_name,
+                BindingKind::Let,
+            )
+            .map_err(LoweringPipelineError::SemanticViolation)?;
             // Find the constructor method, if any.
             let constructor = cls.body.iter().find(|m| m.kind == MethodKind::Constructor);
             // Lower constructor as a function declaration.
@@ -5049,7 +5068,7 @@ fn lower_statement_to_ir1_with_flow(
             let mut body_label_counter: u32 = 0;
             let FunctionParameterPlan {
                 param_names,
-                destructure_params,
+                parameter_steps,
                 parameter_bindings,
                 rest_param_index,
             } = if let Some(ctor) = constructor {
@@ -5065,7 +5084,7 @@ fn lower_statement_to_ir1_with_flow(
             };
             let parameter_binding_names = body_lookup.keys().cloned().collect();
             let parameter_prologue_captures = lower_function_parameter_prologue(
-                &destructure_params,
+                &parameter_steps,
                 &parameter_bindings,
                 binding_lookup,
                 &mut body_ops,
@@ -5074,11 +5093,6 @@ fn lower_statement_to_ir1_with_flow(
                 &mut body_binding_index,
                 body_scope,
                 &mut body_label_counter,
-            )?;
-            reject_self_referential_parameter_capture(
-                &parameter_prologue_captures,
-                &class_name,
-                cls.span.clone(),
             )?;
             let ctor_pre_lower_names = if let Some(ctor) = constructor {
                 let pre_lower_names = prepare_function_body_bindings(
@@ -5141,15 +5155,6 @@ fn lower_statement_to_ir1_with_flow(
                 &ctor_free_var_ids,
                 &body_ops,
             );
-            let bid = alloc_binding(
-                bindings,
-                binding_lookup,
-                binding_index,
-                scope_id,
-                &class_name,
-                BindingKind::Let,
-            )
-            .map_err(LoweringPipelineError::SemanticViolation)?;
             ops.push(Ir1Op::DeclareFunction {
                 name: class_name,
                 binding_id: bid,
@@ -5229,7 +5234,7 @@ fn lower_statement_to_ir1_with_flow(
                 let mut m_label_counter: u32 = 0;
                 let FunctionParameterPlan {
                     param_names: m_param_names,
-                    destructure_params: m_destructure_params,
+                    parameter_steps: m_parameter_steps,
                     parameter_bindings: m_parameter_bindings,
                     rest_param_index: m_rest_param_index,
                 } = allocate_function_parameter_bindings(
@@ -5252,7 +5257,7 @@ fn lower_statement_to_ir1_with_flow(
                 }
                 let parameter_binding_names = m_lookup.keys().cloned().collect();
                 let parameter_prologue_captures = lower_function_parameter_prologue(
-                    &m_destructure_params,
+                    &m_parameter_steps,
                     &m_parameter_bindings,
                     binding_lookup,
                     &mut m_body_ops,
@@ -5612,8 +5617,10 @@ fn collect_function_local_lexical_bindings(
     let local_lexical_bindings = bindings
         .iter()
         .filter(|binding| {
-            matches!(binding.kind, BindingKind::Let | BindingKind::Const)
-                && !is_internal_lowering_binding(&binding.name)
+            matches!(
+                binding.kind,
+                BindingKind::Let | BindingKind::Const | BindingKind::Parameter
+            ) && !is_internal_lowering_binding(&binding.name)
                 && !free_var_ids.contains(&binding.binding_id)
                 && child_captured_ids.contains(&binding.binding_id)
         })
@@ -5680,6 +5687,61 @@ fn runtime_binding_kind_code(kind: BindingKind) -> u8 {
         BindingKind::Parameter => 3,
         BindingKind::FunctionDecl => 4,
     }
+}
+
+fn is_cyclic_private_self_capture(name: &str) -> bool {
+    name.starts_with(CLASS_EXPRESSION_CONSTRUCTOR_SELF_CAPTURE_PREFIX)
+        || name.starts_with(FUNCTION_EXPRESSION_SELF_CAPTURE_PREFIX)
+}
+
+fn is_private_self_capture(name: &str) -> bool {
+    is_cyclic_private_self_capture(name)
+        || name.starts_with(CLASS_EXPRESSION_METHOD_SELF_CAPTURE_PREFIX)
+}
+
+/// Materialize an exact capture alias without weakening private function/class
+/// names into mutable `var` cells. Constructor and named-function-expression
+/// aliases are left uninitialized for cyclic publication by the interpreter;
+/// method aliases receive the already-created class value exactly once.
+fn emit_temporary_capture_alias(
+    ir3: &mut Ir3Module,
+    name: &str,
+    source: Option<Reg>,
+) -> Result<(), LoweringPipelineError> {
+    let name_pool_index = push_constant(&mut ir3.constant_pool, name);
+    let private_self = is_private_self_capture(name);
+    ir3.instructions.push(Ir3Instruction::DeclareBinding {
+        name_pool_index,
+        kind: if private_self {
+            runtime_binding_kind_code(BindingKind::Const)
+        } else {
+            runtime_binding_kind_code(BindingKind::Var)
+        },
+    });
+
+    if is_cyclic_private_self_capture(name) {
+        return Ok(());
+    }
+    let Some(source) = source else {
+        if private_self {
+            return Err(LoweringPipelineError::InvariantViolation {
+                detail: "class-expression method self capture requires its initialized class value",
+            });
+        }
+        return Ok(());
+    };
+    if private_self {
+        ir3.instructions.push(Ir3Instruction::InitBinding {
+            src: source,
+            name_pool_index,
+        });
+    } else {
+        ir3.instructions.push(Ir3Instruction::StoreScoped {
+            src: source,
+            name_pool_index,
+        });
+    }
+    Ok(())
 }
 
 fn binding_requires_runtime_initialization(kind: BindingKind) -> bool {
@@ -5988,18 +6050,22 @@ fn emit_exact_nested_capture_scope(
         if existing_runtime_name == Some(name) {
             continue;
         }
-        let source = if let Some(parent_runtime_name) = existing_runtime_name {
+        let source = if is_cyclic_private_self_capture(name) {
+            None
+        } else if let Some(parent_runtime_name) = existing_runtime_name {
             let dst = alloc_register(register_cursor);
             let name_pool_index = push_constant(&mut ir3.constant_pool, parent_runtime_name);
             ir3.instructions.push(Ir3Instruction::LoadScoped {
                 dst,
                 name_pool_index,
             });
-            dst
+            Some(dst)
         } else {
-            *function_binding_registers
-                .entry(*outer_id)
-                .or_insert_with(|| alloc_register(register_cursor))
+            Some(
+                *function_binding_registers
+                    .entry(*outer_id)
+                    .or_insert_with(|| alloc_register(register_cursor)),
+            )
         };
         sources.push((name, source));
     }
@@ -6010,17 +6076,61 @@ fn emit_exact_nested_capture_scope(
 
     ir3.instructions.push(Ir3Instruction::PushScope);
     for (name, source) in sources {
+        emit_temporary_capture_alias(ir3, name, source)?;
+    }
+    Ok(true)
+}
+
+/// Capture an arrow's defining call context in private scope cells. Nested
+/// arrows copy the enclosing arrow's cells; arrows created by ordinary
+/// functions read the live call frame exactly once at definition time.
+fn emit_arrow_lexical_capture_scope(
+    ir3: &mut Ir3Module,
+    register_cursor: &mut Reg,
+    usage: ArrowLexicalContextUsage,
+    inherit_from_enclosing_arrow: bool,
+) -> bool {
+    if usage.is_empty() {
+        return false;
+    }
+
+    ir3.instructions.push(Ir3Instruction::PushScope);
+    for (used, name, direct_instruction) in [
+        (usage.this_value, ARROW_LEXICAL_THIS_CAPTURE, 0_u8),
+        (usage.new_target, ARROW_LEXICAL_NEW_TARGET_CAPTURE, 1_u8),
+        (usage.super_value, ARROW_LEXICAL_SUPER_CAPTURE, 2_u8),
+    ] {
+        if !used {
+            continue;
+        }
+        let src = alloc_register(register_cursor);
         let name_pool_index = push_constant(&mut ir3.constant_pool, name);
+        if inherit_from_enclosing_arrow {
+            ir3.instructions.push(Ir3Instruction::LoadScoped {
+                dst: src,
+                name_pool_index,
+            });
+        } else {
+            match direct_instruction {
+                0 => ir3.instructions.push(Ir3Instruction::LoadThis { dst: src }),
+                1 => ir3
+                    .instructions
+                    .push(Ir3Instruction::LoadNewTarget { dst: src }),
+                _ => ir3
+                    .instructions
+                    .push(Ir3Instruction::LoadSuper { dst: src }),
+            }
+        }
         ir3.instructions.push(Ir3Instruction::DeclareBinding {
             name_pool_index,
             kind: 0,
         });
         ir3.instructions.push(Ir3Instruction::StoreScoped {
-            src: source,
+            src,
             name_pool_index,
         });
     }
-    Ok(true)
+    true
 }
 
 fn validate_deferred_rest_parameter_abi(
@@ -6112,6 +6222,8 @@ pub fn lower_ir2_to_ir3(
         free_var_ids: Vec<BindingId>,
         local_lexical_bindings: Vec<ResolvedBinding>,
         is_generator: bool,
+        is_arrow: bool,
+        arrow_lexical_context: ArrowLexicalContextUsage,
         rest_param_index: Option<u32>,
     }
     let mut deferred_functions = Vec::<DeferredFunction>::new();
@@ -7107,18 +7219,11 @@ pub fn lower_ir2_to_ir3(
                     if !temp_free_vars.is_empty() {
                         ir3.instructions.push(Ir3Instruction::PushScope);
                         for (fv, outer_binding_id) in &temp_free_vars {
-                            let pool_idx = push_constant(&mut ir3.constant_pool, *fv);
-                            ir3.instructions.push(Ir3Instruction::DeclareBinding {
-                                name_pool_index: pool_idx,
-                                kind: 0, // var
-                            });
-                            // Copy register value to scope chain.
-                            if let Some(&reg) = binding_registers.get(outer_binding_id) {
-                                ir3.instructions.push(Ir3Instruction::StoreScoped {
-                                    src: reg,
-                                    name_pool_index: pool_idx,
-                                });
-                            }
+                            emit_temporary_capture_alias(
+                                &mut ir3,
+                                fv,
+                                binding_registers.get(outer_binding_id).copied(),
+                            )?;
                         }
                     }
                     let function_index = deferred_functions.len() as u32 + 1;
@@ -7133,6 +7238,8 @@ pub fn lower_ir2_to_ir3(
                             .cloned()
                             .unwrap_or_default(),
                         is_generator: *is_generator,
+                        is_arrow: false,
+                        arrow_lexical_context: ArrowLexicalContextUsage::default(),
                         rest_param_index: *rest_param_index,
                     });
                     if *is_generator {
@@ -7151,10 +7258,19 @@ pub fn lower_ir2_to_ir3(
                     if let Some(runtime_name) = shared_top_level_capture_names_by_id.get(binding_id)
                     {
                         let pool_idx = push_constant(&mut ir3.constant_pool, runtime_name);
-                        ir3.instructions.push(Ir3Instruction::StoreScoped {
-                            src: dst,
-                            name_pool_index: pool_idx,
-                        });
+                        if binding_id_to_kind.get(binding_id).is_some_and(|kind| {
+                            matches!(kind, BindingKind::Let | BindingKind::Const)
+                        }) {
+                            ir3.instructions.push(Ir3Instruction::InitBinding {
+                                src: dst,
+                                name_pool_index: pool_idx,
+                            });
+                        } else {
+                            ir3.instructions.push(Ir3Instruction::StoreScoped {
+                                src: dst,
+                                name_pool_index: pool_idx,
+                            });
+                        }
                     }
                     if !temp_free_vars.is_empty() {
                         ir3.instructions.push(Ir3Instruction::PopScope);
@@ -7171,8 +7287,8 @@ pub fn lower_ir2_to_ir3(
                 free_var_outer_ids,
                 local_lexical_bindings,
                 is_generator,
+                is_arrow,
                 rest_param_index,
-                ..
             } => {
                 if free_vars.len() != free_var_ids.len()
                     || free_vars.len() != free_var_outer_ids.len()
@@ -7206,20 +7322,19 @@ pub fn lower_ir2_to_ir3(
                 if !temp_free_vars.is_empty() {
                     ir3.instructions.push(Ir3Instruction::PushScope);
                     for (fv, outer_binding_id) in &temp_free_vars {
-                        let pool_idx = push_constant(&mut ir3.constant_pool, *fv);
-                        ir3.instructions.push(Ir3Instruction::DeclareBinding {
-                            name_pool_index: pool_idx,
-                            kind: 0,
-                        });
-                        if let Some(&reg) = binding_registers.get(outer_binding_id) {
-                            ir3.instructions.push(Ir3Instruction::StoreScoped {
-                                src: reg,
-                                name_pool_index: pool_idx,
-                            });
-                        }
+                        emit_temporary_capture_alias(
+                            &mut ir3,
+                            fv,
+                            binding_registers.get(outer_binding_id).copied(),
+                        )?;
                     }
                 }
                 let function_index = deferred_functions.len() as u32 + 1;
+                let arrow_lexical_context = if *is_arrow {
+                    arrow_lexical_context_usage(body_ops)
+                } else {
+                    ArrowLexicalContextUsage::default()
+                };
                 deferred_functions.push(DeferredFunction {
                     body_ops: body_ops.clone(),
                     param_names: param_names.clone(),
@@ -7231,8 +7346,16 @@ pub fn lower_ir2_to_ir3(
                         .cloned()
                         .unwrap_or_default(),
                     is_generator: *is_generator,
+                    is_arrow: *is_arrow,
+                    arrow_lexical_context,
                     rest_param_index: *rest_param_index,
                 });
+                let pushed_arrow_lexical_scope = emit_arrow_lexical_capture_scope(
+                    &mut ir3,
+                    &mut register_cursor,
+                    arrow_lexical_context,
+                    false,
+                );
                 if *is_generator {
                     ir3.instructions.push(Ir3Instruction::CreateGenerator {
                         dst,
@@ -7245,6 +7368,9 @@ pub fn lower_ir2_to_ir3(
                         function_index,
                         capture_count: free_vars.len() as u32,
                     });
+                }
+                if pushed_arrow_lexical_scope {
+                    ir3.instructions.push(Ir3Instruction::PopScope);
                 }
                 if !temp_free_vars.is_empty() {
                     ir3.instructions.push(Ir3Instruction::PopScope);
@@ -7596,6 +7722,8 @@ pub fn lower_ir2_to_ir3(
             free_var_ids,
             local_lexical_bindings: fn_local_lexical_bindings,
             is_generator: fn_is_generator,
+            is_arrow: fn_is_arrow,
+            arrow_lexical_context: fn_arrow_lexical_context,
             rest_param_index: fn_rest_param_index,
         } = deferred_functions[deferred_idx].clone();
         deferred_idx += 1;
@@ -7709,6 +7837,7 @@ pub fn lower_ir2_to_ir3(
             for (name, outer_id) in names.iter().zip(outer_ids.iter()) {
                 if name.starts_with(CLASS_EXPRESSION_CONSTRUCTOR_SELF_CAPTURE_PREFIX)
                     || name.starts_with(CLASS_EXPRESSION_METHOD_SELF_CAPTURE_PREFIX)
+                    || name.starts_with(FUNCTION_EXPRESSION_SELF_CAPTURE_PREFIX)
                 {
                     // Constructor-self and method-self are deliberately
                     // distinct aliases of one class binding. Preserve them
@@ -7757,7 +7886,18 @@ pub fn lower_ir2_to_ir3(
                     name_pool_index: pool_idx,
                     kind: local_lexical_binding_by_id
                         .get(binding_id)
-                        .map_or(0, |binding| runtime_binding_kind_code(binding.kind)),
+                        .map_or(0, |binding| {
+                            if binding.kind == BindingKind::Parameter {
+                                // Captured parameter cells participate in the
+                                // source-ordered parameter TDZ. A runtime Param
+                                // cell is hoisted/initialized, so use a mutable
+                                // lexical cell and initialize it at its formal
+                                // prologue step instead.
+                                runtime_binding_kind_code(BindingKind::Let)
+                            } else {
+                                runtime_binding_kind_code(binding.kind)
+                            }
+                        }),
                 });
                 if let Some(src) = inherited {
                     ir3.instructions.push(Ir3Instruction::InitBinding {
@@ -8313,17 +8453,59 @@ pub fn lower_ir2_to_ir3(
                 }
                 Ir1Op::LoadThis => {
                     let dst = alloc_register(&mut fn_reg);
-                    ir3.instructions.push(Ir3Instruction::LoadThis { dst });
+                    if fn_is_arrow {
+                        if !fn_arrow_lexical_context.this_value {
+                            return Err(LoweringPipelineError::InvariantViolation {
+                                detail: "arrow this load missing lexical capture metadata",
+                            });
+                        }
+                        let name_pool_index =
+                            push_constant(&mut ir3.constant_pool, ARROW_LEXICAL_THIS_CAPTURE);
+                        ir3.instructions.push(Ir3Instruction::LoadScoped {
+                            dst,
+                            name_pool_index,
+                        });
+                    } else {
+                        ir3.instructions.push(Ir3Instruction::LoadThis { dst });
+                    }
                     fn_value_stack.push(dst);
                 }
                 Ir1Op::LoadNewTarget => {
                     let dst = alloc_register(&mut fn_reg);
-                    ir3.instructions.push(Ir3Instruction::LoadNewTarget { dst });
+                    if fn_is_arrow {
+                        if !fn_arrow_lexical_context.new_target {
+                            return Err(LoweringPipelineError::InvariantViolation {
+                                detail: "arrow new.target load missing lexical capture metadata",
+                            });
+                        }
+                        let name_pool_index =
+                            push_constant(&mut ir3.constant_pool, ARROW_LEXICAL_NEW_TARGET_CAPTURE);
+                        ir3.instructions.push(Ir3Instruction::LoadScoped {
+                            dst,
+                            name_pool_index,
+                        });
+                    } else {
+                        ir3.instructions.push(Ir3Instruction::LoadNewTarget { dst });
+                    }
                     fn_value_stack.push(dst);
                 }
                 Ir1Op::LoadSuper => {
                     let dst = alloc_register(&mut fn_reg);
-                    ir3.instructions.push(Ir3Instruction::LoadSuper { dst });
+                    if fn_is_arrow {
+                        if !fn_arrow_lexical_context.super_value {
+                            return Err(LoweringPipelineError::InvariantViolation {
+                                detail: "arrow super load missing lexical capture metadata",
+                            });
+                        }
+                        let name_pool_index =
+                            push_constant(&mut ir3.constant_pool, ARROW_LEXICAL_SUPER_CAPTURE);
+                        ir3.instructions.push(Ir3Instruction::LoadScoped {
+                            dst,
+                            name_pool_index,
+                        });
+                    } else {
+                        ir3.instructions.push(Ir3Instruction::LoadSuper { dst });
+                    }
                     fn_value_stack.push(dst);
                 }
                 Ir1Op::NewArray { count } => {
@@ -8497,6 +8679,7 @@ pub fn lower_ir2_to_ir3(
                         .map(|(name, outer_id)| {
                             if name.starts_with(CLASS_EXPRESSION_CONSTRUCTOR_SELF_CAPTURE_PREFIX)
                                 || name.starts_with(CLASS_EXPRESSION_METHOD_SELF_CAPTURE_PREFIX)
+                                || name.starts_with(FUNCTION_EXPRESSION_SELF_CAPTURE_PREFIX)
                             {
                                 return name.clone();
                             }
@@ -8519,6 +8702,8 @@ pub fn lower_ir2_to_ir3(
                             .cloned()
                             .unwrap_or_default(),
                         is_generator: *inner_gen,
+                        is_arrow: false,
+                        arrow_lexical_context: ArrowLexicalContextUsage::default(),
                         rest_param_index: *inner_rest,
                     });
                     let pushed_capture_scope = emit_exact_nested_capture_scope(
@@ -8571,8 +8756,8 @@ pub fn lower_ir2_to_ir3(
                     free_var_outer_ids: inner_fv_outer_ids,
                     local_lexical_bindings: inner_local_lexical_bindings,
                     is_generator: inner_gen,
+                    is_arrow: inner_is_arrow,
                     rest_param_index: inner_rest,
-                    ..
                 } => {
                     let dst = alloc_register(&mut fn_reg);
                     let inner_runtime_fv: Vec<String> = inner_fv
@@ -8581,6 +8766,7 @@ pub fn lower_ir2_to_ir3(
                         .map(|(name, outer_id)| {
                             if name.starts_with(CLASS_EXPRESSION_CONSTRUCTOR_SELF_CAPTURE_PREFIX)
                                 || name.starts_with(CLASS_EXPRESSION_METHOD_SELF_CAPTURE_PREFIX)
+                                || name.starts_with(FUNCTION_EXPRESSION_SELF_CAPTURE_PREFIX)
                             {
                                 return name.clone();
                             }
@@ -8592,6 +8778,11 @@ pub fn lower_ir2_to_ir3(
                         })
                         .collect();
                     let function_index = deferred_functions.len() as u32 + 1;
+                    let inner_arrow_lexical_context = if *inner_is_arrow {
+                        arrow_lexical_context_usage(inner_body)
+                    } else {
+                        ArrowLexicalContextUsage::default()
+                    };
                     deferred_functions.push(DeferredFunction {
                         body_ops: inner_body.clone(),
                         param_names: inner_params.clone(),
@@ -8603,6 +8794,8 @@ pub fn lower_ir2_to_ir3(
                             .cloned()
                             .unwrap_or_default(),
                         is_generator: *inner_gen,
+                        is_arrow: *inner_is_arrow,
+                        arrow_lexical_context: inner_arrow_lexical_context,
                         rest_param_index: *inner_rest,
                     });
                     let pushed_capture_scope = emit_exact_nested_capture_scope(
@@ -8614,6 +8807,12 @@ pub fn lower_ir2_to_ir3(
                         inner_fv_ids,
                         inner_fv_outer_ids,
                     )?;
+                    let pushed_arrow_lexical_scope = emit_arrow_lexical_capture_scope(
+                        &mut ir3,
+                        &mut fn_reg,
+                        inner_arrow_lexical_context,
+                        fn_is_arrow,
+                    );
                     if *inner_gen {
                         ir3.instructions.push(Ir3Instruction::CreateGenerator {
                             dst,
@@ -8626,6 +8825,9 @@ pub fn lower_ir2_to_ir3(
                             function_index,
                             capture_count: inner_fv.len() as u32,
                         });
+                    }
+                    if pushed_arrow_lexical_scope {
+                        ir3.instructions.push(Ir3Instruction::PopScope);
                     }
                     if pushed_capture_scope {
                         ir3.instructions.push(Ir3Instruction::PopScope);
@@ -9467,6 +9669,8 @@ fn lower_class_expression_to_ir1(
         scope_id,
         "class_expression",
     )?;
+    let ctor_enclosing_self_binding =
+        name.and_then(|self_name| binding_lookup.insert(self_name.to_string(), class_binding));
     let mut body_ops = Vec::new();
     let mut body_bindings = Vec::new();
     let mut body_lookup = BTreeMap::new();
@@ -9475,7 +9679,7 @@ fn lower_class_expression_to_ir1(
     let mut body_label_counter: u32 = 0;
     let FunctionParameterPlan {
         param_names,
-        destructure_params,
+        parameter_steps,
         parameter_bindings,
         rest_param_index,
     } = if let Some(ctor) = constructor {
@@ -9491,7 +9695,7 @@ fn lower_class_expression_to_ir1(
     };
     let parameter_binding_names = body_lookup.keys().cloned().collect();
     let parameter_prologue_captures = lower_function_parameter_prologue(
-        &destructure_params,
+        &parameter_steps,
         &parameter_bindings,
         binding_lookup,
         &mut body_ops,
@@ -9501,15 +9705,6 @@ fn lower_class_expression_to_ir1(
         body_scope,
         &mut body_label_counter,
     )?;
-    if let (Some(self_name), Some(ctor)) = (name, constructor) {
-        reject_self_referential_parameter_capture(
-            &parameter_prologue_captures,
-            self_name,
-            ctor.span.clone(),
-        )?;
-    }
-    let ctor_enclosing_self_binding =
-        name.and_then(|self_name| binding_lookup.insert(self_name.to_string(), class_binding));
     let mut ctor_pre_lower_names = if let Some(ctor) = constructor {
         let pre_lower_names = prepare_function_body_bindings(
             Some(&ctor.body.body),
@@ -9574,12 +9769,11 @@ fn lower_class_expression_to_ir1(
         scope_id,
     );
     if let Some(self_name) = name {
-        rewrite_class_expression_self_capture(
-            &body_lookup,
-            self_name,
+        rewrite_private_self_capture(
+            class_binding,
             class_expression_constructor_self_capture_name(self_name, class_binding),
             &mut ctor_free_vars,
-            &ctor_free_var_ids,
+            &ctor_free_var_outer_ids,
         );
     }
     let ctor_local_lexical_bindings =
@@ -9661,7 +9855,7 @@ fn lower_class_expression_to_ir1(
         let mut method_label_counter: u32 = 0;
         let FunctionParameterPlan {
             param_names: method_param_names,
-            destructure_params: method_destructure_params,
+            parameter_steps: method_parameter_steps,
             parameter_bindings: method_parameter_bindings,
             rest_param_index: method_rest_param_index,
         } = allocate_function_parameter_bindings(
@@ -9682,9 +9876,11 @@ fn lower_class_expression_to_ir1(
                 Some(method.span.clone()),
             ));
         }
+        let method_enclosing_self_binding =
+            name.and_then(|self_name| binding_lookup.insert(self_name.to_string(), class_binding));
         let parameter_binding_names = method_lookup.keys().cloned().collect();
         let parameter_prologue_captures = lower_function_parameter_prologue(
-            &method_destructure_params,
+            &method_parameter_steps,
             &method_parameter_bindings,
             binding_lookup,
             &mut method_body_ops,
@@ -9694,15 +9890,6 @@ fn lower_class_expression_to_ir1(
             method_scope,
             &mut method_label_counter,
         )?;
-        if let Some(self_name) = name {
-            reject_self_referential_parameter_capture(
-                &parameter_prologue_captures,
-                self_name,
-                method.span.clone(),
-            )?;
-        }
-        let method_enclosing_self_binding =
-            name.and_then(|self_name| binding_lookup.insert(self_name.to_string(), class_binding));
         let mut method_pre_lower_names = prepare_function_body_bindings(
             Some(&method.body.body),
             parameter_binding_names,
@@ -9762,12 +9949,11 @@ fn lower_class_expression_to_ir1(
             scope_id,
         );
         if let Some(self_name) = name {
-            rewrite_class_expression_self_capture(
-                &method_lookup,
-                self_name,
+            rewrite_private_self_capture(
+                class_binding,
                 class_expression_method_self_capture_name(self_name, class_binding),
                 &mut method_free_vars,
-                &method_free_var_ids,
+                &method_free_var_outer_ids,
             );
         }
         let method_local_lexical_bindings = collect_function_local_lexical_bindings(
@@ -11656,7 +11842,7 @@ fn lower_expression_to_ir1(
             let mut body_label_counter: u32 = 0;
             let FunctionParameterPlan {
                 param_names,
-                destructure_params,
+                parameter_steps,
                 parameter_bindings,
                 rest_param_index,
             } = allocate_function_parameter_bindings(
@@ -11668,7 +11854,7 @@ fn lower_expression_to_ir1(
             )?;
             let parameter_binding_names = body_lookup.keys().cloned().collect();
             let parameter_prologue_captures = lower_function_parameter_prologue(
-                &destructure_params,
+                &parameter_steps,
                 &parameter_bindings,
                 binding_lookup,
                 &mut body_ops,
@@ -11771,6 +11957,23 @@ fn lower_expression_to_ir1(
             ..
         } => {
             // Same as ArrowFunction but with a BlockStatement body and optional name.
+            // A named function expression owns a private outer cell. Install
+            // the source spelling only while lowering its parameter/body
+            // environments; the runtime marker is initialized cyclically by
+            // CreateClosure before the closure becomes observable.
+            let function_self_binding = if let Some(function_name) = name {
+                let binding_id = alloc_internal_binding(
+                    bindings,
+                    binding_lookup,
+                    binding_index,
+                    root_scope_id,
+                    "function_expression_self",
+                )?;
+                let previous = binding_lookup.insert(function_name.clone(), binding_id);
+                Some((function_name.as_str(), binding_id, previous))
+            } else {
+                None
+            };
             let mut body_ops = Vec::new();
             let mut body_bindings = Vec::new();
             let mut body_lookup = BTreeMap::new();
@@ -11779,7 +11982,7 @@ fn lower_expression_to_ir1(
             let mut body_label_counter: u32 = 0;
             let FunctionParameterPlan {
                 param_names,
-                destructure_params,
+                parameter_steps,
                 parameter_bindings,
                 rest_param_index,
             } = allocate_function_parameter_bindings(
@@ -11800,7 +12003,7 @@ fn lower_expression_to_ir1(
             }
             let parameter_binding_names = body_lookup.keys().cloned().collect();
             let parameter_prologue_captures = lower_function_parameter_prologue(
-                &destructure_params,
+                &parameter_steps,
                 &parameter_bindings,
                 binding_lookup,
                 &mut body_ops,
@@ -11810,38 +12013,12 @@ fn lower_expression_to_ir1(
                 body_scope,
                 &mut body_label_counter,
             )?;
-            if let Some(function_name) = name {
-                reject_self_referential_parameter_capture(
-                    &parameter_prologue_captures,
-                    function_name,
-                    body.span.clone(),
-                )?;
-            }
-            let mut pre_lower_names = prepare_function_body_bindings(
+            let pre_lower_names = prepare_function_body_bindings(
                 Some(&body.body),
                 parameter_binding_names,
                 &mut body_lookup,
                 &mut body_binding_index,
             );
-            // A named function expression has an internal lexical name that
-            // shadows globals in its own body. Parameters and declarations
-            // in the function body are inner and intentionally win if they
-            // reuse that spelling, so install the self name only after their
-            // pre-scan.
-            if let Some(function_name) = name
-                && !body_lookup.contains_key(function_name)
-            {
-                let _ = alloc_binding(
-                    &mut body_bindings,
-                    &mut body_lookup,
-                    &mut body_binding_index,
-                    body_scope,
-                    function_name,
-                    BindingKind::FunctionDecl,
-                )
-                .map_err(LoweringPipelineError::SemanticViolation)?;
-                pre_lower_names.insert(function_name.clone());
-            }
             merge_unshadowed_parameter_prologue_captures(
                 &parameter_prologue_captures,
                 &mut body_lookup,
@@ -11887,11 +12064,26 @@ fn lower_expression_to_ir1(
                 binding_index,
                 root_scope_id,
             );
+            if let Some((function_name, binding_id, _)) = &function_self_binding {
+                rewrite_private_self_capture(
+                    *binding_id,
+                    function_expression_self_capture_name(function_name, *binding_id),
+                    &mut fn_free_vars,
+                    &fn_free_var_outer_ids,
+                );
+            }
             let fn_local_lexical_bindings = collect_function_local_lexical_bindings(
                 &body_bindings,
                 &fn_free_var_ids,
                 &body_ops,
             );
+            if let Some((function_name, _, previous)) = function_self_binding {
+                if let Some(previous) = previous {
+                    binding_lookup.insert(function_name.to_string(), previous);
+                } else {
+                    binding_lookup.remove(function_name);
+                }
+            }
             ops.push(Ir1Op::CreateFunction {
                 name: name.clone(),
                 param_names,
@@ -18905,49 +19097,155 @@ mod tests {
     }
 
     #[test]
-    fn parameter_default_closures_fail_closed_without_live_cells_bd_ur3tk_10() {
-        for source in [
-            "function captured(callback = () => later, later = 3) { return callback(); }",
-            "function lexical(callback = () => this) { return callback(); }",
-            "function nestedLexical(callback = () => () => this) { return callback(); }",
-        ] {
-            let error = lower_rest_source_to_ir3(source).expect_err(
-                "capturing defaults must not snapshot parameters or lexical call context",
-            );
-            let LoweringPipelineError::UnsupportedSyntax(diagnostic) = error else {
-                panic!("expected fail-closed parameter-default closure diagnostic");
-            };
-            assert_eq!(
-                diagnostic.diagnostic_code,
-                "FE-LOWER-UNSUPPORTED-PARAM-DEFAULT-CLOSURE-0001"
-            );
-            assert_eq!(
-                diagnostic.site_id,
-                "core.function_parameter_default_closure"
-            );
-        }
+    fn parameter_default_closures_share_source_ordered_live_cells_bd_wqbac() {
+        let (_, _, value) = lower_and_execute_deferred_source_bd_6pvhn(
+            "function build(callback = () => later, { later } = { later: 3 }) {\
+                 later = later + 1;\
+                 return callback;\
+             }\
+             let first = build(undefined, { later: 10 });\
+             let second = build(undefined, { later: 20 });\
+             first() * 100 + second();",
+        );
+        assert_eq!(value, Value::Int(1_121));
     }
 
     #[test]
-    fn self_referential_parameter_defaults_fail_closed_bd_ur3tk_10() {
-        for source in [
-            "let wrapped = function self(value = self) { return value === self; };",
-            "let Wrapped = class Self { method(value = Self) { return value === Self; } };",
-        ] {
-            let error = lower_rest_source_to_ir3(source)
-                .expect_err("self capture must not snapshot an uninitialized closure");
-            let LoweringPipelineError::UnsupportedSyntax(diagnostic) = error else {
-                panic!("expected fail-closed self-parameter diagnostic");
-            };
-            assert_eq!(
-                diagnostic.diagnostic_code,
-                "FE-LOWER-UNSUPPORTED-SELF-PARAM-DEFAULT-0001"
-            );
-            assert_eq!(
-                diagnostic.site_id,
-                "core.self_referential_parameter_default"
-            );
-        }
+    fn immediate_default_closure_read_preserves_later_parameter_tdz_bd_wqbac() {
+        let (_, _, value) = lower_and_execute_deferred_source_bd_6pvhn(
+            "function target(value = (() => later)(), later = 3) { return value; }\
+             try { target(undefined, 9); 'missed'; }\
+             catch (error) { error.name + ':' + error.message; }",
+        );
+        assert_eq!(
+            value,
+            Value::str("ReferenceError:Cannot access 'later' before initialization")
+        );
+    }
+
+    #[test]
+    fn default_arrows_capture_defining_this_across_escape_and_nesting_bd_wqbac() {
+        let (_, _, value) = lower_and_execute_deferred_source_bd_6pvhn(
+            "function make(callback = () => () => this.value) { return callback(); }\
+             let holder = { value: 7, make };\
+             let arrow = holder.make();\
+             let other = { value: 99, arrow };\
+             other.arrow();",
+        );
+        assert_eq!(value, Value::Int(7));
+    }
+
+    #[test]
+    fn default_arrows_capture_new_target_bd_wqbac() {
+        let (_, _, value) = lower_and_execute_deferred_source_bd_6pvhn(
+            "function Box(read = () => new.target) { this.read = read; }\
+             let box = new Box();\
+             box.read() === Box;",
+        );
+        assert_eq!(value, Value::Bool(true));
+    }
+
+    #[test]
+    fn default_arrows_capture_super_and_defining_this_bd_wqbac() {
+        let (_, _, value) = lower_and_execute_deferred_source_bd_6pvhn(
+            "class Parent { value() { return this.number; } }\
+             class Child extends Parent {\
+                 make(callback = () => super.value()) { return callback; }\
+             }\
+             let child = new Child();\
+             child.number = 7;\
+             let callback = child.make();\
+             let other = { number: 99, callback };\
+             other.callback();",
+        );
+        assert_eq!(value, Value::Int(7));
+    }
+
+    #[test]
+    fn declaration_and_expression_self_defaults_use_live_cells_bd_wqbac() {
+        let (_, _, value) = lower_and_execute_deferred_source_bd_6pvhn(
+            "function declared(value = declared) { return value; }\
+             let original = declared;\
+             declared = 7;\
+             let self = 9;\
+             let wrapped = function self(value = self) { return value === self; };\
+             original() * 10 + (wrapped() ? 1 : 0) + self;",
+        );
+        assert_eq!(value, Value::Int(80));
+    }
+
+    #[test]
+    fn named_class_constructor_and_method_defaults_use_private_self_bd_wqbac() {
+        let (_, _, value) = lower_and_execute_deferred_source_bd_6pvhn(
+            "let Self = 9;\
+             let Wrapped = class Self {\
+                 constructor(value = Self) { this.ctor = value === Self; }\
+                 method(value = Self) { return value === Self; }\
+             };\
+             let wrapped = new Wrapped();\
+             (wrapped.ctor ? 100 : 0) + (wrapped.method() ? 10 : 0) + Self;",
+        );
+        assert_eq!(value, Value::Int(119));
+    }
+
+    #[test]
+    fn named_generator_expression_self_default_gets_private_const_marker_bd_wqbac() {
+        let module = lower_rest_source_to_ir3(
+            "let outer = 9;\
+             let generator = function* outer(value = outer) { yield value; };",
+        )
+        .expect("named generator expression self default should lower");
+        let marker_index = module
+            .constant_pool
+            .iter()
+            .position(|name| name.starts_with(FUNCTION_EXPRESSION_SELF_CAPTURE_PREFIX))
+            .expect("named generator expression must use a private self marker");
+        assert!(module.instructions.iter().any(|instruction| matches!(
+            instruction,
+            Ir3Instruction::DeclareBinding {
+                name_pool_index,
+                kind,
+            } if *name_pool_index as usize == marker_index
+                && *kind == runtime_binding_kind_code(BindingKind::Const)
+        )));
+        assert!(
+            module
+                .instructions
+                .iter()
+                .any(|instruction| matches!(instruction, Ir3Instruction::CreateGenerator { .. }))
+        );
+    }
+
+    #[test]
+    fn private_self_defaults_survive_body_shadowing_and_remain_immutable_bd_wqbac() {
+        let (_, _, value) = lower_and_execute_deferred_source_bd_6pvhn(
+            "let functionOuter = 9;\
+             let wrapped = function functionOuter(value = functionOuter) {\
+                 let functionOuter = 1;\
+                 return value === wrapped && functionOuter === 1;\
+             };\
+             let classOuter = 8;\
+             let Wrapped = class classOuter {\
+                 constructor(value = classOuter) {\
+                     let classOuter = 2;\
+                     this.ctor = value === Wrapped && classOuter === 2;\
+                 }\
+                 method(value = classOuter) {\
+                     let classOuter = 3;\
+                     return value === Wrapped && classOuter === 3;\
+                 }\
+             };\
+             let immutable = function self() {\
+                 'use strict';\
+                 try { self = 7; return false; }\
+                 catch (error) { return error.name === 'TypeError' && self === immutable; }\
+             };\
+             let instance = new Wrapped();\
+             (wrapped() ? 100 : 0) + (instance.ctor ? 10 : 0)\
+                 + (instance.method() ? 1 : 0) + (immutable() ? 1000 : 0)\
+                 + functionOuter + classOuter;",
+        );
+        assert_eq!(value, Value::Int(1_128));
     }
 
     #[test]

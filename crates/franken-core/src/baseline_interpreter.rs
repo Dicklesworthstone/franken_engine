@@ -51,7 +51,8 @@ use crate::ir_contract::{
 };
 use crate::js_string::JsString;
 use crate::lowering_pipeline::{
-    CLASS_EXPRESSION_CONSTRUCTOR_SELF_CAPTURE_PREFIX, LoweringContext, lower_ir0_to_ir3,
+    CLASS_EXPRESSION_CONSTRUCTOR_SELF_CAPTURE_PREFIX, FUNCTION_EXPRESSION_SELF_CAPTURE_PREFIX,
+    LoweringContext, lower_ir0_to_ir3,
 };
 use crate::object_model::{
     BaselineStringAccessor, BaselineSymbolProperty, ExactOrderedStringMap, OrderedStringMap,
@@ -2606,12 +2607,11 @@ impl fmt::Display for InterpreterError {
                 write!(f, "uncaught exception: {value}")
             }
             Self::UninitializedBinding { name } => {
-                write!(
-                    f,
-                    "cannot access '{name}' before initialization (temporal dead zone)"
-                )
+                let name = user_visible_binding_name(name);
+                write!(f, "Cannot access '{name}' before initialization")
             }
             Self::ConstAssignment { name } => {
+                let name = user_visible_binding_name(name);
                 write!(f, "assignment to constant variable '{name}'")
             }
             Self::StringLimitExceeded { length, max } => {
@@ -2650,6 +2650,17 @@ impl fmt::Display for InterpreterError {
             }
             Self::RangeError { message } => write!(f, "range error: {message}"),
         }
+    }
+}
+
+fn user_visible_binding_name(name: &str) -> &str {
+    if name.starts_with('\0') {
+        name.rsplit_once('\0')
+            .map(|(_, source_name)| source_name)
+            .filter(|source_name| !source_name.is_empty())
+            .unwrap_or(name)
+    } else {
+        name
     }
 }
 
@@ -7824,7 +7835,9 @@ impl InterpreterCore {
                     let mut self_capture_rollback = None;
                     if let Some(frame) = captured_env.last() {
                         for (name, binding) in &frame.bindings {
-                            if name.starts_with(CLASS_EXPRESSION_CONSTRUCTOR_SELF_CAPTURE_PREFIX) {
+                            if name.starts_with(CLASS_EXPRESSION_CONSTRUCTOR_SELF_CAPTURE_PREFIX)
+                                || name.starts_with(FUNCTION_EXPRESSION_SELF_CAPTURE_PREFIX)
+                            {
                                 let previous = binding.snapshot_state()?;
                                 {
                                     let mut state = binding.state_mut()?;
@@ -7878,17 +7891,42 @@ impl InterpreterCore {
                             got: format!("exceeded u32::MAX ({})", self.closures.len()),
                         }
                     })?;
+                    let mut self_capture_rollback = None;
+                    if let Some(frame) = captured_env.last() {
+                        for (name, binding) in &frame.bindings {
+                            if name.starts_with(FUNCTION_EXPRESSION_SELF_CAPTURE_PREFIX) {
+                                let previous = binding.snapshot_state()?;
+                                {
+                                    let mut state = binding.state_mut()?;
+                                    state.value = Value::GeneratorFunction(closure_id);
+                                    state.initialized = true;
+                                }
+                                self_capture_rollback = Some((binding.clone(), previous));
+                                break;
+                            }
+                        }
+                    }
                     self.closures.push(ClosureValue {
                         function_index,
                         captured_env,
                     });
                     if let Err(err) = self.sync_estimated_memory_bytes() {
                         self.closures.pop();
+                        if let Some((binding, previous)) = self_capture_rollback {
+                            binding.restore_state(previous)?;
+                        }
+                        self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
+                        return Err(err);
+                    }
+                    if let Err(err) = self.write_reg(dst, Value::GeneratorFunction(closure_id)) {
+                        self.closures.pop();
+                        if let Some((binding, previous)) = self_capture_rollback {
+                            binding.restore_state(previous)?;
+                        }
                         self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
                         return Err(err);
                     }
                     self.pending_captures.clear();
-                    self.write_reg(dst, Value::GeneratorFunction(closure_id))?;
                     self.ip += 1;
                 }
                 Ir3Instruction::CreateAsyncFunction {
@@ -23489,52 +23527,97 @@ mod tests {
     }
 
     #[test]
-    fn failed_closure_publication_restores_shared_self_capture_cell() {
-        let mut config = test_quickjs_config();
-        config.max_registers = 1;
-        let mut core = InterpreterCore::new(config, "shared-self-publication-rollback");
-        let marker_name = format!("{CLASS_EXPRESSION_CONSTRUCTOR_SELF_CAPTURE_PREFIX}7\0Self");
-        let marker = ScopeBinding::with_state(
-            BindingKind::Const,
-            Value::Int(41),
-            crate::ifc_artifacts::Label::Public,
-            true,
-        );
+    fn failed_closure_publication_restores_shared_self_capture_cell_bd_wqbac() {
+        for (marker_name, create_instruction) in [
+            (
+                format!("{CLASS_EXPRESSION_CONSTRUCTOR_SELF_CAPTURE_PREFIX}7\0Self"),
+                Ir3Instruction::CreateClosure {
+                    dst: 1,
+                    function_index: 0,
+                    capture_count: 1,
+                },
+            ),
+            (
+                format!("{FUNCTION_EXPRESSION_SELF_CAPTURE_PREFIX}7\0self"),
+                Ir3Instruction::CreateClosure {
+                    dst: 1,
+                    function_index: 0,
+                    capture_count: 1,
+                },
+            ),
+            (
+                format!("{FUNCTION_EXPRESSION_SELF_CAPTURE_PREFIX}8\0generatorSelf"),
+                Ir3Instruction::CreateGenerator {
+                    dst: 1,
+                    function_index: 0,
+                    capture_count: 1,
+                },
+            ),
+        ] {
+            let mut config = test_quickjs_config();
+            config.max_registers = 1;
+            let mut core = InterpreterCore::new(config, "shared-self-publication-rollback");
+            let marker = ScopeBinding::with_state(
+                BindingKind::Const,
+                Value::Int(41),
+                crate::ifc_artifacts::Label::Public,
+                true,
+            );
+            core.scope_chain
+                .current_mut()
+                .bindings
+                .insert(marker_name, marker.clone());
+            core.pending_captures.push(7);
+            core.sync_estimated_memory_bytes().unwrap();
+            let module = test_module(vec![create_instruction, Ir3Instruction::Halt]);
+
+            let error = core
+                .execute(&module)
+                .expect_err("out-of-range destination must reject closure publication");
+            assert!(matches!(
+                error,
+                InterpreterError::RegisterOutOfBounds {
+                    register: 1,
+                    max: 1
+                }
+            ));
+            assert!(core.closures.is_empty());
+            assert_eq!(core.pending_captures, vec![7]);
+            let state = marker.state().unwrap();
+            assert_eq!(state.value, Value::Int(41));
+            assert!(state.initialized);
+            drop(state);
+            assert_eq!(
+                core.estimated_memory_bytes(),
+                core.recompute_estimated_memory_bytes()
+            );
+        }
+    }
+
+    #[test]
+    fn generator_publication_initializes_named_expression_self_capture_bd_wqbac() {
+        let mut core = quickjs_test_core();
+        let marker_name = format!("{FUNCTION_EXPRESSION_SELF_CAPTURE_PREFIX}8\0generatorSelf");
+        let marker = ScopeBinding::new(BindingKind::Const);
         core.scope_chain
             .current_mut()
             .bindings
             .insert(marker_name, marker.clone());
-        core.pending_captures.push(7);
         core.sync_estimated_memory_bytes().unwrap();
         let module = test_module(vec![
-            Ir3Instruction::CreateClosure {
-                dst: 1,
+            Ir3Instruction::CreateGenerator {
+                dst: 0,
                 function_index: 0,
                 capture_count: 1,
             },
             Ir3Instruction::Halt,
         ]);
 
-        let error = core
-            .execute(&module)
-            .expect_err("out-of-range destination must reject closure publication");
-        assert!(matches!(
-            error,
-            InterpreterError::RegisterOutOfBounds {
-                register: 1,
-                max: 1
-            }
-        ));
-        assert!(core.closures.is_empty());
-        assert_eq!(core.pending_captures, vec![7]);
+        let result = core.execute(&module).expect("generator publication");
+        assert_eq!(result.value, Value::GeneratorFunction(0));
         let state = marker.state().unwrap();
-        assert_eq!(state.value, Value::Int(41));
+        assert_eq!(state.value, Value::GeneratorFunction(0));
         assert!(state.initialized);
-        drop(state);
-        assert_eq!(
-            core.estimated_memory_bytes(),
-            core.recompute_estimated_memory_bytes()
-        );
     }
 
     #[test]

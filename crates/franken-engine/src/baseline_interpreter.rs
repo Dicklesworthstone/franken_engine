@@ -248,6 +248,10 @@ const MEMORY_ESTIMATE_GENERATOR_BASE_BYTES: u64 = 48;
 /// Conservative per-record charge for the emitter listener side table. The
 /// event name and any string-backed listener payload are charged separately.
 const MEMORY_ESTIMATE_EVENT_LISTENER_BASE_BYTES: u64 = 48;
+/// Conservative fixed charge for one callable `once` wrapper's private state.
+/// The map entry, event name, and original listener payload are charged
+/// separately by `estimate_event_once_wrapper_state_bytes`.
+const MEMORY_ESTIMATE_EVENT_ONCE_WRAPPER_BASE_BYTES: u64 = 48;
 /// Conservative per-link charge for a Promise-backed `events.once` waiter.
 /// A non-`error` wait registers two linked records (the awaited event and the
 /// implicit rejection-on-`error` observer), both accounted independently.
@@ -2855,6 +2859,14 @@ pub enum BuiltinFunctionKind {
     MathAcosh,
     MathAsinh,
     MathAtanh,
+    /// `EventEmitter.prototype.rawListeners(event)` (bd-asw4m.2). Appended at
+    /// the true enum tail because builtin discriminants participate in
+    /// deterministic register hashes.
+    EmitterRawListeners,
+    /// Stable callable wrapper created once per `once` registration. Its
+    /// `bound_object` is the ordinary property carrier that exposes
+    /// `.listener`; private invocation state remains interpreter-owned.
+    EmitterOnceWrapper,
 }
 
 impl BuiltinFunctionKind {
@@ -3040,6 +3052,15 @@ impl BuiltinFunction {
             module_specifier: Arc::from(""),
             iterator_handle: Some(token),
             bound_object: Some(stage.0),
+        }
+    }
+
+    fn emitter_once_wrapper(property_object: ObjectId) -> Self {
+        Self {
+            kind: BuiltinFunctionKind::EmitterOnceWrapper,
+            module_specifier: Arc::from(""),
+            iterator_handle: None,
+            bound_object: Some(property_object.0),
         }
     }
 
@@ -4355,6 +4376,8 @@ impl BuiltinFunction {
             BuiltinFunctionKind::MathAcosh => "acosh",
             BuiltinFunctionKind::MathAsinh => "asinh",
             BuiltinFunctionKind::MathAtanh => "atanh",
+            BuiltinFunctionKind::EmitterRawListeners => "rawListeners",
+            BuiltinFunctionKind::EmitterOnceWrapper => "onceWrapper",
         }
     }
 }
@@ -7467,6 +7490,13 @@ enum PendingHttpTask {
         code: String,
         label: Label,
     },
+    EmitLegacyEvent {
+        target: ObjectId,
+        event: String,
+        arguments: Vec<Value>,
+        leading_callback: Option<u32>,
+        label: Label,
+    },
 }
 
 /// Current phase of one finite `Readable.from` pump.
@@ -7870,6 +7900,18 @@ struct EventListenerRecord {
     once: bool,
 }
 
+/// Immutable callback identity plus mutable one-shot state for the callable
+/// function exposed by `rawListeners()`. The public `.listener` property lives
+/// on the wrapper's heap-backed property object and may be reassigned without
+/// changing which callback the wrapper ultimately invokes, matching Node.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct EventOnceWrapperState {
+    target: ObjectId,
+    event: String,
+    original_listener: Value,
+    fired: bool,
+}
+
 /// One link in the Promise-backed static `events.once` waiter table
 /// (bd-asw4m.1). Non-error waits install a Resolve link under the requested
 /// event and a Reject link under `error`, sharing `waiter_id`; settling either
@@ -8198,6 +8240,11 @@ pub struct InterpreterCore {
     /// `once` state; holding them outside the heap keeps listeners live across
     /// deferred HTTP event-loop turns (bd-3894s, bd-2dmnn).
     event_listeners: BTreeMap<ObjectId, BTreeMap<String, Vec<EventListenerRecord>>>,
+    /// Private state for stable callable `once` wrappers, keyed by the same
+    /// heap object that backs each wrapper's public `.listener` property.
+    /// Execution-local state is cleared before a restored heap can reuse an
+    /// ObjectId (bd-asw4m.2).
+    event_once_wrappers: BTreeMap<ObjectId, EventOnceWrapperState>,
     /// Promise-backed static `events.once` waiters. Linked Resolve/Reject
     /// records share a waiter id so settling either event removes every sibling
     /// link before its Promise reaction becomes observable (bd-asw4m.1).
@@ -8663,6 +8710,7 @@ impl InterpreterCore {
             promise_in_flight_task_bytes: 0,
             pending_io_callbacks: BTreeMap::new(),
             event_listeners: BTreeMap::new(),
+            event_once_wrappers: BTreeMap::new(),
             event_promise_waiters: BTreeMap::new(),
             next_event_promise_waiter_id: 0,
             url_objects: BTreeMap::new(),
@@ -9572,6 +9620,15 @@ impl InterpreterCore {
             PendingHttpTask::ClientError { code, label, .. } => MEMORY_ESTIMATE_STRING_BASE_BYTES
                 .saturating_add(code.len() as u64)
                 .saturating_add(Self::estimate_label_bytes(label)),
+            PendingHttpTask::EmitLegacyEvent {
+                event,
+                arguments,
+                label,
+                ..
+            } => MEMORY_ESTIMATE_STRING_BASE_BYTES
+                .saturating_add(event.len() as u64)
+                .saturating_add(Self::estimate_value_vec_bytes(arguments))
+                .saturating_add(Self::estimate_label_bytes(label)),
             _ => 0,
         };
         MEMORY_ESTIMATE_HTTP_TASK_BASE_BYTES.saturating_add(payload)
@@ -9645,6 +9702,7 @@ impl InterpreterCore {
                 .map(|state| state.lifecycle_label.clone())
                 .unwrap_or(Label::Public),
             PendingHttpTask::ClientError { label, .. } => label.clone(),
+            PendingHttpTask::EmitLegacyEvent { label, .. } => label.clone(),
         };
         self.apply_memory_component_delta(0, retained_bytes)?;
         let previous_promise_bytes = self.promise_runtime_memory_bytes();
@@ -13763,6 +13821,29 @@ impl InterpreterCore {
                 let error = self.http_error_value(&code)?;
                 let _ = self.emit_loopback_event(module, request, "error", vec![error], label)?;
             }
+            PendingHttpTask::EmitLegacyEvent {
+                target,
+                event,
+                arguments,
+                leading_callback,
+                label,
+            } => {
+                if let Some(module) = module {
+                    let records = self.event_listener_records_for(target, &event);
+                    if let Some(callback) = leading_callback {
+                        self.invoke_inline_method_call_with_argument_label(
+                            Some(module),
+                            Value::Closure(callback),
+                            Value::Object(target),
+                            arguments.clone(),
+                            Some(label.clone()),
+                        )?;
+                    }
+                    let _ = self.emit_event_listener_snapshot(
+                        module, target, &event, arguments, label, records,
+                    )?;
+                }
+            }
         }
         Ok(())
     }
@@ -14071,6 +14152,144 @@ impl InterpreterCore {
         Ok(())
     }
 
+    fn estimate_event_once_wrapper_state_bytes(state: &EventOnceWrapperState) -> u64 {
+        MEMORY_ESTIMATE_EVENT_ONCE_WRAPPER_BASE_BYTES
+            .saturating_add(MEMORY_ESTIMATE_MAP_ENTRY_BYTES)
+            .saturating_add(std::mem::size_of::<EventOnceWrapperState>() as u64)
+            .saturating_add(Self::estimate_string_bytes(&state.event))
+            .saturating_add(Self::estimate_value_bytes(&state.original_listener))
+    }
+
+    /// Materialize one stable callable wrapper and its public property carrier.
+    /// The private state is precharged before either owner is published; a
+    /// failed heap allocation releases that reservation exactly.
+    fn create_event_once_wrapper(
+        &mut self,
+        target: ObjectId,
+        event: &str,
+        original_listener: Value,
+    ) -> Result<(Value, ObjectId, usize), InterpreterError> {
+        let state = EventOnceWrapperState {
+            target,
+            event: event.to_string(),
+            original_listener: original_listener.clone(),
+            fired: false,
+        };
+        let state_bytes = Self::estimate_event_once_wrapper_state_bytes(&state);
+        let previous_estimated_bytes = self.estimated_memory_bytes;
+        self.apply_memory_component_delta(0, state_bytes)?;
+
+        let previous_heap_len = self.heap.len();
+        let property_object =
+            match self.alloc_object_with_properties(&[("listener", original_listener)]) {
+                Ok(property_object) => property_object,
+                Err(error) => {
+                    self.rollback_heap_to_len(previous_heap_len);
+                    self.estimated_memory_bytes = previous_estimated_bytes;
+                    return Err(error);
+                }
+            };
+        self.event_once_wrappers.insert(property_object, state);
+        Ok((
+            Value::BuiltinFunction(BuiltinFunction::emitter_once_wrapper(property_object)),
+            property_object,
+            previous_heap_len,
+        ))
+    }
+
+    /// Roll back a wrapper that has not escaped registration. No guest code or
+    /// other heap allocation runs between wrapper creation and these callers,
+    /// so its property carrier is the sole heap suffix being discarded.
+    fn rollback_event_once_wrapper(&mut self, property_object: ObjectId, previous_heap_len: usize) {
+        let released_state_bytes = self
+            .event_once_wrappers
+            .remove(&property_object)
+            .as_ref()
+            .map(Self::estimate_event_once_wrapper_state_bytes)
+            .unwrap_or(0);
+        let released_heap_bytes = Self::saturating_sum(
+            self.heap
+                .iter()
+                .skip(previous_heap_len)
+                .map(Self::estimate_heap_object_bytes),
+        );
+        debug_assert_eq!(property_object.0 as usize, previous_heap_len);
+        self.rollback_heap_to_len(previous_heap_len);
+        self.estimated_memory_bytes = self
+            .estimated_memory_bytes
+            .saturating_sub(released_state_bytes)
+            .saturating_sub(released_heap_bytes);
+    }
+
+    fn event_once_wrapper_property_object(listener: &Value) -> Option<ObjectId> {
+        match listener {
+            Value::BuiltinFunction(BuiltinFunction {
+                kind: BuiltinFunctionKind::EmitterOnceWrapper,
+                bound_object: Some(property_object),
+                ..
+            }) => Some(ObjectId(*property_object)),
+            _ => None,
+        }
+    }
+
+    fn event_once_wrapper_listener_property(&self, listener: &Value) -> Option<Value> {
+        let property_object = Self::event_once_wrapper_property_object(listener)?;
+        self.heap
+            .get(property_object.0 as usize)?
+            .properties
+            .get("listener")
+            .cloned()
+    }
+
+    /// Node exposes a once wrapper's truthy `.listener` value through
+    /// `listeners()`, while `rawListeners()` returns the wrapper itself.
+    /// Deleting the property (or assigning a falsy value) therefore falls back
+    /// to the raw callable.
+    fn exposed_event_listener(&self, listener: &Value) -> Value {
+        self.event_once_wrapper_listener_property(listener)
+            .as_ref()
+            .filter(|value| value.is_truthy())
+            .cloned()
+            .unwrap_or_else(|| listener.clone())
+    }
+
+    fn exposed_event_listener_in_array(&self, listener: &Value) -> Value {
+        self.event_once_wrapper_listener_property(listener)
+            .as_ref()
+            .filter(|value| value.is_callable())
+            .cloned()
+            .unwrap_or_else(|| listener.clone())
+    }
+
+    fn event_listener_matches(&self, record: &EventListenerRecord, listener: &Value) -> bool {
+        Self::strict_eq_values(&record.listener, listener)
+            || self
+                .event_once_wrapper_listener_property(&record.listener)
+                .is_some_and(|original| Self::strict_eq_values(&original, listener))
+    }
+
+    /// Node's scalar fast path reports a lone once wrapper's `.listener`
+    /// through the `removeListener` meta-event. Its array path instead reports
+    /// the exact argument used for removal, which is the raw wrapper during
+    /// automatic/direct once invocation and the original for an explicit
+    /// `removeListener(type, original)` call.
+    fn event_remove_listener_meta_value(
+        &self,
+        target_id: ObjectId,
+        event: &str,
+        removal_argument: &Value,
+    ) -> Value {
+        let records = self
+            .event_listeners
+            .get(&target_id)
+            .and_then(|by_event| by_event.get(event));
+        if let Some([record]) = records.map(Vec::as_slice) {
+            self.exposed_event_listener(&record.listener)
+        } else {
+            removal_argument.clone()
+        }
+    }
+
     /// Undo the exact insertion performed immediately before a failed
     /// Readable activation. No guest callback runs between insertion and this
     /// rollback, so the inserted record is still at its known edge.
@@ -14207,6 +14426,7 @@ impl InterpreterCore {
     /// bd-3894s slice (2d): the closure ids registered for `event` on `target_id`,
     /// cloned so the caller can invoke them without holding a borrow on
     /// `event_listeners`. Empty when no listener was registered.
+    #[cfg(test)]
     fn event_listeners_for(&self, target_id: ObjectId, event: &str) -> Vec<u32> {
         self.event_listener_records_for(target_id, event)
             .into_iter()
@@ -14226,11 +14446,14 @@ impl InterpreterCore {
         event: &str,
         listener: &Value,
     ) -> Option<EventListenerRecord> {
+        let index = self
+            .event_listeners
+            .get(&target_id)?
+            .get(event)?
+            .iter()
+            .rposition(|record| self.event_listener_matches(record, listener))?;
         let (removed, event_empty) = {
             let listeners = self.event_listeners.get_mut(&target_id)?.get_mut(event)?;
-            let index = listeners
-                .iter()
-                .rposition(|record| Self::strict_eq_values(&record.listener, listener))?;
             let removed = listeners.remove(index);
             (removed, listeners.is_empty())
         };
@@ -14409,6 +14632,22 @@ impl InterpreterCore {
         self.estimated_memory_bytes = self.estimated_memory_bytes.saturating_sub(released_bytes);
     }
 
+    fn clear_residual_event_state(&mut self) {
+        let released_bytes = self
+            .event_listeners_memory_bytes()
+            .saturating_add(self.event_promise_waiters_memory_bytes());
+        self.event_listeners.clear();
+        self.event_promise_waiters.clear();
+        self.next_event_promise_waiter_id = 0;
+        self.estimated_memory_bytes = self.estimated_memory_bytes.saturating_sub(released_bytes);
+    }
+
+    fn clear_event_once_wrapper_state(&mut self) {
+        let released_bytes = self.event_once_wrappers_memory_bytes();
+        self.event_once_wrappers.clear();
+        self.estimated_memory_bytes = self.estimated_memory_bytes.saturating_sub(released_bytes);
+    }
+
     fn clear_url_execution_state(&mut self) {
         let released_bytes = self
             .url_objects_memory_bytes()
@@ -14517,6 +14756,83 @@ impl InterpreterCore {
         })
     }
 
+    /// Invoke a stable `once` wrapper directly (including a wrapper obtained
+    /// from `rawListeners()`). Preflight the isolated callback before consuming
+    /// the one-shot state; once invocation begins, mark fired and remove the
+    /// exact once record before the original callback can re-enter the emitter.
+    fn invoke_event_once_wrapper(
+        &mut self,
+        module: &Ir3Module,
+        builtin: &BuiltinFunction,
+        args: RegRange,
+    ) -> Result<Value, InterpreterError> {
+        let property_object =
+            builtin
+                .bound_object
+                .map(ObjectId)
+                .ok_or_else(|| InterpreterError::TypeError {
+                    expected: "live EventEmitter once wrapper".to_string(),
+                    got: "wrapper without property object".to_string(),
+                })?;
+        let Some(state) = self.event_once_wrappers.get(&property_object) else {
+            return Err(InterpreterError::TypeError {
+                expected: "live EventEmitter once wrapper".to_string(),
+                got: "stale wrapper state".to_string(),
+            });
+        };
+        if state.fired {
+            return Ok(Value::Undefined);
+        }
+        let target = state.target;
+        let event = state.event.clone();
+        let original_listener = state.original_listener.clone();
+
+        let mut arguments = Vec::with_capacity(args.count as usize);
+        for index in 0..args.count {
+            arguments.push(self.builtin_arg(args, index)?.unwrap_or(Value::Undefined));
+        }
+        let argument_label = self.join_arg_range_label(args)?;
+        self.preflight_inline_method_call_with_argument_label(
+            Some(module),
+            &original_listener,
+            arguments.len(),
+            Some(&argument_label),
+        )?;
+
+        let wrapper = Value::BuiltinFunction(builtin.clone());
+        let removal_meta_listener = self.event_remove_listener_meta_value(target, &event, &wrapper);
+        if self
+            .remove_once_event_listener(target, &event, &wrapper)
+            .is_some()
+        {
+            let _ = self.emit_event_listener_records(
+                module,
+                target,
+                "removeListener",
+                vec![Value::str(event.as_str()), removal_meta_listener],
+                argument_label.clone(),
+            )?;
+        }
+        let Some(state) = self.event_once_wrappers.get_mut(&property_object) else {
+            return Err(InterpreterError::TypeError {
+                expected: "live EventEmitter once wrapper".to_string(),
+                got: "wrapper state disappeared during callback preflight".to_string(),
+            });
+        };
+        state.fired = true;
+
+        let (result, result_label) = self
+            .invoke_inline_method_call_with_argument_label_preflighted(
+                Some(module),
+                original_listener,
+                Value::Object(target),
+                arguments,
+                Some(argument_label),
+            )?;
+        self.replace_pending_hostcall_result_label(Some(result_label))?;
+        Ok(result)
+    }
+
     /// Invoke the current snapshot for `event` with the emitter as `this`.
     /// Returns whether at least one listener existed. An unhandled `error`
     /// re-throws its first argument as a JS exception, matching EventEmitter's
@@ -14529,9 +14845,31 @@ impl InterpreterCore {
         arguments: Vec<Value>,
         emission_label: Label,
     ) -> Result<bool, InterpreterError> {
+        let records = self.event_listener_records_for(target_id, event);
+        self.emit_event_listener_snapshot(
+            module,
+            target_id,
+            event,
+            arguments,
+            emission_label,
+            records,
+        )
+    }
+
+    /// Dispatch a listener snapshot captured at the logical start of an emit.
+    /// A leading callback may mutate the live listener table before this helper
+    /// runs, but additions/removals do not change the already-started emission.
+    fn emit_event_listener_snapshot(
+        &mut self,
+        module: &Ir3Module,
+        target_id: ObjectId,
+        event: &str,
+        arguments: Vec<Value>,
+        emission_label: Label,
+        records: Vec<EventListenerRecord>,
+    ) -> Result<bool, InterpreterError> {
         let settled_waiter =
             self.settle_event_promise_waiters(target_id, event, &arguments, &emission_label)?;
-        let records = self.event_listener_records_for(target_id, event);
         if records.is_empty() {
             if event == "error" && !settled_waiter {
                 let thrown = if let Some(value) = arguments.first() {
@@ -14555,7 +14893,10 @@ impl InterpreterCore {
         }
 
         for record in records {
-            if record.once {
+            if record.once && Self::event_once_wrapper_property_object(&record.listener).is_none() {
+                // Bare one-shot records are engine-internal callbacks (pipe,
+                // pipeline, and the current Writable end-callback carrier),
+                // not registrations made through EventEmitter.once().
                 let _ = self.remove_once_event_listener(target_id, event, &record.listener);
             }
             self.invoke_inline_method_call_with_argument_label(
@@ -21942,21 +22283,26 @@ impl InterpreterCore {
                 // memory refusal cannot publish a response stream that never
                 // reaches `end`.
                 self.schedule_stream_emission(object_id, StreamEventPhase::End)?;
-                if has_body {
-                    for closure_id in self.event_listeners_for(object_id, "data") {
-                        self.invoke_stream_listener(
-                            module,
-                            object_id,
-                            closure_id,
-                            vec![chunk.clone()],
-                        )?;
-                    }
+                if has_body && let Some(module) = module {
+                    let _ = self.emit_event_listener_records(
+                        module,
+                        object_id,
+                        "data",
+                        vec![chunk],
+                        Label::Public,
+                    )?;
                 }
                 Ok(())
             }
             StreamEventPhase::End => {
-                for closure_id in self.event_listeners_for(object_id, "end") {
-                    self.invoke_stream_listener(module, object_id, closure_id, Vec::new())?;
+                if let Some(module) = module {
+                    let _ = self.emit_event_listener_records(
+                        module,
+                        object_id,
+                        "end",
+                        Vec::new(),
+                        Label::Public,
+                    )?;
                 }
                 // The response stream is fully consumed; drop its listener table so
                 // the side-table stays bounded to in-flight streams.
@@ -21964,33 +22310,6 @@ impl InterpreterCore {
                 Ok(())
             }
         }
-    }
-
-    /// bd-3894s slice (2d): invoke a stream-event listener closure with `args`,
-    /// reusing the audited synchronous closure-invocation path (the same one the
-    /// response callback, timer, and promise reactions use). A missing module context
-    /// (the test-only event-loop path) or a dangling closure id is skipped without
-    /// error so a malformed listener cannot fault the whole event loop.
-    fn invoke_stream_listener(
-        &mut self,
-        module: Option<&Ir3Module>,
-        target_id: ObjectId,
-        closure_id: u32,
-        args: Vec<Value>,
-    ) -> Result<(), InterpreterError> {
-        let Some(module) = module else {
-            return Ok(());
-        };
-        if self.closures.get(closure_id as usize).is_none() {
-            return Ok(());
-        }
-        self.invoke_inline_method_call(
-            Some(module),
-            Value::Closure(closure_id),
-            Value::Object(target_id),
-            args,
-        )?;
-        Ok(())
     }
 
     /// bd-3894s slice (2d): build the `Error`-shaped value delivered to a
@@ -22353,6 +22672,8 @@ impl InterpreterCore {
         self.clear_writable_execution_state();
         self.clear_http_execution_state();
         self.clear_loopback_execution_state();
+        self.clear_residual_event_state();
+        self.clear_event_once_wrapper_state();
         if let Some(context) = self.active_inline_callback_context_label.take() {
             self.estimated_memory_bytes = self
                 .estimated_memory_bytes
@@ -27420,12 +27741,21 @@ impl InterpreterCore {
                 // Mark ended BEFORE the egress so a re-entrant `.end()` is a no-op.
                 self.set_object_property(req_id, "__ended".to_string(), Value::Bool(true))?;
                 let response = self.perform_net_request_effect(url, method, headers, body)?;
-                // bd-3894s slice (2d): the request's own event listeners, registered
-                // via `req.on('response'|'error', …)` synchronously before `.end()`.
-                let response_listeners = self.event_listeners_for(req_id, "response");
-                let error_listeners = self.event_listeners_for(req_id, "error");
                 match response {
                     Value::Object(rid) => {
+                        // bd-3894s slice (2d): the request's own event
+                        // listeners, registered synchronously before `.end()`.
+                        // Retain the logical event until its I/O turn so once
+                        // wrappers are consumed there, with their stable identity,
+                        // captured emitter receiver, and removeListener ordering.
+                        let has_response_consumers = !self
+                            .event_listener_records_for(req_id, "response")
+                            .is_empty()
+                            || self
+                                .event_promise_waiters
+                                .get(&req_id)
+                                .and_then(|events| events.get("response"))
+                                .is_some_and(|waiters| !waiters.is_empty());
                         // bd-3894s slice (2c)+(2d): deliver the response to the
                         // `http.request(url[, opts], cb)` callback AND to every
                         // `req.on('response', …)` listener on the next event-loop turn.
@@ -27433,12 +27763,13 @@ impl InterpreterCore {
                         if let Some(cid) = finish_cb {
                             self.schedule_io_callback(cid, Vec::new())?;
                         }
-                        if let Some(cid) = response_cb {
-                            self.schedule_io_callback(cid, vec![Value::Object(rid)])?;
-                        }
-                        for cid in &response_listeners {
-                            self.schedule_io_callback(*cid, vec![Value::Object(rid)])?;
-                        }
+                        self.schedule_http_task(PendingHttpTask::EmitLegacyEvent {
+                            target: req_id,
+                            event: "response".to_string(),
+                            arguments: vec![Value::Object(rid)],
+                            leading_callback: response_cb,
+                            label: Label::Public,
+                        })?;
                         // Drive the `IncomingMessage` readable stream (`'data'`/`'end'`)
                         // after those deliveries (higher registration seq => later turn
                         // => the `res.on('data'|'end', …)` listeners they register
@@ -27450,7 +27781,7 @@ impl InterpreterCore {
                         // finish callback) makes `.end()` evaluate to `undefined`; with
                         // none, the response is returned synchronously (slice-4 model).
                         if response_cb.is_some()
-                            || !response_listeners.is_empty()
+                            || has_response_consumers
                             || finish_cb.is_some()
                         {
                             Ok(Value::Undefined)
@@ -27462,12 +27793,14 @@ impl InterpreterCore {
                         // Denied/failed egress: surface it to the request's `'error'`
                         // listeners (deferred) instead of firing any response/data/end.
                         // The signed DENIED `EffectReceipt` is already recorded.
-                        if !error_listeners.is_empty() {
-                            let err = self.build_request_error_value()?;
-                            for cid in &error_listeners {
-                                self.schedule_io_callback(*cid, vec![err.clone()])?;
-                            }
-                        }
+                        let err = self.build_request_error_value()?;
+                        self.schedule_http_task(PendingHttpTask::EmitLegacyEvent {
+                            target: req_id,
+                            event: "error".to_string(),
+                            arguments: vec![err],
+                            leading_callback: None,
+                            label: Label::Public,
+                        })?;
                         Ok(Value::Undefined)
                     }
                 }
@@ -27598,20 +27931,48 @@ impl InterpreterCore {
                             error,
                         );
                     }
+                    let once = matches!(
+                        builtin.kind,
+                        BuiltinFunctionKind::EmitterOnce
+                            | BuiltinFunctionKind::EmitterPrependOnceListener
+                    );
+                    let (stored_listener, wrapper_allocation) = if once {
+                        match self.create_event_once_wrapper(
+                            target_id,
+                            &event,
+                            listener.clone(),
+                        ) {
+                            Ok((wrapper, property_object, previous_heap_len)) => (
+                                wrapper,
+                                Some((property_object, previous_heap_len)),
+                            ),
+                            Err(error) => {
+                                return self.readable_error_after_reservation(
+                                    target_id,
+                                    pump_reserved,
+                                    error,
+                                );
+                            }
+                        }
+                    } else {
+                        (listener, None)
+                    };
                     let insertion = self.insert_event_listener(
                         target_id,
                         &event,
                         EventListenerRecord {
-                            listener,
-                            once: matches!(
-                                builtin.kind,
-                                BuiltinFunctionKind::EmitterOnce
-                                    | BuiltinFunctionKind::EmitterPrependOnceListener
-                            ),
+                            listener: stored_listener,
+                            once,
                         },
                         prepend,
                     );
                     if let Err(error) = insertion {
+                        if let Some((property_object, previous_heap_len)) = wrapper_allocation {
+                            self.rollback_event_once_wrapper(
+                                property_object,
+                                previous_heap_len,
+                            );
+                        }
                         return self.readable_error_after_reservation(
                             target_id,
                             pump_reserved,
@@ -27624,6 +27985,12 @@ impl InterpreterCore {
                         pump_reserved,
                     ) {
                         self.rollback_inserted_event_listener(target_id, &event, prepend);
+                        if let Some((property_object, previous_heap_len)) = wrapper_allocation {
+                            self.rollback_event_once_wrapper(
+                                property_object,
+                                previous_heap_len,
+                            );
+                        }
                         return Err(error);
                     }
                 }
@@ -27640,11 +28007,12 @@ impl InterpreterCore {
                 let event = self.event_name_arg(args, 0)?;
                 let listener = self.builtin_arg(args, 1)?.unwrap_or(Value::Undefined);
                 let listener_label = self.join_arg_range_label(args)?;
-                if let Some(event) = event
-                    && listener.is_callable()
-                    && let Some(removed) =
+                if let Some(event) = event && listener.is_callable() {
+                    let removal_meta_listener =
+                        self.event_remove_listener_meta_value(target_id, &event, &listener);
+                    if let Some(removed) =
                         self.remove_event_listener(target_id, &event, &listener)
-                {
+                    {
                     if Self::is_internal_readable_pipe_listener(&removed.listener) {
                         self.detach_current_readable_pipe(target_id);
                     }
@@ -27652,9 +28020,10 @@ impl InterpreterCore {
                         module,
                         target_id,
                         "removeListener",
-                        vec![Value::str(event.as_str()), removed.listener],
+                            vec![Value::str(event.as_str()), removal_meta_listener],
                         listener_label,
                     )?;
+                    }
                 }
                 Ok(Value::Object(target_id))
             }
@@ -27693,9 +28062,7 @@ impl InterpreterCore {
                     if let Some(listener) = self.builtin_arg(args, 1)? {
                         records
                             .iter()
-                            .filter(|record| {
-                                Self::strict_eq_values(&record.listener, &listener)
-                            })
+                            .filter(|record| self.event_listener_matches(record, &listener))
                             .count()
                     } else {
                         records.len()
@@ -27808,6 +28175,33 @@ impl InterpreterCore {
                 let listeners = self
                     .event_name_arg(args, 0)?
                     .map(|event| {
+                        let records = self.guest_event_listener_records_for(target_id, &event);
+                        let scalar = records.len() == 1;
+                        records
+                            .into_iter()
+                            .map(|record| {
+                                if scalar {
+                                    self.exposed_event_listener(&record.listener)
+                                } else {
+                                    self.exposed_event_listener_in_array(&record.listener)
+                                }
+                            })
+                            .collect::<Vec<_>>()
+                    })
+                    .unwrap_or_default();
+                Ok(Value::Object(self.alloc_array_from_values(&listeners)?))
+            }
+            BuiltinFunctionKind::EmitterRawListeners => {
+                let receiver = receiver.unwrap_or(Value::Undefined);
+                let Value::Object(target_id) = receiver else {
+                    return Err(InterpreterError::TypeError {
+                        expected: "EventEmitter receiver for rawListeners".to_string(),
+                        got: receiver.type_name().to_string(),
+                    });
+                };
+                let listeners = self
+                    .event_name_arg(args, 0)?
+                    .map(|event| {
                         self.guest_event_listener_records_for(target_id, &event)
                             .into_iter()
                             .map(|record| record.listener)
@@ -27815,6 +28209,9 @@ impl InterpreterCore {
                     })
                     .unwrap_or_default();
                 Ok(Value::Object(self.alloc_array_from_values(&listeners)?))
+            }
+            BuiltinFunctionKind::EmitterOnceWrapper => {
+                self.invoke_event_once_wrapper(module, builtin, args)
             }
             BuiltinFunctionKind::ClusterSetup => {
                 self.cluster_setup(receiver, builtin.bound_object, args)
@@ -35953,10 +36350,17 @@ impl InterpreterCore {
             )),
             (
                 "ClientRequest" | "IncomingMessage" | "EventEmitter" | "Readable" | "Writable"
-                | "NetServer" | "NetSocket" | "TlsServer" | "TlsSocket",
+                | "NetServer" | "NetSocket" | "TlsServer" | "TlsSocket" | "Cluster",
                 "listeners",
             ) => Some(BuiltinFunction::new_kind(
                 BuiltinFunctionKind::EmitterListeners,
+            )),
+            (
+                "ClientRequest" | "IncomingMessage" | "EventEmitter" | "Readable" | "Writable"
+                | "NetServer" | "NetSocket" | "TlsServer" | "TlsSocket" | "Cluster",
+                "rawListeners",
+            ) => Some(BuiltinFunction::new_kind(
+                BuiltinFunctionKind::EmitterRawListeners,
             )),
             ("RegExp", "test") => Some(BuiltinFunction::regexp_test()),
             ("DataView", "getUint8") => Some(BuiltinFunction::data_view_get_uint8()),
@@ -59310,6 +59714,14 @@ impl InterpreterCore {
         )
     }
 
+    fn event_once_wrappers_memory_bytes(&self) -> u64 {
+        Self::saturating_sum(
+            self.event_once_wrappers
+                .values()
+                .map(Self::estimate_event_once_wrapper_state_bytes),
+        )
+    }
+
     fn event_promise_waiters_memory_bytes(&self) -> u64 {
         Self::saturating_sum(
             self.event_promise_waiters
@@ -59529,6 +59941,7 @@ impl InterpreterCore {
             .saturating_add(self.promise_runtime_memory_bytes())
             .saturating_add(self.weakmap_storage_memory_bytes())
             .saturating_add(self.event_listeners_memory_bytes())
+            .saturating_add(self.event_once_wrappers_memory_bytes())
             .saturating_add(self.event_promise_waiters_memory_bytes())
             .saturating_add(self.url_objects_memory_bytes())
             .saturating_add(self.url_search_params_memory_bytes())
@@ -61295,14 +61708,19 @@ impl InterpreterCore {
     }
 
     /// Return the ordinary-property backing object for a builtin function that
-    /// also acts as a mutable JavaScript object. `Date` is the first such
-    /// materialized global: aliases share this object, so writes to `Date.now`
-    /// remain visible through every reference (bd-1piai).
+    /// also acts as a mutable JavaScript object. `Date` aliases share one object
+    /// so writes to `Date.now` remain visible through every reference
+    /// (bd-1piai); every EventEmitter once wrapper owns a distinct object so
+    /// repeated `rawListeners()` calls observe stable `.listener` state
+    /// (bd-asw4m.2).
     fn builtin_function_property_object(builtin: &BuiltinFunction) -> Option<ObjectId> {
-        (builtin.kind == BuiltinFunctionKind::DateConstructor)
-            .then_some(builtin.bound_object)
-            .flatten()
-            .map(ObjectId)
+        matches!(
+            builtin.kind,
+            BuiltinFunctionKind::DateConstructor | BuiltinFunctionKind::EmitterOnceWrapper
+        )
+        .then_some(builtin.bound_object)
+        .flatten()
+        .map(ObjectId)
     }
 
     /// Resolve the function index backing a closure handle, erroring if the
@@ -67663,22 +68081,35 @@ mod async_runtime_tests_current {
             "the deferred .end() egress is recorded exactly once"
         );
         assert_eq!(
-            core.pending_io_callbacks.len(),
+            core.pending_http_tasks.len(),
             1,
-            "the response callback must be scheduled after the .end() egress"
+            "the response callback must share the deferred logical response event"
         );
-        let args = core
-            .pending_io_callbacks
+        let task = core
+            .pending_http_tasks
             .values()
             .next()
-            .expect("a scheduled callback")
-            .clone();
+            .expect("a scheduled response event");
+        let PendingHttpTask::EmitLegacyEvent {
+            target,
+            event,
+            arguments: args,
+            leading_callback,
+            label,
+        } = task
+        else {
+            panic!("expected a deferred response event, got {task:?}");
+        };
+        assert_eq!(*target, req_id);
+        assert_eq!(event, "response");
+        assert_eq!(*leading_callback, Some(0));
+        assert_eq!(label, &Label::Public);
         assert_eq!(
             args.len(),
             1,
             "cb(res) is invoked with a single response arg"
         );
-        let Value::Object(resp_id) = args[0] else {
+        let Value::Object(resp_id) = &args[0] else {
             panic!(
                 "the scheduled callback arg must be the response object, got {:?}",
                 args[0]
@@ -68038,6 +68469,7 @@ mod async_runtime_tests_current {
             "getMaxListeners",
             "setMaxListeners",
             "listeners",
+            "rawListeners",
         ] {
             assert!(
                 InterpreterCore::collection_prototype_method("EventEmitter", method).is_some(),
@@ -68090,13 +68522,19 @@ mod async_runtime_tests_current {
         dispatch_listener(&mut core, BuiltinFunctionKind::EmitterOn, Value::Closure(1))
             .expect("append duplicate listener");
         let records = core.event_listener_records_for(target_id, "tick");
+        assert_eq!(records.len(), 3);
+        assert!(records[0].once);
+        assert!(
+            InterpreterCore::event_once_wrapper_property_object(&records[0].listener).is_some()
+        );
         assert_eq!(
-            records,
-            vec![
-                EventListenerRecord {
-                    listener: Value::Closure(2),
-                    once: true,
-                },
+            core.exposed_event_listener(&records[0].listener),
+            Value::Closure(2),
+            "listeners() exposes the original callback while the record retains the raw wrapper"
+        );
+        assert_eq!(
+            records[1..],
+            [
                 EventListenerRecord {
                     listener: Value::Closure(1),
                     once: false,
@@ -68114,18 +68552,19 @@ mod async_runtime_tests_current {
             Value::Closure(1),
         )
         .expect("remove most recent duplicate");
+        let records = core.event_listener_records_for(target_id, "tick");
+        assert_eq!(records.len(), 2);
+        assert!(records[0].once);
         assert_eq!(
-            core.event_listener_records_for(target_id, "tick"),
-            vec![
-                EventListenerRecord {
-                    listener: Value::Closure(2),
-                    once: true,
-                },
-                EventListenerRecord {
-                    listener: Value::Closure(1),
-                    once: false,
-                },
-            ]
+            core.exposed_event_listener(&records[0].listener),
+            Value::Closure(2)
+        );
+        assert_eq!(
+            records[1],
+            EventListenerRecord {
+                listener: Value::Closure(1),
+                once: false,
+            }
         );
 
         let error_id = core
@@ -77591,6 +78030,296 @@ mod async_runtime_tests_current {
         );
     }
 
+    #[test]
+    fn event_once_wrapper_allocation_is_atomic_accounted_and_seed_safe_bd_asw4m_2() {
+        let mut core = test_interpreter();
+        let target = core
+            .alloc_object_with_properties(&[("__type", Value::str("EventEmitter"))])
+            .expect("emitter target before seed capture");
+        let seed = core.capture_execution_seed();
+        let baseline_heap_len = core.heap.len();
+        let baseline_bytes = core.estimated_memory_bytes();
+        let original_listener =
+            Value::BuiltinFunction(BuiltinFunction::new_kind(BuiltinFunctionKind::ArrayIsArray));
+        let projected_state = EventOnceWrapperState {
+            target,
+            event: "tick".to_string(),
+            original_listener: original_listener.clone(),
+            fired: false,
+        };
+        let state_bytes =
+            InterpreterCore::estimate_event_once_wrapper_state_bytes(&projected_state);
+        let mut projected_object = HeapObject::new();
+        projected_object
+            .properties
+            .insert("listener".to_string(), original_listener.clone());
+        let object_bytes = InterpreterCore::estimate_heap_object_bytes(&projected_object);
+        let exact_bytes = baseline_bytes
+            .saturating_add(state_bytes)
+            .saturating_add(object_bytes);
+
+        core.config.max_total_memory_bytes = exact_bytes.saturating_sub(1);
+        let error = core
+            .create_event_once_wrapper(target, "tick", original_listener.clone())
+            .expect_err("one-byte-short wrapper allocation must fail atomically");
+        assert!(matches!(
+            error,
+            InterpreterError::MemoryBudgetExceeded { .. }
+        ));
+        assert_eq!(core.heap.len(), baseline_heap_len);
+        assert!(core.event_once_wrappers.is_empty());
+        assert_eq!(core.estimated_memory_bytes(), baseline_bytes);
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+
+        core.config.max_total_memory_bytes = exact_bytes;
+        let (wrapper, property_object, previous_heap_len) = core
+            .create_event_once_wrapper(target, "tick", original_listener.clone())
+            .expect("exact wrapper allocation ceiling must succeed");
+        assert_eq!(previous_heap_len, baseline_heap_len);
+        assert_eq!(
+            InterpreterCore::event_once_wrapper_property_object(&wrapper),
+            Some(property_object)
+        );
+        assert_eq!(
+            core.heap[property_object.0 as usize]
+                .properties
+                .get("listener"),
+            Some(&original_listener)
+        );
+        assert_eq!(
+            core.event_once_wrappers.get(&property_object),
+            Some(&projected_state)
+        );
+        assert_eq!(core.estimated_memory_bytes(), exact_bytes);
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+
+        core.config.max_total_memory_bytes = u64::MAX;
+        core.insert_event_listener(
+            target,
+            "tick",
+            EventListenerRecord {
+                listener: wrapper,
+                once: true,
+            },
+            false,
+        )
+        .expect("plain EventEmitter wrapper registration before reset");
+        assert!(core.event_listeners.contains_key(&target));
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+        let previous_register_bytes = core.registers_memory_bytes();
+        let previous_heap_bytes = core.heap_memory_bytes();
+        core.reset_execution_state_from_seed(&seed)
+            .expect("seed reset clears once-wrapper side state");
+        core.apply_register_heap_memory_delta(previous_register_bytes, previous_heap_bytes)
+            .expect("account restored wrapper heap suffix");
+        assert!(core.event_once_wrappers.is_empty());
+        assert!(core.event_listeners.is_empty());
+        assert_eq!(core.heap.len(), baseline_heap_len);
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+        let replacement = core
+            .alloc_object_with_prototype(None)
+            .expect("ordinary object after once-wrapper seed reset");
+        assert_eq!(
+            replacement, property_object,
+            "cleared wrapper state must not brand a reused ObjectId"
+        );
+        assert!(
+            !core.event_once_wrappers.contains_key(&replacement),
+            "the reused ObjectId has no stale once-wrapper state"
+        );
+    }
+
+    #[test]
+    fn deferred_http_event_preserves_once_wrapper_until_delivery_bd_asw4m_2() {
+        let module = test_module_with_functions(Vec::new(), Vec::new());
+        let mut core = test_interpreter();
+        let source = core
+            .alloc_object_with_properties(&[("__type", Value::str("EventEmitter"))])
+            .expect("source emitter");
+        let delivery_target = core
+            .alloc_object_with_properties(&[("__type", Value::str("ClientRequest"))])
+            .expect("deferred delivery emitter");
+        let original =
+            Value::BuiltinFunction(BuiltinFunction::new_kind(BuiltinFunctionKind::ArrayIsArray));
+        let (wrapper, property_object, _) = core
+            .create_event_once_wrapper(source, "source", original)
+            .expect("stable once wrapper");
+        core.insert_event_listener(
+            source,
+            "source",
+            EventListenerRecord {
+                listener: wrapper.clone(),
+                once: true,
+            },
+            false,
+        )
+        .expect("source once registration");
+        core.insert_event_listener(
+            delivery_target,
+            "response",
+            EventListenerRecord {
+                listener: wrapper.clone(),
+                once: false,
+            },
+            false,
+        )
+        .expect("cross-registered raw wrapper");
+
+        core.schedule_io_callback(0, Vec::new())
+            .expect("finish callback turn");
+        let finish_sequence = *core
+            .pending_io_callbacks
+            .keys()
+            .next()
+            .expect("finish callback registration");
+        let delivery_sequence = core
+            .schedule_http_task(PendingHttpTask::EmitLegacyEvent {
+                target: delivery_target,
+                event: "response".to_string(),
+                arguments: vec![Value::Undefined],
+                leading_callback: None,
+                label: Label::Public,
+            })
+            .expect("logical response event turn");
+        assert!(
+            finish_sequence < delivery_sequence,
+            "the finish callback is queued before response-event delivery"
+        );
+        assert!(
+            core.event_listeners
+                .get(&source)
+                .and_then(|events| events.get("source"))
+                .is_some_and(|records| records.len() == 1),
+            "scheduling must not consume the source once registration"
+        );
+        assert_eq!(
+            core.event_once_wrappers
+                .get(&property_object)
+                .map(|state| state.fired),
+            Some(false)
+        );
+
+        let task = core
+            .pending_http_tasks
+            .remove(&delivery_sequence)
+            .expect("queued logical response event");
+        core.execute_pending_http_task(task, Some(&module))
+            .expect("response-event delivery");
+
+        assert_eq!(
+            core.event_once_wrappers
+                .get(&property_object)
+                .map(|state| state.fired),
+            Some(true),
+            "the wrapper fires only on the deferred event turn"
+        );
+        assert!(
+            core.event_listeners
+                .get(&source)
+                .and_then(|events| events.get("source"))
+                .is_none(),
+            "direct wrapper invocation consumes its captured source registration"
+        );
+        assert!(
+            core.event_listeners
+                .get(&delivery_target)
+                .and_then(|events| events.get("response"))
+                .is_some_and(|records| {
+                    records.len() == 1
+                        && InterpreterCore::strict_eq_values(&records[0].listener, &wrapper)
+                        && !records[0].once
+                }),
+            "cross-registration remains on the delivery emitter after its wrapper fires"
+        );
+    }
+
+    #[test]
+    fn event_snapshot_ignores_listener_mutations_after_emit_start_bd_asw4m_2() {
+        let module = test_module_with_functions(Vec::new(), Vec::new());
+        let mut core = test_interpreter();
+        let target = core
+            .alloc_object_with_properties(&[("__type", Value::str("ClientRequest"))])
+            .expect("response emitter");
+        let original =
+            Value::BuiltinFunction(BuiltinFunction::new_kind(BuiltinFunctionKind::ArrayIsArray));
+        let (keep, keep_state, _) = core
+            .create_event_once_wrapper(target, "response", original.clone())
+            .expect("pre-existing response wrapper");
+        core.insert_event_listener(
+            target,
+            "response",
+            EventListenerRecord {
+                listener: keep.clone(),
+                once: true,
+            },
+            false,
+        )
+        .expect("pre-existing response listener");
+        let snapshot = core.event_listener_records_for(target, "response");
+
+        core.remove_event_listener(target, "response", &keep)
+            .expect("leading callback removes pre-existing listener");
+        let (late, late_state, _) = core
+            .create_event_once_wrapper(target, "response", original)
+            .expect("late response wrapper");
+        core.insert_event_listener(
+            target,
+            "response",
+            EventListenerRecord {
+                listener: late.clone(),
+                once: true,
+            },
+            false,
+        )
+        .expect("listener added during leading callback");
+
+        core.emit_event_listener_snapshot(
+            &module,
+            target,
+            "response",
+            vec![Value::Undefined],
+            Label::Public,
+            snapshot,
+        )
+        .expect("dispatch pre-callback listener snapshot");
+
+        assert_eq!(
+            core.event_once_wrappers
+                .get(&keep_state)
+                .map(|state| state.fired),
+            Some(true),
+            "removing a snapshotted listener does not suppress the current emit"
+        );
+        assert_eq!(
+            core.event_once_wrappers
+                .get(&late_state)
+                .map(|state| state.fired),
+            Some(false),
+            "a listener added after the snapshot waits for the next emit"
+        );
+        assert!(
+            core.event_listeners
+                .get(&target)
+                .and_then(|events| events.get("response"))
+                .is_some_and(|records| {
+                    records.len() == 1
+                        && InterpreterCore::strict_eq_values(&records[0].listener, &late)
+                })
+        );
+    }
+
     /// bd-3894s slice (2d): scheduling the readable-stream `'data'` phase drives a
     /// `'data'` turn that then schedules the `'end'` turn; after `'end'` the object's
     /// listener table is released. Exercised on the module-less event-loop path (the
@@ -77691,22 +78420,35 @@ mod async_runtime_tests_current {
         );
 
         assert_eq!(
-            core.pending_io_callbacks.len(),
+            core.pending_http_tasks.len(),
             1,
-            "the 'error' listener is scheduled as a pending IoCompletion macrotask"
+            "the logical 'error' event is scheduled as a pending IoCompletion macrotask"
         );
-        let args = core
-            .pending_io_callbacks
+        let task = core
+            .pending_http_tasks
             .values()
             .next()
-            .expect("a scheduled error callback")
-            .clone();
+            .expect("a scheduled error event");
+        let PendingHttpTask::EmitLegacyEvent {
+            target,
+            event,
+            arguments: args,
+            leading_callback,
+            label,
+        } = task
+        else {
+            panic!("expected a deferred error event, got {task:?}");
+        };
+        assert_eq!(*target, req_id);
+        assert_eq!(event, "error");
+        assert_eq!(*leading_callback, None);
+        assert_eq!(label, &Label::Public);
         assert_eq!(
             args.len(),
             1,
             "the 'error' listener receives a single Error arg"
         );
-        let Value::Object(err_id) = args[0] else {
+        let Value::Object(err_id) = &args[0] else {
             panic!("the error arg must be an Error object, got {:?}", args[0]);
         };
         let err = core.heap.get(err_id.0 as usize).expect("error object");
@@ -77809,17 +78551,30 @@ mod async_runtime_tests_current {
 
         // The 'response' listener was scheduled with the parsed response object.
         assert_eq!(
-            core.pending_io_callbacks.len(),
+            core.pending_http_tasks.len(),
             1,
-            "the 'response' listener is scheduled as a pending IoCompletion macrotask"
+            "the logical 'response' event is scheduled as a pending IoCompletion macrotask"
         );
-        let args = core
-            .pending_io_callbacks
+        let task = core
+            .pending_http_tasks
             .values()
             .next()
-            .expect("a scheduled response listener")
-            .clone();
-        let Value::Object(resp_id) = args[0] else {
+            .expect("a scheduled response event");
+        let PendingHttpTask::EmitLegacyEvent {
+            target,
+            event,
+            arguments: args,
+            leading_callback,
+            label,
+        } = task
+        else {
+            panic!("expected a deferred response event, got {task:?}");
+        };
+        assert_eq!(*target, req_id);
+        assert_eq!(event, "response");
+        assert_eq!(*leading_callback, None);
+        assert_eq!(label, &Label::Public);
+        let Value::Object(resp_id) = &args[0] else {
             panic!(
                 "the listener arg must be the response object, got {:?}",
                 args[0]

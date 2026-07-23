@@ -3,8 +3,8 @@
 //! The engine already used an emitter listener table for HTTP request/response
 //! streams. This suite pins the standalone `require('events')` lowering and the
 //! shared receiver-aware runtime semantics that franken_node's compatibility
-//! corpus exercises. Promise-backed module `once`, lexical arrow `this`, and
-//! callable `rawListeners` wrappers are intentionally separate follow-ups.
+//! corpus exercises. Promise-backed module `once` and lexical arrow `this`
+//! remain separate follow-ups; callable `rawListeners` wrappers are covered here.
 
 use frankenengine_engine::HybridRouter;
 
@@ -131,6 +131,118 @@ fn listener_introspection_returns_detached_arrays() {
         e.emit('alpha');
     "#;
     assert_eq!(eval_console(src), "alpha,mid,zeta\n3\n1\nfired");
+}
+
+#[test]
+fn raw_listeners_expose_stable_callable_once_wrappers_bd_asw4m_2() {
+    let src = r#"
+        const { EventEmitter } = require('events');
+        const e = new EventEmitter();
+        const original = (value) => {
+          console.log('original:' + value);
+          return 'return:' + value;
+        };
+        const replacement = () => console.log('replacement');
+        e.once('work', original);
+        const first = e.rawListeners('work');
+        const second = e.rawListeners('work');
+        console.log(first.length);
+        console.log(typeof first[0]);
+        console.log(first[0] === second[0]);
+        console.log(first[0].listener === original);
+        console.log(e.listeners('work')[0] === original);
+        first[0].listener = replacement;
+        console.log(e.listeners('work')[0] === replacement);
+        console.log(e.listenerCount('work', replacement));
+        console.log(first[0]('manual'));
+        console.log(e.listenerCount('work'));
+        console.log(String(first[0]()));
+
+        const projection = new EventEmitter();
+        const projected = () => {};
+        const persistent = () => {};
+        projection.once('shape', projected);
+        const projectedWrapper = projection.rawListeners('shape')[0];
+        projectedWrapper.listener = 1;
+        console.log(projection.listeners('shape')[0] === 1);
+        projection.on('shape', persistent);
+        console.log(projection.listeners('shape')[0] === projectedWrapper);
+        console.log(projection.listenerCount('shape', 1));
+        projectedWrapper.listener = 0;
+        console.log(projection.listeners('shape')[0] === projectedWrapper);
+        console.log(projection.listenerCount('shape', 0));
+    "#;
+    assert_eq!(
+        eval_console(src),
+        "1\nfunction\ntrue\ntrue\ntrue\ntrue\n1\noriginal:manual\nreturn:manual\n0\nundefined\ntrue\ntrue\n1\ntrue\n1"
+    );
+}
+
+#[test]
+fn raw_once_wrapper_order_removal_and_reentrancy_bd_asw4m_2() {
+    let src = r#"
+        const { EventEmitter } = require('events');
+        const e = new EventEmitter();
+        const out = [];
+        const persistent = () => out.push('persistent');
+        const front = () => out.push('front');
+        e.on('order', persistent);
+        e.prependOnceListener('order', front);
+        const orderRaw = e.rawListeners('order');
+        console.log(orderRaw[0].listener === front);
+        console.log(orderRaw[1] === persistent);
+        orderRaw.length = 0;
+        console.log(e.listenerCount('order'));
+        e.emit('order');
+        e.emit('order');
+        console.log(out.join(','));
+
+        const removed = () => {};
+        e.once('byOriginal', removed);
+        e.removeListener('byOriginal', removed);
+        console.log(e.emit('byOriginal'));
+        e.once('byWrapper', removed);
+        const wrapper = e.rawListeners('byWrapper')[0];
+        e.removeListener('byWrapper', wrapper);
+        console.log(e.emit('byWrapper'));
+
+        let calls = 0;
+        e.once('reentrant', () => {
+          calls += 1;
+          e.emit('reentrant');
+        });
+        e.emit('reentrant');
+        console.log(calls);
+    "#;
+    assert_eq!(
+        eval_console(src),
+        "true\ntrue\n2\nfront,persistent,persistent\nfalse\nfalse\n1"
+    );
+}
+
+#[test]
+fn raw_once_wrapper_remove_listener_meta_identity_bd_asw4m_2() {
+    let src = r#"
+        const { EventEmitter } = require('events');
+        const e = new EventEmitter();
+        const meta = () => {};
+        e.on('removeListener', (name, listener) => {
+          if (name === 'meta') console.log(listener === meta);
+        });
+        e.once('meta', meta);
+        e.removeListener('meta', meta);
+
+        const many = () => {};
+        const keep = () => {};
+        e.once('multiMeta', many);
+        e.on('multiMeta', keep);
+        const manyWrapper = e.rawListeners('multiMeta')[0];
+        e.on('removeListener', (name, listener) => {
+          if (name === 'multiMeta') console.log(listener === manyWrapper);
+        });
+        e.emit('multiMeta');
+    "#;
+    assert_eq!(eval_console(src), "true\ntrue");
 }
 
 #[test]

@@ -25307,25 +25307,65 @@ mod tests {
             .value
     }
 
+    fn complete_constructor_return_bd_ptu9m(return_value: Value) -> Value {
+        let mut core = quickjs_test_core();
+        let allocated_this = Value::Object(
+            core.alloc_object_with_prototype(None)
+                .expect("constructor receiver allocation should fit"),
+        );
+        core.call_stack.push(CallFrame {
+            return_ip: 1,
+            return_reg: Some(0),
+            register_base: 0,
+            function_index: None,
+            this_value: allocated_this.clone(),
+            this_label: crate::ifc_artifacts::Label::Public,
+            new_target_value: Value::Function(0),
+            new_target_label: crate::ifc_artifacts::Label::Public,
+            super_value: Value::Undefined,
+            super_label: crate::ifc_artifacts::Label::Public,
+            construct_this: Some(allocated_this),
+            saved_pending_exception: None,
+            saved_pending_return: None,
+            saved_suspended_abrupt_depth: 0,
+            saved_finally_mode_depth: 0,
+            saved_scope_depth: core.scope_chain.depth(),
+            saved_scope_chain: None,
+            async_function_id: None,
+        });
+        core.complete_return(return_value, crate::ifc_artifacts::Label::Public)
+            .expect("constructor return should complete");
+        core.read_reg(0).expect("constructor result register")
+    }
+
     #[test]
     fn constructor_preserves_explicit_object_like_returns_bd_ptu9m() {
-        assert_eq!(
-            execute_class_expression_source_bd_va13y(
-                "let callable = function(){ return 7; }; \
-                 let promise = Promise.resolve(9); \
-                 let builtin = Array.isArray; \
-                 function* make(){ yield 1; } let generator = make(); \
-                 function ReturnCallable(){ return callable; } \
-                 function ReturnPromise(){ return promise; } \
-                 function ReturnBuiltin(){ return builtin; } \
-                 function ReturnGenerator(){ return generator; } \
-                 new ReturnCallable() === callable && \
-                 new ReturnPromise() === promise && \
-                 new ReturnBuiltin() === builtin && \
-                 new ReturnGenerator() === generator;"
+        for (case, return_value) in [
+            ("object", Value::Object(ObjectId(u32::MAX))),
+            ("function", Value::Function(11)),
+            ("closure", Value::Closure(12)),
+            ("iterator", Value::Iterator(13)),
+            ("generator function", Value::GeneratorFunction(14)),
+            ("generator", Value::Generator(15)),
+            ("async function", Value::AsyncFunction(16)),
+            ("async function object", Value::AsyncFunctionObject(17)),
+            (
+                "async generator function",
+                Value::AsyncGeneratorFunction(18),
             ),
-            Value::Bool(true)
-        );
+            ("async generator object", Value::AsyncGeneratorObject(19)),
+            ("promise", Value::Promise(20)),
+            (
+                "builtin function",
+                Value::BuiltinFunction(BuiltinFunction::array_is_array()),
+            ),
+        ] {
+            assert_eq!(
+                complete_constructor_return_bd_ptu9m(return_value.clone()),
+                return_value,
+                "constructor must preserve an explicit {case} return",
+            );
+        }
     }
 
     #[test]
@@ -25333,6 +25373,30 @@ mod tests {
         assert_eq!(
             execute_class_expression_source_bd_va13y(
                 "let value = function(){ return 7; }; \
+                 function ReturnValue(){ return value; } \
+                 new ReturnValue() === value;"
+            ),
+            Value::Bool(true),
+        );
+    }
+
+    #[test]
+    fn constructor_preserves_builtin_return_bd_ptu9m() {
+        assert_eq!(
+            execute_class_expression_source_bd_va13y(
+                "let value = Array.isArray; \
+                 function ReturnValue(){ return value; } \
+                 new ReturnValue() === value;"
+            ),
+            Value::Bool(true),
+        );
+    }
+
+    #[test]
+    fn constructor_preserves_generator_return_bd_ptu9m() {
+        assert_eq!(
+            execute_class_expression_source_bd_va13y(
+                "function* make(){ yield 1; } let value = make(); \
                  function ReturnValue(){ return value; } \
                  new ReturnValue() === value;"
             ),

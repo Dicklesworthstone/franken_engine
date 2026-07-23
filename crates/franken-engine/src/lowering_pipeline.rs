@@ -24374,10 +24374,19 @@ mod tests {
         crate::ast::SourceSpan::new(0, 10, line, 1, line, 11)
     }
 
-    fn ir1_with_nop_ops_and_spans(op_count: usize, op_spans: Vec<Ir1OpSpanEntry>) -> Ir1Module {
+    fn ir1_with_stack_valid_ops_and_spans(
+        op_count: usize,
+        op_spans: Vec<Ir1OpSpanEntry>,
+    ) -> Ir1Module {
         let mut ir1 = Ir1Module::new(ContentHash::compute(b"span-stamping-ir0"), "spans.js");
-        for _ in 0..op_count {
-            ir1.ops.push(Ir1Op::Nop);
+        for index in 0..op_count {
+            ir1.ops.push(if index == 0 {
+                Ir1Op::LoadLiteral {
+                    value: Ir1Literal::Undefined,
+                }
+            } else {
+                Ir1Op::Nop
+            });
         }
         ir1.op_spans = op_spans;
         ir1
@@ -24414,7 +24423,7 @@ mod tests {
                 },
             ],
         ] {
-            let ir1 = ir1_with_nop_ops_and_spans(3, entries);
+            let ir1 = ir1_with_stack_valid_ops_and_spans(3, entries);
             let ir2 = lower_ir1_to_ir2(&ir1).expect("IR1->IR2").module;
             assert_eq!(ir2.ops[0].span, Some(span_for_test(1)));
             assert_eq!(ir2.ops[1].span, Some(span_for_test(2)));
@@ -24424,7 +24433,7 @@ mod tests {
 
     #[test]
     fn ir2_span_stamping_clamps_out_of_bounds_entries() {
-        let ir1 = ir1_with_nop_ops_and_spans(
+        let ir1 = ir1_with_stack_valid_ops_and_spans(
             2,
             vec![
                 Ir1OpSpanEntry {
@@ -24446,7 +24455,7 @@ mod tests {
 
     #[test]
     fn ir2_span_stamping_empty_table_leaves_all_spans_none() {
-        let ir1 = ir1_with_nop_ops_and_spans(3, Vec::new());
+        let ir1 = ir1_with_stack_valid_ops_and_spans(3, Vec::new());
         let ir2 = lower_ir1_to_ir2(&ir1).expect("IR1->IR2").module;
         assert!(ir2.ops.iter().all(|op| op.span.is_none()));
     }
@@ -24456,7 +24465,7 @@ mod tests {
         // The span side-table and Ir2Op::span are diagnostic provenance:
         // content hashes, equality, and serialized bytes must be identical
         // with and without them (the bd-fqlfw.1.5 zero-churn contract).
-        let spanned = ir1_with_nop_ops_and_spans(
+        let spanned = ir1_with_stack_valid_ops_and_spans(
             2,
             vec![Ir1OpSpanEntry {
                 op_start: 0,
@@ -24464,7 +24473,7 @@ mod tests {
                 span: span_for_test(3),
             }],
         );
-        let unspanned = ir1_with_nop_ops_and_spans(2, Vec::new());
+        let unspanned = ir1_with_stack_valid_ops_and_spans(2, Vec::new());
         assert_eq!(spanned, unspanned);
         assert_eq!(spanned.content_hash(), unspanned.content_hash());
         assert_eq!(

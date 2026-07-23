@@ -4966,6 +4966,35 @@ impl InterpreterCore {
         Ok(())
     }
 
+    fn load_scoped_binding(
+        &self,
+        module: &Ir3Module,
+        name_pool_index: u32,
+    ) -> Result<(Value, crate::ifc_artifacts::Label), InterpreterError> {
+        let name = Self::metadata_pool_string(
+            module,
+            name_pool_index,
+            format!("__binding_{name_pool_index}"),
+        )?;
+        if let Some((_, binding)) = self.scope_chain.resolve(&name) {
+            let state = binding.state()?;
+            if !state.initialized {
+                return Err(InterpreterError::UninitializedBinding { name });
+            }
+            return Ok((state.value.clone(), state.label.clone()));
+        }
+        if let Some(context) = self.active_cjs_context.as_ref() {
+            let (filename, dirname) = self.cjs_filename_dirname(Some(&context.module_specifier));
+            let value = match name.as_str() {
+                "__filename" => filename,
+                "__dirname" => dirname,
+                _ => Value::Undefined,
+            };
+            return Ok((value, crate::ifc_artifacts::Label::Public));
+        }
+        Ok((Value::Undefined, crate::ifc_artifacts::Label::Public))
+    }
+
     fn take_current_abrupt_completion(&mut self) -> Option<AbruptCompletion> {
         if let Some(exception) = self.pending_exception.take() {
             self.pending_return = None;
@@ -8235,35 +8264,22 @@ impl InterpreterCore {
                 Ir3Instruction::LoadScoped {
                     dst,
                     name_pool_index,
-                } => {
-                    let name = Self::metadata_pool_string(
-                        module,
-                        name_pool_index,
-                        format!("__binding_{name_pool_index}"),
-                    )?;
-                    let (val, label) = if let Some((_, binding)) = self.scope_chain.resolve(&name) {
-                        let state = binding.state()?;
-                        if !state.initialized {
-                            return Err(InterpreterError::UninitializedBinding {
-                                name: name.clone(),
-                            });
+                } => match self.load_scoped_binding(module, name_pool_index) {
+                    Ok((value, label)) => {
+                        self.write_reg_with_label(dst, value, label)?;
+                        self.ip += 1;
+                    }
+                    Err(error)
+                        if matches!(&error, InterpreterError::UninitializedBinding { .. })
+                            && self.has_exception_target_frame() =>
+                    {
+                        match self.route_javascript_error(module, error)? {
+                            None => continue,
+                            Some(error) => return Err(error),
                         }
-                        (state.value.clone(), state.label.clone())
-                    } else if let Some(context) = self.active_cjs_context.as_ref() {
-                        let (filename, dirname) =
-                            self.cjs_filename_dirname(Some(&context.module_specifier));
-                        let value = match name.as_str() {
-                            "__filename" => filename,
-                            "__dirname" => dirname,
-                            _ => Value::Undefined,
-                        };
-                        (value, crate::ifc_artifacts::Label::Public)
-                    } else {
-                        (Value::Undefined, crate::ifc_artifacts::Label::Public)
-                    };
-                    self.write_reg_with_label(dst, val, label)?;
-                    self.ip += 1;
-                }
+                    }
+                    Err(error) => return Err(error),
+                },
                 Ir3Instruction::StoreScoped {
                     src,
                     name_pool_index,
@@ -19035,6 +19051,94 @@ mod tests {
             core.heap[error_id.0 as usize].properties.get("name"),
             Some(&Value::str("ReferenceError"))
         );
+        let (_, binding) = core
+            .scope_chain
+            .resolve("future")
+            .expect("TDZ binding should remain present");
+        assert!(!binding.state().unwrap().initialized);
+    }
+
+    #[test]
+    fn caught_uninitialized_load_scoped_error_is_reference_error_bd_mfcww() {
+        let module = test_module_with_pool(
+            vec![
+                Ir3Instruction::LoadInt { dst: 0, value: 41 },
+                Ir3Instruction::DeclareBinding {
+                    name_pool_index: 0,
+                    kind: BindingKind::Let as u8,
+                },
+                Ir3Instruction::BeginTry {
+                    catch_target: 5,
+                    finally_target: None,
+                },
+                Ir3Instruction::LoadScoped {
+                    dst: 0,
+                    name_pool_index: 0,
+                },
+                Ir3Instruction::EndTry,
+                Ir3Instruction::EnterCatch { dst: 1 },
+                Ir3Instruction::Halt,
+            ],
+            vec!["future".to_string()],
+        );
+        let mut core = quickjs_test_core();
+
+        let halted = core
+            .run_loop(&module)
+            .expect_err("test should stop immediately after entering catch");
+        assert_eq!(halted, InterpreterError::Halted);
+        let caught = core.registers[1].clone();
+        let Value::Object(error_id) = caught else {
+            panic!("expected materialized ReferenceError object, got {caught:?}");
+        };
+        assert_eq!(
+            core.heap[error_id.0 as usize].properties.get("name"),
+            Some(&Value::str("ReferenceError"))
+        );
+        assert_eq!(core.registers[0], Value::Int(41));
+        let (_, binding) = core
+            .scope_chain
+            .resolve("future")
+            .expect("TDZ binding should remain present");
+        assert!(!binding.state().unwrap().initialized);
+        assert!(core.catch_frames.is_empty());
+        assert!(core.pending_exception.is_none());
+        assert!(core.pending_return.is_none());
+        assert!(core.pending_finally_entry.is_none());
+        assert!(core.finally_frames.is_empty());
+        assert!(core.suspended_abrupt_completions.is_empty());
+    }
+
+    #[test]
+    fn uncaught_uninitialized_load_scoped_preserves_native_error_and_state_bd_mfcww() {
+        let module = test_module_with_pool(
+            vec![
+                Ir3Instruction::LoadInt { dst: 0, value: 41 },
+                Ir3Instruction::DeclareBinding {
+                    name_pool_index: 0,
+                    kind: BindingKind::Let as u8,
+                },
+                Ir3Instruction::LoadScoped {
+                    dst: 0,
+                    name_pool_index: 0,
+                },
+            ],
+            vec!["future".to_string()],
+        );
+        let mut core = quickjs_test_core();
+        let heap_len_before = core.heap.len();
+
+        let error = core
+            .run_loop(&module)
+            .expect_err("uncaught TDZ read should remain a native error");
+        assert_eq!(
+            error,
+            InterpreterError::UninitializedBinding {
+                name: "future".to_string()
+            }
+        );
+        assert_eq!(core.heap.len(), heap_len_before);
+        assert_eq!(core.registers[0], Value::Int(41));
         let (_, binding) = core
             .scope_chain
             .resolve("future")

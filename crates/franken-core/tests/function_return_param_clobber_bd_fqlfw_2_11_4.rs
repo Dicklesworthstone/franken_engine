@@ -248,6 +248,55 @@ fn captured_function_local_let_observes_tdz_bd_uhf1m() {
 }
 
 #[test]
+fn captured_function_local_let_tdz_is_catchable_bd_mfcww() {
+    let src = concat!(
+        "function make(){",
+        "  function read(){ return later; }",
+        "  try { read(); } catch (error) {",
+        "    if (error.name !== 'ReferenceError') return 98;",
+        "    return 7;",
+        "  }",
+        "  let later=9;",
+        "  return 99;",
+        "}",
+        "make();",
+    );
+    assert_eq!(completion(src), Value::Int(7));
+}
+
+#[test]
+fn captured_function_local_let_tdz_runs_finally_before_outer_catch_bd_mfcww() {
+    let src = concat!(
+        "let cleaned=0;",
+        "function make(){",
+        "  function read(){ return later; }",
+        "  try { read(); } finally { cleaned=5; }",
+        "  let later=9;",
+        "}",
+        "let caught=0;",
+        "try { make(); } catch (error) {",
+        "  if (error.name === 'ReferenceError') caught=1;",
+        "}",
+        "cleaned*10+caught;",
+    );
+    assert_eq!(completion(src), Value::Int(51));
+}
+
+#[test]
+fn captured_function_local_let_tdz_can_be_overridden_by_finally_return_bd_mfcww() {
+    let src = concat!(
+        "function make(){",
+        "  let reached=0;",
+        "  function read(){ return later; }",
+        "  try { read(); reached=1; } finally { return reached+13; }",
+        "  let later=9;",
+        "}",
+        "make();",
+    );
+    assert_eq!(completion(src), Value::Int(13));
+}
+
+#[test]
 fn separate_factory_activations_keep_independent_capture_cells() {
     let src = concat!(
         "function make(){",

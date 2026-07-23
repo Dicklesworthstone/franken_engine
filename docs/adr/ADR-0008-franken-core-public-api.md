@@ -730,6 +730,31 @@ peer-owned `0.6.x` and `0.7.x` artifacts instead of accepting them through the
 minor-version compatibility window. This schema checkpoint does not claim
 that the otherwise divergent core and engine IR contracts are interchangeable.
 
+### Captured local lexical metadata checkpoint (`bd-uhf1m`)
+
+Core advances `IrSchemaVersion::CURRENT` from `0.8.0` to `0.9.0` when
+`Ir1Op::DeclareFunction` and `Ir1Op::CreateFunction` gain optional
+`local_lexical_bindings` metadata. The vector carries only exact source
+`let`/`const` bindings captured by an immediate child function. Deferred IR3
+lowering uses it to declare the corresponding runtime cell with its original
+kind, initialize a declaration with `InitBinding`, and retain checked
+`StoreScoped` semantics for later assignments. Synthetic, unresolved,
+inherited, uncaptured, and legacy captures keep the historical mutable
+fallback.
+
+The field is an `Option<Box<Vec<ResolvedBinding>>>` using
+`serde(default, skip_serializing_if = "Option::is_none")`; the optional box
+keeps absent metadata allocation-free and avoids enlarging the recursive
+`Ir1Op` enum enough to consume materially more lowering/test-thread stack. Its
+canonical entry is likewise absent when empty. Historical `0.8.x` operations
+therefore deserialize with absent metadata and retain their prior canonical
+bytes. Non-empty metadata is sorted by stable binding identity for canonical
+encoding, and both binding identity and `BindingKind` participate in the hash.
+An old reader must reject the `0.9.x` header before decoding instead of
+silently discarding semantics-bearing metadata. Core `0.9.0` readers retain
+the supported historical core minors, including `0.8.x`, while continuing to
+reject the engine-owned `0.6.x` and `0.7.x` wires.
+
 ## Cross-Crate Compatibility Matrix
 
 | Consumer or peer | Current relation | Compatibility rule |

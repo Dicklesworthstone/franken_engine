@@ -97,6 +97,16 @@ rejecting engine-owned `0.6.x` and `0.7.x` artifacts. The matching core
 lowering/runtime work supplies the ordinary JavaScript parity obligation;
 neither schema change settles ownership of the otherwise divergent IR rows.
 
+`bd-uhf1m` subsequently advances only core IR to `0.9.0`. Its function
+operations carry optional exact metadata for body-local `let`/`const` bindings
+captured by immediate child functions, allowing deferred lowering to preserve
+TDZ, const, and declaration-initialization semantics. Empty metadata is
+omitted from serde and canonical forms, so historical `0.8.x` artifacts remain
+readable with their prior bytes. Old readers must reject a `0.9.x` header
+rather than ignore the semantics-bearing field. The engine mirror remains on
+its independently versioned `0.7.0` wire, and the `ir_contract` row remains
+`pending_graduation`.
+
 ## Active Parity Exception: Executable Symbol Keys
 
 `bd-n8eta.4.1` records a wire-additive but Rust-source-breaking versioned

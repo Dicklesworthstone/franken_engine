@@ -37,20 +37,23 @@ pub struct IrSchemaVersion {
 }
 
 impl IrSchemaVersion {
-    /// `0.8.0` adds the boundary-crossing `Continue` reason to serialized IR1,
-    /// IR2, and IR3 `IteratorClose` operations. Core minors `0.6.0` and `0.7.0`
-    /// are intentionally skipped because those numeric versions identify
-    /// incompatible `franken-engine` IR wires. `0.5.0` widened IR1 static
-    /// property keys to exact UTF-16 [`JsString`] values. `0.4.0` widened IR1
-    /// module specifiers to exact UTF-16 [`JsString`] values. `0.3.0` adds
-    /// dedicated object-rest `CopyDataProperties` operations to IR1 and IR3.
-    /// `0.2.0` widened JavaScript literal carriers and the IR3 constant pool to
-    /// exact UTF-16 [`JsString`] values. Historical
+    /// `0.9.0` adds optional exact body-local lexical metadata to serialized
+    /// IR1 function operations so deferred lowering preserves captured
+    /// `let`/`const` semantics. `0.8.0` adds the boundary-crossing `Continue`
+    /// reason to serialized IR1, IR2, and IR3 `IteratorClose` operations. Core
+    /// minors `0.6.0` and `0.7.0` are intentionally skipped because those
+    /// numeric versions identify incompatible `franken-engine` IR wires.
+    /// `0.5.0` widened IR1 static property keys to exact UTF-16 [`JsString`]
+    /// values. `0.4.0` widened IR1 module specifiers to exact UTF-16
+    /// [`JsString`] values. `0.3.0` adds dedicated object-rest
+    /// `CopyDataProperties` operations to IR1 and IR3. `0.2.0` widened
+    /// JavaScript literal carriers and the IR3 constant pool to exact UTF-16
+    /// [`JsString`] values. Historical
     /// well-formed strings retain their plain-string JSON wire shape;
     /// lone-surrogate values use `$wtf16`.
     pub const CURRENT: Self = Self {
         major: 0,
-        minor: 8,
+        minor: 9,
         patch: 0,
     };
 
@@ -258,6 +261,29 @@ impl ResolvedBinding {
     }
 }
 
+fn canonical_resolved_binding_array(bindings: &[ResolvedBinding]) -> CanonicalValue {
+    let mut bindings = bindings.to_vec();
+    bindings.sort_by(|left, right| {
+        left.binding_id
+            .cmp(&right.binding_id)
+            .then_with(|| left.name.cmp(&right.name))
+            .then_with(|| left.scope.depth.cmp(&right.scope.depth))
+            .then_with(|| left.scope.index.cmp(&right.scope.index))
+            .then_with(|| left.kind.as_str().cmp(right.kind.as_str()))
+    });
+    CanonicalValue::Array(
+        bindings
+            .iter()
+            .map(ResolvedBinding::canonical_value)
+            .collect(),
+    )
+}
+
+#[allow(clippy::box_collection)] // Matches the measured stack-bounding Ir1Op carrier.
+fn boxed_vec_option_is_none_or_empty<T>(values: &Option<Box<Vec<T>>>) -> bool {
+    values.as_ref().is_none_or(|values| values.is_empty())
+}
+
 /// Classification of bindings in IR1.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum BindingKind {
@@ -423,6 +449,9 @@ impl IteratorCloseReason {
 
 /// IR1 operation — semantically resolved, position-independent.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+// The optional boxed metadata vector on function variants is intentionally a
+// thin pointer: storing Vec inline regressed recursive lowering's stack use.
+#[allow(clippy::box_collection)]
 pub enum Ir1Op {
     /// Load a literal value.
     LoadLiteral { value: Ir1Literal },
@@ -531,6 +560,12 @@ pub enum Ir1Op {
         /// captured functions whose parallel metadata vectors do not match.
         #[serde(default)]
         free_var_outer_ids: Vec<BindingId>,
+        /// Exact body-local lexical metadata for bindings captured by an
+        /// immediate child function. It survives detachment from the IR1 scope
+        /// tree for deferred IR3 lowering. Empty metadata remains wire-
+        /// compatible with historical IR1 artifacts.
+        #[serde(default, skip_serializing_if = "boxed_vec_option_is_none_or_empty")]
+        local_lexical_bindings: Option<Box<Vec<ResolvedBinding>>>,
         /// True when the source function is a generator (`function*`).
         is_generator: bool,
         /// Index into `param_names` of the rest parameter (`...xs`), if any.
@@ -553,6 +588,10 @@ pub enum Ir1Op {
         /// DeclareFunction). See that variant for the legacy-artifact posture.
         #[serde(default)]
         free_var_outer_ids: Vec<BindingId>,
+        /// Exact captured body-local `let`/`const` metadata (see
+        /// DeclareFunction).
+        #[serde(default, skip_serializing_if = "boxed_vec_option_is_none_or_empty")]
+        local_lexical_bindings: Option<Box<Vec<ResolvedBinding>>>,
         /// True when the source function is a generator (`function*`).
         is_generator: bool,
         /// True when this expression is an arrow rather than an ordinary
@@ -887,6 +926,7 @@ impl Ir1Op {
                 free_vars,
                 free_var_ids,
                 free_var_outer_ids,
+                local_lexical_bindings,
                 is_generator,
                 rest_param_index,
             } => {
@@ -939,6 +979,15 @@ impl Ir1Op {
                             .collect(),
                     ),
                 );
+                if let Some(local_lexical_bindings) = local_lexical_bindings
+                    .as_deref()
+                    .filter(|bindings| !bindings.is_empty())
+                {
+                    map.insert(
+                        "local_lexical_bindings".to_string(),
+                        canonical_resolved_binding_array(local_lexical_bindings),
+                    );
+                }
                 map.insert(
                     "is_generator".to_string(),
                     CanonicalValue::Bool(*is_generator),
@@ -957,6 +1006,7 @@ impl Ir1Op {
                 free_vars,
                 free_var_ids,
                 free_var_outer_ids,
+                local_lexical_bindings,
                 is_generator,
                 is_arrow,
                 rest_param_index,
@@ -1010,6 +1060,15 @@ impl Ir1Op {
                             .collect(),
                     ),
                 );
+                if let Some(local_lexical_bindings) = local_lexical_bindings
+                    .as_deref()
+                    .filter(|bindings| !bindings.is_empty())
+                {
+                    map.insert(
+                        "local_lexical_bindings".to_string(),
+                        canonical_resolved_binding_array(local_lexical_bindings),
+                    );
+                }
                 map.insert(
                     "is_generator".to_string(),
                     CanonicalValue::Bool(*is_generator),
@@ -3464,7 +3523,7 @@ mod tests {
 
     #[test]
     fn schema_version_display() {
-        assert_eq!(IrSchemaVersion::CURRENT.to_string(), "0.8.0");
+        assert_eq!(IrSchemaVersion::CURRENT.to_string(), "0.9.0");
     }
 
     #[test]
@@ -3485,7 +3544,7 @@ mod tests {
         };
 
         assert!(verify_schema_version(&header(IrSchemaVersion::CURRENT, IrLevel::Ir3)).is_ok());
-        for minor in [1, 2, 3, 4, 5] {
+        for minor in [1, 2, 3, 4, 5, 8] {
             assert!(
                 verify_schema_version(&header(
                     IrSchemaVersion {
@@ -3496,7 +3555,7 @@ mod tests {
                     IrLevel::Ir1,
                 ))
                 .is_ok(),
-                "core 0.8 readers retain compatibility with 0.{minor} artifacts"
+                "core 0.9 readers retain compatibility with 0.{minor} artifacts"
             );
         }
 
@@ -3776,6 +3835,7 @@ mod tests {
                 free_vars: vec!["x".to_string()],
                 free_var_ids: vec![0],
                 free_var_outer_ids: vec![3],
+                local_lexical_bindings: None,
                 is_generator: false,
                 rest_param_index: Some(0),
             },
@@ -3786,6 +3846,7 @@ mod tests {
                 free_vars: vec!["y".to_string()],
                 free_var_ids: vec![1],
                 free_var_outer_ids: vec![4],
+                local_lexical_bindings: None,
                 is_generator: false,
                 is_arrow: false,
                 rest_param_index: Some(0),
@@ -3807,6 +3868,7 @@ mod tests {
                 .and_then(serde_json::Value::as_object_mut)
                 .expect("externally tagged function op payload");
             assert!(payload.remove("free_var_outer_ids").is_some());
+            assert!(payload.get("local_lexical_bindings").is_none());
             assert!(payload.remove("rest_param_index").is_some());
 
             let restored: Ir1Op =
@@ -3815,21 +3877,131 @@ mod tests {
                 Ir1Op::DeclareFunction {
                     free_vars,
                     free_var_outer_ids,
+                    local_lexical_bindings,
                     rest_param_index,
                     ..
                 }
                 | Ir1Op::CreateFunction {
                     free_vars,
                     free_var_outer_ids,
+                    local_lexical_bindings,
                     rest_param_index,
                     ..
                 } => {
                     assert_eq!(free_vars.len(), 1);
                     assert!(free_var_outer_ids.is_empty());
+                    assert!(local_lexical_bindings.is_none());
                     assert_eq!(rest_param_index, None);
                 }
                 other => panic!("expected a function op, got {other:?}"),
             }
+        }
+    }
+
+    #[test]
+    fn function_local_lexical_metadata_is_optional_roundtrippable_and_canonical_bd_uhf1m() {
+        fn function_op(declared: bool, local_lexical_bindings: Vec<ResolvedBinding>) -> Ir1Op {
+            let local_lexical_bindings =
+                (!local_lexical_bindings.is_empty()).then(|| Box::new(local_lexical_bindings));
+            if declared {
+                Ir1Op::DeclareFunction {
+                    name: "run".to_string(),
+                    binding_id: 0,
+                    param_names: Vec::new(),
+                    body_ops: Vec::new(),
+                    free_vars: Vec::new(),
+                    free_var_ids: Vec::new(),
+                    free_var_outer_ids: Vec::new(),
+                    local_lexical_bindings,
+                    is_generator: false,
+                    rest_param_index: None,
+                }
+            } else {
+                Ir1Op::CreateFunction {
+                    name: Some("run".to_string()),
+                    param_names: Vec::new(),
+                    body_ops: Vec::new(),
+                    free_vars: Vec::new(),
+                    free_var_ids: Vec::new(),
+                    free_var_outer_ids: Vec::new(),
+                    local_lexical_bindings,
+                    is_generator: false,
+                    is_arrow: false,
+                    rest_param_index: None,
+                }
+            }
+        }
+
+        let captured = vec![
+            ResolvedBinding {
+                name: "later".to_string(),
+                binding_id: 7,
+                scope: ScopeId { depth: 1, index: 0 },
+                kind: BindingKind::Let,
+            },
+            ResolvedBinding {
+                name: "fixed".to_string(),
+                binding_id: 3,
+                scope: ScopeId { depth: 1, index: 0 },
+                kind: BindingKind::Const,
+            },
+        ];
+
+        for declared in [false, true] {
+            let empty = function_op(declared, Vec::new());
+            let empty_json = serde_json::to_string(&empty).expect("serialize empty metadata");
+            assert!(!empty_json.contains("local_lexical_bindings"));
+            let CanonicalValue::Map(empty_fields) = empty.canonical_value() else {
+                panic!("function op canonical value must be a map");
+            };
+            assert!(!empty_fields.contains_key("local_lexical_bindings"));
+
+            let mut explicit_empty_json =
+                serde_json::to_value(&empty).expect("serialize empty function operation");
+            explicit_empty_json
+                .as_object_mut()
+                .and_then(|operation| operation.values_mut().next())
+                .and_then(serde_json::Value::as_object_mut)
+                .expect("externally tagged function op payload")
+                .insert(
+                    "local_lexical_bindings".to_string(),
+                    serde_json::Value::Array(Vec::new()),
+                );
+            let explicit_empty: Ir1Op = serde_json::from_value(explicit_empty_json)
+                .expect("deserialize explicit empty lexical metadata");
+            assert_eq!(explicit_empty.canonical_value(), empty.canonical_value());
+            assert!(
+                !serde_json::to_string(&explicit_empty)
+                    .expect("re-serialize explicit empty metadata")
+                    .contains("local_lexical_bindings"),
+                "explicit empty metadata must normalize to the absent wire posture"
+            );
+
+            let populated = function_op(declared, captured.clone());
+            let populated_json =
+                serde_json::to_string(&populated).expect("serialize lexical metadata");
+            assert!(populated_json.contains("local_lexical_bindings"));
+            assert_eq!(
+                serde_json::from_str::<Ir1Op>(&populated_json)
+                    .expect("round-trip lexical metadata"),
+                populated
+            );
+
+            let mut reversed = captured.clone();
+            reversed.reverse();
+            assert_eq!(
+                populated.canonical_value(),
+                function_op(declared, reversed).canonical_value(),
+                "metadata order must not affect canonical IR"
+            );
+
+            let mut changed_kind = captured.clone();
+            changed_kind[0].kind = BindingKind::Const;
+            assert_ne!(
+                populated.canonical_value(),
+                function_op(declared, changed_kind).canonical_value(),
+                "lexical kind participates in canonical IR"
+            );
         }
     }
 
@@ -5705,7 +5877,7 @@ mod tests {
     fn schema_version_current_value() {
         let v = IrSchemaVersion::CURRENT;
         assert_eq!(v.major, 0);
-        assert_eq!(v.minor, 8);
+        assert_eq!(v.minor, 9);
         assert_eq!(v.patch, 0);
     }
 

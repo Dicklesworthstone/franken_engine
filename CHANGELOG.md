@@ -10,6 +10,30 @@ The first conventional release, `v0.1.0`, was published on 2026-05-29. Current `
 
 ---
 
+## Post-Snapshot Update — Captured Local Lexical IR Metadata (2026-07-22)
+
+`bd-uhf1m` preserves source `let`/`const` identity when a function-local
+binding is captured by a nested function and the parent body is detached for
+deferred IR3 lowering. Captured declarations now create correctly typed
+runtime cells, initialize them with `InitBinding`, and leave later assignments
+on the checked `StoreScoped` path. This restores const-assignment and temporal
+dead-zone behavior without changing synthetic, unresolved, inherited, or
+uncaptured bindings.
+
+- Core `IrSchemaVersion::CURRENT` advances from `0.8.0` to `0.9.0` because
+  `DeclareFunction` and `CreateFunction` gain semantics-bearing persisted IR1
+  metadata. The optional vector is boxed so absent metadata does not enlarge
+  the recursively lowered `Ir1Op` enum or consume an allocation; it is omitted
+  when empty, so historical function-operation JSON and canonical bytes remain
+  unchanged.
+- Core `0.9.0` readers accept historical core `0.8.x` artifacts, whose missing
+  metadata defaults to the legacy empty posture. Consumers must validate the
+  header before decoding; older readers must reject a `0.9.x` artifact rather
+  than ignore the new metadata and reinterpret captured lexicals as mutable.
+- Core minors `0.6.x` and `0.7.x` remain rejected because they identify the
+  incompatible engine-owned unresolved-name and follow-on `Continue` wires.
+  The compatibility engine remains independently versioned at `0.7.0`.
+
 ## Post-Snapshot Update — Exact Module-Source Metadata (2026-07-17)
 
 `bd-lfq44` closes the remaining UTF-8 projection in parsed ECMAScript module

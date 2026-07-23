@@ -22,7 +22,7 @@
 
 use frankenengine_core::ast::ParseGoal;
 use frankenengine_core::baseline_interpreter::{
-    ExecutionResult, InterpreterConfig, QuickJsLane, Value,
+    ExecutionResult, InterpreterConfig, InterpreterError, QuickJsLane, Value,
 };
 use frankenengine_core::capability::RuntimeCapability;
 use frankenengine_core::ir_contract::Ir0Module;
@@ -31,7 +31,7 @@ use frankenengine_core::parser::{CanonicalEs2020Parser, Es2020Parser};
 
 use std::collections::BTreeSet;
 
-fn run(source: &str) -> ExecutionResult {
+fn execute(source: &str) -> Result<ExecutionResult, InterpreterError> {
     let tree = CanonicalEs2020Parser
         .parse(source, ParseGoal::Script)
         .expect("source should parse");
@@ -49,9 +49,11 @@ fn run(source: &str) -> ExecutionResult {
         RuntimeCapability::VmDispatch,
         RuntimeCapability::HeapAllocate,
     ]);
-    QuickJsLane::with_config(config)
-        .execute(&module, "bd-fqlfw-2-11-4-trace")
-        .expect("execution should succeed")
+    QuickJsLane::with_config(config).execute(&module, "bd-fqlfw-2-11-4-trace")
+}
+
+fn run(source: &str) -> ExecutionResult {
+    execute(source).expect("execution should succeed")
 }
 
 fn completion(source: &str) -> Value {
@@ -192,6 +194,57 @@ fn child_created_before_local_initialization_observes_the_live_cell() {
         "make()();",
     );
     assert_eq!(completion(src), Value::Int(7));
+}
+
+#[test]
+fn captured_function_local_const_rejects_reassignment_bd_uhf1m() {
+    let src = concat!(
+        "function make(){",
+        "  const fixed=1;",
+        "  function read(){ return fixed; }",
+        "  try { fixed=2; } catch (error) {",
+        "    if (error.name !== 'TypeError') return 98;",
+        "    return read();",
+        "  }",
+        "  return 99;",
+        "}",
+        "make();",
+    );
+    assert_eq!(completion(src), Value::Int(1));
+}
+
+#[test]
+fn captured_arrow_local_const_rejects_reassignment_bd_uhf1m() {
+    let src = concat!(
+        "let make=()=>{",
+        "  const fixed=3;",
+        "  let read=()=>fixed;",
+        "  try { fixed=4; } catch (error) {",
+        "    if (error.name !== 'TypeError') return 98;",
+        "    return read();",
+        "  }",
+        "  return 99;",
+        "};",
+        "make();",
+    );
+    assert_eq!(completion(src), Value::Int(3));
+}
+
+#[test]
+fn captured_function_local_let_observes_tdz_bd_uhf1m() {
+    let src = concat!(
+        "function make(){",
+        "  function read(){ return later; }",
+        "  read();",
+        "  let later=7;",
+        "}",
+        "make();",
+    );
+    let error = execute(src).expect_err("captured local read must observe the TDZ");
+    assert!(
+        matches!(error, InterpreterError::UninitializedBinding { .. }),
+        "expected the runtime ReferenceError carrier, got {error:?}"
+    );
 }
 
 #[test]

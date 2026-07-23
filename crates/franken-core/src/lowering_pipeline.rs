@@ -15718,6 +15718,47 @@ mod tests {
     }
 
     #[test]
+    fn lower_object_method_shorthand_preserves_computed_key_order_bd_vjmy7() {
+        let tree = CanonicalEs2020Parser
+            .parse(
+                "({ next() { return 1; }, [Symbol.iterator]() { return this; } })",
+                ParseGoal::Script,
+            )
+            .expect("object method shorthand should parse");
+        let result = lower_ir0_to_ir1(&Ir0Module::from_syntax_tree(
+            tree,
+            "bd_vjmy7_object_methods.js",
+        ))
+        .expect("object method shorthand should lower");
+        let ops = &result.module.ops;
+        let create_indices = ops
+            .iter()
+            .enumerate()
+            .filter_map(|(index, op)| matches!(op, Ir1Op::CreateFunction { .. }).then_some(index))
+            .collect::<Vec<_>>();
+        assert_eq!(create_indices.len(), 2);
+        let symbol_index = ops
+            .iter()
+            .position(|op| {
+                matches!(
+                    op,
+                    Ir1Op::HostCall {
+                        capability,
+                        arg_count: 0,
+                    } if capability == "builtin:SymbolIterator"
+                )
+            })
+            .expect("computed Symbol.iterator key must materialize exactly");
+        let object_index = ops
+            .iter()
+            .position(|op| matches!(op, Ir1Op::NewObject { count: 2 }))
+            .expect("both method properties must build one two-entry object");
+        assert!(create_indices[0] < symbol_index);
+        assert!(symbol_index < create_indices[1]);
+        assert!(create_indices[1] < object_index);
+    }
+
+    #[test]
     fn static_object_literal_keys_fail_closed_without_canonical_ast_bd_y74cd() {
         for with_spread in [false, true] {
             let mut properties = vec![ObjectProperty {

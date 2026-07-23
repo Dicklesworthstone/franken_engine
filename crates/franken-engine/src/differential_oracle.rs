@@ -3164,6 +3164,10 @@ pub fn default_engine_core_corpus() -> Vec<EngineCoreCorpusCase> {
             r#"let n=0,c=0; let it={next:function(){n=n+1;return n===1?{value:7,done:false}:{done:true};},return:function(){c=c+1;return {};}}; let xs={[Symbol.iterator]:function(){return it;}}; let v=0; for(const x of xs){v=x;break;} v*10+c;"#,
         ),
         (
+            "for_of_object_method_shorthand",
+            r#"let it={n:0,next(){this.n=this.n+1;return {value:this.n,done:false};},return(){return {};}};let xs={[Symbol.iterator](){return it;}};let v=0;for(const x of xs){v=x;break;}v;"#,
+        ),
+        (
             "for_of_body_throw_keeps_original_completion",
             r#"let c=0; let it={next:function(){return {value:1,done:false};},return:function(){c=c+1;throw "close";}}; let xs={[Symbol.iterator]:function(){return it;}}; let caught=""; try{for(const x of xs){throw "body";}}catch(e){caught=e;} caught+":"+c;"#,
         ),
@@ -3852,6 +3856,19 @@ mod tests {
             corpus.len(),
             "every default-corpus case must agree"
         );
+        assert!(report.accounting_is_consistent());
+    }
+
+    #[test]
+    fn object_method_shorthand_agrees_between_engine_and_core_bd_vjmy7() {
+        let corpus = vec![EngineCoreCorpusCase::new(
+            "for_of_object_method_shorthand",
+            r#"let it={n:0,next(){this.n=this.n+1;return {value:this.n,done:false};},return(){return {};}};let xs={[Symbol.iterator](){return it;}};let v=0;for(const x of xs){v=x;break;}v;"#,
+        )];
+        let report = run_engine_core_differential_oracle(&corpus, 64);
+        assert!(!report.has_defects(), "{:?}", report.defects);
+        assert_eq!(report.agreements, 1);
+        assert_eq!(report.inconclusive, 0);
         assert!(report.accounting_is_consistent());
     }
 

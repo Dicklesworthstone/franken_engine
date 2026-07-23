@@ -186,6 +186,35 @@ fn custom_iterator_break_calls_return_on_the_iterator_bd_t9n3s() {
 }
 
 #[test]
+fn object_method_shorthand_executes_custom_iterator_end_to_end_bd_vjmy7() {
+    let src = r#"
+        let iterator = {
+            count: 0,
+            closed: 0,
+            next() {
+                this.count = this.count + 1;
+                return { value: this.count * 3, done: false };
+            },
+            return() {
+                this.closed = this.closed + 1;
+                return {};
+            }
+        };
+        let iterable = {
+            calls: 0,
+            [Symbol.iterator]() {
+                this.calls = this.calls + 1;
+                return iterator;
+            }
+        };
+        let seen = 0;
+        for (const value of iterable) { seen = value; break; }
+        seen * 1000 + iterable.calls * 100 + iterator.count * 10 + iterator.closed;
+    "#;
+    assert_eq!(completion(src), Value::Int(3111));
+}
+
+#[test]
 fn iterator_methods_receive_their_ordinary_receivers_bd_t9n3s() {
     let src = r#"
         let iterator = {

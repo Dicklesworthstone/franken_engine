@@ -11144,6 +11144,17 @@ fn parse_object_literal(
                 computed,
                 shorthand: false,
             });
+        } else if let Some((key, value, computed)) =
+            try_parse_object_method(p, span, context, recursion_depth)?
+        {
+            // The currently supported object-method subset desugars to a data
+            // property whose value is an ordinary anonymous function.
+            properties.push(ObjectProperty {
+                key,
+                value,
+                computed,
+                shorthand: false,
+            });
         } else {
             // Shorthand property: { x } means { x: x }
             let invalid_shorthand = || {
@@ -11173,6 +11184,159 @@ fn parse_object_literal(
         }
     }
     Ok(Expression::ObjectLiteral(properties))
+}
+
+/// Parse the ordinary object-literal method subset: `name(params) { body }`
+/// and `[expression](params) { body }`.
+///
+/// The AST currently represents this subset as a data property containing an
+/// anonymous ordinary function. Async, generator, accessor, and full
+/// `[[HomeObject]]` method semantics are outside this bounded engine-twin syntax
+/// subset.
+fn try_parse_object_method(
+    part: &str,
+    span: &SourceSpan,
+    context: &mut ParseExecutionContext<'_>,
+    recursion_depth: u64,
+) -> ParseResult<Option<(Expression, Expression, bool)>> {
+    let grammar_context = ScanGrammarContext::from_execution_context(context).expression();
+    let part = trim_directive_trivia(part).0;
+
+    if part.starts_with('[') {
+        let Some((key_inner, after_key)) =
+            extract_balanced_with_context(part, '[', ']', grammar_context)
+        else {
+            return Ok(None);
+        };
+        let function_source = trim_directive_trivia(after_key).0;
+        if !function_source.starts_with('(') {
+            return Ok(None);
+        }
+        let error_source_label = context.source_label.to_string();
+        let error_span = span.clone();
+        let invalid_computed_key = || {
+            ParseError::new(
+                ParseErrorCode::UnsupportedSyntax,
+                format!("invalid computed object-literal method key: `[{key_inner}]`"),
+                error_source_label.clone(),
+                Some(error_span.clone()),
+            )
+        };
+        if key_inner.trim().is_empty() {
+            return Err(invalid_computed_key());
+        }
+        let key = parse_expression(key_inner.trim(), span, context, recursion_depth + 1)?;
+        if matches!(&key, Expression::Raw(_) | Expression::SpreadElement(_)) {
+            return Err(invalid_computed_key());
+        }
+        validate_object_method_source_consumed(function_source, span, context)?;
+        let value =
+            parse_function_expression(function_source, false, span, context, recursion_depth + 1)?;
+        validate_object_method_parameter_names(&value, span, context)?;
+        return Ok(Some((key, value, true)));
+    }
+
+    let mut parameter_list_index = None;
+    scan_binding_pattern_source_until_with_context(
+        part,
+        grammar_context,
+        |index, ch, depth, quoted| {
+            if !quoted && depth == 0 && ch == '(' {
+                parameter_list_index = Some(index);
+                false
+            } else {
+                true
+            }
+        },
+    );
+    let Some(parameter_list_index) = parameter_list_index else {
+        return Ok(None);
+    };
+    let Some(key_source) = trim_binding_pattern_trivia(&part[..parameter_list_index]) else {
+        return Ok(None);
+    };
+    if key_source.is_empty() {
+        return Ok(None);
+    }
+    let Ok(key) = parse_static_object_property_key(key_source, span, context) else {
+        return Ok(None);
+    };
+    let function_source = &part[parameter_list_index..];
+    validate_object_method_source_consumed(function_source, span, context)?;
+    let value =
+        parse_function_expression(function_source, false, span, context, recursion_depth + 1)?;
+    validate_object_method_parameter_names(&value, span, context)?;
+    Ok(Some((key, value, false)))
+}
+
+fn validate_object_method_source_consumed(
+    function_source: &str,
+    span: &SourceSpan,
+    context: &ParseExecutionContext<'_>,
+) -> ParseResult<()> {
+    let (_, after_params) = extract_balanced_with_context(
+        function_source,
+        '(',
+        ')',
+        ScanGrammarContext::function_parameters(false, false, context.strict_mode),
+    )
+    .ok_or_else(|| {
+        ParseError::new(
+            ParseErrorCode::UnsupportedSyntax,
+            "object method has an unbalanced parameter list",
+            context.source_label.to_string(),
+            Some(span.clone()),
+        )
+    })?;
+    let (_, trailing) = extract_balanced_with_context(
+        trim_directive_trivia(after_params).0,
+        '{',
+        '}',
+        ScanGrammarContext::function_body(false, false, context.strict_mode),
+    )
+    .ok_or_else(|| {
+        ParseError::new(
+            ParseErrorCode::UnsupportedSyntax,
+            "object method requires a braced body",
+            context.source_label.to_string(),
+            Some(span.clone()),
+        )
+    })?;
+    let (trailing, _) = trim_directive_trivia(trailing);
+    if !trailing.is_empty() {
+        return Err(ParseError::new(
+            ParseErrorCode::UnsupportedSyntax,
+            "object method has trailing source after its body",
+            context.source_label.to_string(),
+            Some(span.clone()),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_object_method_parameter_names(
+    value: &Expression,
+    span: &SourceSpan,
+    context: &ParseExecutionContext<'_>,
+) -> ParseResult<()> {
+    let Expression::Function { params, .. } = value else {
+        return Ok(());
+    };
+    let mut seen = BTreeSet::new();
+    for name in params
+        .iter()
+        .flat_map(|parameter| parameter.pattern.binding_names())
+    {
+        if !seen.insert(name) {
+            return Err(ParseError::new(
+                ParseErrorCode::UnsupportedSyntax,
+                format!("duplicate object-method parameter binding `{name}` is not allowed"),
+                context.source_label.to_string(),
+                Some(span.clone()),
+            ));
+        }
+    }
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -13865,7 +14029,7 @@ fn parse_function_expression(
         )
     })?;
     // Parse body.
-    let rest = rest.trim_start();
+    let rest = trim_directive_trivia(rest).0;
     let (body_src, _) = extract_balanced_with_context(
         rest,
         '{',
@@ -18518,6 +18682,170 @@ strict"; var static = 1; }"#,
         };
         assert!(properties[0].computed);
         assert!(matches!(&properties[0].key, Expression::NullLiteral));
+    }
+
+    #[test]
+    fn object_literal_methods_parse_to_canonical_function_properties_bd_vjmy7() {
+        let methods = parse_script(
+            r#"({ next(value) { return value; }, [Symbol.iterator]() { return this; }, "x("() { return 3; }, 1() { return 4; } })"#,
+        );
+        let Expression::ObjectLiteral(properties) = first_expr(&methods) else {
+            panic!("expected object literal");
+        };
+        assert_eq!(properties.len(), 4);
+        assert!(!properties[0].computed);
+        assert!(properties[1].computed);
+        assert!(properties.iter().all(|property| !property.shorthand));
+        let Expression::Function {
+            name,
+            params,
+            body,
+            is_async,
+            is_generator,
+        } = &properties[0].value
+        else {
+            panic!("plain method value must be a function");
+        };
+        assert!(name.is_none());
+        assert_eq!(params.len(), 1);
+        assert!(matches!(body.body.as_slice(), [Statement::Return(_)]));
+        assert!(!is_async);
+        assert!(!is_generator);
+        assert!(matches!(
+            &properties[1].value,
+            Expression::Function {
+                name: None,
+                params,
+                is_async: false,
+                is_generator: false,
+                ..
+            } if params.is_empty()
+        ));
+        assert!(
+            properties[2..]
+                .iter()
+                .all(|property| matches!(&property.value, Expression::Function { .. }))
+        );
+
+        let explicit_functions = parse_script(
+            r#"({ next: function(value) { return value; }, [Symbol.iterator]: function() { return this; }, "x(": function() { return 3; }, 1: function() { return 4; } })"#,
+        );
+        assert_eq!(
+            first_expr(&methods).canonical_value(),
+            first_expr(&explicit_functions).canonical_value(),
+            "the supported method subset must have one deterministic desugared AST"
+        );
+    }
+
+    #[test]
+    fn object_literal_method_headers_accept_lexical_trivia_bd_vjmy7() {
+        let tree = parse_script(
+            "({ plain/* key */\u{feff}()/* body */\u{feff}{ return 1; }, /* leading */\u{feff}[Symbol.iterator]/* computed */\u{feff}() { return this; } })",
+        );
+        let Expression::ObjectLiteral(properties) = first_expr(&tree) else {
+            panic!("expected object literal");
+        };
+        assert_eq!(properties.len(), 2);
+        assert!(!properties[0].computed);
+        assert!(properties[1].computed);
+        assert!(
+            properties
+                .iter()
+                .all(|property| matches!(&property.value, Expression::Function { .. }))
+        );
+    }
+
+    #[test]
+    fn object_literal_method_names_use_property_name_grammar_bd_vjmy7() {
+        let parser = CanonicalEs2020Parser;
+        for (source, goal, expected_name) in [
+            ("'use strict'; ({ yield() {} })", ParseGoal::Script, "yield"),
+            ("({ await() {} })", ParseGoal::Module, "await"),
+        ] {
+            let tree = parser
+                .parse(source, goal)
+                .expect("reserved words remain valid static PropertyNames");
+            let Statement::Expression(statement) =
+                tree.body.last().expect("expected object expression")
+            else {
+                panic!("expected object expression");
+            };
+            let Expression::ObjectLiteral(properties) = &statement.expression else {
+                panic!("expected object literal");
+            };
+            assert!(matches!(
+                &properties[0].key,
+                Expression::Identifier(name) if name == expected_name
+            ));
+        }
+    }
+
+    #[test]
+    fn object_literal_async_and_generator_methods_remain_explicitly_unsupported_bd_vjmy7() {
+        let named_like_modifiers = parse_script("({ get() {}, set() {}, async() {} })");
+        let Expression::ObjectLiteral(properties) = first_expr(&named_like_modifiers) else {
+            panic!("expected object literal");
+        };
+        assert_eq!(properties.len(), 3);
+        assert!(
+            properties
+                .iter()
+                .all(|property| matches!(&property.value, Expression::Function { .. }))
+        );
+
+        let parser = CanonicalEs2020Parser;
+        for source in [
+            "({ async next() {} })",
+            "({ async [key]() {} })",
+            "({ *next() {} })",
+            "({ *[key]() {} })",
+            "({ async *next() {} })",
+            "({ async *[key]() {} })",
+            "({ get value() {} })",
+            "({ set value(next) {} })",
+        ] {
+            let error = parser
+                .parse(source, ParseGoal::Script)
+                .expect_err("unsupported method form must not be approximated as ordinary");
+            assert_eq!(error.code, ParseErrorCode::UnsupportedSyntax, "{source}");
+        }
+    }
+
+    #[test]
+    fn object_literal_methods_require_unique_parameter_bindings_bd_vjmy7() {
+        let parser = CanonicalEs2020Parser;
+        let error = parser
+            .parse("({ method(value, value) {} })", ParseGoal::Script)
+            .expect_err("concise methods require UniqueFormalParameters");
+        assert_eq!(error.code, ParseErrorCode::UnsupportedSyntax);
+        assert!(error.message.contains("duplicate object-method parameter"));
+    }
+
+    #[test]
+    fn computed_object_method_keys_preserve_strict_boundaries_bd_vjmy7() {
+        let tree = parse_script(
+            "({ [Symbol.iterator]() {}, [nested[key]]() {}, [']']() {}, [`]`]() {} })",
+        );
+        let Expression::ObjectLiteral(properties) = first_expr(&tree) else {
+            panic!("expected computed-method object literal");
+        };
+        assert_eq!(properties.len(), 4);
+        assert!(properties.iter().all(|property| property.computed));
+
+        let parser = CanonicalEs2020Parser;
+        for source in [
+            "({ []() {} })",
+            "({ [key] trailing() {} })",
+            "({ [1, 2]() {} })",
+            "({ [...items]() {} })",
+            "({ next() {} trailing })",
+            "({ [key]() {} trailing })",
+        ] {
+            let error = parser
+                .parse(source, ParseGoal::Script)
+                .expect_err("invalid computed/trailing method syntax must be rejected");
+            assert_eq!(error.code, ParseErrorCode::UnsupportedSyntax, "{source}");
+        }
     }
 
     #[test]

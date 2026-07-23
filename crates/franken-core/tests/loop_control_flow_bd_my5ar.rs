@@ -483,3 +483,172 @@ fn uncaught_close_failure_inside_finally_replaces_outer_return_bd_t9n3s() {
     "#;
     assert_eq!(completion(src), Value::str("close:1"));
 }
+
+// --- Loop-head assignment error routing (bd-dp12f). ------------------------
+
+#[test]
+fn const_for_of_head_error_closes_once_bd_dp12f() {
+    let src = r#"
+        let closeCount = 0;
+        let iterator = {
+            step: 0,
+            next: function () {
+                this.step = this.step + 1;
+                return this.step === 1
+                    ? { value: 7, done: false }
+                    : { done: true };
+            },
+            return: function () { closeCount = closeCount + 1; return {}; }
+        };
+        let iterable = { [Symbol.iterator]: function () { return iterator; } };
+        const fixed = 1;
+        function run() {
+            try { for (fixed of iterable) {} }
+            catch (error) { return error.name; }
+            return "miss";
+        }
+        run() + ":" + closeCount;
+    "#;
+    assert_eq!(completion(src), Value::str("TypeError:1"));
+}
+
+#[test]
+fn tdz_for_of_head_error_closes_once_bd_dp12f() {
+    let src = r#"
+        let closeCount = 0;
+        let step = 0;
+        let iterator = {
+            next: function () {
+                step = step + 1;
+                return step === 1
+                    ? { value: 7, done: false }
+                    : { done: true };
+            },
+            return: function () { closeCount = closeCount + 1; return {}; }
+        };
+        let iterable = { [Symbol.iterator]: function () { return iterator; } };
+        function run() {
+            try { for (future of iterable) {} }
+            catch (error) { return error.name; }
+            return "miss";
+        }
+        let observed = run();
+        let future;
+        observed + ":" + closeCount;
+    "#;
+    assert_eq!(completion(src), Value::str("ReferenceError:1"));
+}
+
+#[test]
+fn destructuring_for_of_head_errors_close_once_bd_dp12f() {
+    for (case, before, captured, target, yielded, after, expected) in [
+        (
+            "const array",
+            "const fixed = 1;",
+            "fixed",
+            "[fixed]",
+            "[7]",
+            "",
+            "TypeError:1",
+        ),
+        (
+            "TDZ array",
+            "",
+            "future",
+            "[future]",
+            "[7]",
+            "let future;",
+            "ReferenceError:1",
+        ),
+        (
+            "const object",
+            "const fixed = 1;",
+            "fixed",
+            "{ value: fixed }",
+            "{ value: 7 }",
+            "",
+            "TypeError:1",
+        ),
+    ] {
+        let src = r#"
+            let closeCount = 0;
+            let step = 0;
+            let iterator = {
+                next: function () {
+                    step = step + 1;
+                    return step === 1
+                        ? { value: __YIELDED__, done: false }
+                        : { done: true };
+                },
+                return: function () { closeCount = closeCount + 1; return {}; }
+            };
+            let iterable = { [Symbol.iterator]: function () { return iterator; } };
+            __BEFORE__
+            function readCaptured() { return __CAPTURED__; }
+            let observed = "miss";
+            try { for (__TARGET__ of iterable) {} }
+            catch (error) { observed = error.name; }
+            __AFTER__
+            observed + ":" + closeCount;
+        "#
+        .replace("__BEFORE__", before)
+        .replace("__CAPTURED__", captured)
+        .replace("__TARGET__", target)
+        .replace("__YIELDED__", yielded)
+        .replace("__AFTER__", after);
+        assert_eq!(
+            completion(&src),
+            Value::str(expected),
+            "{case} destructuring head"
+        );
+    }
+}
+
+#[test]
+fn unresolved_destructuring_for_of_target_stays_lenient_bd_dp12f() {
+    let src = r#"
+        function readMissing() { return missing; }
+        for ([missing] of [[7]]) {}
+        readMissing();
+    "#;
+    assert_eq!(completion(src), Value::Int(7));
+}
+
+#[test]
+fn for_of_head_error_wins_over_return_failures_bd_dp12f() {
+    for (case, return_body) in [
+        ("primitive return", "return 0;"),
+        ("throwing return", "throw 'close-error';"),
+    ] {
+        let src = r#"
+            let closeCount = 0;
+            let step = 0;
+            let iterator = {
+                next: function () {
+                    step = step + 1;
+                    return step === 1
+                        ? { value: 7, done: false }
+                        : { done: true };
+                },
+                return: function () {
+                    closeCount = closeCount + 1;
+                    __RETURN_BODY__
+                }
+            };
+            let iterable = { [Symbol.iterator]: function () { return iterator; } };
+            const fixed = 1;
+            function run() {
+                try { for (fixed of iterable) {} }
+                catch (error) { return error.name; }
+                return "miss";
+            }
+            run() + ":" + closeCount;
+        "#
+        .replace("__RETURN_BODY__", return_body);
+        assert_eq!(
+            completion(&src),
+            Value::str("TypeError:1"),
+            "{case}: the original loop-head failure must retain precedence"
+        );
+    }
+}

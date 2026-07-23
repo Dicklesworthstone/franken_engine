@@ -4859,11 +4859,18 @@ impl InterpreterCore {
         Some(frame)
     }
 
-    /// Route an iterator-protocol JavaScript failure back through the caller's
-    /// active catch/finally frames. Explicit callback throws arrive with their
-    /// exact value re-armed in `pending_exception`; native TypeErrors are
-    /// materialized as small ordinary error objects for catch bindings.
-    fn route_iterator_protocol_error(
+    fn has_exception_target_frame(&self) -> bool {
+        let current_depth = self.call_stack.len();
+        self.catch_frames
+            .iter()
+            .any(|frame| frame.call_depth <= current_depth)
+    }
+
+    /// Route a JavaScript runtime failure back through the caller's active
+    /// catch/finally frames. Explicit callback throws arrive with their exact
+    /// value re-armed in `pending_exception`; native errors are materialized as
+    /// small ordinary error objects for catch bindings.
+    fn route_javascript_error(
         &mut self,
         module: &Ir3Module,
         error: InterpreterError,
@@ -4918,6 +4925,45 @@ impl InterpreterCore {
             self.discard_all_copy_data_properties_states();
             Ok(Some(error))
         }
+    }
+
+    fn store_scoped_binding(
+        &mut self,
+        module: &Ir3Module,
+        src: u32,
+        name_pool_index: u32,
+    ) -> Result<(), InterpreterError> {
+        let name = Self::metadata_pool_string(
+            module,
+            name_pool_index,
+            format!("__binding_{name_pool_index}"),
+        )?;
+        let val = self.read_reg(src)?;
+        let label = self.read_reg_label(src)?;
+        let mut previous = None;
+        if let Some((_, binding)) = self.scope_chain.resolve(&name) {
+            let previous_state = binding.snapshot_state()?;
+            if !previous_state.initialized {
+                return Err(InterpreterError::UninitializedBinding { name });
+            }
+            if binding.kind == BindingKind::Const {
+                return Err(InterpreterError::ConstAssignment { name });
+            }
+            previous = Some((binding.clone(), previous_state));
+            let mut state = binding.state_mut()?;
+            state.value = val;
+            state.label = label;
+        }
+        // Silently ignore stores to undeclared variables
+        // (strict mode would throw, but baseline is lenient).
+        if let Err(err) = self.sync_estimated_memory_bytes() {
+            if let Some((binding, old_state)) = previous {
+                binding.restore_state(old_state)?;
+            }
+            self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
+            return Err(err);
+        }
+        Ok(())
     }
 
     fn take_current_abrupt_completion(&mut self) -> Option<AbruptCompletion> {
@@ -5987,7 +6033,7 @@ impl InterpreterCore {
                             self.write_reg(dst, iterator)?;
                             self.ip += 1;
                         }
-                        Err(error) => match self.route_iterator_protocol_error(module, error)? {
+                        Err(error) => match self.route_javascript_error(module, error)? {
                             None => continue,
                             Some(error) => return Err(error),
                         },
@@ -6007,7 +6053,7 @@ impl InterpreterCore {
                         Ok(None) => {
                             self.ip = done_target as usize;
                         }
-                        Err(error) => match self.route_iterator_protocol_error(module, error)? {
+                        Err(error) => match self.route_javascript_error(module, error)? {
                             None => continue,
                             Some(error) => return Err(error),
                         },
@@ -6017,7 +6063,7 @@ impl InterpreterCore {
                     let iterator = self.read_reg(iterator)?;
                     match self.close_iterator(module, iterator, reason) {
                         Ok(()) => self.ip += 1,
-                        Err(error) => match self.route_iterator_protocol_error(module, error)? {
+                        Err(error) => match self.route_javascript_error(module, error)? {
                             None => continue,
                             Some(error) => return Err(error),
                         },
@@ -8221,41 +8267,22 @@ impl InterpreterCore {
                 Ir3Instruction::StoreScoped {
                     src,
                     name_pool_index,
-                } => {
-                    let name = Self::metadata_pool_string(
-                        module,
-                        name_pool_index,
-                        format!("__binding_{name_pool_index}"),
-                    )?;
-                    let val = self.read_reg(src)?;
-                    let label = self.read_reg_label(src)?;
-                    let mut previous = None;
-                    if let Some((_, binding)) = self.scope_chain.resolve(&name) {
-                        let previous_state = binding.snapshot_state()?;
-                        if !previous_state.initialized {
-                            return Err(InterpreterError::UninitializedBinding {
-                                name: name.clone(),
-                            });
+                } => match self.store_scoped_binding(module, src, name_pool_index) {
+                    Ok(()) => self.ip += 1,
+                    Err(error)
+                        if matches!(
+                            &error,
+                            InterpreterError::UninitializedBinding { .. }
+                                | InterpreterError::ConstAssignment { .. }
+                        ) && self.has_exception_target_frame() =>
+                    {
+                        match self.route_javascript_error(module, error)? {
+                            None => continue,
+                            Some(error) => return Err(error),
                         }
-                        if binding.kind == BindingKind::Const {
-                            return Err(InterpreterError::ConstAssignment { name: name.clone() });
-                        }
-                        previous = Some((binding.clone(), previous_state));
-                        let mut state = binding.state_mut()?;
-                        state.value = val;
-                        state.label = label;
                     }
-                    // Silently ignore stores to undeclared variables
-                    // (strict mode would throw, but baseline is lenient).
-                    if let Err(err) = self.sync_estimated_memory_bytes() {
-                        if let Some((binding, old_state)) = previous {
-                            binding.restore_state(old_state)?;
-                        }
-                        self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
-                        return Err(err);
-                    }
-                    self.ip += 1;
-                }
+                    Err(error) => return Err(error),
+                },
                 Ir3Instruction::InitBinding {
                     name_pool_index,
                     src,
@@ -18924,6 +18951,136 @@ mod tests {
             core.read_reg_label(5).expect("overwritten binding label"),
             crate::ifc_artifacts::Label::Public
         );
+    }
+
+    #[test]
+    fn caught_const_store_scoped_error_is_type_error_bd_dp12f() {
+        let module = test_module_with_pool(
+            vec![
+                Ir3Instruction::LoadInt { dst: 0, value: 1 },
+                Ir3Instruction::DeclareBinding {
+                    name_pool_index: 0,
+                    kind: BindingKind::Const as u8,
+                },
+                Ir3Instruction::InitBinding {
+                    name_pool_index: 0,
+                    src: 0,
+                },
+                Ir3Instruction::LoadInt { dst: 1, value: 2 },
+                Ir3Instruction::BeginTry {
+                    catch_target: 7,
+                    finally_target: None,
+                },
+                Ir3Instruction::StoreScoped {
+                    src: 1,
+                    name_pool_index: 0,
+                },
+                Ir3Instruction::EndTry,
+                Ir3Instruction::EnterCatch { dst: 2 },
+                Ir3Instruction::Return { value: 2 },
+            ],
+            vec!["fixed".to_string()],
+        );
+        let mut core = quickjs_test_core();
+
+        let caught = core
+            .run_loop(&module)
+            .expect("const assignment should enter the active catch");
+        let Value::Object(error_id) = caught else {
+            panic!("expected materialized TypeError object, got {caught:?}");
+        };
+        assert_eq!(
+            core.heap[error_id.0 as usize].properties.get("name"),
+            Some(&Value::str("TypeError"))
+        );
+        let (_, binding) = core
+            .scope_chain
+            .resolve("fixed")
+            .expect("const binding should remain present");
+        assert_eq!(binding.value().unwrap(), Value::Int(1));
+    }
+
+    #[test]
+    fn caught_uninitialized_store_scoped_error_is_reference_error_bd_dp12f() {
+        let module = test_module_with_pool(
+            vec![
+                Ir3Instruction::DeclareBinding {
+                    name_pool_index: 0,
+                    kind: BindingKind::Let as u8,
+                },
+                Ir3Instruction::LoadInt { dst: 0, value: 2 },
+                Ir3Instruction::BeginTry {
+                    catch_target: 5,
+                    finally_target: None,
+                },
+                Ir3Instruction::StoreScoped {
+                    src: 0,
+                    name_pool_index: 0,
+                },
+                Ir3Instruction::EndTry,
+                Ir3Instruction::EnterCatch { dst: 1 },
+                Ir3Instruction::Return { value: 1 },
+            ],
+            vec!["future".to_string()],
+        );
+        let mut core = quickjs_test_core();
+
+        let caught = core
+            .run_loop(&module)
+            .expect("TDZ assignment should enter the active catch");
+        let Value::Object(error_id) = caught else {
+            panic!("expected materialized ReferenceError object, got {caught:?}");
+        };
+        assert_eq!(
+            core.heap[error_id.0 as usize].properties.get("name"),
+            Some(&Value::str("ReferenceError"))
+        );
+        let (_, binding) = core
+            .scope_chain
+            .resolve("future")
+            .expect("TDZ binding should remain present");
+        assert!(!binding.state().unwrap().initialized);
+    }
+
+    #[test]
+    fn uncaught_const_store_scoped_preserves_native_error_and_heap_bd_dp12f() {
+        let module = test_module_with_pool(
+            vec![
+                Ir3Instruction::LoadInt { dst: 0, value: 1 },
+                Ir3Instruction::DeclareBinding {
+                    name_pool_index: 0,
+                    kind: BindingKind::Const as u8,
+                },
+                Ir3Instruction::InitBinding {
+                    name_pool_index: 0,
+                    src: 0,
+                },
+                Ir3Instruction::LoadInt { dst: 1, value: 2 },
+                Ir3Instruction::StoreScoped {
+                    src: 1,
+                    name_pool_index: 0,
+                },
+            ],
+            vec!["fixed".to_string()],
+        );
+        let mut core = quickjs_test_core();
+        let heap_len_before = core.heap.len();
+
+        let error = core
+            .run_loop(&module)
+            .expect_err("uncaught const assignment should remain a native error");
+        assert_eq!(
+            error,
+            InterpreterError::ConstAssignment {
+                name: "fixed".to_string()
+            }
+        );
+        assert_eq!(core.heap.len(), heap_len_before);
+        let (_, binding) = core
+            .scope_chain
+            .resolve("fixed")
+            .expect("const binding should remain present");
+        assert_eq!(binding.value().unwrap(), Value::Int(1));
     }
 
     #[test]

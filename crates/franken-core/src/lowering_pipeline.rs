@@ -2783,6 +2783,7 @@ fn lower_function_parameter_prologue(
             body_binding_index,
             body_scope,
             body_label_counter,
+            DestructuringWriteMode::Initialize,
             Some(&mut parameter_tdz),
         )?;
         if body_ops[prologue_op_start..].iter().any(|op| match op {
@@ -3002,10 +3003,33 @@ fn emit_object_binding_coercibility_check(
     ops.push(Ir1Op::Label { id: continue_label });
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DestructuringWriteMode {
+    Initialize,
+    Assign,
+}
+
+fn emit_destructuring_target_write(
+    ops: &mut Vec<Ir1Op>,
+    binding_id: BindingId,
+    mode: DestructuringWriteMode,
+) {
+    match mode {
+        DestructuringWriteMode::Initialize => {
+            ops.push(Ir1Op::StoreBinding { binding_id });
+        }
+        DestructuringWriteMode::Assign => {
+            ops.push(Ir1Op::AssignOp {
+                binding_id,
+                operator: AssignmentOperator::Assign,
+            });
+        }
+    }
+}
+
 /// Emit IR1 ops to destructure a value (already stored in `source_bid`) into
-/// the individual bindings declared by `pattern`. For object patterns this
-/// emits `LoadBinding(source) + GetProperty(key) + StoreBinding(target) + Pop`
-/// for each property. Array patterns use numeric index strings.
+/// the individual bindings declared by `pattern`. Array patterns use numeric
+/// index strings.
 #[allow(clippy::only_used_in_recursion)]
 #[allow(clippy::too_many_arguments)]
 fn lower_destructuring_to_ir1(
@@ -3027,6 +3051,33 @@ fn lower_destructuring_to_ir1(
         binding_index,
         scope_id,
         label_counter,
+        DestructuringWriteMode::Initialize,
+        None,
+    )
+}
+
+#[allow(clippy::only_used_in_recursion)]
+#[allow(clippy::too_many_arguments)]
+fn lower_destructuring_assignment_to_ir1(
+    pattern: &BindingPattern,
+    source_bid: BindingId,
+    ops: &mut Vec<Ir1Op>,
+    bindings: &mut Vec<ResolvedBinding>,
+    binding_lookup: &mut BTreeMap<String, BindingId>,
+    binding_index: &mut BindingId,
+    scope_id: ScopeId,
+    label_counter: &mut u32,
+) -> Result<(), LoweringPipelineError> {
+    lower_destructuring_to_ir1_with_parameter_tdz(
+        pattern,
+        source_bid,
+        ops,
+        bindings,
+        binding_lookup,
+        binding_index,
+        scope_id,
+        label_counter,
+        DestructuringWriteMode::Assign,
         None,
     )
 }
@@ -3041,6 +3092,7 @@ fn lower_destructuring_to_ir1_with_parameter_tdz(
     binding_index: &mut BindingId,
     scope_id: ScopeId,
     label_counter: &mut u32,
+    write_mode: DestructuringWriteMode,
     mut parameter_tdz: Option<&mut ParameterTdzState>,
 ) -> Result<(), LoweringPipelineError> {
     match pattern {
@@ -3088,9 +3140,13 @@ fn lower_destructuring_to_ir1_with_parameter_tdz(
                         }
                     })?;
                     ops.push(Ir1Op::CopyDataProperties { excluded_count });
-                    ops.push(Ir1Op::StoreBinding {
-                        binding_id: rest_bid,
-                    });
+                    if target_name.is_some() {
+                        emit_destructuring_target_write(ops, rest_bid, write_mode);
+                    } else {
+                        ops.push(Ir1Op::StoreBinding {
+                            binding_id: rest_bid,
+                        });
+                    }
                     ops.push(Ir1Op::Pop);
 
                     if let Some(target_name) = target_name {
@@ -3107,6 +3163,7 @@ fn lower_destructuring_to_ir1_with_parameter_tdz(
                             binding_index,
                             scope_id,
                             label_counter,
+                            write_mode,
                             parameter_tdz.as_deref_mut(),
                         )?;
                     }
@@ -3172,9 +3229,7 @@ fn lower_destructuring_to_ir1_with_parameter_tdz(
                                 detail: "Object-pattern target binding must be allocated before lowering",
                             },
                         )?;
-                        ops.push(Ir1Op::StoreBinding {
-                            binding_id: target_bid,
-                        });
+                        emit_destructuring_target_write(ops, target_bid, write_mode);
                         ops.push(Ir1Op::Pop);
                         if let Some(state) = parameter_tdz.as_deref_mut() {
                             state.mark_binding_initialized(target_name, binding_lookup);
@@ -3201,6 +3256,7 @@ fn lower_destructuring_to_ir1_with_parameter_tdz(
                             binding_index,
                             scope_id,
                             label_counter,
+                            write_mode,
                             parameter_tdz.as_deref_mut(),
                         )?;
                     }
@@ -3247,9 +3303,13 @@ fn lower_destructuring_to_ir1_with_parameter_tdz(
                         value: Ir1Literal::Integer(index as i64),
                     });
                     ops.push(Ir1Op::ArraySlice);
-                    ops.push(Ir1Op::StoreBinding {
-                        binding_id: rest_bid,
-                    });
+                    if target_name.is_some() {
+                        emit_destructuring_target_write(ops, rest_bid, write_mode);
+                    } else {
+                        ops.push(Ir1Op::StoreBinding {
+                            binding_id: rest_bid,
+                        });
+                    }
                     ops.push(Ir1Op::Pop);
 
                     if let Some(target_name) = target_name {
@@ -3266,6 +3326,7 @@ fn lower_destructuring_to_ir1_with_parameter_tdz(
                             binding_index,
                             scope_id,
                             label_counter,
+                            write_mode,
                             parameter_tdz.as_deref_mut(),
                         )?;
                     }
@@ -3291,9 +3352,7 @@ fn lower_destructuring_to_ir1_with_parameter_tdz(
                 });
                 match element {
                     BindingPattern::Identifier(_) => {
-                        ops.push(Ir1Op::StoreBinding {
-                            binding_id: target_bid,
-                        });
+                        emit_destructuring_target_write(ops, target_bid, write_mode);
                         ops.push(Ir1Op::Pop);
                         if let Some(state) = parameter_tdz.as_deref_mut() {
                             state.mark_binding_initialized(target_name, binding_lookup);
@@ -3320,6 +3379,7 @@ fn lower_destructuring_to_ir1_with_parameter_tdz(
                             binding_index,
                             scope_id,
                             label_counter,
+                            write_mode,
                             parameter_tdz.as_deref_mut(),
                         )?;
                     }
@@ -3359,9 +3419,7 @@ fn lower_destructuring_to_ir1_with_parameter_tdz(
                         ops.push(Ir1Op::LoadBinding {
                             binding_id: source_bid,
                         });
-                        ops.push(Ir1Op::StoreBinding {
-                            binding_id: target_bid,
-                        });
+                        emit_destructuring_target_write(ops, target_bid, write_mode);
                         ops.push(Ir1Op::Pop);
                     }
                 }
@@ -3376,6 +3434,7 @@ fn lower_destructuring_to_ir1_with_parameter_tdz(
                         binding_index,
                         scope_id,
                         label_counter,
+                        write_mode,
                         branch_tdz.as_mut(),
                     )?;
                 }
@@ -3408,9 +3467,7 @@ fn lower_destructuring_to_ir1_with_parameter_tdz(
                         ops.push(Ir1Op::LoadBinding {
                             binding_id: source_bid,
                         });
-                        ops.push(Ir1Op::StoreBinding {
-                            binding_id: target_bid,
-                        });
+                        emit_destructuring_target_write(ops, target_bid, write_mode);
                         ops.push(Ir1Op::Pop);
                     }
                 }
@@ -3425,6 +3482,7 @@ fn lower_destructuring_to_ir1_with_parameter_tdz(
                         binding_index,
                         scope_id,
                         label_counter,
+                        write_mode,
                         branch_tdz.as_mut(),
                     )?;
                 }
@@ -3446,6 +3504,7 @@ fn lower_destructuring_to_ir1_with_parameter_tdz(
                 binding_index,
                 scope_id,
                 label_counter,
+                write_mode,
                 parameter_tdz,
             )?;
         }
@@ -3873,21 +3932,43 @@ fn lower_statement_to_ir1_with_flow(
                 .map_err(LoweringPipelineError::SemanticViolation)?
             };
 
-            ops.push(Ir1Op::StoreBinding {
-                binding_id: source_binding_id,
-            });
+            if for_in_stmt.binding_kind.is_none()
+                && matches!(for_in_stmt.binding, BindingPattern::Identifier(_))
+            {
+                ops.push(Ir1Op::AssignOp {
+                    binding_id: source_binding_id,
+                    operator: AssignmentOperator::Assign,
+                });
+            } else {
+                ops.push(Ir1Op::StoreBinding {
+                    binding_id: source_binding_id,
+                });
+            }
             ops.push(Ir1Op::Pop);
             if !matches!(for_in_stmt.binding, BindingPattern::Identifier(_)) {
-                lower_destructuring_to_ir1(
-                    &for_in_stmt.binding,
-                    source_binding_id,
-                    ops,
-                    bindings,
-                    binding_lookup,
-                    binding_index,
-                    scope_id,
-                    label_counter,
-                )?;
+                if for_in_stmt.binding_kind.is_none() {
+                    lower_destructuring_assignment_to_ir1(
+                        &for_in_stmt.binding,
+                        source_binding_id,
+                        ops,
+                        bindings,
+                        binding_lookup,
+                        binding_index,
+                        scope_id,
+                        label_counter,
+                    )?;
+                } else {
+                    lower_destructuring_to_ir1(
+                        &for_in_stmt.binding,
+                        source_binding_id,
+                        ops,
+                        bindings,
+                        binding_lookup,
+                        binding_index,
+                        scope_id,
+                        label_counter,
+                    )?;
+                }
             }
 
             lower_statement_to_ir1_with_flow(
@@ -4019,21 +4100,43 @@ fn lower_statement_to_ir1_with_flow(
                 .map_err(LoweringPipelineError::SemanticViolation)?
             };
 
-            ops.push(Ir1Op::StoreBinding {
-                binding_id: source_binding_id,
-            });
+            if for_of_stmt.binding_kind.is_none()
+                && matches!(for_of_stmt.binding, BindingPattern::Identifier(_))
+            {
+                ops.push(Ir1Op::AssignOp {
+                    binding_id: source_binding_id,
+                    operator: AssignmentOperator::Assign,
+                });
+            } else {
+                ops.push(Ir1Op::StoreBinding {
+                    binding_id: source_binding_id,
+                });
+            }
             ops.push(Ir1Op::Pop);
             if !matches!(for_of_stmt.binding, BindingPattern::Identifier(_)) {
-                lower_destructuring_to_ir1(
-                    &for_of_stmt.binding,
-                    source_binding_id,
-                    ops,
-                    bindings,
-                    binding_lookup,
-                    binding_index,
-                    scope_id,
-                    label_counter,
-                )?;
+                if for_of_stmt.binding_kind.is_none() {
+                    lower_destructuring_assignment_to_ir1(
+                        &for_of_stmt.binding,
+                        source_binding_id,
+                        ops,
+                        bindings,
+                        binding_lookup,
+                        binding_index,
+                        scope_id,
+                        label_counter,
+                    )?;
+                } else {
+                    lower_destructuring_to_ir1(
+                        &for_of_stmt.binding,
+                        source_binding_id,
+                        ops,
+                        bindings,
+                        binding_lookup,
+                        binding_index,
+                        scope_id,
+                        label_counter,
+                    )?;
+                }
             }
 
             ops.push(Ir1Op::EndTry);
@@ -5511,6 +5614,25 @@ fn binding_kind_for_variable_declaration(kind: VariableDeclarationKind) -> Bindi
     }
 }
 
+/// Encode the IR1 binding classification for the runtime `DeclareBinding`
+/// instruction. Keep this in lockstep with the interpreter's binding-kind ABI.
+fn runtime_binding_kind_code(kind: BindingKind) -> u8 {
+    match kind {
+        BindingKind::Var => 0,
+        BindingKind::Let => 1,
+        BindingKind::Const | BindingKind::Import => 2,
+        BindingKind::Parameter => 3,
+        BindingKind::FunctionDecl => 4,
+    }
+}
+
+fn binding_requires_runtime_initialization(kind: BindingKind) -> bool {
+    matches!(
+        kind,
+        BindingKind::Let | BindingKind::Const | BindingKind::Import
+    )
+}
+
 fn nested_function_body(op: &Ir1Op) -> Option<&[Ir1Op]> {
     match op {
         Ir1Op::DeclareFunction { body_ops, .. } | Ir1Op::CreateFunction { body_ops, .. } => {
@@ -5940,6 +6062,7 @@ pub fn lower_ir2_to_ir3(
     // IR3 lowering can resolve free-variable names to register indices.
     let mut name_to_binding_id = BTreeMap::<String, BindingId>::new();
     let mut binding_id_to_name = BTreeMap::<BindingId, String>::new();
+    let mut binding_id_to_kind = BTreeMap::<BindingId, BindingKind>::new();
     for scope in &ir2.scopes {
         for binding in &scope.bindings {
             name_to_binding_id
@@ -5948,8 +6071,21 @@ pub fn lower_ir2_to_ir3(
             binding_id_to_name
                 .entry(binding.binding_id)
                 .or_insert(binding.name.clone());
+            binding_id_to_kind
+                .entry(binding.binding_id)
+                .or_insert(binding.kind);
         }
     }
+    let top_level_declared_binding_ids = ir2
+        .ops
+        .iter()
+        .filter_map(|op| match &op.inner {
+            Ir1Op::StoreBinding { binding_id } | Ir1Op::DeclareFunction { binding_id, .. } => {
+                Some(*binding_id)
+            }
+            _ => None,
+        })
+        .collect::<BTreeSet<_>>();
     let is_commonjs = Path::new(&ir2.header.source_label)
         .extension()
         .and_then(|ext| ext.to_str())
@@ -6008,11 +6144,19 @@ pub fn lower_ir2_to_ir3(
     let main_capture_scope_pushed = !shared_top_level_capture_names_by_id.is_empty();
     if main_capture_scope_pushed {
         ir3.instructions.push(Ir3Instruction::PushScope);
-        for name in shared_top_level_capture_names_by_id.values() {
+        for (binding_id, name) in &shared_top_level_capture_names_by_id {
             let pool_idx = push_constant(&mut ir3.constant_pool, name);
             ir3.instructions.push(Ir3Instruction::DeclareBinding {
                 name_pool_index: pool_idx,
-                kind: 0,
+                kind: if top_level_declared_binding_ids.contains(binding_id) {
+                    binding_id_to_kind
+                        .get(binding_id)
+                        .copied()
+                        .map(runtime_binding_kind_code)
+                        .unwrap_or(0)
+                } else {
+                    0
+                },
             });
         }
     }
@@ -6136,10 +6280,24 @@ pub fn lower_ir2_to_ir3(
                         .or_else(|| binding_id_to_name.get(binding_id).cloned())
                         .unwrap_or_else(|| format!("__binding_{binding_id}"));
                     let pool_index = push_constant(&mut ir3.constant_pool, &name);
-                    ir3.instructions.push(Ir3Instruction::StoreScoped {
-                        src,
-                        name_pool_index: pool_index,
-                    });
+                    let initializes_shared_lexical = shared_top_level_capture_names_by_id
+                        .contains_key(binding_id)
+                        && top_level_declared_binding_ids.contains(binding_id)
+                        && binding_id_to_kind
+                            .get(binding_id)
+                            .copied()
+                            .is_some_and(binding_requires_runtime_initialization);
+                    if initializes_shared_lexical {
+                        ir3.instructions.push(Ir3Instruction::InitBinding {
+                            name_pool_index: pool_index,
+                            src,
+                        });
+                    } else {
+                        ir3.instructions.push(Ir3Instruction::StoreScoped {
+                            src,
+                            name_pool_index: pool_index,
+                        });
+                    }
                     value_stack.push(src);
                 } else {
                     let dst = *binding_registers
@@ -16070,6 +16228,16 @@ mod tests {
         assert_eq!(begin_tries[0].1, Some(begin_tries[0].0));
         assert_eq!(begin_tries[1].0, begin_tries[0].0);
         assert_ne!(begin_tries[1].1, Some(begin_tries[1].0));
+        assert!(ops.windows(2).any(|pair| matches!(
+            pair,
+            [
+                Ir1Op::BeginTry { .. },
+                Ir1Op::AssignOp {
+                    operator: AssignmentOperator::Assign,
+                    ..
+                }
+            ]
+        )));
 
         let closes = ops
             .iter()
@@ -16142,6 +16310,95 @@ mod tests {
                 ..
             }
         )));
+    }
+
+    #[test]
+    fn lower_captured_const_for_of_head_as_guarded_scoped_assignment_bd_dp12f() {
+        let tree = CanonicalEs2020Parser
+            .parse(
+                "const fixed = 0; function run() { for (fixed of [1]) {} } run();",
+                ParseGoal::Script,
+            )
+            .expect("captured const for-of source should parse");
+        let ir0 = Ir0Module::from_syntax_tree(tree, "bd_dp12f.js");
+        let output = lower_ir0_to_ir3(
+            &ir0,
+            &LoweringContext::new("trace-bd-dp12f", "decision-bd-dp12f", "policy"),
+        )
+        .expect("captured const for-of source should lower");
+        let fixed = output
+            .ir1
+            .scopes
+            .iter()
+            .flat_map(|scope| &scope.bindings)
+            .find(|binding| binding.name == "fixed")
+            .expect("fixed binding metadata");
+        assert_eq!(fixed.kind, BindingKind::Const);
+        let cell_name = lexical_capture_cell_name("fixed", fixed.binding_id);
+        let cell_pool_indices = output
+            .ir3
+            .constant_pool
+            .iter()
+            .enumerate()
+            .filter_map(|(index, value)| (value == cell_name.as_str()).then_some(index as u32))
+            .collect::<BTreeSet<_>>();
+        assert!(
+            !cell_pool_indices.is_empty(),
+            "captured cell must be pooled"
+        );
+        assert!(output.ir3.instructions.iter().any(|instruction| matches!(
+            instruction,
+            Ir3Instruction::DeclareBinding {
+                name_pool_index,
+                kind: 2
+            } if cell_pool_indices.contains(name_pool_index)
+        )));
+        assert!(output.ir3.instructions.iter().any(|instruction| matches!(
+            instruction,
+            Ir3Instruction::InitBinding {
+                name_pool_index,
+                ..
+            } if cell_pool_indices.contains(name_pool_index)
+        )));
+
+        let (head_guard, throw_close_target) = output
+            .ir3
+            .instructions
+            .iter()
+            .enumerate()
+            .find_map(|(index, instruction)| match instruction {
+                Ir3Instruction::BeginTry {
+                    catch_target,
+                    finally_target: Some(finally_target),
+                } if catch_target == finally_target
+                    && matches!(
+                        output.ir3.instructions.get(index + 1),
+                        Some(Ir3Instruction::StoreScoped {
+                            name_pool_index,
+                            ..
+                        }) if cell_pool_indices.contains(name_pool_index)
+                    ) =>
+                {
+                    Some((index, *catch_target as usize))
+                }
+                _ => None,
+            })
+            .expect("loop-head StoreScoped must be inside its throw-close guard");
+        assert!(matches!(
+            output.ir3.instructions.get(head_guard + 2),
+            Some(Ir3Instruction::EndTry)
+        ));
+        assert!(matches!(
+            output.ir3.instructions.get(throw_close_target),
+            Some(Ir3Instruction::EnterFinally)
+        ));
+        assert!(matches!(
+            output.ir3.instructions.get(throw_close_target + 2),
+            Some(Ir3Instruction::IteratorClose {
+                reason: IteratorCloseReason::Throw,
+                ..
+            })
+        ));
     }
 
     #[test]
@@ -19330,8 +19587,24 @@ mod tests {
                     |op| matches!(op, Ir1Op::StoreBinding { binding_id } if *binding_id == k_id)
                 )
                 .count(),
-            2,
-            "the declaration initializer and loop assignment must store the same binding"
+            1,
+            "the declaration initializer must initialize the existing binding"
+        );
+        assert_eq!(
+            result
+                .module
+                .ops
+                .iter()
+                .filter(|op| matches!(
+                    op,
+                    Ir1Op::AssignOp {
+                        binding_id,
+                        operator: AssignmentOperator::Assign
+                    } if *binding_id == k_id
+                ))
+                .count(),
+            1,
+            "the bare loop head must assign that same existing binding"
         );
     }
 

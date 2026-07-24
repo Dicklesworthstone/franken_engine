@@ -247,3 +247,10 @@ crates/franken-engine/tests/*_irdump.rs
 # prefix (moonshot_weekly_report, moonshot_disruption_track, ...).
 /crates/franken-engine/src/moonshot_ranking_report.rs
 /crates/franken-engine/tests/moonshot_ranking_report_integration.rs
+
+# Compiler probe artifacts. `rustc --emit=llvm-ir` output left behind by one-off
+# layout/size investigations (e.g. franken_sizecheck.ll, a 2026-07-15 probe of
+# Value/Label enum sizes). These are never build inputs and are referenced
+# nowhere in the tree. Ignored rather than deleted: AGENTS.md Rule 1 forbids
+# removing files without explicit written user permission.
+*.ll

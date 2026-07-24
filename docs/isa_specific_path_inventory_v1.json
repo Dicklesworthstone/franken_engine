@@ -1,0 +1,75 @@
+{
+  "schema_id": "franken-engine.isa-specific-path-inventory.v1",
+  "generated_for_bead": "bd-performance-conformance-bridge-tu32j.19.10",
+  "generated_on": "2026-07-24",
+  "purpose": "Enumerate every architecture-specific execution path so that each one can be held to bit-identical output against a portable reference. Registering a path here is the precondition for the cross-ISA bit-identity gate; an unregistered ISA path must fail the gate closed.",
+  "method": {
+    "static_scan": "ripgrep over crates/*/src for core::arch::*, is_*_feature_detected, target_arch/target_feature cfg, std::simd and core::simd",
+    "limits": "Static inventory. Cross-machine execution on AArch64 and Windows x64 was NOT performed in this session (no such hardware available); those lanes remain open on the bead.",
+    "host_measured_on": "x86-64 (AMD EPYC 7282)"
+  },
+  "totals": {
+    "core_arch_x86_64_intrinsics": 0,
+    "core_arch_aarch64_intrinsics": 0,
+    "std_simd_or_core_simd": 0,
+    "is_x86_feature_detected": 2,
+    "is_aarch64_feature_detected": 1,
+    "target_arch_cfg_sites": 57,
+    "target_feature_sites": 10
+  },
+  "key_structural_finding": {
+    "statement": "There are currently ZERO real ISA-specific EXECUTION paths in the runtime. The module named simd_lexer.rs does not use SIMD intrinsics at all: its own header states it uses SWAR (SIMD Within A Register) via ordinary 64-bit arithmetic with no unsafe code and no platform intrinsics. The handful of is_*_feature_detected calls are confined to building an architecture FINGERPRINT for telemetry and reproducibility reporting, not to dispatching divergent code.",
+    "consequence": "Current cross-ISA divergence risk is LOW, and the same machine code runs everywhere. The risk becomes real and large the moment BRIDGE-10.2 (AArch64/NEON code shapes) and BRIDGE-11.2 (Zen4/Zen5 AVX-512 kernels) land, and again for BRIDGE-07.20 guarded vectorization.",
+    "revises": "This tempers the original framing of this bead. The gate should be understood as a PRECONDITION to be installed before ISA paths are introduced, not as remediation of existing divergence. Installing it now is cheap; installing it after twenty vectorized kernels exist is not."
+  },
+  "registered_paths": [
+    {
+      "id": "swar-lexer",
+      "path": "crates/franken-engine/src/simd_lexer.rs",
+      "kind": "SWAR (portable 64-bit word arithmetic) - NOT an ISA-specific path",
+      "portable_counterpart": "scalar reference lexer in the same module",
+      "equivalence_mechanism_present": true,
+      "equivalence_mechanism": "find_mismatch(swar, scalar) -> Option<ParityMismatch>, plus the test swar_all_word_predicates_match_scalar_reference and a scalar_config() reference configuration.",
+      "precedent": "bd-2noh9 was a real shipped SWAR-vs-scalar lexical-token divergence. The parity mechanism above is the surviving control from that fix and MUST NOT be removed.",
+      "verdict": "COMPLIANT - portable counterpart exists and is differentially tested",
+      "residual_risk": "LOW. SWAR is deterministic across ISAs because it is ordinary integer arithmetic; endianness is the only theoretical concern and all supported targets are little-endian."
+    },
+    {
+      "id": "arch-fingerprint-reporting",
+      "path": "crates/franken-engine/src/simd_lexer.rs (arch_family / feature reporting, lines ~1167-1205)",
+      "kind": "telemetry / capability reporting only",
+      "portable_counterpart": "n/a - reports capability, does not select an execution path",
+      "verdict": "OUT OF SCOPE for bit-identity, but IN SCOPE for determinism",
+      "residual_risk": "MEDIUM if a reported feature string ever reaches a content-hashed position. Host facts belong in env.json, never in an artifact content hash.",
+      "action": "Add an assertion that architecture fingerprints never enter a content hash, only the environment manifest."
+    },
+    {
+      "id": "platform-worker-modules",
+      "path": "crates/franken-engine/src/{macos_arm64_worker.rs,windows_x64_worker.rs,rgc_cross_arch_reproducibility.rs,worker_env_capture.rs}",
+      "kind": "platform build/execution plumbing (rch workers, cross-arch reproducibility reporting)",
+      "verdict": "OUT OF SCOPE for execution bit-identity; IN SCOPE for FE-CLAIM-023 cross-platform reproducibility",
+      "residual_risk": "LOW"
+    }
+  ],
+  "prospective_paths_requiring_registration_before_merge": [
+    { "bead": "BRIDGE-10.2", "description": "AArch64/NEON VM and JIT code shapes, CBZ/TBZ, paired loads/stores, literal pools" },
+    { "bead": "BRIDGE-11.2", "description": "Zen4/Zen5 x86-64 code shapes and any AVX-512 kernels" },
+    { "bead": "BRIDGE-07.20", "description": "Guarded vectorization and target-specific loop lowering" },
+    { "bead": "BRIDGE-03.12", "description": "UTF-16 string storage/slices/atoms/ropes if vectorized" },
+    { "bead": "BRIDGE-10.3", "description": "M4/M5 target variants and Apple PGO/layout artifacts" }
+  ],
+  "gate_contract": {
+    "rule": "For every architecture-specific code path, the ISA-specialised implementation and the portable reference implementation MUST produce bit-identical observable output on the same input.",
+    "enforcement": "The gate fails closed on (a) any observed divergence, and (b) any new architecture-specific path that lacks a registered portable counterpart in this inventory.",
+    "boundary_fuzzing_required": "Inputs at and around vector-width boundaries, unaligned starts, and tail handling - this is precisely where the bd-2noh9 defect class lives.",
+    "feature_detection_rule": "Runtime detection only, never compile-time-only, so a binary built on one machine stays correct on another.",
+    "determinism_outranks_speed": "Any ISA path that cannot be proven bit-identical is disabled by default and may ship only behind a non-default flag with a recorded waiver."
+  },
+  "open_work_not_done_in_this_pass": [
+    "Cross-machine execution of differential oracle / metamorphic / golden suites on AArch64 and Windows x64 with content-hash comparison",
+    "Boundary-focused fuzz corpora for vector-width edges",
+    "Wiring the fail-closed CI gate that rejects unregistered ISA paths",
+    "Assertion that architecture fingerprints never enter content-hashed positions"
+  ],
+  "honest_status": "PARTIAL. This artifact discharges the inventory, registration-contract and risk-reframing portions of the bead. Cross-machine execution and CI wiring remain open."
+}

@@ -1,0 +1,73 @@
+{
+  "schema_id": "franken-engine.atomics-ordering-inventory.v1",
+  "generated_for_bead": "bd-performance-conformance-bridge-tu32j.11.6",
+  "generated_on": "2026-07-24",
+  "purpose": "Machine-readable inventory of every atomic-ordering, interior-mutability and lock-free publication site, so that AArch64 (weak memory model) exposure is enumerable and drift is detectable. Follows the repository gap-inventory pattern: if something is unverified, it must be enumerable, and a gate must fail closed when the enumeration drifts from the code.",
+  "method": {
+    "static_scan": "ripgrep over crates/*/src for Ordering::*, compare_exchange*, fence(, UnsafeCell",
+    "limits": "This is a STATIC inventory only. It does NOT constitute proof of correctness. Loom exhaustive interleaving models and real AArch64 hardware execution are NOT included and remain open work on this bead.",
+    "host_measured_on": "x86-64 (AMD EPYC 7282, 2 NUMA nodes) - no AArch64 hardware was available in this session"
+  },
+  "totals_by_crate": {
+    "frankenengine-engine": {
+      "relaxed": 46, "acquire": 15, "release": 7, "acq_rel": 1, "seq_cst": 12,
+      "compare_exchange": 0, "fence": 0, "unsafe_cell": 0
+    },
+    "frankenengine-core": {
+      "relaxed": 2, "acquire": 1, "release": 2, "acq_rel": 0, "seq_cst": 0,
+      "compare_exchange": 0, "fence": 0, "unsafe_cell": 0
+    },
+    "frankenengine-extension-host": {
+      "relaxed": 6, "acquire": 12, "release": 1, "acq_rel": 5, "seq_cst": 0,
+      "compare_exchange": 1, "fence": 0, "unsafe_cell": 0
+    }
+  },
+  "key_structural_finding": {
+    "statement": "There is currently NO true lock-free data structure in the repository. Zero UnsafeCell and zero fence() calls exist across all three crates. This is a direct consequence of #![forbid(unsafe_code)]: a classic seqlock requires UnsafeCell and tolerates torn reads, which safe Rust cannot express.",
+    "consequence": "AArch64 weak-memory exposure of EXISTING code is materially lower than a raw Ordering::Relaxed count would suggest. The risk becomes real when BRIDGE-05 introduces the native-code capsule with genuine lock-free code-cache publication.",
+    "revises": "This finding tempers the original framing of this bead. The audit should be understood as establishing the ordering inventory and verification harness BEFORE the capsule lands, rather than as remediating a known existing defect."
+  },
+  "sites": [
+    {
+      "id": "seqlock-fastpath-sequence",
+      "path": "crates/franken-engine/src/seqlock_fastpath.rs",
+      "structure": "SnapshotFastPath<T>",
+      "payload_storage": "snapshot: RwLock<Option<T>> (NOT UnsafeCell)",
+      "sequence_field": "sequence: AtomicU64",
+      "orderings_observed": {
+        "sequence_store": "Release (line 128, SequencePublishGuard::drop)",
+        "sequence_load": "Acquire (lines 242, 296, 319)"
+      },
+      "relaxed_count": 23,
+      "relaxed_classification": "ALL 23 Relaxed uses are on pure statistics counters (total_reads, fast_path_reads, fallback_reads, total_retries, writer_pressure_observations, retry_budget_fallbacks, uninitialized_fallbacks, writer_pressure_fallbacks, writes). None are on the sequence field or on any correctness-bearing value.",
+      "verdict": "LIKELY CORRECT",
+      "rationale": "The sequence field uses exclusively Acquire loads and Release stores, which is textbook seqlock discipline. Critically, the payload is read via self.snapshot_read().clone() under an RwLock read guard, NOT as an unsynchronized raw read. The RwLock supplies its own acquire-on-lock / release-on-unlock ordering for the payload, so the classic seqlock read-side hazard (payload loads sinking past the validating sequence load, which an Acquire load does not prevent) DOES NOT APPLY here. Relaxed on statistics counters is correct and idiomatic.",
+      "residual_risk": "LOW. This is a seqlock-shaped optimistic-retry wrapper around an RwLock, not a lock-free seqlock. The optimistic sequence check is an additional validity filter layered on an already-synchronized read.",
+      "action": "Confirm under loom anyway (cheap, and locks in the property before the structure is ever converted to a genuine lock-free form)."
+    },
+    {
+      "id": "extension-host-effect-concurrency",
+      "path": "crates/franken-extension-host/src/{process_spawn.rs,host_io.rs,host_effect_journal.rs}",
+      "orderings_observed": { "acquire": 12, "acq_rel": 5, "relaxed": 6, "release": 1, "compare_exchange": 1 },
+      "verdict": "REVIEW REQUIRED",
+      "rationale": "This is the newest concurrent code in the tree (bd-x85a7, landed 2026-07-23) and holds the only compare_exchange in the repository, plus the highest AcqRel density. It governs process-spawn admission and the globally ordered host-effect journal, where ordering is semantically load-bearing for replay identity, not merely for performance.",
+      "residual_risk": "MEDIUM. Newest code, least soak time, and the journal explicitly claims a global ordering property that a weak memory model could violate if the reserve/complete protocol is under-synchronized.",
+      "action": "Priority target for loom modeling of the reserve-before-live / completion-ordering protocol. Cross-reference open beads bd-x85a7.1 (temporal containment, atomic attempt admission) and bd-x85a7.2 (journal integrity, no completion holes)."
+    },
+    {
+      "id": "future-capsule-code-cache",
+      "path": "crates/franken-engine/src/ (BRIDGE-05, not yet implemented)",
+      "verdict": "NOT YET EXISTENT - HIGHEST FUTURE RISK",
+      "rationale": "The native-code capsule will introduce genuine lock-free publication: concurrent patch/execute/retire on executable memory, epoch invalidation, and retirement-under-read. This is where weak-memory correctness genuinely bites, and where x86-TSO would silently forgive a missing Acquire/Release that AArch64 would not.",
+      "residual_risk": "HIGH once implemented.",
+      "action": "Loom model the publication/retirement state machine BEFORE the capsule ships, per bead .6.37. This inventory exists so that gate is in place first."
+    }
+  ],
+  "open_work_not_done_in_this_pass": [
+    "Loom exhaustive interleaving models (seqlock publication, host-effect journal reserve/complete, future code-cache publication)",
+    "Execution of the full lib/integration/differential/metamorphic suites on real AArch64 hardware",
+    "Permanent AArch64 CI lane",
+    "Per-site written justification for each of the remaining Relaxed uses outside seqlock_fastpath.rs (23 of 54 engine-crate Relaxed uses are characterized here; the remaining 23 are spread across telemetry, orchestrator and inventory modules and are presumed statistical but are NOT individually verified)"
+  ],
+  "honest_status": "PARTIAL. This artifact discharges the inventory-and-classification portion of the bead and materially revises its risk framing downward for existing code. It does not discharge the loom, AArch64-hardware, or CI-lane portions, which remain open."
+}

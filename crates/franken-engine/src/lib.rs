@@ -197,6 +197,7 @@ pub mod evidence_replay_checker;
 pub mod exception_translation_validator;
 pub mod execution_cell;
 pub mod execution_orchestrator;
+pub mod execution_truth_ledger;
 pub mod expected_info_value_scoring;
 pub mod expected_loss_selector;
 pub mod extension_host_authority_guard;

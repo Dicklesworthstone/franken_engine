@@ -594,6 +594,11 @@ pub struct ExecutionOrchestrator {
     process_spawn: Option<Arc<dyn ProcessSpawnProvider>>,
     host_effect_journal: Option<Arc<InMemoryHostEffectJournal>>,
     last_failed_host_effect_journal: Vec<HostEffectJournalEntry>,
+    /// Trace of the most recent execution attempt that returned an error, bound
+    /// as soon as the attempt's identifiers exist. A product caller labelling
+    /// the retained failure journal must use the same trace the successful path
+    /// would have reported, never a locally minted substitute.
+    last_failed_trace_id: Option<String>,
     /// Optional per-run cancellation signal supplied by the product supervisor.
     cancellation_token: Option<CancellationToken>,
     /// Optional data-contract IFC ingress binding (bd-fqlfw.8.2): the labeled
@@ -704,6 +709,7 @@ impl ExecutionOrchestrator {
             process_spawn: None,
             host_effect_journal: None,
             last_failed_host_effect_journal: Vec::new(),
+            last_failed_trace_id: None,
             cancellation_token: None,
             data_contract_ingress: None,
             data_contract_flow_events: Vec::new(),
@@ -770,6 +776,19 @@ impl ExecutionOrchestrator {
     #[must_use]
     pub fn last_failed_host_effect_journal(&self) -> &[HostEffectJournalEntry] {
         &self.last_failed_host_effect_journal
+    }
+
+    /// Trace identifier of the most recent execution attempt that returned an
+    /// error, or `None` when the last attempt succeeded or never reached
+    /// identifier allocation.
+    ///
+    /// Pairs with [`Self::last_failed_host_effect_journal`]: a product caller
+    /// that mints failure receipts must bind them to this trace rather than to
+    /// a locally invented label, so the aborted attempt's evidence stays
+    /// correlatable with everything the successful path would have emitted.
+    #[must_use]
+    pub fn last_failed_trace_id(&self) -> Option<&str> {
+        self.last_failed_trace_id.as_deref()
     }
 
     /// Install a per-run cooperative cancellation signal for both interpreter
@@ -915,6 +934,7 @@ impl ExecutionOrchestrator {
         let process_spawn = self.process_spawn.take();
         let host_effect_journal = self.host_effect_journal.take();
         self.last_failed_host_effect_journal.clear();
+        self.last_failed_trace_id = None;
         // Step 0: Validate.
         Self::validate_package(package)?;
         self.ensure_not_cancelled()?;
@@ -927,6 +947,11 @@ impl ExecutionOrchestrator {
         // Step 1: Generate identifiers.
         let (attempt_index, trace_id, decision_id) =
             self.take_or_allocate_execution_context(package)?;
+        // Bind the failure trace as soon as identifiers exist. Every abort from
+        // here on can then be reported against the exact trace a successful
+        // attempt would have carried, instead of forcing product callers to
+        // mint a substitute label for evidence they did not produce.
+        self.last_failed_trace_id = Some(trace_id.clone());
         let prepared = self.prepare_lowering_output(package, &trace_id, &decision_id)?;
         self.ensure_not_cancelled()?;
         let PreparedLoweringOutput {
@@ -1011,26 +1036,58 @@ impl ExecutionOrchestrator {
                     HostEffectJournalEntry::ProcessSpawn { .. } => None,
                 })
                 .collect()
-        } else if let Some(recorder) = self.host_io_recorder.as_deref() {
-            recorder.finish_execution().map_err(|error| {
-                let phase_context = execution
-                    .as_ref()
-                    .err()
-                    .map(|phase_error| format!("; phase execution also failed: {phase_error}"))
-                    .unwrap_or_default();
-                OrchestratorError::Interpreter(InterpreterError::InternalError {
-                    details: format!(
-                        "host I/O execution finalization failed: {error}{phase_context}"
-                    ),
-                })
-            })?
+        } else if let Some(recorder) = self.host_io_recorder.clone() {
+            match recorder.finish_execution() {
+                Ok(entries) => entries,
+                Err(error) => {
+                    // The recorder could not certify this attempt's exact
+                    // boundary, so which effects belong to it is unknown. Drop
+                    // the failure trace binding too: an empty retained journal
+                    // published under a real trace asserts "no host effect
+                    // occurred", a stronger claim than the runtime can make
+                    // here. Attributing the recorder's cumulative lifetime
+                    // history instead would be worse still, since it can carry
+                    // a prefix from before this execution began.
+                    self.last_failed_trace_id = None;
+                    let phase_context = execution
+                        .as_ref()
+                        .err()
+                        .map(|phase_error| format!("; phase execution also failed: {phase_error}"))
+                        .unwrap_or_default();
+                    return Err(OrchestratorError::Interpreter(
+                        InterpreterError::InternalError {
+                            details: format!(
+                                "host I/O execution finalization failed: {error}{phase_context}"
+                            ),
+                        },
+                    ));
+                }
+            }
         } else {
             Vec::new()
         };
         // Retain the finalized prefix until the *entire* orchestration path
         // succeeds. Any later cancellation, evidence, or containment failure
         // must not erase already-performed effects from product receipts.
-        self.last_failed_host_effect_journal = host_effect_journal_entries.clone();
+        //
+        // Only process-authority runs own a journal; the ordinary run installs
+        // a recorder alone, and for it `host_effect_journal_entries` is empty
+        // by construction. Retaining that empty vec silently discarded every
+        // ordinary filesystem/network effect an aborted attempt had already
+        // performed or been denied, which is exactly the evidence a failure
+        // receipt needs. Retain whichever source actually finalized this
+        // attempt, preserving its global order.
+        self.last_failed_host_effect_journal = if host_effect_journal.is_some() {
+            host_effect_journal_entries.clone()
+        } else {
+            host_effect_transcript
+                .iter()
+                .map(|(request, outcome)| HostEffectJournalEntry::HostIo {
+                    request: request.clone(),
+                    outcome: outcome.clone(),
+                })
+                .collect()
+        };
         let (routed, guardplane_report) = execution?;
         self.ensure_not_cancelled()?;
         let lane = routed.lane;
@@ -1145,6 +1202,7 @@ impl ExecutionOrchestrator {
             epoch: self.config.epoch,
         };
         self.last_failed_host_effect_journal.clear();
+        self.last_failed_trace_id = None;
         Ok(result)
     }
 

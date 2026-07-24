@@ -1,0 +1,24 @@
+{
+  "schema_version": "franken-engine.native-code-capsule-owner-trust-root.v1",
+  "contract_marker": "NCC-OWNER-TRUST-ROOT-0010-V1",
+  "status": "unconfigured",
+  "signature_scheme": "ed25519",
+  "signature_domain": "franken-engine.native-code-capsule-adr-approval.v1",
+  "trust_root_epoch": 0,
+  "revocation_epoch": 0,
+  "trusted_keys": [],
+  "revoked_keys": [],
+  "enrollment_policy": {
+    "authority": "project-owner-out-of-band",
+    "proof_domain": "franken-engine.native-code-capsule-owner-key-enrollment.v1",
+    "accepted_key_algorithms": [
+      "ed25519"
+    ],
+    "proof_of_possession_required": true,
+    "producer_distinct_reviewer_required": true,
+    "external_verifier_anchor_required": true,
+    "external_anchor_may_be_sourced_from_repository": false,
+    "repository_record_alone_is_identity_proof": false
+  },
+  "note": "No project-owner signing key is enrolled. ADR-0010 cannot enter accepted implementation-authorized state until the owner enrolls and proves control of an Ed25519 key through producer-distinct review."
+}

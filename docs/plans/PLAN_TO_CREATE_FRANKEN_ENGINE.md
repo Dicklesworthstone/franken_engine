@@ -1562,12 +1562,55 @@ The following decisions happen before broad implementation.
    is allowed only by the existing graduation contract and parity gate.
 2. **Native code boundary.** Existing repository crates retain
    `#![forbid(unsafe_code)]`. Executable machine-code allocation and invocation
-   require a separately audited codegen capsule with a safe, typed,
-   capability-bounded interface. Its dependency direction is one-way into
-   FrankenEngine, it contains no JavaScript semantics, and it may use an
-   established backend such as Cranelift internally. Creating that boundary is
-   an architecture and split-contract decision; without approval, native JIT
-   work remains blocked rather than smuggling `unsafe` into the engine.
+   require the separately audited `/dp/franken_native_capsule` sibling with a
+   safe, typed, ENGINE-authorized interface. The production dependency chain
+   is `franken_node -> franken_engine -> franken_native_capsule`; the capsule
+   has no JavaScript semantics and no production reverse dependency. Cranelift
+   is the first portable backend. FrankenEngine lowers into a backend-neutral,
+   machine-code-free `NativeRegionPlan`; the capsule compiler consumes it and
+   produces/seals the Region Code Object. Copy-and-patch and
+   whole-interpreter partial evaluation remain measured Tier-B bakeoff
+   candidates behind those contracts. A typed interface, signature,
+   structural validator, W^X, or CFI does not sandbox a compiler bug: the
+   compiler, capsule, and generated code are an explicit TCB for in-process
+   execution. A fatal native fault terminates the executing process; parent
+   survival requires the complete execution cell and native heap to run in a
+   child process. That boundary alone does not confine authority: untrusted
+   production also requires a cross-platform least-authority sandbox,
+   out-of-cell effect/key/checkpoint broker, and typed indeterminate outcome
+   for external effects whose commit state cannot be reconciled.
+   A checkpoint emitted by a cell after it entered potentially corrupt native
+   code is not a trusted recovery root. Recovery starts from the last
+   pre-native checkpoint bound to the broker/evidence prefix, or from state
+   independently reconstructed and verified outside the child, then replays
+   broker-held nondeterminism and effect receipts. The broker treats
+   child-supplied IFC labels, capability claims, provenance, evidence, and
+   commit assertions as untrusted and rederives or verifies the authority
+   needed for each effect.
+   It cannot reconstruct arbitrary value-level IFC provenance from bytes
+   emitted by a memory-corrupted cell, so it enforces an independently
+   maintained conservative output label equal to the join of all labels
+   admitted to the cell plus broker-derived input lineage. Fine-grained
+   language-level capability/IFC semantics retain the engine, compiler,
+   backend, capsule, helpers, and generated code in their claim-specific TCB;
+   no arbitrary-code-resilient fine-IFC claim is made without unforgeable
+   broker-owned labeled handles or equivalent external derivation.
+   Native eligibility must also preserve user-visible behavior: prove before
+   entry that all prospective effects accept the broker-owned cell high-water
+   label, otherwise route `preferred` to independently eligible Tier I or
+   return a typed `required`-mode denial with doctor/explain evidence.
+   Post-entry label escalation denies the effect and may restart at the
+   trusted pre-native boundary in Tier I only when broker-held effect state
+   proves replay safe; otherwise it is typed partial/indeterminate. Signed
+   declassification stays outside the cell and overtaint/fallback rates are
+   measured.
+   Compilation-worker isolation alone is insufficient. Compile authorization
+   binds inputs and budgets before compilation; a distinct activation
+   authorization binds the resulting sealed RCO and runtime contract.
+   `ADR-0010` freezes the detailed boundary and remains proposed until the
+   project owner explicitly approves its payload. Until then, native JIT work
+   remains blocked rather than smuggling `unsafe` into either existing
+   repository.
 3. **No binding-led escape hatch.** Cranelift, a stencil linker, or another
    machine-code backend is a compiler backend, not a borrowed JavaScript
    engine. V8, JavaScriptCore, QuickJS, Boa, or equivalent cannot become the
@@ -1593,6 +1636,79 @@ The following decisions happen before broad implementation.
    for every semantics, representation, security, and tiering lane. Extract
    measured vertical slices behind the single-source semantics contract, one
    reviewable change at a time, without a broad mechanical rewrite.
+
+**Native-code capsule decision checkpoint (`NCC-PLAN-0010-V1`)**
+
+- Canonical decision: `docs/adr/ADR-0010-native-code-capsule-trust-boundary.md`
+- Machine-readable decision:
+  `docs/adr/native_code_capsule_decision_v1.json`
+- Candidate portable sibling: `/dp/franken_native_capsule`
+- Candidate packages: `frankenengine-native-capsule-api`,
+  `frankenengine-native-capsule`, and `franken-native-capsule-worker`
+- Unsafe ownership: the API and worker packages remain unsafe-forbidden.
+  First-party unsafe is restricted to the runtime package’s exact ADR
+  allowlist for raw invocation plus platform executable-memory, unwind,
+  process-sandbox, and process-supervisor mechanisms. Every block carries an
+  invariant ID, local proof/test linkage, cfg/feature coverage, and
+  producer-distinct review; build scripts, proc macros, examples, tests,
+  benches, generated source, and new unallowlisted modules remain forbidden,
+  and transitive unsafe gets a separate Cargo/geiger/SBOM risk inventory.
+  FrankenNode owns supervision policy/operations, but low-level OS mechanisms
+  route through a narrow safe capsule-to-engine API; there is no direct
+  product-to-capsule call.
+- Candidate first portable backend: Cranelift `0.134.2` from Wasmtime
+  `v47.0.2` at `90fed3c6adf53f112c4dea56851728557bb73799`, minimum
+  Rust `1.94.0`, with exact crate/source/Cargo-lock checksums behind RCO v1.
+  The separately recorded `bccd12218bb4d16e0f535cd69b4d96994ff3a7ad`
+  research-head snapshot is not an implementation release identity.
+- Compiler ownership: engine produces `NativeRegionPlan`; capsule worker
+  produces/seals RCO under compile authorization and receipt
+- Profile model: every decision and receipt records `code_mode`
+  (`tier-i`/`jit`/`aot`), fault domain, authority profile, sandbox profile, and
+  administrator mode (`disabled`/`preferred`/`required`). AOT is a code mode,
+  not a security profile. It retains the offline compiler/backend/generated
+  code in the semantic TCB, may remove runtime compilation from the active
+  process, and adds artifact distribution/loading/signing to the deployment
+  TCB.
+- Named native profiles: `native-throughput`,
+  `native-parent-crash-contained`, `native-crash-contained`, and
+  `portable-tier-i`
+- Untrusted native default: whole-execution-cell child process plus
+  platform-least-authority sandbox and out-of-cell authority/effect broker; no
+  per-opcode IPC, shared mutable VM memory, ambient host authority, or in-cell
+  long-lived signing/declassification keys
+- Side-channel boundary: ordinary native profiles make no
+  microarchitectural-confidentiality claim. Any high-assurance profile must
+  separately own core scheduling/isolation, SMT policy, cache/NUMA placement,
+  predictor/serialization mitigations, a constant-time out-of-cell key
+  service, cross-tenant Prime+Probe/branch-target red probes, and measured
+  performance/capacity cost.
+- Crash-artifact boundary: ambient OS core dumps are disabled. Explicit
+  diagnostic dumps use only a broker-controlled encrypted,
+  quota/retention-bounded store with no guest-chosen filenames; heap,
+  registers, native pages, and specialized constants are tenant-secret-bearing
+  and require redacted operator output plus verified zero/expiry.
+- Fatal-fault rule: a native memory/control/stack fault is process-fatal and
+  can recover only through supervisor restart from the last pre-native
+  trusted checkpoint and broker-proved nondeterminism/effect/evidence prefix,
+  or from independently reconstructed/verified out-of-cell state. A
+  post-entry child checkpoint is only an untrusted proposal. Unknown
+  non-reconcilable external effects terminate as indeterminate and are never
+  blindly replayed.
+- Authorization rule: `franken_engine` owns the policy logic, but only an
+  out-of-cell control-plane native-authorization service may revalidate and
+  sign separate `CompileAuthorization` and `ActivationAuthorization` records.
+  An execution-cell engine submits unsigned, untrusted proposals only and has
+  no issuer key. Signer outage, stale epoch, rotation, or revocation fails
+  closed to Tier-I or a typed unavailable outcome with no in-cell/unsigned
+  bypass; signatures establish provenance, not memory safety
+- Lifecycle rule: immutable RCO cache, validate/reserve/relocate/finalize/RX,
+  prepared/dormant/admission-committed-or-aborted/atomically-enabled activation
+  with a post-linearization observation or typed indeterminate reconciliation,
+  then unroute/quiesce/unregister/zero/unmap and a linked retirement receipt
+- Approval rule: while the ADR state is `proposed` and
+  `implementation_authorized=false`, all executable native implementation
+  leaves remain blocked
 
 ### 18.3 Measurement-First Truth Layer
 
@@ -1777,6 +1893,11 @@ bounded compilation, and exact fallback.
 - Exception unwinding initially returns a typed status to the shared runtime
   rather than depending on platform-language unwinding through JIT frames.
   Native unwind metadata is an optional later optimization with its own proof.
+- The native ABI saves and restores floating-point control state, preserves
+  ECMAScript NaN and negative-zero behavior, forbids direct syscalls and
+  nondeterministic instructions outside approved helpers, and forbids
+  Rust/platform unwinding across the boundary. An independent parent watchdog
+  owns hard hangs and resource ceilings when corrupt code ignores safepoints.
 
 **Executable-memory and hostile-code contract**
 
@@ -1789,16 +1910,34 @@ bounded compilation, and exact fallback.
 - Enforce per-tenant and global code-memory quotas, variant caps, compile-rate
   limits, and S3-FIFO eviction. Eviction waits for an execution epoch in which
   no frame can reference the code.
-- Generated code can access only the `VmContext` and approved helper table.
-  Bounds, capability, IFC, and policy operations are not arbitrary host
-  addresses embedded in stencils.
+- Correctly generated code is required to derive accesses from the versioned
+  `VmContext` and approved helper table. Bounds, capability, IFC, and policy
+  operations are never arbitrary host addresses embedded in stencils. This is
+  a compiler/validator invariant inside the declared TCB, not a claim that a
+  corrupt instruction stream is memory-confined.
 - Add control-flow-integrity-compatible entry points, guard against code/data
   pointer confusion, and audit Spectre-style bounds/indirect-branch gadgets at
   the guest-to-host boundary. Architecture mitigations are selected from the
   threat model and measured; they are not globally disabled for benchmark wins.
 - macOS hardened-runtime entitlements and Linux executable-memory policy are
   deployment inputs recorded in receipts. A missing entitlement or denied JIT
-  allocation falls back to AOT or Tier I without changing semantics.
+  allocation produces a typed pre-entry refusal. It may route only to an
+  independently eligible, explicitly configured `aot` code mode or to Tier
+  I/R; it never silently changes any profile axis or claim semantics.
+- Windows uses dedicated mappings, explicit instruction-cache flush, exact CFG
+  call-target registration, and dynamic function-table lifecycle. Apple uses
+  the supported `MAP_JIT` write-authorization path, callback allowlist, and
+  instruction-cache invalidation. Linux uses dedicated page-aligned mappings,
+  `RW -> RX`, and sealed transfer where shared immutable code is used. Each
+  platform has a named owner and typed unavailable state.
+- `native-throughput`, `native-parent-crash-contained`, and
+  `native-crash-contained` publish separate semantic, parent-survival,
+  authority-confinement, recovery, and performance claims. A native fault is
+  never caught and converted into an in-process deoptimization. The
+  untrusted-production profile places the whole execution cell in a long-lived
+  child process, removes ambient authority with platform controls, and routes
+  effects/checkpoints/evidence keys through the parent broker without
+  per-operation VM IPC.
 
 **Compilation replay and compiler quality**
 

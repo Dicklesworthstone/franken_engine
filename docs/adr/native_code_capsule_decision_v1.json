@@ -1,0 +1,1292 @@
+{
+  "schema_version": "franken-engine.native-code-capsule-decision.v1",
+  "decision_id": "ADR-0010",
+  "contract_marker": "NCC-ADR-0010-V1",
+  "governing_bead": "bd-performance-conformance-bridge-tu32j.6.1",
+  "research_cutoff": "2026-07-24",
+  "status": "proposed",
+  "implementation_authorized": false,
+  "approval": null,
+  "approval_policy": {
+    "signature_scheme": "ed25519",
+    "signature_domain": "franken-engine.native-code-capsule-adr-approval.v1",
+    "signature_preimage_schema": "franken-engine.native-code-capsule-adr-approval-preimage.v1",
+    "composite_payload_domain": "franken-engine.native-code-capsule-adr-composite-payload.v1",
+    "digest_algorithm": "sha256",
+    "canonicalization": {
+      "schema": "franken-engine.strict-json-c14n-no-float.v1",
+      "input_encoding": "utf-8-no-bom",
+      "duplicate_keys_allowed": false,
+      "numbers": "signed-safe-range-integers-only",
+      "unpaired_unicode_surrogates_allowed": false,
+      "map_order": "lexicographic-unicode-code-point",
+      "insignificant_whitespace": "none"
+    },
+    "trust_root_marker": "NCC-OWNER-TRUST-ROOT-0010-V1",
+    "repository_record_alone_is_identity_proof": false,
+    "accepted_verifier_requires_external_anchor": true,
+    "external_anchor_may_be_sourced_from_repository": false,
+    "accepted_requires_online_source_snapshots": true,
+    "approval_text_hash_encoding": "canonical-json-string-utf8",
+    "signed_payload_components": [
+      "canonical-proposed-decision",
+      "canonical-proposed-adr",
+      "authoritative-plan",
+      "engine-split-contract",
+      "node-split-contract",
+      "owner-trust-root",
+      "adr-gate",
+      "strict-validator",
+      "public-e2e-verifier"
+    ]
+  },
+  "repositories": {
+    "capsule": "/dp/franken_native_capsule",
+    "engine": "/dp/franken_engine",
+    "product": "/dp/franken_node"
+  },
+  "packages": {
+    "api": "frankenengine-native-capsule-api",
+    "runtime": "frankenengine-native-capsule",
+    "worker": "franken-native-capsule-worker"
+  },
+  "process_roles": [
+    {
+      "id": "capsule-compilation-worker",
+      "owner": "franken_native_capsule",
+      "package": "franken-native-capsule-worker",
+      "contains_javascript_heap": false,
+      "runs_machine_code_derived_from_untrusted_javascript": false,
+      "loads_capsule_runtime_for_platform_self_tests_only": true,
+      "containment_claim": "compiler-fault-containment-only"
+    },
+    {
+      "id": "engine-execution-cell-worker",
+      "owner": "franken_engine",
+      "contains_javascript_heap": true,
+      "contains_whole_javascript_agent_cluster_for_shared_memory": true,
+      "cross_cell_mutable_shared_array_buffer_allowed": false,
+      "runs_machine_code_derived_from_untrusted_javascript": true,
+      "loads_capsule_runtime": true,
+      "generated_code_role_by_claim": {
+        "semantic_correctness": "trusted-computing-base",
+        "parent_survival": "potentially-adversarial",
+        "ambient_authority_and_effect_ceiling": "potentially-adversarial-only-with-broker-and-sandbox",
+        "language_level_capability_and_ifc_semantics": "trusted-computing-base"
+      }
+    },
+    {
+      "id": "product-supervisor",
+      "owner": "franken_node",
+      "contains_javascript_heap": false,
+      "runs_machine_code_derived_from_untrusted_javascript": false,
+      "loads_capsule_runtime": false,
+      "containment_claim": "parent-supervision-and-scoped-recovery"
+    },
+    {
+      "id": "control-plane-authority-broker",
+      "policy_owner": "franken_engine",
+      "operations_owner": "franken_node",
+      "contains_javascript_heap": false,
+      "runs_machine_code_derived_from_untrusted_javascript": false,
+      "holds_long_lived_authorization_evidence_or_declassification_keys": true,
+      "owns_durable_effect_and_checkpoint_state": true,
+      "trusts_execution_cell_policy_assertions": false
+    }
+  ],
+  "dependency_direction": [
+    "franken_node -> franken_engine",
+    "franken_engine -> franken_native_capsule"
+  ],
+  "forbidden_dependency_direction": [
+    "franken_engine -> franken_node",
+    "franken_native_capsule -> franken_engine",
+    "franken_native_capsule -> franken_node",
+    "franken_node -> franken_native_capsule"
+  ],
+  "unsafe_boundary": {
+    "allowed_repository": "/dp/franken_native_capsule",
+    "unsafe_allowed_package": "frankenengine-native-capsule",
+    "unsafe_forbidden_packages": [
+      "frankenengine-native-capsule-api",
+      "franken-native-capsule-worker"
+    ],
+    "unsafe_allowed_modules": [
+      "src/arch/x86_64/raw_invoke.rs",
+      "src/arch/aarch64/raw_invoke.rs",
+      "src/platform/linux/executable_memory.rs",
+      "src/platform/linux/process_sandbox.rs",
+      "src/platform/linux/process_supervisor.rs",
+      "src/platform/linux/unwind_registration.rs",
+      "src/platform/apple/executable_memory.rs",
+      "src/platform/apple/process_sandbox.rs",
+      "src/platform/apple/process_supervisor.rs",
+      "src/platform/apple/unwind_registration.rs",
+      "src/platform/windows/executable_memory.rs",
+      "src/platform/windows/process_sandbox.rs",
+      "src/platform/windows/process_supervisor.rs",
+      "src/platform/windows/unwind_registration.rs"
+    ],
+    "unsafe_block_requirements": [
+      "stable-safety-invariant-id",
+      "local-safety-comment-bound-to-proof-or-test",
+      "two-person-producer-distinct-review",
+      "cfg-and-feature-matrix-coverage",
+      "miri-sanitizer-fuzz-or-platform-probe-as-applicable"
+    ],
+    "unsafe_forbidden_surfaces": [
+      "build-scripts",
+      "proc-macros",
+      "examples",
+      "tests",
+      "benches",
+      "generated-source",
+      "newly-added-unallowlisted-modules"
+    ],
+    "transitive_unsafe_policy": "separate-cargo-metadata-cargo-geiger-sbom-inventory-and-risk-acceptance",
+    "forbidden_repositories": [
+      "/dp/franken_engine",
+      "/dp/franken_node"
+    ],
+    "scope": [
+      "backend adapter",
+      "executable memory",
+      "native relocation",
+      "raw invocation",
+      "platform mitigation",
+      "quiescent retirement"
+    ]
+  },
+  "selected_backend": {
+    "portable_backend": "cranelift",
+    "implementation_release": {
+      "cranelift_version": "0.134.2",
+      "wasmtime_tag": "v47.0.2",
+      "wasmtime_source_commit": "90fed3c6adf53f112c4dea56851728557bb73799",
+      "minimum_rust_version": "1.94.0",
+      "upstream_wasmtime_v47_0_2_cargo_lock_sha256": "5ade5500913378cee414018ccb85700ed39dafd0eeed1625e0cd8deee296862b",
+      "production_crates": [
+        {
+          "name": "cranelift-bforest",
+          "version": "0.134.2",
+          "crates_io_sha256": "6867e99f068454b0c81c50b807af88aa80aaf383105e2be26675d81fc4278466",
+          "download_url": "https://static.crates.io/crates/cranelift-bforest/cranelift-bforest-0.134.2.crate"
+        },
+        {
+          "name": "cranelift-codegen",
+          "version": "0.134.2",
+          "crates_io_sha256": "933b2e5237665bf9367a34ad2100eed70c94b2796586cb09d9ba11693e061667",
+          "download_url": "https://static.crates.io/crates/cranelift-codegen/cranelift-codegen-0.134.2.crate"
+        },
+        {
+          "name": "cranelift-control",
+          "version": "0.134.2",
+          "crates_io_sha256": "c11438f9becf9a1e1e061bf76a33241b941a07ed01a489e9dad5fa79dc3624e9",
+          "download_url": "https://static.crates.io/crates/cranelift-control/cranelift-control-0.134.2.crate"
+        },
+        {
+          "name": "cranelift-entity",
+          "version": "0.134.2",
+          "crates_io_sha256": "584ecabe1462593a9cba9efbf9022e0987421ddb548989b455ab8bdd444b743c",
+          "download_url": "https://static.crates.io/crates/cranelift-entity/cranelift-entity-0.134.2.crate"
+        },
+        {
+          "name": "cranelift-frontend",
+          "version": "0.134.2",
+          "crates_io_sha256": "34249873145213a12106d5fd8a98a9dc9e90e16525e2337b2907874d1e7e9ee7",
+          "download_url": "https://static.crates.io/crates/cranelift-frontend/cranelift-frontend-0.134.2.crate"
+        },
+        {
+          "name": "cranelift-module",
+          "version": "0.134.2",
+          "crates_io_sha256": "790e3fa73ee25bbb25eee937986051f8b6f6a2f5582477662f95e09d1e9f85f3",
+          "download_url": "https://static.crates.io/crates/cranelift-module/cranelift-module-0.134.2.crate"
+        },
+        {
+          "name": "cranelift-native",
+          "version": "0.134.2",
+          "crates_io_sha256": "31d9e4f6d9a3777b1ffa818000b4a6d7afd1b8787af71a9c58d94baef9076ced",
+          "download_url": "https://static.crates.io/crates/cranelift-native/cranelift-native-0.134.2.crate"
+        },
+        {
+          "name": "cranelift-object",
+          "version": "0.134.2",
+          "crates_io_sha256": "ef16bb4647b1f9b8ca0e8f0a8354165310551943af44d42aa9ec3307f172c7de",
+          "download_url": "https://static.crates.io/crates/cranelift-object/cranelift-object-0.134.2.crate"
+        }
+      ],
+      "research_only_crates": [
+        {
+          "name": "cranelift-jit",
+          "version": "0.134.2",
+          "crates_io_sha256": "fc96ccb592b046be204bf2fbeb397761384e5da10cbf0c2095078af3eaaebe55",
+          "download_url": "https://static.crates.io/crates/cranelift-jit/cranelift-jit-0.134.2.crate",
+          "production_dependency_allowed": false
+        }
+      ]
+    },
+    "research_head_snapshot": {
+      "commit": "bccd12218bb4d16e0f535cd69b4d96994ff3a7ad",
+      "purpose": "post-release-architecture-survey-only",
+      "is_implementation_release_identity": false
+    },
+    "license": "Apache-2.0 WITH LLVM-exception",
+    "direct_jitmodule_exposure": false,
+    "jitmodule_v1_production_eligible": false,
+    "v1_production_emission_paths": [
+      "cranelift-object-to-address-free-rco",
+      "direct-compiled-code-and-relocation-extraction-to-address-free-rco"
+    ],
+    "jitmodule_reeligibility_condition": "prove-identical-address-free-seal-post-output-activation-authorization-dormant-admission-retirement-and-receipt-semantics",
+    "custom_backend_is_initial_default": false,
+    "tier_b_bakeoff": [
+      "copy-and-patch",
+      "direct-cranelift",
+      "whole-interpreter-partial-evaluation"
+    ]
+  },
+  "compiler_input": {
+    "schema_version": "franken-engine.native-region-plan.v1",
+    "owner": "franken_engine",
+    "contains_machine_code": false,
+    "contains_live_addresses": false,
+    "binds_semantics_and_lowering_hashes": true,
+    "rco_producer": "franken-native-capsule-worker"
+  },
+  "region_code_object": {
+    "schema_version": "franken-engine.region-code-object.v1",
+    "contains_live_addresses": false,
+    "pipeline": [
+      "lower",
+      "compile-authorize",
+      "compile",
+      "seal",
+      "compile-receipt",
+      "activation-authorize",
+      "structural-validate",
+      "reserve",
+      "relocate",
+      "final-image-validate",
+      "instruction-cache-sync",
+      "write-revoke",
+      "cfi-unwind-register",
+      "prepare",
+      "install-dormant-route",
+      "commit-admission",
+      "enable-entry-atomically",
+      "record-entry-enabled",
+      "execute",
+      "unroute",
+      "quiesce",
+      "cfi-unwind-unregister",
+      "unmap",
+      "retire"
+    ],
+    "required_domains": [
+      "semantics-and-ir-hashes",
+      "compiler-backend-generator-hashes",
+      "target-and-feature-mask",
+      "code-and-rodata",
+      "allowlisted-relocations",
+      "entrypoints-and-signatures",
+      "branch-targets-and-bounds",
+      "safepoints-and-stack-maps",
+      "deopt-and-materialization",
+      "exceptions-osr-and-interrupts",
+      "deterministic-fp-unwind-and-forbidden-instructions",
+      "capability-ifc-budget-policy-evidence",
+      "assumptions-watchpoints-and-epochs",
+      "resource-estimates",
+      "debug-and-redaction",
+      "provenance-signature-sbom-license"
+    ],
+    "forbidden_or_guarded_instruction_classes": [
+      "direct-syscall-and-trap-gateways",
+      "rdtsc-rdtscp",
+      "rdrand-rdseed",
+      "privileged-state-changes",
+      "unauthorized-tls-or-signal-state-access",
+      "architecture-specific-nondeterminism"
+    ],
+    "floating_point_contract": [
+      "save-and-restore-x87-mxcsr-fpcr-state",
+      "no-unauthorized-ftz-or-daz",
+      "no-fma-contraction-without-semantic-proof",
+      "spec-exact-nan-and-signed-zero",
+      "no-unwind-across-native-abi"
+    ]
+  },
+  "engine_authorization": {
+    "schema_version": "franken-engine.native-authorization-protocol.v1",
+    "policy_logic_owner": "franken_engine",
+    "issuer_role": "out-of-cell-control-plane-native-authorization-service",
+    "issuer_process_location": "outside-execution-cell",
+    "signing_key_location": "outside-execution-cell",
+    "execution_cell_role": "unsigned-untrusted-compile-or-activation-proposal-producer-only",
+    "in_cell_engine_may_issue_signed_authorization": false,
+    "issuer_revalidation_required": [
+      "trusted-source-semantics-ir-and-lowering-lineage",
+      "tenant-extension-package-realm-cell-authority",
+      "tier-and-complete-execution-profile-tuple",
+      "compiler-backend-capsule-target-abi-rco-helper-identities",
+      "capability-ifc-policy-proof-revocation-and-security-epochs",
+      "compile-code-memory-activation-runtime-and-variant-budgets",
+      "time-nonce-attempt-replay-and-prior-authorization-state",
+      "sandbox-supervisor-broker-checkpoint-and-recovery-contract"
+    ],
+    "signer_unavailable_or_stale_action": "fail-closed-tier-i-or-typed-unavailable-no-unsigned-bypass",
+    "rotation_and_revocation_rule": "new-epoch-revalidation-old-key-rejection-and-no-in-cell-fallback",
+    "compile_authorization": {
+      "schema_version": "franken-engine.native-compile-authorization.v1",
+      "issued_before_compilation": true,
+      "single_use_or_bounded_replay": true,
+      "required_domains": [
+        "source-semantics-ir-and-lowering-hashes",
+        "tenant-extension-package-realm-cell-authority",
+        "tier-and-execution-profile-tuple",
+        "compiler-backend-capsule-identities",
+        "target-feature-abi-rco-schema",
+        "capability-ifc-policy-proof-revocation-security-epochs",
+        "compile-cpu-memory-output-and-variant-budgets",
+        "time-nonce-attempt-replay",
+        "engine-signature-and-evidence-linkage"
+      ]
+    },
+    "compile_receipt": {
+      "schema_version": "franken-engine.native-compile-receipt.v1",
+      "binds_input_authorization": true,
+      "binds_transcript_and_sealed_rco_hash": true
+    },
+    "activation_authorization": {
+      "schema_version": "franken-engine.native-activation-authorization.v1",
+      "issued_after_sealed_rco": true,
+      "single_use_or_bounded_replay": true,
+      "required_domains": [
+        "compile-authorization-and-receipt-hashes",
+        "sealed-rco-and-final-pre-relocation-hashes",
+        "tenant-extension-package-realm-cell-authority",
+        "tier-and-execution-profile-tuple",
+        "compiler-backend-capsule-identities",
+        "target-feature-abi-rco-schema",
+        "helper-table-schema-and-helper-ids",
+        "capability-ifc-policy-proof-revocation-security-epochs",
+        "code-memory-activation-and-runtime-budgets",
+        "time-nonce-attempt-replay",
+        "supervisor-broker-sandbox-and-recovery-contract",
+        "engine-signature-and-evidence-linkage"
+      ]
+    },
+    "signature_is_memory_safety_proof": false
+  },
+  "authority_containment": {
+    "external_effect_path": "out-of-cell-policy-enforcing-broker-only",
+    "broker_trusts_child_policy_assertions": false,
+    "broker_can_reconstruct_arbitrary_value_level_ifc_from_child_bytes": false,
+    "arbitrary_code_resilient_fine_grained_ifc_claim": false,
+    "broker_owned_conservative_output_label_rule": "join-of-all-labels-admitted-to-cell-plus-broker-derived-input-lineage",
+    "forged_child_public_label_action": "ignore-child-label-and-enforce-broker-owned-conservative-label",
+    "finer_grained_ifc_requires": "unforgeable-broker-owned-labeled-handles-or-generated-code-and-engine-in-language-security-tcb",
+    "native_ifc_eligibility_rule": "before-entry-prove-all-prospective-effects-accept-cell-high-water-label-else-preferred-tier-i-or-required-typed-denial",
+    "post_entry_label_escalation_action": "deny-unapproved-effect-and-restart-from-trusted-pre-native-boundary-in-tier-i-only-when-broker-proves-replay-safe-else-typed-indeterminate",
+    "signed_declassification_owner": "out-of-cell-authority-broker",
+    "overtaint_operator_surface": "doctor-explain-receipt-and-measured-rate",
+    "broker_revalidates": [
+      "cell-tenant-extension-authority",
+      "capability-and-ifc-policy",
+      "resource-and-rate-budget",
+      "effect-sequence-and-idempotency-key",
+      "security-proof-and-revocation-epochs",
+      "trusted-input-lineage-and-derived-ifc-provenance"
+    ],
+    "externally_visible_effect_classes_include": [
+      "hostcalls",
+      "stdout-and-stderr",
+      "streamed-response-bytes",
+      "product-visible-return-delivery"
+    ],
+    "partial_output_policy": [
+      "buffer-until-commit-when-bounded",
+      "otherwise-broker-with-sequence-and-idempotency",
+      "otherwise-terminal-partial-or-indeterminate-no-auto-replay"
+    ],
+    "in_child_long_lived_signing_or_declassification_keys": false,
+    "durable_effect_journal_location": "outside-execution-cell",
+    "durable_checkpoint_location": "outside-execution-cell",
+    "evidence_signing_location": "outside-execution-cell",
+    "unknown_nonreconcilable_effect_action": "terminal-indeterminate-quarantine-no-auto-replay",
+    "exact_prefix_recovery_scope": "only-effects-with-broker-proof-of-commit-state",
+    "child_supplied_ifc_capability_provenance_evidence_or_commit_assertions_are_authoritative": false,
+    "post_native_child_checkpoint_is_trusted_recovery_root": false,
+    "trusted_recovery_roots": [
+      "pre-native-checkpoint-bound-to-broker-and-evidence-prefix",
+      "post-native-state-independently-reconstructed-or-verified-outside-child"
+    ],
+    "replay_inputs": [
+      "broker-held-nondeterminism-receipts",
+      "broker-held-effect-and-commit-receipts",
+      "trusted-policy-and-revocation-epochs"
+    ],
+    "active_shared_memory_fault_recovery": "quiescent-checkpoint-proven-or-typed-terminal-no-fake-deterministic-replay",
+    "ambient_filesystem_network_device_or_process_authority": false
+  },
+  "recovery_eligibility": {
+    "registry_schema": "franken-engine.native-recovery-class-registry.v1",
+    "owner": "franken_engine",
+    "unknown_state_family_action": "fail-closed-pre-entry-tier-i-or-typed-terminal",
+    "feature_may_be_silently_dropped": false,
+    "live_state_families": [
+      "live-sockets-files-and-process-handles",
+      "timers-jobs-and-pending-promises",
+      "generators-and-async-suspension",
+      "weakref-and-finalization-registry-state",
+      "module-instantiation-and-evaluation-state",
+      "sharedarraybuffer-atomics-agent-cluster-state",
+      "pending-stdout-stderr-and-streamed-output",
+      "product-visible-return-delivery"
+    ],
+    "allowed_dispositions": [
+      "trusted-quiescent-checkpoint-and-broker-replay",
+      "pre-entry-tier-i-fallback",
+      "typed-terminal-nonreplayable-or-indeterminate"
+    ]
+  },
+  "profile_model": {
+    "receipt_axes": [
+      "code-mode",
+      "fault-domain",
+      "authority-profile",
+      "sandbox-profile",
+      "operator-mode"
+    ],
+    "code_modes": [
+      "tier-i",
+      "jit",
+      "aot"
+    ],
+    "operator_modes": [
+      "disabled",
+      "preferred",
+      "required"
+    ],
+    "operator_mode_owner": "administrator-not-guest-or-extension-manifest",
+    "silent_axis_transition_allowed": false,
+    "aot_tcb_effects": {
+      "semantic_correctness": [
+        "offline-compiler",
+        "backend",
+        "structural-validator",
+        "generated-code"
+      ],
+      "active_runtime_process_removed_components": [
+        "runtime-compiler",
+        "runtime-backend"
+      ],
+      "deployment_added_components": [
+        "artifact-distribution",
+        "artifact-loader-or-platform-linker",
+        "code-signing-and-package-verification"
+      ],
+      "wrong_code_becomes_safe": false
+    }
+  },
+  "execution_profiles": [
+    {
+      "id": "native-throughput",
+      "allowed_code_modes": [
+        "jit",
+        "aot"
+      ],
+      "fault_domain": "embedded-engine-process",
+      "authority_profile": "engine-process-authority",
+      "sandbox_profile": "none-beyond-engine-policy",
+      "production_eligibility": "dedicated-trust-domain-and-explicit-administrator-selection",
+      "fatal_fault_action": "terminate-embedded-engine-process",
+      "in_process_catch_and_fallback": false,
+      "claim_tcb": {
+        "semantic_correctness": [
+          "engine-lowering",
+          "engine-runtime-and-gc",
+          "compiler",
+          "backend",
+          "structural-validator",
+          "relocator-or-platform-linker",
+          "platform-adapter",
+          "capsule",
+          "generated-code",
+          "abi-helper-table-and-helper-implementations"
+        ],
+        "language_level_capability_and_ifc_semantics": [
+          "engine-lowering",
+          "engine-runtime-and-gc",
+          "compiler",
+          "backend",
+          "structural-validator",
+          "relocator-or-platform-linker",
+          "platform-adapter",
+          "capsule",
+          "generated-code",
+          "abi-helper-table-and-helper-implementations"
+        ],
+        "parent_survival": null,
+        "ambient_authority_and_effect_ceiling": null,
+        "broker_proven_effect_prefix_recovery": null
+      }
+    },
+    {
+      "id": "native-parent-crash-contained",
+      "allowed_code_modes": [
+        "jit",
+        "aot"
+      ],
+      "fault_domain": "whole-execution-cell-child-process",
+      "authority_profile": "in-cell-engine-authority",
+      "sandbox_profile": "parent-address-space-and-lifecycle-only",
+      "production_eligibility": "fuzz-bringup-and-explicitly-labeled-non-authority-contained-use",
+      "fatal_fault_action": "terminate-and-reap-cell-process-group",
+      "in_process_catch_and_fallback": false,
+      "claim_tcb": {
+        "semantic_correctness": [
+          "engine-lowering",
+          "engine-runtime-and-gc",
+          "compiler",
+          "backend",
+          "structural-validator",
+          "relocator-or-platform-linker",
+          "platform-adapter",
+          "capsule",
+          "generated-code",
+          "abi-helper-table-and-helper-implementations"
+        ],
+        "language_level_capability_and_ifc_semantics": [
+          "engine-lowering",
+          "engine-runtime-and-gc",
+          "compiler",
+          "backend",
+          "structural-validator",
+          "relocator-or-platform-linker",
+          "platform-adapter",
+          "capsule",
+          "generated-code",
+          "abi-helper-table-and-helper-implementations"
+        ],
+        "parent_survival": [
+          "kernel-process-isolation",
+          "cell-supervisor",
+          "process-and-descendant-lifecycle",
+          "ipc-parser-and-peer-authentication",
+          "no-shared-mutable-vm-memory"
+        ],
+        "ambient_authority_and_effect_ceiling": null,
+        "broker_proven_effect_prefix_recovery": null
+      }
+    },
+    {
+      "id": "native-crash-contained",
+      "allowed_code_modes": [
+        "jit",
+        "aot"
+      ],
+      "fault_domain": "whole-execution-cell-child-process",
+      "authority_profile": "out-of-cell-broker-confined",
+      "sandbox_profile": "platform-least-authority-v1",
+      "production_eligibility": "default-for-untrusted-native-extensions-when-all-controls-green",
+      "fatal_fault_action": "terminate-and-reap-cell-process-group",
+      "in_process_catch_and_fallback": false,
+      "claim_tcb": {
+        "semantic_correctness": [
+          "engine-lowering",
+          "engine-runtime-and-gc",
+          "compiler",
+          "backend",
+          "structural-validator",
+          "relocator-or-platform-linker",
+          "platform-adapter",
+          "capsule",
+          "generated-code",
+          "abi-helper-table-and-helper-implementations"
+        ],
+        "language_level_capability_and_ifc_semantics": [
+          "engine-lowering",
+          "engine-runtime-and-gc",
+          "compiler",
+          "backend",
+          "structural-validator",
+          "relocator-or-platform-linker",
+          "platform-adapter",
+          "capsule",
+          "generated-code",
+          "abi-helper-table-and-helper-implementations"
+        ],
+        "parent_survival": [
+          "kernel-process-isolation",
+          "cell-supervisor",
+          "process-and-descendant-lifecycle",
+          "ipc-parser-and-peer-authentication",
+          "no-shared-mutable-vm-memory"
+        ],
+        "ambient_authority_and_effect_ceiling": [
+          "kernel-and-platform-sandbox",
+          "cell-supervisor",
+          "ipc-parser-and-peer-authentication",
+          "authority-and-effect-broker",
+          "policy-capability-ifc-and-budget-verifier",
+          "out-of-cell-evidence-and-key-service",
+          "descriptor-handle-and-channel-allowlists"
+        ],
+        "broker_proven_effect_prefix_recovery": [
+          "authority-and-effect-broker",
+          "durable-checkpoint-and-effect-journal",
+          "provider-commit-reconciliation",
+          "out-of-cell-evidence-and-key-service",
+          "cell-supervisor"
+        ]
+      }
+    },
+    {
+      "id": "portable-tier-i",
+      "allowed_code_modes": [
+        "tier-i"
+      ],
+      "fault_domain": "declared-engine-deployment-topology",
+      "authority_profile": "safe-engine-policy",
+      "sandbox_profile": "declared-engine-deployment-topology",
+      "production_eligibility": "universal-portable-execution-path",
+      "fatal_fault_action": "not-a-native-fault-contract",
+      "in_process_catch_and_fallback": false,
+      "claim_tcb": {
+        "semantic_correctness": [
+          "safe-engine"
+        ],
+        "language_level_capability_and_ifc_semantics": [
+          "safe-engine"
+        ],
+        "parent_survival": [
+          "inherit-declared-engine-deployment-topology"
+        ],
+        "ambient_authority_and_effect_ceiling": [
+          "inherit-declared-engine-deployment-topology"
+        ],
+        "broker_proven_effect_prefix_recovery": [
+          "inherit-declared-engine-deployment-topology"
+        ]
+      }
+    }
+  ],
+  "platform_owners": [
+    {
+      "platform": "linux",
+      "owner": "franken_native_capsule::platform::linux",
+      "architectures": [
+        "x86_64",
+        "aarch64"
+      ],
+      "required_controls": [
+        "dedicated-page-aligned-mapping",
+        "rw-to-rx",
+        "no-live-writable-alias",
+        "instruction-cache-sync",
+        "sealed-transfer-if-used",
+        "least-authority-cell-process",
+        "no-new-privileges",
+        "namespace-landlock-seccomp-cgroup-support-matrix",
+        "descriptor-and-channel-allowlist",
+        "broker-only-external-effects",
+        "no-in-cell-signing-or-declassification-keys",
+        "independent-hard-watchdog",
+        "process-group-kill-and-reap"
+      ]
+    },
+    {
+      "platform": "apple",
+      "owner": "franken_native_capsule::platform::apple",
+      "architectures": [
+        "aarch64",
+        "x86_64"
+      ],
+      "required_controls": [
+        "hardened-runtime-entitlement-envelope",
+        "map-jit",
+        "jit-write-callback-allowlist",
+        "instruction-cache-invalidate",
+        "no-live-writable-alias",
+        "pac-bti-support-matrix",
+        "codesign-and-notarization",
+        "sandboxed-service-or-typed-unavailable",
+        "descriptor-and-channel-allowlist",
+        "broker-only-external-effects",
+        "no-in-cell-signing-or-declassification-keys",
+        "bounded-process-resource-envelope",
+        "independent-hard-watchdog"
+      ]
+    },
+    {
+      "platform": "windows",
+      "owner": "franken_native_capsule::platform::windows",
+      "architectures": [
+        "x86_64",
+        "aarch64-typed-availability"
+      ],
+      "required_controls": [
+        "virtualalloc-dedicated-region",
+        "virtualprotect-rw-to-rx",
+        "flushinstructioncache",
+        "cfg-invalid-by-default-exact-target-registration",
+        "dynamic-function-table-registration",
+        "cet-support-matrix",
+        "restricted-token-or-appcontainer-support-matrix",
+        "inherited-handle-and-channel-allowlist",
+        "broker-only-external-effects",
+        "no-in-cell-signing-or-declassification-keys",
+        "independent-hard-watchdog",
+        "job-process-mitigation-envelope"
+      ]
+    }
+  ],
+  "cache_and_confidentiality": {
+    "artifact_identity": "immutable-compiler-semantics-target-profile-and-rco-content",
+    "artifact_identity_includes_activation_nonce_or_expiry": false,
+    "activation_binding_is_separate": true,
+    "confidentiality_classes": [
+      "public-shareable",
+      "tenant-scoped",
+      "tenant-secret-bearing"
+    ],
+    "tenant_secret_cross_tenant_deduplication_allowed": false,
+    "ordinary_profile_claims_microarchitectural_side_channel_confidentiality": false,
+    "high_assurance_side_channel_profile_controls": [
+      "tenant-core-isolation-or-core-scheduling",
+      "explicit-smt-disable-or-trusted-sibling-policy",
+      "cache-numa-and-memory-placement-policy",
+      "architecture-specific-predictor-and-serialization-mitigations",
+      "constant-time-out-of-cell-key-service",
+      "cross-tenant-prime-probe-and-branch-target-red-probes",
+      "measured-throughput-latency-and-capacity-cost"
+    ],
+    "side_channel_evidence_absence_action": "claim-excluded-not-inferred-from-process-or-sandbox-isolation",
+    "crash_artifact_policy": {
+      "ambient_os_core_dumps_enabled": false,
+      "diagnostic_dump_path": "broker-controlled-encrypted-quota-retention-store-only",
+      "user_controlled_dump_filenames_allowed": false,
+      "full_heap_register_native_page_classification": "tenant-secret-bearing",
+      "operator_output": "redacted-reference-and-policy-outcome-only",
+      "quota_or_key_service_failure_action": "deny-dump-and-preserve-terminal-fault-record",
+      "verified_zero_or_expiry_required": true
+    },
+    "tenant_secret_artifact_requirements": [
+      "tenant-bound-identity",
+      "encryption-at-rest",
+      "bounded-retention",
+      "redacted-debug-perf-and-crash-artifacts",
+      "verified-zero-before-release"
+    ]
+  },
+  "lifecycle": {
+    "cache_identity": "immutable-artifact-identity-separate-from-activation-authorization",
+    "activation_records": {
+      "prepared": "franken-engine.native-code-activation-prepared.v1",
+      "admission_committed": "franken-engine.native-code-activation-admission-committed.v1",
+      "entry_enabled": "franken-engine.native-code-activation-entry-enabled.v1",
+      "aborted": "franken-engine.native-code-activation-aborted.v1",
+      "outcome_indeterminate": "franken-engine.native-code-activation-outcome-indeterminate.v1"
+    },
+    "retirement_receipt": "franken-engine.native-code-retirement-receipt.v1",
+    "activation_atomic": true,
+    "dormant_route_is_not_guest_enterable": true,
+    "committed_admission_before_entry_enable": true,
+    "entry_enable_is_linearization_point": true,
+    "admission_commit_claims_guest_routability": false,
+    "entry_enabled_record_follows_linearization": true,
+    "missing_entry_enabled_record_after_process_loss_requires_reconciliation": true,
+    "patch_in_place": false,
+    "retirement_requires_quiescence": true,
+    "confidential_zero_before_unmap": true,
+    "failed_activation_cleans_registered_metadata_and_mappings": true,
+    "unknown_liveness_action": "quarantine-and-block-reuse",
+    "required_domains": [
+      "authenticate-and-parse",
+      "authorization-and-resource-reservation",
+      "inactive-population-and-relocation",
+      "final-image-hash-and-validation",
+      "instruction-cache-and-write-revocation",
+      "cfi-unwind-debug-registration",
+      "prepared-record-and-dormant-route-install",
+      "admission-committed-or-aborted-record",
+      "atomic-entry-enable",
+      "entry-enabled-record-or-process-loss-reconciliation",
+      "unroute-and-epoch-quiescence",
+      "metadata-unregister-confidential-zero-and-unmap",
+      "quota-refund-and-linked-retirement-receipt",
+      "partial-activation-rollback-cleanup"
+    ],
+    "last_trusted_boundary": "pre-native-checkpoint-plus-broker-nondeterminism-effect-policy-and-evidence-prefix",
+    "post_native_child_checkpoint_is_untrusted_proposal": true
+  },
+  "claim_rules": {
+    "raw_compute_profile": "native-throughput",
+    "untrusted_production_profile": "native-crash-contained",
+    "portable_profile": "portable-tier-i",
+    "aot_is_code_mode_not_trust_profile": true,
+    "parent_crash_containment_is_authority_containment": false,
+    "w_x_is_arbitrary_code_containment": false,
+    "cfi_pac_bti_is_arbitrary_code_containment": false,
+    "compiler_signature_is_arbitrary_code_containment": false,
+    "compilation_worker_is_execution_isolation": false,
+    "unknown_external_effect_auto_replay_allowed": false,
+    "silent_profile_fallback_allowed": false,
+    "post_fault_same_process_resume_allowed": false
+  },
+  "document_sync": {
+    "adr": "NCC-ADR-0010-V1",
+    "plan": "NCC-PLAN-0010-V1",
+    "engine_split": "NCC-ENGINE-SPLIT-0010-V1",
+    "node_split": "NCC-NODE-SPLIT-0010-V1",
+    "owner_trust_root": "NCC-OWNER-TRUST-ROOT-0010-V1"
+  },
+  "source_claims": [
+    {
+      "claim_id": "NCC-SRC-001",
+      "claim": "Cranelift IR permits general memory operations and is not an arbitrary-code memory sandbox.",
+      "evidence_class": "architecture-input-not-runtime-evidence",
+      "bindings": [
+        {
+          "source_id": "cranelift-ir",
+          "locator": "Memory operations and load/store instruction definitions"
+        }
+      ]
+    },
+    {
+      "claim_id": "NCC-SRC-002",
+      "claim": "Direct JIT integration exposes finalized native addresses and requires capsule-owned lifetime and retirement proofs.",
+      "evidence_class": "architecture-input-not-runtime-evidence",
+      "bindings": [
+        {
+          "source_id": "cranelift-module",
+          "locator": "Module finalized-function access contract"
+        },
+        {
+          "source_id": "cranelift-jit-backend",
+          "locator": "JITModule finalized memory and free_memory lifecycle"
+        }
+      ]
+    },
+    {
+      "claim_id": "NCC-SRC-003",
+      "claim": "The evaluated Cranelift source license is Apache-2.0 WITH LLVM-exception.",
+      "evidence_class": "supply-chain-input-not-release-approval",
+      "bindings": [
+        {
+          "source_id": "cranelift-license",
+          "locator": "Complete LICENSE file"
+        }
+      ]
+    },
+    {
+      "claim_id": "NCC-SRC-004",
+      "claim": "Apple JIT deployment requires explicit MAP_JIT, write-authorization, instruction-cache, signing, and target-specific control handling.",
+      "evidence_class": "platform-input-not-platform-certification",
+      "bindings": [
+        {
+          "source_id": "apple-jit-porting",
+          "locator": "MAP_JIT, JIT write callback, and instruction-cache guidance"
+        },
+        {
+          "source_id": "apple-pointer-authentication",
+          "locator": "Pointer-authentication deployment and compatibility guidance"
+        },
+        {
+          "source_id": "apple-hardened-runtime",
+          "locator": "Hardened Runtime capability and entitlement contract"
+        },
+        {
+          "source_id": "apple-app-sandbox",
+          "locator": "App Sandbox authority and entitlement model"
+        },
+        {
+          "source_id": "apple-xpc-services",
+          "locator": "XPC service isolation and lifecycle model"
+        }
+      ]
+    },
+    {
+      "claim_id": "NCC-SRC-005",
+      "claim": "Windows dynamic code needs explicit page protection, instruction-cache, CFG target, and unwind-function-table lifecycle handling.",
+      "evidence_class": "platform-input-not-platform-certification",
+      "bindings": [
+        {
+          "source_id": "windows-virtualprotect",
+          "locator": "Executable protection and cache-coherency remarks"
+        },
+        {
+          "source_id": "windows-flush-instruction-cache",
+          "locator": "FlushInstructionCache contract"
+        },
+        {
+          "source_id": "windows-valid-call-targets",
+          "locator": "SetProcessValidCallTargets contract"
+        },
+        {
+          "source_id": "windows-control-flow-guard",
+          "locator": "Dynamic-code CFG target validity"
+        },
+        {
+          "source_id": "windows-dynamic-function-table",
+          "locator": "RtlAddFunctionTable dynamic unwind contract"
+        },
+        {
+          "source_id": "windows-appcontainer",
+          "locator": "AppContainer least-authority process setup"
+        },
+        {
+          "source_id": "windows-job-objects",
+          "locator": "Job Object process-tree and resource lifecycle"
+        },
+        {
+          "source_id": "windows-process-mitigation",
+          "locator": "SetProcessMitigationPolicy process mitigation contract"
+        }
+      ]
+    },
+    {
+      "claim_id": "NCC-SRC-006",
+      "claim": "Linux page protection and process controls support W-to-X lifecycle and crash containment but do not make corrupt code safe.",
+      "evidence_class": "platform-input-not-platform-certification",
+      "bindings": [
+        {
+          "source_id": "linux-mprotect",
+          "locator": "Protection changes, alignment, and protection-fault behavior"
+        },
+        {
+          "source_id": "linux-memfd-create",
+          "locator": "Sealing and shared-memory lifecycle"
+        },
+        {
+          "source_id": "linux-seccomp",
+          "locator": "Least-authority syscall filtering contract"
+        },
+        {
+          "source_id": "linux-landlock",
+          "locator": "Unprivileged filesystem access-control contract"
+        },
+        {
+          "source_id": "linux-no-new-privileges",
+          "locator": "No-new-privileges inheritance contract"
+        },
+        {
+          "source_id": "linux-seccomp-filter",
+          "locator": "Kernel seccomp filter design and limitations"
+        }
+      ]
+    },
+    {
+      "claim_id": "NCC-SRC-007",
+      "claim": "Copy-and-patch and baseline meta-compilation merit a measured Tier-B bakeoff, not a production-performance claim.",
+      "evidence_class": "research-hypothesis-not-runtime-evidence",
+      "bindings": [
+        {
+          "source_id": "copy-and-patch",
+          "locator": "Abstract, method, and evaluation sections"
+        },
+        {
+          "source_id": "druid-baseline-meta-compilation",
+          "locator": "Abstract, metacompilation design, and evaluation sections"
+        }
+      ]
+    },
+    {
+      "claim_id": "NCC-SRC-008",
+      "claim": "The proposed implementation lock is Cranelift 0.134.2 from Wasmtime v47.0.2 at source commit 90fed3c6adf53f112c4dea56851728557bb73799 with Rust 1.94.0 minimum, while the newer research-head snapshot is not an implementation identity.",
+      "evidence_class": "supply-chain-input-not-release-approval",
+      "bindings": [
+        {
+          "source_id": "cranelift-release-workspace",
+          "locator": "Workspace version, Rust version, and cranelift-codegen dependency declaration"
+        },
+        {
+          "source_id": "cranelift-release-codegen-manifest",
+          "locator": "cranelift-codegen package version and license"
+        },
+        {
+          "source_id": "cranelift-release-cargo-lock",
+          "locator": "Exact release dependency graph and package checksums"
+        }
+      ]
+    },
+    {
+      "claim_id": "NCC-SRC-009",
+      "claim": "Whole-program partial evaluation can derive compiled code from an interpreter and reported a 2.17x SpiderMonkey-interpreter speedup, so it merits an upstream reproduction before any FrankenEngine production candidate.",
+      "evidence_class": "research-hypothesis-not-runtime-evidence",
+      "bindings": [
+        {
+          "source_id": "whole-program-partial-evaluation",
+          "locator": "Abstract, interpreter-specialization method, SpiderMonkey evaluation, and limitations"
+        }
+      ]
+    },
+    {
+      "claim_id": "NCC-SRC-010",
+      "claim": "Deegen demonstrates generated interpreter, baseline-JIT, specialization, inline-cache, and OSR machinery, so its methods merit upstream reproduction and explicit handoff experiments rather than an untracked second semantics implementation.",
+      "evidence_class": "research-hypothesis-not-runtime-evidence",
+      "bindings": [
+        {
+          "source_id": "deegen",
+          "locator": "Abstract, VM-generation architecture, bytecode specialization, baseline JIT, inline caching, OSR, and evaluation"
+        }
+      ]
+    },
+    {
+      "claim_id": "NCC-SRC-011",
+      "claim": "Two-tier meta-tracing research reports improved warmup with modest peak-performance loss, so tier-transition and compile-budget ideas merit isolated reproduction before production integration.",
+      "evidence_class": "research-hypothesis-not-runtime-evidence",
+      "bindings": [
+        {
+          "source_id": "two-tier-meta-tracing",
+          "locator": "Abstract, tier-one generator design, tier-two handoff, warmup evaluation, and limitations"
+        }
+      ]
+    },
+    {
+      "claim_id": "NCC-SRC-012",
+      "claim": "The VMIL 2025 Copy-and-Patch R study reports fast compilation and moderate interpreter speedups, providing a newer external feasibility point but not a FrankenEngine performance claim.",
+      "evidence_class": "research-hypothesis-not-runtime-evidence",
+      "bindings": [
+        {
+          "source_id": "copy-and-patch-r-vmil-2025",
+          "locator": "Abstract, DOI, compiler throughput, benchmark corpus, and reported speedup range"
+        }
+      ]
+    }
+  ],
+  "source_locks": [
+    {
+      "id": "cranelift-license",
+      "kind": "upstream-source",
+      "url": "https://raw.githubusercontent.com/bytecodealliance/wasmtime/90fed3c6adf53f112c4dea56851728557bb73799/LICENSE",
+      "version_or_commit": "wasmtime-v47.0.2@90fed3c6adf53f112c4dea56851728557bb73799",
+      "sha256": "268872b9816f90fd8e85db5a28d33f8150ebb8dd016653fb39ef1f94f2686bc5"
+    },
+    {
+      "id": "cranelift-ir",
+      "kind": "upstream-source",
+      "url": "https://raw.githubusercontent.com/bytecodealliance/wasmtime/90fed3c6adf53f112c4dea56851728557bb73799/cranelift/docs/ir.md",
+      "version_or_commit": "wasmtime-v47.0.2@90fed3c6adf53f112c4dea56851728557bb73799",
+      "sha256": "0b6363ec7e76df139eea4ed597ff59591d3e61385782ff4c7069415aaa2c4742"
+    },
+    {
+      "id": "cranelift-jit-backend",
+      "kind": "upstream-source",
+      "url": "https://raw.githubusercontent.com/bytecodealliance/wasmtime/90fed3c6adf53f112c4dea56851728557bb73799/cranelift/jit/src/backend.rs",
+      "version_or_commit": "wasmtime-v47.0.2@90fed3c6adf53f112c4dea56851728557bb73799",
+      "sha256": "024cc030e8b2c4f75aae1db4a808ce45e08f54707886a7352833150e5ebe7d80"
+    },
+    {
+      "id": "cranelift-module",
+      "kind": "upstream-source",
+      "url": "https://raw.githubusercontent.com/bytecodealliance/wasmtime/90fed3c6adf53f112c4dea56851728557bb73799/cranelift/module/src/module.rs",
+      "version_or_commit": "wasmtime-v47.0.2@90fed3c6adf53f112c4dea56851728557bb73799",
+      "sha256": "79c28ab0bb7d22203b26666d4f59d43cc05826ad4040bda4b6324a6b7b8d24d6"
+    },
+    {
+      "id": "cranelift-object",
+      "kind": "upstream-source",
+      "url": "https://raw.githubusercontent.com/bytecodealliance/wasmtime/90fed3c6adf53f112c4dea56851728557bb73799/cranelift/object/src/backend.rs",
+      "version_or_commit": "wasmtime-v47.0.2@90fed3c6adf53f112c4dea56851728557bb73799",
+      "sha256": "2dd26ad292f7d001708f7201f2717146233144494548381ee92ba26d86da78ea"
+    },
+    {
+      "id": "cranelift-release-workspace",
+      "kind": "upstream-source",
+      "url": "https://raw.githubusercontent.com/bytecodealliance/wasmtime/90fed3c6adf53f112c4dea56851728557bb73799/Cargo.toml",
+      "version_or_commit": "wasmtime-v47.0.2@90fed3c6adf53f112c4dea56851728557bb73799",
+      "sha256": "2cf64f1076fbee3b4acbaf3469606f67814c63e9135bae1f1afed538ab3685a7"
+    },
+    {
+      "id": "cranelift-release-codegen-manifest",
+      "kind": "upstream-source",
+      "url": "https://raw.githubusercontent.com/bytecodealliance/wasmtime/90fed3c6adf53f112c4dea56851728557bb73799/cranelift/codegen/Cargo.toml",
+      "version_or_commit": "wasmtime-v47.0.2@90fed3c6adf53f112c4dea56851728557bb73799",
+      "sha256": "484553f71d825d283514f79c81e0c6dbd54cf3c98432f0facf184cddafd9c96c"
+    },
+    {
+      "id": "cranelift-release-cargo-lock",
+      "kind": "upstream-source",
+      "url": "https://raw.githubusercontent.com/bytecodealliance/wasmtime/90fed3c6adf53f112c4dea56851728557bb73799/Cargo.lock",
+      "version_or_commit": "wasmtime-v47.0.2@90fed3c6adf53f112c4dea56851728557bb73799",
+      "sha256": "5ade5500913378cee414018ccb85700ed39dafd0eeed1625e0cd8deee296862b"
+    },
+    {
+      "id": "apple-jit-porting",
+      "kind": "platform-documentation-snapshot",
+      "url": "https://developer.apple.com/tutorials/data/documentation/apple-silicon/porting-just-in-time-compilers-to-apple-silicon.json",
+      "version_or_commit": "retrieved-2026-07-24",
+      "sha256": "101c002b9414846b410c5fd07665d2d60e82fe3b7b59d76840ed27870f39e3ba"
+    },
+    {
+      "id": "apple-pointer-authentication",
+      "kind": "platform-documentation-snapshot",
+      "url": "https://developer.apple.com/tutorials/data/documentation/apple-silicon/improving-control-flow-integrity-with-pointer-authentication.json",
+      "version_or_commit": "retrieved-2026-07-24",
+      "sha256": "dcfa3327860b622e6ea72a1ec598b820b17abff82f6adf161858bdc2dc8336fb"
+    },
+    {
+      "id": "apple-hardened-runtime",
+      "kind": "platform-documentation-snapshot",
+      "url": "https://developer.apple.com/tutorials/data/documentation/security/hardened-runtime.json",
+      "version_or_commit": "retrieved-2026-07-24",
+      "sha256": "8a38a5b7a9efc53c6318deb4b9719083bf744ba2ab040d6a4ca7145f3ca14eb9"
+    },
+    {
+      "id": "apple-xpc-services",
+      "kind": "platform-documentation-snapshot",
+      "url": "https://developer.apple.com/library/archive/documentation/MacOSX/Conceptual/BPSystemStartup/Chapters/CreatingXPCServices.html",
+      "version_or_commit": "retrieved-2026-07-24",
+      "sha256": "4603116b25a6de9645238a1aeb2b64ab8d0bba095b1349480f87b50e674f6ff7"
+    },
+    {
+      "id": "apple-app-sandbox",
+      "kind": "platform-documentation-snapshot",
+      "url": "https://developer.apple.com/library/archive/documentation/Security/Conceptual/AppSandboxDesignGuide/AboutAppSandbox/AboutAppSandbox.html",
+      "version_or_commit": "retrieved-2026-07-24",
+      "sha256": "7fda694d14cbaf6d12689d37a6a4a7c0b316e4b4b9ed37d28cba9411ec612484"
+    },
+    {
+      "id": "windows-virtualprotect",
+      "kind": "upstream-source",
+      "url": "https://raw.githubusercontent.com/MicrosoftDocs/sdk-api/dee7cfa4e300ed80dd48e2a97043dab8efb7396d/sdk-api-src/content/memoryapi/nf-memoryapi-virtualprotect.md",
+      "version_or_commit": "dee7cfa4e300ed80dd48e2a97043dab8efb7396d",
+      "sha256": "b1af9d5ec8fca73127bd5461fab153668dae5afd24cf4778e819682597156826"
+    },
+    {
+      "id": "windows-valid-call-targets",
+      "kind": "upstream-source",
+      "url": "https://raw.githubusercontent.com/MicrosoftDocs/sdk-api/dee7cfa4e300ed80dd48e2a97043dab8efb7396d/sdk-api-src/content/memoryapi/nf-memoryapi-setprocessvalidcalltargets.md",
+      "version_or_commit": "dee7cfa4e300ed80dd48e2a97043dab8efb7396d",
+      "sha256": "1bfb7ee2e24cc445a9db972d5bc4e144b3030cfc108eb82c0209911e2e104191"
+    },
+    {
+      "id": "windows-flush-instruction-cache",
+      "kind": "upstream-source",
+      "url": "https://raw.githubusercontent.com/MicrosoftDocs/sdk-api/dee7cfa4e300ed80dd48e2a97043dab8efb7396d/sdk-api-src/content/processthreadsapi/nf-processthreadsapi-flushinstructioncache.md",
+      "version_or_commit": "dee7cfa4e300ed80dd48e2a97043dab8efb7396d",
+      "sha256": "24f8d11f01a864a4331eadfd8569cbf8bec3e0f4c7f48454eff4f1f2088433d3"
+    },
+    {
+      "id": "windows-dynamic-function-table",
+      "kind": "upstream-source",
+      "url": "https://raw.githubusercontent.com/MicrosoftDocs/sdk-api/dee7cfa4e300ed80dd48e2a97043dab8efb7396d/sdk-api-src/content/winnt/nf-winnt-rtladdfunctiontable.md",
+      "version_or_commit": "dee7cfa4e300ed80dd48e2a97043dab8efb7396d",
+      "sha256": "5bf80e20a155f931babbd68427c21bfbbb619859697c31d9ef3c0eabcf7e4577"
+    },
+    {
+      "id": "windows-control-flow-guard",
+      "kind": "upstream-source",
+      "url": "https://raw.githubusercontent.com/MicrosoftDocs/win32/1fe27142f7f97c3baf3ae3b71549238e6b2b3647/desktop-src/SecBP/control-flow-guard.md",
+      "version_or_commit": "1fe27142f7f97c3baf3ae3b71549238e6b2b3647",
+      "sha256": "d525eafaa7d8fc904dcffd70d29d96b0bcc1ab031f9c790064ae6cfa3d603083"
+    },
+    {
+      "id": "windows-appcontainer",
+      "kind": "upstream-source",
+      "url": "https://raw.githubusercontent.com/MicrosoftDocs/win32/1fe27142f7f97c3baf3ae3b71549238e6b2b3647/desktop-src/SecAuthZ/implementing-an-appcontainer.md",
+      "version_or_commit": "1fe27142f7f97c3baf3ae3b71549238e6b2b3647",
+      "sha256": "37c381c1793f973c128bb4f508561d5127cc25cef752e5bbf9bd2b853ae15d8b"
+    },
+    {
+      "id": "windows-job-objects",
+      "kind": "upstream-source",
+      "url": "https://raw.githubusercontent.com/MicrosoftDocs/win32/1fe27142f7f97c3baf3ae3b71549238e6b2b3647/desktop-src/ProcThread/job-objects.md",
+      "version_or_commit": "1fe27142f7f97c3baf3ae3b71549238e6b2b3647",
+      "sha256": "7bc691d199400d285dab2655583e4ab235ac8574f440d898baf3f004b6910c96"
+    },
+    {
+      "id": "windows-process-mitigation",
+      "kind": "upstream-source",
+      "url": "https://raw.githubusercontent.com/MicrosoftDocs/sdk-api/dee7cfa4e300ed80dd48e2a97043dab8efb7396d/sdk-api-src/content/processthreadsapi/nf-processthreadsapi-setprocessmitigationpolicy.md",
+      "version_or_commit": "dee7cfa4e300ed80dd48e2a97043dab8efb7396d",
+      "sha256": "ca68dfe70851679506eafdaa653ee4221dad1be287c2d2e2d3717df145ae65d1"
+    },
+    {
+      "id": "linux-mprotect",
+      "kind": "upstream-source",
+      "url": "https://git.kernel.org/pub/scm/docs/man-pages/man-pages.git/plain/man/man2/mprotect.2?id=b77771f71a465271effab0f3d7aa57c85fe6d8e4",
+      "version_or_commit": "b77771f71a465271effab0f3d7aa57c85fe6d8e4",
+      "sha256": "f5c4f6f5d203b6411e842865911230ff9b841a2ca926ac933c57453830a1a6cb"
+    },
+    {
+      "id": "linux-memfd-create",
+      "kind": "upstream-source",
+      "url": "https://git.kernel.org/pub/scm/docs/man-pages/man-pages.git/plain/man/man2/memfd_create.2?id=b77771f71a465271effab0f3d7aa57c85fe6d8e4",
+      "version_or_commit": "b77771f71a465271effab0f3d7aa57c85fe6d8e4",
+      "sha256": "9838911ddbd6d4f910f0a06db650f481c7c589964746a724efac23455c831ce1"
+    },
+    {
+      "id": "linux-seccomp",
+      "kind": "upstream-source",
+      "url": "https://git.kernel.org/pub/scm/docs/man-pages/man-pages.git/plain/man/man2/seccomp.2?id=b77771f71a465271effab0f3d7aa57c85fe6d8e4",
+      "version_or_commit": "b77771f71a465271effab0f3d7aa57c85fe6d8e4",
+      "sha256": "92f0265cec47c953b3c2057ad74666de86b1adf33338bcc316e9b97eb44cb6d5"
+    },
+    {
+      "id": "linux-landlock",
+      "kind": "upstream-source",
+      "url": "https://raw.githubusercontent.com/torvalds/linux/48a5a7ab8d6ab7090564339e039c421f315de912/Documentation/userspace-api/landlock.rst",
+      "version_or_commit": "linux@48a5a7ab8d6ab7090564339e039c421f315de912",
+      "sha256": "01dca210e4a1839c45bb181f7b886465bcbd9e66f55e4f450a76091966aeabf2"
+    },
+    {
+      "id": "linux-no-new-privileges",
+      "kind": "upstream-source",
+      "url": "https://raw.githubusercontent.com/torvalds/linux/48a5a7ab8d6ab7090564339e039c421f315de912/Documentation/userspace-api/no_new_privs.rst",
+      "version_or_commit": "linux@48a5a7ab8d6ab7090564339e039c421f315de912",
+      "sha256": "73cd16bb37fab2678c891dd7d46bd5ea08a89b8534524352ed25f816e7c0da1c"
+    },
+    {
+      "id": "linux-seccomp-filter",
+      "kind": "upstream-source",
+      "url": "https://raw.githubusercontent.com/torvalds/linux/48a5a7ab8d6ab7090564339e039c421f315de912/Documentation/userspace-api/seccomp_filter.rst",
+      "version_or_commit": "linux@48a5a7ab8d6ab7090564339e039c421f315de912",
+      "sha256": "cd51ec8cf62f5029614e8c14d43d52ce1b69efbdb73e1f8c7d1c93d646b06ad7"
+    },
+    {
+      "id": "copy-and-patch",
+      "kind": "research-paper",
+      "url": "https://fredrikbk.com/publications/copy-and-patch.pdf",
+      "version_or_commit": "PACMPL-OOPSLA-2021-article-136",
+      "sha256": "03384d7dc9528f287708e60fbcfd9f4c97427f67867aa17dcca7c7083180bf3e"
+    },
+    {
+      "id": "druid-baseline-meta-compilation",
+      "kind": "research-paper",
+      "url": "https://arxiv.org/pdf/2502.20543v1",
+      "version_or_commit": "arXiv-2502.20543v1",
+      "sha256": "74bce64958c7a77b580786ae98c116b85683a4ea825470259bac979236879e6b"
+    },
+    {
+      "id": "whole-program-partial-evaluation",
+      "kind": "research-paper",
+      "url": "https://arxiv.org/pdf/2411.10559v1",
+      "version_or_commit": "arXiv-2411.10559v1",
+      "sha256": "12de822a94e0f37546e8109d85bf384c3f5ef2f703002464c1684948b4f5a399"
+    },
+    {
+      "id": "deegen",
+      "kind": "research-paper",
+      "url": "https://arxiv.org/pdf/2411.11469v2",
+      "version_or_commit": "arXiv-2411.11469v2",
+      "sha256": "0c90516639442b8d2d714c4d7cf53e5fdeb873c4a594c7144f63020c368c142c"
+    },
+    {
+      "id": "two-tier-meta-tracing",
+      "kind": "research-paper",
+      "url": "https://arxiv.org/pdf/2504.17460v3",
+      "version_or_commit": "arXiv-2504.17460v3",
+      "sha256": "1ac4d9d30fe01513f2a6e310ce4ff8bf358896f804f424638844cd0eacdd87e7"
+    },
+    {
+      "id": "copy-and-patch-r-vmil-2025",
+      "kind": "research-publication-record",
+      "url": "https://d3s.mff.cuni.cz/publications/kocourek_copyandpatch_2025/",
+      "version_or_commit": "DOI-10.1145/3759548.3763370-retrieved-2026-07-24",
+      "sha256": "f68750a780e0b022f0526509855e738e462a229364fd22443dc73581f69b6565"
+    }
+  ]
+}

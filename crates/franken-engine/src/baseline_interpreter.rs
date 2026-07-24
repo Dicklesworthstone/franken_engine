@@ -9896,8 +9896,12 @@ impl InterpreterCore {
                 }
                 Err(error @ InterpreterError::CapabilityDenied { .. })
                 | Err(error @ InterpreterError::InternalError { .. }) => return Err(error),
-                Err(error @ InterpreterError::HostProcess { ref message, .. })
-                    if message.contains("FLOW_POLICY_BLOCKED") =>
+                Err(error)
+                    if matches!(
+                        &error,
+                        InterpreterError::HostProcess { message, .. }
+                            if message.contains("FLOW_POLICY_BLOCKED")
+                    ) =>
                 {
                     return Err(error);
                 }

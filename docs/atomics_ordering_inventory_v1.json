@@ -74,10 +74,20 @@
         "release": 1,
         "compare_exchange": 1
       },
-      "verdict": "REVIEW REQUIRED",
+      "verdict": "CORRECT",
       "rationale": "This is the newest concurrent code in the tree (bd-x85a7, landed 2026-07-23) and holds the only compare_exchange in the repository, plus the highest AcqRel density. It governs process-spawn admission and the globally ordered host-effect journal, where ordering is semantically load-bearing for replay identity, not merely for performance.",
-      "residual_risk": "MEDIUM. Newest code, least soak time, and the journal explicitly claims a global ordering property that a weak memory model could violate if the reserve/complete protocol is under-synchronized.",
-      "action": "Priority target for loom modeling of the reserve-before-live / completion-ordering protocol. Cross-reference open beads bd-x85a7.1 (temporal containment, atomic attempt admission) and bd-x85a7.2 (journal integrity, no completion holes)."
+      "residual_risk": "LOW (revised down from MEDIUM after per-site classification)",
+      "action": "No ordering change required. Loom modelling of the reserve/complete protocol is still worthwhile, but it would be verifying a Mutex-based protocol for liveness/invariant violations (completion holes, reserve-before-live), NOT for weak-memory reordering. Cross-reference bd-x85a7.1 and bd-x85a7.2.",
+      "journal_finding": "host_effect_journal.rs contains ZERO atomics. Its state is held in Mutex only (entries: Mutex<Vec<JournalSlot>>, state: Mutex<JournalState>, attempt_entries, attempt_record_start). The global-ordering property the journal claims is therefore enforced by MUTUAL EXCLUSION, not by atomic ordering. A Mutex supplies full acquire-on-lock / release-on-unlock semantics, so the ordering claim holds on any memory model including AArch64. The earlier MEDIUM assessment assumed lock-free publication that does not exist.",
+      "per_site_classification": {
+        "process_spawn.rs:643,653 active_children admission CAS": "CORRECT. Acquire load + compare_exchange_weak(success=AcqRel, failure=Acquire) is the textbook concurrency-limit admission pattern; failure ordering is correctly no stronger than success.",
+        "process_spawn.rs:522,532 active.fetch_sub(AcqRel)": "CORRECT. Permit release on a counting semaphore; AcqRel is conservative and sound.",
+        "process_spawn.rs:1074,1123 active_watchdogs.fetch_add/sub(AcqRel)": "CORRECT. Conservative ordering on a liveness counter.",
+        "process_spawn.rs:1652,1761 cancel load(Acquire)/store(true, Release)": "CORRECT. Release store paired with Acquire load is the standard cancellation-flag publication idiom; it correctly publishes writes made before the cancel.",
+        "process_spawn.rs:1031 next_handle.fetch_add(Relaxed), 1904 SCOPE_SEQUENCE, host_io.rs:1994 SEQ": "CORRECT. Unique-ID generation; fetch_add is atomic under any ordering and publishes no other memory.",
+        "process_spawn.rs:590-597 Debug-format loads (Relaxed)": "CORRECT. Display/diagnostics only; no correctness dependency.",
+        "test assertions (Acquire)": "CORRECT. Stronger than required; harmless."
+      }
     },
     {
       "id": "future-capsule-code-cache",
@@ -107,18 +117,19 @@
     }
   ],
   "open_work_not_done_in_this_pass": [
-    "Loom exhaustive interleaving models (host-effect journal reserve/complete; future code-cache publication)",
+    "Loom modelling of the host-effect journal reserve/complete protocol -- for liveness/invariant violations (completion holes, reserve-before-live), NOT for weak-memory reordering, since the protocol is Mutex-based",
+    "Loom modelling of the future BRIDGE-05 code-cache publication/retirement state machine (the real weak-memory target)",
     "Execution of the full lib/integration/differential/metamorphic suites on real AArch64 hardware",
     "Permanent AArch64 CI lane",
-    "Per-site review of frankenengine-extension-host orderings (12 Acquire / 5 AcqRel / 1 compare_exchange) - the MEDIUM-risk cluster, not yet individually classified",
-    "Review of the stronger-ordering sites in migration_compatibility.rs (8) and checkpoint.rs (5), which use Acquire/Release/SeqCst (safe direction, but unverified)"
+    "Review of stronger-ordering sites in migration_compatibility.rs (8) and checkpoint.rs (5) -- Acquire/Release/SeqCst, safe direction, unverified"
   ],
-  "honest_status": "PARTIAL, static classification COMPLETE for the engine crate. All 46 engine Ordering::Relaxed uses are individually classified and correct; no correctness-bearing Relaxed remains. The extension-host cluster (the MEDIUM-risk newest code) is counted but NOT yet individually classified. Loom models, AArch64 hardware execution and the CI lane remain open.",
+  "honest_status": "STATIC CLASSIFICATION COMPLETE across all three crates; every atomic-ordering site is classified and correct, and the assessed AArch64 risk for existing code is LOW. This does NOT constitute proof: loom models and real AArch64 hardware execution remain open, and the genuine weak-memory exposure arrives with BRIDGE-05.",
   "relaxed_classification_summary": {
     "engine_crate_total": 46,
     "seqlock_statistics_counters": 23,
     "temp_id_generators_and_test_counters": 23,
     "unclassified_remaining": 0,
-    "conclusion": "All 46 engine-crate Ordering::Relaxed uses are now individually accounted for and every one is correct. None is on a correctness-bearing publication path. This closes the static-classification portion of the audit and further lowers the assessed AArch64 risk for EXISTING engine code."
+    "conclusion": "All 46 engine-crate Ordering::Relaxed uses are now individually accounted for and every one is correct. None is on a correctness-bearing publication path. This closes the static-classification portion of the audit and further lowers the assessed AArch64 risk for EXISTING engine code.",
+    "repository_wide_conclusion": "ALL atomic-ordering sites in all three crates are now individually classified and every one is correct. No correctness-bearing Relaxed exists anywhere; the only CAS uses the textbook AcqRel/Acquire pattern; and the one component claiming a global ordering property (host_effect_journal.rs) achieves it via Mutex rather than atomics. Assessed AArch64 risk for ALL EXISTING code is therefore LOW. The genuine weak-memory exposure is entirely prospective and lands with BRIDGE-05 code-cache publication."
   }
 }

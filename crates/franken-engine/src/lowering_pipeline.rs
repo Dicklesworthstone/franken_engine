@@ -976,6 +976,16 @@ fn lower_ir0_to_ir1_with_ambient_grant(
     for alias in confirmed_cluster_module_aliases(&ir0.tree.body, &binding_lookup) {
         binding_lookup.insert(cluster_module_alias_sentinel(&alias), 0);
     }
+    // bd-x85a7: `child_process` is an extraordinary effect facade. Importing the
+    // module carries no authority; only immutable aliases whose complete use is
+    // a supported process method are elided and rewritten. Every rewritten call
+    // emits the exact `process_spawn` capability tag, so the ordinary runtime
+    // gate still requires the product's signed, actively-contained admission.
+    // Escaped, reassigned, computed, mutated, unsupported, or bare aliases retain
+    // the ambient module-load denial rather than manufacturing a module object.
+    for alias in confirmed_child_process_module_aliases(&ir0.tree.body, &binding_lookup) {
+        binding_lookup.insert(child_process_module_alias_sentinel(&alias), 0);
+    }
     // bd-suwvw: same usage-gated sentinel recording for `require('timers')`
     // (member calls lower to the SAME `builtin:SetTimeout`/… hostcalls as the
     // bare globals; member reads lower to the like-named injected runtime
@@ -2233,6 +2243,7 @@ fn reserve_and_mark_source_scope_bindings(
     suppress_net_module_sentinels(binding_lookup, &lexical_names);
     suppress_zlib_module_sentinels(binding_lookup, &lexical_names);
     suppress_cluster_module_sentinels(binding_lookup, &lexical_names);
+    suppress_child_process_module_sentinels(binding_lookup, &lexical_names);
     for name in reserve_root_scope_bindings(statements, binding_lookup, binding_index) {
         binding_lookup.insert(lexical_binding_sentinel(&name), 0);
         let binding_id = *binding_lookup
@@ -2255,6 +2266,7 @@ fn mark_pre_reserved_source_scope_bindings(
     suppress_net_module_sentinels(binding_lookup, &reserved);
     suppress_zlib_module_sentinels(binding_lookup, &reserved);
     suppress_cluster_module_sentinels(binding_lookup, &reserved);
+    suppress_child_process_module_sentinels(binding_lookup, &reserved);
     for name in reserved {
         binding_lookup.insert(lexical_binding_sentinel(&name), 0);
         let binding_id = *binding_lookup
@@ -2513,6 +2525,7 @@ fn prepare_function_body_bindings(
         suppress_net_module_sentinel(body_lookup, name);
         suppress_zlib_module_sentinel(body_lookup, name);
         suppress_cluster_module_sentinel(body_lookup, name);
+        suppress_child_process_module_sentinel(body_lookup, name);
     }
     for name in &local_names {
         body_lookup.insert(lexical_binding_sentinel(name), 0);
@@ -2525,6 +2538,7 @@ fn prepare_function_body_bindings(
         suppress_net_module_sentinel(body_lookup, name);
         suppress_zlib_module_sentinel(body_lookup, name);
         suppress_cluster_module_sentinel(body_lookup, name);
+        suppress_child_process_module_sentinel(body_lookup, name);
         body_lookup.insert(lexical_binding_sentinel(name), 0);
     }
 
@@ -3227,6 +3241,7 @@ fn allocate_destructure_param_bindings(
             suppress_net_module_sentinel(binding_lookup, inner_name);
             suppress_zlib_module_sentinel(binding_lookup, inner_name);
             suppress_cluster_module_sentinel(binding_lookup, inner_name);
+            suppress_child_process_module_sentinel(binding_lookup, inner_name);
         }
     }
     Ok(())
@@ -3761,6 +3776,11 @@ fn lower_statement_to_ir1_with_flow(
                             || (is_require_crypto_module_initializer(init, binding_lookup)
                                 && binding_lookup
                                     .contains_key(&crypto_module_alias_sentinel(alias)))
+                            || (is_require_child_process_module_initializer(
+                                init,
+                                binding_lookup,
+                            ) && binding_lookup
+                                .contains_key(&child_process_module_alias_sentinel(alias)))
                             // bd-suwvw: confirmed timers / timers-promises
                             // aliases join the same elision (their operations
                             // are recognized at the member call/read sites).
@@ -4082,6 +4102,7 @@ fn lower_statement_to_ir1_with_flow(
             suppress_net_module_sentinels(binding_lookup, &lexical_names);
             suppress_zlib_module_sentinels(binding_lookup, &lexical_names);
             suppress_cluster_module_sentinels(binding_lookup, &lexical_names);
+            suppress_child_process_module_sentinels(binding_lookup, &lexical_names);
             if let Some(binding_kind) = for_in_stmt.binding_kind {
                 for name in for_in_stmt.binding.binding_names() {
                     let binding_id = if binding_kind == VariableDeclarationKind::Var {
@@ -4296,6 +4317,7 @@ fn lower_statement_to_ir1_with_flow(
             suppress_net_module_sentinels(binding_lookup, &lexical_names);
             suppress_zlib_module_sentinels(binding_lookup, &lexical_names);
             suppress_cluster_module_sentinels(binding_lookup, &lexical_names);
+            suppress_child_process_module_sentinels(binding_lookup, &lexical_names);
             if let Some(binding_kind) = for_of_stmt.binding_kind {
                 for name in for_of_stmt.binding.binding_names() {
                     let binding_id = if binding_kind == VariableDeclarationKind::Var {
@@ -4960,6 +4982,7 @@ fn lower_statement_to_ir1_with_flow(
                     suppress_net_module_sentinels(binding_lookup, &catch_lexical_names);
                     suppress_zlib_module_sentinels(binding_lookup, &catch_lexical_names);
                     suppress_cluster_module_sentinels(binding_lookup, &catch_lexical_names);
+                    suppress_child_process_module_sentinels(binding_lookup, &catch_lexical_names);
                     reserve_and_mark_source_scope_bindings(
                         &handler.body.body,
                         binding_lookup,
@@ -5337,6 +5360,7 @@ fn lower_statement_to_ir1_with_flow(
             seed_timers_module_alias_sentinels(&mut body_lookup, binding_lookup);
             seed_zlib_module_alias_sentinels(&mut body_lookup, binding_lookup);
             seed_cluster_module_alias_sentinels(&mut body_lookup, binding_lookup);
+            seed_child_process_module_alias_sentinels(&mut body_lookup, binding_lookup);
             seed_fs_module_alias_sentinels(&mut body_lookup, binding_lookup);
             seed_events_module_sentinels(&mut body_lookup, binding_lookup);
             seed_stream_module_sentinels(&mut body_lookup, binding_lookup);
@@ -5360,6 +5384,7 @@ fn lower_statement_to_ir1_with_flow(
                 suppress_net_module_sentinel(&mut body_lookup, pname);
                 suppress_zlib_module_sentinel(&mut body_lookup, pname);
                 suppress_cluster_module_sentinel(&mut body_lookup, pname);
+                suppress_child_process_module_sentinel(&mut body_lookup, pname);
             }
             // For destructuring-pattern params, allocate inner identifier
             // bindings and emit destructuring ops that copy from each
@@ -5499,6 +5524,7 @@ fn lower_statement_to_ir1_with_flow(
             seed_timers_module_alias_sentinels(&mut body_lookup, binding_lookup);
             seed_zlib_module_alias_sentinels(&mut body_lookup, binding_lookup);
             seed_cluster_module_alias_sentinels(&mut body_lookup, binding_lookup);
+            seed_child_process_module_alias_sentinels(&mut body_lookup, binding_lookup);
             seed_fs_module_alias_sentinels(&mut body_lookup, binding_lookup);
             seed_events_module_sentinels(&mut body_lookup, binding_lookup);
             seed_stream_module_sentinels(&mut body_lookup, binding_lookup);
@@ -5521,6 +5547,7 @@ fn lower_statement_to_ir1_with_flow(
                 suppress_net_module_sentinel(&mut body_lookup, pname);
                 suppress_zlib_module_sentinel(&mut body_lookup, pname);
                 suppress_cluster_module_sentinel(&mut body_lookup, pname);
+                suppress_child_process_module_sentinel(&mut body_lookup, pname);
             }
             // Destructure non-identifier ctor params (applies defaults) before the body.
             allocate_destructure_param_bindings(
@@ -5701,6 +5728,7 @@ fn lower_statement_to_ir1_with_flow(
                 seed_timers_module_alias_sentinels(&mut m_lookup, binding_lookup);
                 seed_zlib_module_alias_sentinels(&mut m_lookup, binding_lookup);
                 seed_cluster_module_alias_sentinels(&mut m_lookup, binding_lookup);
+                seed_child_process_module_alias_sentinels(&mut m_lookup, binding_lookup);
                 seed_fs_module_alias_sentinels(&mut m_lookup, binding_lookup);
                 seed_events_module_sentinels(&mut m_lookup, binding_lookup);
                 seed_stream_module_sentinels(&mut m_lookup, binding_lookup);
@@ -5723,6 +5751,7 @@ fn lower_statement_to_ir1_with_flow(
                     suppress_net_module_sentinel(&mut m_lookup, pname);
                     suppress_zlib_module_sentinel(&mut m_lookup, pname);
                     suppress_cluster_module_sentinel(&mut m_lookup, pname);
+                    suppress_child_process_module_sentinel(&mut m_lookup, pname);
                 }
                 // Destructure non-identifier params (applies defaults) before the body.
                 allocate_destructure_param_bindings(
@@ -5894,6 +5923,7 @@ fn lower_switch_to_ir1(
     suppress_net_module_sentinels(binding_lookup, &lexical_names);
     suppress_zlib_module_sentinels(binding_lookup, &lexical_names);
     suppress_cluster_module_sentinels(binding_lookup, &lexical_names);
+    suppress_child_process_module_sentinels(binding_lookup, &lexical_names);
     for name in &lexical_names {
         let binding_id = reserve_fresh_binding_id(binding_lookup, binding_index, name);
         binding_lookup.insert(lexical_binding_sentinel(name), 0);
@@ -12542,6 +12572,48 @@ fn lower_expression_to_ir1_inner(
                 });
                 return Ok(());
             }
+            if let Some(process_call) =
+                child_process_builtin_call(callee, arguments, binding_lookup)
+            {
+                // The module receiver is lowering-only and is never evaluated.
+                // Slot zero carries a private operation discriminator; the
+                // remaining slots preserve the source argument values verbatim.
+                // All operations deliberately use the ONE typed runtime
+                // capability tag (`process_spawn`) so no method name can bypass
+                // the signed product admission by acquiring a weaker alias.
+                let arg_count = arguments.len().checked_add(1).ok_or(
+                    LoweringPipelineError::TooManyArguments {
+                        count: arguments.len(),
+                        max: (u32::MAX as usize).saturating_sub(1),
+                    },
+                )?;
+                if arg_count > u32::MAX as usize {
+                    return Err(LoweringPipelineError::TooManyArguments {
+                        count: arg_count,
+                        max: u32::MAX as usize,
+                    });
+                }
+                ops.push(Ir1Op::LoadLiteral {
+                    value: Ir1Literal::String(process_call.discriminator().into()),
+                });
+                for argument in arguments {
+                    lower_expression_to_ir1(
+                        argument,
+                        ops,
+                        bindings,
+                        binding_lookup,
+                        binding_index,
+                        root_scope_id,
+                        label_counter,
+                        span_table,
+                    )?;
+                }
+                ops.push(Ir1Op::HostCall {
+                    capability: "process_spawn".to_string(),
+                    arg_count: arg_count as u32,
+                });
+                return Ok(());
+            }
             if let Some(fs_call) = fs_builtin_call_capability(callee, binding_lookup) {
                 // bd-1xl17: inline `require('fs').readFileSync(path)` /
                 // `require('fs').writeFileSync(path, data)` (Sync) lower to an
@@ -14222,6 +14294,7 @@ fn lower_expression_to_ir1_inner(
             seed_timers_module_alias_sentinels(&mut body_lookup, binding_lookup);
             seed_zlib_module_alias_sentinels(&mut body_lookup, binding_lookup);
             seed_cluster_module_alias_sentinels(&mut body_lookup, binding_lookup);
+            seed_child_process_module_alias_sentinels(&mut body_lookup, binding_lookup);
             seed_fs_module_alias_sentinels(&mut body_lookup, binding_lookup);
             seed_events_module_sentinels(&mut body_lookup, binding_lookup);
             seed_stream_module_sentinels(&mut body_lookup, binding_lookup);
@@ -14258,6 +14331,7 @@ fn lower_expression_to_ir1_inner(
                 suppress_net_module_sentinel(&mut body_lookup, pname);
                 suppress_zlib_module_sentinel(&mut body_lookup, pname);
                 suppress_cluster_module_sentinel(&mut body_lookup, pname);
+                suppress_child_process_module_sentinel(&mut body_lookup, pname);
             }
             // Destructure non-identifier params (applies defaults) before the body.
             allocate_destructure_param_bindings(
@@ -14391,6 +14465,7 @@ fn lower_expression_to_ir1_inner(
             seed_timers_module_alias_sentinels(&mut body_lookup, binding_lookup);
             seed_zlib_module_alias_sentinels(&mut body_lookup, binding_lookup);
             seed_cluster_module_alias_sentinels(&mut body_lookup, binding_lookup);
+            seed_child_process_module_alias_sentinels(&mut body_lookup, binding_lookup);
             seed_fs_module_alias_sentinels(&mut body_lookup, binding_lookup);
             seed_events_module_sentinels(&mut body_lookup, binding_lookup);
             seed_stream_module_sentinels(&mut body_lookup, binding_lookup);
@@ -14401,6 +14476,7 @@ fn lower_expression_to_ir1_inner(
                 suppress_net_module_sentinel(&mut body_lookup, self_name);
                 suppress_zlib_module_sentinel(&mut body_lookup, self_name);
                 suppress_cluster_module_sentinel(&mut body_lookup, self_name);
+                suppress_child_process_module_sentinel(&mut body_lookup, self_name);
             }
             let mut body_binding_index: BindingId = 0;
             let body_scope = ScopeId { depth: 0, index: 0 };
@@ -14431,6 +14507,7 @@ fn lower_expression_to_ir1_inner(
                 suppress_net_module_sentinel(&mut body_lookup, pname);
                 suppress_zlib_module_sentinel(&mut body_lookup, pname);
                 suppress_cluster_module_sentinel(&mut body_lookup, pname);
+                suppress_child_process_module_sentinel(&mut body_lookup, pname);
             }
             allocate_destructure_param_bindings(
                 &destructure_params,
@@ -14980,6 +15057,7 @@ fn lower_expression_to_ir1_inner(
             seed_timers_module_alias_sentinels(&mut body_lookup, binding_lookup);
             seed_zlib_module_alias_sentinels(&mut body_lookup, binding_lookup);
             seed_cluster_module_alias_sentinels(&mut body_lookup, binding_lookup);
+            seed_child_process_module_alias_sentinels(&mut body_lookup, binding_lookup);
             seed_fs_module_alias_sentinels(&mut body_lookup, binding_lookup);
             seed_events_module_sentinels(&mut body_lookup, binding_lookup);
             seed_stream_module_sentinels(&mut body_lookup, binding_lookup);
@@ -14990,6 +15068,7 @@ fn lower_expression_to_ir1_inner(
                 suppress_net_module_sentinel(&mut body_lookup, self_name);
                 suppress_zlib_module_sentinel(&mut body_lookup, self_name);
                 suppress_cluster_module_sentinel(&mut body_lookup, self_name);
+                suppress_child_process_module_sentinel(&mut body_lookup, self_name);
             }
             let mut body_binding_index: BindingId = 0;
             let body_scope = ScopeId { depth: 0, index: 0 };
@@ -15008,6 +15087,7 @@ fn lower_expression_to_ir1_inner(
                 suppress_net_module_sentinel(&mut body_lookup, pname);
                 suppress_zlib_module_sentinel(&mut body_lookup, pname);
                 suppress_cluster_module_sentinel(&mut body_lookup, pname);
+                suppress_child_process_module_sentinel(&mut body_lookup, pname);
             }
             // Destructure non-identifier ctor params (applies defaults) before the body.
             allocate_destructure_param_bindings(
@@ -15188,6 +15268,7 @@ fn lower_expression_to_ir1_inner(
                 seed_timers_module_alias_sentinels(&mut m_lookup, binding_lookup);
                 seed_zlib_module_alias_sentinels(&mut m_lookup, binding_lookup);
                 seed_cluster_module_alias_sentinels(&mut m_lookup, binding_lookup);
+                seed_child_process_module_alias_sentinels(&mut m_lookup, binding_lookup);
                 seed_fs_module_alias_sentinels(&mut m_lookup, binding_lookup);
                 seed_events_module_sentinels(&mut m_lookup, binding_lookup);
                 seed_stream_module_sentinels(&mut m_lookup, binding_lookup);
@@ -15198,6 +15279,7 @@ fn lower_expression_to_ir1_inner(
                     suppress_net_module_sentinel(&mut m_lookup, self_name);
                     suppress_zlib_module_sentinel(&mut m_lookup, self_name);
                     suppress_cluster_module_sentinel(&mut m_lookup, self_name);
+                    suppress_child_process_module_sentinel(&mut m_lookup, self_name);
                 }
                 let method_self_snapshot = name.as_deref().map(|self_name| {
                     expose_class_expression_self_binding(binding_lookup, self_name, bid)
@@ -15219,6 +15301,7 @@ fn lower_expression_to_ir1_inner(
                     suppress_net_module_sentinel(&mut m_lookup, pname);
                     suppress_zlib_module_sentinel(&mut m_lookup, pname);
                     suppress_cluster_module_sentinel(&mut m_lookup, pname);
+                    suppress_child_process_module_sentinel(&mut m_lookup, pname);
                 }
                 // Destructure non-identifier params (applies defaults) before the body.
                 allocate_destructure_param_bindings(
@@ -17596,6 +17679,196 @@ fn confirmed_cluster_module_aliases(
         .collect()
 }
 
+// ---------------------------------------------------------------------------
+// Node `child_process` authenticated effect facade (bd-x85a7 / bd-at11s)
+// ---------------------------------------------------------------------------
+
+fn is_child_process_module_specifier(specifier: &str) -> bool {
+    specifier == "child_process" || specifier == "node:child_process"
+}
+
+fn child_process_module_alias_sentinel(name: &str) -> String {
+    format!("\0child-process-mod\0{name}")
+}
+
+fn is_require_child_process_module_initializer(
+    expression: &Expression,
+    binding_lookup: &BTreeMap<String, BindingId>,
+) -> bool {
+    let Expression::Call {
+        callee, arguments, ..
+    } = expression
+    else {
+        return false;
+    };
+    matches!(callee.as_ref(), Expression::Identifier(name)
+        if name == "require" && !is_lexically_shadowed(binding_lookup, name))
+        && matches!(arguments.as_slice(), [specifier]
+            if well_formed_string_literal(specifier)
+                .is_some_and(is_child_process_module_specifier))
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ChildProcessOperation {
+    SpawnSync,
+    ExecSync,
+    ExecFileSync,
+    Spawn,
+    Exec,
+    ExecFile,
+}
+
+impl ChildProcessOperation {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::SpawnSync => "spawn_sync",
+            Self::ExecSync => "exec_sync",
+            Self::ExecFileSync => "exec_file_sync",
+            Self::Spawn => "spawn",
+            Self::Exec => "exec",
+            Self::ExecFile => "exec_file",
+        }
+    }
+
+    fn from_discriminator(discriminator: &str) -> Option<Self> {
+        Some(match discriminator {
+            "\0processop:spawn_sync" => Self::SpawnSync,
+            "\0processop:exec_sync" => Self::ExecSync,
+            "\0processop:exec_file_sync" => Self::ExecFileSync,
+            "\0processop:spawn" => Self::Spawn,
+            "\0processop:exec" => Self::Exec,
+            "\0processop:exec_file" => Self::ExecFile,
+            _ => return None,
+        })
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ChildProcessBuiltinCall {
+    operation: ChildProcessOperation,
+}
+
+impl ChildProcessBuiltinCall {
+    fn discriminator(self) -> String {
+        format!("\0processop:{}", self.operation.as_str())
+    }
+}
+
+fn child_process_method_spec(method: &str) -> Option<(ChildProcessOperation, usize)> {
+    Some(match method {
+        "spawnSync" => (ChildProcessOperation::SpawnSync, 1),
+        "execSync" => (ChildProcessOperation::ExecSync, 1),
+        "execFileSync" => (ChildProcessOperation::ExecFileSync, 1),
+        "spawn" => (ChildProcessOperation::Spawn, 1),
+        "exec" => (ChildProcessOperation::Exec, 1),
+        "execFile" => (ChildProcessOperation::ExecFile, 1),
+        _ => return None,
+    })
+}
+
+fn is_child_process_alias_usage(expression: &Expression, alias: &str) -> bool {
+    matches!(expression,
+    Expression::Call { callee, arguments, .. }
+        if module_alias_member_name(callee, alias)
+            .and_then(child_process_method_spec)
+            .is_some_and(|(_, minimum)| {
+                arguments.len() >= minimum
+                    && arguments
+                        .iter()
+                        .all(|argument| !matches!(argument, Expression::SpreadElement(_)))
+            }))
+}
+
+fn confirmed_child_process_module_aliases(
+    body: &[Statement],
+    binding_lookup: &BTreeMap<String, BindingId>,
+) -> BTreeSet<String> {
+    let mut candidates = BTreeMap::new();
+    for (statement_index, statement) in body.iter().enumerate() {
+        let Statement::VariableDeclaration(declaration) = statement else {
+            continue;
+        };
+        if declaration.kind != VariableDeclarationKind::Const {
+            continue;
+        }
+        for (declarator_index, declarator) in declaration.declarations.iter().enumerate() {
+            if let (BindingPattern::Identifier(name), Some(initializer)) =
+                (&declarator.pattern, &declarator.initializer)
+                && is_require_child_process_module_initializer(initializer, binding_lookup)
+            {
+                candidates.insert(name.clone(), (statement_index, declarator_index));
+            }
+        }
+    }
+
+    candidates
+        .into_iter()
+        .filter(|(alias, (statement_index, declarator_index))| {
+            !module_alias_has_predeclaration_hazard(
+                body,
+                *statement_index,
+                *declarator_index,
+                alias,
+                LoweringOnlyModuleAliasSurface::ChildProcess,
+                binding_lookup,
+            ) && body.iter().any(|statement| {
+                module_alias_statement_contains_unshadowed_usage(
+                    statement,
+                    alias,
+                    LoweringOnlyModuleAliasSurface::ChildProcess,
+                )
+            }) && !body.iter().any(|statement| {
+                module_alias_statement_has_rejected_use(
+                    statement,
+                    alias,
+                    LoweringOnlyModuleAliasSurface::ChildProcess,
+                )
+            })
+        })
+        .map(|(alias, _)| alias)
+        .collect()
+}
+
+fn is_child_process_module_object(
+    expression: &Expression,
+    binding_lookup: &BTreeMap<String, BindingId>,
+) -> bool {
+    match expression {
+        Expression::Call { .. } => {
+            is_require_child_process_module_initializer(expression, binding_lookup)
+        }
+        Expression::Identifier(alias) => {
+            binding_lookup.contains_key(&child_process_module_alias_sentinel(alias))
+        }
+        _ => false,
+    }
+}
+
+fn child_process_builtin_call(
+    callee: &Expression,
+    arguments: &[Expression],
+    binding_lookup: &BTreeMap<String, BindingId>,
+) -> Option<ChildProcessBuiltinCall> {
+    let Expression::Member {
+        object,
+        property,
+        computed: false,
+        ..
+    } = callee
+    else {
+        return None;
+    };
+    if !is_child_process_module_object(object, binding_lookup) {
+        return None;
+    }
+    let (operation, minimum) = child_process_method_spec(well_formed_static_name(property)?)?;
+    (arguments.len() >= minimum
+        && arguments
+            .iter()
+            .all(|argument| !matches!(argument, Expression::SpreadElement(_))))
+    .then_some(ChildProcessBuiltinCall { operation })
+}
+
 /// bd-suwvw: true when `specifier` names the Node timers module — `timers`
 /// or `node:timers`.
 fn is_timers_module_specifier(specifier: &str) -> bool {
@@ -17992,6 +18265,36 @@ fn suppress_cluster_module_sentinels(
     }
 }
 
+/// Carry authenticated child-process facade provenance into nested functions.
+/// The sentinel only authenticates the syntactic module receiver; every actual
+/// call still emits and is gated by `RuntimeCapability::ProcessSpawn`.
+fn seed_child_process_module_alias_sentinels(
+    body_lookup: &mut BTreeMap<String, BindingId>,
+    outer_lookup: &BTreeMap<String, BindingId>,
+) {
+    for key in outer_lookup.keys() {
+        if key.starts_with("\0child-process-mod\0") {
+            body_lookup.insert(key.clone(), 0);
+        }
+    }
+}
+
+fn suppress_child_process_module_sentinel(
+    binding_lookup: &mut BTreeMap<String, BindingId>,
+    name: &str,
+) {
+    binding_lookup.remove(&child_process_module_alias_sentinel(name));
+}
+
+fn suppress_child_process_module_sentinels(
+    binding_lookup: &mut BTreeMap<String, BindingId>,
+    names: &BTreeSet<String>,
+) {
+    for name in names {
+        suppress_child_process_module_sentinel(binding_lookup, name);
+    }
+}
+
 /// bd-8u1t5: carry confirmed fs and fs/promises provenance into every fresh
 /// function/method lookup. This makes the deep pre-scan actionable inside
 /// callbacks, try/catch bodies, and promise arrows without creating a runtime
@@ -18158,6 +18461,7 @@ enum LoweringOnlyModuleAliasSurface {
     CryptoHmacObject,
     CryptoCipherObject,
     Cluster,
+    ChildProcess,
     StreamConstructor,
     StreamPipeline,
     StreamPromises,
@@ -18278,6 +18582,7 @@ fn is_module_alias_usage(
             is_crypto_object_alias_usage(expr, alias, surface)
         }
         LoweringOnlyModuleAliasSurface::Cluster => is_cluster_alias_usage(expr, alias),
+        LoweringOnlyModuleAliasSurface::ChildProcess => is_child_process_alias_usage(expr, alias),
         LoweringOnlyModuleAliasSurface::StreamConstructor => is_stream_constructor_use(expr, alias),
         LoweringOnlyModuleAliasSurface::StreamPipeline => {
             is_stream_pipeline_direct_call(expr, alias)
@@ -18756,6 +19061,9 @@ fn module_alias_expr_has_rejected_use(
                 .is_some_and(|method| {
                     cluster_method_is_supported(method) && !matches!(method, "on" | "once")
                 }),
+            LoweringOnlyModuleAliasSurface::ChildProcess => {
+                is_child_process_alias_usage(expr, alias)
+            }
             LoweringOnlyModuleAliasSurface::StreamConstructor => false,
             LoweringOnlyModuleAliasSurface::StreamPipeline => {
                 is_stream_pipeline_direct_call(expr, alias)
@@ -19500,6 +19808,7 @@ fn module_alias_expression_is_predeclaration_call_hazard(
         && !is_require_zlib_module_initializer(expression, binding_lookup)
         && !is_require_crypto_module_initializer(expression, binding_lookup)
         && !is_require_cluster_module_initializer(expression, binding_lookup)
+        && !is_require_child_process_module_initializer(expression, binding_lookup)
 }
 
 fn module_alias_expression_has_predeclaration_call_hazard(
@@ -22850,25 +23159,33 @@ struct FlowValue {
     label: Label,
     crypto_origin: Option<usize>,
     shape: FlowValueShape,
+    process_operation: Option<ChildProcessOperation>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum FlowValueShape {
     Unknown,
     Primitive,
+    Callable,
     ClosedResult,
     FreshAggregate,
 }
 
 impl FlowValueShape {
     fn is_closed(self) -> bool {
-        !matches!(self, Self::Unknown)
+        matches!(
+            self,
+            Self::Primitive | Self::ClosedResult | Self::FreshAggregate
+        )
     }
 }
 
 fn invalidate_nonprimitive_flow_shapes(values: &mut [FlowValue]) {
     for value in values {
-        if value.shape != FlowValueShape::Primitive {
+        if !matches!(
+            value.shape,
+            FlowValueShape::Primitive | FlowValueShape::Callable
+        ) {
             value.shape = FlowValueShape::Unknown;
         }
     }
@@ -22878,7 +23195,7 @@ fn invalidate_nonprimitive_binding_flow_shapes(
     binding_shapes: &mut BTreeMap<BindingId, FlowValueShape>,
 ) {
     for shape in binding_shapes.values_mut() {
-        if *shape != FlowValueShape::Primitive {
+        if !matches!(*shape, FlowValueShape::Primitive | FlowValueShape::Callable) {
             *shape = FlowValueShape::Unknown;
         }
     }
@@ -22943,6 +23260,58 @@ fn join_flow_values(values: &[FlowValue]) -> Label {
     Label::join_all(values.iter().map(|value| value.label.clone())).unwrap_or(Label::Public)
 }
 
+fn process_spawn_request_label(inputs: &[FlowValue]) -> Label {
+    let Some(discriminator) = inputs.last() else {
+        return Label::TopSecret;
+    };
+    let Some(operation) = discriminator.process_operation else {
+        return Label::TopSecret;
+    };
+    let logical_reversed = &inputs[..inputs.len() - 1];
+    let source_argument = |index: usize| {
+        logical_reversed
+            .len()
+            .checked_sub(index + 1)
+            .and_then(|reversed_index| logical_reversed.get(reversed_index))
+    };
+    let request_argument_count = match operation {
+        ChildProcessOperation::SpawnSync
+        | ChildProcessOperation::ExecFileSync
+        | ChildProcessOperation::Spawn => 3,
+        ChildProcessOperation::ExecSync => 2,
+        ChildProcessOperation::Exec => {
+            if source_argument(1).is_some_and(|value| value.shape == FlowValueShape::Callable) {
+                1
+            } else {
+                2
+            }
+        }
+        ChildProcessOperation::ExecFile => {
+            if source_argument(1).is_some_and(|value| value.shape == FlowValueShape::Callable) {
+                1
+            } else if source_argument(2)
+                .is_some_and(|value| value.shape == FlowValueShape::Callable)
+            {
+                2
+            } else if source_argument(3)
+                .is_some_and(|value| value.shape == FlowValueShape::Callable)
+            {
+                3
+            } else {
+                3
+            }
+        }
+    };
+    Label::join_all(
+        logical_reversed
+            .iter()
+            .rev()
+            .take(request_argument_count)
+            .map(|value| value.label.clone()),
+    )
+    .unwrap_or(Label::Public)
+}
+
 fn fresh_flow_value(label: Label, next_identity: &mut usize) -> FlowValue {
     let identity = *next_identity;
     *next_identity = (*next_identity).saturating_add(1);
@@ -22951,6 +23320,7 @@ fn fresh_flow_value(label: Label, next_identity: &mut usize) -> FlowValue {
         label,
         crypto_origin: None,
         shape: FlowValueShape::Unknown,
+        process_operation: None,
     }
 }
 
@@ -23346,13 +23716,19 @@ fn simulate_ir2_flow_labels(
         }
         let mut operation_exception_is_operand_derived = false;
         let inferred = match &op.inner {
-            Ir1Op::LoadLiteral { .. } => {
+            Ir1Op::LoadLiteral { value } => {
                 let label = infer_data_label_for_op(&op.inner, binding_labels, Label::Public);
-                value_stack.push(fresh_shaped_flow_value(
+                let mut flow_value = fresh_shaped_flow_value(
                     label.clone(),
                     FlowValueShape::Primitive,
                     &mut next_identity,
-                ));
+                );
+                if let Ir1Literal::String(raw) = value {
+                    flow_value.process_operation = raw
+                        .as_str()
+                        .and_then(ChildProcessOperation::from_discriminator);
+                }
+                value_stack.push(flow_value);
                 label
             }
             Ir1Op::LoadBinding { binding_id } => {
@@ -23552,10 +23928,10 @@ fn simulate_ir2_flow_labels(
                 binding_crypto_origins.insert(*binding_id, None);
                 binding_flow_shapes.insert(
                     *binding_id,
-                    if rhs.shape == FlowValueShape::Primitive {
-                        FlowValueShape::Primitive
-                    } else {
-                        FlowValueShape::Unknown
+                    match rhs.shape {
+                        FlowValueShape::Primitive => FlowValueShape::Primitive,
+                        FlowValueShape::Callable => FlowValueShape::Callable,
+                        _ => FlowValueShape::Unknown,
                     },
                 );
                 if may_coerce {
@@ -23643,6 +24019,7 @@ fn simulate_ir2_flow_labels(
                     label: label.clone(),
                     crypto_origin: None,
                     shape: FlowValueShape::Unknown,
+                    process_operation: None,
                 });
                 label
             }
@@ -23710,6 +24087,7 @@ fn simulate_ir2_flow_labels(
                         label: label.clone(),
                         crypto_origin: None,
                         shape: FlowValueShape::Unknown,
+                        process_operation: None,
                     });
                 } else {
                     value_stack.push(fresh_flow_value(label.clone(), &mut next_identity));
@@ -23728,13 +24106,21 @@ fn simulate_ir2_flow_labels(
             } => {
                 let label = infer_function_capture_label(free_vars, binding_labels);
                 bindings_changed |= join_binding_label(binding_labels, *binding_id, &label);
-                binding_flow_shapes.insert(*binding_id, FlowValueShape::Unknown);
-                value_stack.push(fresh_flow_value(label.clone(), &mut next_identity));
+                binding_flow_shapes.insert(*binding_id, FlowValueShape::Callable);
+                value_stack.push(fresh_shaped_flow_value(
+                    label.clone(),
+                    FlowValueShape::Callable,
+                    &mut next_identity,
+                ));
                 label
             }
             Ir1Op::CreateFunction { free_vars, .. } => {
                 let label = infer_function_capture_label(free_vars, binding_labels);
-                value_stack.push(fresh_flow_value(label.clone(), &mut next_identity));
+                value_stack.push(fresh_shaped_flow_value(
+                    label.clone(),
+                    FlowValueShape::Callable,
+                    &mut next_identity,
+                ));
                 label
             }
             Ir1Op::ForInInit | Ir1Op::ForOfInit => {
@@ -23808,7 +24194,18 @@ fn simulate_ir2_flow_labels(
                     invalidate_nonprimitive_flow_shapes(&mut value_stack);
                     invalidate_nonprimitive_binding_flow_shapes(&mut binding_flow_shapes);
                 }
-                let direct_label = join_flow_values(&inputs);
+                // `child_process` callback closures remain inside the
+                // interpreter and never cross the typed ProcessSpawnRequest
+                // boundary. Joining every syntactic hostcall argument would
+                // therefore misclassify every callback form as Internal
+                // egress. The runtime process dispatcher performs the exact
+                // request-field join (command/argv/options only) and blocks a
+                // non-Public request before the provider is called.
+                let direct_label = if capability == "process_spawn" {
+                    process_spawn_request_label(&inputs)
+                } else {
+                    join_flow_values(&inputs)
+                };
                 let mut label = direct_label.clone();
                 let mut result_origin = None;
                 let mut result_shape = FlowValueShape::Unknown;

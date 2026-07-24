@@ -67,8 +67,13 @@ use zeroize::Zeroizing;
 use frankenengine_core::object_model::{
     BaselineSymbolProperty, OrderedStringMap, SymbolId as CoreSymbolId,
 };
+use frankenengine_extension_host::host_effect_journal::InMemoryHostEffectJournal;
 use frankenengine_extension_host::host_io::{
     FsDirEntry, FsMetaResult, FsMetadata, FsOperation, HostIoProvider, HostIoRecorder,
+};
+use frankenengine_extension_host::process_spawn::{
+    ProcessExit, ProcessLaunch, ProcessSpawnError, ProcessSpawnProvider, ProcessSpawnRequest,
+    ProcessSpawnResponse, ProcessStdio, ProcessStdioMode,
 };
 
 use crate::algebraic_effects::EffectError;
@@ -81,7 +86,9 @@ use crate::deterministic_replay::{NondeterminismSource, NondeterminismTrace};
 use crate::engine_object_id::{EngineObjectId, ObjectDomain, SchemaId, derive_id};
 use crate::hash_tiers::ContentHash;
 use crate::hostcall_effects_migration::{
-    create_fs_effect, create_handler_stack_from_profile_with_host_io, create_network_effect,
+    create_fs_effect, create_handler_stack_from_profile_with_effect_providers,
+    create_handler_stack_from_profile_with_host_io, create_network_effect,
+    create_process_spawn_effect,
 };
 use crate::hostcall_telemetry::{
     FlowLabel, HostcallResult as TelemetryHostcallResult, HostcallType as TelemetryHostcallType,
@@ -6490,6 +6497,15 @@ pub enum InterpreterError {
     CapabilityDenied { capability: String },
     /// Guest-visible filesystem error preserving a stable Node-style code.
     HostFilesystem { code: String, message: String },
+    /// Guest-visible child-process failure with Node-style structured output.
+    HostProcess {
+        code: String,
+        message: String,
+        status: Option<i32>,
+        signal: Option<i32>,
+        stdout: Vec<u8>,
+        stderr: Vec<u8>,
+    },
     /// The baseline heap cannot safely answer prototype-aware membership.
     UnsupportedMembershipSemantics { operator: String },
     /// Iterator handle not found in interpreter state.
@@ -6599,6 +6615,9 @@ impl fmt::Display for InterpreterError {
             }
             Self::HostFilesystem { code, message } => {
                 write!(f, "filesystem error {code}: {message}")
+            }
+            Self::HostProcess { code, message, .. } => {
+                write!(f, "child process error {code}: {message}")
             }
             Self::UnsupportedMembershipSemantics { operator } => write!(
                 f,
@@ -7499,6 +7518,46 @@ enum PendingHttpTask {
     },
 }
 
+#[derive(Debug, Clone, Default)]
+struct ProcessCallOptions {
+    cwd: Option<String>,
+    env: BTreeMap<String, String>,
+    input: Vec<u8>,
+    encoding: Option<String>,
+    shell: bool,
+    stdio: ProcessStdio,
+    timeout_millis: Option<u64>,
+    max_buffer: Option<usize>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ChildProcessStreamKind {
+    Stdout,
+    Stderr,
+}
+
+#[derive(Debug)]
+struct CompletedChildProcessState {
+    settled: bool,
+    stdout: Value,
+    stdout_has_data: bool,
+    stderr: Value,
+    stderr_has_data: bool,
+    exit_code: Value,
+    signal: Value,
+    error: Option<Value>,
+    scheduled_events: BTreeSet<String>,
+}
+
+#[derive(Debug)]
+struct PendingChildProcessTask {
+    child: ObjectId,
+    handle: String,
+    callback: Option<u32>,
+    callback_encoding: Option<String>,
+    options: ProcessCallOptions,
+}
+
 /// Current phase of one finite `Readable.from` pump.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ReadableFromPumpPhase {
@@ -8069,6 +8128,10 @@ pub struct InterpreterCore {
     /// Optional deterministic-replay recorder paired with `host_io`; captures each
     /// dispatched effect as a `(request, outcome)` transcript entry.
     host_io_recorder: Option<Arc<dyn HostIoRecorder>>,
+    /// Extraordinary process provider installed only after product-level signed
+    /// admission. The shared journal retains exact inter-family crossing order.
+    process_spawn: Option<Arc<dyn ProcessSpawnProvider>>,
+    host_effect_journal: Option<Arc<InMemoryHostEffectJournal>>,
     /// Register file (flat, indexed by register number). SEED-SURFACE.
     registers: SeedTrackedField<Vec<Value>>,
     /// Call stack.
@@ -8234,6 +8297,15 @@ pub struct InterpreterCore {
     /// drains the entry by seq when it fires, so the map never retains completed
     /// callbacks.
     pending_io_callbacks: BTreeMap<u64, Vec<Value>>,
+    /// Lifecycle process waits scheduled after the guest receives its
+    /// `ChildProcess` facade. The provider `Spawn` crossing happens on the
+    /// initiating stack; `Wait` runs on the deterministic I/O lane so listener
+    /// registration and optional callbacks observe Node-style async ordering.
+    pending_child_process_tasks: BTreeMap<u64, PendingChildProcessTask>,
+    /// Ownership transferred out of `pending_child_process_tasks` remains
+    /// physically live during the provider Wait and terminal event scheduling.
+    /// Keep it charged so nested work sees exact memory pressure.
+    child_process_task_in_flight_bytes: u64,
     /// Registered listeners shared by standalone `EventEmitter` objects and the
     /// HTTP stream objects (`ClientRequest` / `IncomingMessage`), keyed by heap
     /// object id then event name. Records stay in registration order and carry
@@ -8250,6 +8322,12 @@ pub struct InterpreterCore {
     /// link before its Promise reaction becomes observable (bd-asw4m.1).
     event_promise_waiters: BTreeMap<ObjectId, BTreeMap<String, Vec<EventPromiseWaiterRecord>>>,
     next_event_promise_waiter_id: u64,
+    /// Authenticated child-process facades whose native lifecycle has settled
+    /// under provider limits. Pending facades move here on their deterministic
+    /// I/O `Wait` turn; listener registration then exposes only engine-owned
+    /// bounded results without trusting guest tags.
+    completed_child_processes: BTreeMap<ObjectId, CompletedChildProcessState>,
+    child_process_streams: BTreeMap<ObjectId, (ObjectId, ChildProcessStreamKind)>,
     /// Non-forgeable WHATWG URL brands and state (bd-8y0gs). These maps are
     /// execution-local and are cleared before a seed can reuse heap ObjectIds.
     url_objects: BTreeMap<ObjectId, UrlRuntimeState>,
@@ -8384,6 +8462,12 @@ pub struct InterpreterCore {
     nondeterminism_trace: NondeterminismTrace,
     /// IFC labels for each register (same indexing as registers vec).
     register_labels: Vec<Label>,
+    /// Dynamic taint committed into guest-owned aggregate containers. Register
+    /// labels alone are insufficient because an object can be aliased before a
+    /// later `SetProperty` writes a more confidential value through another
+    /// reference. Process-effect request extraction joins these labels
+    /// recursively before crossing the provider boundary.
+    object_mutation_labels: BTreeMap<ObjectId, Label>,
     /// Aggregate provenance active while an isolated callback runs. Register
     /// writes join this label after per-call frame clearing, so zero-argument
     /// callbacks cannot lose lifecycle/emission context.
@@ -8408,6 +8492,26 @@ pub struct InterpreterCore {
     jit_hot_threshold: u64,
     /// Cold function eviction counter to implement decay policy.
     jit_eviction_counter: u64,
+}
+
+impl Drop for InterpreterCore {
+    fn drop(&mut self) {
+        let Some(provider) = self.process_spawn.as_ref() else {
+            return;
+        };
+        // Execution can exit before the deferred Wait turn (fatal callback,
+        // containment, memory budget, or turn-limit exhaustion). Provider Arcs
+        // may outlive this core, so do not rely on provider Drop for ownership
+        // revocation.
+        let handles = self
+            .pending_child_process_tasks
+            .values()
+            .map(|task| task.handle.clone())
+            .collect::<BTreeSet<_>>();
+        for handle in handles {
+            provider.cleanup_handle(&handle);
+        }
+    }
 }
 
 impl InterpreterCore {
@@ -8658,6 +8762,8 @@ impl InterpreterCore {
             state_capture_result: None,
             host_io: None,
             host_io_recorder: None,
+            process_spawn: None,
+            host_effect_journal: None,
             registers: SeedTrackedField::new(vec![Value::Undefined; max_regs]),
             call_stack: Vec::new(),
             heap: SeedTrackedField::new(Vec::new()),
@@ -8709,10 +8815,14 @@ impl InterpreterCore {
             event_loop: crate::promise_model::EventLoop::new(),
             promise_in_flight_task_bytes: 0,
             pending_io_callbacks: BTreeMap::new(),
+            pending_child_process_tasks: BTreeMap::new(),
+            child_process_task_in_flight_bytes: 0,
             event_listeners: BTreeMap::new(),
             event_once_wrappers: BTreeMap::new(),
             event_promise_waiters: BTreeMap::new(),
             next_event_promise_waiter_id: 0,
+            completed_child_processes: BTreeMap::new(),
+            child_process_streams: BTreeMap::new(),
             url_objects: BTreeMap::new(),
             url_search_params: BTreeMap::new(),
             cluster_facades: BTreeMap::new(),
@@ -8767,6 +8877,7 @@ impl InterpreterCore {
             decision_receipts: EvidenceLog::new(),
             nondeterminism_trace,
             register_labels: vec![Label::Public; max_regs],
+            object_mutation_labels: BTreeMap::new(),
             active_inline_callback_context_label: None,
             inline_callback_start_probes: Vec::new(),
             weakmap_storage: BTreeMap::new(),
@@ -8817,6 +8928,1065 @@ impl InterpreterCore {
     ) {
         self.host_io = Some(provider);
         self.host_io_recorder = recorder;
+    }
+
+    /// Install the separately admitted process provider and the global journal
+    /// that also records any host-I/O crossings in this execution.
+    pub fn set_process_spawn(
+        &mut self,
+        provider: Arc<dyn ProcessSpawnProvider>,
+        journal: Arc<InMemoryHostEffectJournal>,
+    ) {
+        self.process_spawn = Some(provider);
+        self.host_effect_journal = Some(journal);
+    }
+
+    fn join_object_mutation_label(
+        &mut self,
+        object_id: ObjectId,
+        label: &Label,
+    ) -> Result<(), InterpreterError> {
+        let mut current = Some(object_id);
+        let mut visited = BTreeSet::new();
+        while let Some(target) = current {
+            if !visited.insert(target) {
+                break;
+            }
+            self.join_direct_object_mutation_label(target, label)?;
+            current = self.heap.get(target.0 as usize).and_then(|object| {
+                let active_proxy = matches!(
+                    object.properties.get("__type"),
+                    Some(Value::Str(kind)) if kind.as_ref() == PROXY_TYPE_TAG
+                ) && !matches!(
+                    object.properties.get(PROXY_REVOKED_SLOT),
+                    Some(Value::Bool(true))
+                );
+                active_proxy
+                    .then(|| object.properties.get(PROXY_TARGET_SLOT))?
+                    .and_then(|value| match value {
+                        Value::Object(target) => Some(*target),
+                        _ => None,
+                    })
+            });
+        }
+        Ok(())
+    }
+
+    fn join_direct_object_mutation_label(
+        &mut self,
+        object_id: ObjectId,
+        label: &Label,
+    ) -> Result<(), InterpreterError> {
+        let previous_bytes = self
+            .object_mutation_labels
+            .get(&object_id)
+            .map_or(0, Self::estimate_object_mutation_label_entry_bytes);
+        let next = self
+            .object_mutation_labels
+            .get(&object_id)
+            .map_or_else(|| label.clone(), |current| current.join(label));
+        let next_bytes = if next == Label::Public {
+            0
+        } else {
+            Self::estimate_object_mutation_label_entry_bytes(&next)
+        };
+        self.apply_memory_component_delta(previous_bytes, next_bytes)?;
+        if next == Label::Public {
+            self.object_mutation_labels.remove(&object_id);
+        } else {
+            self.object_mutation_labels.insert(object_id, next);
+        }
+        Ok(())
+    }
+
+    fn process_dynamic_value_label(
+        &self,
+        value: &Value,
+        visited: &mut BTreeSet<ObjectId>,
+    ) -> Label {
+        let Value::Object(object_id) = value else {
+            return Label::Public;
+        };
+        if !visited.insert(*object_id) {
+            return Label::Public;
+        }
+        let mut label = self
+            .object_mutation_labels
+            .get(object_id)
+            .cloned()
+            .unwrap_or(Label::Public)
+            .join(&self.binary_storage_label(*object_id));
+        if let Some(object) = self.heap.get(object_id.0 as usize) {
+            for property in object.properties.values() {
+                label = label.join(&self.process_dynamic_value_label(property, visited));
+            }
+        }
+        label
+    }
+
+    fn join_arg_range_with_object_mutation_label(
+        &self,
+        args: RegRange,
+    ) -> Result<Label, InterpreterError> {
+        let mut label = Label::Public;
+        for offset in 0..args.count {
+            let register =
+                args.start
+                    .checked_add(offset)
+                    .ok_or(InterpreterError::RegisterOutOfBounds {
+                        register: args.start,
+                        max: self.config.max_registers,
+                    })?;
+            let value = self.read_reg(register)?;
+            label = label
+                .join(self.get_register_label(register)?)
+                .join(&self.process_dynamic_value_label(&value, &mut BTreeSet::new()));
+        }
+        Ok(label)
+    }
+
+    fn process_string_argument(
+        &self,
+        value: Option<&Value>,
+        field: &str,
+    ) -> Result<String, InterpreterError> {
+        match value {
+            Some(Value::Str(value)) => Ok(value.to_string()),
+            Some(value) => Err(InterpreterError::TypeError {
+                expected: format!("string child_process {field}"),
+                got: value.type_name().to_string(),
+            }),
+            None => Err(InterpreterError::TypeError {
+                expected: format!("string child_process {field}"),
+                got: "missing argument".to_string(),
+            }),
+        }
+    }
+
+    fn process_unsigned_option(value: &Value, field: &str) -> Result<u64, InterpreterError> {
+        let number = match value {
+            Value::Int(value) if *value >= 0 => u64::try_from(*value).unwrap_or(u64::MAX),
+            Value::Float(value)
+                if value.inner().is_finite()
+                    && value.inner() >= 0.0
+                    && value.inner().fract() == 0.0 =>
+            {
+                value.inner() as u64
+            }
+            value => {
+                return Err(InterpreterError::TypeError {
+                    expected: format!("non-negative integer child_process {field}"),
+                    got: value.type_name().to_string(),
+                });
+            }
+        };
+        Ok(number)
+    }
+
+    fn process_argv(&self, value: Option<&Value>) -> Result<Vec<String>, InterpreterError> {
+        match value {
+            None | Some(Value::Undefined | Value::Null) => Ok(Vec::new()),
+            Some(Value::Object(object_id)) => self
+                .array_like_values(*object_id)?
+                .iter()
+                .map(|value| match value {
+                    Value::Str(value) => Ok(value.to_string()),
+                    value => Err(InterpreterError::TypeError {
+                        expected: "string child_process argv element".to_string(),
+                        got: value.type_name().to_string(),
+                    }),
+                })
+                .collect(),
+            Some(value) => Err(InterpreterError::TypeError {
+                expected: "child_process argv array".to_string(),
+                got: value.type_name().to_string(),
+            }),
+        }
+    }
+
+    fn process_is_array(&self, value: Option<&Value>) -> bool {
+        matches!(
+            value,
+            Some(Value::Object(object_id))
+                if self
+                    .heap
+                    .get(object_id.0 as usize)
+                    .is_some_and(|object| object.is_array)
+        )
+    }
+
+    fn process_env(&self, value: &Value) -> Result<BTreeMap<String, String>, InterpreterError> {
+        let Value::Object(object_id) = value else {
+            return Err(InterpreterError::TypeError {
+                expected: "child_process env object".to_string(),
+                got: value.type_name().to_string(),
+            });
+        };
+        let object = self
+            .heap
+            .get(object_id.0 as usize)
+            .ok_or(InterpreterError::ObjectNotFound { id: object_id.0 })?;
+        object
+            .properties
+            .iter()
+            .map(|(key, value)| match value {
+                Value::Str(value) => Ok((key.clone(), value.to_string())),
+                value => Err(InterpreterError::TypeError {
+                    expected: format!("string value for child_process env.{key}"),
+                    got: value.type_name().to_string(),
+                }),
+            })
+            .collect()
+    }
+
+    fn process_call_options(
+        &self,
+        value: Option<&Value>,
+    ) -> Result<ProcessCallOptions, InterpreterError> {
+        let Some(value) = value else {
+            return Ok(ProcessCallOptions::default());
+        };
+        if matches!(value, Value::Undefined | Value::Null) {
+            return Ok(ProcessCallOptions::default());
+        }
+        let Value::Object(object_id) = value else {
+            return Err(InterpreterError::TypeError {
+                expected: "child_process options object".to_string(),
+                got: value.type_name().to_string(),
+            });
+        };
+        let object = self
+            .heap
+            .get(object_id.0 as usize)
+            .ok_or(InterpreterError::ObjectNotFound { id: object_id.0 })?;
+        let mut options = ProcessCallOptions::default();
+        if let Some(value) = object.properties.get("cwd") {
+            options.cwd = Some(self.process_string_argument(Some(value), "cwd")?);
+        }
+        if let Some(value) = object.properties.get("env") {
+            options.env = self.process_env(value)?;
+        }
+        if let Some(value) = object.properties.get("input") {
+            options.input = self.fs_value_bytes(value)?;
+        }
+        if let Some(value) = object.properties.get("encoding") {
+            options.encoding = Some(self.process_string_argument(Some(value), "encoding")?);
+        }
+        if let Some(value) = object.properties.get("shell") {
+            options.shell = value.is_truthy();
+        }
+        if let Some(value) = object.properties.get("stdio") {
+            let mode = self.process_string_argument(Some(value), "stdio")?;
+            options.stdio = match mode.as_str() {
+                "pipe" => ProcessStdio::default(),
+                "ignore" => ProcessStdio {
+                    stdin: ProcessStdioMode::Null,
+                    stdout: ProcessStdioMode::Null,
+                    stderr: ProcessStdioMode::Null,
+                },
+                _ => {
+                    return Err(InterpreterError::TypeError {
+                        expected: "child_process stdio value 'pipe' or 'ignore'".to_string(),
+                        got: mode,
+                    });
+                }
+            };
+        }
+        if let Some(value) = object.properties.get("timeout") {
+            options.timeout_millis = Some(Self::process_unsigned_option(value, "timeout")?);
+        }
+        if let Some(value) = object.properties.get("maxBuffer") {
+            options.max_buffer = Some(
+                usize::try_from(Self::process_unsigned_option(value, "maxBuffer")?)
+                    .unwrap_or(usize::MAX),
+            );
+        }
+        Ok(options)
+    }
+
+    fn process_launch(
+        command: String,
+        argv: Vec<String>,
+        options: &ProcessCallOptions,
+        force_shell: bool,
+    ) -> ProcessLaunch {
+        let shell = force_shell || options.shell;
+        let (executable, argv) = if shell {
+            (String::new(), vec![command])
+        } else {
+            (command, argv)
+        };
+        ProcessLaunch {
+            executable,
+            argv,
+            env: options.env.clone(),
+            cwd: options.cwd.clone(),
+            shell,
+            stdio: options.stdio,
+        }
+    }
+
+    fn process_error_from_effect(error: EffectError) -> InterpreterError {
+        match error {
+            EffectError::HandlerError {
+                message,
+                code: Some(code),
+                ..
+            } => {
+                let node_code = if message.contains("executable_alias_denied")
+                    || message.contains("canonicalize executable")
+                {
+                    "ENOENT"
+                } else {
+                    match code.as_str() {
+                        "PROCESS_SPAWN_TIMED_OUT" => "ETIMEDOUT",
+                        "PROCESS_SPAWN_LIMIT_EXCEEDED" => "ENOBUFS",
+                        "PROCESS_SPAWN_POLICY_VIOLATION"
+                        | "PROCESS_SPAWN_DENIED"
+                        | "PROCESS_SPAWN_CAPABILITY_MISSING" => "EACCES",
+                        _ => code.as_str(),
+                    }
+                };
+                InterpreterError::HostProcess {
+                    code: node_code.to_string(),
+                    message,
+                    status: None,
+                    signal: None,
+                    stdout: Vec::new(),
+                    stderr: Vec::new(),
+                }
+            }
+            error => InterpreterError::InternalError {
+                details: format!("process effect dispatch failed: {error}"),
+            },
+        }
+    }
+
+    fn perform_process_request(
+        &mut self,
+        request: ProcessSpawnRequest,
+        args_label: &Label,
+    ) -> Result<ProcessSpawnResponse, InterpreterError> {
+        let Some(provider) = self.process_spawn.clone() else {
+            return Err(InterpreterError::CapabilityDenied {
+                capability: "process_spawn provider admission".to_string(),
+            });
+        };
+        let Some(journal) = self.host_effect_journal.clone() else {
+            return Err(InterpreterError::InternalError {
+                details: "process provider installed without host-effect journal".to_string(),
+            });
+        };
+        if args_label != &Label::Public {
+            let outcome = Err(ProcessSpawnError::FlowPolicyBlocked);
+            journal
+                .record_process_spawn(&request, &outcome)
+                .map_err(|error| InterpreterError::InternalError {
+                    details: format!("failed to journal process IFC denial: {error}"),
+                })?;
+            return Err(InterpreterError::HostProcess {
+                code: "EACCES".to_string(),
+                message: "process spawn denied: FLOW_POLICY_BLOCKED".to_string(),
+                status: None,
+                signal: None,
+                stdout: Vec::new(),
+                stderr: Vec::new(),
+            });
+        }
+        let effect = create_process_spawn_effect(request);
+        let mut stack = create_handler_stack_from_profile_with_effect_providers(
+            &CapabilityProfile::compute_only(),
+            None,
+            None,
+            Some(provider),
+            None,
+            Some(journal),
+        );
+        stack
+            .handle_effect(effect.as_ref())
+            .map_err(Self::process_error_from_effect)?
+            .downcast::<ProcessSpawnResponse>()
+            .map_err(|_| InterpreterError::InternalError {
+                details: "process effect returned an invalid response type".to_string(),
+            })
+    }
+
+    fn process_output_value(
+        &mut self,
+        bytes: &[u8],
+        encoding: Option<&str>,
+    ) -> Result<Value, InterpreterError> {
+        self.decode_fs_read_result(bytes, encoding)
+    }
+
+    fn process_run_error(exit: ProcessExit, stdout: Vec<u8>, stderr: Vec<u8>) -> InterpreterError {
+        InterpreterError::HostProcess {
+            code: "CHILD_PROCESS_EXIT".to_string(),
+            message: format!("command failed with exit status {:?}", exit.code),
+            status: exit.code,
+            signal: exit.signal,
+            stdout,
+            stderr,
+        }
+    }
+
+    fn process_max_buffer_error(
+        exit: ProcessExit,
+        stdout: Vec<u8>,
+        stderr: Vec<u8>,
+    ) -> InterpreterError {
+        InterpreterError::HostProcess {
+            code: "ENOBUFS".to_string(),
+            message: "child_process maxBuffer exceeded".to_string(),
+            status: exit.code,
+            signal: exit.signal,
+            stdout,
+            stderr,
+        }
+    }
+
+    fn process_sync_result(
+        &mut self,
+        response: ProcessSpawnResponse,
+        options: &ProcessCallOptions,
+    ) -> Result<Value, InterpreterError> {
+        let ProcessSpawnResponse::Run {
+            exit,
+            stdout,
+            stderr,
+        } = response
+        else {
+            return Err(InterpreterError::InternalError {
+                details: "process run returned a lifecycle response".to_string(),
+            });
+        };
+        let ignored = options.stdio.stdout == ProcessStdioMode::Null;
+        let stdout_value = if ignored {
+            Value::Null
+        } else {
+            self.process_output_value(&stdout, options.encoding.as_deref())?
+        };
+        let stderr_value = if options.stdio.stderr == ProcessStdioMode::Null {
+            Value::Null
+        } else {
+            self.process_output_value(&stderr, options.encoding.as_deref())?
+        };
+        let output = self.alloc_array_from_values(&[
+            Value::Null,
+            stdout_value.clone(),
+            stderr_value.clone(),
+        ])?;
+        let result = self.alloc_object_with_properties(&[
+            ("pid", Value::Int(1)),
+            (
+                "status",
+                exit.code
+                    .map_or(Value::Null, |code| Value::Int(i64::from(code))),
+            ),
+            (
+                "signal",
+                exit.signal
+                    .map_or(Value::Null, |signal| Value::Int(i64::from(signal))),
+            ),
+            ("stdout", stdout_value),
+            ("stderr", stderr_value),
+            ("output", Value::Object(output)),
+            ("error", Value::Undefined),
+        ])?;
+        Ok(Value::Object(result))
+    }
+
+    fn process_spawn_sync_failure(
+        &mut self,
+        error: InterpreterError,
+    ) -> Result<Value, InterpreterError> {
+        let thrown = self.native_error_to_thrown_value(&error)?;
+        let result = self.alloc_object_with_properties(&[
+            ("pid", Value::Int(0)),
+            ("status", Value::Null),
+            ("signal", Value::Null),
+            ("stdout", Value::Null),
+            ("stderr", Value::Null),
+            ("output", Value::Null),
+            ("error", thrown),
+        ])?;
+        Ok(Value::Object(result))
+    }
+
+    fn allocate_child_process_facade(
+        &mut self,
+        options: &ProcessCallOptions,
+    ) -> Result<ObjectId, InterpreterError> {
+        let stdout_stream = if options.stdio.stdout == ProcessStdioMode::Null {
+            None
+        } else {
+            Some(
+                self.alloc_object_with_properties(&[("__type", Value::str("ChildProcessStream"))])?,
+            )
+        };
+        let stderr_stream = if options.stdio.stderr == ProcessStdioMode::Null {
+            None
+        } else {
+            Some(
+                self.alloc_object_with_properties(&[("__type", Value::str("ChildProcessStream"))])?,
+            )
+        };
+        let child = self.alloc_object_with_properties(&[
+            ("__type", Value::str("ChildProcess")),
+            ("pid", Value::Int(1)),
+            ("killed", Value::Bool(false)),
+            ("stdout", stdout_stream.map_or(Value::Null, Value::Object)),
+            ("stderr", stderr_stream.map_or(Value::Null, Value::Object)),
+            ("stdin", Value::Undefined),
+        ])?;
+        let stream_entries =
+            u64::from(stdout_stream.is_some()) + u64::from(stderr_stream.is_some());
+        let retained_stream_bytes =
+            stream_entries.saturating_mul(MEMORY_ESTIMATE_MAP_ENTRY_BYTES.saturating_add(
+                std::mem::size_of::<(ObjectId, (ObjectId, ChildProcessStreamKind))>() as u64,
+            ));
+        self.apply_memory_component_delta(0, retained_stream_bytes)?;
+        if let Some(stream) = stdout_stream {
+            self.child_process_streams
+                .insert(stream, (child, ChildProcessStreamKind::Stdout));
+        }
+        if let Some(stream) = stderr_stream {
+            self.child_process_streams
+                .insert(stream, (child, ChildProcessStreamKind::Stderr));
+        }
+        Ok(child)
+    }
+
+    fn pending_child_process_state() -> CompletedChildProcessState {
+        CompletedChildProcessState {
+            settled: false,
+            stdout: Value::Null,
+            stdout_has_data: false,
+            stderr: Value::Null,
+            stderr_has_data: false,
+            exit_code: Value::Null,
+            signal: Value::Null,
+            error: None,
+            scheduled_events: BTreeSet::new(),
+        }
+    }
+
+    fn replace_child_process_state(
+        &mut self,
+        child: ObjectId,
+        state: CompletedChildProcessState,
+    ) -> Result<(), InterpreterError> {
+        let previous_bytes = self
+            .completed_child_processes
+            .get(&child)
+            .map(Self::estimate_completed_child_process_state_bytes)
+            .unwrap_or(0);
+        let next_bytes = Self::estimate_completed_child_process_state_bytes(&state);
+        self.apply_memory_component_delta(previous_bytes, next_bytes)?;
+        self.completed_child_processes.insert(child, state);
+        Ok(())
+    }
+
+    fn remove_child_process_state(&mut self, child: ObjectId) {
+        if let Some(state) = self.completed_child_processes.remove(&child) {
+            self.estimated_memory_bytes = self
+                .estimated_memory_bytes
+                .saturating_sub(Self::estimate_completed_child_process_state_bytes(&state));
+        }
+    }
+
+    fn settle_child_process(
+        &mut self,
+        child: ObjectId,
+        outcome: Result<(ProcessExit, Vec<u8>, Vec<u8>), InterpreterError>,
+    ) -> Result<(), InterpreterError> {
+        let (exit_code, signal, stdout, stdout_has_data, stderr, stderr_has_data, error) =
+            match outcome {
+                Ok((exit, stdout, stderr)) => {
+                    let stdout_has_data = !stdout.is_empty();
+                    let stderr_has_data = !stderr.is_empty();
+                    let stdout = self.process_output_value(&stdout, None)?;
+                    let stderr = self.process_output_value(&stderr, None)?;
+                    (
+                        exit.code
+                            .map_or(Value::Null, |code| Value::Int(i64::from(code))),
+                        exit.signal
+                            .map_or(Value::Null, |signal| Value::Int(i64::from(signal))),
+                        stdout,
+                        stdout_has_data,
+                        stderr,
+                        stderr_has_data,
+                        None,
+                    )
+                }
+                Err(error) => (
+                    Value::Null,
+                    Value::Null,
+                    Value::Null,
+                    false,
+                    Value::Null,
+                    false,
+                    Some(self.native_error_to_thrown_value(&error)?),
+                ),
+            };
+        let scheduled_events = self
+            .completed_child_processes
+            .get(&child)
+            .map(|state| state.scheduled_events.clone())
+            .unwrap_or_default();
+        self.replace_child_process_state(
+            child,
+            CompletedChildProcessState {
+                settled: true,
+                stdout,
+                stdout_has_data,
+                stderr,
+                stderr_has_data,
+                exit_code,
+                signal,
+                error,
+                scheduled_events,
+            },
+        )
+    }
+
+    fn activate_completed_child_process_event(
+        &mut self,
+        target: ObjectId,
+        event: &str,
+    ) -> Result<Option<u64>, InterpreterError> {
+        let (child, stream_kind) = self
+            .child_process_streams
+            .get(&target)
+            .copied()
+            .map_or((target, None), |(child, kind)| (child, Some(kind)));
+        let Some(state) = self.completed_child_processes.get_mut(&child) else {
+            return Ok(None);
+        };
+        let event_key =
+            stream_kind.map_or_else(|| event.to_string(), |kind| format!("{kind:?}:{event}"));
+        if state.scheduled_events.contains(&event_key) {
+            return Ok(None);
+        }
+        if event != "spawn" && !state.settled {
+            return Ok(None);
+        }
+        let arguments = match (stream_kind, event) {
+            (Some(ChildProcessStreamKind::Stdout), "data") if state.stdout_has_data => {
+                vec![state.stdout.clone()]
+            }
+            (Some(ChildProcessStreamKind::Stderr), "data") if state.stderr_has_data => {
+                vec![state.stderr.clone()]
+            }
+            (None, "error") => state
+                .error
+                .clone()
+                .map_or_else(Vec::new, |error| vec![error]),
+            (None, "spawn") if state.error.is_none() => Vec::new(),
+            (None, "exit") if state.error.is_none() => {
+                vec![state.exit_code.clone(), state.signal.clone()]
+            }
+            (None, "close") => vec![state.exit_code.clone(), state.signal.clone()],
+            _ => return Ok(None),
+        };
+        let event_key_bytes =
+            MEMORY_ESTIMATE_MAP_ENTRY_BYTES.saturating_add(Self::estimate_string_bytes(&event_key));
+        self.apply_memory_component_delta(0, event_key_bytes)?;
+        let Some(state) = self.completed_child_processes.get_mut(&child) else {
+            self.estimated_memory_bytes =
+                self.estimated_memory_bytes.saturating_sub(event_key_bytes);
+            return Ok(None);
+        };
+        state.scheduled_events.insert(event_key.clone());
+        match self.schedule_child_process_event_task(PendingHttpTask::EmitLegacyEvent {
+            target,
+            event: event.to_string(),
+            arguments,
+            leading_callback: None,
+            label: Label::Public,
+        }) {
+            Ok(sequence) => Ok(Some(sequence)),
+            Err(error) => {
+                if let Some(state) = self.completed_child_processes.get_mut(&child) {
+                    state.scheduled_events.remove(&event_key);
+                }
+                self.estimated_memory_bytes =
+                    self.estimated_memory_bytes.saturating_sub(event_key_bytes);
+                Err(error)
+            }
+        }
+    }
+
+    fn execute_pending_child_process_task(
+        &mut self,
+        task: PendingChildProcessTask,
+        _module: Option<&Ir3Module>,
+    ) -> Result<(), InterpreterError> {
+        let response = self.perform_process_request(
+            ProcessSpawnRequest::Wait {
+                handle: task.handle.clone(),
+                timeout_millis: task.options.timeout_millis,
+            },
+            &Label::Public,
+        );
+        let (settlement, callback_arguments) = match response {
+            Ok(ProcessSpawnResponse::Waited {
+                exit,
+                stdout,
+                stderr,
+            }) if task
+                .options
+                .max_buffer
+                .is_some_and(|maximum| stdout.len() > maximum || stderr.len() > maximum) =>
+            {
+                let error = Self::process_max_buffer_error(exit, stdout, stderr);
+                let thrown = self.native_error_to_thrown_value(&error)?;
+                (Err(error), vec![thrown, Value::str(""), Value::str("")])
+            }
+            Ok(ProcessSpawnResponse::Waited {
+                exit,
+                stdout,
+                stderr,
+            }) => {
+                let (stdout_value, stderr_value) =
+                    if let Some(encoding) = task.callback_encoding.as_deref() {
+                        (
+                            self.process_output_value(&stdout, Some(encoding))?,
+                            self.process_output_value(&stderr, Some(encoding))?,
+                        )
+                    } else {
+                        (Value::Undefined, Value::Undefined)
+                    };
+                let error_value = if exit.success {
+                    Value::Null
+                } else {
+                    let error =
+                        Self::process_run_error(exit.clone(), stdout.clone(), stderr.clone());
+                    self.native_error_to_thrown_value(&error)?
+                };
+                (
+                    Ok((exit, stdout, stderr)),
+                    vec![error_value, stdout_value, stderr_value],
+                )
+            }
+            Ok(_) => {
+                if let Some(provider) = &self.process_spawn {
+                    provider.cleanup_handle(&task.handle);
+                }
+                return Err(InterpreterError::InternalError {
+                    details: "process wait returned a non-wait response".to_string(),
+                });
+            }
+            Err(error) => {
+                if let Some(provider) = &self.process_spawn {
+                    provider.cleanup_handle(&task.handle);
+                }
+                let thrown = self.native_error_to_thrown_value(&error)?;
+                (Err(error), vec![thrown, Value::str(""), Value::str("")])
+            }
+        };
+        self.settle_child_process(task.child, settlement)?;
+        let streams = self
+            .child_process_streams
+            .iter()
+            .filter_map(|(stream, (child, _))| (*child == task.child).then_some(*stream))
+            .collect::<Vec<_>>();
+        for stream in streams {
+            self.activate_completed_child_process_event(stream, "data")?;
+        }
+        let failed = self
+            .completed_child_processes
+            .get(&task.child)
+            .is_some_and(|state| state.error.is_some());
+        if failed {
+            if let Some(callback) = task.callback {
+                self.schedule_child_process_callback(callback, callback_arguments)?;
+            }
+            self.activate_completed_child_process_event(task.child, "error")?;
+        } else {
+            self.activate_completed_child_process_event(task.child, "exit")?;
+            if let Some(callback) = task.callback {
+                self.schedule_child_process_callback(callback, callback_arguments)?;
+            }
+        }
+        self.activate_completed_child_process_event(task.child, "close")?;
+        Ok(())
+    }
+
+    fn dispatch_process_spawn_hostcall(
+        &mut self,
+        args: RegRange,
+    ) -> Result<Value, InterpreterError> {
+        let mut values = Vec::with_capacity(args.count as usize);
+        let mut labels = Vec::with_capacity(args.count as usize);
+        for offset in 0..args.count {
+            let register =
+                args.start
+                    .checked_add(offset)
+                    .ok_or(InterpreterError::RegisterOutOfBounds {
+                        register: args.start,
+                        max: self.config.max_registers,
+                    })?;
+            labels.push(self.get_register_label(register)?.clone());
+            values.push(self.read_reg(register)?);
+        }
+        let discriminator = self.process_string_argument(values.first(), "operation")?;
+        let logical = values.get(1..).unwrap_or_default();
+        let command = self.process_string_argument(logical.first(), "command")?;
+        let (argv, options_value, callback, request_argument_count) = match discriminator.as_str() {
+            "\0processop:spawn_sync" | "\0processop:spawn" | "\0processop:exec_file_sync" => {
+                if self.process_is_array(logical.get(1)) {
+                    (
+                        self.process_argv(logical.get(1))?,
+                        logical.get(2),
+                        None,
+                        logical.len().min(3),
+                    )
+                } else {
+                    (Vec::new(), logical.get(1), None, logical.len().min(2))
+                }
+            }
+            "\0processop:exec_sync" => (Vec::new(), logical.get(1), None, 2),
+            "\0processop:exec" => {
+                let (options, callback_value) = if logical.get(1).is_some_and(Value::is_callable) {
+                    (None, logical.get(1))
+                } else {
+                    (logical.get(1), logical.get(2))
+                };
+                let request_argument_count = if options.is_some() { 2 } else { 1 };
+                (Vec::new(), options, callback_value, request_argument_count)
+            }
+            "\0processop:exec_file" => {
+                if self.process_is_array(logical.get(1)) {
+                    let callback_value = if logical.get(2).is_some_and(Value::is_callable) {
+                        logical.get(2)
+                    } else {
+                        logical.get(3)
+                    };
+                    let options = if logical.get(2).is_some_and(Value::is_callable) {
+                        None
+                    } else {
+                        logical.get(2)
+                    };
+                    let request_argument_count = if options.is_some() { 3 } else { 2 };
+                    (
+                        self.process_argv(logical.get(1))?,
+                        options,
+                        callback_value,
+                        request_argument_count,
+                    )
+                } else {
+                    let callback_value = if logical.get(1).is_some_and(Value::is_callable) {
+                        logical.get(1)
+                    } else {
+                        logical.get(2)
+                    };
+                    let options = if logical.get(1).is_some_and(Value::is_callable) {
+                        None
+                    } else {
+                        logical.get(1)
+                    };
+                    let request_argument_count = if options.is_some() { 2 } else { 1 };
+                    (Vec::new(), options, callback_value, request_argument_count)
+                }
+            }
+            _ => {
+                return Err(InterpreterError::InternalError {
+                    details: "unrecognized authenticated child_process operation".to_string(),
+                });
+            }
+        };
+        let request_label = labels
+            .get(1..)
+            .unwrap_or_default()
+            .iter()
+            .zip(logical.iter())
+            .take(request_argument_count)
+            .fold(Label::Public, |joined, (label, value)| {
+                joined
+                    .join(label)
+                    .join(&self.process_dynamic_value_label(value, &mut BTreeSet::new()))
+            });
+        let options = self.process_call_options(options_value)?;
+        let force_shell = matches!(
+            discriminator.as_str(),
+            "\0processop:exec_sync" | "\0processop:exec"
+        );
+        let launch = Self::process_launch(command, argv, &options, force_shell);
+        let async_operation = matches!(
+            discriminator.as_str(),
+            "\0processop:spawn" | "\0processop:exec" | "\0processop:exec_file"
+        );
+        let callback_id = match callback {
+            Some(Value::Closure(callback)) => Some(*callback),
+            None | Some(Value::Undefined) => None,
+            Some(value) => {
+                return Err(InterpreterError::TypeError {
+                    expected: "closure-backed child_process callback".to_string(),
+                    got: value.type_name().to_string(),
+                });
+            }
+        };
+        if async_operation {
+            if !options.input.is_empty() {
+                return Err(InterpreterError::TypeError {
+                    expected: "async child_process input through bounded stdin lifecycle"
+                        .to_string(),
+                    got: "non-empty input option".to_string(),
+                });
+            }
+            let child = self.allocate_child_process_facade(&options)?;
+            match self
+                .perform_process_request(ProcessSpawnRequest::Spawn { launch }, &request_label)
+            {
+                Ok(ProcessSpawnResponse::Spawned { handle }) => {
+                    if let Err(error) =
+                        self.replace_child_process_state(child, Self::pending_child_process_state())
+                    {
+                        if let Some(provider) = &self.process_spawn {
+                            provider.cleanup_handle(&handle);
+                        }
+                        return Err(error);
+                    }
+                    let spawn_sequence =
+                        match self.activate_completed_child_process_event(child, "spawn") {
+                            Ok(Some(sequence)) => sequence,
+                            Ok(None) => {
+                                self.remove_child_process_state(child);
+                                if let Some(provider) = &self.process_spawn {
+                                    provider.cleanup_handle(&handle);
+                                }
+                                return Err(InterpreterError::InternalError {
+                                    details: "spawn event was not scheduled for a live process"
+                                        .to_string(),
+                                });
+                            }
+                            Err(error) => {
+                                self.remove_child_process_state(child);
+                                if let Some(provider) = &self.process_spawn {
+                                    provider.cleanup_handle(&handle);
+                                }
+                                return Err(error);
+                            }
+                        };
+                    if let Err(error) = self.schedule_child_process_wait(PendingChildProcessTask {
+                        child,
+                        handle: handle.clone(),
+                        callback: callback_id,
+                        callback_encoding: callback_id.map(|_| {
+                            options
+                                .encoding
+                                .clone()
+                                .unwrap_or_else(|| "utf8".to_string())
+                        }),
+                        options,
+                    }) {
+                        self.cancel_http_task_registration(spawn_sequence);
+                        self.remove_child_process_state(child);
+                        if let Some(provider) = &self.process_spawn {
+                            provider.cleanup_handle(&handle);
+                        }
+                        return Err(error);
+                    }
+                }
+                Ok(_) => {
+                    return Err(InterpreterError::InternalError {
+                        details: "process spawn returned a non-lifecycle response".to_string(),
+                    });
+                }
+                Err(error @ InterpreterError::CapabilityDenied { .. })
+                | Err(error @ InterpreterError::InternalError { .. }) => return Err(error),
+                Err(error @ InterpreterError::HostProcess { ref message, .. })
+                    if message.contains("FLOW_POLICY_BLOCKED") =>
+                {
+                    return Err(error);
+                }
+                Err(error) => {
+                    self.settle_child_process(child, Err(error.clone()))?;
+                    if let Some(callback) = callback_id {
+                        let thrown = self.native_error_to_thrown_value(&error)?;
+                        self.schedule_child_process_callback(
+                            callback,
+                            vec![thrown, Value::str(""), Value::str("")],
+                        )?;
+                    }
+                    // Spawn failures are lifecycle events in their own right.
+                    // Queue them even when no listener exists yet so a bare
+                    // unhandled `error` reaches the eval boundary; synchronous
+                    // listener registration can still observe the deferred
+                    // emission before this Immediate turn executes.
+                    self.activate_completed_child_process_event(child, "error")?;
+                    self.activate_completed_child_process_event(child, "close")?;
+                }
+            }
+            return Ok(Value::Object(child));
+        }
+        let request = ProcessSpawnRequest::Run {
+            launch,
+            stdin: options.input.clone(),
+            timeout_millis: options.timeout_millis,
+        };
+        let response = match self.perform_process_request(request, &request_label) {
+            Ok(response) => response,
+            Err(error) if discriminator == "\0processop:spawn_sync" => {
+                return self.process_spawn_sync_failure(error);
+            }
+            Err(error) => {
+                if let Some(Value::Closure(callback)) = callback {
+                    let thrown = self.native_error_to_thrown_value(&error)?;
+                    self.schedule_io_callback(
+                        *callback,
+                        vec![thrown, Value::str(""), Value::str("")],
+                    )?;
+                    return Ok(Value::Undefined);
+                }
+                return Err(error);
+            }
+        };
+        let ProcessSpawnResponse::Run {
+            exit,
+            stdout,
+            stderr,
+        } = response
+        else {
+            return Err(InterpreterError::InternalError {
+                details: "process run returned a lifecycle response".to_string(),
+            });
+        };
+        if options
+            .max_buffer
+            .is_some_and(|maximum| stdout.len() > maximum || stderr.len() > maximum)
+        {
+            let error = Self::process_max_buffer_error(exit, stdout, stderr);
+            if discriminator == "\0processop:spawn_sync" {
+                return self.process_spawn_sync_failure(error);
+            }
+            if let Some(Value::Closure(callback)) = callback {
+                let thrown = self.native_error_to_thrown_value(&error)?;
+                self.schedule_io_callback(*callback, vec![thrown, Value::str(""), Value::str("")])?;
+            }
+            return Err(error);
+        }
+        match discriminator.as_str() {
+            "\0processop:spawn_sync" => self.process_sync_result(
+                ProcessSpawnResponse::Run {
+                    exit,
+                    stdout,
+                    stderr,
+                },
+                &options,
+            ),
+            "\0processop:exec_sync" | "\0processop:exec_file_sync" => {
+                if !exit.success {
+                    return Err(Self::process_run_error(exit, stdout, stderr));
+                }
+                self.process_output_value(&stdout, options.encoding.as_deref())
+            }
+            "\0processop:exec" | "\0processop:exec_file" | "\0processop:spawn" => {
+                unreachable!("async operations return after scheduling their lifecycle wait")
+            }
+            _ => unreachable!("discriminator validated above"),
+        }
     }
 
     fn fs_object_property(&self, value: &Value, key: &str) -> Option<Value> {
@@ -9180,11 +10350,22 @@ impl InterpreterCore {
         // dispatch. Full grants all capabilities so the stack's gate never
         // re-denies what the interpreter already authorized; the provider performs
         // the real, capability-checked effect and the recorder logs it.
-        let mut stack = create_handler_stack_from_profile_with_host_io(
-            &CapabilityProfile::full(),
-            provider,
-            self.host_io_recorder.clone(),
-        );
+        let mut stack = if self.host_effect_journal.is_some() {
+            create_handler_stack_from_profile_with_effect_providers(
+                &CapabilityProfile::full(),
+                Some(provider),
+                self.host_io_recorder.clone(),
+                self.process_spawn.clone(),
+                None,
+                self.host_effect_journal.clone(),
+            )
+        } else {
+            create_handler_stack_from_profile_with_host_io(
+                &CapabilityProfile::full(),
+                provider,
+                self.host_io_recorder.clone(),
+            )
+        };
         let result = match stack.handle_effect(effect.as_ref()) {
             Ok(result) => result,
             Err(EffectError::HandlerError {
@@ -9299,11 +10480,22 @@ impl InterpreterCore {
         // dispatch. Full grants all capabilities so the stack's gate never
         // re-denies what the interpreter already authorized; the provider performs
         // the real, capability-checked effect and the recorder logs it.
-        let mut stack = create_handler_stack_from_profile_with_host_io(
-            &CapabilityProfile::full(),
-            provider,
-            self.host_io_recorder.clone(),
-        );
+        let mut stack = if self.host_effect_journal.is_some() {
+            create_handler_stack_from_profile_with_effect_providers(
+                &CapabilityProfile::full(),
+                Some(provider),
+                self.host_io_recorder.clone(),
+                self.process_spawn.clone(),
+                None,
+                self.host_effect_journal.clone(),
+            )
+        } else {
+            create_handler_stack_from_profile_with_host_io(
+                &CapabilityProfile::full(),
+                provider,
+                self.host_io_recorder.clone(),
+            )
+        };
         let result = match stack.handle_effect(effect.as_ref()) {
             Ok(result) => result,
             Err(EffectError::CapabilityDenied { .. }) => {
@@ -9437,14 +10629,35 @@ impl InterpreterCore {
         callback_args: Vec<Value>,
         callback_label: Label,
     ) -> Result<(), InterpreterError> {
+        self.schedule_callback_in_lane(closure_id, callback_args, callback_label, false)
+    }
+
+    fn schedule_child_process_callback(
+        &mut self,
+        closure_id: u32,
+        callback_args: Vec<Value>,
+    ) -> Result<(), InterpreterError> {
+        self.schedule_callback_in_lane(closure_id, callback_args, Label::Public, true)
+    }
+
+    fn schedule_callback_in_lane(
+        &mut self,
+        closure_id: u32,
+        callback_args: Vec<Value>,
+        callback_label: Label,
+        immediate: bool,
+    ) -> Result<(), InterpreterError> {
         let retained_bytes = MEMORY_ESTIMATE_MAP_ENTRY_BYTES
             .saturating_add(Self::estimate_value_vec_bytes(&callback_args));
         self.apply_memory_component_delta(0, retained_bytes)?;
         let previous_promise_bytes = self.promise_runtime_memory_bytes();
-        let seq = self.event_loop.schedule_io_completion(
-            crate::closure_model::ClosureHandle(closure_id),
-            callback_label,
-        );
+        let handler = crate::closure_model::ClosureHandle(closure_id);
+        let seq = if immediate {
+            self.event_loop.set_immediate(handler, callback_label)
+        } else {
+            self.event_loop
+                .schedule_io_completion(handler, callback_label)
+        };
         if let Err(error) = self.apply_promise_runtime_memory_delta(previous_promise_bytes) {
             self.event_loop.rollback_last_scheduled(seq);
             self.estimated_memory_bytes =
@@ -9452,6 +10665,102 @@ impl InterpreterCore {
             return Err(error);
         }
         self.pending_io_callbacks.insert(seq, callback_args);
+        Ok(())
+    }
+
+    fn pending_child_process_task_bytes(task: &PendingChildProcessTask) -> u64 {
+        let options = &task.options;
+        MEMORY_ESTIMATE_MAP_ENTRY_BYTES
+            .saturating_add(std::mem::size_of::<PendingChildProcessTask>() as u64)
+            .saturating_add(Self::estimate_string_bytes(&task.handle))
+            .saturating_add(
+                options
+                    .cwd
+                    .as_deref()
+                    .map(Self::estimate_string_bytes)
+                    .unwrap_or(0),
+            )
+            .saturating_add(
+                options
+                    .encoding
+                    .as_deref()
+                    .map(Self::estimate_string_bytes)
+                    .unwrap_or(0),
+            )
+            .saturating_add(
+                task.callback_encoding
+                    .as_deref()
+                    .map(Self::estimate_string_bytes)
+                    .unwrap_or(0),
+            )
+            .saturating_add(options.input.len() as u64)
+            .saturating_add(Self::saturating_sum(options.env.iter().map(
+                |(key, value)| {
+                    MEMORY_ESTIMATE_MAP_ENTRY_BYTES
+                        .saturating_add(Self::estimate_string_bytes(key))
+                        .saturating_add(Self::estimate_string_bytes(value))
+                },
+            )))
+    }
+
+    fn estimate_completed_child_process_state_bytes(state: &CompletedChildProcessState) -> u64 {
+        MEMORY_ESTIMATE_MAP_ENTRY_BYTES
+            .saturating_add(std::mem::size_of::<CompletedChildProcessState>() as u64)
+            .saturating_add(Self::estimate_value_bytes(&state.stdout))
+            .saturating_add(Self::estimate_value_bytes(&state.stderr))
+            .saturating_add(Self::estimate_value_bytes(&state.exit_code))
+            .saturating_add(Self::estimate_value_bytes(&state.signal))
+            .saturating_add(
+                state
+                    .error
+                    .as_ref()
+                    .map(Self::estimate_value_bytes)
+                    .unwrap_or(0),
+            )
+            .saturating_add(Self::saturating_sum(state.scheduled_events.iter().map(
+                |event| {
+                    MEMORY_ESTIMATE_MAP_ENTRY_BYTES
+                        .saturating_add(Self::estimate_string_bytes(event))
+                },
+            )))
+    }
+
+    fn completed_child_processes_memory_bytes(&self) -> u64 {
+        Self::saturating_sum(
+            self.completed_child_processes
+                .values()
+                .map(Self::estimate_completed_child_process_state_bytes),
+        )
+    }
+
+    fn child_process_streams_memory_bytes(&self) -> u64 {
+        u64::try_from(self.child_process_streams.len())
+            .unwrap_or(u64::MAX)
+            .saturating_mul(
+                MEMORY_ESTIMATE_MAP_ENTRY_BYTES.saturating_add(std::mem::size_of::<(
+                    ObjectId,
+                    (ObjectId, ChildProcessStreamKind),
+                )>() as u64),
+            )
+    }
+
+    fn schedule_child_process_wait(
+        &mut self,
+        task: PendingChildProcessTask,
+    ) -> Result<(), InterpreterError> {
+        let retained_bytes = Self::pending_child_process_task_bytes(&task);
+        self.apply_memory_component_delta(0, retained_bytes)?;
+        let previous_promise_bytes = self.promise_runtime_memory_bytes();
+        let sequence = self
+            .event_loop
+            .schedule_io_completion(crate::closure_model::ClosureHandle(0), Label::Public);
+        if let Err(error) = self.apply_promise_runtime_memory_delta(previous_promise_bytes) {
+            self.event_loop.rollback_last_scheduled(sequence);
+            self.estimated_memory_bytes =
+                self.estimated_memory_bytes.saturating_sub(retained_bytes);
+            return Err(error);
+        }
+        self.pending_child_process_tasks.insert(sequence, task);
         Ok(())
     }
 
@@ -9670,6 +10979,21 @@ impl InterpreterCore {
     }
 
     fn schedule_http_task(&mut self, task: PendingHttpTask) -> Result<u64, InterpreterError> {
+        self.schedule_http_task_in_lane(task, false)
+    }
+
+    fn schedule_child_process_event_task(
+        &mut self,
+        task: PendingHttpTask,
+    ) -> Result<u64, InterpreterError> {
+        self.schedule_http_task_in_lane(task, true)
+    }
+
+    fn schedule_http_task_in_lane(
+        &mut self,
+        task: PendingHttpTask,
+        immediate: bool,
+    ) -> Result<u64, InterpreterError> {
         let retained_bytes = Self::estimate_pending_http_task_bytes(&task);
         let task_label = match &task {
             PendingHttpTask::DispatchRequest { request, .. } => self
@@ -9706,9 +11030,12 @@ impl InterpreterCore {
         };
         self.apply_memory_component_delta(0, retained_bytes)?;
         let previous_promise_bytes = self.promise_runtime_memory_bytes();
-        let sequence = self
-            .event_loop
-            .schedule_io_completion(crate::closure_model::ClosureHandle(u32::MAX), task_label);
+        let handler = crate::closure_model::ClosureHandle(u32::MAX);
+        let sequence = if immediate {
+            self.event_loop.set_immediate(handler, task_label)
+        } else {
+            self.event_loop.schedule_io_completion(handler, task_label)
+        };
         if let Err(error) = self.apply_promise_runtime_memory_delta(previous_promise_bytes) {
             self.event_loop.rollback_last_scheduled(sequence);
             self.estimated_memory_bytes =
@@ -14633,18 +15960,48 @@ impl InterpreterCore {
     }
 
     fn clear_residual_event_state(&mut self) {
+        let previous_promise_bytes = self.promise_runtime_memory_bytes();
         let released_bytes = self
             .event_listeners_memory_bytes()
-            .saturating_add(self.event_promise_waiters_memory_bytes());
+            .saturating_add(self.event_promise_waiters_memory_bytes())
+            .saturating_add(self.pending_io_callbacks_memory_bytes())
+            .saturating_add(self.completed_child_processes_memory_bytes())
+            .saturating_add(self.child_process_streams_memory_bytes())
+            .saturating_add(self.pending_child_process_tasks_memory_bytes())
+            .saturating_add(self.child_process_task_in_flight_bytes);
+        let pending_tasks = std::mem::take(&mut self.pending_child_process_tasks);
+        for (registration, task) in pending_tasks {
+            self.event_loop.cancel_registration(registration);
+            if let Some(provider) = &self.process_spawn {
+                provider.cleanup_handle(&task.handle);
+            }
+        }
+        for registration in self.pending_io_callbacks.keys().copied() {
+            self.event_loop.cancel_registration(registration);
+        }
+        self.pending_io_callbacks.clear();
+        let released_promise_bytes =
+            previous_promise_bytes.saturating_sub(self.promise_runtime_memory_bytes());
         self.event_listeners.clear();
         self.event_promise_waiters.clear();
         self.next_event_promise_waiter_id = 0;
-        self.estimated_memory_bytes = self.estimated_memory_bytes.saturating_sub(released_bytes);
+        self.completed_child_processes.clear();
+        self.child_process_streams.clear();
+        self.child_process_task_in_flight_bytes = 0;
+        self.estimated_memory_bytes = self
+            .estimated_memory_bytes
+            .saturating_sub(released_bytes.saturating_add(released_promise_bytes));
     }
 
     fn clear_event_once_wrapper_state(&mut self) {
         let released_bytes = self.event_once_wrappers_memory_bytes();
         self.event_once_wrappers.clear();
+        self.estimated_memory_bytes = self.estimated_memory_bytes.saturating_sub(released_bytes);
+    }
+
+    fn clear_object_mutation_labels(&mut self) {
+        let released_bytes = self.object_mutation_labels_memory_bytes();
+        self.object_mutation_labels.clear();
         self.estimated_memory_bytes = self.estimated_memory_bytes.saturating_sub(released_bytes);
     }
 
@@ -22674,6 +24031,7 @@ impl InterpreterCore {
         self.clear_loopback_execution_state();
         self.clear_residual_event_state();
         self.clear_event_once_wrapper_state();
+        self.clear_object_mutation_labels();
         if let Some(context) = self.active_inline_callback_context_label.take() {
             self.estimated_memory_bytes = self
                 .estimated_memory_bytes
@@ -23045,6 +24403,21 @@ impl InterpreterCore {
         ) && let Value::Object(object_id) = receiver
         {
             self.join_url_search_params_lifecycle_label(*object_id, label)?;
+        }
+        if matches!(
+            builtin.kind,
+            Kind::ArrayPush
+                | Kind::ArrayPop
+                | Kind::ArrayShift
+                | Kind::ArrayUnshift
+                | Kind::ArrayReverse
+                | Kind::ArraySort
+                | Kind::ArraySplice
+                | Kind::ArrayFill
+                | Kind::ArrayCopyWithin
+        ) && let Value::Object(object_id) = receiver
+        {
+            self.join_object_mutation_label(*object_id, label)?;
         }
         Ok(())
     }
@@ -27875,6 +29248,12 @@ impl InterpreterCore {
                         self.rollback_inserted_event_listener(target_id, &event, false);
                         return Err(error);
                     }
+                    if let Err(error) =
+                        self.activate_completed_child_process_event(target_id, &event)
+                    {
+                        self.rollback_inserted_event_listener(target_id, &event, false);
+                        return Err(error);
+                    }
                 }
                 Ok(Value::Object(target_id))
             }
@@ -27990,6 +29369,15 @@ impl InterpreterCore {
                                 property_object,
                                 previous_heap_len,
                             );
+                        }
+                        return Err(error);
+                    }
+                    if let Err(error) =
+                        self.activate_completed_child_process_event(target_id, &event)
+                    {
+                        self.rollback_inserted_event_listener(target_id, &event, prepend);
+                        if let Some((property_object, previous_heap_len)) = wrapper_allocation {
+                            self.rollback_event_once_wrapper(property_object, previous_heap_len);
                         }
                         return Err(error);
                     }
@@ -31638,6 +33026,8 @@ impl InterpreterCore {
                         self.dispatch_console_hostcall(&capability.0, args)?
                     } else if capability.0.starts_with("timer:") {
                         self.dispatch_timer_hostcall(&capability.0, args)?
+                    } else if capability.0 == "process_spawn" {
+                        self.dispatch_process_spawn_hostcall(args)?
                     } else if capability.0.starts_with("builtin:") {
                         // bd-8enww.4.10: a `builtin:` hostcall can run a user
                         // callback whose explicit `throw` escapes its isolated
@@ -31947,6 +33337,7 @@ impl InterpreterCore {
                                 .get_register_label(obj)?
                                 .join(self.get_register_label(key)?)
                                 .join(self.get_register_label(val)?);
+                            self.join_object_mutation_label(oid, &mutation_label)?;
                             let handled_url = match property_key.as_str() {
                                 Some(key) => self.set_url_object_property(
                                     oid,
@@ -32141,6 +33532,10 @@ impl InterpreterCore {
                     let arr_val = self.read_reg(array)?;
                     let elem_val = self.read_reg(element)?;
                     if let Value::Object(arr_id) = arr_val {
+                        let mutation_label = self
+                            .get_register_label(array)?
+                            .join(self.get_register_label(element)?);
+                        self.join_object_mutation_label(arr_id, &mutation_label)?;
                         let next_idx = self
                             .heap
                             .get(arr_id.0 as usize)
@@ -34542,7 +35937,9 @@ impl InterpreterCore {
                 Some("TypeError")
             }
             InterpreterError::RangeError { .. } => Some("RangeError"),
-            InterpreterError::HostFilesystem { .. } => Some("Error"),
+            InterpreterError::HostFilesystem { .. } | InterpreterError::HostProcess { .. } => {
+                Some("Error")
+            }
             // Temporal-dead-zone access of a `let`/`const` binding is a
             // `ReferenceError` per ES semantics.
             InterpreterError::UninitializedBinding { .. }
@@ -34567,6 +35964,36 @@ impl InterpreterCore {
         self.initialize_error_like_object(error_id, name, message)?;
         if let InterpreterError::HostFilesystem { code, .. } = err {
             self.set_object_property(error_id, "code".to_string(), Value::str(code.as_str()))?;
+        }
+        if let InterpreterError::HostProcess {
+            code,
+            status,
+            signal,
+            stdout,
+            stderr,
+            ..
+        } = err
+        {
+            let code_value = if code == "CHILD_PROCESS_EXIT" {
+                status.map_or(Value::Null, |status| Value::Int(i64::from(status)))
+            } else {
+                Value::str(code.as_str())
+            };
+            let stdout = self.process_output_value(stdout, None)?;
+            let stderr = self.process_output_value(stderr, None)?;
+            self.set_object_property(error_id, "code".to_string(), code_value)?;
+            self.set_object_property(
+                error_id,
+                "status".to_string(),
+                status.map_or(Value::Null, |status| Value::Int(i64::from(status))),
+            )?;
+            self.set_object_property(
+                error_id,
+                "signal".to_string(),
+                signal.map_or(Value::Null, |signal| Value::Int(i64::from(signal))),
+            )?;
+            self.set_object_property(error_id, "stdout".to_string(), stdout)?;
+            self.set_object_property(error_id, "stderr".to_string(), stderr)?;
         }
         Ok(Value::Object(error_id))
     }
@@ -36281,12 +37708,14 @@ impl InterpreterCore {
             // surface and one listener side table.
             (
                 "ClientRequest" | "IncomingMessage" | "EventEmitter" | "Readable" | "Writable"
-                | "NetServer" | "NetSocket" | "TlsServer" | "TlsSocket" | "Cluster",
+                | "NetServer" | "NetSocket" | "TlsServer" | "TlsSocket" | "Cluster"
+                | "ChildProcess" | "ChildProcessStream",
                 "on" | "addListener",
             ) => Some(BuiltinFunction::emitter_on()),
             (
                 "ClientRequest" | "IncomingMessage" | "EventEmitter" | "Readable" | "Writable"
-                | "NetServer" | "NetSocket" | "TlsServer" | "TlsSocket" | "Cluster",
+                | "NetServer" | "NetSocket" | "TlsServer" | "TlsSocket" | "Cluster"
+                | "ChildProcess" | "ChildProcessStream",
                 "once",
             ) => Some(BuiltinFunction::new_kind(BuiltinFunctionKind::EmitterOnce)),
             (
@@ -38648,14 +40077,27 @@ impl InterpreterCore {
             let transferred_bytes = self.begin_promise_task_transfer(previous_promise_bytes);
             let mut macrotask_error = None;
             if let Some(macrotask) = turn_result.macrotask {
-                let timer_like = matches!(
-                    macrotask.source,
-                    crate::promise_model::MacrotaskSource::Timer
-                        | crate::promise_model::MacrotaskSource::Immediate
-                );
+                let best_effort_timer_like = match macrotask.source {
+                    crate::promise_model::MacrotaskSource::Timer => true,
+                    crate::promise_model::MacrotaskSource::Immediate => {
+                        // Child-process lifecycle events and callbacks use the
+                        // Immediate lane for Node ordering, but they are still
+                        // host-effect completions. Treat only ordinary
+                        // setImmediate work as the historical best-effort
+                        // timer class; otherwise an unhandled child `error` or
+                        // throwing child callback would be silently swallowed.
+                        !self
+                            .pending_http_tasks
+                            .contains_key(&macrotask.registration_seq)
+                            && !self
+                                .pending_io_callbacks
+                                .contains_key(&macrotask.registration_seq)
+                    }
+                    _ => false,
+                };
                 // Execute the macrotask's handler closure
                 if let Err(err) = self.execute_macrotask_callback(&macrotask, module) {
-                    if !timer_like
+                    if !best_effort_timer_like
                         || matches!(
                             err,
                             InterpreterError::MemoryBudgetExceeded { .. }
@@ -38680,6 +40122,17 @@ impl InterpreterCore {
 
             // Phase 2: settle internal Writable work, then drain microtasks.
             self.drain_runtime_checkpoint(module)?;
+        }
+        if turns >= MAX_TURNS
+            && self.event_loop.has_pending_work()
+            && !(self.event_loop.microtasks.is_empty()
+                && self.only_unref_or_cancelled_timers_pending())
+        {
+            return Err(InterpreterError::InternalError {
+                details: format!(
+                    "event loop turn limit exceeded with ref'd work still pending ({MAX_TURNS} turns)"
+                ),
+            });
         }
         Ok(())
     }
@@ -38963,6 +40416,41 @@ impl InterpreterCore {
         Ok(())
     }
 
+    fn execute_pending_deferred_callback(
+        &mut self,
+        macrotask: &crate::promise_model::Macrotask,
+        module: Option<&Ir3Module>,
+    ) -> Option<Result<(), InterpreterError>> {
+        let callback_args = self
+            .pending_io_callbacks
+            .remove(&macrotask.registration_seq)?;
+        let retained_bytes = MEMORY_ESTIMATE_MAP_ENTRY_BYTES
+            .saturating_add(Self::estimate_value_vec_bytes(&callback_args));
+        let closure_id = macrotask.handler.0;
+        if self.closures.get(closure_id as usize).is_none() {
+            self.estimated_memory_bytes =
+                self.estimated_memory_bytes.saturating_sub(retained_bytes);
+            return Some(Err(InterpreterError::TypeError {
+                expected: "valid closure".to_string(),
+                got: format!("closure#{closure_id} not found"),
+            }));
+        }
+        let result = match module {
+            Some(module) => self
+                .invoke_inline_method_call_with_argument_label(
+                    Some(module),
+                    Value::Closure(closure_id),
+                    Value::Undefined,
+                    callback_args,
+                    Some(macrotask.label.clone()),
+                )
+                .map(|_| ()),
+            None => Ok(()),
+        };
+        self.estimated_memory_bytes = self.estimated_memory_bytes.saturating_sub(retained_bytes);
+        Some(result)
+    }
+
     /// Execute a macrotask callback (e.g., timer callbacks).
     ///
     /// This handles timer callbacks by invoking the associated closure.
@@ -38975,6 +40463,12 @@ impl InterpreterCore {
         match macrotask.source {
             crate::promise_model::MacrotaskSource::Timer
             | crate::promise_model::MacrotaskSource::Immediate => {
+                if let Some(task) = self.pending_http_tasks.remove(&macrotask.registration_seq) {
+                    return self.execute_pending_http_task(task, module);
+                }
+                if let Some(result) = self.execute_pending_deferred_callback(macrotask, module) {
+                    return result;
+                }
                 // bd-suwvw: a builtin-scheduled timer/immediate carries its
                 // action in `pending_timer_tasks` (keyed by registration
                 // seq) — cancellation, extra callback args, interval
@@ -39009,6 +40503,22 @@ impl InterpreterCore {
                 result.map(|_| ())
             }
             crate::promise_model::MacrotaskSource::IoCompletion => {
+                if let Some(task) = self
+                    .pending_child_process_tasks
+                    .remove(&macrotask.registration_seq)
+                {
+                    let retained_bytes = Self::pending_child_process_task_bytes(&task);
+                    self.child_process_task_in_flight_bytes = self
+                        .child_process_task_in_flight_bytes
+                        .saturating_add(retained_bytes);
+                    let result = self.execute_pending_child_process_task(task, module);
+                    self.child_process_task_in_flight_bytes = self
+                        .child_process_task_in_flight_bytes
+                        .saturating_sub(retained_bytes);
+                    self.estimated_memory_bytes =
+                        self.estimated_memory_bytes.saturating_sub(retained_bytes);
+                    return result;
+                }
                 if let Some(task) = self.pending_http_tasks.remove(&macrotask.registration_seq) {
                     return self.execute_pending_http_task(task, module);
                 }
@@ -39050,50 +40560,28 @@ impl InterpreterCore {
                 // by `schedule_io_callback`, keyed by this macrotask's registration
                 // sequence. Draining the entry keeps the side-table bounded to
                 // in-flight callbacks.
-                let closure_id = macrotask.handler.0;
-                let callback_args = self
-                    .pending_io_callbacks
-                    .remove(&macrotask.registration_seq);
-                let retained_bytes = callback_args
-                    .as_ref()
-                    .map(|arguments| {
-                        MEMORY_ESTIMATE_MAP_ENTRY_BYTES
-                            .saturating_add(Self::estimate_value_vec_bytes(arguments))
+                self.execute_pending_deferred_callback(macrotask, module)
+                    .unwrap_or_else(|| {
+                        let closure_id = macrotask.handler.0;
+                        if self.closures.get(closure_id as usize).is_none() {
+                            return Err(InterpreterError::TypeError {
+                                expected: "valid closure".to_string(),
+                                got: format!("closure#{closure_id} not found"),
+                            });
+                        }
+                        match module {
+                            Some(module) => self
+                                .invoke_inline_method_call_with_argument_label(
+                                    Some(module),
+                                    Value::Closure(closure_id),
+                                    Value::Undefined,
+                                    Vec::new(),
+                                    Some(macrotask.label.clone()),
+                                )
+                                .map(|_| ()),
+                            None => Ok(()),
+                        }
                     })
-                    .unwrap_or(0);
-                let callback_args = callback_args.unwrap_or_default();
-                if self.closures.get(closure_id as usize).is_none() {
-                    self.estimated_memory_bytes =
-                        self.estimated_memory_bytes.saturating_sub(retained_bytes);
-                    return Err(InterpreterError::TypeError {
-                        expected: "valid closure".to_string(),
-                        got: format!("closure#{closure_id} not found"),
-                    });
-                }
-                let result = match module {
-                    Some(module) => {
-                        // Reuse the audited synchronous closure-invocation path (the
-                        // same one timer + promise-reaction callbacks use): undefined
-                        // `this`, err-first arguments, runs the closure body to
-                        // completion against its captured environment.
-                        self.invoke_inline_method_call_with_argument_label(
-                            Some(module),
-                            Value::Closure(closure_id),
-                            Value::Undefined,
-                            callback_args,
-                            Some(macrotask.label.clone()),
-                        )
-                        .map(|_| ())
-                    }
-                    None => {
-                        // No module context only on the test-only event-loop path;
-                        // without it the callback body cannot be invoked.
-                        Ok(())
-                    }
-                };
-                self.estimated_memory_bytes =
-                    self.estimated_memory_bytes.saturating_sub(retained_bytes);
-                result
             }
             _ => {
                 // Remaining sources (e.g. MessageChannel) are not yet scheduled.
@@ -50577,6 +52065,8 @@ impl InterpreterCore {
                     }
                     // Skip non-object sources (null, undefined, primitives)
                 }
+                let mutation_label = self.join_arg_range_with_object_mutation_label(args)?;
+                self.join_object_mutation_label(target_obj_id, &mutation_label)?;
 
                 // Return the target object
                 Ok(Value::Object(target_obj_id))
@@ -52935,6 +54425,8 @@ impl InterpreterCore {
                     other => other,
                 };
                 self.set_object_runtime_property(obj_id, prop_name, effective_value)?;
+                let mutation_label = self.join_arg_range_with_object_mutation_label(args)?;
+                self.join_object_mutation_label(obj_id, &mutation_label)?;
 
                 Ok(obj_val) // Return the original object
             }
@@ -52991,9 +54483,18 @@ impl InterpreterCore {
                 } else {
                     Value::Object(target)
                 };
-                Ok(Value::Bool(self.proxy_aware_set_runtime_property(
-                    module, target, &key, value, receiver, 0,
-                )?))
+                let receiver_object = match &receiver {
+                    Value::Object(receiver) => Some(*receiver),
+                    _ => None,
+                };
+                let assigned = self
+                    .proxy_aware_set_runtime_property(module, target, &key, value, receiver, 0)?;
+                let mutation_label = self.join_arg_range_with_object_mutation_label(args)?;
+                self.join_object_mutation_label(target, &mutation_label)?;
+                if let Some(receiver) = receiver_object {
+                    self.join_object_mutation_label(receiver, &mutation_label)?;
+                }
+                Ok(Value::Bool(assigned))
             }
             "builtin:ReflectHas" => {
                 let target = self.read_object_argument(args, 0, "Reflect.has target object")?;
@@ -59057,6 +60558,28 @@ impl InterpreterCore {
         }))
     }
 
+    fn pending_child_process_tasks_memory_bytes(&self) -> u64 {
+        Self::saturating_sum(
+            self.pending_child_process_tasks
+                .values()
+                .map(Self::pending_child_process_task_bytes),
+        )
+    }
+
+    fn estimate_object_mutation_label_entry_bytes(label: &Label) -> u64 {
+        (std::mem::size_of::<(ObjectId, Label)>() as u64)
+            .saturating_add(64)
+            .saturating_add(Self::estimate_label_bytes(label))
+    }
+
+    fn object_mutation_labels_memory_bytes(&self) -> u64 {
+        Self::saturating_sum(
+            self.object_mutation_labels
+                .values()
+                .map(Self::estimate_object_mutation_label_entry_bytes),
+        )
+    }
+
     fn estimate_pending_timer_task_bytes(task: &PendingTimerTask) -> u64 {
         match &task.kind {
             PendingTimerTaskKind::Callback { args, .. } => {
@@ -59345,6 +60868,16 @@ impl InterpreterCore {
             InterpreterError::HostFilesystem { code, message } => {
                 string(code).saturating_add(string(message))
             }
+            InterpreterError::HostProcess {
+                code,
+                message,
+                stdout,
+                stderr,
+                ..
+            } => string(code)
+                .saturating_add(string(message))
+                .saturating_add(u64::try_from(stdout.len()).unwrap_or(u64::MAX))
+                .saturating_add(u64::try_from(stderr.len()).unwrap_or(u64::MAX)),
             InterpreterError::ContainmentActionRequested { action, reason } => string(action)
                 .saturating_add(reason.as_ref().map(|reason| string(reason)).unwrap_or(0)),
             InterpreterError::BudgetExhausted { .. }
@@ -59937,12 +61470,17 @@ impl InterpreterCore {
             .saturating_add(self.async_generators_memory_bytes())
             .saturating_add(self.top_level_await_outcome_memory_bytes())
             .saturating_add(self.pending_io_callbacks_memory_bytes())
+            .saturating_add(self.pending_child_process_tasks_memory_bytes())
+            .saturating_add(self.child_process_task_in_flight_bytes)
+            .saturating_add(self.completed_child_processes_memory_bytes())
+            .saturating_add(self.child_process_streams_memory_bytes())
             .saturating_add(self.pending_timer_tasks_memory_bytes())
             .saturating_add(self.promise_runtime_memory_bytes())
             .saturating_add(self.weakmap_storage_memory_bytes())
             .saturating_add(self.event_listeners_memory_bytes())
             .saturating_add(self.event_once_wrappers_memory_bytes())
             .saturating_add(self.event_promise_waiters_memory_bytes())
+            .saturating_add(self.object_mutation_labels_memory_bytes())
             .saturating_add(self.url_objects_memory_bytes())
             .saturating_add(self.url_search_params_memory_bytes())
             .saturating_add(self.cluster_facades_memory_bytes())
@@ -62187,6 +63725,8 @@ pub struct QuickJsLane {
     /// effects (bd-f5b04.2.7). `None` keeps the fail-closed baseline.
     host_io: Option<Arc<dyn HostIoProvider>>,
     host_io_recorder: Option<Arc<dyn HostIoRecorder>>,
+    process_spawn: Option<Arc<dyn ProcessSpawnProvider>>,
+    host_effect_journal: Option<Arc<InMemoryHostEffectJournal>>,
 }
 
 impl Default for QuickJsLane {
@@ -62195,6 +63735,8 @@ impl Default for QuickJsLane {
             config: execution_profile_config(InterpreterConfig::quickjs_defaults()),
             host_io: None,
             host_io_recorder: None,
+            process_spawn: None,
+            host_effect_journal: None,
         }
     }
 }
@@ -62209,6 +63751,8 @@ impl QuickJsLane {
             config,
             host_io: None,
             host_io_recorder: None,
+            process_spawn: None,
+            host_effect_journal: None,
         }
     }
 
@@ -62221,6 +63765,17 @@ impl QuickJsLane {
     ) {
         self.host_io = Some(provider);
         self.host_io_recorder = recorder;
+    }
+
+    /// Install the separately admitted process provider and the execution-wide
+    /// host-effect journal on this lane.
+    pub fn set_process_spawn(
+        &mut self,
+        provider: Arc<dyn ProcessSpawnProvider>,
+        journal: Arc<InMemoryHostEffectJournal>,
+    ) {
+        self.process_spawn = Some(provider);
+        self.host_effect_journal = Some(journal);
     }
 
     pub fn execute(
@@ -62243,6 +63798,11 @@ impl QuickJsLane {
         }
         if let Some(provider) = self.host_io.clone() {
             core.set_host_io(provider, self.host_io_recorder.clone());
+        }
+        if let (Some(provider), Some(journal)) =
+            (self.process_spawn.clone(), self.host_effect_journal.clone())
+        {
+            core.set_process_spawn(provider, journal);
         }
         match core.execute(module) {
             Ok(result) => Ok(result),
@@ -62283,6 +63843,8 @@ pub struct V8Lane {
     /// (bd-f5b04.2.7). `None` keeps the fail-closed baseline.
     host_io: Option<Arc<dyn HostIoProvider>>,
     host_io_recorder: Option<Arc<dyn HostIoRecorder>>,
+    process_spawn: Option<Arc<dyn ProcessSpawnProvider>>,
+    host_effect_journal: Option<Arc<InMemoryHostEffectJournal>>,
 }
 
 impl Default for V8Lane {
@@ -62291,6 +63853,8 @@ impl Default for V8Lane {
             config: execution_profile_config(InterpreterConfig::v8_defaults()),
             host_io: None,
             host_io_recorder: None,
+            process_spawn: None,
+            host_effect_journal: None,
         }
     }
 }
@@ -62313,6 +63877,8 @@ impl V8Lane {
             config,
             host_io: None,
             host_io_recorder: None,
+            process_spawn: None,
+            host_effect_journal: None,
         }
     }
 
@@ -62325,6 +63891,17 @@ impl V8Lane {
     ) {
         self.host_io = Some(provider);
         self.host_io_recorder = recorder;
+    }
+
+    /// Install the separately admitted process provider and the execution-wide
+    /// host-effect journal on this lane.
+    pub fn set_process_spawn(
+        &mut self,
+        provider: Arc<dyn ProcessSpawnProvider>,
+        journal: Arc<InMemoryHostEffectJournal>,
+    ) {
+        self.process_spawn = Some(provider);
+        self.host_effect_journal = Some(journal);
     }
 
     pub fn execute(
@@ -62347,6 +63924,11 @@ impl V8Lane {
         }
         if let Some(provider) = self.host_io.clone() {
             core.set_host_io(provider, self.host_io_recorder.clone());
+        }
+        if let (Some(provider), Some(journal)) =
+            (self.process_spawn.clone(), self.host_effect_journal.clone())
+        {
+            core.set_process_spawn(provider, journal);
         }
         match core.execute(module) {
             Ok(result) => Ok(result),
@@ -62805,6 +64387,18 @@ impl LaneRouter {
     ) {
         self.quickjs.set_host_io(provider.clone(), recorder.clone());
         self.v8.set_host_io(provider, recorder);
+    }
+
+    /// Install the separately admitted process provider and shared journal on
+    /// both lanes so routing cannot drop extraordinary process authority.
+    pub fn set_process_spawn(
+        &mut self,
+        provider: Arc<dyn ProcessSpawnProvider>,
+        journal: Arc<InMemoryHostEffectJournal>,
+    ) {
+        self.quickjs
+            .set_process_spawn(provider.clone(), journal.clone());
+        self.v8.set_process_spawn(provider, journal);
     }
 
     /// Route and execute the module.

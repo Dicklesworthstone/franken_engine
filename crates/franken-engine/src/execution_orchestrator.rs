@@ -83,9 +83,13 @@ use crate::tropical_semiring::{
 use crate::ts_normalization::{
     SourceIngestionSummary, TsNormalizationError, prepare_source_entry_for_public_entrypoints,
 };
+use frankenengine_extension_host::host_effect_journal::{
+    HostEffectJournalEntry, InMemoryHostEffectJournal,
+};
 use frankenengine_extension_host::host_io::{
     HostIoOutcome, HostIoProvider, HostIoRecorder, HostIoRequest,
 };
+use frankenengine_extension_host::process_spawn::ProcessSpawnProvider;
 
 // Canonical baseline anchors for the orchestrator-tuning regression pin
 // (see `runtime_config_default_matches_orchestrator_constants` in this file's
@@ -316,6 +320,10 @@ pub struct OrchestratorResult {
     // emitted no host effects. This is the source bd-5r99w.12 renders as a
     // signed effect ledger in `franken-node run`.
     pub host_effect_transcript: Vec<(HostIoRequest, HostIoOutcome)>,
+    /// Globally ordered filesystem/network/process effects. This is the
+    /// receipt-bearing source for executions that install process authority;
+    /// unlike independent family transcripts it preserves interleaving.
+    pub host_effect_journal: Vec<HostEffectJournalEntry>,
 
     // Replay (bd-9mr8o): the finalised nondeterminism trace the interpreter
     // recorded during this run. Surfaced so `frankenctl run --emit-trace`
@@ -583,6 +591,9 @@ pub struct ExecutionOrchestrator {
     /// (bd-f5b04.2.7). `None` keeps the fail-closed baseline (no host effects).
     host_io: Option<Arc<dyn HostIoProvider>>,
     host_io_recorder: Option<Arc<dyn HostIoRecorder>>,
+    process_spawn: Option<Arc<dyn ProcessSpawnProvider>>,
+    host_effect_journal: Option<Arc<InMemoryHostEffectJournal>>,
+    last_failed_host_effect_journal: Vec<HostEffectJournalEntry>,
     /// Optional per-run cancellation signal supplied by the product supervisor.
     cancellation_token: Option<CancellationToken>,
     /// Optional data-contract IFC ingress binding (bd-fqlfw.8.2): the labeled
@@ -690,6 +701,9 @@ impl ExecutionOrchestrator {
             execution_counter: 0,
             host_io: None,
             host_io_recorder: None,
+            process_spawn: None,
+            host_effect_journal: None,
+            last_failed_host_effect_journal: Vec::new(),
             cancellation_token: None,
             data_contract_ingress: None,
             data_contract_flow_events: Vec::new(),
@@ -736,6 +750,26 @@ impl ExecutionOrchestrator {
     ) {
         self.host_io = Some(provider);
         self.host_io_recorder = recorder;
+    }
+
+    /// Install a signed product-authorized process provider together with the
+    /// globally ordered journal that records/replays every process and ordinary
+    /// host-I/O crossing. Process authority is never inferred from a profile.
+    pub fn set_process_spawn(
+        &mut self,
+        provider: Arc<dyn ProcessSpawnProvider>,
+        journal: Arc<InMemoryHostEffectJournal>,
+    ) {
+        self.process_spawn = Some(provider);
+        self.host_effect_journal = Some(journal);
+    }
+
+    /// Journal finalized from the most recent execution attempt that returned
+    /// an error. Product callers can still issue DENIED/FAILED receipts instead
+    /// of losing the evidence prefix when JavaScript execution aborts.
+    #[must_use]
+    pub fn last_failed_host_effect_journal(&self) -> &[HostEffectJournalEntry] {
+        &self.last_failed_host_effect_journal
     }
 
     /// Install a per-run cooperative cancellation signal for both interpreter
@@ -875,6 +909,12 @@ impl ExecutionOrchestrator {
         &mut self,
         package: &ExtensionPackage,
     ) -> Result<OrchestratorResult, OrchestratorError> {
+        // A signed process admission authorizes exactly one execution attempt.
+        // Consume it before validation so a malformed package cannot preserve
+        // the authority and reuse it for a later, unrelated package.
+        let process_spawn = self.process_spawn.take();
+        let host_effect_journal = self.host_effect_journal.take();
+        self.last_failed_host_effect_journal.clear();
         // Step 0: Validate.
         Self::validate_package(package)?;
         self.ensure_not_cancelled()?;
@@ -916,18 +956,62 @@ impl ExecutionOrchestrator {
         // Step 6: Execute IR3. Establish the recorder boundary before the
         // interpreter can perform any live host effect. Unsupported recorders
         // fail here, not after an irreversible provider call.
-        if let Some(recorder) = self.host_io_recorder.as_deref() {
+        if let Some(journal) = host_effect_journal.as_deref() {
+            journal.begin_execution().map_err(|error| {
+                OrchestratorError::Interpreter(InterpreterError::InternalError {
+                    details: format!("host-effect journal setup failed: {error}"),
+                })
+            })?;
+        } else if let Some(recorder) = self.host_io_recorder.as_deref() {
             recorder.begin_execution().map_err(|error| {
                 OrchestratorError::Interpreter(InterpreterError::InternalError {
                     details: format!("host I/O execution setup failed: {error}"),
                 })
             })?;
         }
-        let execution = self.phase_execute(package, &lowering_output.ir3, &trace_id);
+        let execution = self.phase_execute(
+            package,
+            &lowering_output.ir3,
+            &trace_id,
+            process_spawn.clone(),
+            host_effect_journal.clone(),
+        );
         // Finalize after every interpreter attempt, including failures. Otherwise
         // a valid prefix could be resumed by a later run and falsely certified as
         // one exact replay.
-        let host_effect_transcript = if let Some(recorder) = self.host_io_recorder.as_deref() {
+        let host_effect_journal_entries = if let Some(journal) = host_effect_journal.as_deref() {
+            match journal.finish_execution() {
+                Ok(entries) => entries,
+                Err(error) => {
+                    self.last_failed_host_effect_journal = journal.attempt_entries();
+                    let phase_context = execution
+                        .as_ref()
+                        .err()
+                        .map(|phase_error| format!("; phase execution also failed: {phase_error}"))
+                        .unwrap_or_default();
+                    return Err(OrchestratorError::Interpreter(
+                        InterpreterError::InternalError {
+                            details: format!(
+                                "host-effect journal finalization failed: {error}{phase_context}"
+                            ),
+                        },
+                    ));
+                }
+            }
+        } else {
+            Vec::new()
+        };
+        let host_effect_transcript = if host_effect_journal.is_some() {
+            host_effect_journal_entries
+                .iter()
+                .filter_map(|entry| match entry {
+                    HostEffectJournalEntry::HostIo { request, outcome } => {
+                        Some((request.clone(), outcome.clone()))
+                    }
+                    HostEffectJournalEntry::ProcessSpawn { .. } => None,
+                })
+                .collect()
+        } else if let Some(recorder) = self.host_io_recorder.as_deref() {
             recorder.finish_execution().map_err(|error| {
                 let phase_context = execution
                     .as_ref()
@@ -943,6 +1027,10 @@ impl ExecutionOrchestrator {
         } else {
             Vec::new()
         };
+        // Retain the finalized prefix until the *entire* orchestration path
+        // succeeds. Any later cancellation, evidence, or containment failure
+        // must not erase already-performed effects from product receipts.
+        self.last_failed_host_effect_journal = host_effect_journal_entries.clone();
         let (routed, guardplane_report) = execution?;
         self.ensure_not_cancelled()?;
         let lane = routed.lane;
@@ -1021,7 +1109,7 @@ impl ExecutionOrchestrator {
 
         self.execution_counter = self.execution_counter.saturating_add(1);
 
-        Ok(OrchestratorResult {
+        let result = OrchestratorResult {
             extension_id: package.extension_id.clone(),
             trace_id,
             decision_id,
@@ -1052,9 +1140,12 @@ impl ExecutionOrchestrator {
             // bd-f5b04.2.7: the atomic recorder boundary returns only effects
             // performed or replayed by this execution.
             host_effect_transcript,
+            host_effect_journal: host_effect_journal_entries,
             nondeterminism_trace: exec_result.nondeterminism_trace.clone(),
             epoch: self.config.epoch,
-        })
+        };
+        self.last_failed_host_effect_journal.clear();
+        Ok(result)
     }
 
     // -- Private helpers -----------------------------------------------------
@@ -1258,6 +1349,8 @@ impl ExecutionOrchestrator {
         package: &ExtensionPackage,
         ir3: &Ir3Module,
         trace_id: &str,
+        process_spawn: Option<Arc<dyn ProcessSpawnProvider>>,
+        host_effect_journal: Option<Arc<InMemoryHostEffectJournal>>,
     ) -> Result<(RoutedResult, Option<GuardplaneHookReport>), OrchestratorError> {
         let guardplane_adapter = self.guardplane_adapter_for_package(package);
         let hook = guardplane_adapter.as_ref().map(|adapter| {
@@ -1273,6 +1366,9 @@ impl ExecutionOrchestrator {
         // real host effects through the algebraic-effects stack.
         if let Some(provider) = self.host_io.clone() {
             lane_router.set_host_io(provider, self.host_io_recorder.clone());
+        }
+        if let (Some(provider), Some(journal)) = (process_spawn, host_effect_journal) {
+            lane_router.set_process_spawn(provider, journal);
         }
         let routed = lane_router
             .execute_with_hook(ir3, trace_id, self.config.force_lane, hook)

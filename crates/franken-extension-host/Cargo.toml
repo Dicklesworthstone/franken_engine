@@ -23,6 +23,11 @@ rustls = { version = "0.23", default-features = false, features = ["ring", "std"
 rustls-pki-types = "1"
 webpki-roots = "1"
 
+[target.'cfg(unix)'.dependencies]
+# Safe process-group signalling and nonblocking pipe flags for bounded native
+# process teardown. The crate remains `#![forbid(unsafe_code)]`.
+rustix = { version = "1.1", features = ["fs", "process"] }
+
 [dev-dependencies]
 insta = { version = "1.39", features = ["filters"] }
 toml = "0.8"

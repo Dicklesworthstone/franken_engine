@@ -1649,6 +1649,7 @@ dependencies = [
  "ed25519-dalek",
  "insta",
  "rcgen",
+ "rustix",
  "rustls",
  "rustls-pki-types",
  "serde",

@@ -29,6 +29,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::capability::RuntimeCapability;
 use crate::security_epoch::SecurityEpoch;
+use frankenengine_extension_host::process_spawn::{ProcessSpawnRequest, ProcessSpawnResponse};
 
 // ---------------------------------------------------------------------------
 // Effect trait and operation signatures
@@ -826,46 +827,33 @@ impl Effect for NetConnectEffect {
     }
 }
 
-/// Process spawn effect.
-#[derive(Debug, Clone)]
+/// Typed process operation crossing the algebraic-effects boundary.
+///
+/// The request is already canonicalized into the extension-host protocol; no
+/// command, environment, cwd, lifecycle handle, or resource limit is lost in a
+/// legacy string tuple before policy and replay evaluate it.
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProcSpawnEffect {
-    /// Command to execute.
-    pub command: String,
-    /// Command arguments.
-    pub args: Vec<String>,
-    /// Environment variables.
-    pub env: BTreeMap<String, String>,
-    /// Working directory.
-    pub cwd: Option<String>,
+    pub request: ProcessSpawnRequest,
 }
 
 impl Effect for ProcSpawnEffect {
-    type Output = u32; // process handle
+    type Output = ProcessSpawnResponse;
 
     fn effect_name(&self) -> &'static str {
         "proc:spawn"
     }
 
     fn required_capabilities(&self) -> EffectCapabilities {
-        EffectCapabilities::custom(vec!["proc:spawn".to_string()])
+        EffectCapabilities::runtime([RuntimeCapability::ProcessSpawn])
     }
 
     fn parameters(&self) -> Box<dyn Any + Send + Sync> {
-        Box::new((
-            self.command.clone(),
-            self.args.clone(),
-            self.env.clone(),
-            self.cwd.clone(),
-        ))
+        Box::new(self.request.clone())
     }
 
     fn parameter_type_id(&self) -> TypeId {
-        TypeId::of::<(
-            String,
-            Vec<String>,
-            BTreeMap<String, String>,
-            Option<String>,
-        )>()
+        TypeId::of::<ProcessSpawnRequest>()
     }
 }
 
@@ -1429,7 +1417,7 @@ impl HostcallMigrationAdapter {
         // Process capabilities
         capability_mapping.insert(
             "proc:spawn".to_string(),
-            EffectCapabilities::custom(vec!["proc:spawn".to_string()]),
+            EffectCapabilities::runtime([RuntimeCapability::ProcessSpawn]),
         );
 
         // Policy capabilities

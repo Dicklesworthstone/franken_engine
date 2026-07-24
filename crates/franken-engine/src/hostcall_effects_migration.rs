@@ -15,12 +15,19 @@ use serde::{Deserialize, Serialize};
 
 use crate::algebraic_effects::{
     Effect, EffectCapabilities, EffectError, EffectPriority, EffectResult, ErasedEffect, Handler,
-    HandlerStack,
+    HandlerStack, ProcSpawnEffect,
 };
 use crate::capability::{CapabilityProfile, ProfileKind, RuntimeCapability};
+use frankenengine_extension_host::host_effect_journal::{
+    HostEffectJournalError, InMemoryHostEffectJournal,
+};
 use frankenengine_extension_host::host_io::{
     FsOperation, HostIoCapability, HostIoError, HostIoProvider, HostIoRecorder, HostIoRequest,
     HostIoResponse, SANDBOXED_HOST_IO_MAX_BYTES,
+};
+use frankenengine_extension_host::process_spawn::{
+    ProcessSpawnCapability, ProcessSpawnError, ProcessSpawnProvider, ProcessSpawnRecorder,
+    ProcessSpawnRequest, ProcessSpawnResponse, perform_recorded,
 };
 
 // ---------------------------------------------------------------------------
@@ -236,6 +243,7 @@ pub struct ModuleExports {
 pub struct FullCapsHandler {
     host_io: Option<Arc<dyn HostIoProvider>>,
     host_io_recorder: Option<Arc<dyn HostIoRecorder>>,
+    host_effect_journal: Option<Arc<InMemoryHostEffectJournal>>,
 }
 
 impl FullCapsHandler {
@@ -251,6 +259,7 @@ impl FullCapsHandler {
         Self {
             host_io: Some(provider),
             host_io_recorder: None,
+            host_effect_journal: None,
         }
     }
 
@@ -263,6 +272,23 @@ impl FullCapsHandler {
         Self {
             host_io: Some(provider),
             host_io_recorder: Some(recorder),
+            host_effect_journal: None,
+        }
+    }
+
+    /// Construct the ordinary host-I/O handler with an optional globally
+    /// ordered journal. Process execution remains a separate handler and trust
+    /// boundary.
+    #[must_use]
+    pub fn with_effect_providers(
+        host_io: Option<Arc<dyn HostIoProvider>>,
+        host_io_recorder: Option<Arc<dyn HostIoRecorder>>,
+        host_effect_journal: Option<Arc<InMemoryHostEffectJournal>>,
+    ) -> Self {
+        Self {
+            host_io,
+            host_io_recorder,
+            host_effect_journal,
         }
     }
 
@@ -294,18 +320,34 @@ impl FullCapsHandler {
 
         let request = Self::host_io_request_from_effect(effect)?;
         let granted = [request.required_capability()];
-        let outcome = match self
-            .host_io_recorder
-            .as_deref()
-            .and_then(|recorder| recorder.replay(&request))
-        {
-            Some(recorded) => recorded,
-            None => {
-                let live = provider.perform(&request, &granted);
-                if let Some(recorder) = self.host_io_recorder.as_deref() {
-                    recorder.record(&request, &live);
+        let outcome = if let Some(journal) = self.host_effect_journal.as_deref() {
+            match journal.replay_host_io(&request) {
+                Some(recorded) => recorded,
+                None => {
+                    let reservation = journal
+                        .reserve_host_io(&request)
+                        .map_err(|error| host_effect_journal_error("full_caps_handler", error))?;
+                    let live = provider.perform(&request, &granted);
+                    journal
+                        .complete_host_io(reservation, &request, &live)
+                        .map_err(|error| host_effect_journal_error("full_caps_handler", error))?;
+                    live
                 }
-                live
+            }
+        } else {
+            match self
+                .host_io_recorder
+                .as_deref()
+                .and_then(|recorder| recorder.replay(&request))
+            {
+                Some(recorded) => recorded,
+                None => {
+                    let live = provider.perform(&request, &granted);
+                    if let Some(recorder) = self.host_io_recorder.as_deref() {
+                        recorder.record(&request, &live);
+                    }
+                    live
+                }
             }
         };
 
@@ -403,6 +445,30 @@ impl FullCapsHandler {
             // interpreter, which parses them into a JS response object.
             HostIoResponse::NetworkRequest { response } => EffectResult::new(response.clone()),
         }
+    }
+}
+
+const fn process_spawn_error_code(error: &ProcessSpawnError) -> &'static str {
+    match error {
+        ProcessSpawnError::Denied { .. } => "PROCESS_SPAWN_DENIED",
+        ProcessSpawnError::FlowPolicyBlocked => "PROCESS_SPAWN_FLOW_POLICY_BLOCKED",
+        ProcessSpawnError::CapabilityMissing { .. } => "PROCESS_SPAWN_CAPABILITY_MISSING",
+        ProcessSpawnError::PolicyViolation { .. } => "PROCESS_SPAWN_POLICY_VIOLATION",
+        ProcessSpawnError::LimitExceeded { .. } => "PROCESS_SPAWN_LIMIT_EXCEEDED",
+        ProcessSpawnError::UnknownHandle { .. } => "PROCESS_SPAWN_UNKNOWN_HANDLE",
+        ProcessSpawnError::InvalidState { .. } => "PROCESS_SPAWN_INVALID_STATE",
+        ProcessSpawnError::NotImplemented { .. } => "PROCESS_SPAWN_NOT_IMPLEMENTED",
+        ProcessSpawnError::TimedOut { .. } => "PROCESS_SPAWN_TIMED_OUT",
+        ProcessSpawnError::Io { .. } => "PROCESS_SPAWN_IO",
+        ProcessSpawnError::ReplayDivergence { .. } => "PROCESS_SPAWN_REPLAY_DIVERGENCE",
+    }
+}
+
+fn host_effect_journal_error(handler: &str, error: HostEffectJournalError) -> EffectError {
+    EffectError::HandlerError {
+        handler: handler.to_string(),
+        message: error.to_string(),
+        code: Some("HOST_EFFECT_JOURNAL".to_string()),
     }
 }
 
@@ -511,8 +577,15 @@ impl Handler for FullCapsHandler {
     }
 
     fn provided_capabilities(&self) -> EffectCapabilities {
-        // FullCaps provides all runtime capabilities
-        EffectCapabilities::runtime(RuntimeCapability::ALL.iter().copied())
+        // Extraordinary process authority is never provided by an ordinary
+        // profile handler. It appears only when a ProcessSpawnHandler backed by
+        // an explicitly installed provider joins the stack.
+        EffectCapabilities::runtime(
+            RuntimeCapability::ALL
+                .iter()
+                .copied()
+                .filter(|capability| *capability != RuntimeCapability::ProcessSpawn),
+        )
     }
 
     fn priority(&self) -> EffectPriority {
@@ -521,6 +594,130 @@ impl Handler for FullCapsHandler {
 
     fn handler_name(&self) -> &'static str {
         "full_caps_handler"
+    }
+}
+
+/// Extraordinary process authority is orthogonal to every ordinary profile.
+/// This handler exists only when the product installs a provider backed by a
+/// live signed admission; its presence is the handler-stack capability witness.
+#[derive(Debug)]
+pub struct ProcessSpawnHandler {
+    provider: Arc<dyn ProcessSpawnProvider>,
+    recorder: Option<Arc<dyn ProcessSpawnRecorder>>,
+    host_effect_journal: Option<Arc<InMemoryHostEffectJournal>>,
+}
+
+impl ProcessSpawnHandler {
+    #[must_use]
+    pub fn new(
+        provider: Arc<dyn ProcessSpawnProvider>,
+        recorder: Option<Arc<dyn ProcessSpawnRecorder>>,
+        host_effect_journal: Option<Arc<InMemoryHostEffectJournal>>,
+    ) -> Self {
+        Self {
+            provider,
+            recorder,
+            host_effect_journal,
+        }
+    }
+
+    #[must_use]
+    pub const fn dispatches_real_process_spawn(&self) -> bool {
+        true
+    }
+
+    fn journaled_outcome(
+        &self,
+        journal: &InMemoryHostEffectJournal,
+        request: &ProcessSpawnRequest,
+        granted: &[ProcessSpawnCapability],
+    ) -> Result<Result<ProcessSpawnResponse, ProcessSpawnError>, EffectError> {
+        let prepared = match self.provider.prepare_request(request) {
+            Ok(prepared) => prepared,
+            Err(error) => {
+                if let Some(recorded) = journal.replay_process_spawn(request) {
+                    return Ok(recorded);
+                }
+                let reservation = journal
+                    .reserve_process_spawn(request)
+                    .map_err(|error| host_effect_journal_error("process_spawn_handler", error))?;
+                let outcome = Err(error);
+                journal
+                    .complete_process_spawn(reservation, request, &outcome)
+                    .map_err(|error| host_effect_journal_error("process_spawn_handler", error))?;
+                return Ok(outcome);
+            }
+        };
+        if let Some(recorded) = journal.replay_process_spawn(&prepared) {
+            return Ok(recorded);
+        }
+        let reservation = journal
+            .reserve_process_spawn(&prepared)
+            .map_err(|error| host_effect_journal_error("process_spawn_handler", error))?;
+        let outcome = self.provider.perform(&prepared, granted);
+        journal
+            .complete_process_spawn(reservation, &prepared, &outcome)
+            .map_err(|error| host_effect_journal_error("process_spawn_handler", error))?;
+        Ok(outcome)
+    }
+
+    fn route(&self, effect: &dyn ErasedEffect) -> Result<Option<EffectResult>, EffectError> {
+        let request = effect
+            .parameters()
+            .downcast::<ProcessSpawnRequest>()
+            .map_err(|_| EffectError::InvalidParameters {
+                effect_name: effect.effect_name().to_string(),
+                reason: "expected a typed ProcessSpawnRequest".to_string(),
+            })?;
+        let granted = [ProcessSpawnCapability::Spawn];
+        let outcome = if let Some(journal) = self.host_effect_journal.as_deref() {
+            self.journaled_outcome(journal, request.as_ref(), &granted)?
+        } else {
+            perform_recorded(
+                self.provider.as_ref(),
+                self.recorder.as_deref(),
+                request.as_ref(),
+                &granted,
+            )
+        };
+        match outcome {
+            Ok(response) => Ok(Some(EffectResult::new(response))),
+            // Reaching this handler already proves that the typed
+            // `ProcessSpawn` capability was present in the stack. Preserve the
+            // provider's concrete denial/limit/I/O reason as a handler error so
+            // the interpreter can construct Node's catchable child-process
+            // error shape while the journal retains the exact denied outcome.
+            // Converting policy denials back into `CapabilityDenied` here would
+            // erase `executable_alias_denied`, timeout, and ENOENT-relevant
+            // evidence after the real capability gate had already succeeded.
+            Err(error) => Err(EffectError::HandlerError {
+                handler: "process_spawn_handler".to_string(),
+                message: error.to_string(),
+                code: Some(process_spawn_error_code(&error).to_string()),
+            }),
+        }
+    }
+}
+
+impl Handler for ProcessSpawnHandler {
+    fn can_handle(&self, effect_name: &str) -> bool {
+        effect_name == "proc:spawn"
+    }
+
+    fn handle(&self, effect: &dyn ErasedEffect) -> Result<Option<EffectResult>, EffectError> {
+        self.route(effect)
+    }
+
+    fn provided_capabilities(&self) -> EffectCapabilities {
+        EffectCapabilities::runtime([RuntimeCapability::ProcessSpawn])
+    }
+
+    fn priority(&self) -> EffectPriority {
+        EffectPriority::Critical
+    }
+
+    fn handler_name(&self) -> &'static str {
+        "process_spawn_handler"
     }
 }
 
@@ -786,6 +983,39 @@ pub fn create_handler_stack_from_profile_with_host_io(
     stack
 }
 
+/// Build a profile with filesystem/network and process providers as independent
+/// trust boundaries. Ordinary host I/O remains Full-only. An explicitly
+/// installed process provider is orthogonal to the base profile and supplies
+/// only `ProcessSpawn`, reflecting its separate signed per-run admission.
+pub fn create_handler_stack_from_profile_with_effect_providers(
+    profile: &CapabilityProfile,
+    host_io: Option<Arc<dyn HostIoProvider>>,
+    host_io_recorder: Option<Arc<dyn HostIoRecorder>>,
+    process_spawn: Option<Arc<dyn ProcessSpawnProvider>>,
+    process_spawn_recorder: Option<Arc<dyn ProcessSpawnRecorder>>,
+    host_effect_journal: Option<Arc<InMemoryHostEffectJournal>>,
+) -> HandlerStack {
+    let mut stack = if profile.kind() == ProfileKind::Full {
+        let mut stack = HandlerStack::new();
+        stack.add_handler(Arc::new(FullCapsHandler::with_effect_providers(
+            host_io,
+            host_io_recorder,
+            host_effect_journal.clone(),
+        )));
+        stack
+    } else {
+        create_handler_stack_from_profile(profile)
+    };
+    if let Some(provider) = process_spawn {
+        stack.add_handler(Arc::new(ProcessSpawnHandler::new(
+            provider,
+            process_spawn_recorder,
+            host_effect_journal,
+        )));
+    }
+    stack
+}
+
 /// Convert a legacy hostcall tag to an appropriate Effect.
 ///
 /// This function provides compatibility with the existing hostcall dispatch system
@@ -1009,10 +1239,23 @@ pub fn create_network_effect(
     })
 }
 
+/// Preserve the complete typed process request when entering the algebraic
+/// effect stack. String-tag conversion is intentionally not supported for this
+/// extraordinary authority because it would discard argv/env/cwd/stdio/limit
+/// boundaries before policy and replay inspect them.
+pub fn create_process_spawn_effect(request: ProcessSpawnRequest) -> Box<dyn ErasedEffect> {
+    Box::new(ProcSpawnEffect { request })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use frankenengine_extension_host::host_effect_journal::HostEffectJournalEntry;
     use frankenengine_extension_host::host_io::HostIoCapability;
+    use frankenengine_extension_host::process_spawn::{
+        ProcessExit, ProcessLaunch, ProcessSpawnOutcome, ProcessStdio,
+    };
+    use std::collections::BTreeMap;
 
     #[test]
     fn test_full_caps_handler_console() {
@@ -1155,6 +1398,168 @@ mod tests {
         ) -> Result<HostIoResponse, HostIoError> {
             panic!("provider must not be called in replay mode");
         }
+    }
+
+    #[derive(Debug, Default)]
+    struct RecordingProcessSpawn {
+        seen: std::sync::Mutex<Vec<ProcessSpawnRequest>>,
+    }
+
+    impl ProcessSpawnProvider for RecordingProcessSpawn {
+        fn name(&self) -> &str {
+            "recording-test-process-spawn"
+        }
+
+        fn perform(
+            &self,
+            request: &ProcessSpawnRequest,
+            granted: &[ProcessSpawnCapability],
+        ) -> ProcessSpawnOutcome {
+            assert_eq!(granted, &[ProcessSpawnCapability::Spawn]);
+            self.seen.lock().unwrap().push(request.clone());
+            Ok(ProcessSpawnResponse::Run {
+                exit: ProcessExit {
+                    success: true,
+                    code: Some(0),
+                    signal: None,
+                },
+                stdout: b"typed-process-output".to_vec(),
+                stderr: Vec::new(),
+            })
+        }
+
+        fn cleanup_handle(&self, _handle: &str) {}
+    }
+
+    #[derive(Debug)]
+    struct DenyingProcessSpawn;
+
+    impl ProcessSpawnProvider for DenyingProcessSpawn {
+        fn name(&self) -> &str {
+            "denying-test-process-spawn"
+        }
+
+        fn perform(
+            &self,
+            _request: &ProcessSpawnRequest,
+            _granted: &[ProcessSpawnCapability],
+        ) -> ProcessSpawnOutcome {
+            Err(ProcessSpawnError::PolicyViolation {
+                code: "executable_alias_denied".to_string(),
+                detail: "bare executable alias missing is not signed into policy".to_string(),
+            })
+        }
+
+        fn cleanup_handle(&self, _handle: &str) {}
+    }
+
+    fn process_run_request() -> ProcessSpawnRequest {
+        ProcessSpawnRequest::Run {
+            launch: ProcessLaunch {
+                executable: "/usr/bin/true".to_string(),
+                argv: Vec::new(),
+                env: BTreeMap::new(),
+                cwd: Some("/".to_string()),
+                shell: false,
+                stdio: ProcessStdio::default(),
+            },
+            stdin: Vec::new(),
+            timeout_millis: Some(100),
+        }
+    }
+
+    #[test]
+    fn process_provider_is_an_orthogonal_explicit_capability_witness_bd_x85a7() {
+        let effect = create_process_spawn_effect(process_run_request());
+        let mut ordinary_full = create_handler_stack_from_profile(&CapabilityProfile::full());
+        assert!(!ordinary_full.can_handle("proc:spawn"));
+        assert!(matches!(
+            ordinary_full.handle_effect(effect.as_ref()),
+            Err(EffectError::CapabilityDenied { .. })
+        ));
+
+        let provider = Arc::new(RecordingProcessSpawn::default());
+        let journal = Arc::new(InMemoryHostEffectJournal::recording());
+        journal.begin_execution().unwrap();
+        let mut admitted = create_handler_stack_from_profile_with_effect_providers(
+            &CapabilityProfile::compute_only(),
+            None,
+            None,
+            Some(provider.clone()),
+            None,
+            Some(journal.clone()),
+        );
+        let result = admitted
+            .handle_effect(effect.as_ref())
+            .expect("signed process handler must dispatch independently of base profile")
+            .downcast::<ProcessSpawnResponse>()
+            .expect("typed process response");
+        assert!(matches!(result, ProcessSpawnResponse::Run { .. }));
+        assert_eq!(
+            provider.seen.lock().unwrap().as_slice(),
+            &[process_run_request()]
+        );
+        let entries = journal.finish_execution().unwrap();
+        assert!(matches!(
+            entries.as_slice(),
+            [HostEffectJournalEntry::ProcessSpawn { .. }]
+        ));
+    }
+
+    #[test]
+    fn process_journal_preflight_refuses_before_provider_invocation_bd_x85a7() {
+        let provider = Arc::new(RecordingProcessSpawn::default());
+        let journal = Arc::new(InMemoryHostEffectJournal::recording());
+        let mut stack = create_handler_stack_from_profile_with_effect_providers(
+            &CapabilityProfile::compute_only(),
+            None,
+            None,
+            Some(provider.clone()),
+            None,
+            Some(journal),
+        );
+        let error = stack
+            .handle_effect(create_process_spawn_effect(process_run_request()).as_ref())
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            EffectError::HandlerError { ref code, .. }
+                if code.as_deref() == Some("HOST_EFFECT_JOURNAL")
+        ));
+        assert!(provider.seen.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn admitted_provider_denial_preserves_guest_error_evidence_bd_x85a7() {
+        let journal = Arc::new(InMemoryHostEffectJournal::recording());
+        journal.begin_execution().unwrap();
+        let mut stack = create_handler_stack_from_profile_with_effect_providers(
+            &CapabilityProfile::compute_only(),
+            None,
+            None,
+            Some(Arc::new(DenyingProcessSpawn)),
+            None,
+            Some(journal.clone()),
+        );
+        let error = stack
+            .handle_effect(create_process_spawn_effect(process_run_request()).as_ref())
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            EffectError::HandlerError {
+                ref message,
+                ref code,
+                ..
+            } if code.as_deref() == Some("PROCESS_SPAWN_POLICY_VIOLATION")
+                && message.contains("executable_alias_denied")
+        ));
+        assert!(matches!(
+            journal.finish_execution().unwrap().as_slice(),
+            [HostEffectJournalEntry::ProcessSpawn {
+                outcome: Err(ProcessSpawnError::PolicyViolation { code, .. }),
+                ..
+            }] if code == "executable_alias_denied"
+        ));
     }
 
     /// bd-656a2 (http leg): the `net:request` hostcall tag (emitted by the JS

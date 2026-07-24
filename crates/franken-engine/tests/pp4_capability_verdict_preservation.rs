@@ -20,8 +20,10 @@
 //!   - **membership** (`substrate_provides`) — which capabilities a profile's stack grants.
 //!     PP.3 migrated `Full`/`EngineCore`/`ComputeOnly` faithfully and once left `Policy`/
 //!     `Remote` on a `ComputeOnly` placeholder; those have since been implemented (bd-08wwg —
-//!     `PolicyCapsHandler`/`RemoteCapsHandler` grant their canonical sets), so membership is
-//!     now fully preserved and `FROZEN_PLACEHOLDER_DIVERGENCES` is empty.
+//!     `PolicyCapsHandler`/`RemoteCapsHandler` grant their canonical sets), so ordinary
+//!     membership is preserved and `FROZEN_PLACEHOLDER_DIVERGENCES` is empty. `ProcessSpawn`
+//!     is extraordinary authority: it is deliberately absent from the ordinary `Full` stack
+//!     and appears only when an explicit process provider is installed.
 //!   - **dispatch** (`substrate_allows_hostcall`) — whether a real executor runs the hostcall.
 //!     A capability can be granted yet have no executor: post-bd-6wc97 `FullCapsHandler`
 //!     explicitly denies `fs:read`/`fs:write`/`network` (no in-engine executor — denies
@@ -40,15 +42,17 @@
 use std::collections::BTreeSet;
 use std::fs;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use frankenengine_engine::algebraic_effects::{EffectCapabilities, ErasedEffect};
 use frankenengine_engine::capability::{CapabilityProfile, RuntimeCapability};
 use frankenengine_engine::hostcall_effects_migration::{
     ConsoleHostcallEffect, FsHostcallEffect, ModuleHostcallEffect, ModuleImportType,
     NetworkHostcallEffect, TimerHostcallEffect, TimerOperation, create_effect_from_hostcall_tag,
-    create_handler_stack_from_profile,
+    create_handler_stack_from_profile, create_handler_stack_from_profile_with_effect_providers,
 };
 use frankenengine_extension_host::host_io::FsOperation;
+use frankenengine_extension_host::process_spawn::DenyAllProcessSpawn;
 use sha2::{Digest, Sha256};
 
 // ---------------------------------------------------------------------------
@@ -67,7 +71,7 @@ fn canonical_profiles() -> Vec<(&'static str, CapabilityProfile)> {
 }
 
 /// Profiles whose handlers PP.3 implemented faithfully (no placeholder).
-/// For these, the substrate verdict MUST exactly equal the legacy verdict.
+/// For these, ordinary substrate authority MUST exactly equal the legacy verdict.
 const FAITHFUL_PROFILES: [&str; 3] = ["full", "engine_core", "compute_only"];
 
 /// One representative hostcall effect per family, with the capability it requires.
@@ -137,6 +141,10 @@ fn hostcall_effects() -> Vec<(&'static str, RuntimeCapability, Box<dyn ErasedEff
 fn substrate_provides(profile: &CapabilityProfile, cap: RuntimeCapability) -> bool {
     let stack = create_handler_stack_from_profile(profile);
     EffectCapabilities::runtime([cap]).is_satisfied_by(stack.capabilities())
+}
+
+fn is_extraordinary_provider_gated_cell(profile: &str, capability: RuntimeCapability) -> bool {
+    profile == "full" && capability == RuntimeCapability::ProcessSpawn
 }
 
 /// New-substrate verdict for an *actual hostcall dispatch*: ALLOW iff `handle_effect`
@@ -278,6 +286,33 @@ fn pp4_full_profile_grants_every_family_dispatch_denies_fs_network() {
 }
 
 #[test]
+fn pp4_full_process_spawn_membership_requires_an_explicit_provider() {
+    let profile = CapabilityProfile::full();
+    assert!(
+        profile.has(RuntimeCapability::ProcessSpawn),
+        "the legacy Full descriptor still names the extraordinary capability"
+    );
+    assert!(
+        !substrate_provides(&profile, RuntimeCapability::ProcessSpawn),
+        "the ordinary Full handler must not grant extraordinary process authority"
+    );
+
+    let stack = create_handler_stack_from_profile_with_effect_providers(
+        &profile,
+        None,
+        None,
+        Some(Arc::new(DenyAllProcessSpawn)),
+        None,
+        None,
+    );
+    assert!(
+        EffectCapabilities::runtime([RuntimeCapability::ProcessSpawn])
+            .is_satisfied_by(stack.capabilities()),
+        "installing a process provider is the separate handler-stack admission witness"
+    );
+}
+
+#[test]
 fn pp4_compute_only_denies_every_hostcall_family() {
     // Negative path: ComputeOnly is the zero-authority profile.
     let profile = CapabilityProfile::compute_only();
@@ -332,13 +367,17 @@ fn pp4_policy_profile_denies_all_hostcall_families_matching_legacy() {
 
 #[test]
 fn pp4_capability_membership_equivalence_for_faithful_profiles() {
-    // Full | EngineCore | ComputeOnly  x  all 20 runtime capabilities = 60 verdict cases.
+    // Full | EngineCore | ComputeOnly x ordinary runtime capabilities. ProcessSpawn is
+    // checked separately because it is provider-gated rather than base-profile authority.
     let mut cases = 0usize;
     for (pname, profile) in canonical_profiles() {
         if !FAITHFUL_PROFILES.contains(&pname) {
             continue;
         }
         for cap in RuntimeCapability::ALL {
+            if is_extraordinary_provider_gated_cell(pname, cap) {
+                continue;
+            }
             let prior = profile.has(cap);
             let substrate = substrate_provides(&profile, cap);
             emit_event("membership", pname, &cap.to_string(), prior, substrate);
@@ -396,9 +435,11 @@ fn pp4_hostcall_dispatch_equivalence_for_faithful_profiles_modulo_frozen() {
 /// The EXACT set of `(profile, capability)` **membership** divergences the migration is
 /// permitted to have. Now EMPTY: `PolicyCapsHandler`/`RemoteCapsHandler` were implemented
 /// (bd-08wwg) and grant their canonical capability sets, so every profile's membership is
-/// faithfully preserved. (Was 7 policy/remote entries while those were ComputeOnly
-/// placeholders.) Implementing a placeholder must delete its entries here — that is exactly
-/// what happened. If a NEW entry appears, a verdict regressed.
+/// faithfully preserved for ordinary profile authority. The intentional provider-gated
+/// `(full, ProcessSpawn)` cell is checked separately and is not a placeholder divergence.
+/// (Was 7 policy/remote entries while those were ComputeOnly placeholders.) Implementing a
+/// placeholder must delete its entries here — that is exactly what happened. If a NEW entry
+/// appears, a verdict regressed.
 const FROZEN_PLACEHOLDER_DIVERGENCES: [(&str, RuntimeCapability); 0] = [];
 
 /// The EXACT set of `(profile, hostcall_family)` **dispatch** divergences: cells where the
@@ -436,10 +477,14 @@ fn pp4_known_placeholder_divergences_are_exactly_frozen() {
         .map(|(p, c)| ((*p).to_string(), c.to_string()))
         .collect();
 
-    // Observe every divergence across the FULL 5 x 20 = 100-cell membership matrix.
+    // Observe every ordinary-profile divergence across the full membership matrix.
+    // ProcessSpawn is an intentional provider-gated exception, asserted independently.
     let mut observed: BTreeSet<(String, String)> = BTreeSet::new();
     for (pname, profile) in canonical_profiles() {
         for cap in RuntimeCapability::ALL {
+            if is_extraordinary_provider_gated_cell(pname, cap) {
+                continue;
+            }
             let prior = profile.has(cap);
             let substrate = substrate_provides(&profile, cap);
             if prior != substrate {

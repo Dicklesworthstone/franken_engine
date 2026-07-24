@@ -1,0 +1,1122 @@
+{
+  "schema_version": "franken-engine.intl-surface-contract.v1",
+  "contract_id": "franken-engine-intl-surface-v1",
+  "owning_bead": "bd-performance-conformance-bridge-tu32j.27.1",
+  "purpose": "Freeze the exact shipped Intl and locale-sensitive surface before ECMA-402 implementation, preserving observable behavior and absence without crediting internal scaffolds.",
+  "source_cutoff": {
+    "engine_base_commit": "0fb96dea1",
+    "franken_node_base_commit": "5b3585be53cafcf20e79fc53707b75b2751bc26d",
+    "authority_hash_algorithm": "sha256 over UTF-8 bytes from the unique start anchor through the unique end anchor, inclusive",
+    "authority_scope": "bounded implementation, route, documentation, test, and sibling dependency slices; unrelated repository bytes are outside the frozen digest",
+    "engine_root_hint": "/dp/franken_engine",
+    "franken_node_root_hint": "/dp/franken_node"
+  },
+  "scoring_boundary": {
+    "ecma262_profile": "ECMA-262 11th edition ES2020 normative profile",
+    "ecma262_rule": "This contract changes neither numerator nor denominator. Frozen-surface preservation earns zero score points. String.prototype.localeCompare presence/coercion remains an ECMA-262 observable; collation quality never earns ECMA-262 pass credit here.",
+    "ecma402_profile": "not selected by BRIDGE-26.1; BRIDGE-26.2 must pin the separate ECMA-402 2020 profile",
+    "ecma402_rule": "No current row, including the callable localeCompare shortcut, counts as ECMA-402 conformance. A zero denominator is reported as not_measured, never 100%.",
+    "preservation_score_name": "frozen_intl_surface_preservation",
+    "preservation_rule": "Every probe-backed exposed, absent, and internal-non-credit row must retain its exact preservation relation; this is a compatibility score, not a conformance score.",
+    "contamination_kill_rule": "Any report that adds preservation results to the ECMA-262 numerator/denominator, or renders an unselected ECMA-402 denominator as green, fails closed."
+  },
+  "provider_policy": {
+    "default_locale": "No public Intl default exists. Internal date HostCalls hard-code/fallback to en-US; exposed localeCompare ignores locale arguments.",
+    "default_timezone": "No public locale timezone provider exists. Ambient TZ is not consulted by the frozen exposed surface.",
+    "public_provider": "none",
+    "internal_date_provider": "hand-authored embedded en-US/en-GB/ja-JP tables in baseline_interpreter.rs; internal_unrouted and receives no public credit",
+    "internal_case_provider": "Rust Unicode scalar to_lowercase/to_uppercase; internal_unrouted and locale arguments are ignored",
+    "collation_provider": "deterministic Rust string ordering over the engine UTF-8 projection; locale/options are ignored",
+    "data_versions": [
+      "collation:utf8-projection-lexicographic-v1",
+      "internal-date:bd-1j1wy-inline-table-v1",
+      "internal-case:rust-unicode-build-version-unpinned"
+    ],
+    "ambient_environment_rule": "LANG, LC_ALL, and TZ must not change the frozen exposed results. Probe profiles C/UTC and hostile locale/TZ values are compared byte-for-byte.",
+    "upgrade_rule": "BRIDGE-26.2 owns real Unicode/CLDR/tzdb/provider pins. Any provider or data change is a versioned migration and cannot rewrite this baseline."
+  },
+  "authorities": [
+    {
+      "authority_id": "engine.baseline.internal-date-locale-hostcalls",
+      "repository": "franken_engine",
+      "path": "crates/franken-engine/src/baseline_interpreter.rs",
+      "start_anchor": "            \"builtin:DatePrototypeToLocaleString\" => {",
+      "end_anchor": "            \"builtin:ObjectPrototypeValueOf\" => {",
+      "sha256": "78b9acdf360deaf6e08dc7e273f2340fc4443b5e33db565ba9f9102402230ccd",
+      "required_markers": [
+        "DatePrototypeToLocaleDateString",
+        "DatePrototypeToLocaleTimeString",
+        "DatePrototypeToString",
+        "format_date_with_locale"
+      ],
+      "forbidden_markers": [],
+      "interpretation": "Date locale implementations exist in HostCall dispatch, but the primitive/object JavaScript property route does not expose them."
+    },
+    {
+      "authority_id": "engine.baseline.internal-locale-case-hostcalls",
+      "repository": "franken_engine",
+      "path": "crates/franken-engine/src/baseline_interpreter.rs",
+      "start_anchor": "            \"builtin:StringPrototypeToLocaleLowerCase\" => {",
+      "end_anchor": "                // Unknown builtin method - return undefined",
+      "sha256": "1b553b057c481584309e0be438d69681506c3ac95858b7bc995f73e4ffc4ab47",
+      "required_markers": [
+        "StringPrototypeToLocaleUpperCase",
+        "to_lowercase",
+        "to_uppercase",
+        "full locale support would require ICU"
+      ],
+      "forbidden_markers": [],
+      "interpretation": "Locale casing is internal-only and ignores the requested locale."
+    },
+    {
+      "authority_id": "engine.baseline.locale-compare-impl",
+      "repository": "franken_engine",
+      "path": "crates/franken-engine/src/baseline_interpreter.rs",
+      "start_anchor": "    fn string_locale_compare_impl(",
+      "end_anchor": "    fn string_normalize_impl(",
+      "sha256": "d1d648c35807320ec8af780f90a8f174c8199824f4cc6da5457db2c341463a17",
+      "required_markers": [
+        "as_utf8_projection().cmp",
+        "std::cmp::Ordering::Less"
+      ],
+      "forbidden_markers": [
+        "Collator",
+        "ICU",
+        "locale_arg"
+      ],
+      "interpretation": "The exposed method uses deterministic lexicographic comparison and consumes only the first argument."
+    },
+    {
+      "authority_id": "engine.baseline.string-property-route",
+      "repository": "franken_engine",
+      "path": "crates/franken-engine/src/baseline_interpreter.rs",
+      "start_anchor": "    fn string_property_value(receiver: &str, key: &str) -> Value {",
+      "end_anchor": "    fn number_property_value(key: &str) -> Value {",
+      "sha256": "0db00c5a82cd0fe45a6cae1521f8facd297d2202afafb92b9dd25ab5dbe98b39",
+      "required_markers": [
+        "\"localeCompare\" => Value::BuiltinFunction",
+        "\"normalize\" => Value::BuiltinFunction"
+      ],
+      "forbidden_markers": [
+        "\"toLocaleLowerCase\" =>",
+        "\"toLocaleUpperCase\" =>"
+      ],
+      "interpretation": "Primitive String property resolution exposes localeCompare but not locale casing."
+    },
+    {
+      "authority_id": "engine.docs.bridge-score-boundary",
+      "repository": "franken_engine",
+      "path": "docs/plans/PLAN_TO_CREATE_FRANKEN_ENGINE.md",
+      "start_anchor": "### 18.1 Outcome Definitions: Two Performance Scoreboards, One Conformance Gate",
+      "end_anchor": "### 18.2 P0 Decisions And Program Constitution",
+      "sha256": "dff0471d4d30d0db5fc2c81edeb992aec002ca38bd69de4ede29ad5bfea70b61",
+      "required_markers": [
+        "Annex B and ECMA-402 are separate scored tracks",
+        "cannot inflate or",
+        "depress the ES2020 normative headline"
+      ],
+      "forbidden_markers": [
+        "ECMA-402 is included in ES2020"
+      ],
+      "interpretation": "The bridge program requires an independent Intl scoreboard."
+    },
+    {
+      "authority_id": "engine.docs.ecma262-score-boundary",
+      "repository": "franken_engine",
+      "path": "docs/ECMA262_CONFORMANCE_TARGET.md",
+      "start_anchor": "### Out of scope",
+      "end_anchor": "## Coverage surface",
+      "sha256": "15b2b8e9d715f3ff38f04bd4d2f8c952f307a680592813ac8a81b5e2d786bf0b",
+      "required_markers": [
+        "ECMA-402",
+        "explicitly excludes ECMA-402 vectors"
+      ],
+      "forbidden_markers": [
+        "ECMA-402 conformance is complete"
+      ],
+      "interpretation": "The core ES2020 profile excludes the separate internationalization standard."
+    },
+    {
+      "authority_id": "engine.frankenctl.production-route",
+      "repository": "franken_engine",
+      "path": "crates/franken-engine/src/bin/frankenctl.rs",
+      "start_anchor": "fn execute_run(args: RunArgs) -> Result<i32, String> {",
+      "end_anchor": "fn load_and_bind_data_contract(",
+      "sha256": "ace742ebe2ccb1c967e469fe1dbf59c41265b703b80a232465a504ee0ec9ef67",
+      "required_markers": [
+        "ExecutionOrchestrator::new",
+        ".execute(&package)",
+        "console_output"
+      ],
+      "forbidden_markers": [
+        "QuickJS",
+        "V8"
+      ],
+      "interpretation": "The production probe enters the canonical parser/lowering/orchestrator/runtime path."
+    },
+    {
+      "authority_id": "engine.intrinsics.locale-compare-row",
+      "repository": "franken_engine",
+      "path": "crates/franken-engine/src/intrinsics_table.rs",
+      "start_anchor": "            name: \"String.prototype.localeCompare\",",
+      "end_anchor": "            name: \"String.prototype.normalize\",",
+      "sha256": "2020e094b07483691fcf44e3d3ed2d9fe2b5691523ead65fb6b245044728c4ec",
+      "required_markers": [
+        "string_locale_compare_impl",
+        "JoinReceiverAndArgs"
+      ],
+      "forbidden_markers": [
+        "DateTimeFormat"
+      ],
+      "interpretation": "The generated intrinsic table names localeCompare but does not define an Intl constructor."
+    },
+    {
+      "authority_id": "engine.stdlib.scope-comment",
+      "repository": "franken_engine",
+      "path": "crates/franken-engine/src/stdlib.rs",
+      "start_anchor": "//! Coverage priorities",
+      "end_anchor": "use std::collections",
+      "sha256": "d951bcdba5a53ba91d1e06d4ed0ec457254802aea0102263fdd0519b95f56ffa",
+      "required_markers": [
+        "no exposed `Intl` global"
+      ],
+      "forbidden_markers": [
+        "Intl subset"
+      ],
+      "interpretation": "Source documentation no longer promotes the nonexistent Intl global."
+    },
+    {
+      "authority_id": "engine.tests.internal-date-locale",
+      "repository": "franken_engine",
+      "path": "crates/franken-engine/tests/locale_date_formatting.rs",
+      "start_anchor": "//! Integration tests for locale-aware date formatting (bd-1j1wy).",
+      "end_anchor": "fn test_config() -> InterpreterConfig {",
+      "sha256": "bf321845cc994079e4976abfdb5618e513018e0ac7fb84eb6bac132641c3de2c",
+      "required_markers": [
+        "Date.prototype.toLocaleString",
+        "en-US",
+        "en-GB",
+        "ja-JP"
+      ],
+      "forbidden_markers": [
+        "frankenctl"
+      ],
+      "interpretation": "The historical locale-date suite calls hand-authored IR HostCalls and is test evidence, not proof of JavaScript exposure."
+    },
+    {
+      "authority_id": "node.dispatch.native-engine-route",
+      "repository": "franken_node",
+      "path": "crates/franken-node/src/ops/engine_dispatcher.rs",
+      "start_anchor": "    fn run_engine_native_guarded(",
+      "end_anchor": "        use std::fs;",
+      "sha256": "ef096e1c0fc872c5479f578530cd82c42761845a716fd60bd299d2edbf25a257",
+      "required_markers": [
+        "frankenengine_extension_host",
+        "NativeEngineCancellation"
+      ],
+      "forbidden_markers": [
+        "Intl",
+        "localeCompare"
+      ],
+      "interpretation": "The product executes the sibling engine in its supervised native path and adds no locale shim at the boundary."
+    },
+    {
+      "authority_id": "node.manifest.engine-dependency",
+      "repository": "franken_node",
+      "path": "crates/franken-node/Cargo.toml",
+      "start_anchor": "engine = [\"dep:frankenengine-engine\", \"dep:frankenengine-extension-host\"]",
+      "end_anchor": "blake3 = [\"dep:blake3\"]",
+      "sha256": "385402ed0d1eb0ee7ed4233e50473759438acf68826e7f25c69b661a66d7dd8b",
+      "required_markers": [
+        "frankenengine-engine"
+      ],
+      "forbidden_markers": [
+        "quickjs"
+      ],
+      "interpretation": "The product native lane consumes the canonical engine rather than defining a local Intl runtime."
+    }
+  ],
+  "discovery_rules": [
+    {
+      "rule_id": "franken-node.no-independent-intl-shim",
+      "repository": "franken_node",
+      "roots": [
+        "crates/franken-node/src"
+      ],
+      "file_extensions": [
+        "rs"
+      ],
+      "needles": [
+        "Intl",
+        "localeCompare",
+        "toLocaleString",
+        "toLocaleDateString",
+        "toLocaleTimeString",
+        "toLocaleLowerCase",
+        "toLocaleUpperCase"
+      ],
+      "excluded_path_fragments": [],
+      "expected_match_count": 0,
+      "interpretation": "The product layer adds no independent Intl/locale compatibility shim; its native lane delegates to franken_engine."
+    }
+  ],
+  "documentation_crosswalk": [
+    {
+      "document_id": "ecma262-profile-excludes-ecma402",
+      "path": "docs/ECMA262_CONFORMANCE_TARGET.md",
+      "classification": "binding-core-score-boundary",
+      "required_text": [
+        "ECMA-402",
+        "explicitly excludes ECMA-402 vectors"
+      ],
+      "forbidden_text": [
+        "ECMA-402 conformance is complete"
+      ],
+      "authority_ids": [
+        "engine.docs.ecma262-score-boundary"
+      ]
+    },
+    {
+      "document_id": "bridge-plan-separate-intl-score",
+      "path": "docs/plans/PLAN_TO_CREATE_FRANKEN_ENGINE.md",
+      "classification": "authoritative-bridge-score-boundary",
+      "required_text": [
+        "Annex B and ECMA-402 are separate scored tracks",
+        "cannot inflate or",
+        "depress the ES2020 normative headline"
+      ],
+      "forbidden_text": [
+        "Intl is part of the ES2020 headline"
+      ],
+      "authority_ids": [
+        "engine.docs.bridge-score-boundary"
+      ]
+    },
+    {
+      "document_id": "stdlib-comment-no-intl-overclaim",
+      "path": "crates/franken-engine/src/stdlib.rs",
+      "classification": "source-documentation-corrected",
+      "required_text": [
+        "no exposed `Intl` global"
+      ],
+      "forbidden_text": [
+        "Intl subset"
+      ],
+      "authority_ids": [
+        "engine.stdlib.scope-comment"
+      ]
+    }
+  ],
+  "surfaces": [
+    {
+      "surface_id": "date.prototype.to_locale_date_string",
+      "owner": "bd-performance-conformance-bridge-tu32j.27.1",
+      "category": "date_method",
+      "object_name": "Date instance",
+      "member_name": "toLocaleDateString",
+      "exposure": "internal_unrouted",
+      "production_routes": [],
+      "internal_routes": [
+        "baseline interpreter HostCall builtin:DatePrototypeToLocaleDateString"
+      ],
+      "descriptor": {
+        "observable_from_javascript": false,
+        "descriptor_kind": "absent",
+        "writable": null,
+        "enumerable": null,
+        "configurable": null,
+        "function_name": null,
+        "function_length": null,
+        "observation": "`typeof new Date(0).toLocaleDateString` evaluates to `undefined`."
+      },
+      "locale_semantics": "Internal HostCall selects M/D/Y, D/M/Y, or Y-M-D for three hard-coded locale tags.",
+      "timezone_semantics": "Internal formatter ignores ambient TZ.",
+      "provider": "inline-date-table-internal",
+      "data_version": "internal-date:bd-1j1wy-inline-table-v1",
+      "error_semantics": "Invalid/non-Date receivers return `Invalid Date` internally.",
+      "fallback_semantics": "Unknown locale falls back to en-US internally.",
+      "capability_semantics": "Normal HostCall capability dispatch only; no public locale capability.",
+      "ecma262_score_relation": "No core score credit because the JavaScript property is absent.",
+      "ecma402_score_relation": "Zero ECMA-402 credit; internal code is explicitly non-credit.",
+      "preservation_relation": "preserve_internal_non_credit",
+      "ga_preservation_rule": "Preserve public absence and non-credit status until the canonical route is intentionally implemented.",
+      "authority_ids": [
+        "engine.baseline.internal-date-locale-hostcalls",
+        "engine.tests.internal-date-locale"
+      ],
+      "probe_ids": [
+        "probe.date-locale-methods-absent"
+      ],
+      "limitations": [
+        "No calendar, numberingSystem, or options processing exists."
+      ]
+    },
+    {
+      "surface_id": "date.prototype.to_locale_string",
+      "owner": "bd-performance-conformance-bridge-tu32j.27.1",
+      "category": "date_method",
+      "object_name": "Date instance",
+      "member_name": "toLocaleString",
+      "exposure": "internal_unrouted",
+      "production_routes": [],
+      "internal_routes": [
+        "baseline interpreter HostCall builtin:DatePrototypeToLocaleString"
+      ],
+      "descriptor": {
+        "observable_from_javascript": false,
+        "descriptor_kind": "absent",
+        "writable": null,
+        "enumerable": null,
+        "configurable": null,
+        "function_name": null,
+        "function_length": null,
+        "observation": "`typeof new Date(0).toLocaleString` evaluates to `undefined`."
+      },
+      "locale_semantics": "Internal HostCall formats en-US/en-GB/ja-JP with hand-authored tables and falls back to en-US.",
+      "timezone_semantics": "Internal formatter performs raw UTC-like timestamp arithmetic and does not consult ambient TZ.",
+      "provider": "inline-date-table-internal",
+      "data_version": "internal-date:bd-1j1wy-inline-table-v1",
+      "error_semantics": "Invalid/non-Date receivers return the string `Invalid Date` internally rather than a specification-accurate exception.",
+      "fallback_semantics": "Unsupported locale strings fall back to en-US internally.",
+      "capability_semantics": "Normal HostCall capability dispatch only; no public locale capability.",
+      "ecma262_score_relation": "No core score credit because the JavaScript property is absent.",
+      "ecma402_score_relation": "Zero ECMA-402 credit; internal code is explicitly non-credit.",
+      "preservation_relation": "preserve_internal_non_credit",
+      "ga_preservation_rule": "Preserve public absence and non-credit status until the canonical route is intentionally implemented.",
+      "authority_ids": [
+        "engine.baseline.internal-date-locale-hostcalls",
+        "engine.tests.internal-date-locale"
+      ],
+      "probe_ids": [
+        "probe.date-locale-methods-absent"
+      ],
+      "limitations": [
+        "Calendar arithmetic is deliberately simplified and not conformance-grade."
+      ]
+    },
+    {
+      "surface_id": "date.prototype.to_locale_time_string",
+      "owner": "bd-performance-conformance-bridge-tu32j.27.1",
+      "category": "date_method",
+      "object_name": "Date instance",
+      "member_name": "toLocaleTimeString",
+      "exposure": "internal_unrouted",
+      "production_routes": [],
+      "internal_routes": [
+        "baseline interpreter HostCall builtin:DatePrototypeToLocaleTimeString"
+      ],
+      "descriptor": {
+        "observable_from_javascript": false,
+        "descriptor_kind": "absent",
+        "writable": null,
+        "enumerable": null,
+        "configurable": null,
+        "function_name": null,
+        "function_length": null,
+        "observation": "`typeof new Date(0).toLocaleTimeString` evaluates to `undefined`."
+      },
+      "locale_semantics": "Internal HostCall renders fixed 24-hour HH:MM:SS for every locale.",
+      "timezone_semantics": "Internal formatter ignores ambient TZ.",
+      "provider": "inline-date-table-internal",
+      "data_version": "internal-date:bd-1j1wy-inline-table-v1",
+      "error_semantics": "Invalid/non-Date receivers return `Invalid Date` internally.",
+      "fallback_semantics": "Unknown locale falls back to en-US data even though the time form is invariant.",
+      "capability_semantics": "Normal HostCall capability dispatch only; no public locale capability.",
+      "ecma262_score_relation": "No core score credit because the JavaScript property is absent.",
+      "ecma402_score_relation": "Zero ECMA-402 credit; internal code is explicitly non-credit.",
+      "preservation_relation": "preserve_internal_non_credit",
+      "ga_preservation_rule": "Preserve public absence and non-credit status until the canonical route is intentionally implemented.",
+      "authority_ids": [
+        "engine.baseline.internal-date-locale-hostcalls",
+        "engine.tests.internal-date-locale"
+      ],
+      "probe_ids": [
+        "probe.date-locale-methods-absent"
+      ],
+      "limitations": [
+        "No hour-cycle, timezone, or options processing exists."
+      ]
+    },
+    {
+      "surface_id": "date.prototype.to_string_locale_negative_control",
+      "owner": "bd-performance-conformance-bridge-tu32j.27.1",
+      "category": "locale_negative_control",
+      "object_name": "Date instance",
+      "member_name": "toString",
+      "exposure": "exposed_negative_control",
+      "production_routes": [
+        "frankenctl/franken-node JavaScript Date instance -> generic object toString"
+      ],
+      "internal_routes": [
+        "builtin:DatePrototypeToString internal HostCall with fixed en-US formatter"
+      ],
+      "descriptor": {
+        "observable_from_javascript": false,
+        "descriptor_kind": "synthetic generic object method",
+        "writable": null,
+        "enumerable": null,
+        "configurable": null,
+        "function_name": null,
+        "function_length": null,
+        "observation": "`new Date(0).toString()` returns `[object Object]`, proving the hidden locale-aware Date HostCall is not the JavaScript route."
+      },
+      "locale_semantics": "The exposed result is generic and locale-insensitive; the internal fixed-en-US Date branch is not credited.",
+      "timezone_semantics": "Ambient TZ does not affect the exposed result.",
+      "provider": "generic-object-stringification",
+      "data_version": "none",
+      "error_semantics": "Ordinary object toString behavior.",
+      "fallback_semantics": "No locale fallback.",
+      "capability_semantics": "Ordinary VM dispatch.",
+      "ecma262_score_relation": "Negative control only; contributes no conformance points.",
+      "ecma402_score_relation": "Zero ECMA-402 credit.",
+      "preservation_relation": "preserve_exact_behavior",
+      "ga_preservation_rule": "Preserve this negative-control observation until Date method routing intentionally changes; then require an explicit migration.",
+      "authority_ids": [
+        "engine.baseline.internal-date-locale-hostcalls",
+        "engine.frankenctl.production-route"
+      ],
+      "probe_ids": [
+        "probe.date-to-string-negative-control"
+      ],
+      "limitations": [
+        "This row prevents an internal Date formatter from being misreported as public."
+      ]
+    },
+    {
+      "surface_id": "intl.global",
+      "owner": "bd-performance-conformance-bridge-tu32j.27.1",
+      "category": "intl_object",
+      "object_name": "globalThis",
+      "member_name": "Intl",
+      "exposure": "absent_production",
+      "production_routes": [],
+      "internal_routes": [],
+      "descriptor": {
+        "observable_from_javascript": false,
+        "descriptor_kind": "absent",
+        "writable": null,
+        "enumerable": null,
+        "configurable": null,
+        "function_name": null,
+        "function_length": null,
+        "observation": "`typeof Intl` evaluates to `undefined` in a fresh frankenctl/franken-node realm."
+      },
+      "locale_semantics": "No Intl namespace, constructor, locale negotiation, options processing, or locale data is exposed.",
+      "timezone_semantics": "No timezone surface.",
+      "provider": "none",
+      "data_version": "none",
+      "error_semantics": "Property access beyond `typeof` would fail because the global binding is absent.",
+      "fallback_semantics": "No fallback; absence is observable.",
+      "capability_semantics": "No capability can synthesize the missing binding.",
+      "ecma262_score_relation": "No ECMA-262 score delta; ECMA-402 remains a separate excluded profile.",
+      "ecma402_score_relation": "Zero ECMA-402 credit. Absence remains visible in the preservation score.",
+      "preservation_relation": "preserve_absence",
+      "ga_preservation_rule": "GA must not claim or accidentally expose a partial Intl namespace without a versioned migration.",
+      "authority_ids": [
+        "engine.baseline.string-property-route",
+        "engine.docs.ecma262-score-boundary",
+        "node.dispatch.native-engine-route"
+      ],
+      "probe_ids": [
+        "probe.intl-global-absent"
+      ],
+      "limitations": [
+        "Absence does not waive the future ECMA-402 completion program."
+      ]
+    },
+    {
+      "surface_id": "number.prototype.to_locale_string",
+      "owner": "bd-performance-conformance-bridge-tu32j.27.1",
+      "category": "number_method",
+      "object_name": "Number primitive synthetic prototype",
+      "member_name": "toLocaleString",
+      "exposure": "absent_production",
+      "production_routes": [],
+      "internal_routes": [],
+      "descriptor": {
+        "observable_from_javascript": false,
+        "descriptor_kind": "absent",
+        "writable": null,
+        "enumerable": null,
+        "configurable": null,
+        "function_name": null,
+        "function_length": null,
+        "observation": "`typeof (1234).toLocaleString` evaluates to `undefined`."
+      },
+      "locale_semantics": "No locale-sensitive number formatting path exists.",
+      "timezone_semantics": "Timezone-independent.",
+      "provider": "none",
+      "data_version": "none",
+      "error_semantics": "Calling the absent value fails as an undefined function.",
+      "fallback_semantics": "No fallback.",
+      "capability_semantics": "No capability can synthesize the missing method.",
+      "ecma262_score_relation": "No score delta; absence stays visible.",
+      "ecma402_score_relation": "Zero ECMA-402 credit.",
+      "preservation_relation": "preserve_absence",
+      "ga_preservation_rule": "GA must not claim NumberFormat or locale number formatting until a complete reviewed route lands.",
+      "authority_ids": [
+        "engine.baseline.string-property-route",
+        "node.dispatch.native-engine-route"
+      ],
+      "probe_ids": [
+        "probe.number-locale-method-absent"
+      ],
+      "limitations": [
+        "Number.prototype.toString exists but is not locale-sensitive."
+      ]
+    },
+    {
+      "surface_id": "string.prototype.locale_compare",
+      "owner": "bd-performance-conformance-bridge-tu32j.27.1",
+      "category": "string_method",
+      "object_name": "String primitive synthetic prototype",
+      "member_name": "localeCompare",
+      "exposure": "exposed_production",
+      "production_routes": [
+        "frankenctl run -> ExecutionOrchestrator -> baseline interpreter -> string_property_value -> string_locale_compare_impl",
+        "franken-node run --runtime franken-engine -> supervised native EngineDispatcher -> same engine route"
+      ],
+      "internal_routes": [
+        "builtin:StringPrototypeLocaleCompare HostCall duplicate implementation"
+      ],
+      "descriptor": {
+        "observable_from_javascript": false,
+        "descriptor_kind": "synthetic primitive-method resolution; no exposed String.prototype object",
+        "writable": null,
+        "enumerable": null,
+        "configurable": null,
+        "function_name": null,
+        "function_length": null,
+        "observation": "Calling works, but reading `.length` or `.name` fails with `type error: expected object, got function`; no property descriptor is observable."
+      },
+      "locale_semantics": "Compares the receiver UTF-8 projection lexicographically with ToString(first argument). Locale and options arguments are ignored.",
+      "timezone_semantics": "Timezone-independent.",
+      "provider": "utf8-projection-lexicographic-v1",
+      "data_version": "collation:utf8-projection-lexicographic-v1",
+      "error_semantics": "Null/undefined receiver coercion follows the engine's primitive method rules; method metadata access currently errors.",
+      "fallback_semantics": "No locale fallback occurs because locale negotiation is not attempted.",
+      "capability_semantics": "The ordinary VmDispatch/HeapAllocate execution profile applies; there is no Intl-specific capability.",
+      "ecma262_score_relation": "Method presence and core coercion remain observable; this contract contributes zero score points.",
+      "ecma402_score_relation": "Not ECMA-402 collation conformance. The shortcut receives zero Intl credit.",
+      "preservation_relation": "preserve_exact_behavior",
+      "ga_preservation_rule": "Preserve exact baseline outputs and environment independence until a signed provider migration intentionally supersedes them.",
+      "authority_ids": [
+        "engine.baseline.string-property-route",
+        "engine.baseline.locale-compare-impl",
+        "engine.intrinsics.locale-compare-row",
+        "engine.frankenctl.production-route",
+        "node.dispatch.native-engine-route"
+      ],
+      "probe_ids": [
+        "probe.locale-compare-basic",
+        "probe.locale-compare-env-hostile",
+        "probe.locale-compare-locale-options-ignored",
+        "probe.locale-compare-metadata-unobservable",
+        "probe.locale-compare-undefined-coercion"
+      ],
+      "limitations": [
+        "Comparison is not locale-aware despite the method name.",
+        "The implementation returns only -1, 0, or 1."
+      ]
+    },
+    {
+      "surface_id": "string.prototype.to_locale_lower_case",
+      "owner": "bd-performance-conformance-bridge-tu32j.27.1",
+      "category": "string_method",
+      "object_name": "String primitive synthetic prototype",
+      "member_name": "toLocaleLowerCase",
+      "exposure": "internal_unrouted",
+      "production_routes": [],
+      "internal_routes": [
+        "baseline interpreter HostCall builtin:StringPrototypeToLocaleLowerCase"
+      ],
+      "descriptor": {
+        "observable_from_javascript": false,
+        "descriptor_kind": "absent",
+        "writable": null,
+        "enumerable": null,
+        "configurable": null,
+        "function_name": null,
+        "function_length": null,
+        "observation": "`typeof \"I\".toLocaleLowerCase` evaluates to `undefined`; no descriptor is exposed."
+      },
+      "locale_semantics": "Internal HostCall applies Rust Unicode lowercase and ignores locale arguments.",
+      "timezone_semantics": "Timezone-independent.",
+      "provider": "rust-unicode-case-internal",
+      "data_version": "internal-case:rust-unicode-build-version-unpinned",
+      "error_semantics": "Internal HostCall uses ordinary receiver coercion; no supported JavaScript call exists.",
+      "fallback_semantics": "No JavaScript fallback; the property is absent.",
+      "capability_semantics": "Direct hand-authored IR still passes the normal HostCall capability gate, but that is not a supported public route.",
+      "ecma262_score_relation": "Absent from the frozen JavaScript core surface.",
+      "ecma402_score_relation": "Zero ECMA-402 credit; internal code is explicitly non-credit.",
+      "preservation_relation": "preserve_internal_non_credit",
+      "ga_preservation_rule": "GA may preserve the internal branch, but must preserve public absence unless a reviewed route and provider migration lands.",
+      "authority_ids": [
+        "engine.baseline.string-property-route",
+        "engine.baseline.internal-locale-case-hostcalls"
+      ],
+      "probe_ids": [
+        "probe.locale-case-methods-absent"
+      ],
+      "limitations": [
+        "No Turkish/Azeri/Lithuanian locale tailoring is implemented."
+      ]
+    },
+    {
+      "surface_id": "string.prototype.to_locale_upper_case",
+      "owner": "bd-performance-conformance-bridge-tu32j.27.1",
+      "category": "string_method",
+      "object_name": "String primitive synthetic prototype",
+      "member_name": "toLocaleUpperCase",
+      "exposure": "internal_unrouted",
+      "production_routes": [],
+      "internal_routes": [
+        "baseline interpreter HostCall builtin:StringPrototypeToLocaleUpperCase"
+      ],
+      "descriptor": {
+        "observable_from_javascript": false,
+        "descriptor_kind": "absent",
+        "writable": null,
+        "enumerable": null,
+        "configurable": null,
+        "function_name": null,
+        "function_length": null,
+        "observation": "`typeof \"i\".toLocaleUpperCase` evaluates to `undefined`; no descriptor is exposed."
+      },
+      "locale_semantics": "Internal HostCall applies Rust Unicode uppercase and ignores locale arguments.",
+      "timezone_semantics": "Timezone-independent.",
+      "provider": "rust-unicode-case-internal",
+      "data_version": "internal-case:rust-unicode-build-version-unpinned",
+      "error_semantics": "Internal HostCall uses ordinary receiver coercion; no supported JavaScript call exists.",
+      "fallback_semantics": "No JavaScript fallback; the property is absent.",
+      "capability_semantics": "Direct hand-authored IR still passes the normal HostCall capability gate, but that is not a supported public route.",
+      "ecma262_score_relation": "Absent from the frozen JavaScript core surface.",
+      "ecma402_score_relation": "Zero ECMA-402 credit; internal code is explicitly non-credit.",
+      "preservation_relation": "preserve_internal_non_credit",
+      "ga_preservation_rule": "GA may preserve the internal branch, but must preserve public absence unless a reviewed route and provider migration lands.",
+      "authority_ids": [
+        "engine.baseline.string-property-route",
+        "engine.baseline.internal-locale-case-hostcalls"
+      ],
+      "probe_ids": [
+        "probe.locale-case-methods-absent"
+      ],
+      "limitations": [
+        "No Turkish/Azeri/Lithuanian locale tailoring is implemented."
+      ]
+    }
+  ],
+  "probes": [
+    {
+      "probe_id": "probe.date-locale-methods-absent",
+      "surface_ids": [
+        "date.prototype.to_locale_string",
+        "date.prototype.to_locale_date_string",
+        "date.prototype.to_locale_time_string"
+      ],
+      "profile": "default",
+      "locale": "en-US",
+      "timezone": "UTC",
+      "provider": "none",
+      "data_version": "none",
+      "source": "const d=new Date(0); console.log(typeof d.toLocaleString); console.log(typeof d.toLocaleDateString); console.log(typeof d.toLocaleTimeString);\n",
+      "environment": {
+        "LANG": "en_US.UTF-8",
+        "LC_ALL": "en_US.UTF-8",
+        "TZ": "UTC"
+      },
+      "expectations": [
+        {
+          "runner": "frankenctl",
+          "expected_exit": 0,
+          "expected_console": [
+            "undefined",
+            "undefined",
+            "undefined"
+          ],
+          "stderr_contains": null
+        },
+        {
+          "runner": "franken_node",
+          "expected_exit": 0,
+          "expected_console": [
+            "undefined",
+            "undefined",
+            "undefined"
+          ],
+          "stderr_contains": null
+        }
+      ],
+      "branch_authority_ids": [
+        "engine.baseline.internal-date-locale-hostcalls"
+      ]
+    },
+    {
+      "probe_id": "probe.date-to-string-negative-control",
+      "surface_ids": [
+        "date.prototype.to_string_locale_negative_control"
+      ],
+      "profile": "default",
+      "locale": "en-US",
+      "timezone": "Pacific/Honolulu",
+      "provider": "generic-object-stringification",
+      "data_version": "none",
+      "source": "const d=new Date(0); console.log(d.toString());\n",
+      "environment": {
+        "LANG": "en_US.UTF-8",
+        "LC_ALL": "en_US.UTF-8",
+        "TZ": "Pacific/Honolulu"
+      },
+      "expectations": [
+        {
+          "runner": "frankenctl",
+          "expected_exit": 0,
+          "expected_console": [
+            "[object Object]"
+          ],
+          "stderr_contains": null
+        },
+        {
+          "runner": "franken_node",
+          "expected_exit": 0,
+          "expected_console": [
+            "[object Object]"
+          ],
+          "stderr_contains": null
+        }
+      ],
+      "branch_authority_ids": [
+        "engine.baseline.internal-date-locale-hostcalls",
+        "engine.frankenctl.production-route"
+      ]
+    },
+    {
+      "probe_id": "probe.intl-global-absent",
+      "surface_ids": [
+        "intl.global"
+      ],
+      "profile": "default",
+      "locale": "C",
+      "timezone": "UTC",
+      "provider": "none",
+      "data_version": "none",
+      "source": "console.log(typeof Intl);\n",
+      "environment": {
+        "LANG": "C",
+        "LC_ALL": "C",
+        "TZ": "UTC"
+      },
+      "expectations": [
+        {
+          "runner": "frankenctl",
+          "expected_exit": 0,
+          "expected_console": [
+            "undefined"
+          ],
+          "stderr_contains": null
+        },
+        {
+          "runner": "franken_node",
+          "expected_exit": 0,
+          "expected_console": [
+            "undefined"
+          ],
+          "stderr_contains": null
+        }
+      ],
+      "branch_authority_ids": [
+        "engine.frankenctl.production-route",
+        "node.dispatch.native-engine-route"
+      ]
+    },
+    {
+      "probe_id": "probe.locale-case-methods-absent",
+      "surface_ids": [
+        "string.prototype.to_locale_lower_case",
+        "string.prototype.to_locale_upper_case"
+      ],
+      "profile": "default",
+      "locale": "tr-TR",
+      "timezone": "UTC",
+      "provider": "none",
+      "data_version": "none",
+      "source": "console.log(typeof \"I\".toLocaleLowerCase); console.log(typeof \"i\".toLocaleUpperCase);\n",
+      "environment": {
+        "LANG": "tr_TR.UTF-8",
+        "LC_ALL": "tr_TR.UTF-8",
+        "TZ": "UTC"
+      },
+      "expectations": [
+        {
+          "runner": "frankenctl",
+          "expected_exit": 0,
+          "expected_console": [
+            "undefined",
+            "undefined"
+          ],
+          "stderr_contains": null
+        },
+        {
+          "runner": "franken_node",
+          "expected_exit": 0,
+          "expected_console": [
+            "undefined",
+            "undefined"
+          ],
+          "stderr_contains": null
+        }
+      ],
+      "branch_authority_ids": [
+        "engine.baseline.string-property-route",
+        "engine.baseline.internal-locale-case-hostcalls"
+      ]
+    },
+    {
+      "probe_id": "probe.locale-compare-basic",
+      "surface_ids": [
+        "string.prototype.locale_compare"
+      ],
+      "profile": "default",
+      "locale": "C",
+      "timezone": "UTC",
+      "provider": "utf8-projection-lexicographic-v1",
+      "data_version": "collation:utf8-projection-lexicographic-v1",
+      "source": "console.log(\"a\".localeCompare(\"b\")); console.log(\"x\".localeCompare(\"x\")); console.log(\"z\".localeCompare(\"a\"));\n",
+      "environment": {
+        "LANG": "C",
+        "LC_ALL": "C",
+        "TZ": "UTC"
+      },
+      "expectations": [
+        {
+          "runner": "frankenctl",
+          "expected_exit": 0,
+          "expected_console": [
+            "-1",
+            "0",
+            "1"
+          ],
+          "stderr_contains": null
+        },
+        {
+          "runner": "franken_node",
+          "expected_exit": 0,
+          "expected_console": [
+            "-1",
+            "0",
+            "1"
+          ],
+          "stderr_contains": null
+        }
+      ],
+      "branch_authority_ids": [
+        "engine.baseline.string-property-route",
+        "engine.baseline.locale-compare-impl",
+        "engine.frankenctl.production-route"
+      ]
+    },
+    {
+      "probe_id": "probe.locale-compare-env-hostile",
+      "surface_ids": [
+        "string.prototype.locale_compare"
+      ],
+      "profile": "hostile-env",
+      "locale": "tr-TR",
+      "timezone": "Pacific/Honolulu",
+      "provider": "utf8-projection-lexicographic-v1",
+      "data_version": "collation:utf8-projection-lexicographic-v1",
+      "source": "console.log(\"a\".localeCompare(\"b\")); console.log(\"x\".localeCompare(\"x\")); console.log(\"z\".localeCompare(\"a\"));\n",
+      "environment": {
+        "LANG": "tr_TR.UTF-8",
+        "LC_ALL": "tr_TR.UTF-8",
+        "TZ": "Pacific/Honolulu"
+      },
+      "expectations": [
+        {
+          "runner": "frankenctl",
+          "expected_exit": 0,
+          "expected_console": [
+            "-1",
+            "0",
+            "1"
+          ],
+          "stderr_contains": null
+        },
+        {
+          "runner": "franken_node",
+          "expected_exit": 0,
+          "expected_console": [
+            "-1",
+            "0",
+            "1"
+          ],
+          "stderr_contains": null
+        }
+      ],
+      "branch_authority_ids": [
+        "engine.baseline.locale-compare-impl",
+        "node.dispatch.native-engine-route"
+      ]
+    },
+    {
+      "probe_id": "probe.locale-compare-locale-options-ignored",
+      "surface_ids": [
+        "string.prototype.locale_compare"
+      ],
+      "profile": "default",
+      "locale": "de-DE,tr-TR",
+      "timezone": "UTC",
+      "provider": "utf8-projection-lexicographic-v1",
+      "data_version": "collation:utf8-projection-lexicographic-v1",
+      "source": "console.log(\"A\".localeCompare(\"a\",\"tr\",{sensitivity:\"base\"})); console.log(\"ä\".localeCompare(\"z\",\"de\"));\n",
+      "environment": {
+        "LANG": "C",
+        "LC_ALL": "C",
+        "TZ": "UTC"
+      },
+      "expectations": [
+        {
+          "runner": "frankenctl",
+          "expected_exit": 0,
+          "expected_console": [
+            "-1",
+            "1"
+          ],
+          "stderr_contains": null
+        },
+        {
+          "runner": "franken_node",
+          "expected_exit": 0,
+          "expected_console": [
+            "-1",
+            "1"
+          ],
+          "stderr_contains": null
+        }
+      ],
+      "branch_authority_ids": [
+        "engine.baseline.locale-compare-impl"
+      ]
+    },
+    {
+      "probe_id": "probe.locale-compare-metadata-unobservable",
+      "surface_ids": [
+        "string.prototype.locale_compare"
+      ],
+      "profile": "default",
+      "locale": "C",
+      "timezone": "UTC",
+      "provider": "utf8-projection-lexicographic-v1",
+      "data_version": "collation:utf8-projection-lexicographic-v1",
+      "source": "console.log(\"a\".localeCompare.length);\n",
+      "environment": {
+        "LANG": "C",
+        "LC_ALL": "C",
+        "TZ": "UTC"
+      },
+      "expectations": [
+        {
+          "runner": "frankenctl",
+          "expected_exit": 2,
+          "expected_console": [],
+          "stderr_contains": "expected object, got function"
+        }
+      ],
+      "branch_authority_ids": [
+        "engine.baseline.string-property-route"
+      ]
+    },
+    {
+      "probe_id": "probe.locale-compare-undefined-coercion",
+      "surface_ids": [
+        "string.prototype.locale_compare"
+      ],
+      "profile": "default",
+      "locale": "C",
+      "timezone": "UTC",
+      "provider": "utf8-projection-lexicographic-v1",
+      "data_version": "collation:utf8-projection-lexicographic-v1",
+      "source": "console.log(\"undefined\".localeCompare()); console.log(\"2\".localeCompare(10));\n",
+      "environment": {
+        "LANG": "C",
+        "LC_ALL": "C",
+        "TZ": "UTC"
+      },
+      "expectations": [
+        {
+          "runner": "frankenctl",
+          "expected_exit": 0,
+          "expected_console": [
+            "0",
+            "1"
+          ],
+          "stderr_contains": null
+        },
+        {
+          "runner": "franken_node",
+          "expected_exit": 0,
+          "expected_console": [
+            "0",
+            "1"
+          ],
+          "stderr_contains": null
+        }
+      ],
+      "branch_authority_ids": [
+        "engine.baseline.locale-compare-impl"
+      ]
+    },
+    {
+      "probe_id": "probe.number-locale-method-absent",
+      "surface_ids": [
+        "number.prototype.to_locale_string"
+      ],
+      "profile": "default",
+      "locale": "de-DE",
+      "timezone": "UTC",
+      "provider": "none",
+      "data_version": "none",
+      "source": "const n=1234; console.log(typeof n.toLocaleString);\n",
+      "environment": {
+        "LANG": "de_DE.UTF-8",
+        "LC_ALL": "de_DE.UTF-8",
+        "TZ": "UTC"
+      },
+      "expectations": [
+        {
+          "runner": "frankenctl",
+          "expected_exit": 0,
+          "expected_console": [
+            "undefined"
+          ],
+          "stderr_contains": null
+        },
+        {
+          "runner": "franken_node",
+          "expected_exit": 0,
+          "expected_console": [
+            "undefined"
+          ],
+          "stderr_contains": null
+        }
+      ],
+      "branch_authority_ids": [
+        "engine.baseline.string-property-route"
+      ]
+    }
+  ],
+  "exclusions": [
+    "String.prototype.normalize is Unicode-sensitive but not locale-sensitive; it remains in the ECMA-262 core track and is not an Intl preservation row.",
+    "Test262 intl402 profile selection, Unicode/CLDR/tzdb acquisition, normative-optional policy, and full constructors belong to BRIDGE-26.2 through BRIDGE-26.6.",
+    "Internal HostCall reachability from hand-authored IR is not a supported JavaScript or product API and receives no compatibility or conformance credit.",
+    "Node and Bun are reference runtimes only; their broader Intl surfaces do not define FrankenEngine's frozen baseline."
+  ],
+  "legal": {
+    "repository_license": "MIT",
+    "external_runtime_data": [
+      "none acquired or redistributed by BRIDGE-26.1"
+    ],
+    "bundled_locale_data": "Existing hand-authored internal strings only; no CLDR/tzdb corpus is claimed or newly bundled.",
+    "review_rule": "BRIDGE-26.2 must attach source and license records before any external locale data becomes authoritative."
+  }
+}

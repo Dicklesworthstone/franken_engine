@@ -6,7 +6,9 @@
 //! Coverage priorities (per RGC-306 workload matrix):
 //! - **Tier 1** (critical path): Array, Object, String, Math, JSON, Number, Boolean
 //! - **Tier 2** (ecosystem): Map, Set, Date, RegExp, Error, Symbol, Promise
-//! - **Tier 3** (completeness): WeakMap, WeakSet, Intl subset, Proxy/Reflect
+//! - **Tier 3** (completeness): WeakMap, WeakSet, Proxy/Reflect
+//! - **Intl status**: no exposed `Intl` global; the frozen locale surface is
+//!   inventoried separately
 //!
 //! All arithmetic uses fixed-point millionths (1_000_000 = 1.0) for
 //! cross-architecture determinism.  `BTreeMap`/`BTreeSet` for ordering.

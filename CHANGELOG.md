@@ -10,6 +10,39 @@ The first conventional release, `v0.1.0`, was published on 2026-05-29. Current `
 
 ---
 
+## Post-Snapshot Update — Authenticated Process-Spawn Foundation (2026-07-23)
+
+`bd-x85a7` adds the first host process-execution authority to the extension
+host, as a fail-closed request/provider seam rather than an ambient capability.
+`ProcessSpawn` becomes a typed `RuntimeCapability`; `ProcSpawnEffect` carries a
+structured `ProcessSpawnRequest` instead of an untyped string tuple; and the
+default provider is `DenyAllProcessSpawn`, so a runtime that does not explicitly
+install a provider cannot spawn at all.
+
+- `crates/franken-extension-host/src/process_spawn.rs` implements the typed
+  request/response/error protocol and a bounded native provider that re-verifies
+  the target executable by SHA-256 before every launch, clears ambient
+  environment and admits only an allowlist, jails the working directory to a
+  canonical path, refuses dangerous environment carriers (`LD_PRELOAD`,
+  `DYLD_*`, `BASH_ENV`), applies per-child resource limits, and returns opaque
+  scoped handles rather than PIDs. A detached reaper thread plus `Drop`-time
+  containment prevents orphaned children. The module keeps
+  `#![forbid(unsafe_code)]`.
+- `crates/franken-extension-host/src/host_effect_journal.rs` adds a globally
+  ordered record/replay journal spanning host I/O *and* process effects.
+  Reservation and completion preserve crossing order, because concatenating
+  per-family transcripts would forge the ordering of interleaved effects and
+  break replay identity.
+- The orchestrator gains `set_process_spawn(...)`, a `host_effect_journal`
+  result field, and `last_failed_host_effect_journal`; the capability stack
+  treats `ProcessSpawn` as extraordinary authority that is absent from the
+  ordinary `Full` profile, so it cannot be acquired by default composition.
+- Follow-up audit beads are tracked as `bd-x85a7.1`–`.4`: temporal containment
+  and per-effect expiry, journal completion-hole integrity, secret hygiene for
+  env/stdin/stdout/stderr in `Debug` and diagnostics, and platform process-tree
+  containment (cgroup or job object) beyond Unix process groups. This entry
+  records the foundation only; those four remain open.
+
 ## Post-Snapshot Update — Generator Activation Boundary (2026-07-23)
 
 `bd-093id` makes synchronous generator invocation run its parameter

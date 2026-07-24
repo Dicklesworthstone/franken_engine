@@ -10,16 +10,35 @@
   },
   "totals_by_crate": {
     "frankenengine-engine": {
-      "relaxed": 46, "acquire": 15, "release": 7, "acq_rel": 1, "seq_cst": 12,
-      "compare_exchange": 0, "fence": 0, "unsafe_cell": 0
+      "relaxed": 46,
+      "acquire": 15,
+      "release": 7,
+      "acq_rel": 1,
+      "seq_cst": 12,
+      "compare_exchange": 0,
+      "fence": 0,
+      "unsafe_cell": 0,
+      "relaxed_fully_classified": true
     },
     "frankenengine-core": {
-      "relaxed": 2, "acquire": 1, "release": 2, "acq_rel": 0, "seq_cst": 0,
-      "compare_exchange": 0, "fence": 0, "unsafe_cell": 0
+      "relaxed": 2,
+      "acquire": 1,
+      "release": 2,
+      "acq_rel": 0,
+      "seq_cst": 0,
+      "compare_exchange": 0,
+      "fence": 0,
+      "unsafe_cell": 0
     },
     "frankenengine-extension-host": {
-      "relaxed": 6, "acquire": 12, "release": 1, "acq_rel": 5, "seq_cst": 0,
-      "compare_exchange": 1, "fence": 0, "unsafe_cell": 0
+      "relaxed": 6,
+      "acquire": 12,
+      "release": 1,
+      "acq_rel": 5,
+      "seq_cst": 0,
+      "compare_exchange": 1,
+      "fence": 0,
+      "unsafe_cell": 0
     }
   },
   "key_structural_finding": {
@@ -48,7 +67,13 @@
     {
       "id": "extension-host-effect-concurrency",
       "path": "crates/franken-extension-host/src/{process_spawn.rs,host_io.rs,host_effect_journal.rs}",
-      "orderings_observed": { "acquire": 12, "acq_rel": 5, "relaxed": 6, "release": 1, "compare_exchange": 1 },
+      "orderings_observed": {
+        "acquire": 12,
+        "acq_rel": 5,
+        "relaxed": 6,
+        "release": 1,
+        "compare_exchange": 1
+      },
       "verdict": "REVIEW REQUIRED",
       "rationale": "This is the newest concurrent code in the tree (bd-x85a7, landed 2026-07-23) and holds the only compare_exchange in the repository, plus the highest AcqRel density. It governs process-spawn admission and the globally ordered host-effect journal, where ordering is semantically load-bearing for replay identity, not merely for performance.",
       "residual_risk": "MEDIUM. Newest code, least soak time, and the journal explicitly claims a global ordering property that a weak memory model could violate if the reserve/complete protocol is under-synchronized.",
@@ -61,13 +86,39 @@
       "rationale": "The native-code capsule will introduce genuine lock-free publication: concurrent patch/execute/retire on executable memory, epoch invalidation, and retirement-under-read. This is where weak-memory correctness genuinely bites, and where x86-TSO would silently forgive a missing Acquire/Release that AArch64 would not.",
       "residual_risk": "HIGH once implemented.",
       "action": "Loom model the publication/retirement state machine BEFORE the capsule ships, per bead .6.37. This inventory exists so that gate is in place first."
+    },
+    {
+      "id": "engine-temp-id-generators",
+      "path": "crates/franken-engine/src/ (23 sites across 20 modules)",
+      "kind": "process-unique ID generation for temporary file/directory names",
+      "symbols": [
+        "NEXT_TEMP_FILE_ID",
+        "EVENT_TEMP_SEQUENCE",
+        "HSP_BUNDLE_TEMP_COUNTER",
+        "NEXT_AMBIENT_MOCK_GUARD_TEMP_FILE_ID",
+        "NEXT_DIR_ID",
+        "TEMP_SEQUENCE"
+      ],
+      "relaxed_count": 23,
+      "verdict": "CORRECT",
+      "rationale": "Every one of these is `COUNTER.fetch_add(1, Ordering::Relaxed)` used to mint a unique suffix for a temp path, plus two test-only provider call counters in execution_orchestrator.rs. fetch_add is atomic under ANY ordering, so uniqueness -- the only property required -- is guaranteed. Relaxed is correct precisely because the counter publishes no other memory: nothing is read through it, so no happens-before edge is needed. Strengthening these to SeqCst would cost performance and buy nothing.",
+      "residual_risk": "NONE. Weak memory models do not affect fetch_add atomicity.",
+      "action": "No change required. Recorded so the classification is complete and drift is detectable."
     }
   ],
   "open_work_not_done_in_this_pass": [
-    "Loom exhaustive interleaving models (seqlock publication, host-effect journal reserve/complete, future code-cache publication)",
+    "Loom exhaustive interleaving models (host-effect journal reserve/complete; future code-cache publication)",
     "Execution of the full lib/integration/differential/metamorphic suites on real AArch64 hardware",
     "Permanent AArch64 CI lane",
-    "Per-site written justification for each of the remaining Relaxed uses outside seqlock_fastpath.rs (23 of 54 engine-crate Relaxed uses are characterized here; the remaining 23 are spread across telemetry, orchestrator and inventory modules and are presumed statistical but are NOT individually verified)"
+    "Per-site review of frankenengine-extension-host orderings (12 Acquire / 5 AcqRel / 1 compare_exchange) - the MEDIUM-risk cluster, not yet individually classified",
+    "Review of the stronger-ordering sites in migration_compatibility.rs (8) and checkpoint.rs (5), which use Acquire/Release/SeqCst (safe direction, but unverified)"
   ],
-  "honest_status": "PARTIAL. This artifact discharges the inventory-and-classification portion of the bead and materially revises its risk framing downward for existing code. It does not discharge the loom, AArch64-hardware, or CI-lane portions, which remain open."
+  "honest_status": "PARTIAL, static classification COMPLETE for the engine crate. All 46 engine Ordering::Relaxed uses are individually classified and correct; no correctness-bearing Relaxed remains. The extension-host cluster (the MEDIUM-risk newest code) is counted but NOT yet individually classified. Loom models, AArch64 hardware execution and the CI lane remain open.",
+  "relaxed_classification_summary": {
+    "engine_crate_total": 46,
+    "seqlock_statistics_counters": 23,
+    "temp_id_generators_and_test_counters": 23,
+    "unclassified_remaining": 0,
+    "conclusion": "All 46 engine-crate Ordering::Relaxed uses are now individually accounted for and every one is correct. None is on a correctness-bearing publication path. This closes the static-classification portion of the audit and further lowers the assessed AArch64 risk for EXISTING engine code."
+  }
 }

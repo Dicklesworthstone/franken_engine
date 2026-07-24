@@ -107,6 +107,22 @@ rather than ignore the semantics-bearing field. The engine mirror remains on
 its independently versioned `0.7.0` wire, and the `ir_contract` row remains
 `pending_graduation`.
 
+`bd-093id` advances core IR again to `0.10.0` for the serialized
+`GeneratorBodyStart` operation in IR1, IR2's `Ir2Op::inner` carrier, and IR3.
+Lowering places the boundary after a generator's parameter prologue and before
+its first body statement, so invocation can evaluate defaults synchronously
+and persist the initialized activation without starting the body. Core
+`0.10.0` readers retain supported `0.9.x` artifacts and preserve their version
+through IR1-to-IR3 lowering; legacy generator artifacts without the marker
+therefore keep their historical first-`.next()` start timing. Schema and
+structural gates reject unsupported headers and malformed current boundaries
+before execution. Older readers must reject `0.10.x` before decoding the new
+variant. Engine IR remains independently versioned at `0.7.0`, and this change
+does not alter the `ir_contract` row's `pending_graduation` status. The public
+enum audit found only the engine differential oracle as a workspace consumer;
+its fallback match remains source-compatible, while `franken_node` has no
+direct core-IR match or construction site.
+
 ## Active Parity Exception: Executable Symbol Keys
 
 `bd-n8eta.4.1` records a wire-additive but Rust-source-breaking versioned

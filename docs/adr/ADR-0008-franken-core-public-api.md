@@ -755,6 +755,33 @@ silently discarding semantics-bearing metadata. Core `0.9.0` readers retain
 the supported historical core minors, including `0.8.x`, while continuing to
 reject the engine-owned `0.6.x` and `0.7.x` wires.
 
+### Generator activation boundary checkpoint (`bd-093id`)
+
+Core advances `IrSchemaVersion::CURRENT` from `0.9.0` to `0.10.0` when IR1,
+IR2 (through the serialized `Ir2Op::inner` carrier), and IR3 gain the
+serialized `GeneratorBodyStart` variant. Generator lowering places this marker
+immediately after parameter initialization and before the body. The runtime
+executes through the marker during invocation, persists the initialized
+activation, and resumes after it on the first `.next()` call.
+
+The marker is semantics-bearing even though it has no data fields: a reader
+that ignores it runs defaults at the wrong time or starts the body during
+invocation. Core `0.10.0` readers therefore retain supported historical core
+minors through `0.9.x`; IR1-to-IR3 lowering preserves a supported legacy
+header, so a legacy generator artifact without the marker keeps its historical
+first-`.next()` start timing. Schema gates run at lowering, verification, and
+execution boundaries, and current generator bodies must structurally contain
+exactly one marker before yield/return. Older readers must reject a `0.10.x`
+header before decoding. Engine IR remains independently versioned at `0.7.0`;
+this checkpoint does not claim cross-crate IR interchangeability.
+
+The additive public-enum audit required by this ADR found one workspace
+consumer, `crates/franken-engine/src/differential_oracle.rs`; its core IR3
+matches retain fallback arms and remain source-compatible. The sibling
+`franken_node` repository has no direct core-IR construction or exhaustive
+match site. Exact IR1/IR2/IR3 serde and canonical-wire tests pin the new unit
+variant.
+
 ## Cross-Crate Compatibility Matrix
 
 | Consumer or peer | Current relation | Compatibility rule |

@@ -672,6 +672,7 @@ pub enum BuiltinFunctionKind {
     SymbolFor,
     SymbolKeyFor,
     SymbolPrototypeToString,
+    GeneratorPrototypeNext,
 }
 
 /// First-class builtin callable value with the module provenance needed for
@@ -716,6 +717,13 @@ impl BuiltinFunction {
         }
     }
 
+    fn generator_next() -> Self {
+        Self {
+            kind: BuiltinFunctionKind::GeneratorPrototypeNext,
+            module_specifier: String::new(),
+        }
+    }
+
     fn display_name(&self) -> &'static str {
         match self.kind {
             BuiltinFunctionKind::Require => "require",
@@ -730,6 +738,7 @@ impl BuiltinFunction {
             BuiltinFunctionKind::SymbolFor => "for",
             BuiltinFunctionKind::SymbolKeyFor => "keyFor",
             BuiltinFunctionKind::SymbolPrototypeToString => "toString",
+            BuiltinFunctionKind::GeneratorPrototypeNext => "next",
         }
     }
 }
@@ -1667,7 +1676,7 @@ struct CjsModuleContext {
 // ---------------------------------------------------------------------------
 
 /// State of a generator object.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 enum GeneratorPhase {
     /// Created but not yet started (initial .next() call).
     SuspendedStart,
@@ -1682,18 +1691,13 @@ enum GeneratorPhase {
 /// A generator object holds the suspended state of a generator function.
 #[derive(Debug, Clone)]
 struct GeneratorObject {
-    /// Function index in the function table.
-    function_index: u32,
-    /// Closure index (captures from the enclosing scope).
-    closure_index: Option<u32>,
-    /// Saved instruction pointer (resume point after yield).
-    saved_ip: usize,
-    /// Saved register file snapshot at the time of yield.
-    saved_registers: Vec<Value>,
-    /// Saved IFC label snapshot for the register file at the time of yield.
-    saved_register_labels: Vec<crate::ifc_artifacts::Label>,
-    /// Saved register base offset.
-    saved_register_base: usize,
+    /// Complete isolated activation captured after parameter initialization or
+    /// a yield. This keeps lexical cells, control stacks, and registers owned
+    /// by the generator instead of borrowing the caller's active context.
+    execution: Option<ModuleExecutionSnapshot>,
+    /// Destination register that receives the argument to the next `.next(v)`
+    /// after a source `yield`. `None` while suspended at body start.
+    resume_dst: Option<u32>,
     /// Current phase of the generator.
     phase: GeneratorPhase,
 }
@@ -1763,6 +1767,19 @@ struct AsyncCallSetup {
     super_value: Value,
     super_label: crate::ifc_artifacts::Label,
     result_register: u32,
+}
+
+/// Fully validated state needed to initialize a synchronous generator through
+/// its parameter prologue and suspend it at `GeneratorBodyStart`.
+struct GeneratorCallSetup {
+    function_index: u32,
+    function_entry: u32,
+    captured_env: Vec<ScopeFrame>,
+    arguments: Vec<(Value, crate::ifc_artifacts::Label)>,
+    this_value: Value,
+    this_label: crate::ifc_artifacts::Label,
+    super_value: Value,
+    super_label: crate::ifc_artifacts::Label,
 }
 
 /// An async generator object combines generator suspension with promise wrapping.
@@ -3000,6 +3017,27 @@ struct ModuleExecutionSnapshot {
     current_module_specifier: Option<String>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RunLoopMode {
+    Normal,
+    Generator,
+}
+
+#[derive(Debug)]
+enum RunLoopExit {
+    Value(Value),
+    GeneratorBodyStart,
+    GeneratorYield {
+        result: Value,
+        resume_dst: u32,
+    },
+    GeneratorReturn(Value),
+    GeneratorThrow {
+        exception: LabeledException,
+        description: String,
+    },
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 enum FunctionObjectKey {
     Function(u32),
@@ -3065,6 +3103,13 @@ pub struct InterpreterCore {
     symbol_state: RuntimeSymbolState,
     /// Approximate live memory tracked for fail-closed budget enforcement.
     estimated_memory_bytes: u64,
+    /// Execution snapshots moved out while a generator activation is running.
+    /// Nested generator calls accumulate here so allocation checks continue to
+    /// account for every synchronously suspended caller.
+    temporarily_suspended_execution_bytes: u64,
+    /// Call depth represented by the same temporarily moved-out executions.
+    /// Active depth checks add this to the installed activation's stack.
+    temporarily_suspended_call_depth: usize,
     /// Dedicated iterator runtime state used by iterator-specific IR3 ops.
     iterators: Vec<RuntimeIteratorState>,
     /// Lazily allocated prototype objects for constructor function values.
@@ -3210,6 +3255,8 @@ impl InterpreterCore {
             heap: Vec::new(),
             symbol_state: RuntimeSymbolState::default(),
             estimated_memory_bytes: 0,
+            temporarily_suspended_execution_bytes: 0,
+            temporarily_suspended_call_depth: 0,
             iterators: Vec::new(),
             function_prototypes: BTreeMap::new(),
             function_objects: BTreeMap::new(),
@@ -3298,6 +3345,13 @@ impl InterpreterCore {
 
     /// Execute an IR3 module and return the result.
     pub fn execute(&mut self, module: &Ir3Module) -> Result<ExecutionResult, InterpreterError> {
+        crate::ir_contract::verify_ir3_specialization(module).map_err(|error| {
+            InterpreterError::TypeError {
+                expected: "supported, structurally valid core IR3 module".to_string(),
+                got: error.to_string(),
+            }
+        })?;
+
         // Check VmDispatch capability before executing
         if !self
             .config
@@ -3442,6 +3496,8 @@ impl InterpreterCore {
         self.finally_frames.clear();
         self.pending_finally_entry = None;
         self.copy_data_properties_states.clear();
+        self.temporarily_suspended_execution_bytes = 0;
+        self.temporarily_suspended_call_depth = 0;
         self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
         self.module_state = ModuleState::new();
         self.active_cjs_context = None;
@@ -3559,6 +3615,8 @@ impl InterpreterCore {
         self.finally_frames.clear();
         self.pending_finally_entry = None;
         self.copy_data_properties_states.clear();
+        self.temporarily_suspended_execution_bytes = 0;
+        self.temporarily_suspended_call_depth = 0;
         self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
         self.module_state = ModuleState::new();
         self.active_cjs_context = None;
@@ -3589,7 +3647,30 @@ impl InterpreterCore {
         }
     }
 
-    fn restore_module_execution(&mut self, snapshot: ModuleExecutionSnapshot) {
+    /// Move the currently installed execution context out of the interpreter.
+    /// Heap objects, closures, generator tables, budgets, and witness streams
+    /// remain shared; only frame-local execution state is transferred.
+    fn take_module_execution(&mut self) -> ModuleExecutionSnapshot {
+        ModuleExecutionSnapshot {
+            registers: std::mem::take(&mut self.registers),
+            register_labels: std::mem::take(&mut self.register_labels),
+            call_stack: std::mem::take(&mut self.call_stack),
+            ip: std::mem::take(&mut self.ip),
+            register_base: std::mem::take(&mut self.register_base),
+            catch_frames: std::mem::take(&mut self.catch_frames),
+            pending_exception: self.pending_exception.take(),
+            pending_return: self.pending_return.take(),
+            suspended_abrupt_completions: std::mem::take(&mut self.suspended_abrupt_completions),
+            finally_frames: std::mem::take(&mut self.finally_frames),
+            pending_finally_entry: self.pending_finally_entry.take(),
+            copy_data_properties_states: std::mem::take(&mut self.copy_data_properties_states),
+            scope_chain: std::mem::replace(&mut self.scope_chain, ScopeChain::new()),
+            pending_captures: std::mem::take(&mut self.pending_captures),
+            current_module_specifier: self.current_module_specifier.take(),
+        }
+    }
+
+    fn install_module_execution(&mut self, snapshot: ModuleExecutionSnapshot) {
         self.registers = snapshot.registers;
         self.register_labels = snapshot.register_labels;
         self.register_labels
@@ -3607,6 +3688,10 @@ impl InterpreterCore {
         self.scope_chain = snapshot.scope_chain;
         self.pending_captures = snapshot.pending_captures;
         self.current_module_specifier = snapshot.current_module_specifier;
+    }
+
+    fn restore_module_execution(&mut self, snapshot: ModuleExecutionSnapshot) {
+        self.install_module_execution(snapshot);
         self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
     }
 
@@ -4179,6 +4264,25 @@ impl InterpreterCore {
                 };
                 Ok(Value::Str(self.symbol_to_string(*symbol)))
             }
+            BuiltinFunctionKind::GeneratorPrototypeNext => {
+                let Some(Value::Generator(generator_id)) = receiver else {
+                    return Err(InterpreterError::TypeError {
+                        expected: "Generator receiver".to_string(),
+                        got: receiver.map_or("undefined", Value::type_name).to_string(),
+                    });
+                };
+                let argument = if args.count > 0 {
+                    self.read_reg(args.start)?
+                } else {
+                    Value::Undefined
+                };
+                let argument_label = if args.count > 0 {
+                    self.read_reg_label(args.start)?
+                } else {
+                    crate::ifc_artifacts::Label::Public
+                };
+                self.generator_next(module, *generator_id, argument, argument_label)
+            }
             BuiltinFunctionKind::StringPrototypeCharAt
             | BuiltinFunctionKind::StringPrototypeCharCodeAt
             | BuiltinFunctionKind::StringPrototypeCodePointAt
@@ -4219,7 +4323,8 @@ impl InterpreterCore {
                     | BuiltinFunctionKind::Symbol
                     | BuiltinFunctionKind::SymbolFor
                     | BuiltinFunctionKind::SymbolKeyFor
-                    | BuiltinFunctionKind::SymbolPrototypeToString => {
+                    | BuiltinFunctionKind::SymbolPrototypeToString
+                    | BuiltinFunctionKind::GeneratorPrototypeNext => {
                         unreachable!("handled above")
                     }
                 }
@@ -4938,6 +5043,29 @@ impl InterpreterCore {
         }
     }
 
+    /// Route an error raised while the bytecode loop is active. If a nested
+    /// generator call propagates an exact thrown value beyond every handler in
+    /// the current generator, keep that value armed in the isolated activation
+    /// so its caller can continue the same exception completion after restore.
+    fn route_run_loop_javascript_error(
+        &mut self,
+        module: &Ir3Module,
+        error: InterpreterError,
+        mode: RunLoopMode,
+    ) -> Result<Option<InterpreterError>, InterpreterError> {
+        let escaped_exception = (mode == RunLoopMode::Generator
+            && matches!(error, InterpreterError::UncaughtException { .. }))
+        .then(|| self.pending_exception.clone())
+        .flatten();
+        let routed = self.route_javascript_error(module, error)?;
+        if routed.is_some()
+            && let Some(exception) = escaped_exception
+        {
+            self.pending_exception = Some(exception);
+        }
+        Ok(routed)
+    }
+
     fn store_scoped_binding(
         &mut self,
         module: &Ir3Module,
@@ -5357,6 +5485,22 @@ impl InterpreterCore {
         self.enforce_hook_action(hook.pre_call(&ctx, &function_ref, args))
     }
 
+    fn effective_call_depth(&self) -> usize {
+        self.temporarily_suspended_call_depth
+            .saturating_add(self.call_stack.len())
+    }
+
+    fn ensure_call_depth_available(&self) -> Result<(), InterpreterError> {
+        let depth = self.effective_call_depth();
+        if depth >= self.config.max_call_depth {
+            return Err(InterpreterError::StackOverflow {
+                depth,
+                max: self.config.max_call_depth,
+            });
+        }
+        Ok(())
+    }
+
     fn enter_function_call(
         &mut self,
         module: &Ir3Module,
@@ -5402,12 +5546,7 @@ impl InterpreterCore {
         }
         arg_vals.truncate(func.arity as usize);
 
-        if self.call_stack.len() >= self.config.max_call_depth {
-            return Err(InterpreterError::StackOverflow {
-                depth: self.call_stack.len(),
-                max: self.config.max_call_depth,
-            });
-        }
+        self.ensure_call_depth_available()?;
 
         self.run_pre_call_hook(module, &callee_val, func_idx, &arg_vals)?;
 
@@ -5495,160 +5634,330 @@ impl InterpreterCore {
         self.enforce_hook_action(hook.pre_import(&ctx, specifier))
     }
 
-    /// Step a generator: resume from its saved state, run until Yield or
-    /// Return, then snapshot the state back. Returns the {value, done} object.
+    fn generator_result_object(
+        &mut self,
+        value: Value,
+        done: bool,
+    ) -> Result<Value, InterpreterError> {
+        let result_id = self.alloc_object_with_prototype(None)?;
+        self.set_object_property(result_id, "value".to_string(), value)?;
+        self.set_object_property(result_id, "done".to_string(), Value::Bool(done))?;
+        Ok(Value::Object(result_id))
+    }
+
+    fn prepare_generator_activation(
+        &mut self,
+        module: &Ir3Module,
+        setup: GeneratorCallSetup,
+    ) -> Result<GeneratorObject, InterpreterError> {
+        self.ensure_call_depth_available()?;
+
+        let mut scope_chain = ScopeChain {
+            frames: setup.captured_env,
+        };
+        let saved_scope_depth = scope_chain.depth();
+        scope_chain.push(self.config.max_scope_depth)?;
+
+        let max_registers = self.config.max_registers as usize;
+        let mut registers = vec![Value::Undefined; max_registers];
+        let mut register_labels = vec![crate::ifc_artifacts::Label::Public; max_registers];
+        for (index, (value, label)) in setup.arguments.into_iter().enumerate() {
+            if index >= max_registers {
+                break;
+            }
+            registers[index] = value;
+            register_labels[index] = label;
+        }
+
+        let caller_execution = self.take_module_execution();
+        let caller_bytes = Self::estimate_module_execution_bytes(&caller_execution);
+        let previous_suspended_bytes = self.temporarily_suspended_execution_bytes;
+        let previous_suspended_call_depth = self.temporarily_suspended_call_depth;
+        self.temporarily_suspended_execution_bytes =
+            previous_suspended_bytes.saturating_add(caller_bytes);
+        self.temporarily_suspended_call_depth =
+            previous_suspended_call_depth.saturating_add(caller_execution.call_stack.len());
+        let module_specifier = caller_execution.current_module_specifier.clone();
+        self.install_module_execution(ModuleExecutionSnapshot {
+            registers,
+            register_labels,
+            call_stack: vec![CallFrame {
+                return_ip: module.instructions.len(),
+                return_reg: None,
+                register_base: 0,
+                function_index: Some(setup.function_index),
+                this_value: setup.this_value,
+                this_label: setup.this_label,
+                new_target_value: Value::Undefined,
+                new_target_label: crate::ifc_artifacts::Label::Public,
+                super_value: setup.super_value,
+                super_label: setup.super_label,
+                construct_this: None,
+                saved_pending_exception: None,
+                saved_pending_return: None,
+                saved_suspended_abrupt_depth: 0,
+                saved_finally_mode_depth: 0,
+                saved_scope_depth,
+                saved_scope_chain: None,
+                async_function_id: None,
+            }],
+            ip: setup.function_entry as usize,
+            register_base: 0,
+            catch_frames: Vec::new(),
+            pending_exception: None,
+            pending_return: None,
+            suspended_abrupt_completions: Vec::new(),
+            finally_frames: Vec::new(),
+            pending_finally_entry: None,
+            copy_data_properties_states: Vec::new(),
+            scope_chain,
+            pending_captures: Vec::new(),
+            current_module_specifier: module_specifier,
+        });
+
+        // Historical core IR through 0.9 has no parameter/body boundary. Keep
+        // those explicitly supported artifacts readable by suspending at the
+        // function entry; they retain their historical first-next parameter
+        // timing. Newly lowered 0.10+ IR must reach the explicit marker.
+        let has_explicit_body_boundary = module.header.schema_version
+            >= crate::ir_contract::IrSchemaVersion {
+                major: 0,
+                minor: 10,
+                patch: 0,
+            };
+        let outcome = match self.sync_estimated_memory_bytes() {
+            Ok(_) if has_explicit_body_boundary => {
+                self.run_loop_with_mode(module, RunLoopMode::Generator)
+            }
+            Ok(_) => Ok(RunLoopExit::GeneratorBodyStart),
+            Err(error) => Err(error),
+        };
+        let activation = self.take_module_execution();
+        let escaped_exception = activation.pending_exception.clone();
+        self.temporarily_suspended_execution_bytes = previous_suspended_bytes;
+        self.temporarily_suspended_call_depth = previous_suspended_call_depth;
+        self.restore_module_execution(caller_execution);
+
+        match outcome {
+            Ok(RunLoopExit::GeneratorBodyStart) => Ok(GeneratorObject {
+                execution: Some(activation),
+                resume_dst: None,
+                phase: GeneratorPhase::SuspendedStart,
+            }),
+            Ok(RunLoopExit::GeneratorThrow {
+                exception,
+                description,
+            }) => {
+                self.pending_exception = Some(exception);
+                Err(InterpreterError::UncaughtException { value: description })
+            }
+            Err(error) => {
+                if matches!(error, InterpreterError::UncaughtException { .. })
+                    && let Some(exception) = escaped_exception
+                {
+                    self.pending_exception = Some(exception);
+                }
+                Err(error)
+            }
+            Ok(
+                RunLoopExit::GeneratorReturn(_)
+                | RunLoopExit::GeneratorYield { .. }
+                | RunLoopExit::Value(_),
+            ) => Err(InterpreterError::TypeError {
+                expected: "generator parameter prologue followed by generator_body_start"
+                    .to_string(),
+                got: "generator body executed before its suspension boundary".to_string(),
+            }),
+        }
+    }
+
+    fn publish_generator(
+        &mut self,
+        dst: u32,
+        generator: GeneratorObject,
+    ) -> Result<u32, InterpreterError> {
+        let generator_id =
+            u32::try_from(self.generators.len()).map_err(|_| InterpreterError::TypeError {
+                expected: "generator table capacity".into(),
+                got: format!("exceeded u32::MAX ({})", self.generators.len()),
+            })?;
+        self.generators.push(generator);
+        if let Err(error) = self.sync_estimated_memory_bytes() {
+            self.generators.pop();
+            self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
+            return Err(error);
+        }
+        if let Err(error) = self.write_reg(dst, Value::Generator(generator_id)) {
+            self.generators.pop();
+            self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
+            return Err(error);
+        }
+        Ok(generator_id)
+    }
+
+    /// Step a generator: install its isolated activation, run until Yield or
+    /// Return, then transfer the activation back. Returns `{ value, done }`.
     fn generator_next(
         &mut self,
         module: &Ir3Module,
         gen_id: u32,
-        _arg: Value,
+        argument: Value,
+        argument_label: crate::ifc_artifacts::Label,
     ) -> Result<Value, InterpreterError> {
-        let gobj = self.generators.get_mut(gen_id as usize).ok_or_else(|| {
-            InterpreterError::TypeError {
-                expected: "valid generator".into(),
-                got: format!("generator#{gen_id} not found"),
-            }
-        })?;
-
-        match gobj.phase {
-            GeneratorPhase::Completed => {
-                let result_id = self.alloc_object_with_prototype(None)?;
-                {
-                    self.set_object_property(result_id, "value".to_string(), Value::Undefined)?;
-                    self.set_object_property(result_id, "done".to_string(), Value::Bool(true))?;
+        let phase = {
+            let generator = self.generators.get(gen_id as usize).ok_or_else(|| {
+                InterpreterError::TypeError {
+                    expected: "valid generator".into(),
+                    got: format!("generator#{gen_id} not found"),
                 }
-                return Ok(Value::Object(result_id));
+            })?;
+            match generator.phase {
+                GeneratorPhase::Completed => {
+                    return self.generator_result_object(Value::Undefined, true);
+                }
+                GeneratorPhase::Executing => {
+                    return Err(InterpreterError::TypeError {
+                        expected: "suspended generator".into(),
+                        got: "generator already executing".into(),
+                    });
+                }
+                GeneratorPhase::SuspendedStart | GeneratorPhase::SuspendedYield => {}
             }
-            GeneratorPhase::Executing => {
-                return Err(InterpreterError::TypeError {
-                    expected: "suspended generator".into(),
-                    got: "generator already executing".into(),
-                });
-            }
-            GeneratorPhase::SuspendedStart | GeneratorPhase::SuspendedYield => {}
-        }
-
-        let caller_ip = self.ip;
-        let caller_register_base = self.register_base;
-        let caller_scope = self.snapshot_scope_chain()?;
-        let caller_scope_bytes = Self::estimate_scope_chain_bytes(&caller_scope);
-
-        let (is_start, func_idx, closure_idx) = {
-            let gobj = &mut self.generators[gen_id as usize];
-            let is_start = gobj.phase == GeneratorPhase::SuspendedStart;
-            let func_idx = gobj.function_index;
-            let closure_idx = gobj.closure_index;
-            gobj.phase = GeneratorPhase::Executing;
-            (is_start, func_idx, closure_idx)
+            generator.phase
         };
 
-        if is_start {
-            let start_result = (|| -> Result<(), InterpreterError> {
-                let func = module.function_table.get(func_idx as usize).ok_or(
-                    InterpreterError::FunctionNotFound {
-                        index: func_idx,
-                        table_size: module.function_table.len() as u32,
-                    },
-                )?;
+        // Resuming installs one suspended generator frame on top of the
+        // synchronously active caller chain. Apply the same fail-closed depth
+        // check used by ordinary calls before moving either execution context.
+        self.ensure_call_depth_available()?;
 
-                if let Some(cid) = closure_idx {
-                    let closure = self.closures.get(cid as usize).ok_or_else(|| {
-                        InterpreterError::TypeError {
-                            expected: "valid closure".into(),
-                            got: format!("closure#{cid} not found"),
-                        }
+        let (resume_dst, activation) = {
+            let generator = &mut self.generators[gen_id as usize];
+            let activation =
+                generator
+                    .execution
+                    .take()
+                    .ok_or_else(|| InterpreterError::TypeError {
+                        expected: "suspended generator activation".into(),
+                        got: "generator has no saved execution context".into(),
                     })?;
-                    self.scope_chain.frames = self.clone_scope_frames_with_temporary_budget(
-                        &closure.captured_env,
-                        caller_scope_bytes,
-                    )?;
-                }
-                self.scope_chain.push(self.config.max_scope_depth)?;
-                self.sync_estimated_memory_bytes()?;
+            let resume_dst = generator.resume_dst.take();
+            generator.phase = GeneratorPhase::Executing;
+            (resume_dst, activation)
+        };
 
-                self.register_base = self.registers.len();
-                let req_len = self.register_base + self.config.max_registers as usize;
-                self.clear_register_range(self.register_base, req_len);
+        let caller_execution = self.take_module_execution();
+        let caller_bytes = Self::estimate_module_execution_bytes(&caller_execution);
+        let previous_suspended_bytes = self.temporarily_suspended_execution_bytes;
+        let previous_suspended_call_depth = self.temporarily_suspended_call_depth;
+        self.temporarily_suspended_execution_bytes =
+            previous_suspended_bytes.saturating_add(caller_bytes);
+        self.temporarily_suspended_call_depth =
+            previous_suspended_call_depth.saturating_add(caller_execution.call_stack.len());
+        self.install_module_execution(activation);
 
-                self.ip = func.entry as usize;
-                Ok(())
-            })();
-
-            if let Err(err) = start_result {
-                self.ip = caller_ip;
-                self.register_base = caller_register_base;
-                self.scope_chain.frames = caller_scope;
-                let gobj = &mut self.generators[gen_id as usize];
-                gobj.phase = GeneratorPhase::SuspendedStart;
-                self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
-                return Err(err);
-            }
-        } else {
-            let (saved_ip, saved_regs, saved_labels, saved_base) = {
-                let gobj = &mut self.generators[gen_id as usize];
-                (
-                    gobj.saved_ip,
-                    std::mem::take(&mut gobj.saved_registers),
-                    std::mem::take(&mut gobj.saved_register_labels),
-                    gobj.saved_register_base,
-                )
-            };
-
-            self.ip = saved_ip;
-            self.register_base = saved_base;
-            self.restore_saved_register_range(saved_base, saved_regs, saved_labels);
+        if let Err(error) = self.sync_estimated_memory_bytes() {
+            let activation = self.take_module_execution();
+            self.temporarily_suspended_execution_bytes = previous_suspended_bytes;
+            self.temporarily_suspended_call_depth = previous_suspended_call_depth;
+            self.restore_module_execution(caller_execution);
+            let generator = &mut self.generators[gen_id as usize];
+            generator.execution = Some(activation);
+            generator.resume_dst = resume_dst;
+            generator.phase = phase;
+            return Err(error);
         }
 
-        let result = self.run_loop(module);
+        if phase == GeneratorPhase::SuspendedYield
+            && let Some(resume_dst) = resume_dst
+            && let Err(error) = self.write_reg_with_label(resume_dst, argument, argument_label)
+        {
+            let activation = self.take_module_execution();
+            self.temporarily_suspended_execution_bytes = previous_suspended_bytes;
+            self.temporarily_suspended_call_depth = previous_suspended_call_depth;
+            self.restore_module_execution(caller_execution);
+            let generator = &mut self.generators[gen_id as usize];
+            generator.execution = Some(activation);
+            generator.resume_dst = Some(resume_dst);
+            generator.phase = phase;
+            self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
+            return Err(error);
+        }
 
-        match &result {
-            Ok(yielded_val) => {
-                let max_regs = self.config.max_registers as usize;
-                let saved_regs: Vec<Value> =
-                    self.registers[self.register_base..self.register_base + max_regs].to_vec();
-                let saved_labels = self
-                    .register_labels_in_range(self.register_base, self.register_base + max_regs);
+        let outcome = self.run_loop_with_mode(module, RunLoopMode::Generator);
+        let activation = self.take_module_execution();
+        let escaped_exception = activation.pending_exception.clone();
+        self.temporarily_suspended_execution_bytes = previous_suspended_bytes;
+        self.temporarily_suspended_call_depth = previous_suspended_call_depth;
+        self.restore_module_execution(caller_execution);
 
-                let gobj = &mut self.generators[gen_id as usize];
-                gobj.saved_ip = self.ip;
-                gobj.saved_registers = saved_regs;
-                gobj.saved_register_labels = saved_labels;
-                gobj.saved_register_base = self.register_base;
-                gobj.phase = GeneratorPhase::SuspendedYield;
-
-                self.ip = caller_ip;
-                self.register_base = caller_register_base;
-                self.scope_chain.frames = caller_scope;
+        match outcome {
+            Ok(RunLoopExit::GeneratorYield { result, resume_dst }) => {
+                let generator = &mut self.generators[gen_id as usize];
+                generator.execution = Some(activation);
+                generator.resume_dst = Some(resume_dst);
+                generator.phase = GeneratorPhase::SuspendedYield;
+                if let Err(error) = self.sync_estimated_memory_bytes() {
+                    let generator = &mut self.generators[gen_id as usize];
+                    generator.execution = None;
+                    generator.resume_dst = None;
+                    generator.phase = GeneratorPhase::Completed;
+                    self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
+                    return Err(error);
+                }
+                Ok(result)
+            }
+            Ok(RunLoopExit::GeneratorReturn(value) | RunLoopExit::Value(value)) => {
+                let generator = &mut self.generators[gen_id as usize];
+                generator.execution = None;
+                generator.resume_dst = None;
+                generator.phase = GeneratorPhase::Completed;
                 self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
-
-                Ok(yielded_val.clone())
+                self.generator_result_object(value, true)
+            }
+            Ok(RunLoopExit::GeneratorThrow {
+                exception,
+                description,
+            }) => {
+                let generator = &mut self.generators[gen_id as usize];
+                generator.execution = None;
+                generator.resume_dst = None;
+                generator.phase = GeneratorPhase::Completed;
+                self.pending_exception = Some(exception);
+                self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
+                Err(InterpreterError::UncaughtException { value: description })
+            }
+            Ok(RunLoopExit::GeneratorBodyStart) => {
+                let generator = &mut self.generators[gen_id as usize];
+                generator.execution = None;
+                generator.resume_dst = None;
+                generator.phase = GeneratorPhase::Completed;
+                self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
+                Err(InterpreterError::TypeError {
+                    expected: "generator body without a second initialization boundary".into(),
+                    got: "generator_body_start reached while resuming generator".into(),
+                })
             }
             Err(InterpreterError::Halted) => {
-                let gobj = &mut self.generators[gen_id as usize];
-                gobj.phase = GeneratorPhase::Completed;
-
-                self.ip = caller_ip;
-                self.register_base = caller_register_base;
-                self.scope_chain.frames = caller_scope;
+                let generator = &mut self.generators[gen_id as usize];
+                generator.execution = None;
+                generator.resume_dst = None;
+                generator.phase = GeneratorPhase::Completed;
                 self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
-
-                let result_id = self.alloc_object_with_prototype(None)?;
-                {
-                    self.set_object_property(result_id, "value".to_string(), Value::Undefined)?;
-                    self.set_object_property(result_id, "done".to_string(), Value::Bool(true))?;
-                }
-                Ok(Value::Object(result_id))
+                self.generator_result_object(Value::Undefined, true)
             }
-            Err(_) => {
-                let gobj = &mut self.generators[gen_id as usize];
-                gobj.phase = GeneratorPhase::Completed;
-
-                self.ip = caller_ip;
-                self.register_base = caller_register_base;
-                self.scope_chain.frames = caller_scope;
+            Err(error) => {
+                let generator = &mut self.generators[gen_id as usize];
+                generator.execution = None;
+                generator.resume_dst = None;
+                generator.phase = GeneratorPhase::Completed;
+                if matches!(error, InterpreterError::UncaughtException { .. })
+                    && let Some(exception) = escaped_exception
+                {
+                    self.pending_exception = Some(exception);
+                }
                 self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
-
-                result
+                Err(error)
             }
         }
     }
@@ -5908,6 +6217,29 @@ impl InterpreterCore {
     }
 
     fn run_loop(&mut self, module: &Ir3Module) -> Result<Value, InterpreterError> {
+        match self.run_loop_with_mode(module, RunLoopMode::Normal)? {
+            RunLoopExit::Value(value)
+            | RunLoopExit::GeneratorReturn(value)
+            | RunLoopExit::GeneratorYield { result: value, .. } => Ok(value),
+            RunLoopExit::GeneratorBodyStart => Err(InterpreterError::TypeError {
+                expected: "generator activation".to_string(),
+                got: "generator body boundary outside generator invocation".to_string(),
+            }),
+            RunLoopExit::GeneratorThrow {
+                exception,
+                description,
+            } => {
+                self.pending_exception = Some(exception);
+                Err(InterpreterError::UncaughtException { value: description })
+            }
+        }
+    }
+
+    fn run_loop_with_mode(
+        &mut self,
+        module: &Ir3Module,
+        mode: RunLoopMode,
+    ) -> Result<RunLoopExit, InterpreterError> {
         // Initialize CheckpointGuard if cancellation token is provided
         let mut checkpoint_guard = if let Some(ref token) = self.config.cancellation_token {
             Some(CheckpointGuard::new(
@@ -5927,14 +6259,23 @@ impl InterpreterCore {
             if self.ip >= module.instructions.len() {
                 // Fell off the end of the instruction stream.
                 if !self.call_stack.is_empty() {
+                    let generator_root =
+                        mode == RunLoopMode::Generator && self.call_stack.len() == 1;
+                    if generator_root {
+                        let _ = self.complete_return(
+                            Value::Undefined,
+                            crate::ifc_artifacts::Label::Public,
+                        )?;
+                        return Ok(RunLoopExit::GeneratorReturn(Value::Undefined));
+                    }
                     if let Some(final_value) =
                         self.complete_return(Value::Undefined, crate::ifc_artifacts::Label::Public)?
                     {
-                        return Ok(final_value);
+                        return Ok(RunLoopExit::Value(final_value));
                     }
                     continue;
                 } else {
-                    return self.read_reg(0);
+                    return self.read_reg(0).map(RunLoopExit::Value);
                 }
             }
 
@@ -6073,10 +6414,12 @@ impl InterpreterCore {
                             self.write_reg(dst, iterator)?;
                             self.ip += 1;
                         }
-                        Err(error) => match self.route_javascript_error(module, error)? {
-                            None => continue,
-                            Some(error) => return Err(error),
-                        },
+                        Err(error) => {
+                            match self.route_run_loop_javascript_error(module, error, mode)? {
+                                None => continue,
+                                Some(error) => return Err(error),
+                            }
+                        }
                     }
                 }
                 Ir3Instruction::ForOfNext {
@@ -6093,20 +6436,24 @@ impl InterpreterCore {
                         Ok(None) => {
                             self.ip = done_target as usize;
                         }
-                        Err(error) => match self.route_javascript_error(module, error)? {
-                            None => continue,
-                            Some(error) => return Err(error),
-                        },
+                        Err(error) => {
+                            match self.route_run_loop_javascript_error(module, error, mode)? {
+                                None => continue,
+                                Some(error) => return Err(error),
+                            }
+                        }
                     }
                 }
                 Ir3Instruction::IteratorClose { iterator, reason } => {
                     let iterator = self.read_reg(iterator)?;
                     match self.close_iterator(module, iterator, reason) {
                         Ok(()) => self.ip += 1,
-                        Err(error) => match self.route_javascript_error(module, error)? {
-                            None => continue,
-                            Some(error) => return Err(error),
-                        },
+                        Err(error) => {
+                            match self.route_run_loop_javascript_error(module, error, mode)? {
+                                None => continue,
+                                Some(error) => return Err(error),
+                            }
+                        }
                     }
                 }
                 Ir3Instruction::Move { dst, src } => {
@@ -6138,24 +6485,19 @@ impl InterpreterCore {
                     let callee_val = self.read_reg(callee)?;
                     let callee_label = self.read_reg_label(callee)?;
 
-                    // Generator .next() call: step the generator.
-                    if let Value::Generator(gen_id) = &callee_val {
-                        let gen_id = *gen_id;
-                        let arg = if args.count > 0 {
-                            self.read_reg(args.start)?
-                        } else {
-                            Value::Undefined
-                        };
-                        let result = self.generator_next(module, gen_id, arg)?;
-                        self.write_reg(dst, result)?;
-                        self.ip += 1;
-                        continue;
-                    }
-
                     if let Value::BuiltinFunction(builtin) = &callee_val {
-                        let result = self.dispatch_builtin_function(module, builtin, None, args)?;
-                        self.write_reg(dst, result)?;
-                        self.ip += 1;
+                        match self.dispatch_builtin_function(module, builtin, None, args) {
+                            Ok(result) => {
+                                self.write_reg(dst, result)?;
+                                self.ip += 1;
+                            }
+                            Err(error) => {
+                                match self.route_run_loop_javascript_error(module, error, mode)? {
+                                    None => {}
+                                    Some(error) => return Err(error),
+                                }
+                            }
+                        }
                         continue;
                     }
 
@@ -6198,12 +6540,7 @@ impl InterpreterCore {
                         )?;
                         self.validate_function_rest_param(func)?;
 
-                        if self.call_stack.len() >= self.config.max_call_depth {
-                            return Err(InterpreterError::StackOverflow {
-                                depth: self.call_stack.len(),
-                                max: self.config.max_call_depth,
-                            });
-                        }
+                        self.ensure_call_depth_available()?;
 
                         let mut arg_vals = Vec::new();
                         let mut arg_labels = Vec::new();
@@ -6249,8 +6586,10 @@ impl InterpreterCore {
                         continue;
                     }
 
-                    // Generator function call: create a suspended GeneratorObject.
-                    if let Value::GeneratorFunction(cid) = &callee_val {
+                    // Generator invocation initializes parameters immediately,
+                    // then suspends the isolated activation at the explicit
+                    // body boundary without running a body statement.
+                    if let Value::GeneratorFunction(_) = &callee_val {
                         let func = module.function_table.get(func_idx as usize).ok_or(
                             InterpreterError::FunctionNotFound {
                                 index: func_idx,
@@ -6264,22 +6603,59 @@ impl InterpreterCore {
                                 got: "generator rest parameters are not implemented".to_string(),
                             });
                         }
-                        let gen_id = u32::try_from(self.generators.len()).map_err(|_| {
-                            InterpreterError::TypeError {
-                                expected: "generator table capacity".into(),
-                                got: format!("exceeded u32::MAX ({})", self.generators.len()),
+                        let function_entry = func.entry;
+                        let function_arity = func.arity;
+                        let mut arguments = Vec::new();
+                        for offset in 0..args.count.min(function_arity) {
+                            let reg = args.start.checked_add(offset).ok_or(
+                                InterpreterError::RegisterOutOfBounds {
+                                    register: args.start,
+                                    max: self.config.max_registers,
+                                },
+                            )?;
+                            arguments.push((self.read_reg(reg)?, self.read_reg_label(reg)?));
+                        }
+                        let argument_values = arguments
+                            .iter()
+                            .map(|(value, _)| value.clone())
+                            .collect::<Vec<_>>();
+                        if let Err(error) =
+                            self.run_pre_call_hook(module, &callee_val, func_idx, &argument_values)
+                        {
+                            match self.route_run_loop_javascript_error(module, error, mode)? {
+                                None => continue,
+                                Some(error) => return Err(error),
                             }
-                        })?;
-                        self.generators.push(GeneratorObject {
-                            function_index: func_idx,
-                            closure_index: Some(*cid),
-                            saved_ip: 0,
-                            saved_registers: Vec::new(),
-                            saved_register_labels: Vec::new(),
-                            saved_register_base: 0,
-                            phase: GeneratorPhase::SuspendedStart,
-                        });
-                        self.write_reg(dst, Value::Generator(gen_id))?;
+                        }
+                        let super_value =
+                            self.function_super_value(&callee_val, IR_SUPER_PROTOTYPE_PROPERTY)?;
+                        let generator = match self.prepare_generator_activation(
+                            module,
+                            GeneratorCallSetup {
+                                function_index: func_idx,
+                                function_entry,
+                                captured_env: captured_env.unwrap_or_default(),
+                                arguments,
+                                this_value: Value::Undefined,
+                                this_label: crate::ifc_artifacts::Label::Public,
+                                super_value,
+                                super_label: callee_label.clone(),
+                            },
+                        ) {
+                            Ok(generator) => generator,
+                            Err(error) => {
+                                match self.route_run_loop_javascript_error(module, error, mode)? {
+                                    None => continue,
+                                    Some(error) => return Err(error),
+                                }
+                            }
+                        };
+                        if let Err(error) = self.publish_generator(dst, generator) {
+                            match self.route_run_loop_javascript_error(module, error, mode)? {
+                                None => continue,
+                                Some(error) => return Err(error),
+                            }
+                        }
                         self.ip += 1;
                         continue;
                     }
@@ -6361,12 +6737,7 @@ impl InterpreterCore {
                             };
                             self.validate_function_rest_param(func)?;
 
-                            if self.call_stack.len() >= self.config.max_call_depth {
-                                return Err(InterpreterError::StackOverflow {
-                                    depth: self.call_stack.len(),
-                                    max: self.config.max_call_depth,
-                                });
-                            }
+                            self.ensure_call_depth_available()?;
 
                             let mut arg_vals = Vec::new();
                             let mut arg_labels = Vec::new();
@@ -6504,14 +6875,23 @@ impl InterpreterCore {
                     let callee_label = self.read_reg_label(callee)?;
 
                     if let Value::BuiltinFunction(builtin) = &callee_val {
-                        let result = self.dispatch_builtin_function(
+                        match self.dispatch_builtin_function(
                             module,
                             builtin,
                             Some(&receiver_val),
                             args,
-                        )?;
-                        self.write_reg(dst, result)?;
-                        self.ip += 1;
+                        ) {
+                            Ok(result) => {
+                                self.write_reg(dst, result)?;
+                                self.ip += 1;
+                            }
+                            Err(error) => {
+                                match self.route_run_loop_javascript_error(module, error, mode)? {
+                                    None => {}
+                                    Some(error) => return Err(error),
+                                }
+                            }
+                        }
                         continue;
                     }
 
@@ -6549,11 +6929,9 @@ impl InterpreterCore {
                         },
                     )?;
 
-                    // Method calls are still ordinary calls for generator
-                    // functions: invoking one creates the suspended generator
-                    // object without executing its body. IteratorClose relies
-                    // on that object result being accepted as a valid return.
-                    if let Value::GeneratorFunction(closure_id) = &callee_val {
+                    // Method invocation preserves its receiver in the isolated
+                    // generator activation while defaults run synchronously.
+                    if let Value::GeneratorFunction(_) = &callee_val {
                         if func.rest_param_index.is_some() {
                             return Err(InterpreterError::TypeError {
                                 expected: "generator call without unsupported rest metadata"
@@ -6561,22 +6939,58 @@ impl InterpreterCore {
                                 got: "generator rest parameters are not implemented".to_string(),
                             });
                         }
-                        let generator_id = u32::try_from(self.generators.len()).map_err(|_| {
-                            InterpreterError::TypeError {
-                                expected: "generator table capacity".into(),
-                                got: format!("exceeded u32::MAX ({})", self.generators.len()),
+                        let function_entry = func.entry;
+                        let function_arity = func.arity;
+                        let mut arguments = Vec::new();
+                        for offset in 0..args.count.min(function_arity) {
+                            let reg = args.start.checked_add(offset).ok_or(
+                                InterpreterError::RegisterOutOfBounds {
+                                    register: args.start,
+                                    max: self.config.max_registers,
+                                },
+                            )?;
+                            arguments.push((self.read_reg(reg)?, self.read_reg_label(reg)?));
+                        }
+                        let argument_values = arguments
+                            .iter()
+                            .map(|(value, _)| value.clone())
+                            .collect::<Vec<_>>();
+                        if let Err(error) =
+                            self.run_pre_call_hook(module, &callee_val, func_idx, &argument_values)
+                        {
+                            match self.route_run_loop_javascript_error(module, error, mode)? {
+                                None => continue,
+                                Some(error) => return Err(error),
                             }
-                        })?;
-                        self.generators.push(GeneratorObject {
-                            function_index: func_idx,
-                            closure_index: Some(*closure_id),
-                            saved_ip: 0,
-                            saved_registers: Vec::new(),
-                            saved_register_labels: Vec::new(),
-                            saved_register_base: 0,
-                            phase: GeneratorPhase::SuspendedStart,
-                        });
-                        self.write_reg(dst, Value::Generator(generator_id))?;
+                        }
+                        let super_value = self.method_super_value(&callee_val, &receiver_val)?;
+                        let generator = match self.prepare_generator_activation(
+                            module,
+                            GeneratorCallSetup {
+                                function_index: func_idx,
+                                function_entry,
+                                captured_env: captured_env.unwrap_or_default(),
+                                arguments,
+                                this_value: receiver_val.clone(),
+                                this_label: receiver_label.clone(),
+                                super_value,
+                                super_label: callee_label.clone(),
+                            },
+                        ) {
+                            Ok(generator) => generator,
+                            Err(error) => {
+                                match self.route_run_loop_javascript_error(module, error, mode)? {
+                                    None => continue,
+                                    Some(error) => return Err(error),
+                                }
+                            }
+                        };
+                        if let Err(error) = self.publish_generator(dst, generator) {
+                            match self.route_run_loop_javascript_error(module, error, mode)? {
+                                None => continue,
+                                Some(error) => return Err(error),
+                            }
+                        }
                         self.ip += 1;
                         continue;
                     }
@@ -6616,12 +7030,7 @@ impl InterpreterCore {
 
                     self.validate_function_rest_param(func)?;
 
-                    if self.call_stack.len() >= self.config.max_call_depth {
-                        return Err(InterpreterError::StackOverflow {
-                            depth: self.call_stack.len(),
-                            max: self.config.max_call_depth,
-                        });
-                    }
+                    self.ensure_call_depth_available()?;
 
                     let mut arg_vals = Vec::new();
                     let mut arg_labels = Vec::new();
@@ -6746,8 +7155,15 @@ impl InterpreterCore {
                         self.ip = finally_target;
                     } else {
                         self.pending_return = None;
+                        let generator_root =
+                            mode == RunLoopMode::Generator && self.call_stack.len() == 1;
+                        if generator_root {
+                            let completed_value = return_val.clone();
+                            let _ = self.complete_return(return_val, return_label)?;
+                            return Ok(RunLoopExit::GeneratorReturn(completed_value));
+                        }
                         if let Some(final_value) = self.complete_return(return_val, return_label)? {
-                            return Ok(final_value);
+                            return Ok(RunLoopExit::Value(final_value));
                         }
                     }
                 }
@@ -6938,6 +7354,19 @@ impl InterpreterCore {
                                     false
                                 }
                             }
+                        }
+                        Value::Generator(_) => {
+                            self.preflight_runtime_property_key_for_hook(&property_key)?;
+                            let value = match &property_key {
+                                RuntimePropertyKey::String(key) if key.as_str() == Some("next") => {
+                                    Value::BuiltinFunction(BuiltinFunction::generator_next())
+                                }
+                                RuntimePropertyKey::String(_) | RuntimePropertyKey::Symbol(_) => {
+                                    Value::Undefined
+                                }
+                            };
+                            self.write_reg(dst, value)?;
+                            false
                         }
                         _ if Self::function_object_key(&obj_val).is_some() => self
                             .load_function_like_property_or_call_accessor(
@@ -7431,12 +7860,7 @@ impl InterpreterCore {
                             )?;
                             self.validate_function_rest_param(func)?;
 
-                            if self.call_stack.len() >= self.config.max_call_depth {
-                                return Err(InterpreterError::StackOverflow {
-                                    depth: self.call_stack.len(),
-                                    max: self.config.max_call_depth,
-                                });
-                            }
+                            self.ensure_call_depth_available()?;
 
                             let mut arg_vals = Vec::new();
                             let mut arg_labels = Vec::new();
@@ -7662,12 +8086,13 @@ impl InterpreterCore {
                 Ir3Instruction::Throw { value } => {
                     let thrown = self.read_reg(value)?;
                     let thrown_label = self.read_reg_label(value)?;
-                    self.suspend_current_abrupt_completion();
-                    self.pending_return = None;
-                    self.pending_exception = Some(LabeledException {
+                    let exception = LabeledException {
                         value: thrown.clone(),
                         label: thrown_label,
-                    });
+                    };
+                    self.suspend_current_abrupt_completion();
+                    self.pending_return = None;
+                    self.pending_exception = Some(exception.clone());
                     // Walk the catch frame stack to find the nearest valid handler.
                     // Use rposition to find the topmost matching frame by index,
                     // then truncate to remove it and any frames above it — but
@@ -7699,6 +8124,12 @@ impl InterpreterCore {
                         self.pending_finally_entry = None;
                         self.finally_frames.clear();
                         self.discard_all_copy_data_properties_states();
+                        if mode == RunLoopMode::Generator {
+                            return Ok(RunLoopExit::GeneratorThrow {
+                                exception,
+                                description: desc,
+                            });
+                        }
                         return Err(InterpreterError::UncaughtException { value: desc });
                     }
                 }
@@ -7772,6 +8203,12 @@ impl InterpreterCore {
                                 self.pending_finally_entry = None;
                                 self.finally_frames.clear();
                                 self.discard_all_copy_data_properties_states();
+                                if mode == RunLoopMode::Generator {
+                                    return Ok(RunLoopExit::GeneratorThrow {
+                                        exception: thrown,
+                                        description: desc,
+                                    });
+                                }
                                 return Err(InterpreterError::UncaughtException { value: desc });
                             }
                         }
@@ -7784,10 +8221,22 @@ impl InterpreterCore {
                                     mode: FinallyMode::Return,
                                 });
                                 self.ip = finally_target;
-                            } else if let Some(final_value) =
-                                self.complete_return(pending_return.value, pending_return.label)?
-                            {
-                                return Ok(final_value);
+                            } else {
+                                let generator_root =
+                                    mode == RunLoopMode::Generator && self.call_stack.len() == 1;
+                                if generator_root {
+                                    let completed_value = pending_return.value.clone();
+                                    let _ = self.complete_return(
+                                        pending_return.value,
+                                        pending_return.label,
+                                    )?;
+                                    return Ok(RunLoopExit::GeneratorReturn(completed_value));
+                                }
+                                if let Some(final_value) = self
+                                    .complete_return(pending_return.value, pending_return.label)?
+                                {
+                                    return Ok(RunLoopExit::Value(final_value));
+                                }
                             }
                         }
                         None => {
@@ -7989,6 +8438,12 @@ impl InterpreterCore {
                     self.write_reg(dst, Value::AsyncGeneratorFunction(closure_id))?;
                     self.ip += 1;
                 }
+                Ir3Instruction::GeneratorBodyStart => {
+                    self.ip += 1;
+                    if mode == RunLoopMode::Generator {
+                        return Ok(RunLoopExit::GeneratorBodyStart);
+                    }
+                }
                 Ir3Instruction::Yield {
                     value,
                     delegate: _,
@@ -8005,8 +8460,12 @@ impl InterpreterCore {
                         )?;
                     }
                     self.ip += 1;
+                    let result = Value::Object(result_id);
+                    if mode == RunLoopMode::Generator {
+                        return Ok(RunLoopExit::GeneratorYield { result, resume_dst });
+                    }
                     self.write_reg(resume_dst, Value::Undefined)?;
-                    return Ok(Value::Object(result_id));
+                    return Ok(RunLoopExit::Value(result));
                 }
                 Ir3Instruction::AwaitValue { promise_reg } => {
                     let awaited_value = self.read_reg(promise_reg)?;
@@ -8082,7 +8541,7 @@ impl InterpreterCore {
                                         Value::Undefined,
                                         crate::ifc_artifacts::Label::Public,
                                     )? {
-                                        return Ok(final_value);
+                                        return Ok(RunLoopExit::Value(final_value));
                                     }
                                     continue;
                                 }
@@ -8190,7 +8649,7 @@ impl InterpreterCore {
                     if let Some(final_value) =
                         self.complete_return(Value::Undefined, crate::ifc_artifacts::Label::Public)?
                     {
-                        return Ok(final_value);
+                        return Ok(RunLoopExit::Value(final_value));
                     }
                     continue;
                 }
@@ -8240,7 +8699,7 @@ impl InterpreterCore {
                     if let Some(final_value) =
                         self.complete_return(Value::Undefined, crate::ifc_artifacts::Label::Public)?
                     {
-                        return Ok(final_value);
+                        return Ok(RunLoopExit::Value(final_value));
                     }
                     continue;
                 }
@@ -8311,7 +8770,7 @@ impl InterpreterCore {
                         if matches!(&error, InterpreterError::UninitializedBinding { .. })
                             && self.has_exception_target_frame() =>
                     {
-                        match self.route_javascript_error(module, error)? {
+                        match self.route_run_loop_javascript_error(module, error, mode)? {
                             None => continue,
                             Some(error) => return Err(error),
                         }
@@ -8330,7 +8789,7 @@ impl InterpreterCore {
                                 | InterpreterError::ConstAssignment { .. }
                         ) && self.has_exception_target_frame() =>
                     {
-                        match self.route_javascript_error(module, error)? {
+                        match self.route_run_loop_javascript_error(module, error, mode)? {
                             None => continue,
                             Some(error) => return Err(error),
                         }
@@ -11056,12 +11515,7 @@ impl InterpreterCore {
         self.validate_function_rest_param(func)?;
         let captured_env = self.clone_scope_frames_with_budget(&closure.captured_env)?;
 
-        if self.call_stack.len() >= self.config.max_call_depth {
-            return Err(InterpreterError::StackOverflow {
-                depth: self.call_stack.len(),
-                max: self.config.max_call_depth,
-            });
-        }
+        self.ensure_call_depth_available()?;
 
         let callee = Value::Closure(closure_id);
         let mut arg_vals = Vec::new();
@@ -13452,13 +13906,107 @@ impl InterpreterCore {
             .saturating_add(write_mode)
     }
 
-    fn estimate_generator_bytes(generator: &GeneratorObject) -> u64 {
-        let registers = generator
-            .saved_registers
+    fn estimate_labeled_exception_bytes(exception: &LabeledException) -> u64 {
+        Self::estimate_value_bytes(&exception.value)
+            .saturating_add(Self::estimate_label_bytes(&exception.label))
+    }
+
+    fn estimate_labeled_return_bytes(return_value: &LabeledReturn) -> u64 {
+        Self::estimate_value_bytes(&return_value.value)
+            .saturating_add(Self::estimate_label_bytes(&return_value.label))
+    }
+
+    fn estimate_abrupt_completion_bytes(completion: &AbruptCompletion) -> u64 {
+        match completion {
+            AbruptCompletion::Exception(exception) => {
+                Self::estimate_labeled_exception_bytes(exception)
+            }
+            AbruptCompletion::Return(return_value) => {
+                Self::estimate_labeled_return_bytes(return_value)
+            }
+        }
+    }
+
+    fn estimate_module_execution_bytes(execution: &ModuleExecutionSnapshot) -> u64 {
+        execution
+            .registers
             .iter()
             .map(Self::estimate_value_bytes)
-            .sum::<u64>();
-        MEMORY_ESTIMATE_GENERATOR_BASE_BYTES.saturating_add(registers)
+            .sum::<u64>()
+            .saturating_add(
+                execution
+                    .register_labels
+                    .iter()
+                    .map(Self::estimate_label_bytes)
+                    .sum::<u64>(),
+            )
+            .saturating_add(
+                execution
+                    .call_stack
+                    .iter()
+                    .map(Self::estimate_call_frame_bytes)
+                    .sum::<u64>(),
+            )
+            .saturating_add(Self::estimate_scope_chain_bytes(
+                &execution.scope_chain.frames,
+            ))
+            .saturating_add(
+                execution
+                    .copy_data_properties_states
+                    .iter()
+                    .map(Self::estimate_copy_data_properties_state_bytes)
+                    .sum::<u64>(),
+            )
+            .saturating_add(
+                execution
+                    .pending_exception
+                    .as_ref()
+                    .map(Self::estimate_labeled_exception_bytes)
+                    .unwrap_or(0),
+            )
+            .saturating_add(
+                execution
+                    .pending_return
+                    .as_ref()
+                    .map(Self::estimate_labeled_return_bytes)
+                    .unwrap_or(0),
+            )
+            .saturating_add(
+                execution
+                    .suspended_abrupt_completions
+                    .iter()
+                    .map(Self::estimate_abrupt_completion_bytes)
+                    .sum::<u64>(),
+            )
+            .saturating_add(
+                execution
+                    .finally_frames
+                    .iter()
+                    .filter_map(|frame| frame.completion.as_ref())
+                    .map(Self::estimate_abrupt_completion_bytes)
+                    .sum::<u64>(),
+            )
+            .saturating_add(
+                (execution.pending_captures.len() as u64)
+                    .saturating_mul(std::mem::size_of::<u32>() as u64),
+            )
+            .saturating_add(
+                execution
+                    .current_module_specifier
+                    .as_ref()
+                    .map(|specifier| Self::estimate_string_bytes(specifier))
+                    .unwrap_or(0),
+            )
+    }
+
+    fn estimate_generator_bytes(generator: &GeneratorObject) -> u64 {
+        MEMORY_ESTIMATE_GENERATOR_BASE_BYTES.saturating_add(
+            generator
+                .execution
+                .as_ref()
+                .map(Self::estimate_module_execution_bytes)
+                .unwrap_or(0),
+        )
     }
 
     fn heap_object_count_u32(&self) -> u32 {
@@ -13492,6 +14040,16 @@ impl InterpreterCore {
                     .map(Self::estimate_value_bytes)
                     .sum::<u64>(),
             )
+            // Keep the installed execution-context estimate symmetric with
+            // estimate_module_execution_bytes. Generator activation swaps can
+            // then move a context between active and suspended storage without
+            // creating an unaccounted transient.
+            .saturating_add(
+                self.register_labels
+                    .iter()
+                    .map(Self::estimate_label_bytes)
+                    .sum::<u64>(),
+            )
             .saturating_add(Self::estimate_scope_chain_bytes(&self.scope_chain.frames))
             .saturating_add(
                 self.closures
@@ -13521,11 +14079,47 @@ impl InterpreterCore {
                     .sum::<u64>(),
             )
             .saturating_add(
+                self.pending_exception
+                    .as_ref()
+                    .map(Self::estimate_labeled_exception_bytes)
+                    .unwrap_or(0),
+            )
+            .saturating_add(
+                self.pending_return
+                    .as_ref()
+                    .map(Self::estimate_labeled_return_bytes)
+                    .unwrap_or(0),
+            )
+            .saturating_add(
+                self.suspended_abrupt_completions
+                    .iter()
+                    .map(Self::estimate_abrupt_completion_bytes)
+                    .sum::<u64>(),
+            )
+            .saturating_add(
+                self.finally_frames
+                    .iter()
+                    .filter_map(|frame| frame.completion.as_ref())
+                    .map(Self::estimate_abrupt_completion_bytes)
+                    .sum::<u64>(),
+            )
+            .saturating_add(
+                (self.pending_captures.len() as u64)
+                    .saturating_mul(std::mem::size_of::<u32>() as u64),
+            )
+            .saturating_add(
+                self.current_module_specifier
+                    .as_ref()
+                    .map(|specifier| Self::estimate_string_bytes(specifier))
+                    .unwrap_or(0),
+            )
+            .saturating_add(
                 self.generators
                     .iter()
                     .map(Self::estimate_generator_bytes)
                     .sum::<u64>(),
             )
+            .saturating_add(self.temporarily_suspended_execution_bytes)
     }
 
     fn sync_estimated_memory_bytes(&mut self) -> Result<u64, InterpreterError> {
@@ -23654,93 +24248,283 @@ mod tests {
     }
 
     #[test]
-    fn generator_start_budget_failure_preserves_suspended_start_phase() {
-        let payload = "x".repeat(128);
-        let mut module = test_module_with_pool(
-            vec![
-                Ir3Instruction::LoadStr {
-                    dst: 0,
-                    pool_index: 1,
-                },
-                Ir3Instruction::DeclareBinding {
-                    name_pool_index: 0,
-                    kind: 0,
-                },
-                Ir3Instruction::StoreScoped {
-                    src: 0,
-                    name_pool_index: 0,
-                },
-                Ir3Instruction::CreateGenerator {
-                    dst: 1,
-                    function_index: 0,
-                    capture_count: 0,
-                },
-                Ir3Instruction::Call {
-                    dst: 0,
-                    callee: 1,
-                    args: RegRange {
-                        start: 10,
-                        count: 0,
-                    },
-                },
-                Ir3Instruction::Halt,
-                Ir3Instruction::LoadScoped {
-                    dst: 0,
-                    name_pool_index: 0,
-                },
-                Ir3Instruction::Yield {
-                    value: 0,
-                    delegate: false,
-                    resume_dst: 1,
-                },
-                Ir3Instruction::Return { value: 0 },
-            ],
-            vec!["payload".to_string(), payload.clone()],
+    fn generator_invocation_budget_failure_restores_caller_and_publishes_no_ghost_bd_093id() {
+        let module = test_module(vec![
+            Ir3Instruction::GeneratorBodyStart,
+            Ir3Instruction::LoadInt { dst: 0, value: 7 },
+            Ir3Instruction::Yield {
+                value: 0,
+                delegate: false,
+                resume_dst: 1,
+            },
+            Ir3Instruction::Return { value: 0 },
+        ]);
+        let mut core = InterpreterCore::new(test_quickjs_config(), "generator-invocation-budget");
+        core.scope_chain.current_mut().bindings.insert(
+            "payload".to_string(),
+            ScopeBinding::with_state(
+                BindingKind::Var,
+                Value::str("x".repeat(128)),
+                crate::ifc_artifacts::Label::Public,
+                true,
+            ),
         );
+        let captured_env = core.scope_chain.snapshot();
+        core.closures.push(ClosureValue {
+            function_index: 0,
+            captured_env: captured_env.clone(),
+        });
+        core.ip = 3;
+        core.write_reg(0, Value::Int(41)).unwrap();
+        core.sync_estimated_memory_bytes().unwrap();
+        let baseline_memory = core.estimated_memory_bytes();
+        core.config.max_total_memory_bytes = baseline_memory;
+
+        let error = core
+            .prepare_generator_activation(
+                &module,
+                GeneratorCallSetup {
+                    function_index: 0,
+                    function_entry: 0,
+                    captured_env,
+                    arguments: Vec::new(),
+                    this_value: Value::Undefined,
+                    this_label: crate::ifc_artifacts::Label::Public,
+                    super_value: Value::Undefined,
+                    super_label: crate::ifc_artifacts::Label::Public,
+                },
+            )
+            .expect_err("zero headroom must reject the isolated generator activation");
+
+        assert!(matches!(
+            error,
+            InterpreterError::MemoryBudgetExceeded { .. }
+        ));
+        assert!(core.generators.is_empty());
+        assert_eq!(core.ip, 3);
+        assert_eq!(core.read_reg(0).unwrap(), Value::Int(41));
+        assert!(core.scope_chain.resolve("payload").is_some());
+        assert_eq!(core.temporarily_suspended_execution_bytes, 0);
+        assert_eq!(core.temporarily_suspended_call_depth, 0);
+        assert_eq!(core.estimated_memory_bytes(), baseline_memory);
+    }
+
+    #[test]
+    fn generator_resume_rejects_at_active_call_depth_limit_bd_093id() {
+        let module = test_module(vec![
+            Ir3Instruction::GeneratorBodyStart,
+            Ir3Instruction::LoadInt { dst: 0, value: 7 },
+            Ir3Instruction::Yield {
+                value: 0,
+                delegate: false,
+                resume_dst: 1,
+            },
+            Ir3Instruction::Return { value: 0 },
+        ]);
+        let mut config = test_quickjs_config();
+        config.max_call_depth = 2;
+        let mut core = InterpreterCore::new(config, "generator-resume-depth");
+        let captured_env = core.scope_chain.snapshot();
+        let generator = core
+            .prepare_generator_activation(
+                &module,
+                GeneratorCallSetup {
+                    function_index: 0,
+                    function_entry: 0,
+                    captured_env,
+                    arguments: Vec::new(),
+                    this_value: Value::Undefined,
+                    this_label: crate::ifc_artifacts::Label::Public,
+                    super_value: Value::Undefined,
+                    super_label: crate::ifc_artifacts::Label::Public,
+                },
+            )
+            .expect("generator activation should suspend at its body boundary");
+        let generator_frame = generator
+            .execution
+            .as_ref()
+            .expect("suspended generator should own its activation")
+            .call_stack[0]
+            .clone();
+        core.generators.push(generator);
+        core.call_stack = vec![generator_frame; core.config.max_call_depth];
+
+        let error = core
+            .generator_next(
+                &module,
+                0,
+                Value::Undefined,
+                crate::ifc_artifacts::Label::Public,
+            )
+            .expect_err("resume at the active depth limit must fail closed");
+        assert_eq!(error, InterpreterError::StackOverflow { depth: 2, max: 2 });
+        assert_eq!(core.generators[0].phase, GeneratorPhase::SuspendedStart);
+        assert!(core.generators[0].execution.is_some());
+    }
+
+    #[test]
+    fn generator_resume_context_swap_preserves_memory_accounting_bd_093id() {
+        let module = test_module(vec![
+            Ir3Instruction::GeneratorBodyStart,
+            Ir3Instruction::LoadInt { dst: 0, value: 7 },
+            Ir3Instruction::Yield {
+                value: 0,
+                delegate: false,
+                resume_dst: 1,
+            },
+            Ir3Instruction::Return { value: 0 },
+        ]);
+        let mut core = InterpreterCore::new(test_quickjs_config(), "generator-resume-memory");
+        let captured_env = core.scope_chain.snapshot();
+        let generator = core
+            .prepare_generator_activation(
+                &module,
+                GeneratorCallSetup {
+                    function_index: 0,
+                    function_entry: 0,
+                    captured_env,
+                    arguments: Vec::new(),
+                    this_value: Value::Undefined,
+                    this_label: crate::ifc_artifacts::Label::Public,
+                    super_value: Value::Undefined,
+                    super_label: crate::ifc_artifacts::Label::Public,
+                },
+            )
+            .expect("generator activation should suspend at its body boundary");
+        core.generators.push(generator);
+        core.current_module_specifier = Some("m".repeat(64 * 1024));
+        let baseline = core
+            .sync_estimated_memory_bytes()
+            .expect("caller and generator activation should fit initially");
+        core.config.max_total_memory_bytes = baseline.saturating_add(16 * 1024);
+
+        let yielded = core
+            .generator_next(
+                &module,
+                0,
+                Value::Undefined,
+                crate::ifc_artifacts::Label::Public,
+            )
+            .expect("moving a fully accounted caller must not create a phantom overage");
+        let Value::Object(result_id) = yielded else {
+            panic!("expected generator result object");
+        };
+        assert_eq!(
+            core.heap[result_id.0 as usize].properties.get("value"),
+            Some(&Value::Int(7))
+        );
+        assert_eq!(
+            core.current_module_specifier.as_ref().map(String::len),
+            Some(64 * 1024)
+        );
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+    }
+
+    fn markerless_generator_module_bd_093id() -> Ir3Module {
+        let mut module = test_module(vec![
+            Ir3Instruction::LoadInt { dst: 2, value: 7 },
+            Ir3Instruction::CreateGenerator {
+                dst: 0,
+                function_index: 0,
+                capture_count: 0,
+            },
+            Ir3Instruction::Call {
+                callee: 0,
+                args: RegRange { start: 2, count: 1 },
+                dst: 1,
+            },
+            Ir3Instruction::Move { dst: 0, src: 1 },
+            Ir3Instruction::Halt,
+            Ir3Instruction::Yield {
+                value: 0,
+                delegate: false,
+                resume_dst: 1,
+            },
+            Ir3Instruction::Return { value: 0 },
+        ]);
         module.function_table.push(Ir3FunctionDesc {
-            entry: 6,
-            arity: 0,
-            frame_size: 4,
-            name: Some("capturing_generator".to_string()),
+            entry: 5,
+            arity: 1,
+            frame_size: 2,
+            name: Some("legacy_generator".to_string()),
             is_generator: true,
             rest_param_index: None,
         });
+        module
+    }
 
-        let mut core = InterpreterCore::new(test_quickjs_config(), "generator");
-        let result = core.execute(&module).unwrap();
-        assert_eq!(result.value, Value::Generator(0));
+    #[test]
+    fn current_generator_ir_without_body_boundary_rejects_before_execution_bd_093id() {
+        let module = markerless_generator_module_bd_093id();
+        let mut core = InterpreterCore::new(test_quickjs_config(), "current-generator-wire");
+        let error = core
+            .execute(&module)
+            .expect_err("current markerless generator IR must fail structurally");
+        assert!(matches!(
+            error,
+            InterpreterError::TypeError { expected, got }
+                if expected.contains("structurally valid core IR3")
+                    && got.contains("IR_INVALID_GENERATOR_BOUNDARY")
+        ));
+        assert!(core.generators.is_empty());
+    }
 
-        let clone_bytes =
-            InterpreterCore::estimate_scope_chain_bytes(&core.closures[0].captured_env);
-        core.scope_chain.frames = vec![ScopeFrame::new()];
-        core.sync_estimated_memory_bytes().unwrap();
-        let baseline_memory = core.estimated_memory_bytes();
-        core.config.max_total_memory_bytes = baseline_memory
-            .saturating_add(clone_bytes)
-            .saturating_sub(1);
-
-        let err = core
-            .generator_next(&module, 0, Value::Undefined)
-            .unwrap_err();
-        assert!(matches!(err, InterpreterError::MemoryBudgetExceeded { .. }));
-        assert_eq!(core.generators[0].phase, GeneratorPhase::SuspendedStart);
-        assert_eq!(core.estimated_memory_bytes(), baseline_memory);
-
-        core.config.max_total_memory_bytes = u64::MAX;
-        let yielded = core.generator_next(&module, 0, Value::Undefined).unwrap();
-        assert_eq!(core.generators[0].phase, GeneratorPhase::SuspendedYield);
-
-        let Value::Object(result_id) = yielded else {
-            panic!("expected generator.next() to return a result object");
+    #[test]
+    fn execution_rejects_unsupported_ir_schema_before_dispatch_bd_093id() {
+        let mut module = test_module(vec![Ir3Instruction::Halt]);
+        module.header.schema_version = crate::ir_contract::IrSchemaVersion {
+            major: 0,
+            minor: crate::ir_contract::IrSchemaVersion::CURRENT.minor + 1,
+            patch: 0,
         };
-        let result_object = &core.heap[result_id.0 as usize];
+        let mut core = InterpreterCore::new(test_quickjs_config(), "future-core-ir");
+        let error = core
+            .execute(&module)
+            .expect_err("future IR must reject before interpreter dispatch");
+        assert!(matches!(
+            error,
+            InterpreterError::TypeError { expected, got }
+                if expected.contains("supported")
+                    && got.contains("IR_SCHEMA_VERSION_MISMATCH")
+        ));
+        assert_eq!(core.instructions_executed, 0);
+    }
+
+    #[test]
+    fn legacy_generator_ir_without_body_boundary_retains_first_next_start_bd_093id() {
+        let mut module = markerless_generator_module_bd_093id();
+        module.header.schema_version = crate::ir_contract::IrSchemaVersion {
+            major: 0,
+            minor: 9,
+            patch: 0,
+        };
+
+        let mut core = InterpreterCore::new(test_quickjs_config(), "legacy-generator-wire");
+        let invocation = core.execute(&module).expect("legacy generator invocation");
+        assert_eq!(invocation.value, Value::Generator(0));
+        assert_eq!(core.generators[0].phase, GeneratorPhase::SuspendedStart);
+
+        let yielded = core
+            .generator_next(
+                &module,
+                0,
+                Value::Undefined,
+                crate::ifc_artifacts::Label::Public,
+            )
+            .expect("legacy generator should start at its first next call");
+        let Value::Object(result_id) = yielded else {
+            panic!("expected legacy generator result object");
+        };
         assert_eq!(
-            result_object.properties.get("done"),
-            Some(&Value::Bool(false))
+            core.heap[result_id.0 as usize].properties.get("value"),
+            Some(&Value::Int(7))
         );
         assert_eq!(
-            result_object.properties.get("value"),
-            Some(&Value::str(payload))
+            core.heap[result_id.0 as usize].properties.get("done"),
+            Some(&Value::Bool(false))
         );
     }
 

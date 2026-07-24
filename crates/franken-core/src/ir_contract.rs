@@ -37,9 +37,12 @@ pub struct IrSchemaVersion {
 }
 
 impl IrSchemaVersion {
-    /// `0.9.0` adds optional exact body-local lexical metadata to serialized
-    /// IR1 function operations so deferred lowering preserves captured
-    /// `let`/`const` semantics. `0.8.0` adds the boundary-crossing `Continue`
+    /// `0.10.0` adds the explicit `GeneratorBodyStart` boundary to serialized
+    /// IR1, IR2, and IR3 so generator invocation can initialize parameters before
+    /// suspending ahead of the body. `0.9.0` adds optional exact body-local
+    /// lexical metadata to serialized IR1 function operations so deferred
+    /// lowering preserves captured `let`/`const` semantics. `0.8.0` adds the
+    /// boundary-crossing `Continue`
     /// reason to serialized IR1, IR2, and IR3 `IteratorClose` operations. Core
     /// minors `0.6.0` and `0.7.0` are intentionally skipped because those
     /// numeric versions identify incompatible `franken-engine` IR wires.
@@ -53,7 +56,7 @@ impl IrSchemaVersion {
     /// lone-surrogate values use `$wtf16`.
     pub const CURRENT: Self = Self {
         major: 0,
-        minor: 9,
+        minor: 10,
         patch: 0,
     };
 
@@ -475,6 +478,11 @@ pub enum Ir1Op {
     /// Yield a value from a generator function.  When `delegate` is true the
     /// operand is an iterable whose values are forwarded (`yield*`).
     Yield { delegate: bool },
+    /// Internal boundary between generator FunctionDeclarationInstantiation
+    /// (including parameter defaults) and evaluation of the generator body.
+    /// Generator invocation executes through this marker synchronously; the
+    /// first `.next()` resumes immediately after it.
+    GeneratorBodyStart,
     /// No-op placeholder.
     Nop,
     /// Binary operation: pop two operands, push result.
@@ -730,6 +738,12 @@ impl Ir1Op {
                     CanonicalValue::String("yield".to_string()),
                 );
                 map.insert("delegate".to_string(), CanonicalValue::Bool(*delegate));
+            }
+            Self::GeneratorBodyStart => {
+                map.insert(
+                    "op".to_string(),
+                    CanonicalValue::String("generator_body_start".to_string()),
+                );
             }
             Self::Nop => {
                 map.insert("op".to_string(), CanonicalValue::String("nop".to_string()));
@@ -1760,6 +1774,9 @@ pub enum Ir3Instruction {
         function_index: u32,
         capture_count: u32,
     },
+    /// Suspend a freshly invoked generator after its parameter environment is
+    /// initialized but before any source body statement is evaluated.
+    GeneratorBodyStart,
     /// Yield a value from a generator.  Suspends execution and returns
     /// `{value, done: false}` to the caller.  When resumed via `.next(v)`,
     /// the injected value is placed in `resume_dst`.
@@ -2569,6 +2586,12 @@ impl Ir3Instruction {
                     CanonicalValue::U64(u64::from(*capture_count)),
                 );
             }
+            Self::GeneratorBodyStart => {
+                map.insert(
+                    "op".to_string(),
+                    CanonicalValue::String("generator_body_start".to_string()),
+                );
+            }
             Self::Yield {
                 value,
                 delegate,
@@ -3083,6 +3106,8 @@ impl Ir4Module {
 pub enum IrErrorCode {
     /// Schema version mismatch.
     SchemaVersionMismatch,
+    /// Generator parameter/body boundary is missing, duplicated, or misplaced.
+    InvalidGeneratorBoundary,
     /// Unexpected IR level.
     LevelMismatch,
     /// Source hash verification failed.
@@ -3101,6 +3126,7 @@ impl IrErrorCode {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::SchemaVersionMismatch => "IR_SCHEMA_VERSION_MISMATCH",
+            Self::InvalidGeneratorBoundary => "IR_INVALID_GENERATOR_BOUNDARY",
             Self::LevelMismatch => "IR_LEVEL_MISMATCH",
             Self::SourceHashMismatch => "IR_SOURCE_HASH_MISMATCH",
             Self::HashVerificationFailed => "IR_HASH_VERIFICATION_FAILED",
@@ -3149,6 +3175,7 @@ impl std::error::Error for IrError {}
 
 /// Verify that an IR0 module's content hash matches an expected value.
 pub fn verify_ir0_hash(module: &Ir0Module, expected: &ContentHash) -> Result<(), IrError> {
+    verify_schema_version(&module.header)?;
     let actual = module.content_hash();
     if &actual != expected {
         return Err(IrError::new(
@@ -3166,6 +3193,8 @@ pub fn verify_ir0_hash(module: &Ir0Module, expected: &ContentHash) -> Result<(),
 
 /// Verify that an IR1 module's source hash matches the expected IR0 hash.
 pub fn verify_ir1_source(module: &Ir1Module, ir0_hash: &ContentHash) -> Result<(), IrError> {
+    verify_schema_version(&module.header)?;
+    verify_ir1_generator_boundaries(module)?;
     match &module.header.source_hash {
         Some(source_hash) if source_hash == ir0_hash => Ok(()),
         Some(source_hash) => Err(IrError::new(
@@ -3187,6 +3216,8 @@ pub fn verify_ir1_source(module: &Ir1Module, ir0_hash: &ContentHash) -> Result<(
 
 /// Verify that an IR3 module has valid specialization linkage if present.
 pub fn verify_ir3_specialization(module: &Ir3Module) -> Result<(), IrError> {
+    verify_schema_version(&module.header)?;
+    verify_ir3_generator_boundaries(module)?;
     if let Some(spec) = &module.specialization {
         if spec.proof_input_ids.is_empty() {
             return Err(IrError::new(
@@ -3208,6 +3239,7 @@ pub fn verify_ir3_specialization(module: &Ir3Module) -> Result<(), IrError> {
 
 /// Verify that an IR4 witness is consistent with the IR3 module it was produced from.
 pub fn verify_ir4_linkage(witness: &Ir4Module, ir3_hash: &ContentHash) -> Result<(), IrError> {
+    verify_schema_version(&witness.header)?;
     if &witness.executed_ir3_hash != ir3_hash {
         return Err(IrError::new(
             IrErrorCode::WitnessIntegrityViolation,
@@ -3303,6 +3335,276 @@ pub fn verify_schema_version(header: &IrHeader) -> Result<(), IrError> {
         ));
     }
 
+    Ok(())
+}
+
+const GENERATOR_BODY_BOUNDARY_SCHEMA_VERSION: IrSchemaVersion = IrSchemaVersion {
+    major: 0,
+    minor: 10,
+    patch: 0,
+};
+
+fn generator_body_boundary_required(version: IrSchemaVersion) -> bool {
+    version >= GENERATOR_BODY_BOUNDARY_SCHEMA_VERSION
+}
+
+fn invalid_generator_boundary(
+    level: IrLevel,
+    context: &str,
+    expected: usize,
+    actual: usize,
+) -> IrError {
+    IrError::new(
+        IrErrorCode::InvalidGeneratorBoundary,
+        format!(
+            "{context} must contain exactly {expected} generator_body_start marker(s), found {actual}"
+        ),
+        level,
+    )
+}
+
+fn verify_ir1_generator_sequence(
+    ops: &[Ir1Op],
+    schema_version: IrSchemaVersion,
+    level: IrLevel,
+    context: &str,
+    is_generator: bool,
+) -> Result<(), IrError> {
+    let boundary_required = generator_body_boundary_required(schema_version);
+    let expected = usize::from(boundary_required && is_generator);
+    let actual = ops
+        .iter()
+        .filter(|op| matches!(op, Ir1Op::GeneratorBodyStart))
+        .count();
+    if actual != expected {
+        return Err(invalid_generator_boundary(level, context, expected, actual));
+    }
+
+    if expected == 1 {
+        let boundary_index = ops
+            .iter()
+            .position(|op| matches!(op, Ir1Op::GeneratorBodyStart))
+            .expect("counted generator boundary must have an index");
+        if let Some(terminal_index) = ops
+            .iter()
+            .position(|op| matches!(op, Ir1Op::Yield { .. } | Ir1Op::Return))
+            && boundary_index > terminal_index
+        {
+            return Err(IrError::new(
+                IrErrorCode::InvalidGeneratorBoundary,
+                format!("{context} generator_body_start marker appears after a yield or return"),
+                level,
+            ));
+        }
+    }
+
+    for op in ops {
+        match op {
+            Ir1Op::DeclareFunction {
+                name,
+                body_ops,
+                is_generator,
+                ..
+            } => verify_ir1_generator_sequence(
+                body_ops,
+                schema_version,
+                level,
+                &format!("function {name}"),
+                *is_generator,
+            )?,
+            Ir1Op::CreateFunction {
+                name,
+                body_ops,
+                is_generator,
+                ..
+            } => verify_ir1_generator_sequence(
+                body_ops,
+                schema_version,
+                level,
+                &format!(
+                    "function expression {}",
+                    name.as_deref().unwrap_or("<anonymous>")
+                ),
+                *is_generator,
+            )?,
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+/// Verify the versioned generator parameter/body boundary contract in IR1.
+pub fn verify_ir1_generator_boundaries(module: &Ir1Module) -> Result<(), IrError> {
+    verify_ir1_generator_sequence(
+        &module.ops,
+        module.header.schema_version,
+        IrLevel::Ir1,
+        "IR1 module body",
+        false,
+    )
+}
+
+/// Verify the IR1 operations serialized inside IR2 retain the same versioned
+/// generator parameter/body boundary contract.
+pub fn verify_ir2_generator_boundaries(module: &Ir2Module) -> Result<(), IrError> {
+    let actual = module
+        .ops
+        .iter()
+        .filter(|op| matches!(&op.inner, Ir1Op::GeneratorBodyStart))
+        .count();
+    if actual != 0 {
+        return Err(invalid_generator_boundary(
+            IrLevel::Ir2,
+            "IR2 module body",
+            0,
+            actual,
+        ));
+    }
+
+    for op in &module.ops {
+        match &op.inner {
+            Ir1Op::DeclareFunction {
+                name,
+                body_ops,
+                is_generator,
+                ..
+            } => verify_ir1_generator_sequence(
+                body_ops,
+                module.header.schema_version,
+                IrLevel::Ir2,
+                &format!("function {name}"),
+                *is_generator,
+            )?,
+            Ir1Op::CreateFunction {
+                name,
+                body_ops,
+                is_generator,
+                ..
+            } => verify_ir1_generator_sequence(
+                body_ops,
+                module.header.schema_version,
+                IrLevel::Ir2,
+                &format!(
+                    "function expression {}",
+                    name.as_deref().unwrap_or("<anonymous>")
+                ),
+                *is_generator,
+            )?,
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+fn verify_ir3_generator_sequence(
+    instructions: &[Ir3Instruction],
+    boundary_required: bool,
+    context: &str,
+    is_generator: bool,
+) -> Result<(), IrError> {
+    let expected = usize::from(boundary_required && is_generator);
+    let actual = instructions
+        .iter()
+        .filter(|instruction| matches!(instruction, Ir3Instruction::GeneratorBodyStart))
+        .count();
+    if actual != expected {
+        return Err(invalid_generator_boundary(
+            IrLevel::Ir3,
+            context,
+            expected,
+            actual,
+        ));
+    }
+
+    if expected == 1 {
+        let boundary_index = instructions
+            .iter()
+            .position(|instruction| matches!(instruction, Ir3Instruction::GeneratorBodyStart))
+            .expect("counted generator boundary must have an index");
+        if let Some(terminal_index) = instructions.iter().position(|instruction| {
+            matches!(
+                instruction,
+                Ir3Instruction::Yield { .. } | Ir3Instruction::Return { .. } | Ir3Instruction::Halt
+            )
+        }) && boundary_index > terminal_index
+        {
+            return Err(IrError::new(
+                IrErrorCode::InvalidGeneratorBoundary,
+                format!(
+                    "{context} generator_body_start marker appears after a yield, return, or halt"
+                ),
+                IrLevel::Ir3,
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Verify each IR3 function owns the boundary shape required by its schema
+/// version. Current generator bodies have one marker; legacy generators and
+/// every non-generator region have none.
+pub fn verify_ir3_generator_boundaries(module: &Ir3Module) -> Result<(), IrError> {
+    let boundary_required = generator_body_boundary_required(module.header.schema_version);
+    let instruction_count = module.instructions.len();
+
+    if module.function_table.is_empty() {
+        return verify_ir3_generator_sequence(
+            &module.instructions,
+            boundary_required,
+            "IR3 module body",
+            false,
+        );
+    }
+
+    for pair in module.function_table.windows(2) {
+        if pair[0].entry >= pair[1].entry {
+            return Err(IrError::new(
+                IrErrorCode::InvalidGeneratorBoundary,
+                "IR3 function entries must be strictly increasing",
+                IrLevel::Ir3,
+            ));
+        }
+    }
+
+    let first_entry = module.function_table[0].entry as usize;
+    if first_entry > instruction_count {
+        return Err(IrError::new(
+            IrErrorCode::InvalidGeneratorBoundary,
+            "IR3 function entry exceeds the instruction stream",
+            IrLevel::Ir3,
+        ));
+    }
+    verify_ir3_generator_sequence(
+        &module.instructions[..first_entry],
+        boundary_required,
+        "IR3 module prefix",
+        false,
+    )?;
+
+    for (index, function) in module.function_table.iter().enumerate() {
+        let start = function.entry as usize;
+        let end = module
+            .function_table
+            .get(index + 1)
+            .map_or(instruction_count, |next| next.entry as usize);
+        if start > end || end > instruction_count {
+            return Err(IrError::new(
+                IrErrorCode::InvalidGeneratorBoundary,
+                format!("IR3 function {index} has an invalid instruction range"),
+                IrLevel::Ir3,
+            ));
+        }
+        let context = function.name.as_deref().map_or_else(
+            || format!("IR3 function {index}"),
+            |name| format!("IR3 function {name}"),
+        );
+        verify_ir3_generator_sequence(
+            &module.instructions[start..end],
+            boundary_required,
+            &context,
+            function.is_generator,
+        )?;
+    }
     Ok(())
 }
 
@@ -3523,7 +3825,7 @@ mod tests {
 
     #[test]
     fn schema_version_display() {
-        assert_eq!(IrSchemaVersion::CURRENT.to_string(), "0.9.0");
+        assert_eq!(IrSchemaVersion::CURRENT.to_string(), "0.10.0");
     }
 
     #[test]
@@ -3544,7 +3846,7 @@ mod tests {
         };
 
         assert!(verify_schema_version(&header(IrSchemaVersion::CURRENT, IrLevel::Ir3)).is_ok());
-        for minor in [1, 2, 3, 4, 5, 8] {
+        for minor in [1, 2, 3, 4, 5, 8, 9] {
             assert!(
                 verify_schema_version(&header(
                     IrSchemaVersion {
@@ -3555,7 +3857,7 @@ mod tests {
                     IrLevel::Ir1,
                 ))
                 .is_ok(),
-                "core 0.9 readers retain compatibility with 0.{minor} artifacts"
+                "core 0.10 readers retain compatibility with 0.{minor} artifacts"
             );
         }
 
@@ -3608,6 +3910,62 @@ mod tests {
             assert!(error.message.contains("skipped core minor"));
             assert!(error.message.contains(&format!("0.{minor}.{}", u32::MAX)));
         }
+    }
+
+    #[test]
+    fn verifier_entrypoints_enforce_schema_version_bd_093id() {
+        let source_hash = ContentHash::compute(b"schema-entrypoint");
+        let mut ir1 = Ir1Module::new(source_hash, "future-ir1.js");
+        ir1.header.schema_version = IrSchemaVersion {
+            major: 0,
+            minor: IrSchemaVersion::CURRENT.minor + 1,
+            patch: 0,
+        };
+        let mut verifier = IrVerifier::new();
+        let ir1_error = verifier
+            .verify_ir1(&ir1, &source_hash, "trace-future-ir1")
+            .expect_err("IR1 verifier must reject a future schema");
+        assert_eq!(ir1_error.code, IrErrorCode::SchemaVersionMismatch);
+
+        let mut ir3 = Ir3Module::new(source_hash, "peer-ir3.js");
+        ir3.header.schema_version = IrSchemaVersion {
+            major: 0,
+            minor: 7,
+            patch: 0,
+        };
+        let ir3_error = verifier
+            .verify_ir3(&ir3, "trace-peer-ir3")
+            .expect_err("IR3 verifier must reject a skipped peer-owned schema");
+        assert_eq!(ir3_error.code, IrErrorCode::SchemaVersionMismatch);
+    }
+
+    #[test]
+    fn current_ir3_generator_boundary_must_precede_yield_bd_093id() {
+        let source_hash = ContentHash::compute(b"misplaced-generator-boundary");
+        let mut ir3 = Ir3Module::new(source_hash, "misplaced-generator-boundary.js");
+        ir3.instructions = vec![
+            Ir3Instruction::LoadUndefined { dst: 0 },
+            Ir3Instruction::Yield {
+                value: 0,
+                delegate: false,
+                resume_dst: 1,
+            },
+            Ir3Instruction::GeneratorBodyStart,
+            Ir3Instruction::Return { value: 0 },
+        ];
+        ir3.function_table.push(Ir3FunctionDesc {
+            entry: 0,
+            arity: 0,
+            frame_size: 2,
+            name: Some("misplaced".to_string()),
+            is_generator: true,
+            rest_param_index: None,
+        });
+
+        let error = verify_ir3_generator_boundaries(&ir3)
+            .expect_err("a generator boundary after yield must fail structurally");
+        assert_eq!(error.code, IrErrorCode::InvalidGeneratorBoundary);
+        assert!(error.message.contains("appears after"));
     }
 
     #[test]
@@ -3692,6 +4050,57 @@ mod tests {
                 ir3
             );
         }
+    }
+
+    #[test]
+    fn generator_body_start_wire_and_canonical_contract_bd_093id() {
+        let ir1 = Ir1Op::GeneratorBodyStart;
+        assert_eq!(
+            serde_json::to_string(&ir1).expect("IR1 boundary should serialize"),
+            r#""GeneratorBodyStart""#
+        );
+        let CanonicalValue::Map(ir1_canonical) = ir1.canonical_value() else {
+            panic!("IR1 generator boundary canonical form should be a map");
+        };
+        assert_eq!(
+            ir1_canonical.get("op"),
+            Some(&CanonicalValue::String("generator_body_start".to_string()))
+        );
+
+        let ir2 = Ir2Op {
+            inner: Ir1Op::GeneratorBodyStart,
+            effect: EffectBoundary::Pure,
+            required_capability: None,
+            flow: None,
+        };
+        let ir2_json = serde_json::to_value(&ir2).expect("IR2 boundary should serialize");
+        assert_eq!(
+            ir2_json.get("inner"),
+            Some(&serde_json::Value::String("GeneratorBodyStart".to_string()))
+        );
+        let CanonicalValue::Map(ir2_canonical) = ir2.canonical_value() else {
+            panic!("IR2 generator boundary canonical form should be a map");
+        };
+        let Some(CanonicalValue::Map(ir2_inner)) = ir2_canonical.get("inner") else {
+            panic!("IR2 generator boundary should retain its IR1 canonical form");
+        };
+        assert_eq!(
+            ir2_inner.get("op"),
+            Some(&CanonicalValue::String("generator_body_start".to_string()))
+        );
+
+        let ir3 = Ir3Instruction::GeneratorBodyStart;
+        assert_eq!(
+            serde_json::to_string(&ir3).expect("IR3 boundary should serialize"),
+            r#""GeneratorBodyStart""#
+        );
+        let CanonicalValue::Map(ir3_canonical) = ir3.canonical_value() else {
+            panic!("IR3 generator boundary canonical form should be a map");
+        };
+        assert_eq!(
+            ir3_canonical.get("op"),
+            Some(&CanonicalValue::String("generator_body_start".to_string()))
+        );
     }
 
     #[test]
@@ -4180,6 +4589,7 @@ mod tests {
             Ir1Op::StoreBinding { binding_id: 1 },
             Ir1Op::Call { arg_count: 2 },
             Ir1Op::Return,
+            Ir1Op::GeneratorBodyStart,
             Ir1Op::ImportModule {
                 specifier: "mod".into(),
             },
@@ -4395,6 +4805,7 @@ mod tests {
                 dst: 3,
             },
             Ir3Instruction::Return { value: 0 },
+            Ir3Instruction::GeneratorBodyStart,
             Ir3Instruction::HostCall {
                 capability: CapabilityTag("net:connect".to_string()),
                 args: RegRange { start: 0, count: 1 },
@@ -5399,6 +5810,7 @@ mod tests {
             Ir1Op::StoreBinding { binding_id: 1 },
             Ir1Op::Call { arg_count: 3 },
             Ir1Op::Return,
+            Ir1Op::GeneratorBodyStart,
             Ir1Op::ImportModule {
                 specifier: "m".into(),
             },
@@ -5510,6 +5922,7 @@ mod tests {
                 dst: 3,
             },
             Ir3Instruction::Return { value: 0 },
+            Ir3Instruction::GeneratorBodyStart,
             Ir3Instruction::HostCall {
                 capability: CapabilityTag("net:connect".to_string()),
                 args: RegRange { start: 0, count: 1 },
@@ -5877,7 +6290,7 @@ mod tests {
     fn schema_version_current_value() {
         let v = IrSchemaVersion::CURRENT;
         assert_eq!(v.major, 0);
-        assert_eq!(v.minor, 9);
+        assert_eq!(v.minor, 10);
         assert_eq!(v.patch, 0);
     }
 
@@ -6083,6 +6496,7 @@ mod tests {
                 "call",
             ),
             (Ir3Instruction::Return { value: 0 }, "return"),
+            (Ir3Instruction::GeneratorBodyStart, "generator_body_start"),
             (
                 Ir3Instruction::HostCall {
                     capability: CapabilityTag("x".to_string()),

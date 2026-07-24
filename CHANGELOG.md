@@ -10,6 +10,27 @@ The first conventional release, `v0.1.0`, was published on 2026-05-29. Current `
 
 ---
 
+## Post-Snapshot Update — Generator Activation Boundary (2026-07-23)
+
+`bd-093id` makes synchronous generator invocation run its parameter
+initialization before publishing the iterator, while suspending ahead of the
+first body statement. Generator activations now retain their full isolated
+execution context across yields; `.next(value)` injects the value and label at
+the prior yield site, returns completion records with `done: true`, and
+validates the generator receiver through the exposed `next` builtin.
+
+- Core `IrSchemaVersion::CURRENT` advances from `0.9.0` to `0.10.0` because
+  serialized IR1, IR2 (through `Ir2Op::inner`), and IR3 gain the
+  semantics-bearing `GeneratorBodyStart` variant. Schema gates now reject
+  skipped peer-owned and future versions at lowering, verification, and
+  execution entry points. IR1-to-IR3 lowering preserves a supported legacy
+  header, so markerless `0.9.x` generator artifacts retain their historical
+  first-`.next()` start timing; current generator bodies must contain exactly
+  one boundary before yield/return. Older readers must reject `0.10.x` before
+  decoding.
+- The engine mirror remains independently versioned at `0.7.0`; this core-only
+  checkpoint does not change the cross-seam ownership posture.
+
 ## Post-Snapshot Update — Captured Local Lexical IR Metadata (2026-07-22)
 
 `bd-uhf1m` preserves source `let`/`const` identity when a function-local

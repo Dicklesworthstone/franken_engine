@@ -21,7 +21,9 @@ use crate::ir_contract::{
     IR_ACCESSOR_SET_PREFIX, IR_SUPER_CONSTRUCTOR_PROPERTY, IR_SUPER_PROTOTYPE_PROPERTY, Ir0Module,
     Ir1Literal, Ir1Module, Ir1Op, Ir1PropertyKey, Ir2Module, Ir2Op, Ir3FunctionDesc,
     Ir3Instruction, Ir3Module, IrError, IrLevel, IteratorCloseReason, Reg, RegRange,
-    ResolvedBinding, ScopeId, ScopeKind, ScopeNode, verify_ir1_source, verify_ir3_specialization,
+    ResolvedBinding, ScopeId, ScopeKind, ScopeNode, verify_ir1_generator_boundaries,
+    verify_ir1_source, verify_ir2_generator_boundaries, verify_ir3_specialization,
+    verify_schema_version,
 };
 use crate::js_string::JsString;
 use crate::parser::{
@@ -1546,6 +1548,7 @@ fn confirmed_os_module_aliases(
 pub fn lower_ir0_to_ir1(
     ir0: &Ir0Module,
 ) -> Result<LoweringPassResult<Ir1Module>, LoweringPipelineError> {
+    verify_schema_version(&ir0.header).map_err(lowering_error_from_ir_error)?;
     if ir0.tree.body.is_empty() {
         return Err(LoweringPipelineError::EmptyIr0Body);
     }
@@ -4970,6 +4973,9 @@ fn lower_statement_to_ir1_with_flow(
                 body_scope,
                 &mut body_label_counter,
             )?;
+            if func.is_generator {
+                body_ops.push(Ir1Op::GeneratorBodyStart);
+            }
             let pre_lower_names = prepare_function_body_bindings(
                 Some(&func.body.body),
                 parameter_binding_names,
@@ -5820,8 +5826,11 @@ fn collect_nested_ir2_analysis(
 pub fn lower_ir1_to_ir2(
     ir1: &Ir1Module,
 ) -> Result<LoweringPassResult<Ir2Module>, LoweringPipelineError> {
+    verify_schema_version(&ir1.header).map_err(lowering_error_from_ir_error)?;
+    verify_ir1_generator_boundaries(ir1).map_err(lowering_error_from_ir_error)?;
     let ir1_hash = ir1.content_hash();
     let mut ir2 = Ir2Module::new(ir1_hash, ir1.header.source_label.clone());
+    ir2.header.schema_version = ir1.header.schema_version;
     ir2.scopes = ir1.scopes.clone();
 
     let mut required_capabilities = BTreeSet::<String>::new();
@@ -6155,6 +6164,8 @@ fn validate_deferred_rest_parameter_abi(
 pub fn lower_ir2_to_ir3(
     ir2: &Ir2Module,
 ) -> Result<LoweringPassResult<Ir3Module>, LoweringPipelineError> {
+    verify_schema_version(&ir2.header).map_err(lowering_error_from_ir_error)?;
+    verify_ir2_generator_boundaries(ir2).map_err(lowering_error_from_ir_error)?;
     enum PendingJump {
         Unconditional {
             instruction_index: usize,
@@ -6182,6 +6193,7 @@ pub fn lower_ir2_to_ir3(
 
     let ir2_hash = ir2.content_hash();
     let mut ir3 = Ir3Module::new(ir2_hash, ir2.header.source_label.clone());
+    ir3.header.schema_version = ir2.header.schema_version;
     // Register 0 is the module's reserved completion-value slot: the baseline
     // interpreter returns `read_reg(0)` when execution falls off the end of the
     // instruction stream (Halt), and module-level `Return` lowers to
@@ -6577,6 +6589,9 @@ pub fn lower_ir2_to_ir3(
                 ir3.instructions
                     .push(Ir3Instruction::Move { dst, src: current });
                 value_stack.push(dst);
+            }
+            Ir1Op::GeneratorBodyStart => {
+                ir3.instructions.push(Ir3Instruction::GeneratorBodyStart);
             }
             Ir1Op::Yield { delegate } => {
                 let value_reg = value_stack.pop().unwrap_or(0);
@@ -8843,6 +8858,9 @@ pub fn lower_ir2_to_ir3(
                         resume_dst: dst,
                     });
                     fn_value_stack.push(dst);
+                }
+                Ir1Op::GeneratorBodyStart => {
+                    ir3.instructions.push(Ir3Instruction::GeneratorBodyStart);
                 }
                 Ir1Op::Await => {
                     let current = fn_value_stack.pop().unwrap_or(0);
@@ -12013,6 +12031,9 @@ fn lower_expression_to_ir1(
                 body_scope,
                 &mut body_label_counter,
             )?;
+            if *is_generator {
+                body_ops.push(Ir1Op::GeneratorBodyStart);
+            }
             let pre_lower_names = prepare_function_body_bindings(
                 Some(&body.body),
                 parameter_binding_names,
@@ -19217,6 +19238,226 @@ mod tests {
     }
 
     #[test]
+    fn generator_defaults_run_at_invocation_before_body_bd_093id() {
+        let (ir1, ir3, value) = lower_and_execute_deferred_source_bd_6pvhn(
+            "let n = 0;\
+             function mark() { n = n * 10 + 1; return 7; }\
+             function* g(x = mark()) { n = n * 10 + 2; yield x; }\
+             let iterator = g();\
+             let atCall = n;\
+             let first = iterator.next();\
+             atCall + ':' + n + ':' + first.value + ':' + first.done;",
+        );
+        assert_eq!(value, Value::str("1:12:7:false"));
+
+        let ir1_body = deferred_ir1_body_bd_6pvhn(&ir1, "g");
+        assert_eq!(
+            ir1_body
+                .iter()
+                .filter(|op| matches!(op, Ir1Op::GeneratorBodyStart))
+                .count(),
+            1
+        );
+        let ir3_body = deferred_ir3_body_bd_6pvhn(&ir3, "g");
+        assert_eq!(
+            ir3_body
+                .iter()
+                .filter(|instruction| matches!(instruction, Ir3Instruction::GeneratorBodyStart))
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn named_generator_self_default_is_private_bd_093id() {
+        let (_, _, value) = lower_and_execute_deferred_source_bd_6pvhn(
+            "let inner = 9;\
+             let g = function* inner(x = inner) {\
+                 yield (x === g ? 100 : 0) + (inner === g ? 10 : 0);\
+             };\
+             let first = g().next();\
+             first.value + inner;",
+        );
+        assert_eq!(value, Value::Int(119));
+    }
+
+    #[test]
+    fn generator_next_injects_resume_value_and_completes_bd_093id() {
+        let (_, _, value) = lower_and_execute_deferred_source_bd_6pvhn(
+            "function* g(seed) {\
+                 const received = yield seed;\
+                 return received + 1;\
+             }\
+             let iterator = g(10);\
+             let first = iterator.next(99);\
+             let second = iterator.next(20);\
+             let third = iterator.next(30);\
+             first.value === 10 && first.done === false\
+                 && second.value === 21 && second.done === true\
+                 && third.value === undefined && third.done === true;",
+        );
+        assert_eq!(value, Value::Bool(true));
+    }
+
+    #[test]
+    fn generator_next_property_requires_receiver_bd_093id() {
+        let (_, _, value) = lower_and_execute_deferred_source_bd_6pvhn(
+            "function* g() { yield 4; }\
+             let iterator = g();\
+             let nextType = typeof iterator.next;\
+             let next = iterator.next;\
+             let detachedError = '';\
+             try { next(); } catch (error) { detachedError = error.name; }\
+             let direct = iterator.next();\
+             nextType + ':' + detachedError + ':' + direct.value + ':' + direct.done;",
+        );
+        assert_eq!(value, Value::str("function:TypeError:4:false"));
+    }
+
+    #[test]
+    fn generator_method_invocation_preserves_receiver_for_defaults_and_body_bd_093id() {
+        let (_, _, value) = lower_and_execute_deferred_source_bd_6pvhn(
+            "function* g(x = this.n) { yield this.n + x; }\
+             let holder = { n: 4, g };\
+             holder.g().next().value;",
+        );
+        assert_eq!(value, Value::Int(8));
+    }
+
+    #[test]
+    fn nested_plain_generator_call_does_not_inherit_callers_receiver_bd_093id() {
+        let (_, _, value) = lower_and_execute_deferred_source_bd_6pvhn(
+            "function* g() { yield this === holder; }\
+             function make() { return g(); }\
+             let holder = { make };\
+             holder.make().next().value;",
+        );
+        assert_eq!(value, Value::Bool(false));
+    }
+
+    #[test]
+    fn generator_default_throw_is_synchronous_bd_093id() {
+        let (_, _, value) = lower_and_execute_deferred_source_bd_6pvhn(
+            "let effects = 0;\
+             function fail() { effects += 1; throw 7; }\
+             function* defaultThrow(x = fail()) { effects += 100; yield x; }\
+             let callCaught = 0;\
+             try { defaultThrow(); } catch (error) { callCaught = error; }\
+             function* bodyThrow() { effects += 10; throw 8; }\
+             let iterator = bodyThrow();\
+             let beforeNext = effects;\
+             let nextCaught = 0;\
+             try { iterator.next(); } catch (error) { nextCaught = error; }\
+             callCaught + ':' + beforeNext + ':' + nextCaught + ':' + effects;",
+        );
+        assert_eq!(value, Value::str("7:1:8:11"));
+    }
+
+    #[test]
+    fn failed_generator_invocation_does_not_poison_next_activation_bd_093id() {
+        let (_, _, value) = lower_and_execute_deferred_source_bd_6pvhn(
+            "let calls = 0;\
+             function init() { calls += 1; if (calls === 1) throw 5; return calls; }\
+             function* g(x = init()) { yield x; }\
+             let firstCaught = 0;\
+             try { g(); } catch (error) { firstCaught = error; }\
+             let second = g().next();\
+             firstCaught + ':' + calls + ':' + second.value + ':' + second.done;",
+        );
+        assert_eq!(value, Value::str("5:2:2:false"));
+    }
+
+    #[test]
+    fn generator_activations_isolate_live_parameter_closures_bd_093id() {
+        let (_, _, value) = lower_and_execute_deferred_source_bd_6pvhn(
+            "let serial = 0;\
+             function* g(x = ++serial, read = () => x) {\
+                 x += 10;\
+                 yield read();\
+                 x += 10;\
+                 return read();\
+             }\
+             let a = g();\
+             let b = g();\
+             let afterCalls = serial;\
+             let a1 = a.next();\
+             let b1 = b.next();\
+             let a2 = a.next();\
+             let b2 = b.next();\
+             afterCalls + ':' + a1.value + ':' + b1.value + ':'\
+                 + a2.value + ':' + b2.value + ':' + serial;",
+        );
+        assert_eq!(value, Value::str("2:11:12:21:22:2"));
+    }
+
+    #[test]
+    fn legacy_markerless_generator_keeps_schema_through_ir1_ir2_ir3_bd_093id() {
+        let tree = CanonicalEs2020Parser
+            .parse(
+                "function* g(x) { yield x; } g(7).next().value;",
+                ParseGoal::Script,
+            )
+            .expect("legacy generator compatibility source should parse");
+        let ir0 = Ir0Module::from_syntax_tree(tree, "legacy_generator_bd_093id.js");
+        let mut ir1 = lower_ir0_to_ir1(&ir0)
+            .expect("current source should lower to IR1")
+            .module;
+        let body = ir1
+            .ops
+            .iter_mut()
+            .find_map(|op| match op {
+                Ir1Op::DeclareFunction {
+                    name,
+                    body_ops,
+                    is_generator: true,
+                    ..
+                } if name == "g" => Some(body_ops),
+                _ => None,
+            })
+            .expect("lowered generator body should exist");
+        body.retain(|op| !matches!(op, Ir1Op::GeneratorBodyStart));
+
+        let current_error = lower_ir1_to_ir2(&ir1)
+            .expect_err("current markerless generator IR1 must fail structurally");
+        assert!(matches!(
+            current_error,
+            LoweringPipelineError::IrContractValidation { ref code, .. }
+                if code == "IR_INVALID_GENERATOR_BOUNDARY"
+        ));
+
+        let legacy_version = crate::ir_contract::IrSchemaVersion {
+            major: 0,
+            minor: 9,
+            patch: 0,
+        };
+        ir1.header.schema_version = legacy_version;
+        let ir2 = lower_ir1_to_ir2(&ir1)
+            .expect("legacy markerless IR1 should lower")
+            .module;
+        assert_eq!(ir2.header.schema_version, legacy_version);
+        let ir3 = lower_ir2_to_ir3(&ir2)
+            .expect("legacy markerless IR2 should lower")
+            .module;
+        assert_eq!(ir3.header.schema_version, legacy_version);
+        assert!(
+            !ir3.instructions
+                .iter()
+                .any(|instruction| matches!(instruction, Ir3Instruction::GeneratorBodyStart))
+        );
+
+        let mut config = InterpreterConfig::quickjs_defaults();
+        config.granted_capabilities = BTreeSet::from([
+            RuntimeCapability::VmDispatch,
+            RuntimeCapability::HeapAllocate,
+        ]);
+        let value = QuickJsLane::with_config(config)
+            .execute(&ir3, "trace-legacy-generator-bd-093id")
+            .expect("legacy markerless generator should retain first-next start timing")
+            .value;
+        assert_eq!(value, Value::Int(7));
+    }
+
+    #[test]
     fn private_self_defaults_survive_body_shadowing_and_remain_immutable_bd_wqbac() {
         let (_, _, value) = lower_and_execute_deferred_source_bd_6pvhn(
             "let functionOuter = 9;\
@@ -19249,9 +19490,9 @@ mod tests {
     }
 
     #[test]
-    fn generator_rest_fails_closed_until_arguments_are_persisted_bd_ur3tk_9() {
+    fn generator_rest_remains_fail_closed_until_tail_is_persisted_bd_ur3tk_9() {
         let error = lower_rest_source_to_ir3("function* generated(...tail) { yield tail; }")
-            .expect_err("generator creation currently discards invocation arguments");
+            .expect_err("generator rest arguments remain intentionally fail-closed");
         let LoweringPipelineError::UnsupportedSyntax(diagnostic) = error else {
             panic!("expected fail-closed generator-rest diagnostic");
         };

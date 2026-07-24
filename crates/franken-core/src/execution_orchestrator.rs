@@ -1860,6 +1860,7 @@ impl ExecutionOrchestrator {
             crate::ir_contract::Ir3Instruction::LoadNewTarget { .. } => "load_new_target",
             crate::ir_contract::Ir3Instruction::LoadSuper { .. } => "load_super",
             crate::ir_contract::Ir3Instruction::CallMethod { .. } => "call_method",
+            crate::ir_contract::Ir3Instruction::GeneratorBodyStart => "generator_body_start",
             &crate::ir_contract::Ir3Instruction::CreateGenerator { .. }
             | &crate::ir_contract::Ir3Instruction::Yield { .. } => "generator_op",
             &crate::ir_contract::Ir3Instruction::CreateAsyncFunction { .. } => {

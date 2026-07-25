@@ -48,8 +48,19 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
-AGENT = "icydeer"
-WARM_TARGET = str(REPO / "target_icydeer")
+
+# bd-...tu32j.20.18 (BRIDGE-19.18) / ADR-0012: the agent id and warm-target path
+# used to be hardcoded to "icydeer" -- the agent who first wrote this script.
+# That is fine for a human running it by hand in that agent's tree and wrong for
+# the scheduled, unattended job this is becoming: on any other machine the
+# substituted path does not exist, and claims whose verification_command embeds a
+# binary path fail with a *tooling* error that is easy to misread as the claim
+# having regressed. FE-CLAIM-007 failed exactly that way ("frankenctl binary is
+# not executable: .../target_icydeer/debug/frankenctl") while the claim itself was
+# fine. Both are now overridable, and the default target is the ordinary cargo
+# target directory rather than one agent's scratch dir.
+AGENT = os.environ.get("REEMIT_AGENT") or os.environ.get("AGENT_NAME") or "icydeer"
+WARM_TARGET = os.environ.get("REEMIT_TARGET_DIR") or str(REPO / "target")
 MATRIX = REPO / "docs" / "claim_to_proof_matrix_v1.json"
 EVIDENCE_DIR = REPO / "docs" / "evidence"
 
@@ -73,7 +84,13 @@ def substitute(command: str) -> str:
     cmd = cmd.replace("rch exec -- env ", "")
     cmd = cmd.replace("rch exec -- ", "")
     cmd = cmd.replace(f"/tmp/rch_target_{AGENT}", WARM_TARGET)
-    cmd = cmd.replace("target/debug/frankenctl", f"{WARM_TARGET}/debug/frankenctl")
+    # Only redirect a binary path if the redirected binary actually exists.
+    # Rewriting it unconditionally is how a present-and-working frankenctl gets
+    # replaced by a path that was never built, turning a passing claim into a
+    # spurious "regression" (BRIDGE-19.18).
+    warm_ctl = Path(WARM_TARGET) / "debug" / "frankenctl"
+    if warm_ctl.is_file() and os.access(warm_ctl, os.X_OK):
+        cmd = cmd.replace("target/debug/frankenctl", str(warm_ctl))
     return cmd
 
 

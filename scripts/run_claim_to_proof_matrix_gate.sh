@@ -686,6 +686,36 @@ jq -n \
       events: $events
   }' >"$report_path"
 
+# bd-...tu32j.20.18 (BRIDGE-19.18) — make staleness MACHINE-VISIBLE.
+#
+# Staleness was reported only as a stderr WARNING behind an exit-0 gate, so the
+# erosion of every OBSERVED row to `provisional` was invisible to anything that
+# consumes the report: dashboards, operator status, and CI all saw verdict=pass
+# and nothing else. Anyone reading the JSON could not tell a fully-fresh matrix
+# from one where all 16 OBSERVED claims had decayed.
+#
+# This block folds a `freshness` summary into the report. It is descriptive
+# only: the verdict is untouched, so this changes what is *observable*, not what
+# passes. Whether staleness should ever fail the gate closed is a separate,
+# deliberate decision (BRIDGE-19.18 §4) and is not being smuggled in here.
+freshness_summary="$(jq --argjson threshold "$stale_threshold_days" '
+  [.events[] | select(.allowed_state == "observed")] as $observed
+  | [$observed[] | select(.freshness_status == "stale")] as $stale
+  | {
+      stale_threshold_days: $threshold,
+      observed_total: ($observed | length),
+      observed_fresh: (($observed | length) - ($stale | length)),
+      observed_stale: ($stale | length),
+      all_observed_provisional: (($observed | length) > 0 and ($stale | length) == ($observed | length)),
+      max_observed_age_days: ([$observed[].actual_freshness_days // 0] | max // 0),
+      per_claim_freshness_days_set: ([$observed[] | select(.freshness_days != null)] | length),
+      provisional_claims: [
+        $stale[] | {claim_id: .claim_id, age_days: .actual_freshness_days, owning_bead: .owning_bead}
+      ]
+    }' "$report_path")"
+jq --argjson freshness "$freshness_summary" '. + {freshness: $freshness}' \
+  "$report_path" >"${report_path}.tmp" && mv "${report_path}.tmp" "$report_path"
+
 claim_ids_csv="$(jq -r '.claims[].claim_id' "$matrix_path" | paste -sd, -)"
 verdict="$(jq -r '.verdict' "$report_path")"
 proof_contract_write_standard_bundle \
@@ -710,6 +740,19 @@ stale_count="$(jq '[.events[] | select(.freshness_status == "stale")] | length' 
 if [[ "$stale_count" -gt 0 ]]; then
   echo "WARNING: Found $stale_count claims with stale proof artifacts:" >&2
   jq -r '.events[] | select(.freshness_status == "stale") | "\(.claim_id): proof is \(.actual_freshness_days) days old (max: \(.freshness_days // "unknown"))"' "$report_path" >&2
+fi
+
+# bd-...tu32j.20.18 — surface the freshness summary on stdout too, so an operator
+# reading a terminal sees the same number a dashboard would read from the report.
+# The total-decay case gets its own line: "every OBSERVED claim is provisional" is
+# a qualitatively different posture from "some evidence is aging" and should not
+# have to be inferred by comparing two counts.
+jq -r '
+  .freshness
+  | "claim_to_proof_matrix_freshness=observed_total=\(.observed_total) fresh=\(.observed_fresh) stale=\(.observed_stale) threshold_days=\(.stale_threshold_days) max_age_days=\(.max_observed_age_days) per_claim_windows_set=\(.per_claim_freshness_days_set)"
+' "$report_path"
+if [[ "$(jq -r '.freshness.all_observed_provisional' "$report_path")" == "true" ]]; then
+  echo "WARNING: ALL $(jq -r '.freshness.observed_total' "$report_path") OBSERVED claims are provisional; the matrix currently proves nothing at OBSERVED strength" >&2
 fi
 
 if [[ "$failures" -ne 0 ]]; then

@@ -18,7 +18,7 @@
     "scope": "operations",
     "state": "observed"
   },
-  "generated_at_utc": "2026-06-20T06:08:16.361447+00:00",
+  "generated_at_utc": "2026-07-25T17:05:02.594468+00:00",
   "inputs": {
     "dependencies": [
       "frankenengine-engine",
@@ -33,9 +33,9 @@
     "decision_artifacts": "generated",
     "execution_trace": "deterministic",
     "exit_code": 0,
-    "verification_command": "FRANKENCTL_BIN=/data/projects/franken_engine/target_icydeer/debug/frankenctl ./scripts/e2e/readme_cli_workflow_smoke.sh",
+    "verification_command": "FRANKENCTL_BIN=/data/projects/franken_engine/target/debug/frankenctl ./scripts/e2e/readme_cli_workflow_smoke.sh",
     "verification_result": "passed",
-    "verified_at_utc": "2026-06-20T06:08:16.361447+00:00"
+    "verified_at_utc": "2026-07-25T17:05:02.594468+00:00"
   },
   "provenance": {
     "audit_source": "bd-cixqu.4.1",
@@ -51,7 +51,7 @@
   "schema_version": "frankenengine.reproducibility.manifest.v1",
   "source_revision": {
     "branch": "main",
-    "commit": "ba0339838b2e1b964c4904fef131d1cafaf449ef",
+    "commit": "4e3f3e7126af7974d6c0a315072a847f89b4fece",
     "repository": "franken_engine"
   },
   "validation": {

@@ -18,7 +18,7 @@
     "scope": "integration",
     "state": "observed"
   },
-  "generated_at_utc": "2026-06-20T06:10:18.598745+00:00",
+  "generated_at_utc": "2026-07-25T16:46:48.586948+00:00",
   "inputs": {
     "dependencies": [
       "scripts/test_standalone_build.sh",
@@ -36,7 +36,7 @@
     "exit_code": 0,
     "verification_command": "./scripts/test_standalone_build.sh full-integration",
     "verification_result": "passed",
-    "verified_at_utc": "2026-06-20T06:10:18.598745+00:00"
+    "verified_at_utc": "2026-07-25T16:46:48.586948+00:00"
   },
   "provenance": {
     "audit_source": "bd-cixqu.13.3",
@@ -55,7 +55,7 @@
   "schema_version": "frankenengine.reproducibility.manifest.v1",
   "source_revision": {
     "branch": "main",
-    "commit": "ba0339838b2e1b964c4904fef131d1cafaf449ef",
+    "commit": "4e3f3e7126af7974d6c0a315072a847f89b4fece",
     "repository": "franken_engine"
   },
   "validation": {

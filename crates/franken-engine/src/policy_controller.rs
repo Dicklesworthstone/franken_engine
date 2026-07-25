@@ -9,6 +9,9 @@
 //! with expected-loss actions), Top-10 #2 (guardplane), #8 (budgets).
 
 pub mod operator_safety_copilot;
+/// Service endpoint contracts adapted from `/dp/fastapi_rust` (ADR-0002).
+/// Gated so `--no-default-features` needs no sibling checkout (bd-ndpm2).
+#[cfg(feature = "sibling-service-api")]
 pub mod service_endpoint_template;
 
 use std::collections::BTreeMap;

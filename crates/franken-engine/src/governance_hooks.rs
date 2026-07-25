@@ -27,10 +27,17 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
+// `/dp/frankenpandas` evidence-frame primitives back the Parquet export lane
+// only. Gated so `--no-default-features` needs no sibling checkout (bd-ndpm2).
+#[cfg(feature = "sibling-dataframes")]
 use fp_columnar::Column;
+#[cfg(feature = "sibling-dataframes")]
 use fp_frame::DataFrame;
+#[cfg(feature = "sibling-dataframes")]
 use fp_index::{Index, IndexLabel};
+#[cfg(feature = "sibling-dataframes")]
 use fp_io::write_parquet_bytes;
+#[cfg(feature = "sibling-dataframes")]
 use fp_types::Scalar;
 use serde::{Deserialize, Serialize};
 
@@ -1303,6 +1310,7 @@ fn parse_and_normalise_policy(bytes: &[u8], format: &str) -> Result<Vec<u8>, Str
 }
 
 /// Convert evidence entries to a DataFrame for Parquet export.
+#[cfg(feature = "sibling-dataframes")]
 fn evidence_entries_to_dataframe(entries: &[&EvidenceEntry]) -> Result<DataFrame, GovernanceError> {
     // Create column vectors
     let mut entry_ids = Vec::new();
@@ -1409,6 +1417,7 @@ fn serialise_entries(
             }
             Ok(buf)
         }
+        #[cfg(feature = "sibling-dataframes")]
         AuditExportFormat::Parquet => {
             // Convert evidence entries to DataFrame and export as real Parquet binary format
             let df = evidence_entries_to_dataframe(entries)?;
@@ -1416,6 +1425,18 @@ fn serialise_entries(
                 message: format!("Failed to write Parquet: {}", io_err),
             })
         }
+        // Fail closed rather than degrade. Without `/dp/frankenpandas` there is no
+        // Parquet writer, and emitting some *other* encoding under the Parquet
+        // format name would put a mislabelled artifact into the evidence stream —
+        // exactly what the no-fake-artifact discipline forbids. The caller gets a
+        // typed error naming the feature that would satisfy the request.
+        #[cfg(not(feature = "sibling-dataframes"))]
+        AuditExportFormat::Parquet => Err(GovernanceError::ExportError {
+            message: "Parquet audit export requires the `sibling-dataframes` feature \
+                      (/dp/frankenpandas); rebuild with it enabled or export as \
+                      JsonLines/Csv/CompliancePdf"
+                .to_string(),
+        }),
         AuditExportFormat::CompliancePdf => {
             // Generate minimal hand-rolled PDF for compliance export
             generate_compliance_pdf(entries)
@@ -2534,6 +2555,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "sibling-dataframes")]
     fn test_export_parquet_success() {
         let entries = vec![make_entry("capability_decision", 30)];
         let req = make_export_request(AuditExportFormat::Parquet, 0, 100);
@@ -4177,6 +4199,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "sibling-dataframes")]
     fn export_parquet_and_pdf_entry_count_matches() {
         let entries: Vec<EvidenceEntry> = (0..5)
             .map(|i| make_entry("security_action", i * 10))
@@ -4189,6 +4212,24 @@ mod tests {
             .expect("operation should succeed for valid inputs");
         assert_eq!(result_parquet.entry_count, 5);
         assert_eq!(result_pdf.entry_count, 5);
+    }
+
+    /// Without `/dp/frankenpandas` the Parquet lane must refuse, not silently
+    /// emit a different encoding under the Parquet name (bd-ndpm2).
+    #[test]
+    #[cfg(not(feature = "sibling-dataframes"))]
+    fn export_parquet_fails_closed_without_sibling_dataframes() {
+        let entries = vec![make_entry("capability_decision", 30)];
+        let req = make_export_request(AuditExportFormat::Parquet, 0, 100);
+        let err = export_audit_evidence(req, entries, ts(200))
+            .expect_err("Parquet export must fail closed without the sibling feature");
+        let GovernanceError::ExportError { message } = err else {
+            panic!("expected ExportError, got {err:?}");
+        };
+        assert!(
+            message.contains("sibling-dataframes"),
+            "error must name the feature that would satisfy the request, got: {message}"
+        );
     }
 
     // ---- Regression tests for audit-discovered bugs (2026-03-27) ----

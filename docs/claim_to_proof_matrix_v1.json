@@ -191,9 +191,9 @@
       "reason": "The support boundary is a documentation policy claim and the source span is validated by this gate.",
       "source_path": "README.md",
       "source_span": {
-        "end_line": 2416,
+        "end_line": 2422,
         "must_contain": "Unsupported-surface usage voids reproduction assistance",
-        "start_line": 2416
+        "start_line": 2422
       },
       "verification_command": "./scripts/run_claim_to_proof_matrix_gate.sh ci"
     },
@@ -489,9 +489,9 @@
       "reason": "Downgraded observed->target under CEI B.2 (bd-sde5e.2.2, SwiftSquirrel): the identical-hash claim spans Linux/macOS/Windows × x64/arm64, but a single host can only produce the Linux×x64 manifest. The committed receipt was backfill/pending (never a live multi-platform pass) and evaluate_matrix requires per-target manifests from a real 6-platform CI matrix. The gate logic is correct (run_mode recursion fixed in 24d79417) and would pass in CI, but OBSERVED cannot be honestly backed single-host. Precedent: FE-CLAIM-012.",
       "source_path": "README.md",
       "source_span": {
-        "end_line": 1762,
+        "end_line": 1768,
         "must_contain": "Cross-platform matrix",
-        "start_line": 1762
+        "start_line": 1768
       },
       "verification_command": "./scripts/run_rgc_cross_platform_matrix_gate.sh ci"
     },
@@ -508,9 +508,9 @@
       "reason": "Sibling repo reuse contract is now machine-enforced. M.1 (bd-cixqu.13.1, commit 87418e94) added a full-integration lane to scripts/test_standalone_build.sh that records pass/skipped/failed for each of the six declared siblings; the smoke at scripts/e2e/sibling_integration_smoke.sh asserts the lane's structured output. Reproducibility bundle at docs/evidence/FE-CLAIM-024/ self-attests via env.json + manifest.json + repro.lock per docs/REPRODUCIBILITY_CONTRACT.md.",
       "source_path": "README.md",
       "source_span": {
-        "end_line": 2110,
+        "end_line": 2116,
         "must_contain": "Sibling Repositories (Binding Reuse Contract)",
-        "start_line": 2110
+        "start_line": 2116
       },
       "verification_command": "./scripts/test_standalone_build.sh full-integration"
     },
@@ -528,9 +528,9 @@
       "reason": "CEI H.2: the claim-evidence integrity capstone (scripts/run_claim_evidence_integrity_capstone.sh) composes the A.1/A.3 bidirectional lattice, the H.1 Merkle-committed Claim-Evidence Ledger, the claim-to-proof wording gate, and the D.3 Test262 posture gate. FE-CLAIM-025's own row is committed in that ledger, the A.5 adversarial corpus rejects over-promotion fixtures, and the G.3 no-mock drill (scripts/e2e/claim_evidence_integrity_capstone_drift.sh) demonstrates the capstone goes red on any injected over-promotion and green only when all sub-gates hold. H.4 (bd-sde5e.8.4) additionally machine-checks in Lean 4 the meta-soundness lemma the whole gate rests on: proofs/lean4/ClaimEvidenceSoundness.lean proves that the asserted state never exceeds the evidence ceiling under the gate's corrective transition (gate_transition_sound), that ceiling is monotone in the evidence tier (ceiling_monotone), that soundness can only strengthen with committed evidence (sound_monotone_in_tier, tier_monotone), and that this is exactly the H.3 Biba integrity verdict (flow_legal_iff_sound) -- re-checked sorryAx-free by scripts/run_cei_soundness_lean_proof.sh ci.",
       "source_path": "README.md",
       "source_span": {
-        "end_line": 2485,
+        "end_line": 2491,
         "must_contain": "Reflexive claim-evidence integrity",
-        "start_line": 2485
+        "start_line": 2491
       },
       "verification_command": "cargo test -p frankenengine-engine --test claim_evidence_adversarial_corpus"
     },
@@ -548,9 +548,9 @@
       "reason": "A reproducible, content-addressed weighted coverage summary is linked (docs/coverage/es2020_coverage_summary_bundle_v1, bd-fqlfw.7.4). On the ES2020-normative tc39/test262 profile (language/* + built-ins/*) the engine EXECUTES 6201/47514 = 130508 millionths (~13.0508%) of the observable surface, where executed = evaluated without an engine error (positive) or correctly rejected (negative); assertion outcomes are not verified, so this is an execution-coverage measure, NOT a conformance pass-rate (the stricter harness-based ES2020 conformance pass-rate is far lower, ~0.25%, docs/test262_real_corpus_pass_rate_v1.json). Weakest view 'builtin' at 16664 millionths. Six weighted views plus the floor prevent a single gamed percentage; stays target. Gated by ./scripts/run_coverage_summary_bundle_gate.sh ci.",
       "source_path": "docs/plans/PLAN_TO_CREATE_FRANKEN_ENGINE.md",
       "source_span": {
-        "start_line": 1419,
         "end_line": 1432,
-        "must_contain": "targets executing a high fraction of the ES2020 observable"
+        "must_contain": "targets executing a high fraction of the ES2020 observable",
+        "start_line": 1419
       },
       "verification_command": "./scripts/run_coverage_summary_bundle_gate.sh ci"
     }
@@ -582,8 +582,8 @@
       "current_state": "target",
       "linked_artifact": "docs/perf/e2_denominator_bundle_v1",
       "measured_geomean_speedup_millionths": {
-        "node": 920,
-        "bun": 791
+        "bun": 791,
+        "node": 920
       },
       "meets_3x_floor": false,
       "required_before_observed": "A fairness-compliant Node and Bun denominator is now linked (docs/perf/e2_denominator_bundle_v1, bd-fqlfw.2.6/2.7), but the engine does not meet the >= 3x floor (meets_3x_floor=false for both baselines). Promotion to observed requires the engine to actually clear the floor; until then the claim stays target."

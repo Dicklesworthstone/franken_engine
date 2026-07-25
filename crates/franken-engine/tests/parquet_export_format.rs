@@ -1,3 +1,8 @@
+// This whole suite exercises the Parquet export lane, which exists only when
+// `/dp/frankenpandas` is linked. Gated so `--no-default-features` compiles with
+// no sibling checkouts (bd-ndpm2).
+#![cfg(feature = "sibling-dataframes")]
+
 use fp_io::read_parquet_bytes;
 use frankenengine_engine::engine_object_id::{ObjectDomain, SchemaId, derive_id};
 use frankenengine_engine::governance_hooks::{

@@ -9,7 +9,12 @@ license.workspace = true
 # Real engine, for the EngineEvalAdapter (bd-x9t1n.1): the metamorphic oracle
 # must exercise frankenengine-engine, not a self-contained toy interpreter
 # (bd-q90jg). One-way dep only — the engine must NOT depend on this crate.
-frankenengine-engine = { path = "../franken-engine" }
+# See bd-ndpm2: `default-features = false` stops this edge from re-enabling
+# the engine's /dp sibling features in a standalone workspace build. The
+# metamorphic relations drive the parser/lowering/interpreter only.
+frankenengine-engine = { path = "../franken-engine", default-features = false, features = [
+    "asupersync-integration",
+] }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 hex = "0.4"

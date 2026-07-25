@@ -110,7 +110,15 @@ name = "safety_decision_router_integration"
 path = "../franken-engine/tests/safety_decision_router_integration.rs"
 
 [dev-dependencies]
-frankenengine-engine = { path = "../franken-engine" }
+# `default-features = false` keeps the /dp sibling crates out of a
+# `--workspace --no-default-features` build; without it this edge re-enables
+# the engine's default features and drags all nine siblings back in
+# (bd-ndpm2). This crate uses no sibling-gated engine API. The asupersync
+# control-plane integration is requested explicitly because these tests do
+# exercise it.
+frankenengine-engine = { path = "../franken-engine", default-features = false, features = [
+    "asupersync-integration",
+] }
 frankenengine-test-support = { path = "../franken-engine-test-support" }
 insta = { version = "1.39", features = ["filters"] }
 serde = { workspace = true, features = ["derive"] }

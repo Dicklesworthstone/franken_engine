@@ -6,17 +6,18 @@ cd "$root_dir"
 
 print_usage() {
   cat <<'EOF'
-usage: ./scripts/test_standalone_build.sh [standalone-check|standalone-test|full-check|full-integration|ci]
+usage: ./scripts/test_standalone_build.sh [standalone-check|standalone-test|full-check|full-integration|sibling-isolation|ci]
 
 Modes:
   standalone-check    rch-backed cargo check in standalone mode
   standalone-test     rch-backed cargo test in standalone mode
   full-check          rch-backed cargo check with all features when sibling deps exist
+  sibling-isolation   assert no /dp sibling enters the --no-default-features graph
   full-integration    per-sibling smoke (asupersync, frankentui, frankensqlite,
                       sqlmodel_rust, fastapi_rust, frankenpandas) recording each
                       as passed / skipped / failed (bd-cixqu.13.1)
-  ci                  standalone-check + standalone-test + full-check + full-integration
-                      manifest/report
+  ci                  standalone-check + standalone-test + full-check +
+                      full-integration + sibling-isolation, with manifest/report
 
 Environment:
   STANDALONE_BUILD_GATE_ARTIFACT_ROOT  Output root (default: artifacts/standalone_build_gate)
@@ -46,7 +47,7 @@ commands_path="${run_dir}/commands.txt"
 step_logs_dir="${run_dir}/step_logs"
 
 case "$mode" in
-  standalone-check|standalone-test|full-check|full-integration|ci)
+  standalone-check|standalone-test|full-check|full-integration|sibling-isolation|ci)
     ;;
   -h|--help)
     print_usage
@@ -325,6 +326,104 @@ run_full_integration_lane() {
   done
 }
 
+# bd-ndpm2 — sibling-isolation lane.
+#
+# Guards the property that DOES hold and that nothing else checks: with default
+# features off, no `/dp/*` sibling crate is in the engine's resolved dependency
+# graph. Before this lane, all nine sibling path deps were unconditional, so
+# `--no-default-features` still compiled `/dp/sqlmodel_rust` and (through it)
+# `/dp/frankensqlite` — which is how a broken sibling took the whole engine down
+# with nothing failing until a human noticed a doc regeneration break.
+#
+# What this lane deliberately does NOT claim: that the build works with `/dp`
+# absent. Cargo resolves a path dependency's manifest whether or not a feature
+# activates it, so an absent sibling still fails at resolution time. Verified by
+# experiment and recorded on bd-ndpm2. Delivering the absent-sibling build needs
+# the siblings published to a registry; until then the README says the checkouts
+# are required, and this lane holds the line that they are not *linked*.
+#
+# Two assertions:
+#   1. Every `/dp/*` path dependency in the engine manifest is `optional = true`.
+#   2. `cargo tree --no-default-features -e normal,dev` names zero `/dp/` paths.
+# Assertion 1 catches a newly-added unconditional sibling dep even in a tree
+# where assertion 2 cannot run (no cargo).
+#
+# `-e normal,dev` rather than `-e normal` is deliberate. The crate carries a self
+# dev-dependency (for `tee-test-mock`); while it lacked `default-features =
+# false`, feature unification re-enabled `default` for every test target, so
+# `cargo test --no-default-features` rebuilt all nine siblings and the
+# standalone-test lane was proving nothing. A normal-only assertion is blind to
+# that entire class of regression.
+run_sibling_isolation_lane() {
+  local lane="sibling-isolation"
+  local command_text="assert no /dp sibling crate enters the --no-default-features dependency graph (normal + dev)"
+  local log_path="${step_logs_dir}/${lane}.log"
+  local status="passed"
+  local note="no sibling crate is linked with default features off"
+  local -a non_optional=()
+  local dep_line dep_name tree_out leaked
+
+  commands_run+=("$command_text")
+  : >"$log_path"
+
+  # (1) Every /dp path dep must carry `optional = true`.
+  while IFS= read -r dep_line; do
+    [[ -z "$dep_line" ]] && continue
+    if [[ "$dep_line" != *"optional"*"="*"true"* ]]; then
+      dep_name="${dep_line%%=*}"
+      non_optional+=("$(printf '%s' "$dep_name" | tr -d '[:space:]')")
+    fi
+  done < <(grep -E '^[A-Za-z0-9_-]+[[:space:]]*=.*path[[:space:]]*=[[:space:]]*"/dp/' \
+    crates/franken-engine/Cargo.toml || true)
+
+  {
+    printf -- '-- assertion 1: every /dp path dep is optional\n'
+    if [[ "${#non_optional[@]}" -gt 0 ]]; then
+      printf -- '   FAIL: non-optional sibling deps: %s\n' "${non_optional[*]}"
+    else
+      printf -- '   ok\n'
+    fi
+  } >>"$log_path"
+
+  if [[ "${#non_optional[@]}" -gt 0 ]]; then
+    status="failed"
+    note="non-optional /dp sibling dependencies: ${non_optional[*]}"
+  fi
+
+  # (2) The resolved standalone graph must name no /dp path at all.
+  if command -v cargo >/dev/null 2>&1; then
+    if tree_out="$(RCH_CARGO_WRAPPER_BYPASS=1 cargo tree -p frankenengine-engine \
+      --no-default-features -e normal,dev 2>>"$log_path")"; then
+      leaked="$(printf '%s\n' "$tree_out" | grep -c '/dp/' || true)"
+      {
+        printf -- '-- assertion 2: cargo tree --no-default-features -e normal,dev names no /dp path\n'
+        printf -- '   /dp entries found: %s\n' "$leaked"
+      } >>"$log_path"
+      if [[ "$leaked" -ne 0 ]]; then
+        status="failed"
+        note="${leaked} sibling crate(s) remain in the --no-default-features graph"
+        printf '%s\n' "$tree_out" | grep '/dp/' >>"$log_path" || true
+      fi
+    else
+      # Resolution failure is itself a finding, not a reason to pass quietly.
+      status="failed"
+      note="cargo tree --no-default-features failed to resolve"
+      printf -- '-- assertion 2: FAILED to resolve\n' >>"$log_path"
+    fi
+  else
+    printf -- '-- assertion 2: skipped (cargo not on PATH)\n' >>"$log_path"
+    if [[ "$status" == "passed" ]]; then
+      note="${note} (graph assertion skipped: cargo unavailable)"
+    fi
+  fi
+
+  record_event "$lane" "$status" "$note"
+  lane_results+=("$(lane_result_json "$lane" "$status" "$command_text" "$log_path" "$note")")
+
+  [[ "$status" == "failed" ]] && return 1
+  return 0
+}
+
 declare -a external_dependency_paths=()
 declare -a missing_external_dependency_paths=()
 
@@ -365,6 +464,10 @@ run_mode() {
       # bd-cixqu.13.1 — per-sibling presence + manifest-shape smoke.
       run_full_integration_lane
       ;;
+    sibling-isolation)
+      # bd-ndpm2 — no sibling crate may be linked with default features off.
+      run_sibling_isolation_lane || run_failures=$((run_failures + 1))
+      ;;
     ci)
       run_rch_lane \
         "standalone-check" \
@@ -384,6 +487,8 @@ run_mode() {
       fi
       # bd-cixqu.13.1 — sibling-presence smoke as part of ci.
       run_full_integration_lane
+      # bd-ndpm2 — sibling-isolation as part of ci.
+      run_sibling_isolation_lane || run_failures=$((run_failures + 1))
       ;;
   esac
 }
@@ -405,6 +510,7 @@ generated_at_utc="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 standalone_check_status="$(printf '%s\n' "$lane_results_json" | jq -r 'map(select(.lane == "standalone-check")) | .[0].status // "not_run"')"
 standalone_test_status="$(printf '%s\n' "$lane_results_json" | jq -r 'map(select(.lane == "standalone-test")) | .[0].status // "not_run"')"
 full_check_status="$(printf '%s\n' "$lane_results_json" | jq -r 'map(select(.lane == "full-check")) | .[0].status // "not_run"')"
+sibling_isolation_status="$(printf '%s\n' "$lane_results_json" | jq -r 'map(select(.lane == "sibling-isolation")) | .[0].status // "not_run"')"
 
 if [[ "$standalone_check_status" == "passed" && "$standalone_test_status" == "passed" ]]; then
   standalone_status="ready"
@@ -510,8 +616,18 @@ jq -n \
 echo "wrote ${manifest_path}"
 
 exit_code=0
+
+# bd-ndpm2 — the sibling-isolation lane is a manifest + `cargo tree` assertion.
+# It needs no rch worker, so it stays enforcing even under skip_remote, where
+# every heavy lane is deliberately skipped. Without this, setting
+# STANDALONE_BUILD_GATE_SKIP_REMOTE=1 would silently turn the isolation
+# guarantee off, which is exactly the failure mode this bead exists to close.
+if [[ "$sibling_isolation_status" == "failed" ]]; then
+  exit_code=1
+fi
+
 if [[ "$skip_remote" == "1" ]]; then
-  exit 0
+  exit "$exit_code"
 fi
 
 case "$mode" in
@@ -523,6 +639,9 @@ case "$mode" in
     ;;
   full-check)
     [[ "$full_integration_status" == "ready" || "$full_integration_status" == "skipped_missing_external_deps" ]] || exit_code=1
+    ;;
+  sibling-isolation)
+    [[ "$sibling_isolation_status" == "passed" ]] || exit_code=1
     ;;
   ci)
     [[ "$standalone_gate_passed" == "true" ]] || exit_code=1

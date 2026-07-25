@@ -11,20 +11,33 @@
 
 use std::collections::BTreeMap;
 use std::fmt;
+// Both `Path` users (the FrankenSQLite backend's `open_file` and the fleet
+// authority adapter's `open_fleet_trust_state_file`) are sibling-gated.
+#[cfg(feature = "sibling-persistence")]
 use std::path::Path;
 
 use serde::{Deserialize, Serialize};
+#[cfg(feature = "sibling-persistence")]
 use sqlmodel::{Model, Value};
+#[cfg(feature = "sibling-persistence")]
 use sqlmodel_core::Row as SqlModelRow;
+#[cfg(feature = "sibling-persistence")]
 use sqlmodel_frankensqlite::{FrankenConnection, FrankenExclusiveTransaction};
 
 use crate::fleet_immune_protocol::FleetTrustStateCasMint;
+#[cfg(feature = "sibling-persistence")]
 use crate::typed_persistence_models::{
     FLEET_TRUST_STATE_MAX_ANCHOR_PERMIT_BYTES, FLEET_TRUST_STATE_MAX_SNAPSHOT_BYTES,
-    FLEET_TRUST_STATE_RECORD_ID, FLEET_TRUST_STATE_SCHEMA_VERSION, FleetTrustStateEntry,
-    IfcProvenanceEntry, ReplacementLineageEntry, ShadowEvidenceJournalEntry,
-    SpecializationIndexEntry, TypedFrankenSqliteSession, TypedStoreRecord,
-    fleet_trust_state_create_table_sql, open_typed_frankensqlite_memory_session,
+    FLEET_TRUST_STATE_RECORD_ID, FLEET_TRUST_STATE_SCHEMA_VERSION,
+};
+use crate::typed_persistence_models::{
+    FleetTrustStateEntry, IfcProvenanceEntry, ReplacementLineageEntry, ShadowEvidenceJournalEntry,
+    SpecializationIndexEntry, TypedStoreRecord,
+};
+#[cfg(feature = "sibling-persistence")]
+use crate::typed_persistence_models::{
+    TypedFrankenSqliteSession, fleet_trust_state_create_table_sql,
+    open_typed_frankensqlite_memory_session,
 };
 
 /// Current schema version for storage-adapter contracts.
@@ -519,7 +532,9 @@ impl FleetTrustStateCasAuthorization {
         }
     }
 
-    #[cfg(test)]
+    // Every caller of this test-only constructor is a fleet-authority CAS test,
+    // all of which need the FrankenSQLite backend (bd-ndpm2).
+    #[cfg(all(test, feature = "sibling-persistence"))]
     pub(crate) fn new(
         expected_current_snapshot_hash: Option<String>,
         next_snapshot_hash: String,
@@ -1236,14 +1251,23 @@ pub const FLEET_TRUST_STATE_DATABASE_FILENAME: &str = "fleet_trust_state.db";
 /// fleet-authority model. Keeping this representation explicit lets the
 /// authority boundary reject hidden collation, affinity, or constraint drift
 /// after FrankenSQLite has canonicalized identifier quoting.
+#[cfg(feature = "sibling-persistence")]
 const FLEET_TRUST_STATE_CANONICAL_CREATE_SQL: &str = "CREATE TABLE IF NOT EXISTS fleet_trust_state (state_id BIGINT NOT NULL, schema_version TEXT NOT NULL, fleet_authority_id TEXT NOT NULL, generation_decimal TEXT NOT NULL, authority_epoch_decimal TEXT NOT NULL, snapshot_hash TEXT NOT NULL, prior_snapshot_hash TEXT NOT NULL, authority_head_hash TEXT NOT NULL, anchor_advance_permit_hex TEXT NOT NULL, snapshot_json TEXT NOT NULL, PRIMARY KEY (state_id))";
 
+// The isolated fleet-authority row is persisted through `/dp/sqlmodel_rust`
+// over `/dp/frankensqlite`. Everything from here to the end of
+// `impl FrankensqliteBackend for FleetTrustStateFrankensqliteBackend` needs
+// those siblings; the generic `FrankensqliteBackend` trait and the
+// `FrankensqliteStorageAdapter` over it do not, and stay available in a
+// no-siblings build (bd-ndpm2).
+#[cfg(feature = "sibling-persistence")]
 trait FleetAuthoritySql {
     fn query(&mut self, sql: &str, params: &[Value]) -> Result<Vec<SqlModelRow>, String>;
     fn execute(&mut self, sql: &str, params: &[Value]) -> Result<u64, String>;
     fn execute_raw(&mut self, sql: &str) -> Result<(), String>;
 }
 
+#[cfg(feature = "sibling-persistence")]
 impl FleetAuthoritySql for FrankenExclusiveTransaction<'_> {
     fn query(&mut self, sql: &str, params: &[Value]) -> Result<Vec<SqlModelRow>, String> {
         self.query_sync(sql, params)
@@ -1270,10 +1294,12 @@ impl FleetAuthoritySql for FrankenExclusiveTransaction<'_> {
 /// also the specialized [`StoreRecord::revision`]. If metadata-only durable
 /// writes or multi-transition publications are ever introduced, this mapping
 /// must be replaced by an independent typed revision column.
+#[cfg(feature = "sibling-persistence")]
 pub struct FleetTrustStateFrankensqliteBackend {
     connection: FrankenConnection,
 }
 
+#[cfg(feature = "sibling-persistence")]
 impl fmt::Debug for FleetTrustStateFrankensqliteBackend {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("FleetTrustStateFrankensqliteBackend")
@@ -1282,6 +1308,7 @@ impl fmt::Debug for FleetTrustStateFrankensqliteBackend {
     }
 }
 
+#[cfg(feature = "sibling-persistence")]
 impl FleetTrustStateFrankensqliteBackend {
     /// Open the isolated authority database through the sibling-owned driver.
     ///
@@ -1736,6 +1763,7 @@ impl FleetTrustStateFrankensqliteBackend {
     }
 }
 
+#[cfg(feature = "sibling-persistence")]
 impl FrankensqliteBackend for FleetTrustStateFrankensqliteBackend {
     fn apply_control_plane_profile(&mut self) -> Result<(), String> {
         self.initialize_authority_schema()
@@ -1880,6 +1908,7 @@ pub struct FrankensqliteStorageAdapter<B: FrankensqliteBackend> {
     /// Optional typed SQLModel session for ReplacementLineage, ShadowEvidenceJournal,
     /// IfcProvenance, EvidenceIndex, and SpecializationIndex stores.
     /// When present, typed operations use SQLModel boundaries instead of generic record operations.
+    #[cfg(feature = "sibling-persistence")]
     typed_session: Option<TypedFrankenSqliteSession>,
 }
 
@@ -1892,7 +1921,7 @@ where
             .field("backend", &self.backend)
             .field("schema_version", &self.schema_version)
             .field("events", &self.events)
-            .field("typed_session_present", &self.typed_session.is_some())
+            .field("typed_session_present", &self.has_typed_session())
             .finish()
     }
 }
@@ -1917,6 +1946,7 @@ impl<B: FrankensqliteBackend> FrankensqliteStorageAdapter<B> {
             backend,
             schema_version,
             events: Vec::new(),
+            #[cfg(feature = "sibling-persistence")]
             typed_session: None,
         })
     }
@@ -1927,6 +1957,7 @@ impl<B: FrankensqliteBackend> FrankensqliteStorageAdapter<B> {
     /// IfcProvenance, EvidenceIndex, and SpecializationIndex stores
     /// using SQLModel boundaries instead of generic record operations. Uses in-memory typed session
     /// for development/testing; production callers should extend this to use file-backed sessions.
+    #[cfg(feature = "sibling-persistence")]
     pub fn new_with_typed_session(mut backend: B) -> Result<Self, StorageError> {
         backend.apply_control_plane_profile().map_err(|detail| {
             StorageError::BackendUnavailable {
@@ -1959,16 +1990,29 @@ impl<B: FrankensqliteBackend> FrankensqliteStorageAdapter<B> {
     }
 
     /// Check if typed SQLModel session is available for typed store operations.
+    #[cfg(feature = "sibling-persistence")]
     pub fn has_typed_session(&self) -> bool {
         self.typed_session.is_some()
     }
 
+    /// Check if typed SQLModel session is available for typed store operations.
+    ///
+    /// Without `/dp/sqlmodel_rust` there is no session to hold, so this is a
+    /// constant `false` rather than a missing method: callers keep compiling and
+    /// take their existing "no typed session" branch (bd-ndpm2).
+    #[cfg(not(feature = "sibling-persistence"))]
+    pub fn has_typed_session(&self) -> bool {
+        false
+    }
+
     /// Get immutable reference to typed session if available.
+    #[cfg(feature = "sibling-persistence")]
     pub fn typed_session(&self) -> Option<&TypedFrankenSqliteSession> {
         self.typed_session.as_ref()
     }
 
     /// Get mutable reference to typed session if available.
+    #[cfg(feature = "sibling-persistence")]
     pub fn typed_session_mut(&mut self) -> Option<&mut TypedFrankenSqliteSession> {
         self.typed_session.as_mut()
     }
@@ -2000,9 +2044,11 @@ impl<B: FrankensqliteBackend> FrankensqliteStorageAdapter<B> {
 }
 
 /// Storage-adapter type for the isolated real fleet-authority database.
+#[cfg(feature = "sibling-persistence")]
 pub type FleetTrustStateFrankensqliteStorageAdapter =
     FrankensqliteStorageAdapter<FleetTrustStateFrankensqliteBackend>;
 
+#[cfg(feature = "sibling-persistence")]
 impl FrankensqliteStorageAdapter<FleetTrustStateFrankensqliteBackend> {
     /// Open, initialize, and validate the isolated `fleet_trust_state.db`.
     pub fn open_fleet_trust_state_file(path: impl AsRef<Path>) -> Result<Self, StorageError> {
@@ -4306,6 +4352,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "sibling-persistence")]
     fn frankensqlite_adapter_new_creates_no_typed_session() {
         let backend = MockFrankenSqlite::default();
         let adapter = FrankensqliteStorageAdapter::new(backend).expect("should create adapter");
@@ -4314,6 +4361,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "sibling-persistence")]
     fn frankensqlite_adapter_new_with_typed_session_enables_typed_operations() {
         let backend = MockFrankenSqlite::default();
         let mut adapter = FrankensqliteStorageAdapter::new_with_typed_session(backend)
@@ -4715,6 +4763,7 @@ mod tests {
         assert!(rows.is_empty());
     }
 
+    #[cfg(feature = "sibling-persistence")]
     fn fleet_trust_state_entry(generation: u64, authority_epoch: u64) -> FleetTrustStateEntry {
         FleetTrustStateEntry {
             state_id: crate::typed_persistence_models::FLEET_TRUST_STATE_RECORD_ID,
@@ -4738,6 +4787,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "sibling-persistence")]
     fn fleet_trust_state_rejects_generic_put_batch_and_delete() {
         let mut adapter = InMemoryStorageAdapter::new();
         let entry = fleet_trust_state_entry(1, 1);
@@ -4824,6 +4874,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "sibling-persistence")]
     fn fleet_trust_state_compare_and_swap_rejects_stale_concurrent_writer() {
         let mut adapter = InMemoryStorageAdapter::new();
         let first_model = fleet_trust_state_entry(1, 10);
@@ -4902,6 +4953,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "sibling-persistence")]
     fn fleet_trust_state_failed_compare_and_swap_leaves_prior_state_intact() {
         let mut adapter = InMemoryStorageAdapter::new();
         let initial_model = fleet_trust_state_entry(1, 10);
@@ -4955,6 +5007,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "sibling-persistence")]
     fn fleet_trust_state_revision_overflow_and_misbound_authorization_fail_closed() {
         let mut adapter = InMemoryStorageAdapter::new();
         let initial_model = fleet_trust_state_entry(1, 10);
@@ -5045,6 +5098,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "sibling-persistence")]
     fn real_frankensqlite_fleet_backend_bootstraps_and_advances_exact_revision() {
         let mut adapter =
             FleetTrustStateFrankensqliteStorageAdapter::open_fleet_trust_state_memory()
@@ -5114,6 +5168,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "sibling-persistence")]
     fn real_frankensqlite_fleet_backend_hash_conflict_gap_and_exhaustion_fail_closed() {
         let mut adapter =
             FleetTrustStateFrankensqliteStorageAdapter::open_fleet_trust_state_memory()
@@ -5210,6 +5265,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "sibling-persistence")]
     fn real_fleet_backend_requires_the_isolated_database_basename() {
         let error =
             FleetTrustStateFrankensqliteBackend::open_file("/data/tmp/not-the-fleet-authority.db")
@@ -5222,6 +5278,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "sibling-persistence")]
     fn real_fleet_backend_rejects_a_shared_database_schema() {
         let backend = FleetTrustStateFrankensqliteBackend::open_memory()
             .expect("real in-memory FrankenSQLite backend should open");
@@ -5248,6 +5305,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "sibling-persistence")]
     fn real_fleet_backend_rejects_noncanonical_table_shape_and_triggers() {
         let malformed = FleetTrustStateFrankensqliteBackend::open_memory()
             .expect("malformed-schema test backend should open");
@@ -5300,6 +5358,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "sibling-persistence")]
     fn real_fleet_backend_rejects_multiple_rows_before_sqlmodel_deserialization() {
         let backend = FleetTrustStateFrankensqliteBackend::open_memory()
             .expect("cardinality test backend should open");
@@ -5338,6 +5397,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "sibling-persistence")]
     fn real_fleet_backend_bounds_state_id_before_materialization() {
         let backend = FleetTrustStateFrankensqliteBackend::open_memory()
             .expect("state-id ingress test backend should open");
@@ -5367,6 +5427,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "sibling-persistence")]
     fn frankensqlite_backend_without_atomic_cas_fails_closed() {
         let backend = MockFrankenSqlite::default();
         let mut adapter = FrankensqliteStorageAdapter::new(backend).expect("adapter init");

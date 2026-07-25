@@ -35,7 +35,7 @@ The rules compose. A containment action is replay-anchored *and* signed, so a co
 
 This is research-grade infrastructure, not a packaged product.
 
-- **First published release: `v0.1.0`.** Prebuilt `frankenctl` binaries (Linux x86_64 and macOS Apple Silicon) ship via [GitHub Releases](https://github.com/Dicklesworthstone/franken_engine/releases) with a checksum-verified `curl | bash` installer ([`install.sh`](./install.sh)); other platforms fall back to a standalone (`--no-default-features`) source build. Current `main` stages `frankenengine-core` and `frankenengine-engine` at an unreleased `0.2.0` compatibility boundary; it does not create a `v0.2.0` tag or release. See [`CHANGELOG.md`](./CHANGELOG.md) for the evidence trail.
+- **First published release: `v0.1.0`.** Prebuilt `frankenctl` binaries (Linux x86_64 and macOS Apple Silicon) ship via [GitHub Releases](https://github.com/Dicklesworthstone/franken_engine/releases) with a checksum-verified `curl | bash` installer ([`install.sh`](./install.sh)); other platforms fall back to a source build. Note that `--no-default-features` links no sibling crates but still requires the `/dp` sibling checkouts to be present at resolution time (`bd-ndpm2`); see *Standalone Mode*. Current `main` stages `frankenengine-core` and `frankenengine-engine` at an unreleased `0.2.0` compatibility boundary; it does not create a `v0.2.0` tag or release. See [`CHANGELOG.md`](./CHANGELOG.md) for the evidence trail.
 - **Every README claim is gated.** Any wording change runs through [`./scripts/run_claim_to_proof_matrix_gate.sh ci`](./scripts/run_claim_to_proof_matrix_gate.sh) against [`docs/claim_to_proof_matrix_v1.json`](./docs/claim_to_proof_matrix_v1.json). Claims classified `hypothesis` or `target` must say so explicitly; absolute-superiority language without artifacts is rejected.
 - **Automation surfaces ship in advisory-only mode.** The shadow daemon and related automations cannot execute live mutations or production deployments until adoption gates are explicitly verified green. See [`docs/SHADOW_DAEMON_PROOF_STATE.md`](./docs/SHADOW_DAEMON_PROOF_STATE.md).
 
@@ -1429,13 +1429,13 @@ curl -fsSL https://raw.githubusercontent.com/Dicklesworthstone/franken_engine/ma
 irm https://raw.githubusercontent.com/Dicklesworthstone/franken_engine/main/install.ps1 | iex
 ```
 
-The installer downloads the latest `frankenctl` release asset for your platform, verifies it against its `SHA256` sidecar (and a cosign signature when present), and installs to `~/.local/bin` (`%USERPROFILE%\.local\bin` on Windows). Prebuilt binaries ship for **Linux x86_64**, **macOS Apple Silicon (arm64)**, and **Windows x86_64**; on other platforms the bash installer falls back to a standalone source build (`--no-default-features`, no sibling repos required). Pass `--help` (bash) / `-EasyMode` (PowerShell adds the dir to PATH) for options.
+The installer downloads the latest `frankenctl` release asset for your platform, verifies it against its `SHA256` sidecar (and a cosign signature when present), and installs to `~/.local/bin` (`%USERPROFILE%\.local\bin` on Windows). Prebuilt binaries ship for **Linux x86_64**, **macOS Apple Silicon (arm64)**, and **Windows x86_64**; on other platforms the bash installer falls back to a source build (`--no-default-features`, which links no sibling crates but still needs the `/dp` checkouts present — see *Standalone Mode*). Pass `--help` (bash) / `-EasyMode` (PowerShell adds the dir to PATH) for options.
 
 ### Build from source
 
-The `frankenctl` binary also builds directly from source. Standalone mode requires no sibling repos.
+The `frankenctl` binary also builds directly from source. Standalone mode links no sibling crates, but the sibling *checkouts* must still be present — see the correction note below.
 
-### Standalone Mode (no sibling repos required)
+### Standalone Mode (no sibling crates linked)
 
 ```bash
 cargo check --no-default-features
@@ -1444,6 +1444,12 @@ cargo test --no-default-features
 ```
 
 In standalone mode the core interpreter compiles, governance modules fall back to local-only behavior, and external policy integration is disabled. Suitable for development and testing.
+
+**What `--no-default-features` does and does not do (corrected 2026-07-25, `bd-ndpm2`).** It drops all nine `/dp` sibling crates from the build graph: `sqlmodel`, `sqlmodel-core`, `sqlmodel-frankensqlite` (and through them `/dp/frankensqlite`), `fastapi-core`, and the five `fp-*` crates. Nothing from a sibling repository is compiled or linked, and `./scripts/test_standalone_build.sh sibling-isolation` fails closed if any sibling re-enters the graph.
+
+It does **not** yet mean you can build without the sibling repositories on disk. Cargo resolves a path dependency's manifest during resolution whether or not a feature activates it, and the workspace `[patch.crates-io]` block independently requires `/dp/frankensqlite`. So a checkout that lacks `/dp` still fails at resolution time, before any compilation. Making the checkouts genuinely optional requires publishing the sibling crates to a registry (an optional *registry* dependency is skipped when disabled; an optional *path* or *git* dependency is not); none of the nine is currently published. That work is tracked on `bd-gw4cg` — until it lands, treat the sibling repositories as a build prerequisite in every mode.
+
+What standalone mode buys today is isolation, not independence: a broken or mid-migration sibling can no longer break the engine build, which is the failure this correction came from.
 
 ### Full Integration Mode (requires `/dp/asupersync`, `/dp/frankentui`, `/dp/frankensqlite`, `/dp/sqlmodel_rust`, `/dp/fastapi_rust`, `/dp/frankenpandas`)
 
@@ -2237,7 +2243,7 @@ As of `v0.1.0` the project ships a checksum-verified `curl | bash` installer and
 curl -fsSL https://raw.githubusercontent.com/Dicklesworthstone/franken_engine/main/install.sh | bash
 ```
 
-On platforms without a prebuilt asset the installer falls back to a source build. You can still build directly with `cargo build --release -p frankenengine-engine --bin frankenctl` in either Standalone Mode (`--no-default-features`, no sibling repos) or Full Integration Mode (with `/dp/asupersync`, `/dp/frankentui`, `/dp/frankensqlite`, `/dp/sqlmodel_rust`, `/dp/fastapi_rust`, `/dp/frankenpandas` available). See *Installation* above. The release binary is built in Full Integration Mode and is self-contained; macOS/ARM prebuilt assets are not yet published.
+On platforms without a prebuilt asset the installer falls back to a source build. You can still build directly with `cargo build --release -p frankenengine-engine --bin frankenctl` in either Standalone Mode (`--no-default-features`, which links no sibling crates but still requires the `/dp` checkouts on disk — `bd-ndpm2`) or Full Integration Mode (with `/dp/asupersync`, `/dp/frankentui`, `/dp/frankensqlite`, `/dp/sqlmodel_rust`, `/dp/fastapi_rust`, `/dp/frankenpandas` available). See *Installation* above. The release binary is built in Full Integration Mode and is self-contained; macOS/ARM prebuilt assets are not yet published.
 
 ### 10. How do I add a new claim to the README?
 

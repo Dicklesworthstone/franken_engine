@@ -6623,11 +6623,20 @@ impl FleetProtocolState {
 mod tests {
     use super::*;
     use std::cell::{Cell, RefCell};
+    // Only the gated Q9.2 retained-e2e subprocess harness below uses these
+    // (bd-ndpm2); without `sibling-persistence` there is no FrankenSQLite
+    // authority database for it to drive.
+    #[cfg(feature = "sibling-persistence")]
     use std::fs::OpenOptions;
+    #[cfg(feature = "sibling-persistence")]
     use std::io::Write;
+    #[cfg(feature = "sibling-persistence")]
     use std::path::{Path, PathBuf};
+    #[cfg(feature = "sibling-persistence")]
     use std::process::{Child, Command, ExitStatus};
+    #[cfg(feature = "sibling-persistence")]
     use std::time::{Duration, Instant};
+    #[cfg(feature = "sibling-persistence")]
     use wait_timeout::ChildExt;
 
     // -- Helpers --
@@ -8450,6 +8459,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "sibling-persistence")]
     fn retained_real_fleet_authority_path(scenario: &str) -> PathBuf {
         let root = std::env::var_os("FLEET_TRUST_STATE_E2E_ROOT")
             .map(PathBuf::from)
@@ -8465,37 +8475,52 @@ mod tests {
         scenario_root.join(crate::storage_adapter::FLEET_TRUST_STATE_DATABASE_FILENAME)
     }
 
+    #[cfg(feature = "sibling-persistence")]
     const Q9_2_WORKER_MODE: &str = "FRANKEN_FLEET_Q9_2_WORKER_MODE";
+    #[cfg(feature = "sibling-persistence")]
     const Q9_2_DATABASE_PATH: &str = "FRANKEN_FLEET_Q9_2_DATABASE_PATH";
+    #[cfg(feature = "sibling-persistence")]
     const Q9_2_ANCHOR_PATH: &str = "FRANKEN_FLEET_Q9_2_ANCHOR_PATH";
+    #[cfg(feature = "sibling-persistence")]
     const Q9_2_READY_PATH: &str = "FRANKEN_FLEET_Q9_2_READY_PATH";
+    #[cfg(feature = "sibling-persistence")]
     const Q9_2_GO_PATH: &str = "FRANKEN_FLEET_Q9_2_GO_PATH";
+    #[cfg(feature = "sibling-persistence")]
     const Q9_2_OUTCOME_PATH: &str = "FRANKEN_FLEET_Q9_2_OUTCOME_PATH";
+    #[cfg(feature = "sibling-persistence")]
     const Q9_2_SEQUENCE: &str = "FRANKEN_FLEET_Q9_2_SEQUENCE";
+    #[cfg(feature = "sibling-persistence")]
     const Q9_2_SEED: &str = "FRANKEN_FLEET_Q9_2_SEED";
+    #[cfg(feature = "sibling-persistence")]
     const Q9_2_TEST_NAME: &str = "fleet_immune_protocol::tests::real_frankensqlite_subprocess_crash_and_cross_process_cas_proof";
+    #[cfg(feature = "sibling-persistence")]
     const Q9_2_CHILD_TIMEOUT: Duration = Duration::from_secs(30);
     // Test-only trust root: compiled into the external-authority harness and
     // deliberately absent from the rollbackable database and its journal.
+    #[cfg(feature = "sibling-persistence")]
     const Q9_2_ANCHOR_PERMIT_KEY: &[u8] = b"franken-engine/q9.2/retained-test-anchor/permit-key/v1";
 
     #[derive(Debug, Clone, Serialize, Deserialize)]
+    #[cfg(feature = "sibling-persistence")]
     struct RetainedTestAnchorPermitPayload {
         expected: Option<FleetRegistrySnapshotAnchorClaim>,
         next: FleetRegistrySnapshotAnchorClaim,
     }
 
     #[derive(Debug, Serialize, Deserialize)]
+    #[cfg(feature = "sibling-persistence")]
     struct RetainedTestAnchorPermit {
         payload: RetainedTestAnchorPermitPayload,
         authentication: AuthenticityHash,
     }
 
+    #[cfg(feature = "sibling-persistence")]
     struct RetainedTestAnchorAuthority {
         state_path: PathBuf,
         fail_after_advance_once: Cell<bool>,
     }
 
+    #[cfg(feature = "sibling-persistence")]
     impl RetainedTestAnchorAuthority {
         fn new(state_path: impl Into<PathBuf>, fail_after_advance_once: bool) -> Self {
             Self {
@@ -8650,6 +8675,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "sibling-persistence")]
     impl FleetRegistryAnchorAuthority for RetainedTestAnchorAuthority {
         fn fleet_authority_id(&self) -> FleetAuthorityId {
             test_fleet_authority_id()
@@ -8752,6 +8778,7 @@ mod tests {
     }
 
     #[derive(Debug, Serialize, Deserialize)]
+    #[cfg(feature = "sibling-persistence")]
     struct Q9_2WorkerOutcome {
         applied: bool,
         key_sequence: u64,
@@ -8762,12 +8789,14 @@ mod tests {
         error: Option<String>,
     }
 
+    #[cfg(feature = "sibling-persistence")]
     fn q9_2_required_path(variable: &str) -> PathBuf {
         std::env::var_os(variable)
             .map(PathBuf::from)
             .unwrap_or_else(|| panic!("missing required q9.2 worker variable {variable}"))
     }
 
+    #[cfg(feature = "sibling-persistence")]
     fn q9_2_write_retained_bytes(path: &Path, bytes: &[u8]) {
         let mut file = OpenOptions::new()
             .create_new(true)
@@ -8787,11 +8816,13 @@ mod tests {
         });
     }
 
+    #[cfg(feature = "sibling-persistence")]
     fn q9_2_write_outcome(path: &Path, outcome: &Q9_2WorkerOutcome) {
         let bytes = serde_json::to_vec_pretty(outcome).expect("serialize q9.2 worker outcome");
         q9_2_write_retained_bytes(path, &bytes);
     }
 
+    #[cfg(feature = "sibling-persistence")]
     fn q9_2_read_outcome(path: &Path) -> Q9_2WorkerOutcome {
         let bytes = std::fs::read(path).unwrap_or_else(|error| {
             panic!("read retained q9.2 outcome {}: {error}", path.display())
@@ -8801,6 +8832,7 @@ mod tests {
         })
     }
 
+    #[cfg(feature = "sibling-persistence")]
     fn q9_2_wait_for_path(path: &Path, label: &str) {
         let deadline = Instant::now() + Q9_2_CHILD_TIMEOUT;
         while !path.exists() {
@@ -8813,6 +8845,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "sibling-persistence")]
     fn q9_2_worker_command(mode: &str, database_path: &Path, anchor_path: &Path) -> Command {
         let mut command = Command::new(std::env::current_exe().expect("locate q9.2 test binary"));
         command
@@ -8826,6 +8859,7 @@ mod tests {
         command
     }
 
+    #[cfg(feature = "sibling-persistence")]
     fn q9_2_wait_child(mut child: Child, label: &str) -> ExitStatus {
         match child
             .wait_timeout(Q9_2_CHILD_TIMEOUT)
@@ -8840,6 +8874,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "sibling-persistence")]
     fn q9_2_context(label: &str) -> EventContext {
         EventContext::new(
             format!("trace-q9-2-{label}"),
@@ -8849,6 +8884,7 @@ mod tests {
         .expect("valid q9.2 storage context")
     }
 
+    #[cfg(feature = "sibling-persistence")]
     fn q9_2_bootstrap_retained_registry(database_path: &Path, anchor_path: &Path, seed: u8) {
         let context = q9_2_context("bootstrap");
         let authority = RetainedTestAnchorAuthority::new(anchor_path, false);
@@ -8871,6 +8907,7 @@ mod tests {
         assert_eq!(live.store_revision(), 1);
     }
 
+    #[cfg(feature = "sibling-persistence")]
     fn q9_2_copy_database_family(source: &Path, destination: &Path) {
         std::fs::copy(source, destination).unwrap_or_else(|error| {
             panic!(
@@ -8926,6 +8963,7 @@ mod tests {
             });
     }
 
+    #[cfg(feature = "sibling-persistence")]
     fn q9_2_run_worker(mode: &str) {
         let database_path = q9_2_required_path(Q9_2_DATABASE_PATH);
         let anchor_path = q9_2_required_path(Q9_2_ANCHOR_PATH);
@@ -11312,6 +11350,7 @@ mod tests {
 
     #[test]
     #[ignore = "requires an explicit retained FLEET_TRUST_STATE_E2E_ROOT; artifacts are never removed"]
+    #[cfg(feature = "sibling-persistence")]
     fn real_frankensqlite_subprocess_crash_and_cross_process_cas_proof() {
         if let Some(mode) = std::env::var_os(Q9_2_WORKER_MODE) {
             q9_2_run_worker(&mode.to_string_lossy());
@@ -11597,6 +11636,7 @@ mod tests {
 
     #[test]
     #[ignore = "requires an explicit retained FLEET_TRUST_STATE_E2E_ROOT; artifacts are never removed"]
+    #[cfg(feature = "sibling-persistence")]
     fn real_frankensqlite_registry_gracefully_reopens_prepared_rotation() {
         let database_path = retained_real_fleet_authority_path("prepared-rotation-reopen");
         let context = EventContext::new(
@@ -11656,6 +11696,7 @@ mod tests {
 
     #[test]
     #[ignore = "requires an explicit retained FLEET_TRUST_STATE_E2E_ROOT; artifacts are never removed"]
+    #[cfg(feature = "sibling-persistence")]
     fn real_frankensqlite_registry_reconciles_lost_finalize_response_after_reopen() {
         let database_path = retained_real_fleet_authority_path("lost-finalize-response-reopen");
         let context = EventContext::new(
@@ -11705,6 +11746,7 @@ mod tests {
 
     #[test]
     #[ignore = "requires an explicit retained FLEET_TRUST_STATE_E2E_ROOT; artifacts are never removed"]
+    #[cfg(feature = "sibling-persistence")]
     fn real_frankensqlite_sequential_connections_reject_a_stale_rotation() {
         let database_path = retained_real_fleet_authority_path("independent-connection-cas");
         let context = EventContext::new(

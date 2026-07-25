@@ -210,11 +210,49 @@ path = "tests/safety_decision_router_integration.rs"
 required-features = ["__moved_to_frankenengine_control_plane_integration_tests"]
 
 [features]
-default = ["asupersync-integration"]
+default = [
+    "asupersync-integration",
+    "sibling-persistence",
+    "sibling-service-api",
+    "sibling-dataframes",
+]
 asupersync-integration = [
     "dep:franken-kernel",
     "dep:franken-decision",
     "dep:franken-evidence",
+]
+# The three features below gate every `/dp/*` sibling *path* dependency, so that
+# `--no-default-features` is a genuine no-siblings build rather than a build that
+# merely drops the crates.io-published asupersync trio (bd-ndpm2).
+#
+# Each is ON by default: a normal `cargo build` in a full checkout is unchanged.
+# Turning one OFF removes the sibling from the dependency graph entirely and
+# compiles out the surface that consumes it. Nothing is stubbed or simulated —
+# the affected API simply does not exist, and the one runtime path that would
+# otherwise silently degrade (Parquet evidence export) fails closed with a
+# typed error instead of emitting a lesser artifact under the same name.
+
+# `/dp/sqlmodel_rust` typed persistence, and through it `/dp/frankensqlite`.
+# `cargo tree -e normal -i fsqlite` shows sqlmodel-frankensqlite is the *only*
+# edge that pulls fsqlite, so clearing this feature drops both siblings at once.
+# Gates: typed_persistence_models typed-session API, storage_adapter's
+# FleetTrustStateFrankensqliteBackend and FleetAuthoritySql-for-transaction impl.
+sibling-persistence = [
+    "dep:sqlmodel",
+    "dep:sqlmodel-core",
+    "dep:sqlmodel-frankensqlite",
+]
+# `/dp/fastapi_rust` service/API control surface (ADR-0002).
+# Gates: policy_controller::service_endpoint_template.
+sibling-service-api = ["dep:fastapi-core"]
+# `/dp/frankenpandas` evidence-frame primitives.
+# Gates: the Parquet evidence-export path in governance_hooks.
+sibling-dataframes = [
+    "dep:fp-io",
+    "dep:fp-frame",
+    "dep:fp-columnar",
+    "dep:fp-index",
+    "dep:fp-types",
 ]
 certified_rewrite_optimizer_integration = []
 # Do not enable this feature in normal engine validation. The listed
@@ -281,9 +319,9 @@ uuid = { version = "1.16", features = ["v7", "serde"] }
 syn = { version = "2.0", features = ["full", "visit"] }
 toml = "0.8"
 clap = { version = "4.5", features = ["derive"] }
-sqlmodel = { path = "/dp/sqlmodel_rust/crates/sqlmodel" }
-sqlmodel-core = { path = "/dp/sqlmodel_rust/crates/sqlmodel-core" }
-sqlmodel-frankensqlite = { path = "/dp/sqlmodel_rust/crates/sqlmodel-frankensqlite" }
+sqlmodel = { path = "/dp/sqlmodel_rust/crates/sqlmodel", optional = true }
+sqlmodel-core = { path = "/dp/sqlmodel_rust/crates/sqlmodel-core", optional = true }
+sqlmodel-frankensqlite = { path = "/dp/sqlmodel_rust/crates/sqlmodel-frankensqlite", optional = true }
 franken-engine-deterministic-trait = { path = "../franken-engine-deterministic-trait" }
 franken-engine-deterministic-derive = { path = "../franken-engine-deterministic-derive" }
 franken-engine-fixed-layout-derive = { path = "../franken-engine-fixed-layout-derive" }
@@ -293,15 +331,15 @@ rustix = { version = "1.1", features = ["event", "fs", "process", "time"] }
 wait4 = "0.1"
 wait-timeout = "0.2"
 frankenengine-extension-host = { path = "../franken-extension-host" }
-fastapi-core = { path = "/dp/fastapi_rust/crates/fastapi-core" }
+fastapi-core = { path = "/dp/fastapi_rust/crates/fastapi-core", optional = true }
 franken-kernel = { version = "0.3.4", optional = true }
 franken-decision = { version = "0.3.4", optional = true }
 franken-evidence = { version = "0.3.4", optional = true }
-fp-io = { path = "/dp/frankenpandas/crates/fp-io", default-features = false }
-fp-frame = { path = "/dp/frankenpandas/crates/fp-frame" }
-fp-columnar = { path = "/dp/frankenpandas/crates/fp-columnar" }
-fp-index = { path = "/dp/frankenpandas/crates/fp-index" }
-fp-types = { path = "/dp/frankenpandas/crates/fp-types" }
+fp-io = { path = "/dp/frankenpandas/crates/fp-io", default-features = false, optional = true }
+fp-frame = { path = "/dp/frankenpandas/crates/fp-frame", optional = true }
+fp-columnar = { path = "/dp/frankenpandas/crates/fp-columnar", optional = true }
+fp-index = { path = "/dp/frankenpandas/crates/fp-index", optional = true }
+fp-types = { path = "/dp/frankenpandas/crates/fp-types", optional = true }
 # Bonawitz 2017 secure aggregation primitive (T.3). The QQ.2 protocol module
 # (`secure_aggregation.rs`) wraps this vetted sibling crate rather than inlining
 # ad-hoc cryptography.
@@ -312,7 +350,16 @@ dp = { path = "../dp" }
 # crate's integration tests (e.g. fleet_quarantine_integration.rs) without
 # leaking it into the default/production build. Dev-dependencies are not pulled
 # by `cargo build`/`--release`, so the mock stays out of prod (bd-bg9l1.2).
-frankenengine-engine = { path = ".", features = ["tee-test-mock"] }
+#
+# `default-features = false` is load-bearing (bd-ndpm2): without it this entry
+# re-enables `default` during feature unification, so `cargo test
+# --no-default-features` silently rebuilt every `/dp` sibling and the gate's
+# standalone-test lane proved nothing. Requesting only `tee-test-mock` here
+# leaves an ordinary `cargo test` unchanged — the lib target still brings
+# `default` in — while letting the standalone lane actually be standalone.
+frankenengine-engine = { path = ".", default-features = false, features = [
+    "tee-test-mock",
+] }
 criterion = { version = "0.5", features = ["html_reports"] }
 tempfile = "3.0"
 tracing = "0.1"

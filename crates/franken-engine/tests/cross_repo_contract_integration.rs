@@ -36,6 +36,10 @@ use frankenengine_engine::frankentui_adapter::{
     FRANKENTUI_ADAPTER_SCHEMA_VERSION, FrankentuiViewPayload, IncidentReplayView, ReplayEventView,
     ReplayStatus, UpdateKind,
 };
+// `service_endpoint_template` exists only when `/dp/fastapi_rust` is linked
+// (bd-ndpm2). The fastapi_rust *schema contract* assertions elsewhere in this
+// file are pure data and stay ungated.
+#[cfg(feature = "sibling-service-api")]
 use frankenengine_engine::policy_controller::service_endpoint_template::{
     AuthContext, ControlAction, EndpointResponse, ErrorEnvelope, HealthStatusResponse,
     ReplayCommand, RequestContext, SCOPE_CONTROL_WRITE, SCOPE_EVIDENCE_READ, SCOPE_HEALTH_READ,
@@ -1284,6 +1288,7 @@ fn frankensqlite_query_ordering_is_deterministic() {
 // Section 17: Live cross-boundary integration: fastapi_rust
 // ============================================================================
 
+#[cfg(feature = "sibling-service-api")]
 fn sample_health_response() -> EndpointResponse<HealthStatusResponse> {
     EndpointResponse {
         status: "ok".to_string(),
@@ -1310,6 +1315,7 @@ fn sample_health_response() -> EndpointResponse<HealthStatusResponse> {
 }
 
 #[test]
+#[cfg(feature = "sibling-service-api")]
 fn fastapi_endpoint_response_schema_compliance() {
     let contract = fastapi_endpoint_response_contract();
     let violations = verify_schema_compliance(&sample_health_response(), &contract);
@@ -1317,11 +1323,13 @@ fn fastapi_endpoint_response_schema_compliance() {
 }
 
 #[test]
+#[cfg(feature = "sibling-service-api")]
 fn fastapi_endpoint_response_deterministic_serde() {
     verify_deterministic_serde(&sample_health_response()).unwrap();
 }
 
 #[test]
+#[cfg(feature = "sibling-service-api")]
 fn fastapi_endpoint_response_log_structured_compliance() {
     let json = serde_json::to_value(sample_health_response()).unwrap();
     let log_json = &json["log"];
@@ -1330,6 +1338,7 @@ fn fastapi_endpoint_response_log_structured_compliance() {
 }
 
 #[test]
+#[cfg(feature = "sibling-service-api")]
 fn fastapi_error_envelope_has_required_fields() {
     let error = ErrorEnvelope {
         error_code: "unauthorized".to_string(),
@@ -1346,6 +1355,7 @@ fn fastapi_error_envelope_has_required_fields() {
 }
 
 #[test]
+#[cfg(feature = "sibling-service-api")]
 fn fastapi_control_action_enum_stable() {
     let pairs = [
         (ControlAction::Start, "Start"),
@@ -1360,6 +1370,7 @@ fn fastapi_control_action_enum_stable() {
 }
 
 #[test]
+#[cfg(feature = "sibling-service-api")]
 fn fastapi_replay_command_enum_stable() {
     let pairs = [
         (ReplayCommand::Start, "Start"),
@@ -1373,6 +1384,7 @@ fn fastapi_replay_command_enum_stable() {
 }
 
 #[test]
+#[cfg(feature = "sibling-service-api")]
 fn fastapi_scope_constants_non_empty_and_prefixed() {
     for scope in [
         SCOPE_HEALTH_READ,
@@ -1387,6 +1399,7 @@ fn fastapi_scope_constants_non_empty_and_prefixed() {
 }
 
 #[test]
+#[cfg(feature = "sibling-service-api")]
 fn fastapi_request_context_serde() {
     let ctx = RequestContext {
         trace_id: "trace-1".to_string(),
@@ -1399,6 +1412,7 @@ fn fastapi_request_context_serde() {
 }
 
 #[test]
+#[cfg(feature = "sibling-service-api")]
 fn fastapi_auth_context_serde() {
     let auth = AuthContext {
         subject: "operator@example".to_string(),
@@ -1444,6 +1458,7 @@ fn cross_boundary_storage_then_tui_deterministic() {
 }
 
 #[test]
+#[cfg(feature = "sibling-service-api")]
 fn cross_boundary_service_and_storage_both_pass_structured_log() {
     let storage_event = StorageEvent {
         trace_id: "trace-1".to_string(),

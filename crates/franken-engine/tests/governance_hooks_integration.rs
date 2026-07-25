@@ -440,6 +440,7 @@ fn export_csv_basic() {
 }
 
 #[test]
+#[cfg(feature = "sibling-dataframes")]
 fn export_parquet_basic() {
     let entries = full_evidence_set();
     let request = AuditExportRequest {
@@ -452,8 +453,37 @@ fn export_parquet_basic() {
         correlation_id: None,
     };
     let result = export_audit_evidence(request, entries, ts(200)).unwrap();
-    let payload = String::from_utf8_lossy(&result.payload_bytes);
-    assert!(payload.starts_with("FRANKEN_PARQUET_V1\n"));
+    // Real Parquet starts with the PAR1 magic. This assertion previously
+    // required the `FRANKEN_PARQUET_V1` plaintext header, which was the fake
+    // format deliberately removed when the export lane moved to a real writer —
+    // the lib test `test_export_parquet_success` asserts that string is *absent*.
+    // The two had contradicted each other; this one was the stale side.
+    let payload = &result.payload_bytes;
+    assert!(payload.len() >= 4, "Parquet payload needs a magic header");
+    assert_eq!(&payload[0..4], b"PAR1", "expected real Parquet magic");
+}
+
+/// Without `/dp/frankenpandas` the Parquet lane refuses rather than emitting a
+/// differently-encoded artifact under the Parquet name (bd-ndpm2).
+#[test]
+#[cfg(not(feature = "sibling-dataframes"))]
+fn export_parquet_fails_closed_without_sibling_dataframes() {
+    let entries = full_evidence_set();
+    let request = AuditExportRequest {
+        format: AuditExportFormat::Parquet,
+        start_tick: ts(0),
+        end_tick: ts(100),
+        evidence_kinds: None,
+        max_entries: None,
+        requester: "test_user".to_string(),
+        correlation_id: None,
+    };
+    let err = export_audit_evidence(request, entries, ts(200))
+        .expect_err("Parquet export must fail closed without the sibling feature");
+    assert!(
+        format!("{err:?}").contains("sibling-dataframes"),
+        "error must name the enabling feature, got: {err:?}"
+    );
 }
 
 #[test]

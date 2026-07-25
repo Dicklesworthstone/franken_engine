@@ -1691,6 +1691,7 @@ dependencies = [
  "fsqlite-parser",
  "fsqlite-types",
  "fsqlite-vfs",
+ "tracing",
 ]
 
 [[package]]

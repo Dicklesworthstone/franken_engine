@@ -3,7 +3,10 @@
 //! Validates the full endpoint pipeline: authentication -> validation -> execution -> response
 //! envelope construction, including cross-endpoint consistency, error propagation, and
 //! JSON serialization stability.
-
+//!
+//! The module under test exists only when `/dp/fastapi_rust` is linked, so the
+//! whole suite is gated on `sibling-service-api` (bd-ndpm2).
+#![cfg(feature = "sibling-service-api")]
 #![allow(
     clippy::field_reassign_with_default,
     clippy::assertions_on_constants,

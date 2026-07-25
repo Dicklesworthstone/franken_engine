@@ -22,9 +22,18 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value as JsonValue};
 use sha2::{Digest, Sha256};
+// `/dp/sqlmodel_rust` (and through it `/dp/frankensqlite`) backs the ORM session
+// layer at the bottom of this module. The typed *records* and the
+// `TypedStoreRecord` / `TypedStorageAdapterExt` traits above it are plain serde
+// and stay available without any sibling checkout, so the six consumer modules
+// need no feature awareness of their own (bd-ndpm2).
+#[cfg(feature = "sibling-persistence")]
 use sqlmodel::prelude::*;
+#[cfg(feature = "sibling-persistence")]
 use sqlmodel::{Connection, Cx, Outcome, Session, SessionConfig, SessionDebugInfo, create_table};
+#[cfg(feature = "sibling-persistence")]
 use sqlmodel_core::error::ConfigError;
+#[cfg(feature = "sibling-persistence")]
 use sqlmodel_frankensqlite::FrankenConnection;
 
 use crate::ifc_provenance_index::{DeclassReceiptRecord, FlowDecision, FlowEventRecord};
@@ -1385,6 +1394,7 @@ pub trait TypedStorageAdapterExt: StorageAdapter {
 impl<A: StorageAdapter + ?Sized> TypedStorageAdapterExt for A {}
 
 /// Session config used for deterministic typed persistence operations.
+#[cfg(feature = "sibling-persistence")]
 pub fn typed_sqlmodel_session_config() -> SessionConfig {
     SessionConfig {
         auto_begin: true,
@@ -1398,6 +1408,7 @@ pub fn typed_sqlmodel_session_config() -> SessionConfig {
 ///
 /// Fleet trust state is deliberately excluded: its isolated authority database
 /// must be initialized and mutated only by the specialized durable CAS backend.
+#[cfg(feature = "sibling-persistence")]
 pub fn typed_persistence_create_table_sql() -> Vec<String> {
     vec![
         create_table::<ReplacementLineageEntry>()
@@ -1422,6 +1433,7 @@ pub fn typed_persistence_create_table_sql() -> Vec<String> {
 /// so a generic typed session never creates the rollback-sensitive table. A
 /// specialized fleet CAS backend may execute this statement while retaining
 /// exclusive control of authority mutations.
+#[cfg(feature = "sibling-persistence")]
 pub fn fleet_trust_state_create_table_sql() -> String {
     create_table::<FleetTrustStateEntry>()
         .if_not_exists()
@@ -1443,11 +1455,12 @@ pub(crate) const FLEET_TRUST_STATE_MAX_ANCHOR_PERMIT_BYTES: usize = 64 * 1024;
 /// and key windows in one atomic durability unit. Storage policy rejects
 /// generic typed `put`; fleet authority accepts only the generation-and-revision
 /// CAS path.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Model)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "sibling-persistence", derive(Model))]
 #[serde(deny_unknown_fields)]
-#[sqlmodel(table = "fleet_trust_state")]
+#[cfg_attr(feature = "sibling-persistence", sqlmodel(table = "fleet_trust_state"))]
 pub struct FleetTrustStateEntry {
-    #[sqlmodel(primary_key)]
+    #[cfg_attr(feature = "sibling-persistence", sqlmodel(primary_key))]
     pub state_id: i64,
     pub schema_version: String,
     /// Required, separately provisioned fleet namespace as canonical hex.
@@ -1576,10 +1589,12 @@ fn validate_fixed_width_u64<T: TypedStoreRecord>(field: &str, value: &str) -> St
 }
 
 /// Thin typed wrapper around the real SQLModel ORM session.
+#[cfg(feature = "sibling-persistence")]
 pub struct TypedSqlModelSession<C: Connection> {
     inner: Session<C>,
 }
 
+#[cfg(feature = "sibling-persistence")]
 impl<C: Connection> TypedSqlModelSession<C> {
     /// Initialize a typed SQLModel session with deterministic FrankenEngine defaults.
     pub fn new(connection: C) -> Self {
@@ -1680,14 +1695,18 @@ impl<C: Connection> TypedSqlModelSession<C> {
 }
 
 /// Concrete typed SQLModel session backed by sibling FrankenSQLite.
+#[cfg(feature = "sibling-persistence")]
 pub type TypedFrankenSqliteSession = TypedSqlModelSession<FrankenConnection>;
 
 /// Result type for concrete SQLModel driver setup helpers.
+#[cfg(feature = "sibling-persistence")]
 pub type TypedSqlModelDriverResult<T> = std::result::Result<T, Box<sqlmodel::Error>>;
 
 /// Result type for concrete FrankenSQLite typed session setup.
+#[cfg(feature = "sibling-persistence")]
 pub type TypedFrankenSqliteSessionResult = TypedSqlModelDriverResult<TypedFrankenSqliteSession>;
 
+#[cfg(feature = "sibling-persistence")]
 fn typed_frankensqlite_path(path: impl AsRef<Path>) -> TypedSqlModelDriverResult<String> {
     let path = path.as_ref();
     let Some(path) = path.to_str() else {
@@ -1706,6 +1725,7 @@ fn typed_frankensqlite_path(path: impl AsRef<Path>) -> TypedSqlModelDriverResult
 }
 
 /// Initialize the concrete FrankenSQLite schema for all typed persistence tables.
+#[cfg(feature = "sibling-persistence")]
 pub fn initialize_typed_frankensqlite_schema(
     connection: &FrankenConnection,
 ) -> TypedSqlModelDriverResult<()> {
@@ -1716,6 +1736,7 @@ pub fn initialize_typed_frankensqlite_schema(
 }
 
 /// Open a file-backed typed SQLModel session using the sibling FrankenSQLite driver.
+#[cfg(feature = "sibling-persistence")]
 pub fn open_typed_frankensqlite_session(path: impl AsRef<Path>) -> TypedFrankenSqliteSessionResult {
     let connection = FrankenConnection::open_file(typed_frankensqlite_path(path)?)?;
     initialize_typed_frankensqlite_schema(&connection)?;
@@ -1723,6 +1744,7 @@ pub fn open_typed_frankensqlite_session(path: impl AsRef<Path>) -> TypedFrankenS
 }
 
 /// Open an in-memory typed SQLModel session using the sibling FrankenSQLite driver.
+#[cfg(feature = "sibling-persistence")]
 pub fn open_typed_frankensqlite_memory_session() -> TypedFrankenSqliteSessionResult {
     let connection = FrankenConnection::open_memory()?;
     initialize_typed_frankensqlite_schema(&connection)?;
@@ -1738,11 +1760,15 @@ pub fn open_typed_frankensqlite_memory_session() -> TypedFrankenSqliteSessionRes
 /// Tracks slot promotion/demotion lineage with signed receipts for audit
 /// replay. Maps to `frankensqlite::replacement::lineage_log` integration point
 /// with compile-time schema validation.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Model)]
-#[sqlmodel(table = "replacement_lineage")]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "sibling-persistence", derive(Model))]
+#[cfg_attr(
+    feature = "sibling-persistence",
+    sqlmodel(table = "replacement_lineage")
+)]
 pub struct ReplacementLineageEntry {
     /// Unique sequence ID for this lineage entry.
-    #[sqlmodel(primary_key)]
+    #[cfg_attr(feature = "sibling-persistence", sqlmodel(primary_key))]
     pub sequence_id: i64,
 
     /// Slot identifier being promoted/demoted.
@@ -1772,11 +1798,13 @@ pub struct ReplacementLineageEntry {
 
 impl ReplacementLineageEntry {
     /// Build a deterministic typed lookup for one lineage sequence entry.
+    #[cfg(feature = "sibling-persistence")]
     pub fn select_by_sequence_id(sequence_id: i64) -> Select<Self> {
         Select::<Self>::new().filter(Expr::col("sequence_id").eq(sequence_id))
     }
 
     /// Build a deterministic typed lookup for all lineage rows for a slot.
+    #[cfg(feature = "sibling-persistence")]
     pub fn select_by_slot_id(slot_id: impl Into<String>) -> Select<Self> {
         Select::<Self>::new()
             .filter(Expr::col("slot_id").eq(slot_id.into()))
@@ -1784,6 +1812,7 @@ impl ReplacementLineageEntry {
     }
 
     /// Build a deterministic typed lookup by audit receipt artifact.
+    #[cfg(feature = "sibling-persistence")]
     pub fn select_by_receipt_artifact_id(receipt_artifact_id: impl Into<String>) -> Select<Self> {
         Select::<Self>::new()
             .filter(Expr::col("receipt_artifact_id").eq(receipt_artifact_id.into()))
@@ -1842,11 +1871,12 @@ impl TypedStoreRecord for ReplacementLineageEntry {
 /// Tracks label-flow provenance edges and declassification references for
 /// non-interference enforcement traceability. Maps to
 /// `frankensqlite::control_plane::ifc_provenance` with typed boundaries.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Model)]
-#[sqlmodel(table = "ifc_provenance")]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "sibling-persistence", derive(Model))]
+#[cfg_attr(feature = "sibling-persistence", sqlmodel(table = "ifc_provenance"))]
 pub struct IfcProvenanceEntry {
     /// Unique provenance entry ID.
-    #[sqlmodel(primary_key)]
+    #[cfg_attr(feature = "sibling-persistence", sqlmodel(primary_key))]
     pub provenance_id: i64,
 
     /// Source label/entity in the flow.
@@ -1879,11 +1909,13 @@ pub struct IfcProvenanceEntry {
 
 impl IfcProvenanceEntry {
     /// Build a deterministic typed lookup for one provenance entry.
+    #[cfg(feature = "sibling-persistence")]
     pub fn select_by_provenance_id(provenance_id: i64) -> Select<Self> {
         Select::<Self>::new().filter(Expr::col("provenance_id").eq(provenance_id))
     }
 
     /// Build a deterministic typed lookup for all provenance rows for a trace.
+    #[cfg(feature = "sibling-persistence")]
     pub fn select_by_trace_id(trace_id: impl Into<String>) -> Select<Self> {
         Select::<Self>::new()
             .filter(Expr::col("trace_id").eq(trace_id.into()))
@@ -1891,6 +1923,7 @@ impl IfcProvenanceEntry {
     }
 
     /// Build a deterministic typed lookup for one label-flow edge.
+    #[cfg(feature = "sibling-persistence")]
     pub fn select_by_label_flow(
         source_label: impl Into<String>,
         target_label: impl Into<String>,
@@ -1902,6 +1935,7 @@ impl IfcProvenanceEntry {
     }
 
     /// Build a deterministic typed lookup for declassification rows.
+    #[cfg(feature = "sibling-persistence")]
     pub fn select_declassifications() -> Select<Self> {
         Select::<Self>::new()
             .filter(Expr::col("edge_type").eq("declassification"))
@@ -1989,11 +2023,15 @@ impl TypedStoreRecord for IfcProvenanceEntry {
 /// Links beads, source revisions, proof artifacts, command receipts,
 /// validation plans, and gate outcomes through the EvidenceIndex store without
 /// trusting untyped generic records.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Model)]
-#[sqlmodel(table = "proof_evidence_index")]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "sibling-persistence", derive(Model))]
+#[cfg_attr(
+    feature = "sibling-persistence",
+    sqlmodel(table = "proof_evidence_index")
+)]
 pub struct ProofEvidenceIndexEntry {
     /// Stable typed row ID allocated from a domain natural key.
-    #[sqlmodel(primary_key)]
+    #[cfg_attr(feature = "sibling-persistence", sqlmodel(primary_key))]
     pub evidence_id: i64,
 
     /// Bead that owns or consumes this evidence.
@@ -2032,11 +2070,13 @@ pub struct ProofEvidenceIndexEntry {
 
 impl ProofEvidenceIndexEntry {
     /// Build a deterministic typed lookup for one proof-evidence entry.
+    #[cfg(feature = "sibling-persistence")]
     pub fn select_by_evidence_id(evidence_id: i64) -> Select<Self> {
         Select::<Self>::new().filter(Expr::col("evidence_id").eq(evidence_id))
     }
 
     /// Build a deterministic typed lookup for all evidence associated with one bead.
+    #[cfg(feature = "sibling-persistence")]
     pub fn select_by_bead_id(bead_id: impl Into<String>) -> Select<Self> {
         Select::<Self>::new()
             .filter(Expr::col("bead_id").eq(bead_id.into()))
@@ -2046,6 +2086,7 @@ impl ProofEvidenceIndexEntry {
     }
 
     /// Build a deterministic typed lookup for all evidence from one source revision.
+    #[cfg(feature = "sibling-persistence")]
     pub fn select_by_source_revision(source_revision: impl Into<String>) -> Select<Self> {
         Select::<Self>::new()
             .filter(Expr::col("source_revision").eq(source_revision.into()))
@@ -2055,6 +2096,7 @@ impl ProofEvidenceIndexEntry {
     }
 
     /// Build a deterministic typed lookup for recent failed gate evidence.
+    #[cfg(feature = "sibling-persistence")]
     pub fn select_recent_failed_gates() -> Select<Self> {
         Select::<Self>::new()
             .filter(Expr::col("gate_status").eq("fail"))
@@ -2063,6 +2105,7 @@ impl ProofEvidenceIndexEntry {
     }
 
     /// Build a deterministic typed lookup for evidence older than its freshness policy.
+    #[cfg(feature = "sibling-persistence")]
     pub fn select_stale_artifacts(now_ms: i64) -> Select<Self> {
         Select::<Self>::new()
             .filter(Expr::col("freshness_deadline_ms").lt(now_ms))
@@ -2143,11 +2186,15 @@ impl TypedStoreRecord for ProofEvidenceIndexEntry {
 /// Persists normalized source snapshots, derived advisory events, and replay
 /// checkpoints through the typed shadow-journal boundary with deterministic
 /// sequence ordering and explicit retention classes.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Model)]
-#[sqlmodel(table = "shadow_evidence_journal")]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "sibling-persistence", derive(Model))]
+#[cfg_attr(
+    feature = "sibling-persistence",
+    sqlmodel(table = "shadow_evidence_journal")
+)]
 pub struct ShadowEvidenceJournalEntry {
     /// Stable typed row ID allocated from the journal natural key.
-    #[sqlmodel(primary_key)]
+    #[cfg_attr(feature = "sibling-persistence", sqlmodel(primary_key))]
     pub journal_event_id: i64,
 
     /// Bead or track consuming this advisory evidence.
@@ -2204,11 +2251,13 @@ pub struct ShadowEvidenceJournalEntry {
 
 impl ShadowEvidenceJournalEntry {
     /// Build a deterministic typed lookup for one journal event.
+    #[cfg(feature = "sibling-persistence")]
     pub fn select_by_journal_event_id(journal_event_id: i64) -> Select<Self> {
         Select::<Self>::new().filter(Expr::col("journal_event_id").eq(journal_event_id))
     }
 
     /// Build a deterministic typed lookup for all journal rows for one bead.
+    #[cfg(feature = "sibling-persistence")]
     pub fn select_by_bead_id(bead_id: impl Into<String>) -> Select<Self> {
         Select::<Self>::new()
             .filter(Expr::col("bead_id").eq(bead_id.into()))
@@ -2217,6 +2266,7 @@ impl ShadowEvidenceJournalEntry {
     }
 
     /// Build a deterministic typed lookup for one source family.
+    #[cfg(feature = "sibling-persistence")]
     pub fn select_by_source_kind(source_kind: impl Into<String>) -> Select<Self> {
         Select::<Self>::new()
             .filter(Expr::col("source_kind").eq(source_kind.into()))
@@ -2225,6 +2275,7 @@ impl ShadowEvidenceJournalEntry {
     }
 
     /// Build a deterministic typed lookup for replay checkpoints and later rows.
+    #[cfg(feature = "sibling-persistence")]
     pub fn select_from_sequence(sequence_id: i64) -> Select<Self> {
         Select::<Self>::new()
             .filter(Expr::col("sequence_id").ge(sequence_id))
@@ -2427,11 +2478,15 @@ impl TypedStoreRecord for ShadowEvidenceJournalEntry {
 /// Tracks proof-specialization mapping and invalidation markers for
 /// fallback/invalidation replay determinism. Maps to
 /// `frankensqlite::control_plane::specialization_index` with typed safety.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Model)]
-#[sqlmodel(table = "specialization_index")]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "sibling-persistence", derive(Model))]
+#[cfg_attr(
+    feature = "sibling-persistence",
+    sqlmodel(table = "specialization_index")
+)]
 pub struct SpecializationIndexEntry {
     /// Unique specialization entry ID.
-    #[sqlmodel(primary_key)]
+    #[cfg_attr(feature = "sibling-persistence", sqlmodel(primary_key))]
     pub specialization_id: i64,
 
     /// Proof artifact ID being specialized.
@@ -2467,11 +2522,13 @@ pub struct SpecializationIndexEntry {
 
 impl SpecializationIndexEntry {
     /// Build a deterministic typed lookup for one specialization entry.
+    #[cfg(feature = "sibling-persistence")]
     pub fn select_by_specialization_id(specialization_id: i64) -> Select<Self> {
         Select::<Self>::new().filter(Expr::col("specialization_id").eq(specialization_id))
     }
 
     /// Build a deterministic typed lookup for all specializations for a proof artifact.
+    #[cfg(feature = "sibling-persistence")]
     pub fn select_by_proof_artifact_id(proof_artifact_id: impl Into<String>) -> Select<Self> {
         Select::<Self>::new()
             .filter(Expr::col("proof_artifact_id").eq(proof_artifact_id.into()))
@@ -2479,6 +2536,7 @@ impl SpecializationIndexEntry {
     }
 
     /// Build a deterministic typed lookup for all entries belonging to one specialized version.
+    #[cfg(feature = "sibling-persistence")]
     pub fn select_by_specialized_version(specialized_version: impl Into<String>) -> Select<Self> {
         Select::<Self>::new()
             .filter(Expr::col("specialized_version").eq(specialized_version.into()))
@@ -2486,6 +2544,7 @@ impl SpecializationIndexEntry {
     }
 
     /// Build a deterministic typed lookup for all active specializations.
+    #[cfg(feature = "sibling-persistence")]
     pub fn select_active() -> Select<Self> {
         Select::<Self>::new()
             .filter(Expr::col("status").eq("active"))
@@ -2493,6 +2552,7 @@ impl SpecializationIndexEntry {
     }
 
     /// Build a deterministic typed lookup for all invalidated specializations.
+    #[cfg(feature = "sibling-persistence")]
     pub fn select_invalidated() -> Select<Self> {
         Select::<Self>::new()
             .filter(Expr::col("status").eq("invalidated"))
@@ -2501,6 +2561,7 @@ impl SpecializationIndexEntry {
     }
 
     /// Build a deterministic typed lookup by security epoch.
+    #[cfg(feature = "sibling-persistence")]
     pub fn select_by_security_epoch(security_epoch: i64) -> Select<Self> {
         Select::<Self>::new()
             .filter(Expr::col("security_epoch").eq(security_epoch))
@@ -2592,11 +2653,16 @@ mod tests {
     use crate::slot_registry::SlotId;
     use crate::specialization_index::SpecializationRecord;
     use crate::storage_adapter::InMemoryStorageAdapter;
+    // The SQLModel metadata assertions and the Noop mock connection below exist
+    // only when the sibling ORM is linked (bd-ndpm2).
+    #[cfg(feature = "sibling-persistence")]
     use sqlmodel::{FieldInfo, Model, Row, SqlType, Value};
+    #[cfg(feature = "sibling-persistence")]
     use sqlmodel_core::{
         Connection, Dialect, Error, IsolationLevel, PreparedStatement, TransactionOps,
     };
 
+    #[cfg(feature = "sibling-persistence")]
     fn field<T: Model>(field_name: &str) -> &'static FieldInfo {
         T::fields()
             .iter()
@@ -2604,6 +2670,7 @@ mod tests {
             .expect("typed persistence field exists")
     }
 
+    #[cfg(feature = "sibling-persistence")]
     fn assert_round_trips<T>(model: T)
     where
         T: Clone + Model + PartialEq + std::fmt::Debug,
@@ -2768,18 +2835,22 @@ mod tests {
         .expect("deterministic test object id")
     }
 
+    #[cfg(feature = "sibling-persistence")]
     #[derive(Debug, Clone, Copy)]
     struct NoopConnection;
 
+    #[cfg(feature = "sibling-persistence")]
     #[derive(Debug, Clone, Copy)]
     struct NoopTransaction;
 
+    #[cfg(feature = "sibling-persistence")]
     fn noop_error(operation: &str) -> Error {
         Error::Custom(format!(
             "noop typed session test connection does not execute {operation}"
         ))
     }
 
+    #[cfg(feature = "sibling-persistence")]
     impl Connection for NoopConnection {
         type Tx<'conn>
             = NoopTransaction
@@ -2889,6 +2960,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "sibling-persistence")]
     impl TransactionOps for NoopTransaction {
         fn query(
             &self,
@@ -2954,6 +3026,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "sibling-persistence")]
     fn fleet_trust_state_model_exports_sqlmodel_metadata_and_round_trips_row() {
         assert_eq!(FleetTrustStateEntry::TABLE_NAME, "fleet_trust_state");
         assert_eq!(FleetTrustStateEntry::PRIMARY_KEY, &["state_id"]);
@@ -2984,6 +3057,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "sibling-persistence")]
     fn replacement_lineage_model_exports_sqlmodel_metadata() {
         assert_eq!(ReplacementLineageEntry::TABLE_NAME, "replacement_lineage");
         assert_eq!(ReplacementLineageEntry::PRIMARY_KEY, &["sequence_id"]);
@@ -2998,6 +3072,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "sibling-persistence")]
     fn ifc_provenance_model_marks_declassification_ref_nullable() {
         assert_eq!(IfcProvenanceEntry::TABLE_NAME, "ifc_provenance");
         assert_eq!(IfcProvenanceEntry::PRIMARY_KEY, &["provenance_id"]);
@@ -3008,6 +3083,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "sibling-persistence")]
     fn specialization_index_model_marks_invalidation_fields_nullable() {
         assert_eq!(SpecializationIndexEntry::TABLE_NAME, "specialization_index");
         assert_eq!(
@@ -3024,6 +3100,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "sibling-persistence")]
     fn proof_evidence_index_model_exports_dashboard_fields() {
         assert_eq!(ProofEvidenceIndexEntry::TABLE_NAME, "proof_evidence_index");
         assert_eq!(ProofEvidenceIndexEntry::PRIMARY_KEY, &["evidence_id"]);
@@ -3039,6 +3116,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "sibling-persistence")]
     fn typed_persistence_models_round_trip_through_sqlmodel_rows() {
         assert_round_trips(ReplacementLineageEntry {
             sequence_id: 7,
@@ -3111,6 +3189,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "sibling-persistence")]
     fn typed_query_builders_emit_stable_sql_and_params() {
         let (sql, params) = ReplacementLineageEntry::select_by_slot_id("slot-alpha").build();
         assert_eq!(
@@ -3166,6 +3245,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "sibling-persistence")]
     fn typed_session_schema_sql_excludes_isolated_fleet_authority_table() {
         let sql = typed_persistence_create_table_sql();
         assert_eq!(sql.len(), 5);
@@ -3225,6 +3305,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "sibling-persistence")]
     fn typed_sqlmodel_session_tracks_models_with_deterministic_defaults() {
         let mut session = TypedSqlModelSession::new(NoopConnection);
         assert!(session.config().auto_begin);
@@ -3262,6 +3343,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "sibling-persistence")]
     fn typed_frankensqlite_session_initializes_real_schema() {
         let session = open_typed_frankensqlite_memory_session()
             .expect("real FrankenSQLite typed session initializes");

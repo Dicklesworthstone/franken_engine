@@ -10,6 +10,59 @@ The first conventional release, `v0.1.0`, was published on 2026-05-29. Current `
 
 ---
 
+## Post-Snapshot Update — Sibling Dependency Isolation and a Standalone-Claim Correction (2026-07-25)
+
+`bd-ndpm2` was filed as a P0 build blocker: `frankenengine-engine` did not compile
+in any feature configuration because a half-finished async migration in
+`/dp/frankensqlite` broke `fsqlite-btree`. Re-measuring at HEAD found the
+originally-named crate fixed upstream and the *same* migration breaking one layer
+further down — `/dp/sqlmodel_rust/crates/sqlmodel-frankensqlite`, 32 errors. Chasing
+a sibling's in-flight refactor crate-by-crate is not a fix, so the engine's own
+coupling was cut instead.
+
+**Nine sibling path dependencies are now feature-gated**, across three features that
+are all ON by default (a normal build in a full checkout is unchanged):
+
+- `sibling-persistence` — `sqlmodel`, `sqlmodel-core`, `sqlmodel-frankensqlite`,
+  and through the last of those `/dp/frankensqlite`. `cargo tree -e normal -i fsqlite`
+  proved that binding is the sole edge pulling fsqlite, so one cut drops two repos.
+- `sibling-service-api` — `fastapi-core` (gates `policy_controller::service_endpoint_template`).
+- `sibling-dataframes` — the five `fp-*` crates (gates the Parquet evidence-export lane).
+
+`typed_persistence_models.rs` looked atomic — six `#[sqlmodel(table = …)]` model
+structs consumed by seven other modules — but `TypedStoreRecord` and
+`TypedStorageAdapterExt` turned out to be pure serde traits with no ORM coupling.
+Only the `Model` derive and the `sqlmodel(…)` attributes needed `cfg_attr`, so **all
+six consumer modules were left untouched**. Where a runtime path would otherwise
+degrade, it fails closed: Parquet audit export returns a typed error naming the
+required feature rather than emitting another encoding under the Parquet name.
+
+**New gate lane**: `./scripts/test_standalone_build.sh sibling-isolation` (also inside
+`ci`) asserts every `/dp` path dep is `optional = true` and that
+`cargo tree --no-default-features -e normal,dev` names zero `/dp` paths. It keeps
+enforcing under `STANDALONE_BUILD_GATE_SKIP_REMOTE=1`, since it needs no rch worker
+and the skip flag would otherwise disable the guarantee exactly when the heavy lanes
+are already skipped.
+
+Two defects surfaced while gating. The self dev-dependency lacked
+`default-features = false`, so feature unification re-enabled `default` for every test
+target and `cargo test --no-default-features` silently rebuilt all nine siblings — the
+standalone-test lane had been proving nothing. The same leak existed on the three
+workspace crates that depend on the engine; fixing all four took the workspace sibling
+count from 119 to 0. Separately, two integration tests still asserted the removed fake
+`FRANKEN_PARQUET_V1` header, directly contradicting the lib test that asserts its
+absence; both now assert real `PAR1` framing.
+
+**README correction.** "Standalone Mode (no sibling repos required)" was false and
+cannot be made true from inside this repository. Three experiments established that
+cargo resolves an optional dependency's manifest whether or not a feature activates it
+— for path, git, and unmatched `[patch.crates-io]` sources alike — and that the only
+source kind genuinely skipped when disabled is a registry dependency. None of the nine
+siblings is published. The README now states that `--no-default-features` links no
+sibling crates but still requires the checkouts present, and registry publication is
+tracked on `bd-gw4cg`. Claim-matrix spans were re-anchored and
+`run_claim_to_proof_matrix_gate.sh ci` passes (28 claims, 0 failures).
+
 ## Post-Snapshot Update — Authenticated Process-Spawn Foundation (2026-07-23)
 
 `bd-x85a7` adds the first host process-execution authority to the extension

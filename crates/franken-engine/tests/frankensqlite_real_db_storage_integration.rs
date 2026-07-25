@@ -1,4 +1,8 @@
 #![forbid(unsafe_code)]
+// This suite opens a real FrankenSQLite database through the typed
+// `/dp/sqlmodel_rust` session, so it exists only under `sibling-persistence`
+// (bd-ndpm2).
+#![cfg(feature = "sibling-persistence")]
 
 use frankenengine_engine::lease_tracker::{LeaseStore, LeaseType};
 use frankenengine_engine::security_epoch::SecurityEpoch;

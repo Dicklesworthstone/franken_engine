@@ -269,9 +269,9 @@ A governance overlay (capability framework, security epochs, gate modules, fleet
 | Integration tests in `crates/franken-engine/tests/` | 1,649 top-level files (41 are RGC gate tests) |
 | Operator gate scripts in `scripts/run_*.sh` | 293 (RGC, parser, and FRX families plus claim/evidence/build plumbing) |
 | Replay wrappers in `scripts/e2e/*_replay.sh` | 186 (some are exact `<gate>_replay.sh` partners to a `run_<gate>.sh`; the rest cover composite or sub-gate replay shapes) |
-| Architecture / contract docs in `docs/` | 726 top-level files (`*.md` + `*.json` contracts) plus `docs/architecture/`, `docs/adr/`, `docs/plans/`, `docs/templates/`, `docs/operator-gates/` |
+| Architecture / contract docs in `docs/` | 727 top-level files (`*.md` + `*.json` contracts) plus `docs/architecture/`, `docs/adr/`, `docs/plans/`, `docs/templates/`, `docs/operator-gates/` |
 | Impossible-by-default demos under `examples/` | 13 impossible-by-default *capabilities* across 24 numbered directories (`01_…` through `26_…`, with gaps at `08_…` and `10_…`). The 13 capabilities are the originally-scoped set; the remaining dirs cover live-runtime variants and integration smokes that sit alongside but are not themselves separate capability claims. |
-| Tracked beads in `.beads/issues.jsonl` | 4,447 records (open + closed); see `memory/enrichment_sessions.md` for the lib-test landing journal (35,000+ unit tests recorded by 2026-03-19) |
+| Tracked beads in `.beads/issues.jsonl` | 4,448 records (open + closed); see `memory/enrichment_sessions.md` for the lib-test landing journal (35,000+ unit tests recorded by 2026-03-19) |
 | Cargo fuzz harnesses | 32 across two trees: 17 in top-level `fuzz/fuzz_targets/` + 15 in `crates/franken-engine/fuzz/fuzz_targets/` |
 | Benchmark suites in `benchmarks/` | `macro/`, `micro/`, `runtime_comparison/` |
 
@@ -293,7 +293,7 @@ franken_engine/
 │   ├── franken-engine-control-plane-integration-tests/ # Holds tests gated on test-support
 │   ├── franken-metamorphic/         # Metamorphic-relation runner (whitespace, roundtrip, equivalence)
 │   └── franken-core/                # Extracted runtime; included in workspace and standalone compileable
-├── docs/                            # Charters, contracts, audits, gate specs (724 top-level files + subdirs)
+├── docs/                            # Charters, contracts, audits, gate specs (727 top-level files + subdirs)
 ├── examples/                        # 13 impossible-by-default capabilities across 24 numbered demo dirs (01..26, gaps at 08/10) + live runtime examples
 ├── scripts/                         # 292 run_*.sh gate runners + e2e/*_replay.sh wrappers
 ├── runbooks/                        # Incident-evidence collector + emergency rollback
@@ -2015,7 +2015,7 @@ The README's troubleshooting table captures the practical operator hits. For the
 
 ## Beads Workflow & Project Memory
 
-The project uses `br` (the Rust-port `beads_rust` tracker) instead of GitHub Issues for in-tree work. The full database is checked in at `.beads/issues.jsonl` (4,443 records; the SQLite mirror under `.beads/beads.db` is a derived cache).
+The project uses `br` (the Rust-port `beads_rust` tracker) instead of GitHub Issues for in-tree work. The full database is checked in at `.beads/issues.jsonl` (4,448 records; the SQLite mirror under `.beads/beads.db` is a derived cache).
 
 ### Why in-tree
 
@@ -2046,7 +2046,7 @@ The README and CHANGELOG are point-in-time documents; the live state of "what's 
 | **Active DEVIATIONs** | `AGENTS.md` (search `DEVIATION`) + the *Persistence Surface & Former DEVIATION* section | Currently zero: the typed-heavy persistence stores deviation was resolved 2026-05-21 (bd-cixqu.12.1 audit). |
 | **Live ready-work queue** | `br ready` (interactive) or `br list --format json --status ready` (script-friendly) | The set of beads whose ancestor chain is unblocked and which can be picked up by the next agent. Reflects current state of `.beads/beads.db`, not the synced `.beads/issues.jsonl`. |
 
-The checked-in `.beads/issues.jsonl` is the *closed-bead history* (currently 4,443 records) used by the claim-to-proof matrix and the CHANGELOG for owning-bead lookups. The live SQLite mirror at `.beads/beads.db` is where status transitions land first; the JSONL is the durable export.
+The checked-in `.beads/issues.jsonl` is the *closed-bead history* (currently 4,448 records) used by the claim-to-proof matrix and the CHANGELOG for owning-bead lookups. The live SQLite mirror at `.beads/beads.db` is where status transitions land first; the JSONL is the durable export.
 
 ### Project-memory files (`memory/`)
 

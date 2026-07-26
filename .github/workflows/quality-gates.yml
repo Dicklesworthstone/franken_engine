@@ -31,8 +31,16 @@ jobs:
       # On failure: `python3 scripts/check_readme_inventory.py --fix` corrects the
       # numbers in place, line-count neutral so the matrix's pinned README claim spans
       # do not shift.
-      - name: README structural-inventory gate
-        run: python3 scripts/check_readme_inventory.py
+      # Covers docs/ARCHITECTURE_INVENTORY.md too. That file calls itself an exact
+      # golden artifact and nothing enforced it, so it reported 495 modules from
+      # April to July against a real 621. The generator's own --check would catch
+      # that but needs the engine crate compiled and the /dp siblings present; this
+      # re-measures the tree in pure Python, so it runs here. The drill proves the
+      # guard can still fail -- a guard that only ever returns 0 is not a guard.
+      - name: structural-inventory gate (check + negative drill)
+        run: |
+          python3 scripts/check_readme_inventory.py
+          bash scripts/e2e/architecture_inventory_gate_drift.sh
 
       # bd-h5cl7: no [patch.*] entry may substitute a crate whose version differs from
       # what its consumers declare, and the guard saying so must itself be able to fail.

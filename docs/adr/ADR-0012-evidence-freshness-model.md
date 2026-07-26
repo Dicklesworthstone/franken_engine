@@ -210,6 +210,59 @@ Note what this does *not* do: it does not forbid running a refresh from a dirty 
 Doing so is often exactly right while iterating on a gate. It forbids the resulting
 receipt from claiming to be something it is not.
 
+### 5.3 Environment drift is compared at material precision (amended 2026-07-26)
+
+Notes 2 and 3 turned the environment signal on by comparing the whole recorded
+fingerprint as one digest: any difference in any field meant `drifted`, hence stale,
+hence provisional. That is the conservative choice, and it was the wrong one — measured
+less than a day after the 16 receipts were refreshed.
+
+This repository has no `rust-toolchain.toml`. It floats on `nightly`, which rolls
+daily. Between the 2026-07-26 refresh and the next morning, `rustc 1.99.0-nightly
+(da86f4d07 2026-07-24)` became `(008fa22ce 2026-07-25)`, and **every claim carrying a
+fingerprint went stale at once** — 10 of 16 `drifted`, 0 `clean`, on evidence hours old.
+
+That is not conservatism, it is saturation. A signal that fires on every claim every day
+cannot distinguish a claim whose environment meaningfully moved from one whose did not,
+which is the entire job the signal was added to do. Worse, it reproduces the exact failure
+this ADR was written to end: a recurring, uninformative "stale" that operators learn to
+clear by rote. §1's disjunction makes this especially costly, because one saturated
+disjunct pins the whole verdict regardless of what the other two say.
+
+So each fingerprint field is compared at the granularity at which a change plausibly
+changes a build's **result**, not the granularity at which its string changes:
+
+| field | compared as | rationale |
+|---|---|---|
+| `platform`, `architecture`, `rustc_host_triple` | verbatim | any change is material |
+| `rustc_version`, `cargo_version` | release + channel, build id dropped | `rustc 1.99.0-nightly` |
+| `kernel_release` | `major.minor` | `6.17.0-41-generic` → `6.17` |
+
+A field not named above is compared verbatim, so extending the fingerprint cannot silently
+widen what is ignored.
+
+**What this gives up, and why that is affordable.** A nightly bump *can* change codegen,
+and this projection no longer detects one. Two things bound the exposure. First, the time
+backstop is retained for precisely this class — §2 keeps it against "environmental change
+nobody thought to fingerprint", and change below recorded precision is that class — so the
+backstop is what eventually forces re-verification. Second, if a toolchain bump actually
+breaks a claim, its verification command **fails** at the next scheduled refresh, and §5
+reports that as a REGRESSION: loud, and categorically distinct from staleness. The residual
+exposure is therefore "carrying an unverified but not known-broken OBSERVED for at most one
+freshness window", never "silently passing a claim known to fail".
+
+**The demotion is recorded, not hidden.** A receipt whose environment moved only below
+material precision is reported `clean` *with* an `advisory_drift` map naming each changed
+field and both values, and the run summary carries `environment_advisory_only`. "We saw N
+environments move and deliberately did not call them stale" is a reviewable statement;
+silence would not be. Receipts also now record a `material_digest` beside the exact
+`digest`, so a receipt states which environment identity it was judged under rather than
+leaving that to the reader's copy of the script.
+
+Pinning the toolchain would make this moot for the rustc field and is worth doing on its
+own merits, but it does not generalise: kernel ABI bumps and future fingerprint fields have
+the same shape. The projection is the durable fix; a pin would be one instance of it.
+
 ## Consequences
 
 **Positive.** Staleness tracks real invalidation instead of the calendar. Frozen claims

@@ -42,6 +42,7 @@ import hashlib
 import json
 import os
 import platform
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -51,6 +52,94 @@ MATRIX = REPO / "docs" / "claim_to_proof_matrix_v1.json"
 EVIDENCE_DIR = REPO / "docs" / "evidence"
 
 ENVIRONMENT_FINGERPRINT_SCHEMA = "franken-engine.evidence-environment-fingerprint.v1"
+
+# ---------------------------------------------------------------------------
+# Material vs advisory environment fields (ADR-0012 §5.3, BRIDGE-19.18)
+# ---------------------------------------------------------------------------
+# The first version of this check compared the whole fingerprint as one digest,
+# so ANY difference in ANY field meant `drifted`. Measured consequence, less
+# than a day after the 16 receipts were refreshed: `rustc 1.99.0-nightly
+# (da86f4d07 2026-07-24)` became `(008fa22ce 2026-07-25)` and every claim that
+# carried a fingerprint went stale at once.
+#
+# That is not conservatism, it is saturation. This repository has no
+# `rust-toolchain.toml`; it floats on `nightly`, which rolls daily, so a
+# comparison that includes the nightly build id fires on every claim every day
+# and can therefore never distinguish a claim whose environment meaningfully
+# moved from one whose did not. A signal that is always on carries no
+# information, and an always-provisional gate is the "rubber-stamp" failure
+# ADR-0012 exists to prevent.
+#
+# So each field is compared at the granularity at which a change plausibly
+# changes a build's RESULT, not at the granularity at which the string changes:
+#
+#   verbatim       any difference is material (host triple, arch, platform)
+#   release_token  the release+channel, without the build id
+#                  `rustc 1.99.0-nightly (008fa22ce 2026-07-25)` -> `rustc 1.99.0-nightly`
+#   kernel_series  major.minor, without the distro ABI suffix
+#                  `6.17.0-41-generic` -> `6.17`
+#
+# What this deliberately gives up, and why that is affordable: a nightly bump
+# CAN change codegen, and this projection no longer detects one. Two things
+# bound that. (a) The time backstop is retained precisely for "environmental
+# drift below the recorded granularity" (ADR-0012 §2), and advisory drift
+# accumulates with the clock, so the backstop is the mechanism that eventually
+# forces a re-verification. (b) If a toolchain bump actually breaks a claim,
+# its verification command FAILS at the next scheduled refresh, and ADR-0012 §5
+# reports that as a REGRESSION -- loud, and categorically distinct from
+# staleness. The residual exposure is therefore "carrying an unverified but not
+# known-broken OBSERVED for at most one freshness window", never "silently
+# passing a claim known to fail".
+#
+# Advisory changes are still recorded per claim, so the demotion is visible
+# rather than a silent hole.
+MATERIAL_FIELD_RULES = {
+    "platform": "verbatim",
+    "architecture": "verbatim",
+    "rustc_host_triple": "verbatim",
+    "rustc_version": "release_token",
+    "cargo_version": "release_token",
+    "kernel_release": "kernel_series",
+}
+
+
+def _release_token(value: str) -> str:
+    """`rustc 1.99.0-nightly (008fa22ce 2026-07-25)` -> `rustc 1.99.0-nightly`."""
+    head, _, _ = value.partition(" (")
+    return head.strip()
+
+
+def _kernel_series(value: str) -> str:
+    """`6.17.0-41-generic` -> `6.17`; anything unparseable is kept verbatim."""
+    match = re.match(r"^(\d+)\.(\d+)", value.strip())
+    return f"{match.group(1)}.{match.group(2)}" if match else value.strip()
+
+
+def material_projection(fields: dict) -> dict:
+    """Project a recorded fingerprint onto the fields compared for staleness.
+
+    A field absent from MATERIAL_FIELD_RULES is compared verbatim: an unknown
+    field is treated as material, so extending the fingerprint cannot silently
+    widen what this check ignores.
+    """
+    projected = {}
+    for key, value in fields.items():
+        rule = MATERIAL_FIELD_RULES.get(key, "verbatim")
+        text = "" if value is None else str(value)
+        if rule == "release_token":
+            projected[key] = _release_token(text)
+        elif rule == "kernel_series":
+            projected[key] = _kernel_series(text)
+        else:
+            projected[key] = text
+    return projected
+
+
+def material_digest(fields: dict) -> str:
+    canonical = json.dumps(
+        material_projection(fields), sort_keys=True, separators=(",", ":")
+    ).encode()
+    return "sha256:" + hashlib.sha256(canonical).hexdigest()
 
 
 def _run(argv: list[str], timeout: int = 30) -> tuple[int, str]:
@@ -96,7 +185,13 @@ def environment_fingerprint() -> dict:
     canonical = json.dumps(fields, sort_keys=True, separators=(",", ":")).encode()
     return {
         "schema_version": ENVIRONMENT_FINGERPRINT_SCHEMA,
+        # Identity of the exact environment, for forensics. NOT the staleness
+        # comparand -- see MATERIAL_FIELD_RULES.
         "digest": "sha256:" + hashlib.sha256(canonical).hexdigest(),
+        # The comparand. Recorded so a receipt states which environment identity
+        # it was judged under, rather than leaving that to the reader's version
+        # of this script.
+        "material_digest": material_digest(fields),
         "fields": fields,
     }
 
@@ -187,7 +282,14 @@ def source_drift(manifest: dict) -> dict:
 
 
 def environment_drift(manifest: dict, current: dict) -> dict:
-    """Does the receipt's recorded environment fingerprint match the current one?"""
+    """Has the receipt's environment moved *materially* since it was written?
+
+    Compares the material projection (see MATERIAL_FIELD_RULES), not the raw
+    fingerprint. A change confined to advisory precision -- a nightly build id,
+    a distro kernel ABI bump -- is reported under `advisory_drift` and does not
+    force staleness, because on an unpinned nightly that fires daily on every
+    claim and so distinguishes nothing.
+    """
     recorded = (manifest.get("outputs") or {}).get("environment_fingerprint")
     if not recorded:
         return {
@@ -197,19 +299,73 @@ def environment_drift(manifest: dict, current: dict) -> dict:
                 "environment drift computable"
             ),
         }
+
+    # Fast path: byte-identical environment. Nothing to project or explain.
     if recorded.get("digest") == current["digest"]:
         return {"status": "clean", "digest": current["digest"]}
 
     recorded_fields = recorded.get("fields") or {}
-    changed = {
-        key: {"recorded": recorded_fields.get(key), "current": value}
-        for key, value in current["fields"].items()
-        if recorded_fields.get(key) != value
+    if not recorded_fields:
+        # A digest with no fields cannot be projected, so material and advisory
+        # change are indistinguishable. Stay with the conservative verdict
+        # rather than guessing which one this was.
+        return {
+            "status": "drifted",
+            "reason": (
+                "receipt records an environment digest but no fields, so material "
+                "drift cannot be separated from advisory drift"
+            ),
+            "recorded_digest": recorded.get("digest"),
+            "current_digest": current["digest"],
+        }
+
+    recorded_material = material_projection(recorded_fields)
+    current_material = material_projection(current["fields"])
+
+    # Union of keys: a field present on one side and absent on the other is a
+    # change, and iterating only `current` would miss a dropped field.
+    keys = sorted(set(recorded_material) | set(current_material))
+
+    changed_material = {
+        key: {
+            "recorded": recorded_fields.get(key),
+            "current": current["fields"].get(key),
+            "compared_as": MATERIAL_FIELD_RULES.get(key, "verbatim"),
+            "recorded_material": recorded_material.get(key),
+            "current_material": current_material.get(key),
+        }
+        for key in keys
+        if recorded_material.get(key) != current_material.get(key)
     }
+
+    advisory = {
+        key: {"recorded": recorded_fields.get(key), "current": current["fields"].get(key)}
+        for key in keys
+        if key not in changed_material and recorded_fields.get(key) != current["fields"].get(key)
+    }
+
+    if changed_material:
+        return {
+            "status": "drifted",
+            "reason": (
+                f"{len(changed_material)} material environment field(s) changed "
+                "since the receipt"
+            ),
+            "changed_fields": changed_material,
+            "advisory_drift": advisory,
+        }
+
+    # Material identity held. Say precisely that, not "the environment is
+    # identical" -- it demonstrably is not, and the difference is recorded.
     return {
-        "status": "drifted",
-        "reason": f"{len(changed)} environment field(s) changed since the receipt",
-        "changed_fields": changed,
+        "status": "clean",
+        "digest": current["digest"],
+        "material_digest": material_digest(current["fields"]),
+        "reason": (
+            f"{len(advisory)} environment field(s) changed below material "
+            "precision (build id / kernel ABI); the time backstop covers this class"
+        ),
+        "advisory_drift": advisory,
     }
 
 
@@ -284,6 +440,17 @@ def main() -> int:
     for result in results:
         counts[result["verdict"]] = counts.get(result["verdict"], 0) + 1
 
+    # Claims whose environment moved, but only below material precision. Counted
+    # separately so the ADR-0012 §5.3 demotion is auditable: "we saw N
+    # environments move and deliberately did not call them stale" is a
+    # reviewable statement; silence is not.
+    advisory_only = sum(
+        1
+        for result in results
+        if (result.get("environment_drift") or {}).get("advisory_drift")
+        and (result.get("environment_drift") or {}).get("status") == "clean"
+    )
+
     report = {
         "schema_version": "franken-engine.evidence-drift-report.v1",
         "owning_bead": "bd-performance-conformance-bridge-tu32j.20.18",
@@ -294,6 +461,7 @@ def main() -> int:
             "clean": counts.get("clean", 0),
             "drifted": counts.get("drifted", 0),
             "unknown": counts.get("unknown", 0),
+            "environment_advisory_only": advisory_only,
         },
         "results": results,
     }
@@ -308,16 +476,22 @@ def main() -> int:
         print(
             f"evidence_drift=observed_total={summary['observed_total']} "
             f"clean={summary['clean']} drifted={summary['drifted']} "
-            f"unknown={summary['unknown']} env_digest={current['digest'][:19]}"
+            f"unknown={summary['unknown']} "
+            f"env_advisory_only={summary['environment_advisory_only']} "
+            f"env_digest={current['digest'][:19]}"
         )
         for result in results:
-            if result["verdict"] == "clean":
-                continue
+            env = result.get("environment_drift") or {}
             parts = []
             if result["source_drift"]["status"] != "clean":
                 parts.append(f"source={result['source_drift']['status']}")
-            if result["environment_drift"]["status"] != "clean":
-                parts.append(f"env={result['environment_drift']['status']}")
+            if env.get("status") != "clean":
+                parts.append(f"env={env.get('status')}")
+            elif env.get("advisory_drift"):
+                # Not stale, but not silent either.
+                parts.append(f"env=advisory({len(env['advisory_drift'])})")
+            if not parts:
+                continue
             print(f"  {result['claim_id']}: {' '.join(parts)}", file=sys.stderr)
 
     drifted = report["summary"]["drifted"]

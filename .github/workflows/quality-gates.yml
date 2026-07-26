@@ -60,6 +60,18 @@ jobs:
           python3 scripts/check_patch_version_consistency.py
           bash scripts/e2e/patch_version_consistency_drift.sh
 
+      # BRIDGE-19.18 / ADR-0012 5.3. The environment-drift comparison was LOOSENED
+      # (build ids and kernel ABI suffixes no longer force staleness) because on an
+      # unpinned nightly the strict version saturated: one rustc roll took all 16
+      # OBSERVED claims stale within hours of a refresh. A loosened check is exactly
+      # the kind that decays into a no-op, so the drill asserts both directions --
+      # advisory changes are not stale AND material ones still are. Without the
+      # second half, "clean" would be unfalsifiable.
+      #
+      # Hermetic: no cargo, no /dp siblings, no receipt is read or written.
+      - name: evidence environment-drift precision (both-direction drill)
+        run: bash scripts/e2e/evidence_environment_drift_precision_drill.sh
+
   frankenengine-engine:
     name: frankenengine-engine quality gates
     runs-on: ubuntu-latest

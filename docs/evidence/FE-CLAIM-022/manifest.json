@@ -18,7 +18,7 @@
     "scope": "runtime",
     "state": "observed"
   },
-  "generated_at_utc": "2026-06-21T04:10:31.838893+00:00",
+  "generated_at_utc": "2026-07-26T04:09:08.793763+00:00",
   "inputs": {
     "dependencies": [
       "frankenengine-engine",
@@ -35,11 +35,23 @@
   "manifest_id": "manifest-fe-claim-022-20260521",
   "outputs": {
     "decision_artifacts": "generated",
+    "environment_fingerprint": {
+      "digest": "sha256:856793073ed9f63e785edcc36f71f8cb2ed0d4445b80a44a356fa2cddbef9ba0",
+      "fields": {
+        "architecture": "x86_64",
+        "cargo_version": "cargo 1.99.0-nightly (3efb1f477 2026-07-17)",
+        "kernel_release": "6.17.0-41-generic",
+        "platform": "linux",
+        "rustc_host_triple": "x86_64-unknown-linux-gnu",
+        "rustc_version": "rustc 1.99.0-nightly (008fa22ce 2026-07-25)"
+      },
+      "schema_version": "franken-engine.evidence-environment-fingerprint.v1"
+    },
     "execution_trace": "deterministic",
     "exit_code": 0,
     "verification_command": "./scripts/run_rgc_lockstep_oracle_pipeline.sh ci",
     "verification_result": "passed",
-    "verified_at_utc": "2026-06-21T04:10:31.838893+00:00"
+    "verified_at_utc": "2026-07-26T04:09:08.793763+00:00"
   },
   "provenance": {
     "audit_source": "bd-cixqu.9.5",
@@ -55,8 +67,9 @@
   "schema_version": "frankenengine.reproducibility.manifest.v1",
   "source_revision": {
     "branch": "main",
-    "commit": "12cec3f935f769aeb0b5d99d5665d0f532a1a2e2",
-    "repository": "franken_engine"
+    "commit": "03767b46f0d90a28df0af9ecebc21ad35013fedc",
+    "repository": "franken_engine",
+    "worktree_dirty": false
   },
   "validation": {
     "hash_verified": true,

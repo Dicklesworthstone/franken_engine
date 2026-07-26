@@ -264,7 +264,7 @@ A governance overlay (capability framework, security epochs, gate modules, fleet
 
 | Surface | Count / size (tracked HEAD, verified 2026-07-24) |
 |---|---|
-| Source modules in `crates/franken-engine/src/` | 615 top-level `.rs` files / 612 `pub mod` declarations in `lib.rs` (`baseline_interpreter.rs` alone is ~3.9 MB / 98,924 LoC). NOTE: `docs/ARCHITECTURE_INVENTORY.md` still reports a stale 495 and needs regeneration via the `franken-architecture-inventory` binary. |
+| Source modules in `crates/franken-engine/src/` | 615 top-level `.rs` files / 612 `pub mod` declarations in `lib.rs` (`baseline_interpreter.rs` alone is ~3.9 MB / 98,924 LoC). The generated companion [`docs/ARCHITECTURE_INVENTORY.md`](./docs/ARCHITECTURE_INVENTORY.md) counts 621 module files: it recurses into `src/` subdirectories and excludes `lib.rs` itself. |
 | Internal operator binaries in `crates/franken-engine/src/bin/` | 67 `.rs` files in total (6 of them are the release binaries listed above; 61 are internal operator tools) |
 | Integration tests in `crates/franken-engine/tests/` | 1,649 top-level files (41 are RGC gate tests) |
 | Operator gate scripts in `scripts/run_*.sh` | 293 (RGC, parser, and FRX families plus claim/evidence/build plumbing) |

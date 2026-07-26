@@ -175,6 +175,18 @@ pub fn page_size() -> usize { 16384 }
 EOF
 assert_rejected "unacknowledged target_arch cfg site" totals
 
+# 5. The vacuity guard. Check 3 is structural: if the function-body extractor
+#    stops matching -- a change in how functions are written, a bad brace match --
+#    it inspects nothing and still exits 0, which is the worst outcome available
+#    to a gate. Strip every hash sink and the guard must notice it checked nothing.
+reset_tree
+cat >"${SRC}/simd_lexer.rs" <<'EOF'
+pub struct ArchCapabilityProfile {
+    pub avx2_available: bool,
+}
+EOF
+assert_rejected "no hash-input function found (check 3 would be vacuous)" coverage
+
 # A missing inventory is exit 2, not a silent pass.
 reset_tree
 rm -f "${WORK}/docs/isa_specific_path_inventory_v1.json"
@@ -182,4 +194,4 @@ run_guard
 [[ "$guard_exit" -eq 2 ]] || fail "missing inventory: expected exit 2, got ${guard_exit}"
 echo "  rejected: missing inventory (exit 2, not a silent pass)"
 
-echo "isa_path_registration_drift=passed faults_rejected=4 unparseable_rejected=1 baseline_accepted=1"
+echo "isa_path_registration_drift=passed faults_rejected=5 unparseable_rejected=1 baseline_accepted=1"

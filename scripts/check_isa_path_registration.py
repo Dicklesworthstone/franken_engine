@@ -147,22 +147,22 @@ def _hash_input_regions(text: str) -> list[tuple[int, str]]:
     return regions
 
 
-def run_checks(repo: Path) -> tuple[list[dict], int]:
-    """Returns (findings, exit_code)."""
+def run_checks(repo: Path) -> tuple[list[dict], int, dict]:
+    """Returns (findings, exit_code, coverage)."""
     inventory_path = repo / "docs/isa_specific_path_inventory_v1.json"
     if not inventory_path.is_file():
-        return [{"check": "inventory", "status": "unparseable",
-                 "detail": f"{inventory_path} is missing"}], 2
+        return ([{"check": "inventory", "status": "unparseable",
+                  "detail": f"{inventory_path} is missing"}], 2, {})
     try:
         inventory = json.loads(inventory_path.read_text())
     except json.JSONDecodeError as err:
-        return [{"check": "inventory", "status": "unparseable",
-                 "detail": f"{inventory_path}: {err}"}], 2
+        return ([{"check": "inventory", "status": "unparseable",
+                  "detail": f"{inventory_path}: {err}"}], 2, {})
 
     for required in ("registered_paths", "totals", "fingerprint_owner_files"):
         if required not in inventory:
-            return [{"check": "inventory", "status": "unparseable",
-                     "detail": f"inventory has no {required!r} key"}], 2
+            return ([{"check": "inventory", "status": "unparseable",
+                      "detail": f"inventory has no {required!r} key"}], 2, {})
 
     # A registered entry may name a file plus a parenthetical locator, e.g.
     # "src/simd_lexer.rs (arch_family reporting, lines ~1167-1205)"; and one entry
@@ -224,9 +224,15 @@ def run_checks(repo: Path) -> tuple[list[dict], int]:
             })
 
     # --- 3. hash inputs are fingerprint-free --------------------------------
+    # Coverage is counted and reported. A structural check like this fails open
+    # if its extractor silently stops matching -- a change to how functions are
+    # written, or a bad brace match, and it inspects nothing while still exiting
+    # 0. Publishing the count makes that visible instead of invisible.
+    hash_functions_scanned = 0
     for path in files:
         text = path.read_text(errors="replace")
         for line_number, body in _hash_input_regions(text):
+            hash_functions_scanned += 1
             used = [s for s in FINGERPRINT_SYMBOLS if s in body]
             if used:
                 findings.append({
@@ -284,7 +290,31 @@ def run_checks(repo: Path) -> tuple[list[dict], int]:
                           "inventory must acknowledge it",
             })
 
-    return findings, (1 if findings else 0)
+    # A check that inspected nothing is not a passing check.
+    if not files:
+        findings.append({
+            "check": "coverage",
+            "status": "fail",
+            "detail": "no source files were scanned; the gate would pass vacuously",
+            "remedy": "check --repo-root; crates/*/src must exist",
+        })
+    elif hash_functions_scanned == 0:
+        findings.append({
+            "check": "coverage",
+            "status": "fail",
+            "detail": f"scanned {len(files)} source files but found 0 hash-input "
+                      "functions; the fingerprint-in-hash check inspected nothing",
+            "remedy": "the function-body extractor or HASH_SINKS list has stopped "
+                      "matching; fix it rather than accepting a vacuous pass",
+        })
+
+    coverage = {
+        "source_files_scanned": len(files),
+        "hash_input_functions_scanned": hash_functions_scanned,
+        "fingerprint_owner_files": sorted(owners),
+        "registered_paths": len(registered),
+    }
+    return findings, (1 if findings else 0), coverage
 
 
 def main() -> int:
@@ -303,7 +333,7 @@ def main() -> int:
     args = parser.parse_args()
 
     repo = Path(args.repo_root).resolve() if args.repo_root else Path(__file__).resolve().parent.parent
-    findings, code = run_checks(repo)
+    findings, code, coverage = run_checks(repo)
 
     by_check: dict[str, int] = {}
     for finding in findings:
@@ -318,6 +348,7 @@ def main() -> int:
             "findings": len(findings),
             "by_check": by_check,
             "verdict": "pass" if code == 0 else "fail_closed",
+            "coverage": coverage,
         },
         "findings": findings,
     }
@@ -331,6 +362,8 @@ def main() -> int:
         print(
             f"isa_path_registration=verdict={report['summary']['verdict']} "
             f"findings={len(findings)} "
+            f"files={coverage.get('source_files_scanned', 0)} "
+            f"hash_fns={coverage.get('hash_input_functions_scanned', 0)} "
             + " ".join(f"{k}={v}" for k, v in sorted(by_check.items()))
         )
         for finding in findings:

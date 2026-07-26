@@ -3023,13 +3023,70 @@ off the guarantee precisely when the heavy lanes are already skipped.
 
 **What this lane does NOT claim.** That the engine builds with `/dp` absent. It
 does not, and cannot today: cargo resolves a path dependency's manifest during
-resolution whether or not a feature activates it, and the workspace
-`[patch.crates-io]` block independently requires `/dp/frankensqlite`. The three
-experiments establishing that are recorded on `bd-ndpm2`; delivering a genuine
-absent-sibling build requires publishing the sibling crates to a registry, which
-is tracked on `bd-gw4cg`. What the lane guarantees is *isolation* — a broken or
-mid-migration sibling cannot break the engine build — which is the failure it
-was written in response to.
+resolution whether or not a feature activates it. The three experiments
+establishing that are recorded on `bd-ndpm2`; delivering a genuine absent-sibling
+build requires publishing the sibling crates to a registry, which is tracked on
+`bd-gw4cg`. What the lane guarantees is *isolation* — a broken or mid-migration
+sibling cannot break the engine build — which is the failure it was written in
+response to.
+
+A second cause used to sit alongside the path dependencies: the workspace
+`[patch.crates-io]` block, which independently required `/dp/frankensqlite`. It
+was removed on 2026-07-25 under `bd-h5cl7` and is now guarded by its own lane —
+see below. The path dependencies remain, so the conclusion above is unchanged.
+
+### `patch-version-consistency` lane (`bd-h5cl7`)
+
+**What it asserts.** That no `[patch.*]` entry substitutes a crate whose version
+differs from what its consumers declare — and, separately, that the guard making
+that assertion is capable of failing.
+
+**Why exact equality, not semver compatibility.** The engine's workspace used to
+patch `fsqlite` at `/dp/frankensqlite`. `sqlmodel-frankensqlite` declares
+`fsqlite = "0.1.18"`; local frankensqlite was `0.1.19` and had shipped a breaking
+sync → async API under that patch-level bump. Cargo's 0.x rules make `^0.1.18`
+admit `0.1.19`, so the substitution applied silently: 33 sync call sites met
+Futures, the default build went red, and 7 of the 16 OBSERVED claims became
+unverifiable because their verification commands are default-feature builds. A
+semver-compatibility check would have passed. A crate patched from a development
+checkout can acquire unreleased breaking changes at any moment, which is exactly
+what a version requirement cannot express, so the lane requires the substituted
+version to be *exactly* what every consumer declares. A requirement that cannot
+reduce to a single version (a range such as `>=0.1, <0.3`) is itself the
+ambiguity being guarded against and fails closed.
+
+**Why it is not a `cargo test`.** The condition it detects makes the tree fail to
+compile, so a Rust test could not run in the state that most needs checking. The
+guard is standalone Python reading manifests with `tomllib`; it consults `cargo
+metadata` only when a patch entry actually exists, because metadata resolves
+without compiling and is the only source that sees consumers living outside this
+repository (the offending consumer was in `/dp/sqlmodel_rust`). With no patch
+entries the check is instant and needs no cargo at all.
+
+**Run it.**
+
+```bash
+./scripts/test_standalone_build.sh patch-version-consistency
+python3 scripts/check_patch_version_consistency.py --json /tmp/report.json
+./scripts/e2e/patch_version_consistency_drift.sh   # negative drill
+```
+
+**Triage.** On failure read
+`artifacts/standalone_build_gate/<ts>/patch_version_consistency_report.json`.
+Every finding carries a `code`, the `crate`, a `detail` naming both versions and
+the consumer, and a `remediation`. Codes: `FE-PATCH-VERSION-SKEW` (the substituted
+version is not what a consumer declares), `FE-PATCH-REQ-NOT-EXACT` (a consumer's
+requirement is a range, so the substitution is unverifiable), `FE-PATCH-UNUSED`
+(the patch names a crate absent from the resolved graph, so it is dead weight
+that will start applying silently if that dependency is ever added), and
+`FE-PATCH-MANIFEST-MISSING` (a manifest the guard is meant to cover has moved).
+
+**Coverage note.** The `sibling-isolation` lane reads only
+`crates/franken-engine/Cargo.toml` and so never saw the root patch block; this
+lane reads the root workspace manifest *and* `crates/franken-engine/fuzz/Cargo.toml`,
+which carried a byte-identical copy that had already drifted out of sight. Both
+are named explicitly rather than globbed, so a manifest that moves is reported
+rather than silently dropped from coverage.
 
 **Triage.** On failure read
 `artifacts/standalone_build_gate/<ts>/step_logs/sibling-isolation.log`: it prints

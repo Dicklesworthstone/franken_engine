@@ -25,11 +25,30 @@ thiserror = "2.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 
-[patch.crates-io]
-fsqlite = { path = "/dp/frankensqlite/crates/fsqlite" }
-fsqlite-core = { path = "/dp/frankensqlite/crates/fsqlite-core" }
-fsqlite-types = { path = "/dp/frankensqlite/crates/fsqlite-types" }
-fsqlite-error = { path = "/dp/frankensqlite/crates/fsqlite-error" }
+# NO `[patch.crates-io]` BLOCK. Removed 2026-07-25 (bd-h5cl7); do not reintroduce
+# one without reading that bead and `scripts/check_patch_version_consistency.py`.
+#
+# This workspace used to substitute `/dp/frankensqlite`'s local `fsqlite*` crates
+# for the published ones. The engine has no direct fsqlite dependency: the single
+# edge is `frankenengine-engine -> sqlmodel-frankensqlite -> fsqlite`, so the patch
+# existed solely to rewire which fsqlite a *sibling* crate binds to.
+#
+# That is the same overreach ADR-0004 forbids for persistence policy, and it is
+# what broke the build. `sqlmodel-frankensqlite` declares `fsqlite = "0.1.18"`;
+# local `/dp/frankensqlite` is `0.1.19` and shipped a breaking sync -> async API
+# under that patch-level bump. Cargo's 0.x rules make `^0.1.18` admit `0.1.19`, so
+# the patch applied silently and 33 sync call sites met Futures. The engine's
+# default build went red, and with it 7 of the 16 OBSERVED claims became
+# unverifiable, because their verification commands are default-feature builds.
+#
+# Without the patch, fsqlite resolves to the published 0.1.18 that
+# sqlmodel-frankensqlite was actually written against, and the pairing is coherent.
+#
+# `scripts/check_patch_version_consistency.py` fails closed if any future
+# `[patch.*]` entry substitutes a crate whose version is not exactly what every
+# consumer of it declares. Semver compatibility is deliberately NOT the test: a
+# patch that points at a development checkout can carry unreleased breaking
+# changes at any moment, which is precisely what semver cannot see.
 
 # Measurement-only profile additions for the profiling-software-performance
 # skill pass (2026-05-20). These do not change shipped opt-level or LTO; they

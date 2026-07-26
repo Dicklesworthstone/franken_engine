@@ -14,11 +14,10 @@ libfuzzer-sys = "0.4"
 serde_json = "1.0"
 tempfile = "3"
 
-[patch.crates-io]
-fsqlite = { path = "/dp/frankensqlite/crates/fsqlite" }
-fsqlite-core = { path = "/dp/frankensqlite/crates/fsqlite-core" }
-fsqlite-types = { path = "/dp/frankensqlite/crates/fsqlite-types" }
-fsqlite-error = { path = "/dp/frankensqlite/crates/fsqlite-error" }
+# NO `[patch.crates-io]` BLOCK. Removed 2026-07-25 (bd-h5cl7) together with the
+# root workspace's copy, which this one duplicated verbatim. See the rationale in
+# the root `Cargo.toml`; `scripts/check_patch_version_consistency.py` covers this
+# manifest too, so the two cannot drift apart again.
 
 [[bin]]
 name = "audit_markdown_parser"

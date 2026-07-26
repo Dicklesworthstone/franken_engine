@@ -6,18 +6,23 @@ cd "$root_dir"
 
 print_usage() {
   cat <<'EOF'
-usage: ./scripts/test_standalone_build.sh [standalone-check|standalone-test|full-check|full-integration|sibling-isolation|ci]
+usage: ./scripts/test_standalone_build.sh [standalone-check|standalone-test|full-check|full-integration|sibling-isolation|patch-version-consistency|ci]
 
 Modes:
   standalone-check    rch-backed cargo check in standalone mode
   standalone-test     rch-backed cargo test in standalone mode
   full-check          rch-backed cargo check with all features when sibling deps exist
   sibling-isolation   assert no /dp sibling enters the --no-default-features graph
+  patch-version-consistency
+                      assert no [patch.*] entry substitutes a crate whose version
+                      differs from what its consumers declare, and prove the guard
+                      can fail via a synthetic skew (bd-h5cl7)
   full-integration    per-sibling smoke (asupersync, frankentui, frankensqlite,
                       sqlmodel_rust, fastapi_rust, frankenpandas) recording each
                       as passed / skipped / failed (bd-cixqu.13.1)
   ci                  standalone-check + standalone-test + full-check +
-                      full-integration + sibling-isolation, with manifest/report
+                      full-integration + sibling-isolation +
+                      patch-version-consistency, with manifest/report
 
 Environment:
   STANDALONE_BUILD_GATE_ARTIFACT_ROOT  Output root (default: artifacts/standalone_build_gate)
@@ -47,7 +52,7 @@ commands_path="${run_dir}/commands.txt"
 step_logs_dir="${run_dir}/step_logs"
 
 case "$mode" in
-  standalone-check|standalone-test|full-check|full-integration|sibling-isolation|ci)
+  standalone-check|standalone-test|full-check|full-integration|sibling-isolation|patch-version-consistency|ci)
     ;;
   -h|--help)
     print_usage
@@ -424,6 +429,74 @@ run_sibling_isolation_lane() {
   return 0
 }
 
+# bd-h5cl7 -- `[patch.crates-io]` skew.
+#
+# The sibling-isolation lane above reads only crates/franken-engine/Cargo.toml, so
+# it never saw the root workspace's `[patch.crates-io]` block. That block forced
+# sqlmodel-frankensqlite (which declares fsqlite "0.1.18") onto local frankensqlite
+# 0.1.19 after it shipped a breaking sync -> async API under a patch-level bump.
+# Cargo's 0.x rules let `^0.1.18` admit `0.1.19`, so the substitution applied
+# silently: 33 sync call sites met Futures, the default build went red, and 7 of
+# the 16 OBSERVED claims became unverifiable because their verification commands
+# are default-feature builds.
+#
+# This lane asserts two things, in order:
+#   (1) no `[patch.*]` entry substitutes a crate whose version differs from what
+#       any consumer declares;
+#   (2) the guard enforcing (1) can actually fail -- proven by a synthetic skew,
+#       because a check that has only ever returned 0 is not evidence.
+run_patch_version_consistency_lane() {
+  local lane="patch-version-consistency"
+  local command_text="python3 scripts/check_patch_version_consistency.py && ./scripts/e2e/patch_version_consistency_drift.sh"
+  local log_path="${step_logs_dir}/${lane}.log"
+  local report_path="${run_dir}/patch_version_consistency_report.json"
+  local status="passed"
+  local note="no [patch.*] entry substitutes a version its consumers do not declare"
+  local guard_exit drill_exit
+
+  commands_run+=("$command_text")
+  : >"$log_path"
+
+  printf -- '-- assertion 1: no patched crate is version-skewed\n' >>"$log_path"
+  set +e
+  RCH_CARGO_WRAPPER_BYPASS=1 python3 scripts/check_patch_version_consistency.py \
+    --json "$report_path" >>"$log_path" 2>&1
+  guard_exit=$?
+  set -e
+  printf -- '   guard exit: %s\n' "$guard_exit" >>"$log_path"
+
+  case "$guard_exit" in
+    0) ;;
+    1)
+      status="failed"
+      note="patched crate version skew detected; see patch_version_consistency_report.json"
+      ;;
+    *)
+      # Could not evaluate. That is an unknown, not a pass.
+      status="failed"
+      note="patch version consistency guard could not run (exit ${guard_exit})"
+      ;;
+  esac
+
+  printf -- '-- assertion 2: the guard rejects a synthetic skew\n' >>"$log_path"
+  set +e
+  ./scripts/e2e/patch_version_consistency_drift.sh >>"$log_path" 2>&1
+  drill_exit=$?
+  set -e
+  printf -- '   drill exit: %s\n' "$drill_exit" >>"$log_path"
+
+  if [[ "$drill_exit" -ne 0 ]]; then
+    status="failed"
+    note="${note}; negative drill did not prove the guard can fail"
+  fi
+
+  record_event "$lane" "$status" "$note"
+  lane_results+=("$(lane_result_json "$lane" "$status" "$command_text" "$log_path" "$note")")
+
+  [[ "$status" == "failed" ]] && return 1
+  return 0
+}
+
 declare -a external_dependency_paths=()
 declare -a missing_external_dependency_paths=()
 
@@ -468,6 +541,10 @@ run_mode() {
       # bd-ndpm2 — no sibling crate may be linked with default features off.
       run_sibling_isolation_lane || run_failures=$((run_failures + 1))
       ;;
+    patch-version-consistency)
+      # bd-h5cl7 — no [patch.*] entry may substitute a version-skewed crate.
+      run_patch_version_consistency_lane || run_failures=$((run_failures + 1))
+      ;;
     ci)
       run_rch_lane \
         "standalone-check" \
@@ -489,6 +566,8 @@ run_mode() {
       run_full_integration_lane
       # bd-ndpm2 — sibling-isolation as part of ci.
       run_sibling_isolation_lane || run_failures=$((run_failures + 1))
+      # bd-h5cl7 — patch version consistency as part of ci.
+      run_patch_version_consistency_lane || run_failures=$((run_failures + 1))
       ;;
   esac
 }

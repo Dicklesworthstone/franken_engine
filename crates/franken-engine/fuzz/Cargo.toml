@@ -124,4 +124,14 @@ test = false
 doc = false
 bench = false
 
+# BRIDGE-18.10: SWAR-vs-scalar lexer differential shaped at word-width
+# boundaries. bd-2noh9 was exactly this defect class and it shipped; until this
+# target, neither fuzz tree touched simd_lexer at all.
+[[bin]]
+name = "swar_scalar_boundary_differential"
+path = "fuzz_targets/swar_scalar_boundary_differential.rs"
+test = false
+doc = false
+bench = false
+
 [workspace]

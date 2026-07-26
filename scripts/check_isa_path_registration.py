@@ -97,6 +97,49 @@ HASH_SINKS = [
     r"derive_id\(",
 ]
 
+# A SWAR high-bit lane mask: the "one flag bit per byte" sentinel that every
+# word-parallel predicate in this tree ANDs against.
+SWAR_LANE_MASK = r"0x8080_?8080_?8080_?8080|0x8080_8080"
+
+# The borrow-unsafe SWAR range compare (found and fixed 2026-07-26).
+#
+#     ge_low = !word.wrapping_sub(low_bound) & high_bits
+#
+# reads as "is each byte >= low_bound", but `wrapping_sub` operates on the whole
+# u64, so a borrow out of lane i-1 corrupts lane i: the answer for one byte
+# depends on its neighbours. In `simd_lexer.rs` this made `digit_mask` and
+# `alpha_mask` disagree with their own scalar reference.
+#
+# Exhaustive case analysis over the lane transfer function (all 256 byte values x
+# both borrow-in states) showed every disagreement was a false NEGATIVE and none
+# occurred in lane 0, so the lexer's observable output stayed correct -- but only
+# because its two call sites count LEADING lanes and fall back to a scalar tail.
+# That is a property of the call sites, not of the idiom, and the next consumer
+# inherits a silent wrong answer.
+#
+# The correct formulation is carry-free: mask to 7 bits per lane and ADD
+# (0x80 - bound), which cannot carry across a lane because 0x7F + (0x80 - bound)
+# <= 0xFF. This check exists so the borrow-unsafe shape cannot come back quietly.
+BORROW_UNSAFE_SWAR = re.compile(
+    r"wrapping_sub\s*\([^;]*?\)\s*&\s*(?:" + SWAR_LANE_MASK + r"|[A-Za-z_][A-Za-z0-9_]*)"
+)
+
+
+def _strip_line_comments(text: str) -> list[tuple[int, str]]:
+    """(1-indexed line number, code with `//` comments removed).
+
+    Prose that *describes* the unsafe idiom -- including the explanation above
+    the fix in `simd_lexer.rs` -- must not trip the check that forbids it.
+    Nothing here needs to survive string literals: the idiom is arithmetic and
+    would not appear inside one.
+    """
+    out = []
+    for number, line in enumerate(text.splitlines(), start=1):
+        code = line.split("//", 1)[0]
+        if code.strip():
+            out.append((number, code))
+    return out
+
 
 def source_files(repo: Path) -> list[Path]:
     """Every crate source file, excluding tests, benches and fuzz trees.
@@ -305,6 +348,41 @@ def run_checks(repo: Path) -> tuple[list[dict], int, dict]:
                           "inventory must acknowledge it",
             })
 
+    # --- 5. borrow-unsafe SWAR range compare ---------------------------------
+    # Scope item 1 says an ISA/word-parallel path must be bit-identical to its
+    # portable reference. Checks 1-4 govern where such paths may live and what
+    # they may leak; none of them can see a path that is registered, compliant on
+    # paper, and arithmetically wrong. This one does, for the single shape that
+    # has actually been wrong in this repository.
+    swar_lane_mask = re.compile(SWAR_LANE_MASK)
+    swar_files_scanned = 0
+    for path in files:
+        text = path.read_text(errors="replace")
+        if not swar_lane_mask.search(text):
+            continue
+        swar_files_scanned += 1
+        for number, code in _strip_line_comments(text):
+            if "wrapping_sub" not in code:
+                continue
+            if BORROW_UNSAFE_SWAR.search(code):
+                findings.append({
+                    "check": "borrow_unsafe_swar",
+                    "status": "fail",
+                    "file": _rel(repo, path),
+                    "line": number,
+                    "code": code.strip()[:160],
+                    "detail": "wrapping_sub result masked with a per-lane high-bit "
+                              "mask: subtraction borrows cross lane boundaries, so "
+                              "this predicate's answer for one byte depends on its "
+                              "neighbours and cannot be bit-identical to a scalar "
+                              "reference",
+                    "remedy": "use the carry-free form: mask to 7 bits per lane and "
+                              "add (0x80 - bound), which cannot carry across a lane "
+                              "because 0x7F + (0x80 - bound) <= 0xFF; exclude "
+                              "high-bit bytes explicitly. See ascii_range_mask in "
+                              "crates/franken-engine/src/simd_lexer.rs",
+                })
+
     # A check that inspected nothing is not a passing check.
     if not files:
         findings.append({
@@ -322,10 +400,26 @@ def run_checks(repo: Path) -> tuple[list[dict], int, dict]:
             "remedy": "the function-body extractor or HASH_SINKS list has stopped "
                       "matching; fix it rather than accepting a vacuous pass",
         })
+    elif swar_files_scanned == 0:
+        # Same reasoning as the hash-function coverage check above. Check 5 is a
+        # negative assertion over a population found by a regex; if that regex
+        # stops matching, the check reports "no borrow-unsafe SWAR" while having
+        # examined nothing. There is at least one SWAR file in this tree
+        # (simd_lexer.rs), so zero means the detector broke, not that the tree
+        # got cleaner.
+        findings.append({
+            "check": "coverage",
+            "status": "fail",
+            "detail": f"scanned {len(files)} source files but found 0 carrying a "
+                      "SWAR lane mask; the borrow-unsafe-SWAR check inspected nothing",
+            "remedy": "SWAR_LANE_MASK has stopped matching the tree's high-bit "
+                      "constants; fix it rather than accepting a vacuous pass",
+        })
 
     coverage = {
         "source_files_scanned": len(files),
         "hash_input_functions_scanned": hash_functions_scanned,
+        "swar_files_scanned": swar_files_scanned,
         "fingerprint_owner_files": sorted(owners),
         "registered_paths": len(registered),
     }
@@ -379,6 +473,7 @@ def main() -> int:
             f"findings={len(findings)} "
             f"files={coverage.get('source_files_scanned', 0)} "
             f"hash_fns={coverage.get('hash_input_functions_scanned', 0)} "
+            f"swar_files={coverage.get('swar_files_scanned', 0)} "
             + " ".join(f"{k}={v}" for k, v in sorted(by_check.items()))
         )
         for finding in findings:

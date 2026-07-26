@@ -48,6 +48,18 @@ pub struct ArchCapabilityProfile {
     pub avx2_available: bool,
 }
 
+// A SWAR lane mask in the CARRY-FREE form: mask to 7 bits per lane and add
+// (0x80 - bound), which cannot carry across a lane boundary. This is the shape
+// check 5 must accept. It also gives the check a non-empty population to
+// inspect, so the swar coverage guard does not fire on the healthy baseline.
+fn digit_mask(word: u64) -> u64 {
+    let high_bits = 0x8080_8080_8080_8080_u64;
+    let low7 = word & !high_bits;
+    let at_least = low7.wrapping_add(0x5050_5050_5050_5050_u64) & high_bits;
+    let above = low7.wrapping_add(0x4646_4646_4646_4646_u64) & high_bits;
+    at_least & !above & high_bits & (!word & high_bits)
+}
+
 fn compute_token_witness_hash(input_hash: &str, token_count: u64) -> String {
     let mut hasher = Sha256::new();
     hasher.update(b"franken-engine.simd-lexer.token-witness.v1");
@@ -198,6 +210,58 @@ reset_tree
 rm -f "${SRC}/simd_lexer.rs"
 assert_rejected "registration names a deleted file" stale_registration
 
+# 7. The borrow-unsafe SWAR range compare. This is the only fault here that was
+#    an ACTUAL defect in the live tree rather than a hypothetical: digit_mask and
+#    alpha_mask in simd_lexer.rs carried it until 2026-07-26. `wrapping_sub`
+#    operates on the whole u64, so a borrow out of lane i-1 corrupts lane i and
+#    the predicate's answer for one byte depends on its neighbours.
+#
+#    It is the one fault a registration check structurally cannot catch: the file
+#    was registered, the entry named a portable counterpart, and the inventory
+#    said COMPLIANT. Checks 1-4 all passed while the arithmetic was wrong.
+reset_tree
+cat >>"${SRC}/simd_lexer.rs" <<'EOF'
+
+fn alpha_mask(word: u64) -> u64 {
+    let high_bits = 0x8080_8080_8080_8080_u64;
+    let low_bound = 0x4141_4141_4141_4141_u64;
+    let ge_low = !word.wrapping_sub(low_bound) & high_bits;
+    ge_low
+}
+EOF
+assert_rejected "borrow-unsafe SWAR range compare" borrow_unsafe_swar
+
+# 7b. Prose describing the unsafe idiom must NOT trip the check. Without this the
+#     honest fix is unlandable: the comment explaining why the shape is wrong
+#     would itself fail the gate, and the incentive becomes to fix it silently.
+reset_tree
+cat >>"${SRC}/simd_lexer.rs" <<'EOF'
+
+// Was: let ge_low = !word.wrapping_sub(low_bound) & high_bits;
+// Borrows cross lane boundaries, so that form is not bit-identical to scalar.
+EOF
+run_guard
+[[ "$guard_exit" -eq 0 ]] || fail "commented-out unsafe idiom must not fail the gate (exit ${guard_exit})"
+echo "  accepted: prose describing the unsafe idiom (no false positive)"
+
+# 8. The vacuity guard for check 5, mirroring fault 5. Check 5 is a NEGATIVE
+#    assertion over a population found by a regex: "no file contains the bad
+#    shape". If SWAR_LANE_MASK stops matching, that population is empty and the
+#    check reports success having examined nothing.
+reset_tree
+cat >"${SRC}/simd_lexer.rs" <<'EOF'
+pub struct ArchCapabilityProfile {
+    pub avx2_available: bool,
+}
+
+fn compute_token_witness_hash(input_hash: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(input_hash.as_bytes());
+    format!("sha256:{}", hex::encode(hasher.finalize()))
+}
+EOF
+assert_rejected "no SWAR lane mask found (check 5 would be vacuous)" coverage
+
 # A missing inventory is exit 2, not a silent pass.
 reset_tree
 rm -f "${WORK}/docs/isa_specific_path_inventory_v1.json"
@@ -205,4 +269,4 @@ run_guard
 [[ "$guard_exit" -eq 2 ]] || fail "missing inventory: expected exit 2, got ${guard_exit}"
 echo "  rejected: missing inventory (exit 2, not a silent pass)"
 
-echo "isa_path_registration_drift=passed faults_rejected=6 unparseable_rejected=1 baseline_accepted=1"
+echo "isa_path_registration_drift=passed faults_rejected=8 false_positive_cases=1 unparseable_rejected=1 baseline_accepted=1"

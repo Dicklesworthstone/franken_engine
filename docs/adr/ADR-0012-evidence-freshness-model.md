@@ -260,8 +260,12 @@ silence would not be. Receipts also now record a `material_digest` beside the ex
 leaving that to the reader's copy of the script.
 
 Pinning the toolchain would make this moot for the rustc field and is worth doing on its
-own merits, but it does not generalise: kernel ABI bumps and future fingerprint fields have
-the same shape. The projection is the durable fix; a pin would be one instance of it.
+own merits — it is already tracked as part of BRIDGE-21.58 ("typed RCH remote-execution
+receipts and a fleet-pinned Rust toolchain"). But it does not generalise: kernel ABI bumps
+and future fingerprint fields have the same shape, and a pin only helps the field it pins.
+The projection is the durable fix; a pin would be one instance of it, and the two compose —
+under a pin the rustc field simply stops changing, and this comparison keeps behaving
+correctly without needing to know that.
 
 ## Consequences
 

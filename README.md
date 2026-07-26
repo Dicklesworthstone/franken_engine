@@ -272,7 +272,7 @@ A governance overlay (capability framework, security epochs, gate modules, fleet
 | Architecture / contract docs in `docs/` | 727 top-level files (`*.md` + `*.json` contracts) plus `docs/architecture/`, `docs/adr/`, `docs/plans/`, `docs/templates/`, `docs/operator-gates/` |
 | Impossible-by-default demos under `examples/` | 13 impossible-by-default *capabilities* across 24 numbered directories (`01_…` through `26_…`, with gaps at `08_…` and `10_…`). The 13 capabilities are the originally-scoped set; the remaining dirs cover live-runtime variants and integration smokes that sit alongside but are not themselves separate capability claims. |
 | Tracked beads in `.beads/issues.jsonl` | 4,448 records (open + closed); see `memory/enrichment_sessions.md` for the lib-test landing journal (35,000+ unit tests recorded by 2026-03-19) |
-| Cargo fuzz harnesses | 32 across two trees: 17 in top-level `fuzz/fuzz_targets/` + 15 in `crates/franken-engine/fuzz/fuzz_targets/` |
+| Cargo fuzz harnesses | 33 across two trees: 17 in top-level `fuzz/fuzz_targets/` + 16 in `crates/franken-engine/fuzz/fuzz_targets/` |
 | Benchmark suites in `benchmarks/` | `macro/`, `micro/`, `runtime_comparison/` |
 
 ### Workspace Layout
@@ -1774,7 +1774,7 @@ The full layered stack is what enforces the project's *evidence-before-claims* p
 
 ## Fuzz Targets Catalogue
 
-Two `cargo-fuzz` trees: `fuzz/fuzz_targets/` at the repo root (17 targets) and `crates/franken-engine/fuzz/fuzz_targets/` crate-local (14 targets). 31 coverage-guided harnesses in total. Two target names appear in both trees (`parse_js_ts.rs`, `capability_profile_deserialize.rs`); they cover different fuzz dictionaries and corpus seeds.
+Two `cargo-fuzz` trees: `fuzz/fuzz_targets/` at the repo root (17 targets) and `crates/franken-engine/fuzz/fuzz_targets/` crate-local (16 targets). 33 coverage-guided harnesses in total. Two target names appear in both trees (`parse_js_ts.rs`, `capability_profile_deserialize.rs`); they cover different fuzz dictionaries and corpus seeds.
 
 ### Top-level `fuzz/fuzz_targets/`
 
@@ -1815,6 +1815,7 @@ Two `cargo-fuzz` trees: `fuzz/fuzz_targets/` at the repo root (17 targets) and `
 | `deterministic_decode.rs` | Deterministic decoder round-trip; catches non-determinism in serde paths. |
 | `runtime_security_logs_jsonl.rs` | Runtime-security `events.jsonl` parser; catches malformed-line handling. |
 | `architecture_inventory.rs` | Architecture-inventory generation; catches drift in the inventory-regeneration path. |
+| `swar_scalar_boundary_differential.rs` | SWAR-vs-scalar lexer differential shaped at word-width boundaries: forces the SWAR path on short inputs and derives length/phase from the input so the corpus walks tails and unaligned starts (`bd-2noh9` class). |
 
 Run any target with:
 

@@ -207,9 +207,9 @@
       "reason": "The support boundary is a documentation policy claim and the source span is validated by this gate.",
       "source_path": "README.md",
       "source_span": {
-        "end_line": 2422,
+        "end_line": 2423,
         "must_contain": "Unsupported-surface usage voids reproduction assistance",
-        "start_line": 2422
+        "start_line": 2423
       },
       "verification_command": "./scripts/run_claim_to_proof_matrix_gate.sh ci"
     },
@@ -372,7 +372,7 @@
       "downgrade_text": "Hypothesis: security decisions may use mathematically explicit specifications after formal modeling artifacts land.",
       "freshness_days": null,
       "owning_bead": "bd-csnqb",
-      "reason": "STAY_HYPOTHESIS (G.10, docs/operator-gates/FE_CLAIM_016_021_PROMOTION_DECISION.md): real Lean 4 proofs exist under proofs/lean4/ (IFCLatticeSpecification, IFCLatticeIsomorphism, CapabilityAlgebraSpecification, CapabilityAlgebraIsomorphism) but are not wired to the G.9 proof bundle — no lake/lean toolchain runs here and nothing emits a .proof.json from a successful 'lake build'. Promotion to observed is deferred to bd-cixqu.7.17.",
+      "reason": "STAY_HYPOTHESIS (G.10, docs/operator-gates/FE_CLAIM_016_021_PROMOTION_DECISION.md): real Lean 4 proofs exist under proofs/lean4/ (IFCLatticeSpecification, IFCLatticeIsomorphism, CapabilityAlgebraSpecification, CapabilityAlgebraIsomorphism) but are not wired to the G.9 proof bundle \u2014 no lake/lean toolchain runs here and nothing emits a .proof.json from a successful 'lake build'. Promotion to observed is deferred to bd-cixqu.7.17.",
       "source_path": "docs/plans/PLAN_TO_CREATE_FRANKEN_ENGINE.md",
       "source_span": {
         "end_line": 50,
@@ -412,7 +412,7 @@
       "downgrade_text": "Hypothesis: policy evaluation may include formal semantics and mathematical proofs after specification artifacts land.",
       "freshness_days": null,
       "owning_bead": "bd-csnqb",
-      "reason": "STAY_HYPOTHESIS (G.10, docs/operator-gates/FE_CLAIM_016_021_PROMOTION_DECISION.md): policy_theorem_engine.rs::verify_single_theorem simulates SMT verification by string-matching the formula ('forall' / 'not (influences' / 'not (exists') — no Z3/CVC5/Yices is invoked and the default backend is SmtSolver::Internal, so the Proven verdict is not real evidence. Promotion to observed is deferred to bd-cixqu.7.17.",
+      "reason": "STAY_HYPOTHESIS (G.10, docs/operator-gates/FE_CLAIM_016_021_PROMOTION_DECISION.md): policy_theorem_engine.rs::verify_single_theorem simulates SMT verification by string-matching the formula ('forall' / 'not (influences' / 'not (exists') \u2014 no Z3/CVC5/Yices is invoked and the default backend is SmtSolver::Internal, so the Proven verdict is not real evidence. Promotion to observed is deferred to bd-cixqu.7.17.",
       "source_path": "docs/plans/PLAN_TO_CREATE_FRANKEN_ENGINE.md",
       "source_span": {
         "end_line": 611,
@@ -432,7 +432,7 @@
       "downgrade_text": "Hypothesis: optimization fast paths may include mathematical equivalence proofs after formal verification artifacts land.",
       "freshness_days": null,
       "owning_bead": "bd-csnqb",
-      "reason": "STAY_HYPOTHESIS (G.10, docs/operator-gates/FE_CLAIM_016_021_PROMOTION_DECISION.md): optimization_proof_carriers.rs::verify_proof_obligation simulates verification — every VerificationMethod arm (ModelChecking, TheoremProving, SymbolicExecution, PropertyTesting, DifferentialTesting) returns Verified once premise/conclusion are non-empty, with no real model checker or differential oracle invoked. Promotion to observed is deferred to bd-cixqu.7.17.",
+      "reason": "STAY_HYPOTHESIS (G.10, docs/operator-gates/FE_CLAIM_016_021_PROMOTION_DECISION.md): optimization_proof_carriers.rs::verify_proof_obligation simulates verification \u2014 every VerificationMethod arm (ModelChecking, TheoremProving, SymbolicExecution, PropertyTesting, DifferentialTesting) returns Verified once premise/conclusion are non-empty, with no real model checker or differential oracle invoked. Promotion to observed is deferred to bd-cixqu.7.17.",
       "source_path": "docs/plans/PLAN_TO_CREATE_FRANKEN_ENGINE.md",
       "source_span": {
         "end_line": 636,
@@ -509,12 +509,12 @@
       "artifact_path": "docs/evidence/FE-CLAIM-023",
       "claim_id": "FE-CLAIM-023",
       "claim_scope": "reproducibility",
-      "claim_text": "Cross-platform reproducibility: Linux×x64, macOS×arm64, Windows×x64 produce identical content hashes from same input.",
+      "claim_text": "Cross-platform reproducibility: Linux\u00d7x64, macOS\u00d7arm64, Windows\u00d7x64 produce identical content hashes from same input.",
       "decision": "downgrade_target",
-      "downgrade_text": "Target: cross-platform reproducibility (Linux×x64, macOS×arm64, Windows×x64 identical content hashes); single-host runs validate the Linux×x64 lane only — full cross-platform identical-hash evidence requires the multi-platform CI matrix.",
+      "downgrade_text": "Target: cross-platform reproducibility (Linux\u00d7x64, macOS\u00d7arm64, Windows\u00d7x64 identical content hashes); single-host runs validate the Linux\u00d7x64 lane only \u2014 full cross-platform identical-hash evidence requires the multi-platform CI matrix.",
       "freshness_days": null,
       "owning_bead": "bd-cixqu.11.7",
-      "reason": "Downgraded observed->target under CEI B.2 (bd-sde5e.2.2, SwiftSquirrel): the identical-hash claim spans Linux/macOS/Windows × x64/arm64, but a single host can only produce the Linux×x64 manifest. The committed receipt was backfill/pending (never a live multi-platform pass) and evaluate_matrix requires per-target manifests from a real 6-platform CI matrix. The gate logic is correct (run_mode recursion fixed in 24d79417) and would pass in CI, but OBSERVED cannot be honestly backed single-host. Precedent: FE-CLAIM-012.",
+      "reason": "Downgraded observed->target under CEI B.2 (bd-sde5e.2.2, SwiftSquirrel): the identical-hash claim spans Linux/macOS/Windows \u00d7 x64/arm64, but a single host can only produce the Linux\u00d7x64 manifest. The committed receipt was backfill/pending (never a live multi-platform pass) and evaluate_matrix requires per-target manifests from a real 6-platform CI matrix. The gate logic is correct (run_mode recursion fixed in 24d79417) and would pass in CI, but OBSERVED cannot be honestly backed single-host. Precedent: FE-CLAIM-012.",
       "source_path": "README.md",
       "source_span": {
         "end_line": 1768,
@@ -538,9 +538,9 @@
       "reason": "Sibling repo reuse contract is now machine-enforced. M.1 (bd-cixqu.13.1, commit 87418e94) added a full-integration lane to scripts/test_standalone_build.sh that records pass/skipped/failed for each of the six declared siblings; the smoke at scripts/e2e/sibling_integration_smoke.sh asserts the lane's structured output. Reproducibility bundle at docs/evidence/FE-CLAIM-024/ self-attests via env.json + manifest.json + repro.lock per docs/REPRODUCIBILITY_CONTRACT.md.",
       "source_path": "README.md",
       "source_span": {
-        "end_line": 2116,
+        "end_line": 2117,
         "must_contain": "Sibling Repositories (Binding Reuse Contract)",
-        "start_line": 2116
+        "start_line": 2117
       },
       "verification_command": "./scripts/test_standalone_build.sh full-integration"
     },
@@ -560,9 +560,9 @@
       "reason": "CEI H.2: the claim-evidence integrity capstone (scripts/run_claim_evidence_integrity_capstone.sh) composes the A.1/A.3 bidirectional lattice, the H.1 Merkle-committed Claim-Evidence Ledger, the claim-to-proof wording gate, and the D.3 Test262 posture gate. FE-CLAIM-025's own row is committed in that ledger, the A.5 adversarial corpus rejects over-promotion fixtures, and the G.3 no-mock drill (scripts/e2e/claim_evidence_integrity_capstone_drift.sh) demonstrates the capstone goes red on any injected over-promotion and green only when all sub-gates hold. H.4 (bd-sde5e.8.4) additionally machine-checks in Lean 4 the meta-soundness lemma the whole gate rests on: proofs/lean4/ClaimEvidenceSoundness.lean proves that the asserted state never exceeds the evidence ceiling under the gate's corrective transition (gate_transition_sound), that ceiling is monotone in the evidence tier (ceiling_monotone), that soundness can only strengthen with committed evidence (sound_monotone_in_tier, tier_monotone), and that this is exactly the H.3 Biba integrity verdict (flow_legal_iff_sound) -- re-checked sorryAx-free by scripts/run_cei_soundness_lean_proof.sh ci.",
       "source_path": "README.md",
       "source_span": {
-        "end_line": 2491,
+        "end_line": 2492,
         "must_contain": "Reflexive claim-evidence integrity",
-        "start_line": 2491
+        "start_line": 2492
       },
       "verification_command": "cargo test -p frankenengine-engine --test claim_evidence_adversarial_corpus"
     },
@@ -596,7 +596,7 @@
   },
   "freshness_tier_policy": {
     "adr": "docs/adr/ADR-0012-evidence-freshness-model.md",
-    "note": "ADR-0012 §3. Every OBSERVED claim carries an explicit per-claim staleness window; a null freshness_days means nobody decided and is rejected. Each row also carries freshness_tier, and the gate fails closed if the label and the number disagree, so the two cannot drift apart. Claims without an authored window fall back to max_observed_freshness_days.",
+    "note": "ADR-0012 \u00a73. Every OBSERVED claim carries an explicit per-claim staleness window; a null freshness_days means nobody decided and is rejected. Each row also carries freshness_tier, and the gate fails closed if the label and the number disagree, so the two cannot drift apart. Claims without an authored window fall back to max_observed_freshness_days.",
     "owning_bead": "bd-performance-conformance-bridge-tu32j.20.18",
     "tiers": {
       "frozen": {

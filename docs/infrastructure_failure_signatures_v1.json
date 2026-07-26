@@ -69,6 +69,13 @@
       "reason": "a /dp sibling repository required at cargo resolution time is absent",
       "regex": "failed to load manifest for (workspace member|dependency)|failed to read [^\\n]*/dp/[^\\n]*Cargo\\.toml",
       "provenance": "bd-gw4cg: cargo resolves an optional path dependency's manifest even when the feature is off, so a missing /dp checkout fails at resolution, before any compilation. That is an environment state, not a claim regression."
+    },
+    {
+      "id": "toolchain_link_policy_mismatch",
+      "reason": "the linker could not resolve core/alloc intrinsics -- a toolchain or target-tree configuration fault, never a claim regression",
+      "regex": "undefined reference to `(core::fmt::write|core::panicking::panic|__rustc::__rust_(alloc|dealloc|no_alloc_shim_is_unstable_v2))|collect2: error: ld returned 1 exit status|rust-lld: error: undefined symbol: (core|alloc)::",
+      "provenance": "Live 2026-07-26 reproducer. FE-CLAIM-022 was launched with CARGO_TARGET_DIR pointed at a private warm tree, but reemit_evidence_receipts.py overrode it with its own default (./target). That tree is shared with other agents and held rlibs compiled under different RUSTFLAGS, so the nested Node-comparative build failed with `undefined reference to core::fmt::write` and `__rustc::__rust_alloc`. No signature matched, so ADR-0012 5.1's conservative default classified it as a REGRESSION of the lockstep-oracle claim -- exactly the false alarm on the most identity-critical surface that 5.1 exists to prevent. The override is fixed in the same commit; this signature covers the failure mode independently, because a mixed-RUSTFLAGS shared tree can arise without that specific bug.",
+      "why_this_is_never_a_regression": "These symbols are emitted by rustc, not by this repository. Engine source cannot cause `core::fmt::write` to be undefined at link time. The narrow anchoring is deliberate per ADR-0012 5.1 point 2: a broad match on `error: could not compile` would excuse real regressions, which is the dangerous direction."
     }
   ],
   "known_divergence": {

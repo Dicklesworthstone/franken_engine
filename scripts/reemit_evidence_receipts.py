@@ -273,7 +273,28 @@ def run_command(
     # agent deleted the tree mid-build and both were reported as regressions. The
     # test is now on the command's own text only.
     if "CARGO_TARGET_DIR" not in command:
-        env["CARGO_TARGET_DIR"] = target_dir or WARM_TARGET
+        # An explicitly exported CARGO_TARGET_DIR is honoured. It used to be
+        # overwritten unconditionally, which is a trap: CARGO_TARGET_DIR is the
+        # obvious variable to reach for, the override is silent, and the build
+        # lands in the shared default tree instead. That happened on 2026-07-26 --
+        # FE-CLAIM-022 was launched with CARGO_TARGET_DIR set to a private warm
+        # tree, ran in ./target anyway, picked up rlibs another agent had built
+        # under different RUSTFLAGS, and died with "undefined reference to
+        # core::fmt::write". It was then reported as a claim REGRESSION.
+        #
+        # Precedence is deliberate: an explicit REEMIT_TARGET_DIR still wins,
+        # because that is this script's own knob and a caller who sets it means it.
+        # `target_dir` (the bd-566x4 isolated retry) wins over both -- the whole
+        # point of that retry is a tree nobody else shares.
+        explicit = os.environ.get("CARGO_TARGET_DIR")
+        chosen = target_dir or os.environ.get("REEMIT_TARGET_DIR") or explicit or WARM_TARGET
+        if explicit and chosen != explicit:
+            print(
+                f"[target-dir] using {chosen} (ignoring exported "
+                f"CARGO_TARGET_DIR={explicit})",
+                flush=True,
+            )
+        env["CARGO_TARGET_DIR"] = chosen
     try:
         proc = subprocess.run(
             command,

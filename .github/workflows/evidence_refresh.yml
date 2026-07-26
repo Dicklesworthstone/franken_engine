@@ -1,0 +1,105 @@
+name: Evidence Refresh
+
+# ADR-0012 implementation note 1 (BRIDGE-19.18): schedule the evidence refresh,
+# publishing per-claim pass/fail, sharded so expensive claims do not gate cheap ones.
+#
+# Cadence is derived from each tier's staleness window rather than picked: refreshing
+# at about a quarter of the window means a claim is re-verified roughly three times
+# before it could expire, so one missed run never makes it provisional.
+#
+#   volatile   30d window  -> weekly     (Mon 06:00 UTC)
+#   standard   90d window  -> monthly    (1st 07:00 UTC)
+#   frozen    180d window  -> quarterly  (1st of Jan/Apr/Jul/Oct 08:00 UTC)
+#
+# WHERE THIS ACTUALLY RUNS. Most OBSERVED claims verify with default-feature cargo
+# builds, and the nine `/dp` sibling path dependencies resolve even when their
+# features are off (bd-ndpm2), so this job can only do real work on a machine that
+# has the `/dp` checkouts. A GitHub-hosted runner does not. Rather than pretend, the
+# refresh script detects their absence and records a `skipped` outcome — the same
+# skip-vs-fail discipline the cross-repo integration suite uses, because "we could
+# not verify" and "verification failed" are different evidence states and conflating
+# them is how a green dashboard starts meaning nothing.
+#
+# To make this do real work, point the repository variable EVIDENCE_REFRESH_RUNNER at
+# a self-hosted runner label on a machine with `/dp` present. Until then the job runs,
+# reports `skipped`, and uploads that as its artifact. Publishing the sibling crates
+# to a registry (bd-gw4cg) is what would eventually remove this constraint.
+
+on:
+  schedule:
+    - cron: "0 6 * * 1"          # volatile, weekly
+    - cron: "0 7 1 * *"          # standard, monthly
+    - cron: "0 8 1 1,4,7,10 *"   # frozen, quarterly
+  workflow_dispatch:
+    inputs:
+      tier:
+        description: "Freshness tier to refresh"
+        required: true
+        default: volatile
+        type: choice
+        options: [volatile, standard, frozen, all]
+
+permissions:
+  contents: read
+
+jobs:
+  refresh:
+    name: refresh ${{ github.event.inputs.tier || 'scheduled tier' }}
+    runs-on: ${{ vars.EVIDENCE_REFRESH_RUNNER || 'ubuntu-latest' }}
+    timeout-minutes: 120
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly
+
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: evidence-refresh
+
+      # One cron cannot carry an input, so the tier is derived from which schedule
+      # fired. A manual dispatch supplies it directly.
+      - name: Resolve tier
+        id: tier
+        run: |
+          case "${{ github.event.schedule }}" in
+            "0 6 * * 1")        tier=volatile ;;
+            "0 7 1 * *")        tier=standard ;;
+            "0 8 1 1,4,7,10 *") tier=frozen ;;
+            *)                  tier="${{ github.event.inputs.tier || 'volatile' }}" ;;
+          esac
+          echo "tier=${tier}" >>"$GITHUB_OUTPUT"
+          echo "refreshing tier: ${tier}"
+
+      # Exits non-zero only on a REGRESSION (a verification command that failed),
+      # never on staleness — ADR-0012 §5 keeps those on separate channels.
+      - name: Run evidence refresh
+        run: ./scripts/run_evidence_refresh_schedule.sh "${{ steps.tier.outputs.tier }}"
+
+      - name: Upload refresh bundle
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: evidence-refresh-${{ steps.tier.outputs.tier }}-${{ github.run_id }}
+          path: artifacts/evidence_refresh/
+          if-no-files-found: warn
+          retention-days: 90
+
+      # The receipts the refresh writes are git-tracked files under docs/evidence/.
+      # This job deliberately does NOT commit them: a scheduled job that rewrites
+      # committed evidence unattended is exactly the kind of unattributed mutation
+      # the acceptance-ledger discipline exists to prevent. The bundle is uploaded
+      # for a human to review and land.
+      - name: Report uncommitted receipt changes
+        if: always()
+        run: |
+          if ! git diff --quiet -- docs/evidence/; then
+            echo "::notice::Refreshed receipts differ from the committed state; review the uploaded bundle and land them deliberately."
+            git diff --stat -- docs/evidence/
+          else
+            echo "No receipt changes."
+          fi

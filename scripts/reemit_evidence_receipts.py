@@ -44,10 +44,17 @@ import json
 import os
 import subprocess
 import sys
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
+
+# Both scripts live in scripts/, which is sys.path[0] when this is run as
+# `python3 scripts/reemit_evidence_receipts.py`. Add it explicitly so the import
+# also works when the script is invoked through a symlink or from a wrapper.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from check_evidence_drift import environment_fingerprint  # noqa: E402
 
 # bd-...tu32j.20.18 (BRIDGE-19.18) / ADR-0012: the agent id and warm-target path
 # used to be hardcoded to "icydeer" -- the agent who first wrote this script.
@@ -110,7 +117,8 @@ def linker_policy_is_effective(rustflags: str) -> bool:
     return effective_value == "-lld"
 
 
-def run_command(command: str, timeout: int) -> tuple[int, str]:
+def run_command(command: str, timeout: int) -> tuple[int, str, float]:
+    started = time.monotonic()
     env = dict(os.environ)
     env.pop("CARGO_ENCODED_RUSTFLAGS", None)
     env["RCH_CARGO_WRAPPER_BYPASS"] = "1"
@@ -133,9 +141,9 @@ def run_command(command: str, timeout: int) -> tuple[int, str]:
             timeout=timeout,
         )
         tail = (proc.stdout + proc.stderr).strip().splitlines()[-3:]
-        return proc.returncode, "\n".join(tail)
+        return proc.returncode, "\n".join(tail), time.monotonic() - started
     except subprocess.TimeoutExpired:
-        return 124, f"TIMEOUT after {timeout}s"
+        return 124, f"TIMEOUT after {timeout}s", time.monotonic() - started
 
 
 def reemit(claim_id: str, command: str, commit: str) -> None:
@@ -148,6 +156,14 @@ def reemit(claim_id: str, command: str, commit: str) -> None:
     outputs["verification_command"] = command
     outputs["verified_at_utc"] = now
     outputs["exit_code"] = 0
+    # ADR-0012 §1 signal 2 (BRIDGE-19.18): record the environment this receipt was
+    # actually produced under, so `check_evidence_drift.py` can later tell whether
+    # the toolchain moved. The sibling env.json is NOT rewritten -- it is part of
+    # the reproducibility contract and its retention block declares it immutable.
+    #
+    # Imported rather than reimplemented: two fingerprint functions that disagreed
+    # by a single field would report drift on every claim forever.
+    outputs["environment_fingerprint"] = environment_fingerprint()
 
     provenance = manifest.setdefault("provenance", {})
     provenance["generated_by"] = "reemit_evidence_receipts.py (live gate run)"
@@ -159,9 +175,27 @@ def reemit(claim_id: str, command: str, commit: str) -> None:
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser()
+    ap = argparse.ArgumentParser(
+        description="Re-emit real reproducibility receipts by running each OBSERVED "
+        "claim's verification_command."
+    )
     ap.add_argument("--only", default="", help="comma-separated claim ids to run")
     ap.add_argument("--timeout", type=int, default=900)
+    # ADR-0012 impl-note 1. The scheduled job needs two things this script did not
+    # have: a way to run one shard so an expensive claim cannot gate the cheap
+    # ones, and per-claim results, since a single aggregate exit code cannot say
+    # WHICH claim regressed -- the thing an operator actually needs to know.
+    ap.add_argument(
+        "--tier",
+        default="",
+        help="only run claims in this freshness_tier (volatile|standard|frozen)",
+    )
+    ap.add_argument(
+        "--json",
+        dest="json_path",
+        default="",
+        help="write per-claim results (id, tier, exit code, duration) here",
+    )
     args = ap.parse_args()
     only = {s.strip() for s in args.only.split(",") if s.strip()}
 
@@ -169,24 +203,72 @@ def main() -> int:
     claims = observed_claims()
     if only:
         claims = [c for c in claims if c["claim_id"] in only]
+    if args.tier:
+        claims = [c for c in claims if c.get("freshness_tier") == args.tier]
+        if not claims:
+            print(f"error: no OBSERVED claim carries freshness_tier={args.tier!r}", file=sys.stderr)
+            return 2
 
+    results: list[dict] = []
     passed, failed = [], []
     for c in claims:
         cid = c["claim_id"]
+        tier = c.get("freshness_tier")
         raw = c.get("verification_command", "")
         if not raw:
             print(f"[{cid}] SKIP (no verification_command)")
+            results.append({"claim_id": cid, "freshness_tier": tier, "status": "skipped"})
             continue
         command = substitute(raw)
         print(f"[{cid}] running: {command[:110]}")
-        code, tail = run_command(command, args.timeout)
+        code, tail, duration = run_command(command, args.timeout)
+        result = {
+            "claim_id": cid,
+            "freshness_tier": tier,
+            "owning_bead": c.get("owning_bead"),
+            "exit_code": code,
+            # Recorded so a future pass can shard by MEASURED cost. Sharding is by
+            # freshness tier today because no per-claim cost data existed to shard
+            # on; this is how that data starts existing.
+            "duration_seconds": round(duration, 1),
+            "command": command,
+        }
         if code == 0:
             reemit(cid, command, commit)
             passed.append(cid)
+            result["status"] = "passed"
             print(f"[{cid}] PASSED -> real receipt written")
         else:
             failed.append((cid, code))
+            result["status"] = "failed"
+            result["output_tail"] = tail
             print(f"[{cid}] FAILED exit={code}\n    {tail}")
+        results.append(result)
+
+    if args.json_path:
+        out = Path(args.json_path)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(
+            json.dumps(
+                {
+                    "schema_version": "franken-engine.evidence-refresh-run.v1",
+                    "generated_at_utc": datetime.now(timezone.utc).isoformat(),
+                    "source_revision": commit,
+                    "tier": args.tier or None,
+                    "agent": AGENT,
+                    "summary": {
+                        "attempted": len(results),
+                        "passed": len(passed),
+                        "failed": len(failed),
+                    },
+                    "results": results,
+                },
+                indent=2,
+                sort_keys=True,
+            )
+            + "\n"
+        )
+        print(f"reemit_report={out}")
 
     print(f"\nreemit: {len(passed)} passed, {len(failed)} failed")
     if failed:

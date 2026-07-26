@@ -433,6 +433,13 @@ emit_event() {
   local artifact_quality_status="${17}"
   local artifact_quality_reason="${18}"
   local artifact_quality_report_path="${19}"
+  # ADR-0012 §3 (BRIDGE-19.18): the per-claim window that was actually applied,
+  # and the tier label that justifies it. Appended rather than inserted so the
+  # existing positional contract is unchanged.
+  local freshness_tier="${20}"
+  local effective_threshold_days="${21}"
+  # ADR-0012 §1 drift verdict: clean | drifted | unknown.
+  local drift_status="${22}"
 
   jq -nc \
     --arg claim_id "$claim_id" \
@@ -454,6 +461,9 @@ emit_event() {
     --arg artifact_quality_status "$artifact_quality_status" \
     --arg artifact_quality_reason "$artifact_quality_reason" \
     --arg artifact_quality_report_path "$artifact_quality_report_path" \
+    --arg freshness_tier "$freshness_tier" \
+    --arg effective_threshold_days "$effective_threshold_days" \
+    --arg drift_status "$drift_status" \
     '{
       schema_version: "'"$PROOF_ARTIFACT_EVENT_SCHEMA_VERSION"'",
       event_name: "claim_to_proof_matrix.claim_checked",
@@ -471,6 +481,9 @@ emit_event() {
       artifact_path: (if $artifact_path == "" then null else $artifact_path end),
       verification_command: $verification_command,
       freshness_days: (if $freshness_days == "" then null else ($freshness_days | tonumber) end),
+      freshness_tier: (if $freshness_tier == "" then null else $freshness_tier end),
+      effective_threshold_days: (if $effective_threshold_days == "" then null else ($effective_threshold_days | tonumber) end),
+      drift_status: (if $drift_status == "" then null else $drift_status end),
       actual_freshness_days: (if $actual_freshness_days == "" then null else ($actual_freshness_days | tonumber) end),
       freshness_status: (if $freshness_status == "" then null else $freshness_status end),
       artifact_quality_status: (if $artifact_quality_status == "" then null else $artifact_quality_status end),
@@ -488,6 +501,36 @@ failures=0
 claim_count=0
 max_observed_freshness_days="$(jq -r '.max_observed_freshness_days // 30' "$matrix_path")"
 stale_threshold_days="$(jq -r '.stale_threshold_days // .max_observed_freshness_days // 30' "$matrix_path")"
+# ADR-0012 §3 (BRIDGE-19.18). `max_observed_freshness_days` used to serve two
+# incompatible purposes: the default staleness window AND the ceiling on what a
+# claim may author. That made the ADR's 90d/standard and 180d/frozen tiers
+# literally unauthorable — any row declaring one hard-failed the gate. The two
+# are now separate: the default window stays `max_observed_freshness_days`, and
+# the ceiling is `max_authored_freshness_days` (the frozen tier).
+max_authored_freshness_days="$(jq -r '.max_authored_freshness_days // .max_observed_freshness_days // 30' "$matrix_path")"
+# tier label -> the window it is allowed to mean, so a row cannot claim "frozen"
+# while carrying 30 days. Absent policy leaves the map empty and the check inert.
+tier_policy_json="$(jq -c '.freshness_tier_policy.tiers // {}' "$matrix_path")"
+
+# ADR-0012 §1 signals 1 and 2 (BRIDGE-19.18). Staleness is the disjunction of
+# source drift, environment drift, and the time backstop. Only the backstop was
+# implemented, which is why the ADR forbade calling the model risk-weighted: a
+# clock cannot distinguish a receipt for code nobody has touched from one whose
+# covered file changed an hour ago.
+#
+# Computed once for all claims rather than per claim -- it is a single git and
+# rustc probe, and re-running it per row would multiply the cost by 28 for
+# identical answers.
+drift_report_path="${run_dir}/evidence_drift_report.json"
+drift_available=0
+if python3 scripts/check_evidence_drift.py --json "$drift_report_path" --quiet >/dev/null 2>&1; then
+  drift_available=1
+else
+  # Fail-open on the *reporting* of a new signal is acceptable; fail-open on the
+  # signal itself is not. Every claim is marked drift_status=unknown below, which
+  # is distinguishable from "clean" in the report.
+  printf "WARNING: evidence drift could not be computed; drift signals unavailable\n" >&2
+fi
 
 while IFS= read -r claim; do
   claim_count=$((claim_count + 1))
@@ -503,6 +546,7 @@ while IFS= read -r claim; do
   artifact_path="$(jq -r '.artifact_path // ""' <<<"$claim")"
   verification_command="$(jq -r '.verification_command // ""' <<<"$claim")"
   freshness_days="$(jq -r '.freshness_days // ""' <<<"$claim")"
+  freshness_tier="$(jq -r '.freshness_tier // ""' <<<"$claim")"
   decision="$(jq -r '.decision // ""' <<<"$claim")"
   reason="$(jq -r '.reason // ""' <<<"$claim")"
   owning_bead="$(jq -r '.owning_bead // ""' <<<"$claim")"
@@ -541,6 +585,13 @@ while IFS= read -r claim; do
 
   actual_freshness_days=""
   freshness_status="ok"
+  # Reset per claim; a non-OBSERVED row never enters the branch that sets it, and
+  # a leftover value from the previous iteration would be reported as this row's.
+  effective_threshold_days=""
+  tier_window=""
+  drift_status=""
+  drift_reason=""
+  stale_signals=()
   artifact_quality_status="ok"
   artifact_quality_reason=""
   artifact_quality_report_path=""
@@ -555,36 +606,83 @@ while IFS= read -r claim; do
     elif [[ -n "$freshness_days" && ! "$freshness_days" =~ ^[0-9]+$ ]]; then
       status="fail"
       local_reason="observed claim freshness_days, when authored, must be numeric (or null)"
-    elif [[ "$freshness_days" =~ ^[0-9]+$ && "$freshness_days" -gt "$max_observed_freshness_days" ]]; then
+    elif [[ "$freshness_days" =~ ^[0-9]+$ && "$freshness_days" -gt "$max_authored_freshness_days" ]]; then
       status="fail"
-      local_reason="observed claim authored freshness exceeds max_observed_freshness_days"
+      local_reason="observed claim authored freshness exceeds max_authored_freshness_days"
+    elif [[ -n "$freshness_tier" ]] \
+      && ! tier_window="$(jq -er --arg t "$freshness_tier" '.[$t].days // empty' <<<"$tier_policy_json")"; then
+      status="fail"
+      local_reason="observed claim declares freshness_tier '${freshness_tier}', which is not in freshness_tier_policy.tiers"
+    elif [[ -n "$freshness_tier" && "$freshness_days" =~ ^[0-9]+$ && "$freshness_days" -ne "$tier_window" ]]; then
+      # A tier label that disagrees with its own number is worse than no label:
+      # it reads as a decision while encoding a different one.
+      status="fail"
+      local_reason="observed claim freshness_tier '${freshness_tier}' means ${tier_window}d but freshness_days is ${freshness_days}"
     else
-      # bd-sde5e.1.4 (CEI-A.4): freshness is COMPUTED from the committed artifact,
-      # never authored — the matrix carries a null per-claim `freshness_days` and a
-      # `freshness_eprocess_policy`. An empty/null authored value is therefore
-      # expected and fine; the real staleness decision uses the derived
-      # `actual_freshness_days` below. A still-authored numeric value is honored
-      # for backward compatibility (checked against max above).
+      # bd-sde5e.1.4 (CEI-A.4): the *observed age* is COMPUTED from the committed
+      # artifact and never authored — that stays true. What ADR-0012 §3 adds is
+      # the per-claim *window* that age is judged against, which is a policy
+      # decision and must be authored: "null means nobody decided".
+      #
+      # BRIDGE-19.18: before this, an authored `freshness_days` was read, range-
+      # checked, reported — and then ignored, because the comparison below used
+      # the global threshold. Per-claim windows were not merely unpopulated, they
+      # were unwired. The effective window is now the claim's own when it has one.
       actual_freshness_days="$(derive_artifact_freshness "$artifact_path")"
 
-      if [[ "$actual_freshness_days" -gt "$stale_threshold_days" ]]; then
+      if [[ "$freshness_days" =~ ^[0-9]+$ ]]; then
+        effective_threshold_days="$freshness_days"
+      else
+        effective_threshold_days="$stale_threshold_days"
+      fi
+
+      # ADR-0012 §1: source/environment drift are peers of the time backstop, not
+      # decorations on it. A receipt whose covered code has moved is stale on day
+      # one, and the clock will never say so.
+      drift_status="unknown"
+      if [[ "$drift_available" -eq 1 ]]; then
+        drift_status="$(jq -r --arg c "$claim_id" \
+          '(.results[] | select(.claim_id == $c) | .verdict) // "unknown"' \
+          "$drift_report_path")"
+        # Only the components that ACTUALLY drifted. Joining in the reason of a
+        # component whose status is `unknown` reads as though it contributed to
+        # the verdict, which sends an operator to fix the wrong thing.
+        drift_reason="$(jq -r --arg c "$claim_id" \
+          '(.results[] | select(.claim_id == $c)
+            | [ (select(.source_drift.status == "drifted") | .source_drift.reason),
+                (select(.environment_drift.status == "drifted") | .environment_drift.reason) ]
+            | join("; ")) // ""' "$drift_report_path")"
+      fi
+
+      stale_signals=()
+      if [[ "$actual_freshness_days" -gt "$effective_threshold_days" ]]; then
+        stale_signals+=("time:${actual_freshness_days}d>${effective_threshold_days}d")
+      fi
+      if [[ "$drift_status" == "drifted" ]]; then
+        stale_signals+=("drift:${drift_reason}")
+      fi
+
+      if [[ "${#stale_signals[@]}" -gt 0 ]]; then
         freshness_status="stale"
 
         # Downgrade decision for stale proofs
+        stale_why="$(IFS='; '; printf '%s' "${stale_signals[*]}")"
         if [[ "$decision" == "allow_observed" ]]; then
           decision="downgrade_stale_proof"
-          local_reason="proof artifact is stale (${actual_freshness_days} days > ${stale_threshold_days} threshold); downgraded to provisional"
+          local_reason="proof artifact is stale (${stale_why}); downgraded to provisional"
 
           # Update downgrade_text to reflect provisional status
           if [[ -n "$downgrade_text" ]]; then
-            downgrade_text="PROVISIONAL: $downgrade_text (proof stale: ${actual_freshness_days}d)"
+            downgrade_text="PROVISIONAL: $downgrade_text (proof stale: ${stale_why})"
           else
-            downgrade_text="PROVISIONAL: proof artifact is stale (${actual_freshness_days} days old)"
+            downgrade_text="PROVISIONAL: proof artifact is stale (${stale_why})"
           fi
 
-          # Emit warning to stderr
-          printf "WARNING: %s: Proof artifact is stale (%d days > %d threshold) - downgraded to provisional\n" \
-            "$claim_id" "$actual_freshness_days" "$stale_threshold_days" >&2
+          # Emit warning to stderr. The signal is named, because "stale" alone
+          # sends an operator to re-run a clock they cannot influence when the
+          # actual cause may be that the covered code moved.
+          printf "WARNING: %s: proof is stale [%s] (tier=%s) - downgraded to provisional\n" \
+            "$claim_id" "$stale_why" "${freshness_tier:-default}" >&2
         fi
       elif [[ "$actual_freshness_days" == "999" ]]; then
         freshness_status="unknown"
@@ -656,7 +754,10 @@ while IFS= read -r claim; do
     "$freshness_status" \
     "$artifact_quality_status" \
     "$artifact_quality_reason" \
-    "$artifact_quality_report_path"
+    "$artifact_quality_report_path" \
+    "$freshness_tier" \
+    "$effective_threshold_days" \
+    "$drift_status"
 
   if [[ "$status" != "pass" ]]; then
     failures=$((failures + 1))
@@ -709,8 +810,27 @@ freshness_summary="$(jq --argjson threshold "$stale_threshold_days" '
       all_observed_provisional: (($observed | length) > 0 and ($stale | length) == ($observed | length)),
       max_observed_age_days: ([$observed[].actual_freshness_days // 0] | max // 0),
       per_claim_freshness_days_set: ([$observed[] | select(.freshness_days != null)] | length),
+      per_claim_windows_wired: true,
+      tier_counts: (
+        reduce $observed[] as $c ({};
+          .[$c.freshness_tier // "unassigned"] += 1)
+      ),
+      # ADR-0012 §1: which of the three staleness signals are actually live.
+      # Published so nobody has to read the source to find out whether the model
+      # is risk-weighted yet or still clock-only.
+      signals_live: {time_backstop: true, source_drift: true, environment_drift: true},
+      drift_counts: (
+        reduce $observed[] as $c ({};
+          .[$c.drift_status // "unknown"] += 1)
+      ),
       provisional_claims: [
-        $stale[] | {claim_id: .claim_id, age_days: .actual_freshness_days, owning_bead: .owning_bead}
+        $stale[] | {
+          claim_id: .claim_id,
+          age_days: .actual_freshness_days,
+          freshness_tier: .freshness_tier,
+          threshold_days: .effective_threshold_days,
+          owning_bead: .owning_bead
+        }
       ]
     }' "$report_path")"
 jq --argjson freshness "$freshness_summary" '. + {freshness: $freshness}' \
@@ -739,7 +859,7 @@ echo "claim_to_proof_matrix_contract_report=${run_dir}/report.json"
 stale_count="$(jq '[.events[] | select(.freshness_status == "stale")] | length' "$report_path")"
 if [[ "$stale_count" -gt 0 ]]; then
   echo "WARNING: Found $stale_count claims with stale proof artifacts:" >&2
-  jq -r '.events[] | select(.freshness_status == "stale") | "\(.claim_id): proof is \(.actual_freshness_days) days old (max: \(.freshness_days // "unknown"))"' "$report_path" >&2
+  jq -r '.events[] | select(.freshness_status == "stale") | "\(.claim_id): age \(.actual_freshness_days)d / window \(.effective_threshold_days // "default")d, tier \(.freshness_tier // "unassigned"), drift \(.drift_status // "unknown")"' "$report_path" >&2
 fi
 
 # bd-...tu32j.20.18 — surface the freshness summary on stdout too, so an operator
@@ -749,7 +869,7 @@ fi
 # have to be inferred by comparing two counts.
 jq -r '
   .freshness
-  | "claim_to_proof_matrix_freshness=observed_total=\(.observed_total) fresh=\(.observed_fresh) stale=\(.observed_stale) threshold_days=\(.stale_threshold_days) max_age_days=\(.max_observed_age_days) per_claim_windows_set=\(.per_claim_freshness_days_set)"
+  | "claim_to_proof_matrix_freshness=observed_total=\(.observed_total) fresh=\(.observed_fresh) stale=\(.observed_stale) default_threshold_days=\(.stale_threshold_days) max_age_days=\(.max_observed_age_days) per_claim_windows_set=\(.per_claim_freshness_days_set) tiers=\(.tier_counts | to_entries | map("\(.key):\(.value)") | join(","))"
 ' "$report_path"
 if [[ "$(jq -r '.freshness.all_observed_provisional' "$report_path")" == "true" ]]; then
   echo "WARNING: ALL $(jq -r '.freshness.observed_total' "$report_path") OBSERVED claims are provisional; the matrix currently proves nothing at OBSERVED strength" >&2

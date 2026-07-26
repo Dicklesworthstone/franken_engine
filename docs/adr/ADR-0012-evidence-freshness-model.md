@@ -142,18 +142,93 @@ active signal — i.e. current behaviour with longer, explicit windows. That is 
 honest intermediate state, not a regression, but the interim must not be described as
 risk-weighted until the comparisons are live.
 
+> **RESOLVED 2026-07-26 (BRIDGE-19.18).** The comparisons are live; all three §1 signals
+> are implemented and wired into the gate, which publishes `freshness.signals_live` so the
+> posture is machine-readable rather than a matter of trusting this paragraph. Operator
+> prose may now describe the model as risk-weighted. See "On notes 2 and 3" below.
+
 ## Implementation notes
 
-1. Schedule `reemit_evidence_receipts.py` (weekly CI and pre-release), publishing per-claim
-   pass/fail; shard by cost tier so the expensive claims do not gate the cheap ones.
-2. Record `source_revision.commit` (already written) **plus** a covered-paths list per
-   claim, so source drift is computable rather than assumed.
-3. Record and compare the `env.json` fingerprint per the reproducibility contract.
-4. Populate `freshness_days` for all 16 OBSERVED claims per the tier table.
+1. ~~Schedule `reemit_evidence_receipts.py`…~~ **DONE 2026-07-26**, with the caveat below.
+2. ~~Record `source_revision.commit` **plus** a covered-paths list per claim.~~ **DONE.**
+3. ~~Record and compare the `env.json` fingerprint.~~ **DONE**, with the caveat below.
+4. ~~Populate `freshness_days` for all 16 OBSERVED claims per the tier table.~~ **DONE.**
 5. Add the release-mode fail-closed check; keep development mode warning-only.
-6. `scripts/reemit_evidence_receipts.py` hardcodes `AGENT = "icydeer"` and a
-   `target_icydeer` warm-target path — an artifact of the agent who wrote it. That must be
-   parameterised before the script runs unattended on a schedule.
+6. ~~`scripts/reemit_evidence_receipts.py` hardcodes `AGENT = "icydeer"`…~~ **DONE**
+   in the same commit that landed this ADR (`ffb32c306`).
+
+### Status of the implementation notes
+
+| # | Note | State |
+|---|---|---|
+| 1 | Schedule the refresh in CI | **done** 2026-07-26 (runner caveat) |
+| 2 | Covered-paths list per claim (source drift) | **done** 2026-07-26 |
+| 3 | `env.json` fingerprint comparison | **done** 2026-07-26 (accrues forward) |
+| 4 | Populate per-claim `freshness_days` | **done** 2026-07-26 |
+| 5 | Release-mode fail-closed | open |
+| 6 | Parameterise the hardcoded agent/target | **done** `ffb32c306` |
+
+**On note 4 (2026-07-26).** Populating the windows turned out to be the smaller half of
+the work. The per-claim `freshness_days` field was not merely unpopulated, it was
+*unwired*: the gate read it, range-checked it, reported it — and then compared observed age
+against the global threshold regardless. Worse, the range check used
+`max_observed_freshness_days` (30) as its ceiling, so authoring either of this ADR's own
+90d and 180d tiers would have hard-failed the gate. Three changes were needed:
+
+- `max_observed_freshness_days` (the *default* window) and `max_authored_freshness_days`
+  (the *ceiling* on an authored window, now the frozen tier's 180d) were split apart. One
+  key could not honestly serve both roles.
+- The staleness comparison now uses the claim's own window when it has one, falling back to
+  the default when it does not.
+- Each row carries `freshness_tier` alongside the number, plus a recorded rationale, and the
+  gate fails closed if the label and the number disagree or the label is not in the policy.
+  A bare number would satisfy the letter of this note while losing the reason — barely
+  better than the `null` the ADR rejects, since "90" alone does not say *why* 90.
+
+Measured effect: `per_claim_windows_set` 0 → 16, and provisional claims 7 → 3. The three
+that remain provisional are all `volatile`-tier, which is the intended behaviour — the
+windows are shortest exactly where evidence decays fastest. Note that widening a window
+makes a claim fresh *by policy, not by re-verification*; the tiers are not a substitute for
+running note 1, and the honest fix for a stale claim remains re-emitting its receipt.
+
+**On notes 2 and 3 (2026-07-26) — the migration-risk clause is now lifted.** All three §1
+signals are live, so the model is risk-weighted in fact and may be described that way.
+
+Neither note needed a new schema. The receipts already carried the inputs:
+`inputs.source_files` (the covered-paths list) is present on all 16 OBSERVED claims, and
+`source_revision.commit` was already written on every re-emit. `scripts/check_evidence_drift.py`
+computes source drift as `git log <recorded>..HEAD -- <covered paths>`.
+
+Environment drift needed one addition. The committed `env.json` could not serve as the
+comparison baseline: its retention block declares it `immutable: true`, and the re-emit script
+never updated it, so its 2026-05-21 toolchain values describe when the bundle was authored, not
+when the evidence was last produced. Comparing against it would have reported drift on all 16
+claims permanently — the same undifferentiated noise this ADR replaced. Instead, re-emit now
+records an `outputs.environment_fingerprint` (rustc/cargo version, host triple, kernel, arch,
+platform; deliberately excluding clock, hostname, cwd and env vars, which differ between two
+runs that should count as identical). `env.json` is left untouched.
+
+That fingerprint accrues forward: a receipt written before this change reports environment
+drift as `unknown`, never as `clean`. Reporting "no drift" when the truth is "could not check"
+is the one failure mode an evidence system must not have, because the first is trusted.
+
+**Immediate yield.** Turning the signals on found two claims the clock could not see:
+FE-CLAIM-009 (age 0d, frozen tier, 180d window — fresh by every time-based measure) and
+FE-CLAIM-025 (34d against a 90d window). Both had covered code move underneath a receipt the
+backstop still called good. FE-CLAIM-006 had **71** commits touch its covered code, which the
+backstop scored as merely "35 days". Stale count went 3 → 5; that is the model getting more
+honest, not noisier.
+
+**Caveat on note 1.** The schedule is implemented
+(`.github/workflows/evidence_refresh.yml` + `scripts/run_evidence_refresh_schedule.sh`,
+sharded by tier at a quarter of each window) but it can only do real work where the `/dp`
+sibling checkouts exist, since most verification commands are default-feature cargo builds
+(bd-ndpm2). A GitHub-hosted runner has none, so the job records `skipped` there rather than
+reporting a refresh that did not happen. Pointing the `EVIDENCE_REFRESH_RUNNER` repository
+variable at a self-hosted runner with `/dp` present makes it live; publishing the sibling
+crates (bd-gw4cg) would remove the constraint entirely. Sharding is currently by freshness
+tier rather than measured cost, because no per-claim cost data existed; the refresh now
+records `duration_seconds` per claim, which is how that data starts existing.
 
 ## Alternatives considered
 

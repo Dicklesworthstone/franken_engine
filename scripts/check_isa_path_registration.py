@@ -182,6 +182,21 @@ def run_checks(repo: Path) -> tuple[list[dict], int, dict]:
     findings: list[dict] = []
     files = source_files(repo)
 
+    # A registration that names a file which no longer exists is rotted inventory,
+    # and it rots in the dangerous direction: the entry keeps asserting a portable
+    # counterpart and an equivalence mechanism for code that is gone, while a
+    # reader counts it as covered. Same for a declared fingerprint owner.
+    for label, declared in (("registered_paths", registered), ("fingerprint_owner_files", owners)):
+        for rel in sorted(declared):
+            if not (repo / rel).is_file():
+                findings.append({
+                    "check": "stale_registration",
+                    "status": "fail",
+                    "file": rel,
+                    "detail": f"{label} names a file that does not exist",
+                    "remedy": "remove the entry, or fix the path if the file moved",
+                })
+
     # --- 1. registration -----------------------------------------------------
     construct_counts: dict[str, int] = {name: 0 for name in DIVERGENT_CONSTRUCTS}
     for path in files:

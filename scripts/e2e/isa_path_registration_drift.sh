@@ -9,15 +9,19 @@
 # position has to be falsified deliberately or it is indistinguishable from a
 # guard that always returns 0.
 #
-# Four injected faults, each a thing that will actually be attempted:
+# Six injected faults, each a thing that will actually be attempted, plus the
+# unparseable-inventory case:
 #   1. a new file uses core::arch intrinsics without registering  (the bd-2noh9 class)
 #   2. an architecture fingerprint type escapes its owning module
 #   3. a function that feeds a content hash reads a CPU feature flag (falsifies
 #      FE-CLAIM-023 cross-platform identical-hash reproducibility)
 #   4. a target_arch cfg site appears without the inventory acknowledging it
+#   5. the hash-input extractor matches nothing, so check 3 would pass vacuously
+#   6. a registration names a file that no longer exists
 #
 # Fault 3 is the one that matters most and the least likely to be noticed by
 # review: it produces correct-looking code that passes every test on one machine.
+# Fault 5 is the one that would make the gate worthless without anyone noticing.
 #
 # Hermetic: no cargo, no /dp siblings, nothing outside the temp dir is touched.
 #
@@ -187,6 +191,13 @@ pub struct ArchCapabilityProfile {
 EOF
 assert_rejected "no hash-input function found (check 3 would be vacuous)" coverage
 
+# 6. A registration naming a file that no longer exists. This rots in the
+#    dangerous direction: the entry keeps asserting a portable counterpart for
+#    code that is gone, and a reader counts it as covered.
+reset_tree
+rm -f "${SRC}/simd_lexer.rs"
+assert_rejected "registration names a deleted file" stale_registration
+
 # A missing inventory is exit 2, not a silent pass.
 reset_tree
 rm -f "${WORK}/docs/isa_specific_path_inventory_v1.json"
@@ -194,4 +205,4 @@ run_guard
 [[ "$guard_exit" -eq 2 ]] || fail "missing inventory: expected exit 2, got ${guard_exit}"
 echo "  rejected: missing inventory (exit 2, not a silent pass)"
 
-echo "isa_path_registration_drift=passed faults_rejected=5 unparseable_rejected=1 baseline_accepted=1"
+echo "isa_path_registration_drift=passed faults_rejected=6 unparseable_rejected=1 baseline_accepted=1"

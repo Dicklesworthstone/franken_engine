@@ -879,3 +879,34 @@ if [[ "$failures" -ne 0 ]]; then
   jq -r '.events[] | select(.status != "pass") | "\(.claim_id): \(.reason) -> \(.downgrade_text // "no downgrade text")"' "$report_path" >&2
   exit 1
 fi
+
+# ADR-0012 §4 (BRIDGE-19.18) — fail closed at publication, warn during development.
+#
+# `mode` had been a pure label: echoed into commands.txt, stamped into the report,
+# and never branched on. This is the first branch. The asymmetry is deliberate and
+# is the ADR's reasoning, not an oversight:
+#
+#   development  A stale receipt on an unrelated claim must not block unrelated
+#                work. A gate that does gets bypassed, and a bypassed gate protects
+#                nothing. Staleness stays a warning.
+#   release      An OBSERVED claim whose evidence is provisional is a claim the
+#                matrix cannot currently back at OBSERVED strength. Publishing it
+#                is precisely the documentation-drift failure Charter §7 forbids.
+#
+# Invoke as: ./scripts/run_claim_to_proof_matrix_gate.sh release
+if [[ "$mode" == "release" ]]; then
+  provisional="$(jq -r '.freshness.observed_stale // 0' "$report_path")"
+  if [[ "$provisional" -gt 0 ]]; then
+    {
+      echo "RELEASE GATE FAILED: ${provisional} OBSERVED claim(s) are provisional."
+      echo "An OBSERVED claim with stale evidence cannot be published at OBSERVED strength."
+      jq -r '.freshness.provisional_claims[]
+             | "  \(.claim_id) (tier \(.freshness_tier // "unassigned"), age \(.age_days)d, window \(.threshold_days // "default")d, bead \(.owning_bead))"' \
+        "$report_path"
+      echo "Refresh them with: ./scripts/run_evidence_refresh_schedule.sh <tier>"
+      echo "or per claim:      python3 scripts/reemit_evidence_receipts.py --only <CLAIM_ID>"
+    } >&2
+    exit 1
+  fi
+  echo "claim_to_proof_matrix_release_gate=pass provisional=0"
+fi

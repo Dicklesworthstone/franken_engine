@@ -153,7 +153,7 @@ risk-weighted until the comparisons are live.
 2. ~~Record `source_revision.commit` **plus** a covered-paths list per claim.~~ **DONE.**
 3. ~~Record and compare the `env.json` fingerprint.~~ **DONE**, with the caveat below.
 4. ~~Populate `freshness_days` for all 16 OBSERVED claims per the tier table.~~ **DONE.**
-5. Add the release-mode fail-closed check; keep development mode warning-only.
+5. ~~Add the release-mode fail-closed check; keep development mode warning-only.~~ **DONE.**
 6. ~~`scripts/reemit_evidence_receipts.py` hardcodes `AGENT = "icydeer"`…~~ **DONE**
    in the same commit that landed this ADR (`ffb32c306`).
 
@@ -165,7 +165,7 @@ risk-weighted until the comparisons are live.
 | 2 | Covered-paths list per claim (source drift) | **done** 2026-07-26 |
 | 3 | `env.json` fingerprint comparison | **done** 2026-07-26 (accrues forward) |
 | 4 | Populate per-claim `freshness_days` | **done** 2026-07-26 |
-| 5 | Release-mode fail-closed | open |
+| 5 | Release-mode fail-closed | **done** 2026-07-26 |
 | 6 | Parameterise the hardcoded agent/target | **done** `ffb32c306` |
 
 **On note 4 (2026-07-26).** Populating the windows turned out to be the smaller half of
@@ -218,6 +218,17 @@ FE-CLAIM-025 (34d against a 90d window). Both had covered code move underneath a
 backstop still called good. FE-CLAIM-006 had **71** commits touch its covered code, which the
 backstop scored as merely "35 days". Stale count went 3 → 5; that is the model getting more
 honest, not noisier.
+
+**On note 5 (2026-07-26).** `./scripts/run_claim_to_proof_matrix_gate.sh release` now exits 1
+when any OBSERVED claim is provisional, listing each with its tier, age, window and owning bead
+plus the exact refresh command. `ci` and every other mode keep warning and exit 0. This is the
+first time the gate's `mode` argument has been branched on at all — it had been a pure label,
+echoed into `commands.txt` and stamped into the report but never read.
+
+The asymmetry is the decision, not a shortcut. Failing closed during ordinary development
+blocks unrelated work on unrelated evidence age, which reliably produces bypasses, and a
+bypassed gate protects nothing. Failing closed at publication catches the thing that actually
+matters: shipping prose backed by evidence the matrix can no longer stand behind.
 
 **Caveat on note 1.** The schedule is implemented
 (`.github/workflows/evidence_refresh.yml` + `scripts/run_evidence_refresh_schedule.sh`,

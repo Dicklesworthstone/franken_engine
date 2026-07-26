@@ -53,6 +53,27 @@ readonly PROJECT_DIR
 readonly GATE_NAME="lockstep_oracle"
 TIMESTAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 readonly TIMESTAMP
+# Where `cargo build` will actually put the binaries this gate then runs.
+#
+# These two must agree. They did not: the build step below honours CARGO_TARGET_DIR
+# (as cargo always does) while the run steps hardcoded ${PROJECT_DIR}/target, so
+# under the repo's own `target_rch_*` isolation convention the gate built fine and
+# then died with exit 127 looking for a binary in a directory nothing had written
+# to. Found refreshing FE-CLAIM-022 in an isolated tree (bd-566x4); an agent
+# following the documented convention would hit it every time.
+#
+# Relative CARGO_TARGET_DIR is resolved against the workspace root, matching cargo.
+if [[ -n "${CARGO_TARGET_DIR:-}" ]]; then
+  if [[ "${CARGO_TARGET_DIR}" == /* ]]; then
+    CARGO_TARGET_ROOT="${CARGO_TARGET_DIR}"
+  else
+    CARGO_TARGET_ROOT="${PROJECT_DIR}/${CARGO_TARGET_DIR}"
+  fi
+else
+  CARGO_TARGET_ROOT="${PROJECT_DIR}/target"
+fi
+readonly CARGO_TARGET_ROOT
+
 readonly ARTIFACTS_BASE="${RGC_LOCKSTEP_ORACLE_ARTIFACTS_DIR:-${PROJECT_DIR}/artifacts}"
 readonly ARTIFACTS_DIR="${ARTIFACTS_BASE}/${GATE_NAME}/${TIMESTAMP}"
 readonly STEP_LOGS_DIR="${ARTIFACTS_DIR}/step_logs"
@@ -178,7 +199,7 @@ generate_workload_traces() {
         workload_args=(--workload "${WORKLOAD_FILTER}")
     fi
 
-    run_step "workload_generation" "${PROJECT_DIR}/target/release/runtime-lockstep-orchestrator" \
+    run_step "workload_generation" "${CARGO_TARGET_ROOT}/release/runtime-lockstep-orchestrator" \
         all \
         --traces-dir "${WORKLOAD_TRACES_DIR}" \
         "${workload_args[@]}" \
@@ -248,7 +269,7 @@ record_report_counts() {
 run_lockstep_analysis() {
     emit_event "lockstep_analysis_start" "{}"
 
-    run_step "lockstep_analysis" "${PROJECT_DIR}/target/release/runtime-lockstep-orchestrator" \
+    run_step "lockstep_analysis" "${CARGO_TARGET_ROOT}/release/runtime-lockstep-orchestrator" \
         analyze \
         --traces-dir "${WORKLOAD_TRACES_DIR}" \
         --output-dir "${DIVERGENCE_REPORTS_DIR}" \

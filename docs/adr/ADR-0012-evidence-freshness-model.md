@@ -124,6 +124,54 @@ existing fail-closed behaviour (write nothing, report failure) is correct and is
 load-bearing: a refresh must never be able to *create* evidence for a claim that no longer
 verifies.
 
+### 5.1 A verification that could not RUN is neither (amended 2026-07-26, `bd-566x4`)
+
+§5 as written above names two outcomes and is right about both. It is incomplete: it
+assumes a non-zero exit means the command reached a verdict. Sometimes it never got
+that far.
+
+Found by using it. Refreshing FE-CLAIM-006 and FE-CLAIM-022 on 2026-07-26, both exited
+non-zero with:
+
+```
+error: failed to write `/data/tmp/cargo-target/…/.fingerprint/…/invoked.timestamp`
+Caused by: No such file or directory (os error 2)
+```
+
+A concurrent agent deleted the shared target tree mid-build. Neither claim regressed —
+FE-CLAIM-006's other two layers passed (17/17 manifests, lowering rejection) — but §5
+had only one bucket for a non-zero exit, so both were reported as regressions on the
+project's most identity-critical surface.
+
+So there are **three** outcomes, and the third gets its own channel:
+
+| outcome | meaning | receipt | scheduled run |
+|---|---|---|---|
+| `passed` | verified | written | pass |
+| `regression` | ran, claim did not hold | **not written** | **fail** |
+| `infrastructure` | could not run to a verdict | **not written** | pass, reported |
+
+Three points govern the split:
+
+1. **Fail-closed is unchanged.** `infrastructure` writes no receipt, exactly like
+   `regression`. The claim stays as provisional as it was. This is a reporting
+   distinction only, and it cannot manufacture evidence — which is what §5 was
+   protecting and remains true.
+2. **The burden of proof is on the machine.** A non-zero exit matching no signature in
+   `docs/infrastructure_failure_signatures_v1.json` is a regression. Excusing a real
+   regression as a machine fault is the dangerous direction, so the conservative
+   default runs that way.
+3. **Retry before reporting.** The dominant cause here is target-tree contention
+   between concurrent agents, and isolation is the actual remedy. An
+   infrastructure-classified failure is retried once in a build tree no other agent
+   shares; only if that also fails is anything reported. The retry declines itself,
+   with a stated reason, when free disk is too low to allocate a tree.
+
+The reason this matters is the same one §4 gives for refusing to fail closed during
+ordinary development. A P0 evidence job that cries "regression" when it means "the disk
+moved" is a job people mute, and a muted gate protects nothing. The distinction is
+machine-detectable, so there is no excuse for making a human make it.
+
 ## Consequences
 
 **Positive.** Staleness tracks real invalidation instead of the calendar. Frozen claims

@@ -31,9 +31,20 @@
 # cross-repo integration suite uses: "we don't know" and "we know it's broken" are
 # different evidence states.
 #
+# Three outcomes, not two
+# -----------------------
+# ADR-0012 §5.1 / bd-566x4. A non-zero verification exit is reported as `regression`
+# only when the command actually reached a verdict. When it could not run at all --
+# build tree deleted underneath it by a concurrent agent, disk full, timeout -- the
+# status is `infrastructure` and the run does not fail. Both write no receipt, so
+# the claim stays exactly as provisional either way; what differs is who is being
+# asked to do something. "Audit this claim" and "fix this machine" are different
+# work orders, and a job that keeps issuing the first when it means the second is a
+# job people learn to ignore.
+#
 # Usage:  ./scripts/run_evidence_refresh_schedule.sh [volatile|standard|frozen|all]
-# Exit:   0 refreshed (or honestly skipped); 1 a claim's verification REGRESSED;
-#         2 usage error.
+# Exit:   0 refreshed, honestly skipped, or infrastructure-blocked;
+#         1 a claim's verification REGRESSED; 2 usage error.
 
 set -euo pipefail
 
@@ -100,7 +111,19 @@ else
   # ADR-0012 §5: a failed verification command is a REGRESSION, never staleness.
   # The two must not share a channel, so this is reported as a distinct status and
   # is the only thing that makes the scheduled run fail.
-  if [[ "$refresh_exit" -ne 0 ]]; then
+  #
+  # ADR-0012 §5.1 (bd-566x4): there is a third outcome. reemit exits 3 when no
+  # claim regressed but at least one could not be verified at all -- the build tree
+  # was deleted underneath it, the disk filled, the command timed out. Reporting
+  # that as a regression sends an operator to audit a claim that was never
+  # implicated, and a few such false alarms are how a scheduled evidence job
+  # becomes something people mute. It gets its own status and does NOT fail the
+  # run, because there is nothing here for the owning team to fix.
+  if [[ "$refresh_exit" -eq 3 ]]; then
+    status="infrastructure"
+    note="$(jq -r '[.results[] | select(.status=="infrastructure") | "\(.claim_id) (\(.infrastructure_reason))"] | join("; ")' "$report_path" 2>/dev/null || echo "see refresh_report.json")"
+    echo "evidence_refresh=infrastructure tier=${tier} blocked=${note}" >&2
+  elif [[ "$refresh_exit" -ne 0 ]]; then
     status="regression"
     note="$(jq -r '[.results[] | select(.status=="failed") | .claim_id] | join(", ")' "$report_path" 2>/dev/null || echo "see refresh_report.json")"
     echo "evidence_refresh=regression tier=${tier} claims=${note}" >&2

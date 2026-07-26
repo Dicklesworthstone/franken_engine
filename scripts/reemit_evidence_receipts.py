@@ -8,6 +8,22 @@ claim's ``verification_command``. A receipt is written ONLY when the command exi
 zero; on any non-zero exit the existing receipt is left untouched and the claim is
 reported as failed.
 
+A non-zero exit is reported as one of *two* distinct states, never one (bd-566x4).
+ADR-0012 §5 separates regression from staleness but names only those two outcomes;
+there is a third, and collapsing it into "regression" points an operator at the
+claim when the fault is the machine:
+
+* ``regression``     -- the command ran and the claim did not hold. A real alarm.
+* ``infrastructure`` -- the command could not be run to a verdict (build tree
+  deleted underneath it, disk exhausted, stale crate metadata, timeout). Says
+  nothing about the claim.
+
+Both write no receipt, so the fail-closed property below is unchanged; they differ
+only in what they tell the reader. An ``infrastructure`` result is retried once in
+an isolated target directory before it can be reported at all, because the dominant
+cause in this repo is target-tree contention between concurrent agents, and that is
+exactly what isolation fixes.
+
 For each OBSERVED claim in ``docs/claim_to_proof_matrix_v1.json`` this updates the
 committed ``docs/evidence/<CLAIM>/manifest.json`` in place:
 
@@ -42,6 +58,8 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
+import shutil
 import subprocess
 import sys
 import time
@@ -70,6 +88,18 @@ AGENT = os.environ.get("REEMIT_AGENT") or os.environ.get("AGENT_NAME") or "icyde
 WARM_TARGET = os.environ.get("REEMIT_TARGET_DIR") or str(REPO / "target")
 MATRIX = REPO / "docs" / "claim_to_proof_matrix_v1.json"
 EVIDENCE_DIR = REPO / "docs" / "evidence"
+
+# bd-566x4. The retry target dir is deliberately NOT a fresh mkdtemp per run: the
+# whole point is a tree no other agent knows the name of, and a stable name stays
+# warm across runs. A per-run temp dir would make every retry a cold ~30 GB build.
+SIGNATURES_PATH = REPO / "docs" / "infrastructure_failure_signatures_v1.json"
+RETRY_TARGET = os.environ.get("REEMIT_RETRY_TARGET_DIR") or str(
+    REPO / "target_evidence_refresh"
+)
+# A retry allocates a build tree. Doing that unconditionally on a nearly-full disk
+# turns one infrastructure failure into a worse one, so the retry declines itself
+# and says so rather than pushing the machine over.
+RETRY_MIN_FREE_GB = int(os.environ.get("REEMIT_RETRY_MIN_FREE_GB") or "60")
 
 
 def head_commit() -> str:
@@ -117,7 +147,61 @@ def linker_policy_is_effective(rustflags: str) -> bool:
     return effective_value == "-lld"
 
 
-def run_command(command: str, timeout: int) -> tuple[int, str, float]:
+def load_signatures() -> dict:
+    """Load the shared infrastructure-failure contract (bd-566x4).
+
+    Imported from a JSON contract rather than inlined for the same reason
+    ``environment_fingerprint`` is imported from ``check_evidence_drift`` above:
+    a second, drifting copy of the rules is how two parts of this system start
+    disagreeing about what happened.
+    """
+    try:
+        return json.loads(SIGNATURES_PATH.read_text())
+    except (OSError, json.JSONDecodeError) as exc:
+        # Fail toward `regression`, the conservative direction: if the contract
+        # cannot be read, nothing gets excused as infrastructure.
+        print(f"warning: cannot read {SIGNATURES_PATH.name}: {exc}", file=sys.stderr)
+        return {"exit_code_rules": [], "signatures": []}
+
+
+def classify_failure(code: int, output: str, signatures: dict) -> tuple[str, str]:
+    """Classify a non-zero exit as ``regression`` or ``infrastructure``.
+
+    Returns ``(kind, reason)``. Per the contract's ``conservative_default``, a
+    failure matching nothing is a regression: excusing a real regression as a
+    machine problem is the dangerous error, so infrastructure carries the burden
+    of proof.
+    """
+    if code == 0:
+        return "ok", ""
+    for rule in signatures.get("exit_code_rules", []):
+        if code == rule.get("exit_code"):
+            return "infrastructure", f"{rule['id']}: {rule['reason']}"
+    for sig in signatures.get("signatures", []):
+        pattern = sig.get("regex")
+        if pattern and re.search(pattern, output, re.IGNORECASE):
+            return "infrastructure", f"{sig['id']}: {sig['reason']}"
+    return "regression", f"verification command exited {code}"
+
+
+def free_gb(path: str) -> float:
+    try:
+        return shutil.disk_usage(path).free / (1024**3)
+    except OSError:
+        return 0.0
+
+
+def run_command(
+    command: str, timeout: int, target_dir: str | None = None
+) -> tuple[int, str, float, str]:
+    """Run one verification command. Returns ``(code, tail, seconds, full_output)``.
+
+    The full output is returned alongside the 3-line tail because
+    ``classify_failure`` has to see the whole transcript: the line that proves a
+    build died on a deleted target tree ("failed to write ...invoked.timestamp")
+    sits well above cargo's final summary, so a tail-only classifier would call
+    it a regression (bd-566x4).
+    """
     started = time.monotonic()
     env = dict(os.environ)
     env.pop("CARGO_ENCODED_RUSTFLAGS", None)
@@ -127,9 +211,18 @@ def run_command(command: str, timeout: int) -> tuple[int, str, float]:
         rustflags = f"{rustflags} -Clinker-features=-lld"
     env["RUSTFLAGS"] = rustflags
     env.setdefault("CARGO_INCREMENTAL", "0")
-    # Bare `cargo ...` commands (no explicit CARGO_TARGET_DIR) reuse the warm target.
-    if "cargo" in command and "CARGO_TARGET_DIR" not in command:
-        env["CARGO_TARGET_DIR"] = WARM_TARGET
+    # Pin the build tree for anything that does not pin its own.
+    #
+    # This used to test `"cargo" in command`, which silently exempted every
+    # verification command that is a GATE SCRIPT -- `./scripts/run_rgc_*.sh ci`
+    # contains no literal "cargo", so the ambient CARGO_TARGET_DIR leaked through
+    # to the cargo invocations inside the script. On 2026-07-26 that put
+    # FE-CLAIM-006 and FE-CLAIM-022 (the only two OBSERVED claims verified by a
+    # bare gate script) into the shared /data/tmp/cargo-target, where a concurrent
+    # agent deleted the tree mid-build and both were reported as regressions. The
+    # test is now on the command's own text only.
+    if "CARGO_TARGET_DIR" not in command:
+        env["CARGO_TARGET_DIR"] = target_dir or WARM_TARGET
     try:
         proc = subprocess.run(
             command,
@@ -140,10 +233,13 @@ def run_command(command: str, timeout: int) -> tuple[int, str, float]:
             text=True,
             timeout=timeout,
         )
-        tail = (proc.stdout + proc.stderr).strip().splitlines()[-3:]
-        return proc.returncode, "\n".join(tail), time.monotonic() - started
-    except subprocess.TimeoutExpired:
-        return 124, f"TIMEOUT after {timeout}s", time.monotonic() - started
+        output = proc.stdout + proc.stderr
+        tail = output.strip().splitlines()[-3:]
+        return proc.returncode, "\n".join(tail), time.monotonic() - started, output
+    except subprocess.TimeoutExpired as exc:
+        partial = (exc.stdout or "") + (exc.stderr or "")
+        msg = f"TIMEOUT after {timeout}s"
+        return 124, msg, time.monotonic() - started, f"{partial}\n{msg}"
 
 
 def reemit(claim_id: str, command: str, commit: str) -> None:
@@ -196,8 +292,22 @@ def main() -> int:
         default="",
         help="write per-claim results (id, tier, exit code, duration) here",
     )
+    ap.add_argument(
+        "--no-retry",
+        action="store_true",
+        help="do not retry an infrastructure-classified failure in an isolated "
+        "target dir (bd-566x4); still classifies and reports it as infrastructure",
+    )
     args = ap.parse_args()
     only = {s.strip() for s in args.only.split(",") if s.strip()}
+
+    # Per-claim progress is the whole point of the --json/per-claim reporting this
+    # script grew for the scheduled job (BRIDGE-19.18): one aggregate exit code
+    # cannot say WHICH claim regressed. But Python block-buffers stdout when it is
+    # redirected to a file, so a run whose claims each take 10-90 minutes wrote
+    # nothing observable until it finished -- the reporting existed and was
+    # invisible exactly when it mattered. Line-buffer it.
+    sys.stdout.reconfigure(line_buffering=True)
 
     commit = head_commit()
     claims = observed_claims()
@@ -209,8 +319,9 @@ def main() -> int:
             print(f"error: no OBSERVED claim carries freshness_tier={args.tier!r}", file=sys.stderr)
             return 2
 
+    signatures = load_signatures()
     results: list[dict] = []
-    passed, failed = [], []
+    passed, failed, blocked = [], [], []
     for c in claims:
         cid = c["claim_id"]
         tier = c.get("freshness_tier")
@@ -221,7 +332,42 @@ def main() -> int:
             continue
         command = substitute(raw)
         print(f"[{cid}] running: {command[:110]}")
-        code, tail, duration = run_command(command, args.timeout)
+        code, tail, duration, output = run_command(command, args.timeout)
+        kind, reason = classify_failure(code, output, signatures)
+
+        # bd-566x4: one retry, in a build tree no other agent shares. The dominant
+        # infrastructure failure here is target-tree contention between concurrent
+        # agents, and isolation is the actual remedy -- so retry before reporting
+        # anything, rather than reporting a failure the retry would have cleared.
+        retry: dict | None = None
+        if kind == "infrastructure" and not args.no_retry:
+            available = free_gb(str(REPO))
+            if available < RETRY_MIN_FREE_GB:
+                retry = {
+                    "attempted": False,
+                    "skipped_reason": (
+                        f"only {available:.0f} GB free, below the "
+                        f"{RETRY_MIN_FREE_GB} GB required to allocate an isolated "
+                        "build tree"
+                    ),
+                }
+                print(f"[{cid}] INFRA ({reason}); retry skipped: {retry['skipped_reason']}")
+            else:
+                print(f"[{cid}] INFRA ({reason}); retrying once in {RETRY_TARGET}")
+                r_code, r_tail, r_duration, r_output = run_command(
+                    command, args.timeout, target_dir=RETRY_TARGET
+                )
+                duration += r_duration
+                retry = {
+                    "attempted": True,
+                    "target_dir": RETRY_TARGET,
+                    "exit_code": r_code,
+                    "duration_seconds": round(r_duration, 1),
+                    "first_attempt_reason": reason,
+                }
+                code, tail, output = r_code, r_tail, r_output
+                kind, reason = classify_failure(code, output, signatures)
+
         result = {
             "claim_id": cid,
             "freshness_tier": tier,
@@ -233,11 +379,25 @@ def main() -> int:
             "duration_seconds": round(duration, 1),
             "command": command,
         }
+        if retry is not None:
+            result["retry"] = retry
         if code == 0:
             reemit(cid, command, commit)
             passed.append(cid)
             result["status"] = "passed"
             print(f"[{cid}] PASSED -> real receipt written")
+        elif kind == "infrastructure":
+            # NOT a regression, and NOT evidence either. The receipt is left
+            # untouched exactly as it is for a regression -- the claim stays as
+            # provisional as it was. All that differs is what the operator is told,
+            # which is the whole point: "audit this claim" and "fix this machine"
+            # are different work orders.
+            blocked.append((cid, reason))
+            result["status"] = "infrastructure"
+            result["truth_state"] = "validation_environment_blocker"
+            result["infrastructure_reason"] = reason
+            result["output_tail"] = tail
+            print(f"[{cid}] INFRASTRUCTURE ({reason}) -- claim NOT implicated\n    {tail}")
         else:
             failed.append((cid, code))
             result["status"] = "failed"
@@ -259,7 +419,11 @@ def main() -> int:
                     "summary": {
                         "attempted": len(results),
                         "passed": len(passed),
+                        # `failed` counts REGRESSIONS only. Infrastructure blockers
+                        # are a separate count so a consumer cannot accidentally
+                        # read "the machine broke" as "the claim broke" (bd-566x4).
                         "failed": len(failed),
+                        "infrastructure": len(blocked),
                     },
                     "results": results,
                 },
@@ -270,10 +434,23 @@ def main() -> int:
         )
         print(f"reemit_report={out}")
 
-    print(f"\nreemit: {len(passed)} passed, {len(failed)} failed")
+    print(
+        f"\nreemit: {len(passed)} passed, {len(failed)} regressed, "
+        f"{len(blocked)} infrastructure-blocked"
+    )
     if failed:
-        print("failed:", ", ".join(f"{c}({code})" for c, code in failed))
-    return 1 if failed else 0
+        print("regressed:", ", ".join(f"{c}({code})" for c, code in failed))
+    if blocked:
+        print("infrastructure-blocked:", ", ".join(f"{c} [{r}]" for c, r in blocked))
+
+    # Three exit codes for three outcomes (bd-566x4). Collapsing 3 into 1 is what
+    # sends an operator to audit a claim membrane when the fix is a target dir.
+    #   0 -- every attempted claim verified
+    #   1 -- at least one REGRESSION. A real alarm; the claim did not hold.
+    #   3 -- no regressions, but at least one claim could not be verified at all.
+    if failed:
+        return 1
+    return 3 if blocked else 0
 
 
 if __name__ == "__main__":

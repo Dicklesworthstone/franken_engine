@@ -172,6 +172,44 @@ ordinary development. A P0 evidence job that cries "regression" when it means "t
 moved" is a job people mute, and a muted gate protects nothing. The distinction is
 machine-detectable, so there is no excuse for making a human make it.
 
+### 5.2 A receipt must be attributable to the commit it names (amended 2026-07-26)
+
+§1 computes source drift as `git log <recorded>..HEAD -- <covered paths>`, which silently
+assumes the receipt was true of `<recorded>` in the first place. Two ways that assumption
+broke, both found by running the refresh rather than by reading it:
+
+**The revision was captured once per run, not once per claim.** `reemit_evidence_receipts.py`
+read HEAD at process start and stamped every receipt with it. This script exists to run
+several claims back to back and a single claim can take 90 minutes, so a later claim's
+receipt named the tree as it stood before the earlier claims — and before any commit that
+landed meanwhile.
+
+**The worktree was not checked at all.** FE-CLAIM-022's 2026-07-26 receipt records
+`49e4edd3b`. The lockstep pipeline's `CARGO_TARGET_DIR` fix was still uncommitted when
+that run started; it landed 34 seconds later as `818dbe700`. At `49e4edd3b` the exact
+command named in the receipt exits 127. **The receipt attributed a pass to a commit that
+fails** — over-claiming, in the single direction this entire subsystem exists to prevent,
+and invisible to every check because both the age and the drift range were computed from
+the wrong anchor.
+
+So the contract gains one requirement: a receipt names a commit, and a reader is entitled
+to assume a clean checkout of that commit reproduces the pass. Concretely:
+
+1. Capture the revision immediately **before each claim's command runs**, not once for
+   the run.
+2. Capture, at the same moment, whether that claim's covered paths differ from HEAD, and
+   record `source_revision.worktree_dirty` plus the offending paths. The field is written
+   even when clean, so "verified against a clean checkout" is distinguishable from "this
+   receipt predates the check".
+3. `check_evidence_drift.py` reports a dirty receipt as **`drifted`**, ahead of any commit
+   scan. This is deliberately a *stronger* failure than "the code moved since": that
+   receipt was never true of the commit it names. `drifted` rather than a fourth verdict
+   keeps §1's three-state contract intact and yields the correct gate behaviour.
+
+Note what this does *not* do: it does not forbid running a refresh from a dirty tree.
+Doing so is often exactly right while iterating on a gate. It forbids the resulting
+receipt from claiming to be something it is not.
+
 ## Consequences
 
 **Positive.** Staleness tracks real invalidation instead of the calendar. Frozen claims

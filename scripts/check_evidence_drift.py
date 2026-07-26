@@ -111,8 +111,29 @@ def observed_claims(only: set[str]) -> list[dict]:
 
 def source_drift(manifest: dict) -> dict:
     """Has any covered path changed since the receipt's recorded revision?"""
-    recorded = (manifest.get("source_revision") or {}).get("commit") or ""
+    source_revision = manifest.get("source_revision") or {}
+    recorded = source_revision.get("commit") or ""
     covered = (manifest.get("inputs") or {}).get("source_files") or []
+
+    # A receipt produced while its covered paths were modified-but-uncommitted is
+    # not attributable to any commit: a third party checking out `recorded` gets
+    # different code than the one that passed. That is a stronger failure than "the
+    # code moved since" -- the receipt was never true of the commit it names -- so
+    # it must not be reported as clean no matter how recent it is. `drifted` rather
+    # than a fourth verdict keeps ADR-0012 §1's three-state contract intact and
+    # produces the correct gate behaviour (downgrade to provisional).
+    if source_revision.get("worktree_dirty"):
+        dirty_paths = source_revision.get("dirty_covered_paths") or []
+        return {
+            "status": "drifted",
+            "reason": (
+                "receipt was produced from a modified worktree; the pass is not "
+                f"attributable to {recorded[:8] or 'the recorded revision'}"
+            ),
+            "covered_path_count": len(covered),
+            "recorded_revision": recorded,
+            "dirty_covered_paths": dirty_paths[:10],
+        }
 
     if not covered:
         return {

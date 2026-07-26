@@ -109,9 +109,60 @@ def head_commit() -> str:
     return out.stdout.strip() if out.returncode == 0 else "unknown"
 
 
+def dirty_covered_paths(covered: list[str]) -> list[str]:
+    """Which of a claim's covered paths differ from HEAD right now.
+
+    A receipt names a commit, and a reader is entitled to assume that checking out
+    that commit and re-running the verification command reproduces the pass. That
+    assumption is false whenever the covered paths were modified-but-uncommitted at
+    run time: what ran was the working tree, not the commit.
+
+    This is not hypothetical. FE-CLAIM-022's 2026-07-26 receipt recorded 49e4edd3b,
+    but the lockstep pipeline's CARGO_TARGET_DIR fix was still uncommitted when the
+    run started (it landed 34 seconds later as 818dbe700). At 49e4edd3b the very
+    command in the receipt exits 127. The receipt attributed a pass to a commit that
+    fails -- over-claiming, in the one direction the evidence system exists to
+    prevent.
+    """
+    if not covered:
+        return []
+    out = subprocess.run(
+        ["git", "-C", str(REPO), "status", "--porcelain", "--"] + covered,
+        capture_output=True,
+        text=True,
+    )
+    if out.returncode != 0:
+        # Cannot prove clean, so do not claim clean. Naming the whole covered set
+        # keeps the receipt honest without inventing a path list we did not observe.
+        return sorted(covered)
+    paths = []
+    for line in out.stdout.splitlines():
+        if len(line) > 3:
+            paths.append(line[3:].strip())
+    return sorted(set(paths))
+
+
 def observed_claims() -> list[dict]:
     matrix = json.loads(MATRIX.read_text())
     return [c for c in matrix["claims"] if c.get("allowed_state") == "observed"]
+
+
+def load_covered_paths(claim_id: str) -> list[str]:
+    """The claim's declared covered paths, read from its existing receipt.
+
+    Same source `check_evidence_drift.py` reads, so the paths this script checks for
+    uncommitted edits are exactly the paths the drift checker later scans for
+    commits. Two different notions of "covered" would let a receipt pass one and
+    fail the other for reasons no operator could act on.
+    """
+    manifest_path = EVIDENCE_DIR / claim_id / "manifest.json"
+    if not manifest_path.is_file():
+        return []
+    try:
+        manifest = json.loads(manifest_path.read_text())
+    except (OSError, json.JSONDecodeError):
+        return []
+    return (manifest.get("inputs") or {}).get("source_files") or []
 
 
 def substitute(command: str) -> str:
@@ -242,7 +293,7 @@ def run_command(
         return 124, msg, time.monotonic() - started, f"{partial}\n{msg}"
 
 
-def reemit(claim_id: str, command: str, commit: str) -> None:
+def reemit(claim_id: str, command: str, commit: str, dirty: list[str]) -> None:
     manifest_path = EVIDENCE_DIR / claim_id / "manifest.json"
     manifest = json.loads(manifest_path.read_text())
     now = datetime.now(timezone.utc).isoformat()
@@ -265,7 +316,15 @@ def reemit(claim_id: str, command: str, commit: str) -> None:
     provenance["generated_by"] = "reemit_evidence_receipts.py (live gate run)"
 
     manifest["generated_at_utc"] = now
-    manifest.setdefault("source_revision", {})["commit"] = commit
+    source_revision = manifest.setdefault("source_revision", {})
+    source_revision["commit"] = commit
+    # Recorded even when clean, so a reader can tell "verified against a clean
+    # checkout of this commit" apart from "the field predates this check".
+    source_revision["worktree_dirty"] = bool(dirty)
+    if dirty:
+        source_revision["dirty_covered_paths"] = dirty
+    else:
+        source_revision.pop("dirty_covered_paths", None)
 
     manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
 
@@ -309,7 +368,7 @@ def main() -> int:
     # invisible exactly when it mattered. Line-buffer it.
     sys.stdout.reconfigure(line_buffering=True)
 
-    commit = head_commit()
+    start_commit = head_commit()
     claims = observed_claims()
     if only:
         claims = [c for c in claims if c["claim_id"] in only]
@@ -331,6 +390,20 @@ def main() -> int:
             results.append({"claim_id": cid, "freshness_tier": tier, "status": "skipped"})
             continue
         command = substitute(raw)
+        # Captured HERE, not once for the whole run. A claim can take 90 minutes,
+        # and this script exists to run several of them back to back; stamping every
+        # receipt with HEAD-as-of-process-start attributes each pass to whatever the
+        # tree looked like before the earlier claims -- and to any commit that landed
+        # while they ran. FE-CLAIM-022 hit exactly that: its receipt named a commit
+        # made 34 seconds before the fix that let the command succeed at all.
+        claim_commit = head_commit()
+        covered = load_covered_paths(cid)
+        dirty = dirty_covered_paths(covered)
+        if dirty:
+            print(
+                f"[{cid}] WARNING: {len(dirty)} covered path(s) modified but not "
+                f"committed; a pass here is not attributable to {claim_commit[:8]}"
+            )
         print(f"[{cid}] running: {command[:110]}")
         code, tail, duration, output = run_command(command, args.timeout)
         kind, reason = classify_failure(code, output, signatures)
@@ -378,11 +451,15 @@ def main() -> int:
             # on; this is how that data starts existing.
             "duration_seconds": round(duration, 1),
             "command": command,
+            "source_revision": claim_commit,
+            "worktree_dirty": bool(dirty),
         }
+        if dirty:
+            result["dirty_covered_paths"] = dirty
         if retry is not None:
             result["retry"] = retry
         if code == 0:
-            reemit(cid, command, commit)
+            reemit(cid, command, claim_commit, dirty)
             passed.append(cid)
             result["status"] = "passed"
             print(f"[{cid}] PASSED -> real receipt written")
@@ -413,7 +490,10 @@ def main() -> int:
                 {
                     "schema_version": "franken-engine.evidence-refresh-run.v1",
                     "generated_at_utc": datetime.now(timezone.utc).isoformat(),
-                    "source_revision": commit,
+                    # HEAD when the run began. Each claim also carries its own
+                    # `source_revision`, captured immediately before its command ran,
+                    # which is the one its receipt is stamped with.
+                    "source_revision": start_commit,
                     "tier": args.tier or None,
                     "agent": AGENT,
                     "summary": {

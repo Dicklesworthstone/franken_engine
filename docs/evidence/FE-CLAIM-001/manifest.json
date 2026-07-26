@@ -18,7 +18,7 @@
     "scope": "runtime",
     "state": "observed"
   },
-  "generated_at_utc": "2026-06-20T05:40:20.500784+00:00",
+  "generated_at_utc": "2026-07-26T01:52:39.637643+00:00",
   "inputs": {
     "dependencies": [
       "frankenengine-engine",
@@ -31,11 +31,23 @@
   "manifest_id": "manifest-fe-claim-001-20260521",
   "outputs": {
     "decision_artifacts": "generated",
+    "environment_fingerprint": {
+      "digest": "sha256:d5d114d10c94d14a19e8c93482179af4537b2b0764bae3efa2e733476212dcc6",
+      "fields": {
+        "architecture": "x86_64",
+        "cargo_version": "cargo 1.99.0-nightly (3efb1f477 2026-07-17)",
+        "kernel_release": "6.17.0-41-generic",
+        "platform": "linux",
+        "rustc_host_triple": "x86_64-unknown-linux-gnu",
+        "rustc_version": "rustc 1.99.0-nightly (da86f4d07 2026-07-24)"
+      },
+      "schema_version": "franken-engine.evidence-environment-fingerprint.v1"
+    },
     "execution_trace": "deterministic",
     "exit_code": 0,
-    "verification_command": "CARGO_TARGET_DIR=/data/projects/franken_engine/target_icydeer CARGO_INCREMENTAL=0 RUSTFLAGS=\"-C linker=cc\" cargo check -p frankenengine-engine --tests",
+    "verification_command": "CARGO_TARGET_DIR=/data/projects/franken_engine/target_rch_ob_on CARGO_INCREMENTAL=0 RUSTFLAGS=\"-C linker=cc -Clinker-features=-lld\" cargo check -p frankenengine-engine --tests",
     "verification_result": "passed",
-    "verified_at_utc": "2026-06-20T05:40:20.500784+00:00"
+    "verified_at_utc": "2026-07-26T01:52:39.637643+00:00"
   },
   "provenance": {
     "audit_source": "bd-cixqu.4.1",
@@ -51,7 +63,7 @@
   "schema_version": "frankenengine.reproducibility.manifest.v1",
   "source_revision": {
     "branch": "main",
-    "commit": "fac696b8a864c5281afb4b0252649024ef366938",
+    "commit": "11f4efcd6a42829b0c3bd11a5d06b3c749fea09f",
     "repository": "franken_engine"
   },
   "validation": {

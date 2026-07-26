@@ -9,13 +9,16 @@
     "host_measured_on": "x86-64 (AMD EPYC 7282)"
   },
   "totals": {
-    "core_arch_x86_64_intrinsics": 0,
-    "core_arch_aarch64_intrinsics": 0,
+    "core_arch_intrinsics": 0,
+    "std_arch_intrinsics": 3,
     "std_simd_or_core_simd": 0,
     "is_x86_feature_detected": 2,
     "is_aarch64_feature_detected": 1,
-    "target_arch_cfg_sites": 57,
-    "target_feature_sites": 10
+    "is_arm_feature_detected": 0,
+    "target_arch_cfg_sites": 62,
+    "target_feature_sites": 10,
+    "_measured_on": "2026-07-26, HEAD bf45e1ca2, by scripts/check_isa_path_registration.py",
+    "_note": "target_arch_cfg_sites was 57 when this inventory was first written on 2026-07-24 and is 62 today. The gate caught that drift on its first run, which is the behaviour it exists for: a new architecture-specific site is a deliberate engineering act and the inventory must acknowledge it. The 2026-07-24 pass also split core::arch counts by target architecture; the gate measures core::arch:: as one metric because splitting it needs a parse rather than a scan, and an unmeasurable declared total is worse than an honest combined one."
   },
   "key_structural_finding": {
     "statement": "There are currently ZERO real ISA-specific EXECUTION paths in the runtime. The module named simd_lexer.rs does not use SIMD intrinsics at all: its own header states it uses SWAR (SIMD Within A Register) via ordinary 64-bit arithmetic with no unsafe code and no platform intrinsics. The handful of is_*_feature_detected calls are confined to building an architecture FINGERPRINT for telemetry and reproducibility reporting, not to dispatching divergent code.",
@@ -52,11 +55,26 @@
     }
   ],
   "prospective_paths_requiring_registration_before_merge": [
-    { "bead": "BRIDGE-10.2", "description": "AArch64/NEON VM and JIT code shapes, CBZ/TBZ, paired loads/stores, literal pools" },
-    { "bead": "BRIDGE-11.2", "description": "Zen4/Zen5 x86-64 code shapes and any AVX-512 kernels" },
-    { "bead": "BRIDGE-07.20", "description": "Guarded vectorization and target-specific loop lowering" },
-    { "bead": "BRIDGE-03.12", "description": "UTF-16 string storage/slices/atoms/ropes if vectorized" },
-    { "bead": "BRIDGE-10.3", "description": "M4/M5 target variants and Apple PGO/layout artifacts" }
+    {
+      "bead": "BRIDGE-10.2",
+      "description": "AArch64/NEON VM and JIT code shapes, CBZ/TBZ, paired loads/stores, literal pools"
+    },
+    {
+      "bead": "BRIDGE-11.2",
+      "description": "Zen4/Zen5 x86-64 code shapes and any AVX-512 kernels"
+    },
+    {
+      "bead": "BRIDGE-07.20",
+      "description": "Guarded vectorization and target-specific loop lowering"
+    },
+    {
+      "bead": "BRIDGE-03.12",
+      "description": "UTF-16 string storage/slices/atoms/ropes if vectorized"
+    },
+    {
+      "bead": "BRIDGE-10.3",
+      "description": "M4/M5 target variants and Apple PGO/layout artifacts"
+    }
   ],
   "gate_contract": {
     "rule": "For every architecture-specific code path, the ISA-specialised implementation and the portable reference implementation MUST produce bit-identical observable output on the same input.",
@@ -66,10 +84,17 @@
     "determinism_outranks_speed": "Any ISA path that cannot be proven bit-identical is disabled by default and may ship only behind a non-default flag with a recorded waiver."
   },
   "open_work_not_done_in_this_pass": [
-    "Cross-machine execution of differential oracle / metamorphic / golden suites on AArch64 and Windows x64 with content-hash comparison",
-    "Boundary-focused fuzz corpora for vector-width edges",
-    "Wiring the fail-closed CI gate that rejects unregistered ISA paths",
-    "Assertion that architecture fingerprints never enter content-hashed positions"
+    "Cross-machine execution of differential oracle / metamorphic / golden suites on AArch64 and Windows x64 with content-hash comparison (no such hardware in this environment; recorded as an explicit open lane rather than a silent pass)",
+    "Boundary-focused fuzz corpora for vector-width edges"
   ],
-  "honest_status": "PARTIAL. This artifact discharges the inventory, registration-contract and risk-reframing portions of the bead. Cross-machine execution and CI wiring remain open."
+  "honest_status": "PARTIAL. Inventory, registration contract, risk reframing, the fail-closed gate (scripts/check_isa_path_registration.py), its negative drill (scripts/e2e/isa_path_registration_drift.sh) and CI wiring are DONE. Cross-machine execution and boundary-fuzz corpora remain open and are named above.",
+  "fingerprint_owner_files": [
+    "crates/franken-engine/src/simd_lexer.rs"
+  ],
+  "fingerprint_containment_finding": {
+    "statement": "Verified 2026-07-26: ArchCapabilityProfile, ArchFamily, SwarDisableReason and the *_available capability flags appear in NO src/ file other than simd_lexer.rs, and compute_token_witness_hash mixes only a domain tag, the input hash, the token count and per-token (kind, start, end). No architecture fact reaches a content hash today.",
+    "why_it_matters": "FE-CLAIM-023 claims cross-platform identical-hash reproducibility. A detected CPU feature reaching a content hash would falsify it -- not through a defect in the hash, but by feeding it a host fact. Host facts belong in env.json.",
+    "enforcement": "scripts/check_isa_path_registration.py checks 2 and 3. Containment is what makes check 3 complete rather than a spot check: a type confined to one module cannot reach a hash in another.",
+    "note_on_actual_mode": "LexerTokenWitnessLog.actual_mode is host-dependent -- it records the mode the fallback matrix selected, which consults ArchCapabilityProfile::detect(). It is currently outside every content hash and the witness log is not referenced anywhere else in src/. If that log is ever folded into a hashed artifact, actual_mode must be excluded or the claim breaks."
+  }
 }

@@ -42,6 +42,17 @@ jobs:
           python3 scripts/check_readme_inventory.py
           bash scripts/e2e/architecture_inventory_gate_drift.sh
 
+      # BRIDGE-18.10: bd-2noh9 was a real shipped SWAR-vs-scalar token divergence, and
+      # the ISA surface is about to grow by an order of magnitude (BRIDGE-10.2 NEON,
+      # BRIDGE-11.2 AVX-512, BRIDGE-07.20 guarded vectorization). There are zero real
+      # ISA-specific execution paths today, which is exactly when this is cheap to
+      # install. The drill matters more than usual here: the gate will sit green for
+      # months before a real ISA path exists to exercise it.
+      - name: ISA path registration gate (check + negative drill)
+        run: |
+          python3 scripts/check_isa_path_registration.py
+          bash scripts/e2e/isa_path_registration_drift.sh
+
       # bd-h5cl7: no [patch.*] entry may substitute a crate whose version differs from
       # what its consumers declare, and the guard saying so must itself be able to fail.
       - name: patch version consistency (check + negative drill)

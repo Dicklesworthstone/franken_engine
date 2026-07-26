@@ -266,12 +266,12 @@ A governance overlay (capability framework, security epochs, gate modules, fleet
 |---|---|
 | Source modules in `crates/franken-engine/src/` | 615 top-level `.rs` files / 612 `pub mod` declarations in `lib.rs` (`baseline_interpreter.rs` alone is ~3.9 MB / 98,924 LoC). NOTE: `docs/ARCHITECTURE_INVENTORY.md` still reports a stale 495 and needs regeneration via the `franken-architecture-inventory` binary. |
 | Internal operator binaries in `crates/franken-engine/src/bin/` | 67 `.rs` files in total (6 of them are the release binaries listed above; 61 are internal operator tools) |
-| Integration tests in `crates/franken-engine/tests/` | 1,637 top-level files (41 are RGC gate tests) |
-| Operator gate scripts in `scripts/run_*.sh` | 292 (RGC, parser, and FRX families plus claim/evidence/build plumbing) |
+| Integration tests in `crates/franken-engine/tests/` | 1,649 top-level files (41 are RGC gate tests) |
+| Operator gate scripts in `scripts/run_*.sh` | 293 (RGC, parser, and FRX families plus claim/evidence/build plumbing) |
 | Replay wrappers in `scripts/e2e/*_replay.sh` | 186 (some are exact `<gate>_replay.sh` partners to a `run_<gate>.sh`; the rest cover composite or sub-gate replay shapes) |
-| Architecture / contract docs in `docs/` | 724 top-level files (`*.md` + `*.json` contracts) plus `docs/architecture/`, `docs/adr/`, `docs/plans/`, `docs/templates/`, `docs/operator-gates/` |
+| Architecture / contract docs in `docs/` | 726 top-level files (`*.md` + `*.json` contracts) plus `docs/architecture/`, `docs/adr/`, `docs/plans/`, `docs/templates/`, `docs/operator-gates/` |
 | Impossible-by-default demos under `examples/` | 13 impossible-by-default *capabilities* across 24 numbered directories (`01_…` through `26_…`, with gaps at `08_…` and `10_…`). The 13 capabilities are the originally-scoped set; the remaining dirs cover live-runtime variants and integration smokes that sit alongside but are not themselves separate capability claims. |
-| Tracked beads in `.beads/issues.jsonl` | 4,443 records (open + closed); see `memory/enrichment_sessions.md` for the lib-test landing journal (35,000+ unit tests recorded by 2026-03-19) |
+| Tracked beads in `.beads/issues.jsonl` | 4,447 records (open + closed); see `memory/enrichment_sessions.md` for the lib-test landing journal (35,000+ unit tests recorded by 2026-03-19) |
 | Cargo fuzz harnesses | 32 across two trees: 17 in top-level `fuzz/fuzz_targets/` + 15 in `crates/franken-engine/fuzz/fuzz_targets/` |
 | Benchmark suites in `benchmarks/` | `macro/`, `micro/`, `runtime_comparison/` |
 

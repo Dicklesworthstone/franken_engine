@@ -21,6 +21,26 @@ jobs:
           bash scripts/e2e/franken_core_status_truth_gate_smoke.sh check
           bash scripts/e2e/franken_core_status_truth_gate_smoke.sh negative
 
+      # BRIDGE-00.8 item 3: the claim-to-proof matrix governs capability *wording*;
+      # nothing governed inventory *counts*, so the README architecture tables drifted
+      # for two months (495 modules against a real 615, baseline_interpreter.rs
+      # described at a third of its real size, three named modules that do not exist).
+      # Regenerating once fixes the symptom; this fixes the cause. Needs no cargo and
+      # no /dp siblings, so it runs anywhere.
+      #
+      # On failure: `python3 scripts/check_readme_inventory.py --fix` corrects the
+      # numbers in place, line-count neutral so the matrix's pinned README claim spans
+      # do not shift.
+      - name: README structural-inventory gate
+        run: python3 scripts/check_readme_inventory.py
+
+      # bd-h5cl7: no [patch.*] entry may substitute a crate whose version differs from
+      # what its consumers declare, and the guard saying so must itself be able to fail.
+      - name: patch version consistency (check + negative drill)
+        run: |
+          python3 scripts/check_patch_version_consistency.py
+          bash scripts/e2e/patch_version_consistency_drift.sh
+
   frankenengine-engine:
     name: frankenengine-engine quality gates
     runs-on: ubuntu-latest

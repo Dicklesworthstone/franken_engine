@@ -18,7 +18,7 @@
     "scope": "evidence",
     "state": "observed"
   },
-  "generated_at_utc": "2026-07-25T16:46:48.396802+00:00",
+  "generated_at_utc": "2026-07-26T02:26:21.015858+00:00",
   "inputs": {
     "dependencies": [
       "scripts/run_claim_to_proof_matrix_gate.sh",
@@ -34,11 +34,23 @@
   "manifest_id": "manifest-fe-claim-009-20260521",
   "outputs": {
     "decision_artifacts": "generated",
+    "environment_fingerprint": {
+      "digest": "sha256:d5d114d10c94d14a19e8c93482179af4537b2b0764bae3efa2e733476212dcc6",
+      "fields": {
+        "architecture": "x86_64",
+        "cargo_version": "cargo 1.99.0-nightly (3efb1f477 2026-07-17)",
+        "kernel_release": "6.17.0-41-generic",
+        "platform": "linux",
+        "rustc_host_triple": "x86_64-unknown-linux-gnu",
+        "rustc_version": "rustc 1.99.0-nightly (da86f4d07 2026-07-24)"
+      },
+      "schema_version": "franken-engine.evidence-environment-fingerprint.v1"
+    },
     "execution_trace": "deterministic",
     "exit_code": 0,
     "verification_command": "./scripts/run_claim_to_proof_matrix_gate.sh ci",
     "verification_result": "passed",
-    "verified_at_utc": "2026-07-25T16:46:48.396802+00:00"
+    "verified_at_utc": "2026-07-26T02:26:21.015858+00:00"
   },
   "provenance": {
     "audit_source": "bd-cixqu.4.4",
@@ -59,7 +71,7 @@
   "schema_version": "frankenengine.reproducibility.manifest.v1",
   "source_revision": {
     "branch": "main",
-    "commit": "4e3f3e7126af7974d6c0a315072a847f89b4fece",
+    "commit": "534f4cb0a8eab6fa33f8b3f96e2901f35622461a",
     "repository": "franken_engine"
   },
   "validation": {

@@ -384,6 +384,26 @@ crates (bd-gw4cg) would remove the constraint entirely. Sharding is currently by
 tier rather than measured cost, because no per-claim cost data existed; the refresh now
 records `duration_seconds` per claim, which is how that data starts existing.
 
+> **RESOLVED 2026-07-26, later the same day (`bd-gw4cg`, commit `5a40110e5`).** The
+> sibling crates were published and the engine's nine path dependencies now resolve
+> from crates.io. The constraint above is gone at its recorded cause.
+>
+> Measured in a stock `rust:latest` container with no `/dp` anywhere on its
+> filesystem — `/dp` is a symlink to `/data/projects` on the host, so mounting only
+> the repository genuinely removes it:
+>
+> | features | exit | packages resolved | sibling packages |
+> |---|---|---|---|
+> | `--no-default-features` | 0 | 292 | **0** (absent from the graph entirely) |
+> | default (what the refresh uses) | 0 | 514 | 18, pulled from the registry |
+>
+> Two qualifications, in the spirit of §5.1. First, this demonstrates **resolution**,
+> not a completed build; resolution was the specific blocker (`bd-ndpm2`), but "it
+> resolves" is not "it builds" and the distinction is exactly the kind this ADR
+> exists to keep. Second, the honest next step is empirical rather than argued: run
+> the schedule once on a hosted runner and see whether it reports `passed` instead of
+> `skipped`. Tracked on `bd-pa12f`, along with the still-open sharding rebalance.
+
 ## Alternatives considered
 
 **Keep uniform clock decay.** Rejected: it is the status quo that produced 16/16 provisional

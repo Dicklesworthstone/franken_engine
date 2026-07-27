@@ -1303,7 +1303,9 @@ checksum = "f8eb564c5c7423d25c886fb561d1e4ee69f72354d16918afa32c08811f6b6a55"
 
 [[package]]
 name = "fastapi-core"
-version = "0.3.0"
+version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5c0a5a26863c5f305b3e7bb74278ef6c809d91862646d7b30b7a75937688d325"
 dependencies = [
  "asupersync",
  "fastapi-openapi",
@@ -1318,7 +1320,9 @@ dependencies = [
 
 [[package]]
 name = "fastapi-openapi"
-version = "0.3.0"
+version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ee04f2884f83c9ba61444b188b11a2fecc2be261c0d1b6e3c61db242b2d00434"
 dependencies = [
  "fastapi-router",
  "fastapi-types",
@@ -1328,7 +1332,9 @@ dependencies = [
 
 [[package]]
 name = "fastapi-router"
-version = "0.3.0"
+version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "85b2ea27b7b51af4893e1d62d75e28348b2707a8b01bcc921bd73d8f01fe1786"
 dependencies = [
  "fastapi-types",
  "serde_json",
@@ -1336,7 +1342,9 @@ dependencies = [
 
 [[package]]
 name = "fastapi-types"
-version = "0.3.0"
+version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a614846493b09d528f0764a8c8d83d58ff6c26b5db707b62edbe630a353660dd"
 
 [[package]]
 name = "fastrand"
@@ -1400,7 +1408,9 @@ dependencies = [
 
 [[package]]
 name = "fp-columnar"
-version = "0.1.2"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e9d5a714ff32ec410d8978ceafc60b2c507e4783f83bc773adcd9281e85aab74"
 dependencies = [
  "fp-types",
  "rustc-hash",
@@ -1410,7 +1420,9 @@ dependencies = [
 
 [[package]]
 name = "fp-frame"
-version = "0.1.2"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "481e85bcecfdbbe88fabef1ec2f17cba4b23ec43e3e6f83d7932c33b65724c0d"
 dependencies = [
  "chrono",
  "chrono-tz",
@@ -1430,7 +1442,9 @@ dependencies = [
 
 [[package]]
 name = "fp-index"
-version = "0.1.2"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "986830e0b1616d0b9a7cc392ef1fce4818950cee15264a66a76f22933cd9bd15"
 dependencies = [
  "chrono",
  "fp-types",
@@ -1441,7 +1455,9 @@ dependencies = [
 
 [[package]]
 name = "fp-io"
-version = "0.1.2"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f208c76117017e3e2e31b754864eb876f22219ecaf49a56e0f0f8b52dbdc4dd1"
 dependencies = [
  "arrow",
  "bytes",
@@ -1466,7 +1482,9 @@ dependencies = [
 
 [[package]]
 name = "fp-runtime"
-version = "0.1.2"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "51146cec595550178fd26d0ceb8805577ec81727db8ccea8f9ef48b89684ae81"
 dependencies = [
  "serde",
  "serde_json",
@@ -1476,7 +1494,9 @@ dependencies = [
 
 [[package]]
 name = "fp-types"
-version = "0.1.2"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b32d5bdef82fd07e905cb6de9d7b2b0145ec16e440a8795ecb9f541e92b58fb8"
 dependencies = [
  "rustc-hash",
  "serde",
@@ -3914,7 +3934,9 @@ dependencies = [
 
 [[package]]
 name = "sqlmodel"
-version = "0.3.0"
+version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "efdc02335d409910df217f8ef6aca00eb2883015906b8ff896e4bd2282d44273"
 dependencies = [
  "asupersync",
  "serde",
@@ -3929,7 +3951,9 @@ dependencies = [
 
 [[package]]
 name = "sqlmodel-core"
-version = "0.3.0"
+version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "32cad4f5d3a39a8c7232539fe2c8eab4166b7d172727ea64799dda532f32b351"
 dependencies = [
  "asupersync",
  "regex",
@@ -3940,7 +3964,9 @@ dependencies = [
 
 [[package]]
 name = "sqlmodel-frankensqlite"
-version = "0.3.0"
+version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4804821548d99e116ec4ba6cc4c789c75422e94d56eab4babec352c7d08e9a46"
 dependencies = [
  "asupersync",
  "fsqlite",
@@ -3954,7 +3980,9 @@ dependencies = [
 
 [[package]]
 name = "sqlmodel-macros"
-version = "0.3.0"
+version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "90e15cd84250e246c8660cb21153fbe3c16965fb8369c5764a92090e7e56af33"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -3964,7 +3992,9 @@ dependencies = [
 
 [[package]]
 name = "sqlmodel-pool"
-version = "0.3.0"
+version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "accb536db57dc26051900045c58b7fc9f94d3b8c2f92d2663a0ad304e7548a16"
 dependencies = [
  "asupersync",
  "sqlmodel-core",
@@ -3973,7 +4003,9 @@ dependencies = [
 
 [[package]]
 name = "sqlmodel-query"
-version = "0.3.0"
+version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "13e2506a52ed4632922006b904bc11298a9d17b69c942cf2882cc10f15aa29b1"
 dependencies = [
  "asupersync",
  "serde",
@@ -3983,7 +4015,9 @@ dependencies = [
 
 [[package]]
 name = "sqlmodel-schema"
-version = "0.3.0"
+version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3299ebdd284d1d4e2b8f7ec1df0988cd1d3c3c499902baffe8252e56039f784c"
 dependencies = [
  "asupersync",
  "serde",
@@ -3994,7 +4028,9 @@ dependencies = [
 
 [[package]]
 name = "sqlmodel-session"
-version = "0.3.0"
+version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "179fb899af74a2dbb976ae9b3796a7b2c9247527c760b0c40f69209f2411fc61"
 dependencies = [
  "asupersync",
  "serde",

@@ -319,9 +319,9 @@ uuid = { version = "1.16", features = ["v7", "serde"] }
 syn = { version = "2.0", features = ["full", "visit"] }
 toml = "0.8"
 clap = { version = "4.5", features = ["derive"] }
-sqlmodel = { path = "/dp/sqlmodel_rust/crates/sqlmodel", optional = true }
-sqlmodel-core = { path = "/dp/sqlmodel_rust/crates/sqlmodel-core", optional = true }
-sqlmodel-frankensqlite = { path = "/dp/sqlmodel_rust/crates/sqlmodel-frankensqlite", optional = true }
+sqlmodel = { version = "0.3.1", optional = true }
+sqlmodel-core = { version = "0.3.1", optional = true }
+sqlmodel-frankensqlite = { version = "0.3.1", optional = true }
 franken-engine-deterministic-trait = { path = "../franken-engine-deterministic-trait" }
 franken-engine-deterministic-derive = { path = "../franken-engine-deterministic-derive" }
 franken-engine-fixed-layout-derive = { path = "../franken-engine-fixed-layout-derive" }
@@ -331,15 +331,15 @@ rustix = { version = "1.1", features = ["event", "fs", "process", "time"] }
 wait4 = "0.1"
 wait-timeout = "0.2"
 frankenengine-extension-host = { path = "../franken-extension-host" }
-fastapi-core = { path = "/dp/fastapi_rust/crates/fastapi-core", optional = true }
+fastapi-core = { version = "0.3.1", optional = true }
 franken-kernel = { version = "0.3.4", optional = true }
 franken-decision = { version = "0.3.4", optional = true }
 franken-evidence = { version = "0.3.4", optional = true }
-fp-io = { path = "/dp/frankenpandas/crates/fp-io", default-features = false, optional = true }
-fp-frame = { path = "/dp/frankenpandas/crates/fp-frame", optional = true }
-fp-columnar = { path = "/dp/frankenpandas/crates/fp-columnar", optional = true }
-fp-index = { path = "/dp/frankenpandas/crates/fp-index", optional = true }
-fp-types = { path = "/dp/frankenpandas/crates/fp-types", optional = true }
+fp-io = { version = "0.2.0", default-features = false, optional = true }
+fp-frame = { version = "0.2.0", optional = true }
+fp-columnar = { version = "0.2.0", optional = true }
+fp-index = { version = "0.2.0", optional = true }
+fp-types = { version = "0.2.0", optional = true }
 # Bonawitz 2017 secure aggregation primitive (T.3). The QQ.2 protocol module
 # (`secure_aggregation.rs`) wraps this vetted sibling crate rather than inlining
 # ad-hoc cryptography.

@@ -8,7 +8,14 @@ use std::collections::BTreeMap;
 use std::env;
 use std::fs;
 use std::io::{self, Read};
+#[cfg(unix)]
+use std::os::{fd::AsFd, unix::process::CommandExt};
 use std::process::{Command, ExitStatus, Stdio};
+#[cfg(unix)]
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -43,6 +50,13 @@ pub const DIFFERENTIAL_ORACLE_DIVERGENCE_TAXONOMY_SCHEMA_VERSION: &str =
     "franken-engine.differential-oracle.divergence-taxonomy.v2";
 
 const DEFAULT_TIMEOUT_MS: u64 = 2_000;
+const MAX_CAPTURED_STREAM_BYTES: u64 = 4 * 1024 * 1024;
+#[cfg(unix)]
+const OUTPUT_DRAIN_POLL_INTERVAL: Duration = Duration::from_millis(2);
+#[cfg(unix)]
+const OUTPUT_DRAIN_EXIT_GRACE: Duration = Duration::from_millis(50);
+#[cfg(unix)]
+const OUTPUT_DRAIN_TEARDOWN_GRACE: Duration = Duration::from_millis(250);
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ExternalRuntimeSpec {
@@ -1086,6 +1100,8 @@ fn run_external_backend(
             let stderr = String::from_utf8_lossy(&output.stderr).to_string();
             let status = if output.timed_out {
                 DifferentialBackendStatus::Timeout
+            } else if output.stdout_truncated || output.stderr_truncated {
+                DifferentialBackendStatus::Degraded
             } else if output.status.success() {
                 DifferentialBackendStatus::Completed
             } else if output.status.code() == Some(1)
@@ -1102,7 +1118,23 @@ fn run_external_backend(
                     spec.runtime_id,
                     timeout.as_millis()
                 ));
-            } else if status == DifferentialBackendStatus::Degraded {
+            }
+            if output.stdout_truncated {
+                diagnostics.push(format!(
+                    "{} stdout exceeded the {}-byte capture limit",
+                    spec.runtime_id, MAX_CAPTURED_STREAM_BYTES
+                ));
+            }
+            if output.stderr_truncated {
+                diagnostics.push(format!(
+                    "{} stderr exceeded the {}-byte capture limit",
+                    spec.runtime_id, MAX_CAPTURED_STREAM_BYTES
+                ));
+            }
+            if status == DifferentialBackendStatus::Degraded
+                && !output.stdout_truncated
+                && !output.stderr_truncated
+            {
                 diagnostics.push(if output.status.code().is_none() {
                     format!(
                         "{} terminated without a comparable runtime exit code",
@@ -2563,62 +2595,299 @@ pub(crate) struct TimedCommandOutput {
     pub(crate) status: ExitStatus,
     pub(crate) stdout: Vec<u8>,
     pub(crate) stderr: Vec<u8>,
+    pub(crate) stdout_truncated: bool,
+    pub(crate) stderr_truncated: bool,
     pub(crate) duration_micros: u128,
     pub(crate) timed_out: bool,
 }
 
+#[cfg(unix)]
 pub(crate) fn run_command_with_timeout<'a>(
     program: &str,
     args: impl IntoIterator<Item = &'a str>,
     timeout: Duration,
 ) -> io::Result<TimedCommandOutput> {
-    let mut child = Command::new(program)
+    let started = Instant::now();
+    let mut command = Command::new(program);
+    command
         .args(args)
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()?;
-    let stdout_reader = child.stdout.take().map(spawn_reader);
-    let stderr_reader = child.stderr.take().map(spawn_reader);
-    let started = Instant::now();
+        .stderr(Stdio::piped());
+    // Every external runtime owns a fresh process group. A timeout therefore
+    // has a stable containment target that includes ordinary descendants,
+    // instead of only the direct child represented by `std::process::Child`.
+    command.process_group(0);
+    let mut child = command.spawn()?;
+    let process_group = rustix::process::Pid::from_child(&child);
 
-    let (status, timed_out) = match child.wait_timeout(timeout)? {
-        Some(status) => (status, false),
-        None => {
-            let _ = child.kill();
-            (child.wait()?, true)
+    let stdout_reader = match child.stdout.take() {
+        Some(stdout) => match spawn_output_drain(stdout, "stdout") {
+            Ok(reader) => Some(reader),
+            Err(error) => {
+                terminate_and_reap_after_setup_failure(&mut child, process_group);
+                return Err(error);
+            }
+        },
+        None => None,
+    };
+    let stderr_reader = match child.stderr.take() {
+        Some(stderr) => match spawn_output_drain(stderr, "stderr") {
+            Ok(reader) => Some(reader),
+            Err(error) => {
+                terminate_and_reap_after_setup_failure(&mut child, process_group);
+                cancel_and_join_output_drain(stdout_reader);
+                return Err(error);
+            }
+        },
+        None => None,
+    };
+
+    let remaining = timeout.saturating_sub(started.elapsed());
+    let wait_result = child.wait_timeout(remaining);
+    let (status, timed_out, termination_error) = match wait_result {
+        Ok(Some(status)) => (status, false, None),
+        Ok(None) => {
+            let group_result = terminate_process_group(process_group);
+            // Keep a direct-child fallback so the child is always reaped even
+            // if the platform reports a process-group signalling failure. We
+            // still surface that failure after cleanup: killing only the child
+            // would not satisfy the descendant-tree timeout contract.
+            let direct_result = child.kill();
+            let status = child.wait();
+            let termination_error = match group_result {
+                Ok(()) => None,
+                Err(group_error) => Some(match direct_result {
+                    Ok(()) => group_error,
+                    Err(direct_error) => io::Error::new(
+                        group_error.kind(),
+                        format!(
+                            "failed to terminate runtime process group: {group_error}; \
+                             direct-child fallback also failed: {direct_error}"
+                        ),
+                    ),
+                }),
+            };
+            match status {
+                Ok(status) => (status, true, termination_error),
+                Err(error) => {
+                    cancel_and_join_output_drain(stdout_reader);
+                    cancel_and_join_output_drain(stderr_reader);
+                    return Err(error);
+                }
+            }
+        }
+        Err(error) => {
+            terminate_and_reap_after_setup_failure(&mut child, process_group);
+            cancel_and_join_output_drain(stdout_reader);
+            cancel_and_join_output_drain(stderr_reader);
+            return Err(error);
         }
     };
 
-    let stdout = join_reader(stdout_reader)?;
-    let stderr = join_reader(stderr_reader)?;
+    let captures = collect_output_drains(process_group, stdout_reader, stderr_reader);
+    if let Some(error) = termination_error {
+        // `collect_output_drains` has already cancelled and joined both reader
+        // threads, so returning here cannot strand a process or thread.
+        let _ = captures;
+        return Err(error);
+    }
+    let (stdout, stderr) = captures?;
     Ok(TimedCommandOutput {
         status,
-        stdout,
-        stderr,
+        stdout: stdout.bytes,
+        stderr: stderr.bytes,
+        stdout_truncated: stdout.truncated,
+        stderr_truncated: stderr.truncated,
         duration_micros: started.elapsed().as_micros(),
         timed_out,
     })
 }
 
-fn spawn_reader<R>(mut reader: R) -> thread::JoinHandle<io::Result<Vec<u8>>>
-where
-    R: Read + Send + 'static,
-{
-    thread::spawn(move || {
-        let mut bytes = Vec::new();
-        reader.read_to_end(&mut bytes)?;
-        Ok(bytes)
-    })
+#[cfg(not(unix))]
+pub(crate) fn run_command_with_timeout<'a>(
+    _program: &str,
+    _args: impl IntoIterator<Item = &'a str>,
+    _timeout: Duration,
+) -> io::Result<TimedCommandOutput> {
+    // A direct-child kill is not a wall-clock bound when descendants inherit
+    // the capture handles. Fail closed until this target has a native job or
+    // process-tree containment backend.
+    Err(io::Error::new(
+        io::ErrorKind::Unsupported,
+        "external runtime execution requires native process-tree containment",
+    ))
 }
 
-fn join_reader(reader: Option<thread::JoinHandle<io::Result<Vec<u8>>>>) -> io::Result<Vec<u8>> {
-    match reader {
-        Some(handle) => match handle.join() {
-            Ok(result) => result,
-            Err(_) => Err(io::Error::other("reader thread panicked")),
-        },
-        None => Ok(Vec::new()),
+#[cfg(unix)]
+#[derive(Debug)]
+struct CapturedCommandStream {
+    bytes: Vec<u8>,
+    truncated: bool,
+}
+
+#[cfg(unix)]
+#[derive(Debug)]
+struct CommandOutputDrain {
+    cancel: Arc<AtomicBool>,
+    thread: thread::JoinHandle<io::Result<CapturedCommandStream>>,
+}
+
+#[cfg(unix)]
+fn spawn_output_drain<R>(reader: R, stream: &'static str) -> io::Result<CommandOutputDrain>
+where
+    R: AsFd + Read + Send + 'static,
+{
+    let flags = rustix::fs::fcntl_getfl(reader.as_fd()).map_err(io::Error::from)?;
+    rustix::fs::fcntl_setfl(reader.as_fd(), flags | rustix::fs::OFlags::NONBLOCK)
+        .map_err(io::Error::from)?;
+    let cancel = Arc::new(AtomicBool::new(false));
+    let reader_cancel = Arc::clone(&cancel);
+    let thread = thread::Builder::new()
+        .name(format!("franken-oracle-{stream}"))
+        .spawn(move || read_bounded_output(reader, &reader_cancel))?;
+    Ok(CommandOutputDrain { cancel, thread })
+}
+
+#[cfg(unix)]
+fn read_bounded_output(
+    mut reader: impl Read,
+    cancel: &AtomicBool,
+) -> io::Result<CapturedCommandStream> {
+    let capacity = usize::try_from(MAX_CAPTURED_STREAM_BYTES.min(64 * 1024)).unwrap_or(64 * 1024);
+    let mut bytes = Vec::with_capacity(capacity);
+    let mut truncated = false;
+    let mut chunk = [0_u8; 8192];
+    loop {
+        if cancel.load(Ordering::Acquire) {
+            break;
+        }
+        let read = match reader.read(&mut chunk) {
+            Ok(read) => read,
+            Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                thread::sleep(OUTPUT_DRAIN_POLL_INTERVAL);
+                continue;
+            }
+            Err(error) => return Err(error),
+        };
+        if read == 0 {
+            break;
+        }
+        let remaining = MAX_CAPTURED_STREAM_BYTES
+            .saturating_sub(u64::try_from(bytes.len()).unwrap_or(u64::MAX));
+        let retain = usize::try_from(remaining).unwrap_or(usize::MAX).min(read);
+        bytes.extend_from_slice(&chunk[..retain]);
+        truncated |= retain < read;
     }
+    Ok(CapturedCommandStream { bytes, truncated })
+}
+
+#[cfg(unix)]
+fn output_drains_finished(
+    stdout: &Option<CommandOutputDrain>,
+    stderr: &Option<CommandOutputDrain>,
+) -> bool {
+    stdout
+        .as_ref()
+        .is_none_or(|reader| reader.thread.is_finished())
+        && stderr
+            .as_ref()
+            .is_none_or(|reader| reader.thread.is_finished())
+}
+
+#[cfg(unix)]
+fn wait_for_output_drains(
+    stdout: &Option<CommandOutputDrain>,
+    stderr: &Option<CommandOutputDrain>,
+    timeout: Duration,
+) {
+    let started = Instant::now();
+    while !output_drains_finished(stdout, stderr) && started.elapsed() < timeout {
+        thread::sleep(OUTPUT_DRAIN_POLL_INTERVAL);
+    }
+}
+
+#[cfg(unix)]
+fn collect_output_drains(
+    process_group: rustix::process::Pid,
+    stdout: Option<CommandOutputDrain>,
+    stderr: Option<CommandOutputDrain>,
+) -> io::Result<(CapturedCommandStream, CapturedCommandStream)> {
+    // A runtime may exit after spawning a descendant that inherited its pipes.
+    // Give ordinary buffered output a short grace period, then terminate the
+    // private group before joining. Nonblocking readers have an independent
+    // cancellation bound even if a descendant escaped that group.
+    wait_for_output_drains(&stdout, &stderr, OUTPUT_DRAIN_EXIT_GRACE);
+    let group_teardown = if output_drains_finished(&stdout, &stderr) {
+        Ok(())
+    } else {
+        let result = terminate_process_group(process_group);
+        wait_for_output_drains(&stdout, &stderr, OUTPUT_DRAIN_TEARDOWN_GRACE);
+        result
+    };
+
+    let stdout_result = join_output_drain(stdout, "stdout");
+    let stderr_result = join_output_drain(stderr, "stderr");
+    group_teardown?;
+    let (stdout, stdout_forced_cancel) = stdout_result?;
+    let (stderr, stderr_forced_cancel) = stderr_result?;
+    if stdout_forced_cancel || stderr_forced_cancel {
+        return Err(io::Error::other(
+            "runtime output remained open after process-group teardown; \
+             a descendant escaped containment",
+        ));
+    }
+    Ok((stdout, stderr))
+}
+
+#[cfg(unix)]
+fn join_output_drain(
+    reader: Option<CommandOutputDrain>,
+    stream: &str,
+) -> io::Result<(CapturedCommandStream, bool)> {
+    let Some(reader) = reader else {
+        return Ok((
+            CapturedCommandStream {
+                bytes: Vec::new(),
+                truncated: false,
+            },
+            false,
+        ));
+    };
+    let forced_cancel = !reader.thread.is_finished();
+    if forced_cancel {
+        reader.cancel.store(true, Ordering::Release);
+    }
+    let captured = reader
+        .thread
+        .join()
+        .map_err(|_| io::Error::other(format!("{stream} reader thread panicked")))??;
+    Ok((captured, forced_cancel))
+}
+
+#[cfg(unix)]
+fn cancel_and_join_output_drain(reader: Option<CommandOutputDrain>) {
+    if let Some(reader) = reader {
+        reader.cancel.store(true, Ordering::Release);
+        let _ = reader.thread.join();
+    }
+}
+
+#[cfg(unix)]
+fn terminate_process_group(process_group: rustix::process::Pid) -> io::Result<()> {
+    match rustix::process::kill_process_group(process_group, rustix::process::Signal::KILL) {
+        Ok(()) | Err(rustix::io::Errno::SRCH) => Ok(()),
+        Err(error) => Err(io::Error::from(error)),
+    }
+}
+
+#[cfg(unix)]
+fn terminate_and_reap_after_setup_failure(
+    child: &mut std::process::Child,
+    process_group: rustix::process::Pid,
+) {
+    let _ = terminate_process_group(process_group);
+    let _ = child.kill();
+    let _ = child.wait();
 }
 
 fn external_eval_command(spec: &ExternalRuntimeSpec) -> Vec<String> {

@@ -2138,6 +2138,10 @@ struct ParseExecutionContext<'a> {
     /// Current statement nesting depth (if/for/while/try/switch/function bodies).
     /// Guards against stack overflow from deeply nested statements.
     statement_depth: u64,
+    /// Current binding-pattern nesting depth (destructuring: `[[[...]]]`,
+    /// `{a:{b:{c:...}}}`). This recursive descent is separate from the
+    /// statement and expression guards, so it needs its own bounded owner.
+    pattern_depth: u64,
 }
 
 /// The lexical meaning of a contextual keyword while a delimiter scan is in
@@ -4726,6 +4730,7 @@ fn parse_source(
         token_count,
         max_recursion_observed: 0,
         statement_depth: 0,
+        pattern_depth: 0,
     };
 
     if source_bytes > options.budget.max_source_bytes {
@@ -7699,6 +7704,37 @@ fn trim_binding_pattern_trivia_with_context(
 
 /// Parse a binding pattern: identifier, `{ ... }` object, or `[ ... ]` array.
 fn parse_binding_pattern(
+    source: &str,
+    span: &SourceSpan,
+    context: &mut ParseExecutionContext<'_>,
+    grammar_context: ScanGrammarContext,
+) -> ParseResult<BindingPattern> {
+    // Binding containers recurse through their object/array elements without
+    // entering either parse_statement or parse_expression. Bound that third
+    // recursion lane explicitly so hostile nesting returns deterministic
+    // budget evidence instead of overflowing the native stack (bd-ogiqj).
+    context.pattern_depth = context.pattern_depth.saturating_add(1);
+    let depth = context.pattern_depth;
+    context.next_depth(depth);
+    if depth > context.options.budget.max_recursion_depth {
+        let max = context.options.budget.max_recursion_depth;
+        let witness = context.witness(Some(ParseBudgetKind::RecursionDepth));
+        context.pattern_depth = context.pattern_depth.saturating_sub(1);
+        return Err(ParseError::with_witness(
+            ParseErrorCode::BudgetExceeded,
+            format!("binding-pattern nesting budget exceeded: depth={depth} max={max}"),
+            context.source_label.to_string(),
+            Some(span.clone()),
+            witness,
+        ));
+    }
+
+    let result = parse_binding_pattern_inner(source, span, context, grammar_context);
+    context.pattern_depth = context.pattern_depth.saturating_sub(1);
+    result
+}
+
+fn parse_binding_pattern_inner(
     source: &str,
     span: &SourceSpan,
     context: &mut ParseExecutionContext<'_>,
@@ -13344,10 +13380,12 @@ fn try_parse_for_in_of(
         } else {
             lhs
         };
-        let Ok(parsed_binding) = parse_binding_pattern(binding_src, span, context, grammar_context)
-        else {
-            continue;
-        };
+        let parsed_binding =
+            match parse_binding_pattern(binding_src, span, context, grammar_context) {
+                Ok(binding) => binding,
+                Err(error) if error.code == ParseErrorCode::BudgetExceeded => return Err(error),
+                Err(_) => continue,
+            };
         // Annex B.3.5 permits exactly one legacy loop-head initializer:
         // `for (var BindingIdentifier = AssignmentExpression in Expression)`
         // in non-strict Script code. Keep it separate from binding-pattern
@@ -19674,6 +19712,123 @@ strict"; var static = 1; }"#,
             .expect_err("right parse should fail");
         assert_eq!(left.code, ParseErrorCode::BudgetExceeded);
         assert_eq!(left, right);
+    }
+
+    fn parse_with_binding_pattern_limit_bd_ogiqj(
+        source: &str,
+        max_recursion_depth: u64,
+    ) -> ParseResult<SyntaxTree> {
+        CanonicalEs2020Parser.parse_with_options(
+            source,
+            ParseGoal::Script,
+            &ParserOptions {
+                mode: ParserMode::ScalarReference,
+                budget: ParserBudget {
+                    max_source_bytes: 1 << 20,
+                    max_token_count: 1 << 20,
+                    max_recursion_depth,
+                },
+            },
+        )
+    }
+
+    fn binding_pattern_position_sources_bd_ogiqj(pattern: &str) -> [(&'static str, String); 5] {
+        [
+            ("variable", format!("let {pattern} = source;")),
+            ("parameter", format!("function f({pattern}) {{}}")),
+            ("catch", format!("try {{}} catch ({pattern}) {{}}")),
+            ("for-in", format!("for (let {pattern} in source) {{}}")),
+            ("for-of", format!("for (let {pattern} of source) {{}}")),
+        ]
+    }
+
+    #[test]
+    fn deep_binding_patterns_are_bounded_in_every_position_bd_ogiqj() {
+        let depth = 2000;
+        let patterns = [
+            (
+                "array",
+                format!("{}value{}", "[".repeat(depth), "]".repeat(depth)),
+            ),
+            (
+                "object",
+                format!("{}value{}", "{key:".repeat(depth), "}".repeat(depth)),
+            ),
+        ];
+
+        for (pattern_kind, pattern) in patterns {
+            for (position, source) in binding_pattern_position_sources_bd_ogiqj(&pattern) {
+                let error = parse_with_binding_pattern_limit_bd_ogiqj(&source, 32)
+                    .expect_err("deep binding pattern must exhaust its recursion budget");
+                assert_eq!(
+                    error.code,
+                    ParseErrorCode::BudgetExceeded,
+                    "{pattern_kind} pattern in {position} must retain its budget diagnostic: {error:?}"
+                );
+                assert_eq!(
+                    error.message,
+                    "binding-pattern nesting budget exceeded: depth=33 max=32"
+                );
+                let witness = error
+                    .witness
+                    .as_deref()
+                    .expect("binding-pattern exhaustion must carry deterministic evidence");
+                assert_eq!(witness.budget_kind, Some(ParseBudgetKind::RecursionDepth));
+                assert_eq!(witness.max_recursion_observed, 33);
+                assert_eq!(witness.max_recursion_depth, 32);
+            }
+        }
+    }
+
+    #[test]
+    fn shallow_binding_patterns_parse_in_every_position_bd_ogiqj() {
+        for pattern in ["[a, [b, [c, [d]]]]", "{a: {b: {c: d}}}"] {
+            for (position, source) in binding_pattern_position_sources_bd_ogiqj(pattern) {
+                parse_with_binding_pattern_limit_bd_ogiqj(&source, 32).unwrap_or_else(|error| {
+                    panic!("shallow pattern in {position} must remain valid: {error:?}")
+                });
+            }
+        }
+    }
+
+    #[test]
+    fn binding_pattern_depth_unwinds_after_budget_refusal_bd_ogiqj() {
+        let options = ParserOptions {
+            mode: ParserMode::ScalarReference,
+            budget: ParserBudget {
+                max_source_bytes: 1 << 20,
+                max_token_count: 1 << 20,
+                max_recursion_depth: 32,
+            },
+        };
+        let deep_pattern = format!("{}value{}", "[".repeat(2000), "]".repeat(2000));
+        let span = SourceSpan::new(0, deep_pattern.len() as u64, 1, 1, 1, 1);
+        let mut context = ParseExecutionContext {
+            source_label: "bd-ogiqj-pattern.js",
+            options: &options,
+            goal: ParseGoal::Script,
+            strict_mode: false,
+            await_identifier_reserved: false,
+            yield_identifier_reserved: false,
+            allow_await_expression: false,
+            allow_yield_expression: false,
+            source_bytes: deep_pattern.len() as u64,
+            token_count: count_lexical_tokens(&deep_pattern),
+            max_recursion_observed: 0,
+            statement_depth: 0,
+            pattern_depth: 0,
+        };
+        let grammar_context = ScanGrammarContext::SLOPPY_SCRIPT.expression();
+
+        let error = parse_binding_pattern(&deep_pattern, &span, &mut context, grammar_context)
+            .expect_err("deep direct pattern must exhaust its recursion budget");
+        assert_eq!(error.code, ParseErrorCode::BudgetExceeded);
+        assert_eq!(context.pattern_depth, 0);
+        assert_eq!(context.max_recursion_observed, 33);
+
+        parse_binding_pattern("[a, [b]]", &span, &mut context, grammar_context)
+            .expect("a refused deep pattern must not poison the next parse");
+        assert_eq!(context.pattern_depth, 0);
     }
 
     #[test]

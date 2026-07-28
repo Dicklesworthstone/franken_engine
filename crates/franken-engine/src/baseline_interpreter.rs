@@ -7070,6 +7070,23 @@ struct ModuleExecutionSnapshot {
     current_module_specifier: Option<String>,
 }
 
+/// IFC labels carried alongside values entering an isolated interpreter
+/// wrapper. `Uniform` is used when an array-like argument carrier has one
+/// aggregate label but no per-property label sidecar; it avoids allocating an
+/// attacker-sized `Vec<Label>` before the wrapper's memory preflight.
+#[derive(Debug)]
+enum IsolatedArgumentLabels {
+    Public,
+    Exact(Vec<Label>),
+    Uniform(Label),
+}
+
+#[derive(Debug)]
+struct IsolatedCallLabels {
+    receiver: Label,
+    arguments: IsolatedArgumentLabels,
+}
+
 // ---------------------------------------------------------------------------
 // Promise combinator state (Promise.all / race / allSettled / any)
 // ---------------------------------------------------------------------------
@@ -24800,33 +24817,6 @@ impl InterpreterCore {
         Ok(joined.clone())
     }
 
-    /// Join an argument range with one receiver register while borrowing every
-    /// candidate and cloning only the full-`Ord` winner. In particular, a
-    /// foreign method call never holds separate receiver and argument Custom
-    /// strings while entering its isolated wrapper.
-    fn join_arg_range_with_register_label(
-        &self,
-        args: crate::ir_contract::RegRange,
-        register: u32,
-    ) -> Result<Label, InterpreterError> {
-        let mut joined = self.get_register_label(register)?;
-        for i in 0..args.count {
-            let reg = args
-                .start
-                .checked_add(i)
-                .ok_or(InterpreterError::RegisterOutOfBounds {
-                    register: args.start,
-                    max: u32::MAX,
-                })?;
-            let candidate = self.get_register_label(reg)?;
-            if candidate > joined {
-                joined = candidate;
-            }
-        }
-        self.check_temporary_memory_budget(Self::estimate_label_bytes(joined))?;
-        Ok(joined.clone())
-    }
-
     fn join_owned_label_with_temporary_budget(
         &self,
         owned: Label,
@@ -26924,7 +26914,9 @@ impl InterpreterCore {
         &mut self,
         builtin: &BuiltinFunction,
         args: RegRange,
-    ) -> Result<Value, InterpreterError> {
+        receiver: Option<Value>,
+        receiver_register: Option<u32>,
+    ) -> Result<(Value, Label), InterpreterError> {
         let artifact_id =
             builtin
                 .module_specifier
@@ -26942,6 +26934,8 @@ impl InterpreterCore {
             let value = self.builtin_arg(args, index)?.unwrap_or(Value::Undefined);
             arguments.push(value);
         }
+        let call_labels =
+            self.clone_isolated_call_labels_from_registers(receiver_register, args)?;
 
         // Clone the artifact's compiled program (and its provenance, for the
         // bd-8enww.3.4 audit entry) out of `self` so the `&self` borrow is
@@ -26965,13 +26959,17 @@ impl InterpreterCore {
                 expected: "u32-bounded generated-function argument count".to_string(),
                 got: format!("{} arguments", arguments.len()),
             })?;
-        // r0 holds the callee descriptor; arguments occupy r1..r1+arg_count.
-        let required_registers =
-            1u32.checked_add(arg_count)
-                .ok_or_else(|| InterpreterError::TypeError {
-                    expected: "u32-bounded generated-function register budget".to_string(),
-                    got: format!("1 callee register + {arg_count} arguments"),
-                })?;
+        // A method-form call reserves r0 for the receiver and r1 for the
+        // generated callee; a plain call needs only the callee in r0.
+        let metadata_registers: u32 = if receiver.is_some() { 2 } else { 1 };
+        let required_registers = metadata_registers.checked_add(arg_count).ok_or_else(|| {
+            InterpreterError::TypeError {
+                expected: "u32-bounded generated-function register budget".to_string(),
+                got: format!(
+                    "{metadata_registers} receiver/callee registers + {arg_count} arguments"
+                ),
+            }
+        })?;
         if required_registers > self.config.max_registers {
             return Err(InterpreterError::TypeError {
                 expected: "generated-function arguments within register budget".to_string(),
@@ -26983,14 +26981,26 @@ impl InterpreterCore {
         }
 
         let wrapper_start = wrapper.instructions.len();
-        wrapper.instructions.push(Ir3Instruction::Call {
-            callee: 0,
-            args: RegRange {
-                start: 1,
-                count: arg_count,
-            },
-            dst: 0,
-        });
+        if receiver.is_some() {
+            wrapper.instructions.push(Ir3Instruction::CallMethod {
+                receiver: 0,
+                callee: 1,
+                args: RegRange {
+                    start: 2,
+                    count: arg_count,
+                },
+                dst: 0,
+            });
+        } else {
+            wrapper.instructions.push(Ir3Instruction::Call {
+                callee: 0,
+                args: RegRange {
+                    start: 1,
+                    count: arg_count,
+                },
+                dst: 0,
+            });
+        }
         wrapper
             .instructions
             .push(Ir3Instruction::Return { value: 0 });
@@ -27042,7 +27052,22 @@ impl InterpreterCore {
         let generated_hidden_call_depth = caller_call_depth;
         let instructions_before = self.instructions_executed;
 
-        let snapshot = self.snapshot_module_execution()?;
+        let mut remaining_label_transport_bytes =
+            Self::isolated_call_label_transport_bytes(&call_labels, arguments.len());
+        self.apply_memory_component_delta(0, remaining_label_transport_bytes)?;
+        let snapshot = match self.snapshot_module_execution() {
+            Ok(snapshot) => snapshot,
+            Err(error) => {
+                self.estimated_memory_bytes = self
+                    .estimated_memory_bytes
+                    .saturating_sub(remaining_label_transport_bytes);
+                return Err(error);
+            }
+        };
+        let IsolatedCallLabels {
+            receiver: receiver_label,
+            arguments: argument_labels,
+        } = call_labels;
         let saved_active_cjs_context = self.active_cjs_context.clone();
         let setup_previous_register_bytes = self.registers_memory_bytes();
         let setup_previous_register_context_label_bytes =
@@ -27078,20 +27103,43 @@ impl InterpreterCore {
                 setup_previous_call_stack_bytes,
             )?;
             wrapper_memory_committed = true;
-            self.write_reg(0, Value::Function(function_index))?;
-            // `arg_count == arguments.len()` and `1 + arg_count <=
-            // max_registers` were validated above, so every register index
-            // `1 + index` fits in u32 and stays within the register budget.
-            for (index, argument) in arguments.into_iter().enumerate() {
-                let register = 1u32 + index as u32;
-                self.write_reg(register, argument)?;
-            }
+            let argument_start = if let Some(receiver) = receiver {
+                self.seed_isolated_receiver(
+                    0,
+                    receiver,
+                    Some(receiver_label),
+                    &mut remaining_label_transport_bytes,
+                )?;
+                self.write_reg(1, Value::Function(function_index))?;
+                2
+            } else {
+                // A plain generated-function call has no receiver register, so
+                // release the precharged Public placeholder without seeding it.
+                self.release_isolated_label_transport_charge(
+                    &mut remaining_label_transport_bytes,
+                    Self::estimate_label_bytes(&receiver_label),
+                );
+                self.write_reg(0, Value::Function(function_index))?;
+                1
+            };
+            self.seed_isolated_arguments(
+                argument_start,
+                arguments,
+                argument_labels,
+                &mut remaining_label_transport_bytes,
+                "generated-function argument register",
+            )?;
             let previous_reentrant_depth = self.module_reentrant_call_depth;
             self.module_reentrant_call_depth = generated_hidden_call_depth;
             let result = self.run_loop(&wrapper);
             self.module_reentrant_call_depth = previous_reentrant_depth;
             result
         })();
+        let result_label = if result.is_ok() {
+            self.clone_register_label_with_temporary_budget(0)
+        } else {
+            Ok(Label::Public)
+        };
         // Preserve a thrown value across the snapshot restore so an enclosing
         // try/catch in the caller can still observe it (same contract as
         // `invoke_inline_method_call`).
@@ -27102,6 +27150,9 @@ impl InterpreterCore {
                 .map(|v| (v, self.pending_exception_label.clone())),
             _ => None,
         };
+        self.estimated_memory_bytes = self
+            .estimated_memory_bytes
+            .saturating_sub(remaining_label_transport_bytes);
         self.restore_module_execution(snapshot, wrapper_memory_committed);
         self.active_cjs_context = saved_active_cjs_context;
         self.config.granted_capabilities = previous_granted_capabilities;
@@ -27139,7 +27190,8 @@ impl InterpreterCore {
             outcome,
         });
 
-        result
+        let result_label = result_label?;
+        result.map(|value| (value, result_label))
     }
 
     /// Single semantic implementation shared by the direct
@@ -27161,6 +27213,7 @@ impl InterpreterCore {
         builtin: &BuiltinFunction,
         args: RegRange,
         receiver: Option<Value>,
+        receiver_register: Option<u32>,
     ) -> Result<Value, InterpreterError> {
         match builtin.kind {
             BuiltinFunctionKind::Require => {
@@ -27187,7 +27240,14 @@ impl InterpreterCore {
                 self.construct_generated_function(module, args)
             }
             BuiltinFunctionKind::GeneratedFunction => {
-                self.call_generated_function_artifact(builtin, args)
+                let (value, label) = self.call_generated_function_artifact(
+                    builtin,
+                    args,
+                    receiver,
+                    receiver_register,
+                )?;
+                self.replace_pending_hostcall_result_label(Some(label))?;
+                Ok(value)
             }
             BuiltinFunctionKind::IteratorNext => {
                 let iterator_handle =
@@ -31018,6 +31078,195 @@ impl InterpreterCore {
         Ok(values)
     }
 
+    fn isolated_call_label_transport_bytes(
+        labels: &IsolatedCallLabels,
+        argument_count: usize,
+    ) -> u64 {
+        let receiver_bytes = Self::estimate_label_bytes(&labels.receiver);
+        let argument_bytes = match &labels.arguments {
+            IsolatedArgumentLabels::Public => 0,
+            IsolatedArgumentLabels::Exact(argument_labels) => {
+                u64::try_from(argument_labels.capacity())
+                    .unwrap_or(u64::MAX)
+                    .saturating_mul(std::mem::size_of::<Label>() as u64)
+                    .saturating_add(Self::saturating_sum(
+                        argument_labels.iter().map(Self::estimate_label_bytes),
+                    ))
+            }
+            // The owned uniform label coexists with one clone per isolated
+            // argument register. Reserve all clones before making the first
+            // one so a long Custom name cannot cross the physical peak.
+            IsolatedArgumentLabels::Uniform(label) => {
+                let copies = u64::try_from(argument_count)
+                    .unwrap_or(u64::MAX)
+                    .saturating_add(1);
+                Self::estimate_label_bytes(label).saturating_mul(copies)
+            }
+        };
+        receiver_bytes.saturating_add(argument_bytes)
+    }
+
+    /// Clone receiver and argument labels only after preflighting the complete
+    /// transport carrier. The returned ownership is charged by the isolated
+    /// wrapper before it clones any module or caller snapshot.
+    fn clone_isolated_call_labels_from_registers(
+        &self,
+        receiver_register: Option<u32>,
+        args: RegRange,
+    ) -> Result<IsolatedCallLabels, InterpreterError> {
+        let receiver_label = receiver_register
+            .map(|register| self.get_register_label(register))
+            .transpose()?;
+        let mut transport_bytes = receiver_label
+            .map(Self::estimate_label_bytes)
+            .unwrap_or(0)
+            .saturating_add(
+                u64::from(args.count).saturating_mul(std::mem::size_of::<Label>() as u64),
+            );
+        for offset in 0..args.count {
+            let register =
+                args.start
+                    .checked_add(offset)
+                    .ok_or(InterpreterError::RegisterOutOfBounds {
+                        register: args.start,
+                        max: self.config.max_registers,
+                    })?;
+            transport_bytes = transport_bytes.saturating_add(Self::estimate_label_bytes(
+                self.get_register_label(register)?,
+            ));
+        }
+        self.check_temporary_memory_budget(transport_bytes)?;
+
+        let mut argument_labels = Vec::with_capacity(args.count as usize);
+        for offset in 0..args.count {
+            let register =
+                args.start
+                    .checked_add(offset)
+                    .ok_or(InterpreterError::RegisterOutOfBounds {
+                        register: args.start,
+                        max: self.config.max_registers,
+                    })?;
+            argument_labels.push(self.get_register_label(register)?.clone());
+        }
+        Ok(IsolatedCallLabels {
+            receiver: receiver_label.cloned().unwrap_or(Label::Public),
+            arguments: IsolatedArgumentLabels::Exact(argument_labels),
+        })
+    }
+
+    fn release_isolated_label_transport_charge(
+        &mut self,
+        remaining_transport_bytes: &mut u64,
+        released_bytes: u64,
+    ) {
+        *remaining_transport_bytes = remaining_transport_bytes.saturating_sub(released_bytes);
+        self.estimated_memory_bytes = self.estimated_memory_bytes.saturating_sub(released_bytes);
+    }
+
+    fn seed_isolated_receiver(
+        &mut self,
+        register: u32,
+        value: Value,
+        label: Option<Label>,
+        remaining_transport_bytes: &mut u64,
+    ) -> Result<(), InterpreterError> {
+        let Some(label) = label else {
+            return self.write_reg(register, value);
+        };
+        let label_bytes = Self::estimate_label_bytes(&label);
+        self.release_isolated_label_transport_charge(remaining_transport_bytes, label_bytes);
+        self.write_reg_with_label(register, value, label)
+    }
+
+    fn seed_isolated_arguments(
+        &mut self,
+        start_register: u32,
+        arguments: Vec<Value>,
+        labels: IsolatedArgumentLabels,
+        remaining_transport_bytes: &mut u64,
+        register_description: &str,
+    ) -> Result<(), InterpreterError> {
+        match labels {
+            IsolatedArgumentLabels::Public => {
+                for (index, argument) in arguments.into_iter().enumerate() {
+                    let register = start_register
+                        .checked_add(u32::try_from(index).map_err(|_| {
+                            InterpreterError::TypeError {
+                                expected: format!("u32-bounded {register_description}"),
+                                got: format!("argument index {index}"),
+                            }
+                        })?)
+                        .ok_or_else(|| InterpreterError::TypeError {
+                            expected: format!("u32-bounded {register_description}"),
+                            got: format!("r{start_register} + argument index {index}"),
+                        })?;
+                    self.write_reg(register, argument)?;
+                }
+            }
+            IsolatedArgumentLabels::Exact(argument_labels) => {
+                let structural_bytes = u64::try_from(argument_labels.capacity())
+                    .unwrap_or(u64::MAX)
+                    .saturating_mul(std::mem::size_of::<Label>() as u64);
+                let mut labels = argument_labels.into_iter();
+                for (index, argument) in arguments.into_iter().enumerate() {
+                    let register = start_register
+                        .checked_add(u32::try_from(index).map_err(|_| {
+                            InterpreterError::TypeError {
+                                expected: format!("u32-bounded {register_description}"),
+                                got: format!("argument index {index}"),
+                            }
+                        })?)
+                        .ok_or_else(|| InterpreterError::TypeError {
+                            expected: format!("u32-bounded {register_description}"),
+                            got: format!("r{start_register} + argument index {index}"),
+                        })?;
+                    let label = labels.next().expect(
+                        "isolated exact argument-label count was validated before state mutation",
+                    );
+                    let label_bytes = Self::estimate_label_bytes(&label);
+                    self.release_isolated_label_transport_charge(
+                        remaining_transport_bytes,
+                        label_bytes,
+                    );
+                    self.write_reg_with_label(register, argument, label)?;
+                }
+                drop(labels);
+                self.release_isolated_label_transport_charge(
+                    remaining_transport_bytes,
+                    structural_bytes,
+                );
+            }
+            IsolatedArgumentLabels::Uniform(label) => {
+                let label_bytes = Self::estimate_label_bytes(&label);
+                for (index, argument) in arguments.into_iter().enumerate() {
+                    let register = start_register
+                        .checked_add(u32::try_from(index).map_err(|_| {
+                            InterpreterError::TypeError {
+                                expected: format!("u32-bounded {register_description}"),
+                                got: format!("argument index {index}"),
+                            }
+                        })?)
+                        .ok_or_else(|| InterpreterError::TypeError {
+                            expected: format!("u32-bounded {register_description}"),
+                            got: format!("r{start_register} + argument index {index}"),
+                        })?;
+                    let argument_label = label.clone();
+                    self.release_isolated_label_transport_charge(
+                        remaining_transport_bytes,
+                        label_bytes,
+                    );
+                    self.write_reg_with_label(register, argument, argument_label)?;
+                }
+                drop(label);
+                self.release_isolated_label_transport_charge(
+                    remaining_transport_bytes,
+                    label_bytes,
+                );
+            }
+        }
+        Ok(())
+    }
+
     fn function_ref(&self, module: &Ir3Module, callee: &Value, function_index: u32) -> FunctionRef {
         let name = module
             .function_table
@@ -32164,29 +32413,30 @@ impl InterpreterCore {
                         // rather than letting `?` escape the caller's try/catch
                         // (bd-8enww.4.7).
                         self.clear_pending_hostcall_result_label();
-                        let result =
-                            match self.dispatch_builtin_function(module, builtin, args, None) {
-                                Ok(value) => value,
-                                Err(err) => match self.route_isolated_explicit_throw(err)? {
-                                    None => {
-                                        // IFC (bd-8enww.4.8): an explicit throw
-                                        // escaping the builtin's callback lane
-                                        // carries a value seeded from the arg
-                                        // registers, so join their labels onto the
-                                        // re-armed exception label — the throw-path
-                                        // mirror of the success-path join below.
-                                        // Required now that the legacy reduce /
-                                        // Array.from mini-lanes preserve the
-                                        // original thrown value (not a Public
-                                        // engine error), so a Secret arg cannot
-                                        // launder to a Public catch binding.
-                                        let escaped = self.join_arg_range_label(args)?;
-                                        self.join_pending_exception_label(&escaped)?;
-                                        continue;
-                                    }
-                                    Some(err) => return Err(err),
-                                },
-                            };
+                        let result = match self
+                            .dispatch_builtin_function(module, builtin, args, None, None)
+                        {
+                            Ok(value) => value,
+                            Err(err) => match self.route_isolated_explicit_throw(err)? {
+                                None => {
+                                    // IFC (bd-8enww.4.8): an explicit throw
+                                    // escaping the builtin's callback lane
+                                    // carries a value seeded from the arg
+                                    // registers, so join their labels onto the
+                                    // re-armed exception label — the throw-path
+                                    // mirror of the success-path join below.
+                                    // Required now that the legacy reduce /
+                                    // Array.from mini-lanes preserve the
+                                    // original thrown value (not a Public
+                                    // engine error), so a Secret arg cannot
+                                    // launder to a Public catch binding.
+                                    let escaped = self.join_arg_range_label(args)?;
+                                    self.join_pending_exception_label(&escaped)?;
+                                    continue;
+                                }
+                                Some(err) => return Err(err),
+                            },
+                        };
                         let callback_result_label = self
                             .take_pending_hostcall_result_label()
                             .unwrap_or(Label::Public);
@@ -32209,15 +32459,17 @@ impl InterpreterCore {
                     if let Some(_origin_module) =
                         self.foreign_closure_module(&callee_val, module)?
                     {
+                        let call_labels =
+                            self.clone_isolated_call_labels_from_registers(None, args)?;
                         let arguments = self.call_arguments(args)?;
-                        let argument_label = self.join_arg_range_label(args)?;
                         let (result, result_label) = match self
-                            .invoke_inline_method_call_with_argument_label(
+                            .invoke_inline_method_call_with_labels(
                                 Some(module),
                                 callee_val.clone(),
                                 Value::Undefined,
                                 arguments,
-                                Some(argument_label),
+                                None,
+                                call_labels,
                             ) {
                             Ok(value) => value,
                             Err(err) => match self.route_isolated_explicit_throw(err)? {
@@ -32677,6 +32929,7 @@ impl InterpreterCore {
                             builtin,
                             args,
                             Some(receiver_val.clone()),
+                            Some(receiver),
                         ) {
                             Ok(value) => value,
                             Err(err) => match self.route_isolated_explicit_throw(err)? {
@@ -32746,16 +32999,17 @@ impl InterpreterCore {
                     if let Some(_origin_module) =
                         self.foreign_closure_module(&callee_val, module)?
                     {
+                        let call_labels =
+                            self.clone_isolated_call_labels_from_registers(Some(receiver), args)?;
                         let arguments = self.call_arguments(args)?;
-                        let argument_label =
-                            self.join_arg_range_with_register_label(args, receiver)?;
                         let (result, result_label) = match self
-                            .invoke_inline_method_call_with_argument_label(
+                            .invoke_inline_method_call_with_labels(
                                 Some(module),
                                 callee_val.clone(),
                                 receiver_val,
                                 arguments,
-                                Some(argument_label),
+                                None,
+                                call_labels,
                             ) {
                             Ok(value) => value,
                             Err(err) => match self.route_isolated_explicit_throw(err)? {
@@ -33986,7 +34240,8 @@ impl InterpreterCore {
                                 ),
                             });
                         }
-                        let result = self.dispatch_builtin_function(module, builtin, args, None)?;
+                        let result =
+                            self.dispatch_builtin_function(module, builtin, args, None, None)?;
                         // IFC: a `new Builtin(...)` result derives entirely from
                         // its argument registers, so the dst label is the join
                         // of the arg labels — same contract as the `Call`
@@ -34076,6 +34331,7 @@ impl InterpreterCore {
                             let this_val = Value::Object(this_id);
 
                             let mut arg_vals = Vec::new();
+                            let mut arg_labels = Vec::new();
                             for i in 0..args.count.min(func.arity) {
                                 let reg = args.start.checked_add(i).ok_or(
                                     InterpreterError::RegisterOutOfBounds {
@@ -34084,8 +34340,14 @@ impl InterpreterCore {
                                     },
                                 )?;
                                 arg_vals.push(self.read_reg(reg)?);
+                                arg_labels.push(self.get_register_label(reg)?.clone());
                             }
                             self.apply_rest_param(&mut arg_vals, func.rest_param_index, args)?;
+                            self.apply_rest_param_labels(
+                                &mut arg_labels,
+                                func.rest_param_index,
+                                args,
+                            )?;
 
                             self.run_pre_call_hook(module, &callee_val, func_idx, &arg_vals)?;
 
@@ -34161,10 +34423,12 @@ impl InterpreterCore {
                             // parameter and silently corrupted
                             // `this.field = paramName` bodies (bd-a7kpw).
                             let _ = this_val;
-                            for (i, val) in arg_vals.into_iter().enumerate() {
+                            for (i, (val, label)) in
+                                arg_vals.into_iter().zip(arg_labels).enumerate()
+                            {
                                 let reg = i as u32;
                                 if reg < self.config.max_registers {
-                                    self.write_reg(reg, val)?;
+                                    self.write_reg_with_label(reg, val, label)?;
                                 }
                             }
 
@@ -40334,17 +40598,23 @@ impl InterpreterCore {
         module: Option<&Ir3Module>,
         handler: crate::closure_model::ClosureHandle,
         argument: crate::object_model::JsValue,
+        task_label: Label,
     ) -> Result<crate::object_model::JsValue, InterpreterError> {
         let module = module.ok_or_else(|| InterpreterError::TypeError {
             expected: "module-backed Promise reaction handler dispatch".to_string(),
             got: "missing module context".to_string(),
         })?;
         let argument = Self::js_value_to_value(&argument);
-        let result = self.invoke_inline_method_call(
+        // Promise reactions are control-dependent on settlement as well as
+        // value-dependent on the delivered argument. Run the whole isolated
+        // callback under the queued task label so ignored arguments cannot
+        // make side effects, hostcalls, or nested Promise work appear Public.
+        let (result, _) = self.invoke_inline_method_call_with_argument_label(
             Some(module),
             Value::Closure(handler.0),
             Value::Undefined,
             vec![argument],
+            Some(task_label),
         )?;
         Ok(Self::value_to_js_value(&result))
     }
@@ -40434,6 +40704,7 @@ impl InterpreterCore {
                                 module,
                                 handler,
                                 argument.clone(),
+                                task_label.clone(),
                             ) {
                                 Ok(result) => {
                                     self.fulfill_promise(
@@ -45504,6 +45775,23 @@ impl InterpreterCore {
         argument_count: usize,
         argument_label: Option<&Label>,
     ) -> Result<(), InterpreterError> {
+        self.preflight_inline_method_call_with_labels(
+            module,
+            callee,
+            argument_count,
+            argument_label,
+            None,
+        )
+    }
+
+    fn preflight_inline_method_call_with_labels(
+        &self,
+        module: Option<&Ir3Module>,
+        callee: &Value,
+        argument_count: usize,
+        argument_label: Option<&Label>,
+        call_labels: Option<&IsolatedCallLabels>,
+    ) -> Result<(), InterpreterError> {
         let caller_module = module.ok_or_else(|| InterpreterError::TypeError {
             expected: "module-backed Function.prototype.call/apply dispatch".to_string(),
             got: "missing module context".to_string(),
@@ -45534,6 +45822,20 @@ impl InterpreterCore {
                 ),
             });
         }
+        if let Some(IsolatedCallLabels {
+            arguments: IsolatedArgumentLabels::Exact(argument_labels),
+            ..
+        }) = call_labels
+            && argument_labels.len() != argument_count
+        {
+            return Err(InterpreterError::TypeError {
+                expected: "one IFC label per isolated callback argument".to_string(),
+                got: format!(
+                    "{} labels for {argument_count} arguments",
+                    argument_labels.len()
+                ),
+            });
+        }
 
         let transient_execution_bytes = Self::transient_module_wrapper_bytes(module)
             .saturating_add(self.module_execution_snapshot_memory_bytes());
@@ -45552,8 +45854,13 @@ impl InterpreterCore {
         let callback_context_bytes = callback_context_label
             .map(Self::estimate_label_bytes)
             .unwrap_or(0);
+        let label_transport_bytes = call_labels
+            .map(|labels| Self::isolated_call_label_transport_bytes(labels, argument_count))
+            .unwrap_or(0);
         self.check_temporary_memory_budget(
-            transient_execution_bytes.saturating_add(callback_context_bytes),
+            transient_execution_bytes
+                .saturating_add(callback_context_bytes)
+                .saturating_add(label_transport_bytes),
         )
     }
 
@@ -45585,6 +45892,32 @@ impl InterpreterCore {
         )
     }
 
+    fn invoke_inline_method_call_with_labels(
+        &mut self,
+        module: Option<&Ir3Module>,
+        callee: Value,
+        receiver: Value,
+        arguments: Vec<Value>,
+        argument_label: Option<Label>,
+        call_labels: IsolatedCallLabels,
+    ) -> Result<(Value, Label), InterpreterError> {
+        self.preflight_inline_method_call_with_labels(
+            module,
+            &callee,
+            arguments.len(),
+            argument_label.as_ref(),
+            Some(&call_labels),
+        )?;
+        self.invoke_inline_method_call_with_labels_preflighted(
+            module,
+            callee,
+            receiver,
+            arguments,
+            argument_label,
+            Some(call_labels),
+        )
+    }
+
     fn invoke_inline_method_call_with_argument_label_preflighted(
         &mut self,
         module: Option<&Ir3Module>,
@@ -45592,6 +45925,25 @@ impl InterpreterCore {
         receiver: Value,
         arguments: Vec<Value>,
         argument_label: Option<Label>,
+    ) -> Result<(Value, Label), InterpreterError> {
+        self.invoke_inline_method_call_with_labels_preflighted(
+            module,
+            callee,
+            receiver,
+            arguments,
+            argument_label,
+            None,
+        )
+    }
+
+    fn invoke_inline_method_call_with_labels_preflighted(
+        &mut self,
+        module: Option<&Ir3Module>,
+        callee: Value,
+        receiver: Value,
+        arguments: Vec<Value>,
+        argument_label: Option<Label>,
+        call_labels: Option<IsolatedCallLabels>,
     ) -> Result<(Value, Label), InterpreterError> {
         let caller_module = module.ok_or_else(|| InterpreterError::TypeError {
             expected: "module-backed Function.prototype.call/apply dispatch".to_string(),
@@ -45634,6 +45986,10 @@ impl InterpreterCore {
 
         let transient_wrapper_bytes = Self::transient_module_wrapper_bytes(module);
         let transient_execution_bytes = transient_wrapper_bytes;
+        let mut remaining_label_transport_bytes = call_labels
+            .as_ref()
+            .map(|labels| Self::isolated_call_label_transport_bytes(labels, arguments.len()))
+            .unwrap_or(0);
         let inherited_context_dominates = match (
             self.active_inline_callback_context_label.as_ref(),
             argument_label.as_ref(),
@@ -45660,7 +46016,10 @@ impl InterpreterCore {
             // no second attacker-sized String allocation is needed.
             argument_label
         };
-        self.apply_memory_component_delta(0, transient_execution_bytes)?;
+        self.apply_memory_component_delta(
+            0,
+            transient_execution_bytes.saturating_add(remaining_label_transport_bytes),
+        )?;
         let mut wrapper = module.clone();
         let wrapper_start = wrapper.instructions.len();
         wrapper.instructions.push(Ir3Instruction::CallMethod {
@@ -45680,11 +46039,15 @@ impl InterpreterCore {
             Ok(snapshot) => snapshot,
             Err(error) => {
                 drop(wrapper);
-                self.estimated_memory_bytes = self
-                    .estimated_memory_bytes
-                    .saturating_sub(transient_execution_bytes);
+                self.estimated_memory_bytes = self.estimated_memory_bytes.saturating_sub(
+                    transient_execution_bytes.saturating_add(remaining_label_transport_bytes),
+                );
                 return Err(error);
             }
+        };
+        let (receiver_label, argument_labels) = match call_labels {
+            Some(labels) => (Some(labels.receiver), labels.arguments),
+            None => (None, IsolatedArgumentLabels::Public),
         };
         let saved_active_cjs_context = self.active_cjs_context.clone();
         let setup_previous_register_bytes = self.registers_memory_bytes();
@@ -45716,24 +46079,20 @@ impl InterpreterCore {
                 setup_previous_call_stack_bytes,
             )?;
             wrapper_memory_committed = true;
-            self.write_reg(0, receiver)?;
+            self.seed_isolated_receiver(
+                0,
+                receiver,
+                receiver_label,
+                &mut remaining_label_transport_bytes,
+            )?;
             self.write_reg(1, callee)?;
-            for (index, argument) in arguments.into_iter().enumerate() {
-                let register = 2u32
-                    .checked_add(u32::try_from(index).map_err(|_| {
-                        InterpreterError::TypeError {
-                            expected: "u32-bounded Function.prototype.call/apply argument register"
-                                .to_string(),
-                            got: format!("argument index {index}"),
-                        }
-                    })?)
-                    .ok_or_else(|| InterpreterError::TypeError {
-                        expected: "u32-bounded Function.prototype.call/apply argument register"
-                            .to_string(),
-                        got: format!("r2 + argument index {index}"),
-                    })?;
-                self.write_reg(register, argument)?;
-            }
+            self.seed_isolated_arguments(
+                2,
+                arguments,
+                argument_labels,
+                &mut remaining_label_transport_bytes,
+                "Function.prototype.call/apply argument register",
+            )?;
             if is_foreign_call {
                 let previous_reentrant_depth = self.module_reentrant_call_depth;
                 let previous_foreign_call_depth = self.active_foreign_module_call_depth;
@@ -45767,9 +46126,9 @@ impl InterpreterCore {
             _ => None,
         };
         drop(wrapper);
-        self.estimated_memory_bytes = self
-            .estimated_memory_bytes
-            .saturating_sub(transient_execution_bytes);
+        self.estimated_memory_bytes = self.estimated_memory_bytes.saturating_sub(
+            transient_execution_bytes.saturating_add(remaining_label_transport_bytes),
+        );
         self.restore_module_execution(snapshot, wrapper_memory_committed);
         self.active_cjs_context = saved_active_cjs_context;
         if let Some((value, label)) = thrown_value {
@@ -45779,12 +46138,24 @@ impl InterpreterCore {
         result.map(|value| (value, result_label))
     }
 
+    #[cfg(test)]
     fn invoke_inline_construct(
         &mut self,
         module: Option<&Ir3Module>,
         constructor: Value,
         arguments: Vec<Value>,
     ) -> Result<Value, InterpreterError> {
+        self.invoke_inline_construct_with_labels(module, constructor, arguments, None)
+            .map(|(value, _label)| value)
+    }
+
+    fn invoke_inline_construct_with_labels(
+        &mut self,
+        module: Option<&Ir3Module>,
+        constructor: Value,
+        arguments: Vec<Value>,
+        call_labels: Option<IsolatedCallLabels>,
+    ) -> Result<(Value, Label), InterpreterError> {
         let module = module.ok_or_else(|| InterpreterError::TypeError {
             expected: "module-backed Reflect.construct dispatch".to_string(),
             got: "missing module context".to_string(),
@@ -45816,10 +46187,37 @@ impl InterpreterCore {
                 ),
             });
         }
+        if let Some(IsolatedCallLabels {
+            arguments: IsolatedArgumentLabels::Exact(argument_labels),
+            ..
+        }) = call_labels.as_ref()
+            && argument_labels.len() != arguments.len()
+        {
+            return Err(InterpreterError::TypeError {
+                expected: "one IFC label per isolated constructor argument".to_string(),
+                got: format!(
+                    "{} labels for {} arguments",
+                    argument_labels.len(),
+                    arguments.len()
+                ),
+            });
+        }
 
         let transient_wrapper_bytes = Self::transient_module_wrapper_bytes(module);
         let transient_execution_bytes = transient_wrapper_bytes;
-        self.apply_memory_component_delta(0, transient_execution_bytes)?;
+        let mut remaining_label_transport_bytes = call_labels
+            .as_ref()
+            .map(|labels| Self::isolated_call_label_transport_bytes(labels, arguments.len()))
+            .unwrap_or(0);
+        self.check_temporary_memory_budget(
+            transient_execution_bytes
+                .saturating_add(self.module_execution_snapshot_memory_bytes())
+                .saturating_add(remaining_label_transport_bytes),
+        )?;
+        self.apply_memory_component_delta(
+            0,
+            transient_execution_bytes.saturating_add(remaining_label_transport_bytes),
+        )?;
         let mut wrapper = module.clone();
         let wrapper_start = wrapper.instructions.len();
         wrapper.instructions.push(Ir3Instruction::Construct {
@@ -45838,11 +46236,15 @@ impl InterpreterCore {
             Ok(snapshot) => snapshot,
             Err(error) => {
                 drop(wrapper);
-                self.estimated_memory_bytes = self
-                    .estimated_memory_bytes
-                    .saturating_sub(transient_execution_bytes);
+                self.estimated_memory_bytes = self.estimated_memory_bytes.saturating_sub(
+                    transient_execution_bytes.saturating_add(remaining_label_transport_bytes),
+                );
                 return Err(error);
             }
+        };
+        let (constructor_label, argument_labels) = match call_labels {
+            Some(labels) => (Some(labels.receiver), labels.arguments),
+            None => (None, IsolatedArgumentLabels::Public),
         };
         let saved_active_cjs_context = self.active_cjs_context.clone();
         let setup_previous_register_bytes = self.registers_memory_bytes();
@@ -45873,30 +46275,44 @@ impl InterpreterCore {
                 setup_previous_call_stack_bytes,
             )?;
             wrapper_memory_committed = true;
-            self.write_reg(0, constructor)?;
-            for (index, argument) in arguments.into_iter().enumerate() {
-                let register = 1u32
-                    .checked_add(
-                        u32::try_from(index).map_err(|_| InterpreterError::TypeError {
-                            expected: "u32-bounded Reflect.construct argument register".to_string(),
-                            got: format!("argument index {index}"),
-                        })?,
-                    )
-                    .ok_or_else(|| InterpreterError::TypeError {
-                        expected: "u32-bounded Reflect.construct argument register".to_string(),
-                        got: format!("r1 + argument index {index}"),
-                    })?;
-                self.write_reg(register, argument)?;
-            }
+            self.seed_isolated_receiver(
+                0,
+                constructor,
+                constructor_label,
+                &mut remaining_label_transport_bytes,
+            )?;
+            self.seed_isolated_arguments(
+                1,
+                arguments,
+                argument_labels,
+                &mut remaining_label_transport_bytes,
+                "Reflect.construct argument register",
+            )?;
             self.run_loop(&wrapper)
         })();
+        let result_label = if result.is_ok() {
+            self.clone_register_label_with_temporary_budget(0)
+        } else {
+            Ok(Label::Public)
+        };
+        let thrown_value = match &result {
+            Err(InterpreterError::UncaughtException { .. }) => self
+                .pending_exception
+                .clone()
+                .map(|value| (value, self.pending_exception_label.clone())),
+            _ => None,
+        };
         drop(wrapper);
-        self.estimated_memory_bytes = self
-            .estimated_memory_bytes
-            .saturating_sub(transient_execution_bytes);
+        self.estimated_memory_bytes = self.estimated_memory_bytes.saturating_sub(
+            transient_execution_bytes.saturating_add(remaining_label_transport_bytes),
+        );
         self.restore_module_execution(snapshot, wrapper_memory_committed);
         self.active_cjs_context = saved_active_cjs_context;
-        result
+        if let Some((value, label)) = thrown_value {
+            self.replace_pending_abrupt_slots(Some((value, label)), None)?;
+        }
+        let result_label = result_label?;
+        result.map(|value| (value, result_label))
     }
 
     fn read_local_register(registers: &[Value], register: u32) -> Result<Value, InterpreterError> {
@@ -54668,9 +55084,34 @@ impl InterpreterCore {
                     });
                 }
                 let this_arg = self.read_reg(args.start + 1)?;
-                let arguments = self.array_like_argument_values(self.read_reg(args.start + 2)?)?;
-                let (value, label) = self.invoke_inline_method_call_with_argument_label(
-                    module, target, this_arg, arguments, None,
+                let arguments_list_register =
+                    args.start
+                        .checked_add(2)
+                        .ok_or(InterpreterError::RegisterOutOfBounds {
+                            register: args.start,
+                            max: self.config.max_registers,
+                        })?;
+                let arguments_list = self.read_reg(arguments_list_register)?;
+                let arguments = self.array_like_argument_values(arguments_list)?;
+                let argument_label = self.join_arg_range_with_object_mutation_label(RegRange {
+                    start: arguments_list_register,
+                    count: 1,
+                })?;
+                let mut call_labels = self.clone_isolated_call_labels_from_registers(
+                    Some(args.start + 1),
+                    RegRange {
+                        start: args.start,
+                        count: 0,
+                    },
+                )?;
+                call_labels.arguments = IsolatedArgumentLabels::Uniform(argument_label);
+                let (value, label) = self.invoke_inline_method_call_with_labels(
+                    module,
+                    target,
+                    this_arg,
+                    arguments,
+                    None,
+                    call_labels,
                 )?;
                 self.replace_pending_hostcall_result_label(Some(label))?;
                 Ok(value)
@@ -54694,8 +55135,35 @@ impl InterpreterCore {
                         got: target.type_name().to_string(),
                     });
                 }
-                let arguments = self.array_like_argument_values(self.read_reg(args.start + 1)?)?;
-                self.invoke_inline_construct(module, target, arguments)
+                let arguments_list_register =
+                    args.start
+                        .checked_add(1)
+                        .ok_or(InterpreterError::RegisterOutOfBounds {
+                            register: args.start,
+                            max: self.config.max_registers,
+                        })?;
+                let arguments =
+                    self.array_like_argument_values(self.read_reg(arguments_list_register)?)?;
+                let argument_label = self.join_arg_range_with_object_mutation_label(RegRange {
+                    start: arguments_list_register,
+                    count: 1,
+                })?;
+                let mut call_labels = self.clone_isolated_call_labels_from_registers(
+                    Some(args.start),
+                    RegRange {
+                        start: args.start,
+                        count: 0,
+                    },
+                )?;
+                call_labels.arguments = IsolatedArgumentLabels::Uniform(argument_label);
+                let (value, label) = self.invoke_inline_construct_with_labels(
+                    module,
+                    target,
+                    arguments,
+                    Some(call_labels),
+                )?;
+                self.replace_pending_hostcall_result_label(Some(label))?;
+                Ok(value)
             }
             "builtin:Map" => {
                 // Map([iterable]) constructor implementation
@@ -55375,8 +55843,27 @@ impl InterpreterCore {
                 for arg_offset in 2..args.count {
                     call_args.push(self.read_reg(args.start + arg_offset)?);
                 }
-                let (value, label) = self.invoke_inline_method_call_with_argument_label(
-                    module, function, this_arg, call_args, None,
+                let argument_start =
+                    args.start
+                        .checked_add(2)
+                        .ok_or(InterpreterError::RegisterOutOfBounds {
+                            register: args.start,
+                            max: self.config.max_registers,
+                        })?;
+                let call_labels = self.clone_isolated_call_labels_from_registers(
+                    (args.count >= 2).then_some(args.start + 1),
+                    RegRange {
+                        start: argument_start,
+                        count: args.count.saturating_sub(2),
+                    },
+                )?;
+                let (value, label) = self.invoke_inline_method_call_with_labels(
+                    module,
+                    function,
+                    this_arg,
+                    call_args,
+                    None,
+                    call_labels,
                 )?;
                 self.replace_pending_hostcall_result_label(Some(label))?;
                 Ok(value)
@@ -55562,8 +56049,29 @@ impl InterpreterCore {
                     Value::Undefined
                 };
                 let apply_args = self.array_like_argument_values(args_array)?;
-                let (value, label) = self.invoke_inline_method_call_with_argument_label(
-                    module, function, this_arg, apply_args, None,
+                let arguments_list_register = (args.count >= 3).then(|| args.start + 2);
+                let argument_label = match arguments_list_register {
+                    Some(register) => self.join_arg_range_with_object_mutation_label(RegRange {
+                        start: register,
+                        count: 1,
+                    })?,
+                    None => Label::Public,
+                };
+                let mut call_labels = self.clone_isolated_call_labels_from_registers(
+                    (args.count >= 2).then_some(args.start + 1),
+                    RegRange {
+                        start: args.start,
+                        count: 0,
+                    },
+                )?;
+                call_labels.arguments = IsolatedArgumentLabels::Uniform(argument_label);
+                let (value, label) = self.invoke_inline_method_call_with_labels(
+                    module,
+                    function,
+                    this_arg,
+                    apply_args,
+                    None,
+                    call_labels,
                 )?;
                 self.replace_pending_hostcall_result_label(Some(label))?;
                 Ok(value)
@@ -65211,6 +65719,7 @@ mod active_builtin_regressions {
             &builtin,
             RegRange { start: 0, count },
             Some(Value::Object(receiver)),
+            None,
         )
     }
 
@@ -68316,8 +68825,14 @@ mod async_runtime_tests_current {
             panic!("revoke field should be callable");
         };
 
-        core.dispatch_builtin_function(&module, &revoker, RegRange { start: 0, count: 0 }, None)
-            .expect("revoker should execute");
+        core.dispatch_builtin_function(
+            &module,
+            &revoker,
+            RegRange { start: 0, count: 0 },
+            None,
+            None,
+        )
+        .expect("revoker should execute");
         let Value::Object(proxy_id) = proxy else {
             panic!("proxy field should be object");
         };
@@ -69460,6 +69975,7 @@ mod async_runtime_tests_current {
                 &write,
                 RegRange { start: 0, count: 1 },
                 Some(Value::Object(req_id)),
+                None,
             )
             .expect("req.write 1");
         assert_eq!(w1, Value::Bool(true), "req.write returns the boolean true");
@@ -69473,6 +69989,7 @@ mod async_runtime_tests_current {
             &write,
             RegRange { start: 0, count: 1 },
             Some(Value::Object(req_id)),
+            None,
         )
         .expect("req.write 2");
 
@@ -69492,6 +70009,7 @@ mod async_runtime_tests_current {
                 &end,
                 RegRange { start: 0, count: 1 },
                 Some(Value::Object(req_id)),
+                None,
             )
             .expect("req.end");
         let Value::Object(response_id) = response else {
@@ -69519,6 +70037,7 @@ mod async_runtime_tests_current {
                 &end,
                 RegRange { start: 0, count: 0 },
                 Some(Value::Object(req_id)),
+                None,
             )
             .expect("second req.end");
         assert_eq!(
@@ -69774,6 +70293,7 @@ mod async_runtime_tests_current {
                 &end,
                 RegRange { start: 0, count: 0 },
                 Some(Value::Object(req_id)),
+                None,
             )
             .expect("req.end with a registered response callback");
         assert_eq!(
@@ -70083,6 +70603,7 @@ mod async_runtime_tests_current {
                 &on,
                 RegRange { start: 0, count: 2 },
                 Some(Value::Object(target_id)),
+                None,
             )
             .expect("emitter.on dispatch");
         assert_eq!(
@@ -70098,6 +70619,7 @@ mod async_runtime_tests_current {
             &on,
             RegRange { start: 0, count: 2 },
             Some(Value::Object(target_id)),
+            None,
         )
         .expect("second data listener");
 
@@ -70111,6 +70633,7 @@ mod async_runtime_tests_current {
             &on,
             RegRange { start: 0, count: 2 },
             Some(Value::Object(target_id)),
+            None,
         )
         .expect("end listener");
 
@@ -70131,6 +70654,7 @@ mod async_runtime_tests_current {
             &on,
             RegRange { start: 0, count: 2 },
             Some(Value::Object(target_id)),
+            None,
         )
         .expect("non-closure listener is a no-op");
         assert!(
@@ -70217,6 +70741,7 @@ mod async_runtime_tests_current {
                 &BuiltinFunction::new_kind(kind),
                 RegRange { start: 0, count: 2 },
                 Some(Value::Object(target_id)),
+                None,
             )
         };
 
@@ -70291,6 +70816,7 @@ mod async_runtime_tests_current {
                 &BuiltinFunction::new_kind(BuiltinFunctionKind::EmitterEmit),
                 RegRange { start: 0, count: 2 },
                 Some(Value::Object(target_id)),
+                None,
             )
             .expect_err("an unhandled error event must throw");
         assert!(matches!(err, InterpreterError::UncaughtException { .. }));
@@ -78434,6 +78960,7 @@ mod async_runtime_tests_current {
                 &builtin,
                 RegRange { start: 0, count: 0 },
                 Some(Value::str("text")),
+                None,
             )
             .expect("string receiver"),
             Value::str("text")
@@ -78444,6 +78971,7 @@ mod async_runtime_tests_current {
                 &builtin,
                 RegRange { start: 0, count: 0 },
                 Some(Value::Int(123)),
+                None,
             ),
             Err(InterpreterError::TypeError { .. })
         ));
@@ -80108,6 +80636,7 @@ mod async_runtime_tests_current {
             &on,
             RegRange { start: 0, count: 2 },
             Some(Value::Object(req_id)),
+            None,
         )
         .expect("req.on('error')");
 
@@ -80120,6 +80649,7 @@ mod async_runtime_tests_current {
                 &end,
                 RegRange { start: 0, count: 0 },
                 Some(Value::Object(req_id)),
+                None,
             )
             .expect("req.end with a failed egress");
         assert_eq!(
@@ -80239,6 +80769,7 @@ mod async_runtime_tests_current {
             &on,
             RegRange { start: 0, count: 2 },
             Some(Value::Object(req_id)),
+            None,
         )
         .expect("req.on('response')");
 
@@ -80250,6 +80781,7 @@ mod async_runtime_tests_current {
                 &end,
                 RegRange { start: 0, count: 0 },
                 Some(Value::Object(req_id)),
+                None,
             )
             .expect("req.end");
         assert_eq!(
@@ -82366,6 +82898,7 @@ mod async_runtime_tests_current {
                 &disconnect,
                 RegRange { start: 0, count: 1 },
                 Some(Value::Object(refused_cluster)),
+                None,
             ),
             Err(InterpreterError::MemoryBudgetExceeded { .. })
         ));
@@ -82399,6 +82932,7 @@ mod async_runtime_tests_current {
                 &accepted_disconnect,
                 RegRange { start: 0, count: 1 },
                 Some(Value::Object(accepted_cluster)),
+                None,
             )
             .expect("disconnect schedule");
         let task = accepted
@@ -82638,6 +83172,523 @@ mod function_prototype_call_apply_tests_current {
                 "{capability} must publish the isolated callee result label"
             );
         }
+    }
+
+    #[test]
+    fn foreign_inline_wrapper_preserves_per_argument_return_label_bd_ur3tk_7() {
+        let mut owner = test_module_with_functions(
+            vec![Ir3Instruction::Return { value: 1 }],
+            vec![Ir3FunctionDesc {
+                entry: 0,
+                arity: 2,
+                frame_size: 2,
+                name: Some("return_second_argument".to_string()),
+                is_generator: false,
+                rest_param_index: None,
+            }],
+        );
+        owner.header.source_label = "labeled-owner.mjs".to_string();
+        let caller = test_module_with_functions(
+            vec![
+                Ir3Instruction::CallMethod {
+                    receiver: 0,
+                    callee: 1,
+                    args: RegRange { start: 2, count: 2 },
+                    dst: 4,
+                },
+                Ir3Instruction::Return { value: 4 },
+            ],
+            Vec::new(),
+        );
+
+        let mut core = test_interpreter();
+        core.ensure_module_record(&owner, "labeled-owner.mjs")
+            .expect("foreign owner program should be retained");
+        core.closures.push(ClosureValue {
+            function_index: 0,
+            captured_env: core.scope_chain.snapshot(),
+        });
+        core.closure_module_origins
+            .insert(0, "labeled-owner.mjs".to_string());
+        let receiver_label = Label::Custom {
+            name: "isolated-receiver".repeat(4),
+            level: 40,
+        };
+        let first_label = Label::Custom {
+            name: "isolated-first-argument".repeat(4),
+            level: 30,
+        };
+        let second_label = Label::Custom {
+            name: "isolated-second-argument".repeat(4),
+            level: 20,
+        };
+        core.write_reg_with_label(0, Value::str("receiver"), receiver_label.clone())
+            .expect("receiver register");
+        core.write_reg(1, Value::Closure(0))
+            .expect("foreign closure register");
+        core.write_reg_with_label(2, Value::str("first"), first_label.clone())
+            .expect("first argument register");
+        core.write_reg_with_label(3, Value::str("second"), second_label.clone())
+            .expect("second argument register");
+        core.write_reg_with_label(7, Value::str("caller"), Label::Internal)
+            .expect("unrelated caller register");
+        core.sync_estimated_memory_bytes()
+            .expect("directly seeded foreign-closure fixture accounting");
+
+        assert_eq!(
+            core.run_loop(&caller)
+                .expect("foreign method call should return"),
+            Value::str("second")
+        );
+        assert_eq!(
+            core.get_register_label(4).expect("foreign result label"),
+            &second_label,
+            "the returned second argument must not inherit the higher receiver or first-argument label"
+        );
+        assert_eq!(
+            core.get_register_label(0).expect("restored receiver label"),
+            &receiver_label
+        );
+        assert_eq!(
+            core.get_register_label(2)
+                .expect("restored first argument label"),
+            &first_label
+        );
+        assert_eq!(
+            core.get_register_label(7)
+                .expect("restored unrelated caller label"),
+            &Label::Internal
+        );
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes(),
+            "Custom transport ownership must be fully released after restoring the caller"
+        );
+    }
+
+    #[test]
+    fn function_call_wrapper_preserves_receiver_and_argument_side_effect_labels_bd_ur3tk_7() {
+        let mut module = test_module_with_functions(
+            vec![
+                Ir3Instruction::LoadStr {
+                    dst: 2,
+                    pool_index: 0,
+                },
+                Ir3Instruction::LoadInt { dst: 3, value: 1 },
+                Ir3Instruction::SetProperty {
+                    obj: 0,
+                    key: 2,
+                    val: 3,
+                },
+                Ir3Instruction::LoadInt { dst: 3, value: 2 },
+                Ir3Instruction::SetProperty {
+                    obj: 1,
+                    key: 2,
+                    val: 3,
+                },
+                Ir3Instruction::LoadThis { dst: 4 },
+                Ir3Instruction::LoadInt { dst: 3, value: 3 },
+                Ir3Instruction::SetProperty {
+                    obj: 4,
+                    key: 2,
+                    val: 3,
+                },
+                Ir3Instruction::Return { value: 0 },
+            ],
+            vec![Ir3FunctionDesc {
+                entry: 0,
+                arity: 2,
+                frame_size: 5,
+                name: Some("mutate_each_input".to_string()),
+                is_generator: false,
+                rest_param_index: None,
+            }],
+        );
+        module.constant_pool.push("mark".into());
+
+        let mut core = test_interpreter();
+        let receiver = seed_object(&mut core, &[]);
+        let secret_argument = seed_object(&mut core, &[]);
+        let confidential_argument = seed_object(&mut core, &[]);
+        core.write_reg(0, Value::Function(0))
+            .expect("callee register");
+        core.write_reg_with_label(1, Value::Object(receiver), Label::Internal)
+            .expect("receiver register");
+        core.write_reg_with_label(2, Value::Object(secret_argument), Label::Secret)
+            .expect("secret argument register");
+        core.write_reg_with_label(3, Value::Object(confidential_argument), Label::Confidential)
+            .expect("confidential argument register");
+        core.write_reg_with_label(7, Value::str("caller"), Label::TopSecret)
+            .expect("unrelated caller register");
+
+        assert_eq!(
+            core.dispatch_builtin_hostcall(
+                "builtin:FunctionPrototypeCall",
+                RegRange { start: 0, count: 4 },
+                Some(&module),
+            )
+            .expect("Function.prototype.call wrapper"),
+            Value::Object(secret_argument)
+        );
+        assert_eq!(
+            core.object_mutation_labels.get(&receiver),
+            Some(&Label::Internal)
+        );
+        assert_eq!(
+            core.object_mutation_labels.get(&secret_argument),
+            Some(&Label::Secret)
+        );
+        assert_eq!(
+            core.object_mutation_labels.get(&confidential_argument),
+            Some(&Label::Confidential)
+        );
+        assert_eq!(
+            core.take_pending_hostcall_result_label(),
+            Some(Label::Secret)
+        );
+        assert_eq!(
+            core.get_register_label(1).expect("restored receiver label"),
+            &Label::Internal
+        );
+        assert_eq!(
+            core.get_register_label(3)
+                .expect("restored confidential argument label"),
+            &Label::Confidential
+        );
+        assert_eq!(
+            core.get_register_label(7)
+                .expect("restored unrelated caller label"),
+            &Label::TopSecret
+        );
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+    }
+
+    #[test]
+    fn function_call_wrapper_preserves_exact_throw_label_bd_ur3tk_7() {
+        let module = test_module_with_functions(
+            vec![Ir3Instruction::Throw { value: 1 }],
+            vec![Ir3FunctionDesc {
+                entry: 0,
+                arity: 2,
+                frame_size: 2,
+                name: Some("throw_second_argument".to_string()),
+                is_generator: false,
+                rest_param_index: None,
+            }],
+        );
+        let mut core = test_interpreter();
+        core.write_reg(0, Value::Function(0))
+            .expect("callee register");
+        core.write_reg_with_label(1, Value::str("receiver"), Label::Internal)
+            .expect("receiver register");
+        core.write_reg_with_label(2, Value::str("higher-unused"), Label::Secret)
+            .expect("first argument register");
+        core.write_reg_with_label(3, Value::str("thrown"), Label::Confidential)
+            .expect("second argument register");
+        core.write_reg_with_label(7, Value::str("caller"), Label::TopSecret)
+            .expect("unrelated caller register");
+
+        let error = core
+            .dispatch_builtin_hostcall(
+                "builtin:FunctionPrototypeCall",
+                RegRange { start: 0, count: 4 },
+                Some(&module),
+            )
+            .expect_err("explicit throw must escape the isolated wrapper");
+        assert!(matches!(error, InterpreterError::UncaughtException { .. }));
+        assert_eq!(core.pending_exception, Some(Value::str("thrown")));
+        assert_eq!(
+            core.pending_exception_label,
+            Label::Confidential,
+            "the thrown second argument must not inherit the higher unused first-argument label"
+        );
+        assert_eq!(
+            core.get_register_label(2)
+                .expect("restored first argument label"),
+            &Label::Secret
+        );
+        assert_eq!(
+            core.get_register_label(7)
+                .expect("restored unrelated caller label"),
+            &Label::TopSecret
+        );
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+    }
+
+    #[test]
+    fn generated_wrapper_preserves_receiver_argument_return_and_throw_labels_bd_ur3tk_7() {
+        let mut generated = test_module_with_functions(
+            vec![
+                Ir3Instruction::LoadThis { dst: 1 },
+                Ir3Instruction::LoadStr {
+                    dst: 2,
+                    pool_index: 0,
+                },
+                Ir3Instruction::SetProperty {
+                    obj: 1,
+                    key: 2,
+                    val: 0,
+                },
+                Ir3Instruction::Return { value: 0 },
+            ],
+            vec![Ir3FunctionDesc {
+                entry: 0,
+                arity: 1,
+                frame_size: 3,
+                name: Some("generated_mutator".to_string()),
+                is_generator: false,
+                rest_param_index: None,
+            }],
+        );
+        generated.constant_pool.push("mark".into());
+        let throwing_generated = test_module_with_functions(
+            vec![Ir3Instruction::Throw { value: 0 }],
+            vec![Ir3FunctionDesc {
+                entry: 0,
+                arity: 1,
+                frame_size: 1,
+                name: Some("generated_thrower".to_string()),
+                is_generator: false,
+                rest_param_index: None,
+            }],
+        );
+        let caller = test_module_with_functions(Vec::new(), Vec::new());
+
+        let mut core = test_interpreter();
+        core.generated_functions.push(GeneratedFunctionArtifact {
+            provenance: InterpreterCore::derive_generated_function_provenance(
+                "generated-label-test",
+                "value",
+                "this.mark = value; return value;",
+            ),
+            compiled_module: generated,
+            function_index: 0,
+        });
+        core.generated_functions.push(GeneratedFunctionArtifact {
+            provenance: InterpreterCore::derive_generated_function_provenance(
+                "generated-label-test",
+                "value",
+                "throw value;",
+            ),
+            compiled_module: throwing_generated,
+            function_index: 0,
+        });
+
+        let receiver = seed_object(&mut core, &[]);
+        core.write_reg_with_label(0, Value::Object(receiver), Label::Internal)
+            .expect("generated receiver register");
+        core.write_reg_with_label(1, Value::str("classified"), Label::Secret)
+            .expect("generated argument register");
+        core.write_reg_with_label(7, Value::str("caller"), Label::Confidential)
+            .expect("unrelated caller register");
+        let result = core
+            .dispatch_builtin_function(
+                &caller,
+                &BuiltinFunction::generated_function(0),
+                RegRange { start: 1, count: 1 },
+                Some(Value::Object(receiver)),
+                Some(0),
+            )
+            .expect("generated method-form invocation");
+        assert_eq!(result, Value::str("classified"));
+        assert_eq!(
+            core.object_mutation_labels.get(&receiver),
+            Some(&Label::Secret)
+        );
+        assert_eq!(
+            core.take_pending_hostcall_result_label(),
+            Some(Label::Secret)
+        );
+        assert_eq!(
+            core.get_register_label(0)
+                .expect("restored generated receiver label"),
+            &Label::Internal
+        );
+        assert_eq!(
+            core.get_register_label(7)
+                .expect("restored unrelated caller label"),
+            &Label::Confidential
+        );
+
+        core.write_reg_with_label(0, Value::Object(receiver), Label::Secret)
+            .expect("higher generated receiver register");
+        core.write_reg_with_label(1, Value::str("thrown"), Label::Confidential)
+            .expect("generated thrown argument register");
+        let error = core
+            .dispatch_builtin_function(
+                &caller,
+                &BuiltinFunction::generated_function(1),
+                RegRange { start: 1, count: 1 },
+                Some(Value::Object(receiver)),
+                Some(0),
+            )
+            .expect_err("generated explicit throw must escape");
+        assert!(matches!(error, InterpreterError::UncaughtException { .. }));
+        assert_eq!(core.pending_exception, Some(Value::str("thrown")));
+        assert_eq!(
+            core.pending_exception_label,
+            Label::Confidential,
+            "generated throw must retain the argument's exact label rather than the higher receiver label"
+        );
+        assert_eq!(
+            core.get_register_label(0)
+                .expect("restored higher generated receiver label"),
+            &Label::Secret
+        );
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+    }
+
+    #[test]
+    fn reflect_construct_wrapper_preserves_argument_side_effect_label_bd_ur3tk_7() {
+        let mut module = test_module_with_functions(
+            vec![
+                Ir3Instruction::LoadThis { dst: 1 },
+                Ir3Instruction::LoadStr {
+                    dst: 2,
+                    pool_index: 0,
+                },
+                Ir3Instruction::SetProperty {
+                    obj: 1,
+                    key: 2,
+                    val: 0,
+                },
+                Ir3Instruction::Return { value: 1 },
+            ],
+            vec![Ir3FunctionDesc {
+                entry: 0,
+                arity: 1,
+                frame_size: 3,
+                name: Some("labeled_constructor".to_string()),
+                is_generator: false,
+                rest_param_index: None,
+            }],
+        );
+        module.constant_pool.push("mark".into());
+
+        let mut core = test_interpreter();
+        let arguments = seed_array_like(&mut core, &[Value::str("classified")]);
+        core.write_reg(0, Value::Function(0))
+            .expect("constructor register");
+        core.write_reg_with_label(1, Value::Object(arguments), Label::Secret)
+            .expect("constructor argument-list register");
+        let result = core
+            .dispatch_builtin_hostcall(
+                "builtin:ReflectConstruct",
+                RegRange { start: 0, count: 2 },
+                Some(&module),
+            )
+            .expect("Reflect.construct wrapper");
+        let Value::Object(constructed) = result else {
+            panic!("Reflect.construct must return an object");
+        };
+        assert_eq!(
+            core.object_mutation_labels.get(&constructed),
+            Some(&Label::Secret),
+            "the constructor body must observe the argument-list label before mutating this"
+        );
+        assert_eq!(
+            core.get_register_label(1)
+                .expect("restored argument-list label"),
+            &Label::Secret
+        );
+        assert_eq!(
+            core.take_pending_hostcall_result_label(),
+            Some(Label::Public)
+        );
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+    }
+
+    #[test]
+    fn promise_reaction_wrapper_preserves_task_label_for_side_effects_bd_ur3tk_7() {
+        let mut module = test_module_with_functions(
+            vec![
+                Ir3Instruction::LoadStr {
+                    dst: 1,
+                    pool_index: 0,
+                },
+                Ir3Instruction::LoadInt { dst: 2, value: 1 },
+                Ir3Instruction::SetProperty {
+                    obj: 0,
+                    key: 1,
+                    val: 2,
+                },
+                Ir3Instruction::Return { value: 0 },
+            ],
+            vec![Ir3FunctionDesc {
+                entry: 0,
+                arity: 1,
+                frame_size: 3,
+                name: Some("promise_reaction_mutator".to_string()),
+                is_generator: false,
+                rest_param_index: None,
+            }],
+        );
+        module.constant_pool.push("settled".into());
+
+        let mut core = test_interpreter();
+        let delivered_object = seed_object(&mut core, &[]);
+        core.closures.push(ClosureValue {
+            function_index: 0,
+            captured_env: Vec::new(),
+        });
+        core.write_reg_with_label(7, Value::str("caller"), Label::TopSecret)
+            .expect("unrelated caller register");
+        core.sync_estimated_memory_bytes()
+            .expect("Promise reaction fixture accounting");
+
+        let source = core.create_promise().expect("source Promise");
+        let result = core
+            .register_promise_then(
+                source,
+                Some(crate::closure_model::ClosureHandle(0)),
+                None,
+                Label::Public,
+            )
+            .expect("Promise reaction");
+        core.fulfill_promise(
+            source,
+            InterpreterCore::value_to_js_value(&Value::Object(delivered_object)),
+            Label::Secret,
+        )
+        .expect("Secret Promise settlement");
+        core.drain_microtasks(Some(&module))
+            .expect("Promise reaction drain");
+
+        assert_eq!(
+            core.object_mutation_labels.get(&delivered_object),
+            Some(&Label::Secret),
+            "the queued settlement label must govern callback side effects inside the isolated wrapper"
+        );
+        let result_promise = core
+            .promise_store
+            .get(result)
+            .expect("reaction result Promise");
+        assert_eq!(
+            result_promise.label,
+            Label::Secret,
+            "the reaction return must preserve the queued settlement label"
+        );
+        assert_eq!(
+            core.get_register_label(7)
+                .expect("restored unrelated caller label"),
+            &Label::TopSecret
+        );
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
     }
 
     #[test]
@@ -86851,6 +87902,7 @@ mod tests {
                 &BuiltinFunction::symbol_to_string(),
                 RegRange { start: 0, count: 0 },
                 Some(Value::Symbol(symbol)),
+                None,
             )
             .unwrap(),
             Value::Str(expected.clone())
@@ -98123,7 +99175,7 @@ mod string_intrinsic_table_parity_tests {
             bound_object: None,
         };
         let module = halted_module();
-        core.dispatch_builtin_function(&module, &builtin, range, Some(receiver.clone()))
+        core.dispatch_builtin_function(&module, &builtin, range, Some(receiver.clone()), None)
     }
 
     fn run_generated(

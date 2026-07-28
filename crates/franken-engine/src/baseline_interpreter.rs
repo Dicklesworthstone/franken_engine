@@ -5380,6 +5380,8 @@ struct AsyncFunctionObject {
     saved_ip: usize,
     /// Saved register file snapshot at the time of await.
     saved_registers: Vec<Value>,
+    /// Saved IFC label snapshot parallel to `saved_registers`.
+    saved_register_labels: Vec<Label>,
     /// Saved register base offset.
     saved_register_base: usize,
     /// Current phase of the async function.
@@ -30349,7 +30351,7 @@ impl InterpreterCore {
                 previous_call_stack_bytes,
             )?;
             if let Some(async_id) = async_function_id {
-                self.settle_async_function(async_id, Ok(effective_val))?;
+                self.settle_async_function(async_id, Ok(effective_val), effective_label)?;
             } else {
                 self.write_reg_with_label(frame.return_reg, effective_val, effective_label)?;
             }
@@ -30379,6 +30381,7 @@ impl InterpreterCore {
         &mut self,
         async_id: u32,
         resolution: Result<Value, Value>,
+        label: Label,
     ) -> Result<(), InterpreterError> {
         let result_promise = {
             let async_function =
@@ -30392,7 +30395,6 @@ impl InterpreterCore {
             async_function.result_promise
         };
         let promise_handle = crate::promise_model::PromiseHandle(result_promise);
-        let label = crate::ifc_artifacts::Label::Public;
 
         match resolution {
             Ok(value) => {
@@ -30411,6 +30413,7 @@ impl InterpreterCore {
         &mut self,
         mut frame: CallFrame,
         resolution: Result<Value, Value>,
+        label: Label,
     ) -> Result<Option<Value>, InterpreterError> {
         let async_id = frame
             .async_function_id
@@ -30429,7 +30432,7 @@ impl InterpreterCore {
             previous_closure_bytes,
             previous_call_stack_bytes,
         )?;
-        self.settle_async_function(async_id, resolution)?;
+        self.settle_async_function(async_id, resolution, label)?;
         self.ip = frame.return_ip;
         Ok(None)
     }
@@ -30437,6 +30440,7 @@ impl InterpreterCore {
     fn complete_current_async_frame(
         &mut self,
         resolution: Result<Value, Value>,
+        label: Label,
     ) -> Result<Option<Value>, InterpreterError> {
         let current_depth = self.call_stack.len();
         self.catch_frames
@@ -30459,12 +30463,13 @@ impl InterpreterCore {
                 expected: "async function frame".to_string(),
                 got: "missing call frame".to_string(),
             })?;
-        self.complete_async_frame(frame, resolution)
+        self.complete_async_frame(frame, resolution, label)
     }
 
     fn reject_nearest_async_boundary(
         &mut self,
         error_value: Value,
+        error_label: Label,
     ) -> Result<bool, InterpreterError> {
         let Some(async_frame_index) = self
             .call_stack
@@ -30485,7 +30490,7 @@ impl InterpreterCore {
                 expected: "async function frame".to_string(),
                 got: "missing async boundary".to_string(),
             })?;
-        self.complete_async_frame(frame, Err(error_value))?;
+        self.complete_async_frame(frame, Err(error_value), error_label)?;
         Ok(true)
     }
 
@@ -30493,6 +30498,7 @@ impl InterpreterCore {
         &mut self,
         promise_handle: crate::promise_model::PromiseHandle,
         result_reg: u32,
+        await_label: Label,
     ) -> Result<(), InterpreterError> {
         // Find the current async function from the call stack
         let async_frame_index = self
@@ -30523,15 +30529,27 @@ impl InterpreterCore {
         let reg_start = self.register_base;
         let reg_end =
             (self.register_base + self.config.max_registers as usize).min(self.registers.len());
+        let saved_label_bytes = self
+            .register_labels
+            .get(reg_start..reg_end)
+            .map(Self::estimate_label_vec_bytes)
+            .ok_or_else(|| InterpreterError::TypeError {
+                expected: "parallel async register-label capacity".to_string(),
+                got: format!(
+                    "register range {reg_start}..{reg_end}, label length {}",
+                    self.register_labels.len()
+                ),
+            })?;
         let previous_async_bytes = Self::estimate_async_function_bytes(async_function);
-        let next_async_bytes = MEMORY_ESTIMATE_GENERATOR_BASE_BYTES.saturating_add(
-            Self::estimate_value_vec_bytes(&self.registers[reg_start..reg_end]),
-        );
+        let next_async_bytes = MEMORY_ESTIMATE_GENERATOR_BASE_BYTES
+            .saturating_add(Self::estimate_value_vec_bytes(
+                &self.registers[reg_start..reg_end],
+            ))
+            .saturating_add(saved_label_bytes);
         self.apply_memory_component_delta(previous_async_bytes, next_async_bytes)?;
 
         // Register the internal await reactions with the awaited Promise.
-        let result_promise = match self
-            .register_promise_then_for_await(promise_handle, crate::ifc_artifacts::Label::Public)
+        let result_promise = match self.register_promise_then_for_await(promise_handle, await_label)
         {
             Ok(result_promise) => result_promise,
             Err(error) => {
@@ -30551,6 +30569,7 @@ impl InterpreterCore {
         async_function.saved_register_base = self.register_base;
         async_function.phase = AsyncFunctionPhase::SuspendedAwait;
         async_function.saved_registers = self.registers[reg_start..reg_end].to_vec();
+        async_function.saved_register_labels = self.register_labels[reg_start..reg_end].to_vec();
 
         // Promise reactions resume through the promise returned by `.then()`.
         self.async_resumption_contexts.insert(
@@ -30587,11 +30606,14 @@ impl InterpreterCore {
         &mut self,
         resumption_context: AsyncResumptionContext,
         settled: Result<crate::object_model::JsValue, crate::object_model::JsValue>,
+        settlement_label: Label,
     ) -> Result<(), InterpreterError> {
         let async_function_id = resumption_context.async_function_id;
         let result_register = resumption_context.result_register;
 
-        let previous_register_bytes = self.registers_memory_bytes();
+        let previous_register_bytes = self
+            .registers_memory_bytes()
+            .saturating_add(self.register_labels_memory_bytes());
         let previous_async_bytes = self.async_functions_memory_bytes();
         // Extract the suspension payload by move. Cloning here retained a
         // duplicate register snapshot after resumption and made every String
@@ -30611,6 +30633,16 @@ impl InterpreterCore {
                     got: format!("async function phase: {:?}", async_function.phase),
                 });
             }
+            if async_function.saved_registers.len() != async_function.saved_register_labels.len() {
+                return Err(InterpreterError::TypeError {
+                    expected: "equal async register and label snapshot lengths".to_string(),
+                    got: format!(
+                        "{} values and {} labels",
+                        async_function.saved_registers.len(),
+                        async_function.saved_register_labels.len()
+                    ),
+                });
+            }
 
             (
                 async_function.saved_ip,
@@ -30626,13 +30658,26 @@ impl InterpreterCore {
                 got: format!("need {} registers, have {}", reg_end, self.registers.len()),
             });
         }
-        let saved_registers = std::mem::take(
-            &mut self
+        if reg_end > self.register_labels.len() {
+            return Err(InterpreterError::TypeError {
+                expected: "sufficient register-label capacity".to_string(),
+                got: format!(
+                    "need {} register labels, have {}",
+                    reg_end,
+                    self.register_labels.len()
+                ),
+            });
+        }
+        let (saved_registers, saved_register_labels) = {
+            let async_function = self
                 .async_functions
                 .get_mut(async_function_id as usize)
-                .expect("async function was validated before suspension move")
-                .saved_registers,
-        );
+                .expect("async function was validated before suspension move");
+            (
+                std::mem::take(&mut async_function.saved_registers),
+                std::mem::take(&mut async_function.saved_register_labels),
+            )
+        };
 
         // Restore execution state
         self.ip = saved_ip;
@@ -30647,6 +30692,12 @@ impl InterpreterCore {
                 r[reg_start + i] = value;
             }
         });
+        for (slot, label) in self.register_labels[reg_start..reg_end]
+            .iter_mut()
+            .zip(saved_register_labels)
+        {
+            *slot = label;
+        }
 
         // Resume execution - now we can safely get the mutable reference
         let async_function = self
@@ -30657,7 +30708,9 @@ impl InterpreterCore {
                 got: format!("async#{async_function_id} not found"),
             })?;
         async_function.phase = AsyncFunctionPhase::Executing;
-        let next_register_bytes = self.registers_memory_bytes();
+        let next_register_bytes = self
+            .registers_memory_bytes()
+            .saturating_add(self.register_labels_memory_bytes());
         let next_async_bytes = self.async_functions_memory_bytes();
         self.estimated_memory_bytes = self
             .estimated_memory_bytes
@@ -30668,11 +30721,15 @@ impl InterpreterCore {
 
         match settled {
             Ok(argument) => {
-                self.write_reg(result_register, Self::js_value_to_value(&argument))?;
+                self.write_reg_with_label(
+                    result_register,
+                    Self::js_value_to_value(&argument),
+                    settlement_label,
+                )?;
             }
             Err(reason) => {
                 let error_value = Self::js_value_to_value(&reason);
-                let _ = self.raise_await_rejection(error_value)?;
+                let _ = self.raise_await_rejection_with_label(error_value, settlement_label)?;
             }
         }
 
@@ -30736,21 +30793,17 @@ impl InterpreterCore {
         }
     }
 
-    fn raise_await_rejection(&mut self, error_value: Value) -> Result<bool, InterpreterError> {
-        self.raise_await_rejection_with_label(error_value, Label::Public)
-    }
-
     fn raise_await_rejection_with_label(
         &mut self,
         error_value: Value,
         label: Label,
     ) -> Result<bool, InterpreterError> {
         self.suspend_current_abrupt_completion()?;
-        self.replace_pending_abrupt_slots(Some((error_value.clone(), label)), None)?;
+        self.replace_pending_abrupt_slots(Some((error_value.clone(), label.clone())), None)?;
         if let Some(frame) = self.pop_exception_target_frame()? {
             self.ip = frame.catch_target;
             Ok(false)
-        } else if self.reject_nearest_async_boundary(error_value.clone())? {
+        } else if self.reject_nearest_async_boundary(error_value.clone(), label)? {
             Ok(true)
         } else {
             Err(InterpreterError::UncaughtException {
@@ -31920,11 +31973,11 @@ impl InterpreterCore {
         // value+label, exactly like the `Throw` instruction.
         let thrown_label = self.pending_exception_label.clone();
         self.suspend_current_abrupt_completion()?;
-        self.replace_pending_abrupt_slots(Some((thrown.clone(), thrown_label)), None)?;
+        self.replace_pending_abrupt_slots(Some((thrown.clone(), thrown_label.clone())), None)?;
         if let Some(frame) = self.pop_exception_target_frame()? {
             self.ip = frame.catch_target;
             Ok(None)
-        } else if self.reject_nearest_async_boundary(thrown.clone())? {
+        } else if self.reject_nearest_async_boundary(thrown.clone(), thrown_label)? {
             Ok(None)
         } else {
             // No enclosing handler: surface as an uncaught exception carrying the
@@ -31967,13 +32020,13 @@ impl InterpreterCore {
                 self.ip = frame.catch_target;
                 return Ok(None);
             }
-            let rejection = self
-                .take_pending_exception_slot()
-                .map(|(value, _)| value)
-                .ok_or_else(|| InterpreterError::UncaughtException {
-                    value: "iterator close lost its pending exception".to_string(),
+            let (rejection, rejection_label) =
+                self.take_pending_exception_slot().ok_or_else(|| {
+                    InterpreterError::UncaughtException {
+                        value: "iterator close lost its pending exception".to_string(),
+                    }
                 })?;
-            if self.reject_nearest_async_boundary(rejection)? {
+            if self.reject_nearest_async_boundary(rejection, rejection_label)? {
                 return Ok(None);
             }
             self.clear_suspended_abrupt_completions();
@@ -32020,7 +32073,7 @@ impl InterpreterCore {
                             // Re-enter dispatch at the handler.
                         }
                         None => {
-                            if self.reject_nearest_async_boundary(thrown.clone())? {
+                            if self.reject_nearest_async_boundary(thrown.clone(), Label::Public)? {
                                 continue;
                             }
                             // `has_active_catch_frame` raced/changed: surface
@@ -32254,13 +32307,15 @@ impl InterpreterCore {
                             let thrown_label = self.pending_exception_label.clone();
                             self.suspend_current_abrupt_completion()?;
                             self.replace_pending_abrupt_slots(
-                                Some((thrown.clone(), thrown_label)),
+                                Some((thrown.clone(), thrown_label.clone())),
                                 None,
                             )?;
                             if let Some(frame) = self.pop_exception_target_frame()? {
                                 self.ip = frame.catch_target;
                             } else {
-                                if self.reject_nearest_async_boundary(thrown.clone())? {
+                                if self
+                                    .reject_nearest_async_boundary(thrown.clone(), thrown_label)?
+                                {
                                     continue;
                                 }
                                 self.clear_suspended_abrupt_completions();
@@ -32575,6 +32630,7 @@ impl InterpreterCore {
                         }
 
                         let mut arg_vals = Vec::new();
+                        let mut arg_labels = Vec::new();
                         for i in 0..args.count.min(func.arity) {
                             let reg = args.start.checked_add(i).ok_or(
                                 InterpreterError::RegisterOutOfBounds {
@@ -32583,8 +32639,10 @@ impl InterpreterCore {
                                 },
                             )?;
                             arg_vals.push(self.read_reg(reg)?);
+                            arg_labels.push(self.get_register_label(reg)?.clone());
                         }
                         self.apply_rest_param(&mut arg_vals, func.rest_param_index, args)?;
+                        self.apply_rest_param_labels(&mut arg_labels, func.rest_param_index, args)?;
 
                         self.run_pre_call_hook(module, &callee_val, func_idx, &arg_vals)?;
 
@@ -32606,6 +32664,7 @@ impl InterpreterCore {
                                     closure_index: Some(*cid),
                                     saved_ip: 0,
                                     saved_registers: Vec::new(),
+                                    saved_register_labels: Vec::new(),
                                     saved_register_base: 0,
                                     phase: AsyncFunctionPhase::Executing,
                                     result_promise,
@@ -32677,10 +32736,12 @@ impl InterpreterCore {
 
                             self.register_base += self.config.max_registers as usize;
                             self.clear_current_register_frame();
-                            for (i, val) in arg_vals.into_iter().enumerate() {
+                            for (i, (val, label)) in
+                                arg_vals.into_iter().zip(arg_labels).enumerate()
+                            {
                                 let reg = i as u32;
                                 if reg < self.config.max_registers {
-                                    self.write_reg(reg, val)?;
+                                    self.write_reg_with_label(reg, val, label)?;
                                 }
                             }
                             self.ip = func.entry as usize;
@@ -33091,6 +33152,7 @@ impl InterpreterCore {
                         }
 
                         let mut arg_vals = Vec::new();
+                        let mut arg_labels = Vec::new();
                         for i in 0..args.count.min(func.arity) {
                             let reg = args.start.checked_add(i).ok_or(
                                 InterpreterError::RegisterOutOfBounds {
@@ -33099,9 +33161,11 @@ impl InterpreterCore {
                                 },
                             )?;
                             arg_vals.push(self.read_reg(reg)?);
+                            arg_labels.push(self.get_register_label(reg)?.clone());
                         }
                         self.mark_inline_callback_started();
                         self.apply_rest_param(&mut arg_vals, func.rest_param_index, args)?;
+                        self.apply_rest_param_labels(&mut arg_labels, func.rest_param_index, args)?;
 
                         self.run_pre_call_hook(module, &callee_val, func_idx, &arg_vals)?;
 
@@ -33119,6 +33183,7 @@ impl InterpreterCore {
                                     closure_index: Some(*cid),
                                     saved_ip: 0,
                                     saved_registers: Vec::new(),
+                                    saved_register_labels: Vec::new(),
                                     saved_register_base: 0,
                                     phase: AsyncFunctionPhase::Executing,
                                     result_promise,
@@ -33181,10 +33246,12 @@ impl InterpreterCore {
 
                             self.register_base += self.config.max_registers as usize;
                             self.clear_current_register_frame();
-                            for (i, val) in arg_vals.into_iter().enumerate() {
+                            for (i, (val, label)) in
+                                arg_vals.into_iter().zip(arg_labels).enumerate()
+                            {
                                 let reg = i as u32;
                                 if reg < self.config.max_registers {
-                                    self.write_reg(reg, val)?;
+                                    self.write_reg_with_label(reg, val, label)?;
                                 }
                             }
                             self.ip = func.entry as usize;
@@ -34574,7 +34641,10 @@ impl InterpreterCore {
                     // the catch binding instead of leaving a stale label.
                     let thrown_label = self.get_register_label(value)?.clone();
                     self.suspend_current_abrupt_completion()?;
-                    self.replace_pending_abrupt_slots(Some((thrown.clone(), thrown_label)), None)?;
+                    self.replace_pending_abrupt_slots(
+                        Some((thrown.clone(), thrown_label.clone())),
+                        None,
+                    )?;
                     // Walk the catch frame stack to find the nearest valid handler.
                     // Use rposition to find the topmost matching frame by index,
                     // then truncate to remove it and any frames above it — but
@@ -34583,7 +34653,7 @@ impl InterpreterCore {
                         self.ip = frame.catch_target;
                     } else {
                         // No catch handler found — uncaught exception.
-                        if self.reject_nearest_async_boundary(thrown.clone())? {
+                        if self.reject_nearest_async_boundary(thrown.clone(), thrown_label)? {
                             continue;
                         }
                         self.clear_suspended_abrupt_completions();
@@ -34623,10 +34693,13 @@ impl InterpreterCore {
                             // Re-throw the pending exception after finally completes.
                             if let Some(thrown) = self.pending_exception.clone() {
                                 let desc = self.uncaught_exception_description(&thrown);
+                                let thrown_label = self.pending_exception_label.clone();
                                 // Look for another catch frame to propagate to.
                                 if let Some(frame) = self.pop_exception_target_frame()? {
                                     self.ip = frame.catch_target;
-                                } else if self.reject_nearest_async_boundary(thrown.clone())? {
+                                } else if self
+                                    .reject_nearest_async_boundary(thrown.clone(), thrown_label)?
+                                {
                                     continue;
                                 } else {
                                     self.clear_suspended_abrupt_completions();
@@ -34897,7 +34970,7 @@ impl InterpreterCore {
                         _ => {
                             // await non-promise: create a resolved promise with the value
                             let js_val = Self::value_to_js_value(&awaited_value);
-                            self.create_fulfilled_promise(js_val, awaited_label)?
+                            self.create_fulfilled_promise(js_val, awaited_label.clone())?
                         }
                     };
 
@@ -34910,12 +34983,13 @@ impl InterpreterCore {
                     })?;
                     let promise_state = promise_record.state.clone();
                     let promise_label = promise_record.label.clone();
+                    let effective_label = awaited_label.join(&promise_label);
 
                     // Module evaluation always crosses a Promise-reaction
                     // microtask boundary, including for non-Promise and
                     // already-settled operands.
                     if is_module_await {
-                        self.suspend_top_level_await(promise_handle, promise_reg, promise_label)?;
+                        self.suspend_top_level_await(promise_handle, promise_reg, effective_label)?;
                         return Ok(Value::Undefined);
                     }
 
@@ -34927,13 +35001,16 @@ impl InterpreterCore {
                                 self.write_reg_with_label(
                                     promise_reg,
                                     result_value,
-                                    promise_label,
+                                    effective_label,
                                 )?;
                                 self.ip += 1;
                             }
                             crate::promise_model::PromiseState::Rejected(js_reason) => {
                                 let error_value = Self::js_value_to_value(&js_reason);
-                                if self.raise_await_rejection(error_value.clone())? {
+                                if self.raise_await_rejection_with_label(
+                                    error_value.clone(),
+                                    effective_label,
+                                )? {
                                     continue;
                                 }
                             }
@@ -34942,7 +35019,11 @@ impl InterpreterCore {
                             }
                         }
                     } else {
-                        self.suspend_async_function_for_await(promise_handle, promise_reg)?;
+                        self.suspend_async_function_for_await(
+                            promise_handle,
+                            promise_reg,
+                            effective_label,
+                        )?;
 
                         // Return special value to indicate suspension
                         // The interpreter loop should exit and return control to the event loop
@@ -34951,8 +35032,9 @@ impl InterpreterCore {
                 }
                 Ir3Instruction::AsyncReturn { value_reg } => {
                     let return_value = self.read_reg(value_reg)?;
+                    let return_label = self.get_register_label(value_reg)?.clone();
                     if let Some(final_value) =
-                        self.complete_current_async_frame(Ok(return_value))?
+                        self.complete_current_async_frame(Ok(return_value), return_label)?
                     {
                         return Ok(final_value);
                     }
@@ -34960,8 +35042,9 @@ impl InterpreterCore {
                 }
                 Ir3Instruction::AsyncThrow { error_reg } => {
                     let error_value = self.read_reg(error_reg)?;
+                    let error_label = self.get_register_label(error_reg)?.clone();
                     if let Some(final_value) =
-                        self.complete_current_async_frame(Err(error_value))?
+                        self.complete_current_async_frame(Err(error_value), error_label)?
                     {
                         return Ok(final_value);
                     }
@@ -40682,6 +40765,7 @@ impl InterpreterCore {
                                     .resume_async_function_after_await(
                                         resumption_context,
                                         Ok(argument.clone()),
+                                        task_label.clone(),
                                     )
                                     .and_then(|()| self.continue_resumed_async_function(module))
                                 {
@@ -40755,6 +40839,7 @@ impl InterpreterCore {
                                 .resume_async_function_after_await(
                                     resumption_context,
                                     Err(reason.clone()),
+                                    task_label.clone(),
                                 )
                                 .and_then(|()| self.continue_resumed_async_function(module))
                             {
@@ -60914,6 +60999,15 @@ impl InterpreterCore {
             ))
     }
 
+    fn estimate_label_vec_bytes(labels: &[Label]) -> u64 {
+        u64::try_from(labels.len())
+            .unwrap_or(u64::MAX)
+            .saturating_mul(std::mem::size_of::<Label>() as u64)
+            .saturating_add(Self::saturating_sum(
+                labels.iter().map(Self::estimate_label_bytes),
+            ))
+    }
+
     fn estimate_labeled_return_bytes(return_value: &LabeledReturn) -> u64 {
         Self::estimate_value_bytes(&return_value.value)
             .saturating_add(Self::estimate_label_bytes(&return_value.label))
@@ -61096,6 +61190,9 @@ impl InterpreterCore {
     fn estimate_async_function_bytes(function: &AsyncFunctionObject) -> u64 {
         MEMORY_ESTIMATE_GENERATOR_BASE_BYTES
             .saturating_add(Self::estimate_value_vec_bytes(&function.saved_registers))
+            .saturating_add(Self::estimate_label_vec_bytes(
+                &function.saved_register_labels,
+            ))
     }
 
     fn async_functions_memory_bytes(&self) -> u64 {
@@ -68121,6 +68218,46 @@ mod async_runtime_tests_current {
         InterpreterCore::new(config, "async-runtime-test")
     }
 
+    fn async_label_test_module(
+        call: Ir3Instruction,
+        body: Vec<Ir3Instruction>,
+        arity: u32,
+        name: &str,
+    ) -> Ir3Module {
+        let mut instructions = vec![call, Ir3Instruction::Halt];
+        instructions.extend(body);
+        test_module_with_functions(
+            instructions,
+            vec![Ir3FunctionDesc {
+                entry: 2,
+                arity,
+                frame_size: arity.max(1),
+                name: Some(name.to_string()),
+                is_generator: false,
+                rest_param_index: None,
+            }],
+        )
+    }
+
+    fn install_async_label_test_closure(core: &mut InterpreterCore) {
+        core.closures.push(ClosureValue {
+            function_index: 0,
+            captured_env: Vec::new(),
+        });
+        core.mutate_registers(|registers| {
+            registers[3] = Value::AsyncFunction(0);
+        });
+    }
+
+    fn async_label_test_result_handle(
+        core: &InterpreterCore,
+    ) -> crate::promise_model::PromiseHandle {
+        match core.registers.get(1) {
+            Some(Value::Promise(handle)) => crate::promise_model::PromiseHandle(*handle),
+            other => panic!("async call should leave result Promise in r1, got {other:?}"),
+        }
+    }
+
     fn shared_payload_values_bd_6pdka() -> [Value; 3] {
         let bigint = Value::BigInt(Arc::from("9".repeat(257)));
         let builtin =
@@ -69259,6 +69396,353 @@ mod async_runtime_tests_current {
             .get(crate::promise_model::PromiseHandle(0))
             .expect("synthetic await promise should exist");
         assert_eq!(promise.label, crate::ifc_artifacts::Label::Secret);
+    }
+
+    #[test]
+    fn async_direct_return_preserves_argument_label_bd_ur3tk_18() {
+        let module = async_label_test_module(
+            Ir3Instruction::Call {
+                callee: 3,
+                args: RegRange {
+                    start: 10,
+                    count: 1,
+                },
+                dst: 1,
+            },
+            vec![Ir3Instruction::AsyncReturn { value_reg: 0 }],
+            1,
+            "direct_async_return_label",
+        );
+        let mut core = test_interpreter();
+        install_async_label_test_closure(&mut core);
+        core.write_reg_with_label(10, Value::str("secret-return"), Label::Secret)
+            .expect("async argument should be writable");
+
+        core.execute(&module)
+            .expect("direct async return should resolve");
+
+        let record = core
+            .promise_store
+            .get(async_label_test_result_handle(&core))
+            .expect("result Promise should exist");
+        assert_eq!(record.label, Label::Secret);
+        assert!(matches!(
+            &record.state,
+            crate::promise_model::PromiseState::Fulfilled(
+                crate::object_model::JsValue::Str(value)
+            ) if value == "secret-return"
+        ));
+    }
+
+    #[test]
+    fn async_direct_throw_preserves_argument_label_bd_ur3tk_18() {
+        let module = async_label_test_module(
+            Ir3Instruction::Call {
+                callee: 3,
+                args: RegRange {
+                    start: 10,
+                    count: 1,
+                },
+                dst: 1,
+            },
+            vec![Ir3Instruction::AsyncThrow { error_reg: 0 }],
+            1,
+            "direct_async_throw_label",
+        );
+        let mut core = test_interpreter();
+        install_async_label_test_closure(&mut core);
+        core.write_reg_with_label(10, Value::str("secret-rejection"), Label::Secret)
+            .expect("async rejection argument should be writable");
+
+        core.execute(&module)
+            .expect("direct async throw should reject its Promise");
+
+        let record = core
+            .promise_store
+            .get(async_label_test_result_handle(&core))
+            .expect("result Promise should exist");
+        assert_eq!(record.label, Label::Secret);
+        assert!(matches!(
+            &record.state,
+            crate::promise_model::PromiseState::Rejected(
+                crate::object_model::JsValue::Str(value)
+            ) if value == "secret-rejection"
+        ));
+    }
+
+    #[test]
+    fn async_method_preserves_receiver_label_bd_ur3tk_18() {
+        let module = async_label_test_module(
+            Ir3Instruction::CallMethod {
+                receiver: 2,
+                callee: 3,
+                args: RegRange {
+                    start: 10,
+                    count: 0,
+                },
+                dst: 1,
+            },
+            vec![
+                Ir3Instruction::LoadThis { dst: 0 },
+                Ir3Instruction::AsyncReturn { value_reg: 0 },
+            ],
+            0,
+            "async_method_receiver_label",
+        );
+        let mut core = test_interpreter();
+        install_async_label_test_closure(&mut core);
+        core.write_reg_with_label(2, Value::str("secret-receiver"), Label::Secret)
+            .expect("method receiver should be writable");
+
+        core.execute(&module).expect("async method should resolve");
+
+        let record = core
+            .promise_store
+            .get(async_label_test_result_handle(&core))
+            .expect("result Promise should exist");
+        assert_eq!(record.label, Label::Secret);
+        assert!(matches!(
+            &record.state,
+            crate::promise_model::PromiseState::Fulfilled(
+                crate::object_model::JsValue::Str(value)
+            ) if value == "secret-receiver"
+        ));
+    }
+
+    #[test]
+    fn async_method_preserves_argument_label_bd_ur3tk_18() {
+        let module = async_label_test_module(
+            Ir3Instruction::CallMethod {
+                receiver: 2,
+                callee: 3,
+                args: RegRange {
+                    start: 10,
+                    count: 1,
+                },
+                dst: 1,
+            },
+            vec![Ir3Instruction::AsyncReturn { value_reg: 0 }],
+            1,
+            "async_method_argument_label",
+        );
+        let mut core = test_interpreter();
+        install_async_label_test_closure(&mut core);
+        core.write_reg_with_label(10, Value::str("secret-argument"), Label::Secret)
+            .expect("method argument should be writable");
+
+        core.execute(&module)
+            .expect("async method should preserve its argument label");
+
+        let record = core
+            .promise_store
+            .get(async_label_test_result_handle(&core))
+            .expect("result Promise should exist");
+        assert_eq!(record.label, Label::Secret);
+        assert!(matches!(
+            &record.state,
+            crate::promise_model::PromiseState::Fulfilled(
+                crate::object_model::JsValue::Str(value)
+            ) if value == "secret-argument"
+        ));
+    }
+
+    #[test]
+    fn async_immediate_await_joins_handle_and_settlement_labels_bd_ur3tk_18() {
+        let module = async_label_test_module(
+            Ir3Instruction::Call {
+                callee: 3,
+                args: RegRange {
+                    start: 10,
+                    count: 1,
+                },
+                dst: 1,
+            },
+            vec![
+                Ir3Instruction::AwaitValue { promise_reg: 0 },
+                Ir3Instruction::AsyncReturn { value_reg: 0 },
+            ],
+            1,
+            "immediate_await_label_join",
+        );
+        let mut core = test_interpreter();
+        install_async_label_test_closure(&mut core);
+        let awaited = core.promise_store.create();
+        core.promise_store
+            .fulfill(
+                awaited,
+                crate::object_model::JsValue::Str("public-payload".to_string()),
+                Label::Public,
+                &mut core.event_loop.microtasks,
+            )
+            .expect("awaited Promise should be fulfillable");
+        core.write_reg_with_label(10, Value::Promise(awaited.0), Label::Secret)
+            .expect("awaited handle should be writable");
+
+        core.execute(&module)
+            .expect("immediate fulfilled await should resolve");
+
+        let record = core
+            .promise_store
+            .get(async_label_test_result_handle(&core))
+            .expect("result Promise should exist");
+        assert_eq!(record.label, Label::Secret);
+        assert!(matches!(
+            &record.state,
+            crate::promise_model::PromiseState::Fulfilled(
+                crate::object_model::JsValue::Str(value)
+            ) if value == "public-payload"
+        ));
+    }
+
+    #[test]
+    fn async_immediate_rejection_joins_handle_label_bd_ur3tk_18() {
+        let module = async_label_test_module(
+            Ir3Instruction::Call {
+                callee: 3,
+                args: RegRange {
+                    start: 10,
+                    count: 1,
+                },
+                dst: 1,
+            },
+            vec![
+                Ir3Instruction::AwaitValue { promise_reg: 0 },
+                Ir3Instruction::AsyncReturn { value_reg: 0 },
+            ],
+            1,
+            "immediate_await_rejection_label_join",
+        );
+        let mut core = test_interpreter();
+        install_async_label_test_closure(&mut core);
+        let awaited = core.promise_store.create();
+        core.promise_store
+            .reject(
+                awaited,
+                crate::object_model::JsValue::Str("public-reason".to_string()),
+                Label::Public,
+                &mut core.event_loop.microtasks,
+            )
+            .expect("awaited Promise should be rejectable");
+        core.write_reg_with_label(10, Value::Promise(awaited.0), Label::Secret)
+            .expect("awaited handle should be writable");
+
+        core.execute(&module)
+            .expect("immediate rejected await should reject its result Promise");
+
+        let record = core
+            .promise_store
+            .get(async_label_test_result_handle(&core))
+            .expect("result Promise should exist");
+        assert_eq!(record.label, Label::Secret);
+        assert!(matches!(
+            &record.state,
+            crate::promise_model::PromiseState::Rejected(
+                crate::object_model::JsValue::Str(value)
+            ) if value == "public-reason"
+        ));
+    }
+
+    #[test]
+    fn async_pending_await_restores_labels_and_joins_fulfillment_bd_ur3tk_18() {
+        let module = async_label_test_module(
+            Ir3Instruction::Call {
+                callee: 3,
+                args: RegRange {
+                    start: 10,
+                    count: 2,
+                },
+                dst: 1,
+            },
+            vec![
+                Ir3Instruction::AwaitValue { promise_reg: 0 },
+                Ir3Instruction::AsyncReturn { value_reg: 0 },
+            ],
+            2,
+            "pending_await_fulfillment_label_join",
+        );
+        let mut core = test_interpreter();
+        install_async_label_test_closure(&mut core);
+        let awaited = core.promise_store.create();
+        core.write_reg_with_label(10, Value::Promise(awaited.0), Label::Confidential)
+            .expect("awaited handle should be writable");
+        core.write_reg_with_label(11, Value::str("preserved-local"), Label::Internal)
+            .expect("unrelated local should be writable");
+
+        core.execute(&module).expect("pending await should suspend");
+        let async_result = async_label_test_result_handle(&core);
+        let suspended = &core.async_functions[0];
+        assert_eq!(
+            suspended.saved_registers.len(),
+            suspended.saved_register_labels.len(),
+            "value and label snapshots must remain parallel"
+        );
+        assert_eq!(suspended.saved_registers[1], Value::str("preserved-local"));
+        assert_eq!(suspended.saved_register_labels[1], Label::Internal);
+
+        core.fulfill_promise(awaited, crate::object_model::JsValue::Int(7), Label::Secret)
+            .expect("awaited Promise should be fulfillable");
+        core.drain_microtasks(Some(&module))
+            .expect("pending fulfillment should resume");
+
+        let record = core
+            .promise_store
+            .get(async_result)
+            .expect("result Promise should exist");
+        assert_eq!(record.label, Label::Secret);
+        assert_eq!(
+            record.state,
+            crate::promise_model::PromiseState::Fulfilled(crate::object_model::JsValue::Int(7))
+        );
+        assert!(core.async_functions[0].saved_registers.is_empty());
+        assert!(core.async_functions[0].saved_register_labels.is_empty());
+    }
+
+    #[test]
+    fn async_pending_rejection_joins_handle_and_settlement_labels_bd_ur3tk_18() {
+        let module = async_label_test_module(
+            Ir3Instruction::Call {
+                callee: 3,
+                args: RegRange {
+                    start: 10,
+                    count: 1,
+                },
+                dst: 1,
+            },
+            vec![
+                Ir3Instruction::AwaitValue { promise_reg: 0 },
+                Ir3Instruction::AsyncReturn { value_reg: 0 },
+            ],
+            1,
+            "pending_await_rejection_label_join",
+        );
+        let mut core = test_interpreter();
+        install_async_label_test_closure(&mut core);
+        let awaited = core.promise_store.create();
+        core.write_reg_with_label(10, Value::Promise(awaited.0), Label::Confidential)
+            .expect("awaited handle should be writable");
+
+        core.execute(&module).expect("pending await should suspend");
+        let async_result = async_label_test_result_handle(&core);
+        core.reject_promise(
+            awaited,
+            crate::object_model::JsValue::Str("secret-reason".to_string()),
+            Label::Secret,
+        )
+        .expect("awaited Promise should be rejectable");
+        core.drain_microtasks(Some(&module))
+            .expect("pending rejection should resume");
+
+        let record = core
+            .promise_store
+            .get(async_result)
+            .expect("result Promise should exist");
+        assert_eq!(record.label, Label::Secret);
+        assert!(matches!(
+            &record.state,
+            crate::promise_model::PromiseState::Rejected(
+                crate::object_model::JsValue::Str(value)
+            ) if value == "secret-reason"
+        ));
     }
 
     /// bd-n2mjy: a HostCall whose arg register carries a Secret label must
@@ -73274,6 +73758,10 @@ mod async_runtime_tests_current {
             closure_index: Some(3),
             saved_ip: 5,
             saved_registers: saved.clone(),
+            saved_register_labels: vec![Label::Custom {
+                name: "async-register-label".repeat(37),
+                level: 3,
+            }],
             saved_register_base: 0,
             phase: AsyncFunctionPhase::SuspendedAwait,
             result_promise: 7,
@@ -91247,6 +91735,7 @@ mod tests {
             closure_index: Some(0),
             saved_ip: 0,
             saved_registers: Vec::new(),
+            saved_register_labels: Vec::new(),
             saved_register_base: 0,
             phase: AsyncFunctionPhase::Executing,
             result_promise,
@@ -91275,7 +91764,7 @@ mod tests {
 
         let frame = core.call_stack.pop().expect("async frame should exist");
         let outcome = core
-            .complete_async_frame(frame, Ok(Value::str("done")))
+            .complete_async_frame(frame, Ok(Value::str("done")), Label::Public)
             .expect("async completion should settle promise");
         assert_eq!(outcome, None);
         assert_eq!(core.ip, 321);
@@ -94263,6 +94752,7 @@ mod tests {
                 closure_index: None,
                 saved_ip: 0,
                 saved_registers: Vec::new(),
+                saved_register_labels: Vec::new(),
                 saved_register_base: 0,
                 phase: AsyncFunctionPhase::SuspendedStart,
                 result_promise: 0, // will be set when called

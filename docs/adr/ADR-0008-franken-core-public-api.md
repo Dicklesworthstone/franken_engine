@@ -120,7 +120,7 @@ the owning type's module tier and Rust visibility rules.
 ### Stable Boundary Modules
 
 - `ast`: constants `CANONICAL_AST_CONTRACT_VERSION`, `CANONICAL_AST_SCHEMA_VERSION`, `CANONICAL_AST_HASH_ALGORITHM`, `CANONICAL_AST_HASH_PREFIX`; enums `ParseGoal`, `Statement`, `ImportClause`, `ExportKind`, `BindingPattern`, `VariableDeclarationKind`, `MethodKind`, `BinaryOperator`, `UnaryOperator`, `AssignmentOperator`, `ArrowBody`, `Expression`; structs `SourceSpan`, `SyntaxTree`, `ImportSpecifier`, `ImportDeclaration`, `NamedExportClause`, `ExportDeclaration`, `ObjectPatternProperty`, `VariableDeclarator`, `VariableDeclaration`, `ExpressionStatement`, `BlockStatement`, `IfStatement`, `ForStatement`, `ForInStatement`, `ForOfStatement`, `LabeledStatement`, `WhileStatement`, `DoWhileStatement`, `ReturnStatement`, `ThrowStatement`, `CatchClause`, `TryCatchStatement`, `SwitchCase`, `SwitchStatement`, `BreakStatement`, `ContinueStatement`, `FunctionParam`, `FunctionDeclaration`, `MethodDefinition`, `ClassDeclaration`, `ObjectProperty`.
-- `baseline_interpreter`: constants `DETERMINISTIC_PROFILE_LABEL`, `THROUGHPUT_PROFILE_LABEL`, `LEGACY_QUICKJS_PROFILE_LABEL`, `LEGACY_V8_PROFILE_LABEL`; type aliases `ExtensionId`, `ObjectRef`, `PropertyKey`; trait `InterpreterHook`; enums `Value`, `BuiltinFunctionKind`, `AllocKind`, `FunctionRef`, `HookAction`, `InterpreterError`, `ConsoleLevel`, `LaneChoice`, `LaneReason`; structs `ActiveTimer`, `Float64`, `BuiltinFunction`, `ObjectId`, `HeapObject`, `AccessorProperty`, `ChallengeToken`, `HookContext`, `DecisionReceipt`, `EvidenceLog`, `InterpreterConfig`, `InterpreterEvent`, `ConsoleEntry`, `ExecutionResult`, `ExecutionSeed`, `EagerExecutionSeed`, `InterpreterCore`, `QuickJsLane`, `V8Lane`, `RoutedResult`, `LaneRouter`.
+- `baseline_interpreter`: constants `DETERMINISTIC_PROFILE_LABEL`, `THROUGHPUT_PROFILE_LABEL`, `LEGACY_QUICKJS_PROFILE_LABEL`, `LEGACY_V8_PROFILE_LABEL`; type aliases `ExtensionId`, `ObjectRef`, `PropertyKey`; trait `InterpreterHook`; enums `Value`, `BuiltinFunctionKind`, `AllocKind`, `FunctionRef`, `HookAction`, `HookPropertyKey`, `HookPropertyKeyCompatibilityError`, `InterpreterError`, `ConsoleLevel`, `LaneChoice`, `LaneReason`; structs `ActiveTimer`, `Float64`, `BuiltinFunction`, `ObjectId`, `HeapObject`, `AccessorProperty`, `ChallengeToken`, `HookContext`, `DecisionReceipt`, `EvidenceLog`, `InterpreterConfig`, `InterpreterEvent`, `ConsoleEntry`, `ExecutionResult`, `ExecutionSeed`, `EagerExecutionSeed`, `InterpreterCore`, `QuickJsLane`, `V8Lane`, `RoutedResult`, `LaneRouter`.
 - `capability`: enums `RuntimeCapability`, `ProfileKind`; structs `CapabilityProfile`, `CapabilityDenied`; functions `require_capability`, `require_all`.
 - `closure_model`: enums `EnvValue`, `EnvironmentKind`, `ScopeError`; structs `ClosureHandle`, `EnvironmentHandle`, `BindingSlot`, `EnvironmentRecord`, `ClosureCapture`, `Closure`, `ScopeChain`, `ClosureStore`.
 - `control_plane`: public re-exports from `franken_decision`, `franken_evidence`, and `franken_kernel`; enums `DecisionVerdict`, `ControlPlaneAdapterError`; traits `ContextAdapter`, `DecisionAdapter`, `EvidenceEmitter`; structs `DecisionRequest`, `AdapterEvent`, `KernelContext`, `ContractDecisionAdapter`, `InMemoryEvidenceEmitter`; function `evaluate_contract`.
@@ -417,6 +417,35 @@ The approved source contract is:
    well-known-symbol schema in interpreter-owned seed-tracked state. That state
    is authoritative; it must never be reconstructed from display strings or
    ordinary user-visible property names.
+
+### Typed property-hook compatibility checkpoint (`bd-n8eta.4.4`)
+
+Both executable lanes retain the frozen `PropertyKey = String` alias and
+`InterpreterHook::pre_property_access` method. They add the isomorphic public
+`HookPropertyKey::{String(JsString), Symbol(SymbolId)}` carrier and the
+defaulted `InterpreterHook::pre_property_access_typed` method. The runtime
+calls the typed method for module-backed object property operations before
+lookup or mutation.
+
+The default method is the compatibility adapter for every existing hook
+implementation. It calls `pre_property_access` only for a well-formed string.
+A Symbol or non-well-formed string returns
+`HookPropertyKeyCompatibilityError` without invoking the legacy callback; the
+interpreter maps that error to a fail-closed `TypeError` before the heap
+operation. A typed hook overrides the new method and receives the exact
+`SymbolId` or UTF-16 units. The ordinary string that resembles a diagnostic
+such as `"~pk~s:14"` therefore remains a string and never aliases
+`SymbolId(14)`.
+
+This is an additive trait migration: existing implementations remain
+source-compatible because the new method has a default, and the old method is
+not deprecated until downstream typed-hook adoption can be measured.
+`GuardplaneAdapter` deliberately remains a legacy implementation in this
+checkpoint, so unrepresentable keys fail closed through the default adapter;
+`GuardplaneOperation`, evidence, heap, AST, and IR wire formats do not change.
+Primitive and isolated internal paths that have no module-backed `ObjectRef`
+retain their legacy representability preflight rather than inventing a
+sentinel target.
 
 This evolution does not require an AST or IR schema change: computed property
 keys already travel through dynamic value registers. It does require the

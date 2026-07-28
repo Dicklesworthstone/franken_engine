@@ -2135,7 +2135,67 @@ struct CallFrame {
 
 pub type ExtensionId = String;
 pub type ObjectRef = ObjectId;
+/// Legacy well-formed string property key accepted by
+/// [`InterpreterHook::pre_property_access`].
 pub type PropertyKey = String;
+
+/// Exact property-key identity presented to interpreter hooks.
+///
+/// This type is deliberately distinct from the legacy [`PropertyKey`] alias:
+/// a `Symbol` never crosses the compatibility callback as a display string,
+/// and a non-well-formed ECMAScript string retains its exact UTF-16 units.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum HookPropertyKey {
+    String(JsString),
+    Symbol(SymbolId),
+}
+
+impl HookPropertyKey {
+    /// Borrow the frozen legacy callback key when that view is lossless.
+    pub fn as_legacy_str(&self) -> Result<&str, HookPropertyKeyCompatibilityError> {
+        match self {
+            Self::String(key) => key
+                .as_str()
+                .ok_or(HookPropertyKeyCompatibilityError::NonWellFormedString),
+            Self::Symbol(_) => Err(HookPropertyKeyCompatibilityError::Symbol),
+        }
+    }
+
+    /// Convert to the frozen legacy callback key when that conversion is
+    /// lossless.
+    pub fn to_legacy_property_key(&self) -> Result<PropertyKey, HookPropertyKeyCompatibilityError> {
+        self.as_legacy_str().map(ToOwned::to_owned)
+    }
+}
+
+/// Why the default typed-key adapter cannot call a legacy string-only hook.
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum HookPropertyKeyCompatibilityError {
+    NonWellFormedString,
+    Symbol,
+}
+
+impl fmt::Display for HookPropertyKeyCompatibilityError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::NonWellFormedString => {
+                write!(
+                    f,
+                    "non-well-formed ECMAScript string property key is not representable by the legacy string hook"
+                )
+            }
+            Self::Symbol => {
+                write!(
+                    f,
+                    "Symbol property key is not representable by the legacy string hook"
+                )
+            }
+        }
+    }
+}
+
+impl std::error::Error for HookPropertyKeyCompatibilityError {}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ChallengeToken {
@@ -2447,12 +2507,33 @@ impl Default for EvidenceLog {
 /// `pre_import` is part of the stable hook contract and is invoked on
 /// `ImportModule` during module loading.
 pub trait InterpreterHook: Send + Sync {
+    /// Frozen compatibility callback for well-formed string property keys.
+    ///
+    /// New implementations that need exact strings or Symbols should override
+    /// [`InterpreterHook::pre_property_access_typed`]. The default typed
+    /// adapter calls this method only when conversion is lossless.
     fn pre_property_access(
         &self,
         ctx: &HookContext,
         target: &ObjectRef,
         key: &PropertyKey,
     ) -> HookAction;
+
+    /// Typed property callback used by executable object property operations.
+    ///
+    /// The default implementation preserves existing hook implementations:
+    /// well-formed strings reach [`InterpreterHook::pre_property_access`],
+    /// while Symbols and non-well-formed strings fail closed without invoking
+    /// that legacy callback.
+    fn pre_property_access_typed(
+        &self,
+        ctx: &HookContext,
+        target: &ObjectRef,
+        key: &HookPropertyKey,
+    ) -> Result<HookAction, HookPropertyKeyCompatibilityError> {
+        let legacy_key = key.to_legacy_property_key()?;
+        Ok(self.pre_property_access(ctx, target, &legacy_key))
+    }
 
     fn pre_call(&self, ctx: &HookContext, callee: &FunctionRef, args: &[Value]) -> HookAction;
 
@@ -5416,40 +5497,32 @@ impl InterpreterCore {
         self.decision_receipts.verify_chain()
     }
 
-    fn run_pre_property_access_hook(
-        &self,
-        module: &Ir3Module,
-        target: ObjectId,
-        key: &str,
-    ) -> Result<(), InterpreterError> {
-        let Some(hook) = self.hook.as_ref() else {
-            return Ok(());
-        };
-        let ctx = self.hook_context(module);
-        let property_key = key.to_string();
-        self.enforce_hook_action(hook.pre_property_access(&ctx, &target, &property_key))
+    fn property_hook_compatibility_error(
+        error: HookPropertyKeyCompatibilityError,
+    ) -> InterpreterError {
+        InterpreterError::TypeError {
+            expected: "property key supported by the installed interpreter hook".to_string(),
+            got: error.to_string(),
+        }
     }
 
-    /// Reject runtime keys the frozen String-only hook cannot represent.
-    /// This preflight performs no callback and is safe before any allocation.
-    fn preflight_runtime_property_key_for_hook(
+    /// Preserve fail-closed behavior in legacy-only internal property paths
+    /// that do not have a module-backed object target to present to a hook.
+    fn preflight_legacy_property_key_for_hook(
         &self,
         key: &RuntimePropertyKey,
     ) -> Result<(), InterpreterError> {
         if self.hook.is_none() {
             return Ok(());
         }
-        match key {
-            RuntimePropertyKey::String(key) if key.as_str().is_some() => Ok(()),
-            RuntimePropertyKey::String(_) => Err(InterpreterError::TypeError {
-                expected: "property key representable by legacy string hook".to_string(),
-                got: "non-well-formed ECMAScript string property key".to_string(),
-            }),
-            RuntimePropertyKey::Symbol(_) => Err(InterpreterError::TypeError {
-                expected: "typed property hook support".to_string(),
-                got: "Symbol property access with legacy string hook".to_string(),
-            }),
-        }
+        let hook_key = match key {
+            RuntimePropertyKey::String(key) => HookPropertyKey::String(key.clone()),
+            RuntimePropertyKey::Symbol(symbol) => HookPropertyKey::Symbol(*symbol),
+        };
+        hook_key
+            .as_legacy_str()
+            .map(|_| ())
+            .map_err(Self::property_hook_compatibility_error)
     }
 
     fn run_pre_runtime_property_access_hook(
@@ -5458,16 +5531,19 @@ impl InterpreterCore {
         target: ObjectId,
         key: &RuntimePropertyKey,
     ) -> Result<(), InterpreterError> {
-        self.preflight_runtime_property_key_for_hook(key)?;
-        match key {
-            RuntimePropertyKey::String(key) => {
-                let Some(key) = key.as_str() else {
-                    return Ok(());
-                };
-                self.run_pre_property_access_hook(module, target, key)
-            }
-            RuntimePropertyKey::Symbol(_) => Ok(()),
-        }
+        self.validate_executable_property_key(key)?;
+        let Some(hook) = self.hook.as_ref() else {
+            return Ok(());
+        };
+        let ctx = self.hook_context(module);
+        let hook_key = match key {
+            RuntimePropertyKey::String(key) => HookPropertyKey::String(key.clone()),
+            RuntimePropertyKey::Symbol(symbol) => HookPropertyKey::Symbol(*symbol),
+        };
+        let action = hook
+            .pre_property_access_typed(&ctx, &target, &hook_key)
+            .map_err(Self::property_hook_compatibility_error)?;
+        self.enforce_hook_action(action)
     }
 
     fn run_pre_call_hook(
@@ -7319,7 +7395,7 @@ impl InterpreterCore {
                         // GetV semantics, matching the engine (bd-7zwar —
                         // previously a fail-closed TypeError).
                         Value::Str(text) => {
-                            self.preflight_runtime_property_key_for_hook(&property_key)?;
+                            self.preflight_legacy_property_key_for_hook(&property_key)?;
                             match &property_key {
                                 RuntimePropertyKey::String(key) => {
                                     match key
@@ -7343,7 +7419,7 @@ impl InterpreterCore {
                             }
                         }
                         Value::Symbol(symbol) => {
-                            self.preflight_runtime_property_key_for_hook(&property_key)?;
+                            self.preflight_legacy_property_key_for_hook(&property_key)?;
                             match self.symbol_property_value(*symbol, &property_key) {
                                 Some(value) => {
                                     self.write_reg(dst, value)?;
@@ -7356,7 +7432,7 @@ impl InterpreterCore {
                             }
                         }
                         Value::Generator(_) => {
-                            self.preflight_runtime_property_key_for_hook(&property_key)?;
+                            self.preflight_legacy_property_key_for_hook(&property_key)?;
                             let value = match &property_key {
                                 RuntimePropertyKey::String(key) if key.as_str() == Some("next") => {
                                     Value::BuiltinFunction(BuiltinFunction::generator_next())
@@ -7435,7 +7511,6 @@ impl InterpreterCore {
                             self.write_reg(dst, Value::Bool(true))?;
                         }
                         function_like if Self::function_object_key(&function_like).is_some() => {
-                            self.preflight_runtime_property_key_for_hook(&property_key)?;
                             if let Some(oid) = self.function_object_id(&function_like) {
                                 self.run_pre_runtime_property_access_hook(
                                     module,
@@ -7446,6 +7521,8 @@ impl InterpreterCore {
                                 if let RuntimePropertyKey::String(key) = &property_key {
                                     self.mark_deleted_for_in_iterators(oid, key);
                                 }
+                            } else {
+                                self.preflight_legacy_property_key_for_hook(&property_key)?;
                             }
                             self.write_reg(dst, Value::Bool(true))?;
                         }
@@ -7818,7 +7895,7 @@ impl InterpreterCore {
                     self.ip += 1;
                 }
                 Ir3Instruction::InOp { dst, lhs, rhs } => {
-                    let result = self.eval_in_operator(lhs, rhs)?;
+                    let result = self.eval_in_operator(module, lhs, rhs)?;
                     self.write_reg(dst, result)?;
                     self.ip += 1;
                 }
@@ -9327,27 +9404,34 @@ impl InterpreterCore {
         ))
     }
 
-    fn eval_in_operator(&self, lhs: u32, rhs: u32) -> Result<Value, InterpreterError> {
+    fn eval_in_operator(
+        &self,
+        module: &Ir3Module,
+        lhs: u32,
+        rhs: u32,
+    ) -> Result<Value, InterpreterError> {
         let key = Self::executable_property_key(&self.read_reg(lhs)?);
         self.validate_executable_property_key(&key)?;
-        self.preflight_runtime_property_key_for_hook(&key)?;
         let target = self.read_reg(rhs)?;
         match target {
             Value::Object(object_id) => {
                 self.heap
                     .get(object_id.0 as usize)
                     .ok_or(InterpreterError::ObjectNotFound { id: object_id.0 })?;
+                self.run_pre_runtime_property_access_hook(module, object_id, &key)?;
                 Ok(Value::Bool(
                     self.prototype_chain_has_runtime_key(object_id, &key)?,
                 ))
             }
             function_like if Self::function_object_key(&function_like).is_some() => {
                 let Some(object_id) = self.function_object_id(&function_like) else {
+                    self.preflight_legacy_property_key_for_hook(&key)?;
                     return Ok(Value::Bool(false));
                 };
                 self.heap
                     .get(object_id.0 as usize)
                     .ok_or(InterpreterError::ObjectNotFound { id: object_id.0 })?;
+                self.run_pre_runtime_property_access_hook(module, object_id, &key)?;
                 Ok(Value::Bool(
                     self.prototype_chain_has_runtime_key(object_id, &key)?,
                 ))
@@ -10433,7 +10517,6 @@ impl InterpreterCore {
         key: &RuntimePropertyKey,
         dst: u32,
     ) -> Result<bool, InterpreterError> {
-        self.preflight_runtime_property_key_for_hook(key)?;
         if let (
             Value::BuiltinFunction(BuiltinFunction {
                 kind: BuiltinFunctionKind::Symbol,
@@ -10453,6 +10536,8 @@ impl InterpreterCore {
             if let Some(property) = self.prototype_chain_lookup_runtime_property(object_id, key)? {
                 return self.load_runtime_property(module, receiver, Some(property), dst);
             }
+        } else {
+            self.preflight_legacy_property_key_for_hook(key)?;
         }
 
         if matches!(key, RuntimePropertyKey::String(key) if key.as_str() == Some("prototype"))
@@ -10473,7 +10558,9 @@ impl InterpreterCore {
         key: &RuntimePropertyKey,
         value: Value,
     ) -> Result<bool, InterpreterError> {
-        self.preflight_runtime_property_key_for_hook(key)?;
+        if self.function_object_id(&receiver).is_none() {
+            self.preflight_legacy_property_key_for_hook(key)?;
+        }
         let Some(object_id) = self.ensure_function_object(&receiver)? else {
             return Err(InterpreterError::TypeError {
                 expected: "function".to_string(),
@@ -18352,6 +18439,60 @@ mod tests {
         }
     }
 
+    #[derive(Debug, Default)]
+    struct TypedRecordingHook {
+        keys: Mutex<Vec<HookPropertyKey>>,
+    }
+
+    impl TypedRecordingHook {
+        fn keys(&self) -> Vec<HookPropertyKey> {
+            self.keys.lock().unwrap().clone()
+        }
+    }
+
+    impl InterpreterHook for TypedRecordingHook {
+        fn pre_property_access(
+            &self,
+            _ctx: &HookContext,
+            _target: &ObjectRef,
+            _key: &PropertyKey,
+        ) -> HookAction {
+            panic!("typed property hook must not route through the legacy string callback")
+        }
+
+        fn pre_property_access_typed(
+            &self,
+            _ctx: &HookContext,
+            _target: &ObjectRef,
+            key: &HookPropertyKey,
+        ) -> Result<HookAction, HookPropertyKeyCompatibilityError> {
+            self.keys.lock().unwrap().push(key.clone());
+            Ok(HookAction::Allow)
+        }
+
+        fn pre_call(
+            &self,
+            _ctx: &HookContext,
+            _callee: &FunctionRef,
+            _args: &[Value],
+        ) -> HookAction {
+            HookAction::Allow
+        }
+
+        fn pre_allocation(
+            &self,
+            _ctx: &HookContext,
+            _kind: AllocKind,
+            _size_hint: usize,
+        ) -> HookAction {
+            HookAction::Allow
+        }
+
+        fn pre_import(&self, _ctx: &HookContext, _specifier: &str) -> HookAction {
+            HookAction::Allow
+        }
+    }
+
     #[test]
     fn interpreter_hook_called_on_property_access() {
         let hook = Arc::new(RecordingHook::allow_all());
@@ -18391,6 +18532,187 @@ mod tests {
                 target: oid,
                 key: "secret".to_string(),
             }]
+        );
+    }
+
+    #[test]
+    fn typed_property_hook_default_adapter_is_lossless_bd_n8eta_4_4() {
+        let hook = RecordingHook::allow_all();
+        let ctx = HookContext {
+            extension_id: "typed-adapter".to_string(),
+            instruction_count: 3,
+            current_ip: 2,
+        };
+        let target = ObjectId(7);
+
+        assert_eq!(
+            hook.pre_property_access_typed(
+                &ctx,
+                &target,
+                &HookPropertyKey::String(JsString::from("ordinary")),
+            ),
+            Ok(HookAction::Allow)
+        );
+        assert!(matches!(
+            hook.pre_property_access_typed(
+                &ctx,
+                &target,
+                &HookPropertyKey::String(JsString::from_code_units(&[0xD800])),
+            ),
+            Err(HookPropertyKeyCompatibilityError::NonWellFormedString)
+        ));
+        assert!(matches!(
+            hook.pre_property_access_typed(&ctx, &target, &HookPropertyKey::Symbol(SymbolId(14)),),
+            Err(HookPropertyKeyCompatibilityError::Symbol)
+        ));
+        assert!(matches!(
+            hook.records().as_slice(),
+            [HookRecord::Property { key, .. }] if key == "ordinary"
+        ));
+
+        let exact = HookPropertyKey::String(JsString::from_code_units(&[0xD801]));
+        let wire = serde_json::to_string(&exact).expect("typed hook key should serialize");
+        assert_eq!(
+            serde_json::from_str::<HookPropertyKey>(&wire)
+                .expect("typed hook key should deserialize"),
+            exact
+        );
+        assert_eq!(
+            serde_json::to_string(&HookPropertyKey::Symbol(SymbolId(14)))
+                .expect("Symbol hook key should serialize"),
+            r#"{"Symbol":14}"#
+        );
+    }
+
+    #[test]
+    fn typed_property_hook_preserves_runtime_key_identity_bd_n8eta_4_4() {
+        let mut core = quickjs_test_core();
+        let object = core.alloc_object_with_prototype(None).unwrap();
+        let symbol = core
+            .allocate_private_symbol(Some(JsString::from("hook-key")))
+            .expect("Symbol allocation should succeed");
+        let symbol_diagnostic_string = JsString::from(format!("~pk~s:{}", symbol.0));
+        let exact = JsString::from_code_units(&[0xD800]);
+
+        for (key, value) in [
+            (RuntimePropertyKey::Symbol(symbol), Value::Int(41)),
+            (
+                RuntimePropertyKey::String(symbol_diagnostic_string.clone()),
+                Value::Int(42),
+            ),
+            (RuntimePropertyKey::String(exact.clone()), Value::Int(43)),
+        ] {
+            core.set_object_runtime_property(object, key, value)
+                .expect("typed test property should fit");
+        }
+
+        let legacy_hook = Arc::new(RecordingHook::allow_all());
+        core.set_hook(legacy_hook.clone());
+        core.registers[1] = Value::Object(object);
+        core.registers[2] = Value::Symbol(symbol);
+        let heap_before =
+            serde_json::to_string(&core.heap).expect("legacy hook heap should serialize");
+        assert!(matches!(
+            core.run_loop(&test_module(vec![Ir3Instruction::GetProperty {
+                obj: 1,
+                key: 2,
+                dst: 5,
+            }])),
+            Err(InterpreterError::TypeError { .. })
+        ));
+        assert!(
+            legacy_hook
+                .records_without_startup_module_record()
+                .is_empty()
+        );
+        assert_eq!(
+            serde_json::to_string(&core.heap)
+                .expect("legacy hook heap should serialize after rejection"),
+            heap_before
+        );
+
+        core.ip = 0;
+        let hook = Arc::new(TypedRecordingHook::default());
+        core.set_hook(hook.clone());
+        core.registers[2] = Value::Symbol(SymbolId(u32::MAX));
+        assert!(matches!(
+            core.run_loop(&test_module(vec![Ir3Instruction::GetProperty {
+                obj: 1,
+                key: 2,
+                dst: 5,
+            }])),
+            Err(InterpreterError::TypeError { got, .. })
+                if got.contains("unresolved Symbol id")
+        ));
+        assert!(
+            hook.keys().is_empty(),
+            "typed hook must not observe unresolved Symbol identity"
+        );
+
+        core.ip = 0;
+        core.registers[2] = Value::Symbol(symbol);
+        core.registers[3] = Value::Str(symbol_diagnostic_string.clone());
+        core.registers[4] = Value::Str(exact.clone());
+        core.registers[9] = Value::Int(99);
+        assert!(matches!(
+            core.run_loop(&test_module(vec![
+                Ir3Instruction::GetProperty {
+                    obj: 1,
+                    key: 2,
+                    dst: 5,
+                },
+                Ir3Instruction::GetProperty {
+                    obj: 1,
+                    key: 3,
+                    dst: 6,
+                },
+                Ir3Instruction::GetProperty {
+                    obj: 1,
+                    key: 4,
+                    dst: 7,
+                },
+                Ir3Instruction::InOp {
+                    dst: 8,
+                    lhs: 2,
+                    rhs: 1,
+                },
+                Ir3Instruction::SetProperty {
+                    obj: 1,
+                    key: 2,
+                    val: 9,
+                },
+                Ir3Instruction::GetProperty {
+                    obj: 1,
+                    key: 2,
+                    dst: 10,
+                },
+                Ir3Instruction::DeleteProperty {
+                    obj: 1,
+                    key: 2,
+                    dst: 11,
+                },
+                Ir3Instruction::Halt,
+            ])),
+            Err(InterpreterError::Halted)
+        ));
+
+        assert_eq!(core.read_reg(5), Ok(Value::Int(41)));
+        assert_eq!(core.read_reg(6), Ok(Value::Int(42)));
+        assert_eq!(core.read_reg(7), Ok(Value::Int(43)));
+        assert_eq!(core.read_reg(8), Ok(Value::Bool(true)));
+        assert_eq!(core.read_reg(10), Ok(Value::Int(99)));
+        assert_eq!(core.read_reg(11), Ok(Value::Bool(true)));
+        assert_eq!(
+            hook.keys(),
+            vec![
+                HookPropertyKey::Symbol(symbol),
+                HookPropertyKey::String(symbol_diagnostic_string),
+                HookPropertyKey::String(exact),
+                HookPropertyKey::Symbol(symbol),
+                HookPropertyKey::Symbol(symbol),
+                HookPropertyKey::Symbol(symbol),
+                HookPropertyKey::Symbol(symbol),
+            ]
         );
     }
 
@@ -18457,7 +18779,7 @@ mod tests {
         core.registers[1] = Value::Str(d800.clone());
         core.registers[2] = Value::Object(object);
         assert!(matches!(
-            core.eval_in_operator(1, 2),
+            core.eval_in_operator(&module, 1, 2),
             Err(InterpreterError::TypeError { .. })
         ));
         assert!(hook.records().is_empty());

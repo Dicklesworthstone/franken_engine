@@ -140,7 +140,7 @@ this order:
 | `bd-n8eta.4.6` | Stages both public runtime crates at unreleased `0.2.0`, marks both `Value` enums non-exhaustive, preserves historical serde bytes, and records the clean downstream match audit. |
 | `bd-n8eta.4.2` | Engine uses typed Symbol identity for lookup, ordering, replay, memory, and the correct consumer filters. |
 | `bd-n8eta.4.3` | Core adds the same executable value/key contract and proves QuickJS/V8 profile parity. |
-| `bd-n8eta.4.4` | The frozen string-only property-hook boundary gains an explicitly reviewed typed-key migration without a string alias. |
+| `bd-n8eta.4.4` | Both lanes add exact `HookPropertyKey` and a defaulted typed callback; legacy hooks remain source-compatible and reject Symbols/exact-only strings without callback or heap effects. |
 | `bd-n8eta.4.5` | Node/Bun donor cases and lockstep engine/core tests prove the combined surface before DISC-013 closes. |
 
 Legacy string-only heap payloads must remain readable, and a historical string
@@ -189,10 +189,11 @@ exposes donor-compatible `URIError`/`ERR_INVALID_URI`, while core retains
 coverage proves the engine/core namespace contract, not Node's static
 named-export lexer.
 
-Independent engine executable Symbol-key and later cross-lane Symbol closeout,
-typed-hook, accessor-continuation, and engine `CopyDataProperties` parity work
-remains. The stable descriptor-model `PropertyKey::String(String)` still
-deliberately rejects non-well-formed strings.
+The independent engine executable Symbol-key and dual-lane typed-hook slices
+are now implemented. Later cross-lane Symbol closeout,
+accessor-continuation, and engine `CopyDataProperties` parity work remains.
+The stable descriptor-model `PropertyKey::String(String)` still deliberately
+rejects non-well-formed strings.
 
 The `js_string`, `object_model`, and `baseline_interpreter` rows remain
 `pending_graduation`. Required adoption evidence must preserve all of these

@@ -5456,7 +5456,7 @@ enum FinallyMode {
     /// Entered because an exception was in flight.  The pending exception is
     /// stored in `InterpreterCore::pending_exception`.
     Exception,
-    /// Entered because a return was in flight.  The pending value is stored
+    /// Entered because a return was in flight.  The pending labeled completion is stored
     /// in `InterpreterCore::pending_return`.
     Return,
 }
@@ -5468,7 +5468,7 @@ enum AbruptCompletion {
     /// A thrown value plus its IFC label (bd-l0d6z): the label must survive
     /// suspension so a later catch binding inherits the thrown value's taint.
     Exception(Value, Label, usize),
-    Return(Value, usize),
+    Return(LabeledReturn, usize),
 }
 
 impl AbruptCompletion {
@@ -5477,6 +5477,13 @@ impl AbruptCompletion {
             Self::Exception(_, _, depth) | Self::Return(_, depth) => *depth,
         }
     }
+}
+
+/// Return completion carried while control unwinds through `finally`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct LabeledReturn {
+    value: Value,
+    label: Label,
 }
 
 // ---------------------------------------------------------------------------
@@ -5716,7 +5723,7 @@ struct ClosureValue {
     captured_env: Vec<ScopeFrame>,
 }
 
-type RestoredAbruptCompletionState = (Option<(Value, Label)>, Option<Value>);
+type RestoredAbruptCompletionState = (Option<(Value, Label)>, Option<LabeledReturn>);
 
 /// A call stack frame.
 #[derive(Debug, Clone)]
@@ -5752,8 +5759,8 @@ struct CallFrame {
     /// IFC label for `saved_pending_exception` (bd-l0d6z): the thrown value's
     /// label must survive call-boundary save/restore.
     saved_pending_exception_label: Label,
-    /// Caller return state saved for the same reason.
-    saved_pending_return: Option<Value>,
+    /// Caller return value and IFC label saved for the same reason.
+    saved_pending_return: Option<LabeledReturn>,
     /// Count of suspended abrupt completions before entering the callee.
     saved_suspended_abrupt_depth: usize,
     /// Count of active finally modes before entering the callee.
@@ -7061,7 +7068,7 @@ struct ModuleExecutionSnapshot {
     pending_exception: Option<Value>,
     pending_exception_label: Label,
     pending_hostcall_result_label: Option<Label>,
-    pending_return: Option<Value>,
+    pending_return: Option<LabeledReturn>,
     suspended_abrupt_completions: Vec<AbruptCompletion>,
     finally_modes: Vec<FinallyMode>,
     scope_chain: ScopeChain,
@@ -8308,8 +8315,8 @@ pub struct InterpreterCore {
     /// `HostCall` consumes this exactly once and joins it with the ordinary
     /// argument label before writing the destination register.
     pending_hostcall_result_label: Option<Label>,
-    /// A pending return value during unwinding through finally blocks.
-    pending_return: Option<Value>,
+    /// A pending return value and IFC label during unwinding through finally blocks.
+    pending_return: Option<LabeledReturn>,
     /// Saved outer abrupt completion state that was temporarily suspended by a
     /// newer local throw/return or by exception unwinding across nested calls
     /// or intermediary finally blocks. If the newer abrupt completion is
@@ -30324,7 +30331,7 @@ impl InterpreterCore {
         let previous_scope_bytes = self.scope_chain_memory_bytes();
         let previous_closure_bytes = self.closures_memory_bytes();
         let previous_call_stack_bytes = self.call_stack_memory_bytes();
-        if let Some(frame) = self.call_stack.pop() {
+        if let Some(mut frame) = self.call_stack.pop() {
             // ES2020 §9.2.2 step 13: if this is a constructor call and the
             // return value is not an object, use the allocated `this` object
             // instead.
@@ -30335,7 +30342,7 @@ impl InterpreterCore {
                 _ => (return_val, return_label),
             };
             let async_function_id = frame.async_function_id;
-            self.restore_call_frame_state(&frame);
+            self.restore_call_frame_state(&mut frame);
             self.apply_scope_closure_call_stack_memory_delta(
                 previous_scope_bytes,
                 previous_closure_bytes,
@@ -30356,15 +30363,16 @@ impl InterpreterCore {
         }
     }
 
-    fn restore_call_frame_state(&mut self, frame: &CallFrame) {
+    fn restore_call_frame_state(&mut self, frame: &mut CallFrame) {
         self.register_base = frame.register_base;
         self.suspended_abrupt_completions
             .truncate(frame.saved_suspended_abrupt_depth);
         self.finally_modes.truncate(frame.saved_finally_mode_depth);
         self.restore_scope_chain_for_frame(frame);
-        self.pending_exception = frame.saved_pending_exception.clone();
-        self.pending_exception_label = frame.saved_pending_exception_label.clone();
-        self.pending_return = frame.saved_pending_return.clone();
+        self.pending_exception = frame.saved_pending_exception.take();
+        self.pending_exception_label =
+            std::mem::replace(&mut frame.saved_pending_exception_label, Label::Public);
+        self.pending_return = frame.saved_pending_return.take();
     }
 
     fn settle_async_function(
@@ -30401,7 +30409,7 @@ impl InterpreterCore {
 
     fn complete_async_frame(
         &mut self,
-        frame: CallFrame,
+        mut frame: CallFrame,
         resolution: Result<Value, Value>,
     ) -> Result<Option<Value>, InterpreterError> {
         let async_id = frame
@@ -30415,7 +30423,7 @@ impl InterpreterCore {
         let previous_call_stack_bytes = self
             .call_stack_memory_bytes()
             .saturating_add(Self::estimate_call_frame_bytes(&frame));
-        self.restore_call_frame_state(&frame);
+        self.restore_call_frame_state(&mut frame);
         self.apply_scope_closure_call_stack_memory_delta(
             previous_scope_bytes,
             previous_closure_bytes,
@@ -30897,7 +30905,7 @@ impl InterpreterCore {
     fn suspend_abrupt_completion(
         &mut self,
         pending_exception: Option<(Value, Label)>,
-        pending_return: Option<Value>,
+        pending_return: Option<LabeledReturn>,
     ) -> Result<(), InterpreterError> {
         debug_assert!(
             pending_exception.is_none() || pending_return.is_none(),
@@ -33325,12 +33333,22 @@ impl InterpreterCore {
                     // unwind through enclosing finally blocks before it can
                     // complete.
                     self.suspend_current_abrupt_completion()?;
-                    self.replace_pending_abrupt_slots(None, Some(return_val.clone()))?;
+                    self.replace_pending_abrupt_slots(
+                        None,
+                        Some(LabeledReturn {
+                            value: return_val,
+                            label: return_label,
+                        }),
+                    )?;
                     if let Some(finally_target) = self.pop_current_finally_target() {
                         self.ip = finally_target;
                     } else {
-                        let _ = self.take_pending_return_slot();
-                        if let Some(final_value) = self.complete_return(return_val, return_label)? {
+                        let pending_return = self
+                            .take_pending_return_slot()
+                            .expect("Return installed a pending completion before direct return");
+                        if let Some(final_value) =
+                            self.complete_return(pending_return.value, pending_return.label)?
+                        {
                             return Ok(final_value);
                         }
                     }
@@ -34622,14 +34640,15 @@ impl InterpreterCore {
                             }
                         }
                         FinallyMode::Return => {
-                            if let Some(return_val) = self.take_pending_return_slot() {
+                            if let Some(pending_return) = self.take_pending_return_slot() {
                                 if let Some(finally_target) = self.pop_current_finally_target() {
-                                    self.replace_pending_abrupt_slots(None, Some(return_val))?;
+                                    self.replace_pending_abrupt_slots(None, Some(pending_return))?;
                                     self.ip = finally_target;
                                 } else {
-                                    if let Some(final_value) =
-                                        self.complete_return(return_val, Label::Public)?
-                                    {
+                                    if let Some(final_value) = self.complete_return(
+                                        pending_return.value,
+                                        pending_return.label,
+                                    )? {
                                         return Ok(final_value);
                                     }
                                 }
@@ -60895,12 +60914,19 @@ impl InterpreterCore {
             ))
     }
 
+    fn estimate_labeled_return_bytes(return_value: &LabeledReturn) -> u64 {
+        Self::estimate_value_bytes(&return_value.value)
+            .saturating_add(Self::estimate_label_bytes(&return_value.label))
+    }
+
     fn estimate_abrupt_completion_bytes(completion: &AbruptCompletion) -> u64 {
         match completion {
             AbruptCompletion::Exception(value, label, _) => {
                 Self::estimate_value_bytes(value).saturating_add(Self::estimate_label_bytes(label))
             }
-            AbruptCompletion::Return(value, _) => Self::estimate_value_bytes(value),
+            AbruptCompletion::Return(return_value, _) => {
+                Self::estimate_labeled_return_bytes(return_value)
+            }
         }
     }
 
@@ -60913,7 +60939,7 @@ impl InterpreterCore {
             .saturating_add(
                 self.pending_return
                     .as_ref()
-                    .map(Self::estimate_value_bytes)
+                    .map(Self::estimate_labeled_return_bytes)
                     .unwrap_or(0),
             )
     }
@@ -60921,7 +60947,7 @@ impl InterpreterCore {
     fn replace_pending_abrupt_slots(
         &mut self,
         exception: Option<(Value, Label)>,
-        return_value: Option<Value>,
+        return_value: Option<LabeledReturn>,
     ) -> Result<(), InterpreterError> {
         debug_assert!(
             exception.is_none() || return_value.is_none(),
@@ -60937,7 +60963,7 @@ impl InterpreterCore {
             .saturating_add(
                 return_value
                     .as_ref()
-                    .map(Self::estimate_value_bytes)
+                    .map(Self::estimate_labeled_return_bytes)
                     .unwrap_or(0),
             );
         self.apply_memory_component_delta(previous_bytes, next_bytes)?;
@@ -60984,11 +61010,11 @@ impl InterpreterCore {
         Some((value, label))
     }
 
-    fn take_pending_return_slot(&mut self) -> Option<Value> {
+    fn take_pending_return_slot(&mut self) -> Option<LabeledReturn> {
         let value = self.pending_return.take()?;
         self.estimated_memory_bytes = self
             .estimated_memory_bytes
-            .saturating_sub(Self::estimate_value_bytes(&value));
+            .saturating_sub(Self::estimate_labeled_return_bytes(&value));
         Some(value)
     }
 
@@ -61646,7 +61672,7 @@ impl InterpreterCore {
                 frame
                     .saved_pending_return
                     .as_ref()
-                    .map(Self::estimate_value_bytes)
+                    .map(Self::estimate_labeled_return_bytes)
                     .unwrap_or(0),
             )
             .saturating_add(
@@ -61684,7 +61710,7 @@ impl InterpreterCore {
                 frame
                     .saved_pending_return
                     .as_ref()
-                    .map(Self::estimate_value_bytes)
+                    .map(Self::estimate_labeled_return_bytes)
                     .unwrap_or(0),
             )
             .saturating_add(frame.saved_scope_chain.as_ref().map_or(0, |frames| {
@@ -71015,6 +71041,347 @@ mod async_runtime_tests_current {
         assert_eq!(
             core.get_register_label(3).expect("nested return label"),
             &Label::Secret
+        );
+    }
+
+    #[test]
+    fn return_label_survives_finally_nested_call_bd_ur3tk_16() {
+        let module = test_module_with_functions(
+            vec![
+                Ir3Instruction::Call {
+                    callee: 0,
+                    args: RegRange { start: 1, count: 2 },
+                    dst: 3,
+                },
+                Ir3Instruction::Return { value: 3 },
+                Ir3Instruction::BeginTry {
+                    catch_target: 4,
+                    finally_target: Some(4),
+                },
+                Ir3Instruction::Return { value: 0 },
+                Ir3Instruction::EnterFinally,
+                Ir3Instruction::Call {
+                    callee: 1,
+                    args: RegRange { start: 0, count: 0 },
+                    dst: 2,
+                },
+                Ir3Instruction::EndFinally,
+                Ir3Instruction::Return { value: 0 },
+            ],
+            vec![
+                Ir3FunctionDesc {
+                    entry: 2,
+                    arity: 2,
+                    frame_size: 3,
+                    name: Some("return_through_finally".to_string()),
+                    is_generator: false,
+                    rest_param_index: None,
+                },
+                Ir3FunctionDesc {
+                    entry: 7,
+                    arity: 0,
+                    frame_size: 1,
+                    name: Some("finally_helper".to_string()),
+                    is_generator: false,
+                    rest_param_index: None,
+                },
+            ],
+        );
+        let mut core = test_interpreter();
+        core.write_reg(0, Value::Function(0))
+            .expect("outer function should be writable");
+        core.write_reg_with_label(1, Value::str("secret-through-finally"), Label::Secret)
+            .expect("secret return argument should be writable");
+        core.write_reg(2, Value::Function(1))
+            .expect("finally helper should be writable");
+
+        assert_eq!(
+            core.run_loop(&module)
+                .expect("finally return should survive nested helper call"),
+            Value::str("secret-through-finally")
+        );
+        assert_eq!(
+            core.get_register_label(3).expect("caller return label"),
+            &Label::Secret
+        );
+    }
+
+    #[test]
+    fn nested_finally_return_override_keeps_new_label_bd_ur3tk_16() {
+        let module = test_module_with_functions(
+            vec![
+                Ir3Instruction::Call {
+                    callee: 0,
+                    args: RegRange { start: 1, count: 2 },
+                    dst: 3,
+                },
+                Ir3Instruction::Return { value: 3 },
+                Ir3Instruction::BeginTry {
+                    catch_target: 8,
+                    finally_target: Some(8),
+                },
+                Ir3Instruction::BeginTry {
+                    catch_target: 5,
+                    finally_target: Some(5),
+                },
+                Ir3Instruction::Return { value: 1 },
+                Ir3Instruction::EnterFinally,
+                Ir3Instruction::Return { value: 0 },
+                Ir3Instruction::EndFinally,
+                Ir3Instruction::EnterFinally,
+                Ir3Instruction::EndFinally,
+            ],
+            vec![Ir3FunctionDesc {
+                entry: 2,
+                arity: 2,
+                frame_size: 2,
+                name: Some("nested_finally_override".to_string()),
+                is_generator: false,
+                rest_param_index: None,
+            }],
+        );
+        let mut core = test_interpreter();
+        core.write_reg(0, Value::Function(0))
+            .expect("outer function should be writable");
+        core.write_reg_with_label(1, Value::str("secret-override"), Label::Secret)
+            .expect("secret overriding return should be writable");
+        core.write_reg(2, Value::str("public-initial-return"))
+            .expect("initial return should be writable");
+
+        assert_eq!(
+            core.run_loop(&module)
+                .expect("inner finally return should override outer completion"),
+            Value::str("secret-override")
+        );
+        assert_eq!(
+            core.get_register_label(3).expect("overriding return label"),
+            &Label::Secret
+        );
+    }
+
+    #[test]
+    fn caught_throw_restores_suspended_return_label_bd_ur3tk_16() {
+        let module = test_module_with_functions(
+            vec![
+                Ir3Instruction::Call {
+                    callee: 0,
+                    args: RegRange { start: 1, count: 2 },
+                    dst: 3,
+                },
+                Ir3Instruction::Return { value: 3 },
+                Ir3Instruction::BeginTry {
+                    catch_target: 4,
+                    finally_target: Some(4),
+                },
+                Ir3Instruction::Return { value: 0 },
+                Ir3Instruction::EnterFinally,
+                Ir3Instruction::BeginTry {
+                    catch_target: 7,
+                    finally_target: None,
+                },
+                Ir3Instruction::Throw { value: 1 },
+                Ir3Instruction::EnterCatch { dst: 2 },
+                Ir3Instruction::EndFinally,
+            ],
+            vec![Ir3FunctionDesc {
+                entry: 2,
+                arity: 2,
+                frame_size: 3,
+                name: Some("caught_throw_during_finally".to_string()),
+                is_generator: false,
+                rest_param_index: None,
+            }],
+        );
+        let mut core = test_interpreter();
+        core.write_reg(0, Value::Function(0))
+            .expect("outer function should be writable");
+        core.write_reg_with_label(1, Value::str("secret-suspended-return"), Label::Secret)
+            .expect("secret pending return should be writable");
+        core.write_reg(2, Value::str("public-local-throw"))
+            .expect("local throw should be writable");
+
+        assert_eq!(
+            core.run_loop(&module)
+                .expect("caught throw should restore the suspended return"),
+            Value::str("secret-suspended-return")
+        );
+        assert_eq!(
+            core.get_register_label(3)
+                .expect("restored suspended return label"),
+            &Label::Secret
+        );
+    }
+
+    #[test]
+    fn module_snapshot_round_trips_labeled_returns_bd_ur3tk_16() {
+        let mut core = test_interpreter();
+        let pending = LabeledReturn {
+            value: Value::str("pending"),
+            label: Label::Secret,
+        };
+        let suspended = LabeledReturn {
+            value: Value::str("suspended"),
+            label: Label::Custom {
+                name: "tenant-return".repeat(8),
+                level: 4,
+            },
+        };
+        core.replace_pending_abrupt_slots(None, Some(pending.clone()))
+            .expect("pending labeled return should fit");
+        core.suspended_abrupt_completions
+            .push(AbruptCompletion::Return(suspended.clone(), 0));
+        core.sync_estimated_memory_bytes()
+            .expect("seeded return state should fit");
+        let baseline = core.estimated_memory_bytes();
+
+        let snapshot = core
+            .snapshot_module_execution()
+            .expect("module snapshot should preserve return labels");
+        core.clear_pending_abrupt_slots();
+        core.clear_suspended_abrupt_completions();
+        core.restore_module_execution(snapshot, true);
+
+        assert_eq!(core.pending_return, Some(pending));
+        assert!(matches!(
+            core.suspended_abrupt_completions.as_slice(),
+            [AbruptCompletion::Return(restored, 0)] if restored == &suspended
+        ));
+        assert_eq!(core.estimated_memory_bytes(), baseline);
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes(),
+            "snapshot restore must account the returned value and its dynamic label exactly"
+        );
+    }
+
+    #[test]
+    fn timer_callback_restores_outer_labeled_return_bd_ur3tk_16() {
+        let module = test_module_with_functions(
+            vec![Ir3Instruction::Return { value: 0 }],
+            vec![Ir3FunctionDesc {
+                entry: 0,
+                arity: 0,
+                frame_size: 1,
+                name: Some("timer_return".to_string()),
+                is_generator: false,
+                rest_param_index: None,
+            }],
+        );
+        let mut core = test_interpreter();
+        core.closures.push(ClosureValue {
+            function_index: 0,
+            captured_env: core.scope_chain.snapshot(),
+        });
+        let pending = LabeledReturn {
+            value: Value::str("outer-pending"),
+            label: Label::Custom {
+                name: "timer-outer-return".repeat(8),
+                level: 5,
+            },
+        };
+        core.replace_pending_abrupt_slots(None, Some(pending.clone()))
+            .expect("outer return should fit");
+        core.sync_estimated_memory_bytes()
+            .expect("timer fixture should fit");
+        let baseline = core.estimated_memory_bytes();
+
+        assert_eq!(
+            core.execute_timer_closure(0, Some(&module), Vec::new())
+                .expect("timer callback should execute in an isolated snapshot"),
+            Value::Undefined
+        );
+        assert_eq!(core.pending_return, Some(pending));
+        assert_eq!(core.estimated_memory_bytes(), baseline);
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes(),
+            "timer snapshot restore must retain exact labeled-return ownership"
+        );
+    }
+
+    #[test]
+    fn labeled_return_custom_label_memory_is_fail_closed_bd_ur3tk_16() {
+        fn pending_return() -> LabeledReturn {
+            LabeledReturn {
+                value: Value::str("return-payload".repeat(32)),
+                label: Label::Custom {
+                    name: "return-label".repeat(64),
+                    level: 6,
+                },
+            }
+        }
+
+        let mut probe = test_interpreter();
+        let baseline = probe
+            .sync_estimated_memory_bytes()
+            .expect("memory probe baseline");
+        probe
+            .replace_pending_abrupt_slots(None, Some(pending_return()))
+            .expect("unbounded labeled-return probe");
+        let delta = probe.estimated_memory_bytes().saturating_sub(baseline);
+        assert!(delta > 0, "return value and custom label must be charged");
+        assert_eq!(
+            probe.estimated_memory_bytes(),
+            probe.recompute_estimated_memory_bytes()
+        );
+
+        let mut one_short = test_interpreter();
+        let one_short_baseline = one_short
+            .sync_estimated_memory_bytes()
+            .expect("one-short baseline");
+        one_short.config.max_total_memory_bytes = one_short_baseline + delta - 1;
+        assert!(matches!(
+            one_short.replace_pending_abrupt_slots(None, Some(pending_return())),
+            Err(InterpreterError::MemoryBudgetExceeded { .. })
+        ));
+        assert!(one_short.pending_return.is_none());
+        assert_eq!(one_short.estimated_memory_bytes(), one_short_baseline);
+    }
+
+    #[test]
+    fn rollback_call_setup_restores_labeled_return_bd_ur3tk_16() {
+        let mut core = test_interpreter();
+        let saved_scope = core.scope_chain.snapshot();
+        let pending = LabeledReturn {
+            value: Value::str("rollback-return"),
+            label: Label::Custom {
+                name: "rollback-return-label".repeat(16),
+                level: 3,
+            },
+        };
+        core.scope_chain
+            .push(core.config.max_scope_depth)
+            .expect("callee setup scope should fit");
+        core.call_stack.push(CallFrame {
+            return_ip: 77,
+            return_reg: 0,
+            register_base: 0,
+            function_index: Some(0),
+            this_value: Value::Undefined,
+            this_label: Label::Public,
+            new_target_value: Value::Undefined,
+            super_value: Value::Undefined,
+            construct_this: None,
+            saved_pending_exception: None,
+            saved_pending_exception_label: Label::Public,
+            saved_pending_return: Some(pending.clone()),
+            saved_suspended_abrupt_depth: 0,
+            saved_finally_mode_depth: 0,
+            saved_scope_depth: saved_scope.len(),
+            saved_scope_chain: Some(saved_scope),
+            async_function_id: None,
+        });
+        core.sync_estimated_memory_bytes()
+            .expect("rollback fixture should fit");
+
+        core.rollback_call_setup();
+
+        assert_eq!(core.pending_return, Some(pending));
+        assert!(core.call_stack.is_empty());
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes(),
+            "rollback must move both the return value and its dynamic label back to pending state"
         );
     }
 
@@ -90948,7 +91315,13 @@ mod tests {
                 },
                 1,
             ),
-            AbruptCompletion::Return(Value::str("discarded deep return"), 2),
+            AbruptCompletion::Return(
+                LabeledReturn {
+                    value: Value::str("discarded deep return"),
+                    label: Label::Public,
+                },
+                2,
+            ),
         ];
         core.sync_estimated_memory_bytes()
             .expect("seeded completion state should fit memory budget");
@@ -91054,7 +91427,13 @@ mod tests {
                 .expect("scope binding update");
         }
         core.suspended_abrupt_completions
-            .push(AbruptCompletion::Return(Value::str("inner"), 0));
+            .push(AbruptCompletion::Return(
+                LabeledReturn {
+                    value: Value::str("inner"),
+                    label: Label::Public,
+                },
+                0,
+            ));
         core.call_stack.push(CallFrame {
             return_ip: 777,
             return_reg: 0,
@@ -91139,7 +91518,13 @@ mod tests {
                 .expect("scope binding update");
         }
         core.suspended_abrupt_completions
-            .push(AbruptCompletion::Return(Value::str("inner"), 0));
+            .push(AbruptCompletion::Return(
+                LabeledReturn {
+                    value: Value::str("inner"),
+                    label: Label::Public,
+                },
+                0,
+            ));
         core.finally_modes.push(FinallyMode::Return);
         core.call_stack.push(CallFrame {
             return_ip: 909,

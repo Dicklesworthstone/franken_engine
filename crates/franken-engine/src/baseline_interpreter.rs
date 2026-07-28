@@ -5442,25 +5442,40 @@ struct CatchFrame {
     /// Call stack depth when the try block was entered.  Used to validate
     /// that the catch frame is still in scope during unwinding.
     call_depth: usize,
-    /// Active source-finally depth when this handler was installed. Abrupt
-    /// completions owned by deeper finalizers are abandoned when unwinding to
-    /// this frame, while completions at this depth remain resumable when a
-    /// local catch consumes the newer exception.
-    finally_mode_depth: usize,
+    /// Active finally-frame depth when this handler was installed. Abrupt
+    /// transfer to this handler exits and discards every owned finalizer
+    /// completion above this depth.
+    finally_frame_depth: usize,
 }
 
-/// Tracks how a finally block was entered so `EndFinally` knows whether to
-/// re-throw a pending exception or continue normally.
+/// Classifies the completion captured when a finally block is entered.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 enum FinallyMode {
     /// Entered via normal control flow (try body completed, or catch body completed).
     Normal,
-    /// Entered because an exception was in flight.  The pending exception is
-    /// stored in `InterpreterCore::pending_exception`.
+    /// Entered because an exception was in flight. `EnterFinally` moves it
+    /// from the pending slots into the new `FinallyFrame`.
     Exception,
-    /// Entered because a return was in flight.  The pending labeled completion is stored
-    /// in `InterpreterCore::pending_return`.
+    /// Entered because a return was in flight. `EnterFinally` moves it into
+    /// the new `FinallyFrame`.
     Return,
+}
+
+/// One-shot ownership record for the exact `EnterFinally` instruction chosen
+/// by an unwind edge. It survives an instruction-boundary cancellation,
+/// budget refusal, or module snapshot before the target instruction executes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PendingFinallyEntry {
+    target: usize,
+    mode: FinallyMode,
+}
+
+/// Completion record owned by one actively executing finally body. Keeping
+/// the completion in the frame prevents a nested abrupt completion from being
+/// suspended and later resurrected after it has been overridden.
+#[derive(Debug, Clone)]
+struct FinallyFrame {
+    completion: Option<AbruptCompletion>,
 }
 
 /// A suspended abrupt completion that should resume if a newer one is later
@@ -5469,16 +5484,8 @@ enum FinallyMode {
 enum AbruptCompletion {
     /// A thrown value plus its IFC label (bd-l0d6z): the label must survive
     /// suspension so a later catch binding inherits the thrown value's taint.
-    Exception(Value, Label, usize),
-    Return(LabeledReturn, usize),
-}
-
-impl AbruptCompletion {
-    fn finally_mode_depth(&self) -> usize {
-        match self {
-            Self::Exception(_, _, depth) | Self::Return(_, depth) => *depth,
-        }
-    }
+    Exception(Value, Label),
+    Return(LabeledReturn),
 }
 
 /// Return completion carried while control unwinds through `finally`.
@@ -5765,7 +5772,7 @@ struct CallFrame {
     saved_pending_return: Option<LabeledReturn>,
     /// Count of suspended abrupt completions before entering the callee.
     saved_suspended_abrupt_depth: usize,
-    /// Count of active finally modes before entering the callee.
+    /// Count of active finally completion frames before entering the callee.
     saved_finally_mode_depth: usize,
     /// Scope chain depth before entering the callee, restored on return.
     saved_scope_depth: usize,
@@ -7072,7 +7079,8 @@ struct ModuleExecutionSnapshot {
     pending_hostcall_result_label: Option<Label>,
     pending_return: Option<LabeledReturn>,
     suspended_abrupt_completions: Vec<AbruptCompletion>,
-    finally_modes: Vec<FinallyMode>,
+    finally_frames: Vec<FinallyFrame>,
+    pending_finally_entry: Option<PendingFinallyEntry>,
     scope_chain: ScopeChain,
     pending_captures: Vec<u32>,
     generated_functions: Vec<GeneratedFunctionArtifact>,
@@ -8303,8 +8311,8 @@ pub struct InterpreterCore {
     register_base: usize,
     /// Stack of active try/catch frames for exception unwinding.
     catch_frames: Vec<CatchFrame>,
-    /// A pending exception value during unwinding (set by `Throw`,
-    /// consumed by `EnterCatch` or re-thrown by `EndFinally`).
+    /// A pending exception value during an unwind edge, consumed by
+    /// `EnterCatch` or moved into an owned `FinallyFrame` by `EnterFinally`.
     pending_exception: Option<Value>,
     /// IFC label shadowing `pending_exception` (bd-l0d6z, fifth member of the
     /// bd-n2mjy/bd-0zybl under-tainting family): set wherever a thrown value
@@ -8317,17 +8325,21 @@ pub struct InterpreterCore {
     /// `HostCall` consumes this exactly once and joins it with the ordinary
     /// argument label before writing the destination register.
     pending_hostcall_result_label: Option<Label>,
-    /// A pending return value and IFC label during unwinding through finally blocks.
+    /// A pending return value and IFC label before `EnterFinally` captures it
+    /// or the return completes.
     pending_return: Option<LabeledReturn>,
     /// Saved outer abrupt completion state that was temporarily suspended by a
     /// newer local throw/return or by exception unwinding across nested calls
     /// or intermediary finally blocks. If the newer abrupt completion is
     /// consumed locally, the most recent suspended completion resumes.
     suspended_abrupt_completions: Vec<AbruptCompletion>,
-    /// Stack of finally-entry modes.  Pushed by `EnterFinally`, popped by
-    /// `EndFinally`.  When `Exception`, `EndFinally` re-throws the pending
-    /// exception.
-    finally_modes: Vec<FinallyMode>,
+    /// Stack of completion records owned by active finally bodies. Pushed by
+    /// `EnterFinally` and consumed by `EndFinally` or an overriding abrupt
+    /// transfer.
+    finally_frames: Vec<FinallyFrame>,
+    /// One-shot entry ownership set by an unwind edge and consumed by the
+    /// exact `EnterFinally` instruction it targets.
+    pending_finally_entry: Option<PendingFinallyEntry>,
     /// Pre-run caller-visible seed used for the most recent execute().
     last_pre_run_seed: Option<std::rc::Rc<std::cell::RefCell<ExecutionSeed>>>,
     /// Caller-visible state immediately after the most recent execute().
@@ -8899,7 +8911,8 @@ impl InterpreterCore {
             pending_hostcall_result_label: None,
             pending_return: None,
             suspended_abrupt_completions: Vec::new(),
-            finally_modes: Vec::new(),
+            finally_frames: Vec::new(),
+            pending_finally_entry: None,
             last_pre_run_seed: None,
             last_post_run_seed: None,
             scope_chain,
@@ -25693,11 +25706,6 @@ impl InterpreterCore {
                     .unwrap_or(u64::MAX)
                     .saturating_mul(std::mem::size_of::<CatchFrame>() as u64),
             )
-            .saturating_add(
-                u64::try_from(self.finally_modes.len())
-                    .unwrap_or(u64::MAX)
-                    .saturating_mul(std::mem::size_of::<FinallyMode>() as u64),
-            )
             .saturating_add(Self::estimate_scope_chain_shallow_clone_bytes(
                 &self.scope_chain.frames,
             ))
@@ -25766,7 +25774,8 @@ impl InterpreterCore {
             pending_hostcall_result_label: self.pending_hostcall_result_label.clone(),
             pending_return: self.pending_return.clone(),
             suspended_abrupt_completions: self.suspended_abrupt_completions.clone(),
-            finally_modes: self.finally_modes.clone(),
+            finally_frames: self.finally_frames.clone(),
+            pending_finally_entry: self.pending_finally_entry.clone(),
             scope_chain: self.scope_chain.clone(),
             pending_captures: self.pending_captures.clone(),
             generated_functions: self.generated_functions.clone(),
@@ -25797,7 +25806,8 @@ impl InterpreterCore {
         self.pending_hostcall_result_label = snapshot.pending_hostcall_result_label;
         self.pending_return = snapshot.pending_return;
         self.suspended_abrupt_completions = snapshot.suspended_abrupt_completions;
-        self.finally_modes = snapshot.finally_modes;
+        self.finally_frames = snapshot.finally_frames;
+        self.pending_finally_entry = snapshot.pending_finally_entry;
         self.scope_chain = snapshot.scope_chain;
         self.pending_captures = snapshot.pending_captures;
         self.generated_functions = snapshot.generated_functions;
@@ -25850,7 +25860,8 @@ impl InterpreterCore {
         self.pending_hostcall_result_label = None;
         self.pending_return = None;
         self.suspended_abrupt_completions.clear();
-        self.finally_modes.clear();
+        self.finally_frames.clear();
+        self.pending_finally_entry = None;
         self.scope_chain = ScopeChain::new();
         self.pending_captures.clear();
         self.generated_functions.clear();
@@ -27277,7 +27288,8 @@ impl InterpreterCore {
             self.pending_hostcall_result_label = None;
             self.pending_return = None;
             self.suspended_abrupt_completions.clear();
-            self.finally_modes.clear();
+            self.finally_frames.clear();
+            self.pending_finally_entry = None;
             self.current_module_specifier = Some(wrapper.header.source_label.clone());
             // Global-only scope: keep just the realm global environment captured
             // above so the body sees globals but no caller locals.
@@ -30540,7 +30552,8 @@ impl InterpreterCore {
         } else {
             self.clear_pending_abrupt_slots();
             self.clear_suspended_abrupt_completions();
-            self.finally_modes.clear();
+            self.clear_finally_frames();
+            self.pending_finally_entry = None;
             Ok(Some(return_val))
         }
     }
@@ -30549,7 +30562,7 @@ impl InterpreterCore {
         self.register_base = frame.register_base;
         self.suspended_abrupt_completions
             .truncate(frame.saved_suspended_abrupt_depth);
-        self.finally_modes.truncate(frame.saved_finally_mode_depth);
+        self.finally_frames.truncate(frame.saved_finally_mode_depth);
         self.restore_scope_chain_for_frame(frame);
         self.pending_exception = frame.saved_pending_exception.take();
         self.pending_exception_label =
@@ -30978,14 +30991,17 @@ impl InterpreterCore {
         error_value: Value,
         label: Label,
     ) -> Result<bool, InterpreterError> {
+        self.pending_finally_entry = None;
         self.suspend_current_abrupt_completion()?;
         self.replace_pending_abrupt_slots(Some((error_value.clone(), label.clone())), None)?;
         if let Some(frame) = self.pop_exception_target_frame()? {
-            self.ip = frame.catch_target;
+            self.select_exception_target(None, frame);
             Ok(false)
         } else if self.reject_nearest_async_boundary(error_value.clone(), label)? {
             Ok(true)
         } else {
+            self.clear_finally_frames();
+            self.pending_finally_entry = None;
             Err(InterpreterError::UncaughtException {
                 value: self.uncaught_exception_description(&error_value),
             })
@@ -31033,7 +31049,7 @@ impl InterpreterCore {
         while self.call_stack.len() > target_depth {
             if let Some(frame) = self.call_stack.pop() {
                 self.register_base = frame.register_base;
-                self.finally_modes.truncate(frame.saved_finally_mode_depth);
+                self.finally_frames.truncate(frame.saved_finally_mode_depth);
                 self.restore_scope_chain_for_frame(&frame);
                 let label = frame.saved_pending_exception_label;
                 restored_pending_exception = frame.saved_pending_exception.map(|v| (v, label));
@@ -31092,46 +31108,142 @@ impl InterpreterCore {
         };
         let frame = self.catch_frames[idx].clone();
         self.catch_frames.truncate(idx);
+        self.truncate_finally_frames(frame.finally_frame_depth);
         let (restored_pending_exception, restored_pending_return) =
             self.unwind_call_stack_to(frame.call_depth)?;
         self.suspend_abrupt_completion(restored_pending_exception, restored_pending_return)?;
-        self.prune_abrupt_state_to_finally_depth(frame.finally_mode_depth);
         Ok(Some(frame))
     }
 
-    /// Drop completions owned by finalizers that an exception just crossed.
-    /// A handler installed inside the same finalizer retains equal-depth state,
-    /// allowing the older completion to resume after the close error is caught.
-    fn prune_abrupt_state_to_finally_depth(&mut self, target_depth: usize) {
-        let mut released_bytes = 0u64;
-        self.suspended_abrupt_completions.retain(|completion| {
-            if completion.finally_mode_depth() <= target_depth {
-                true
-            } else {
-                released_bytes = released_bytes
-                    .saturating_add(std::mem::size_of::<AbruptCompletion>() as u64)
-                    .saturating_add(Self::estimate_abrupt_completion_bytes(completion));
-                false
-            }
+    fn select_exception_target(&mut self, module: Option<&Ir3Module>, frame: CatchFrame) {
+        let target = frame.catch_target;
+        let target_is_finally = frame.finally_target == Some(target)
+            || module.is_some_and(|module| {
+                matches!(
+                    module.instructions.get(target),
+                    Some(Ir3Instruction::EnterFinally)
+                )
+            });
+        self.pending_finally_entry = target_is_finally.then_some(PendingFinallyEntry {
+            target,
+            mode: FinallyMode::Exception,
         });
-        self.finally_modes.truncate(target_depth);
+        self.ip = target;
+    }
+
+    fn enter_finally_frame(&mut self) -> Result<(), InterpreterError> {
+        let owns_pending_completion = self
+            .pending_finally_entry
+            .as_ref()
+            .is_some_and(|entry| entry.target == self.ip);
+        let mode = if owns_pending_completion {
+            self.pending_finally_entry
+                .as_ref()
+                .map_or(FinallyMode::Normal, |entry| entry.mode.clone())
+        } else {
+            FinallyMode::Normal
+        };
+        let entry_is_consistent = match &mode {
+            FinallyMode::Exception => {
+                self.pending_exception.is_some() && self.pending_return.is_none()
+            }
+            FinallyMode::Return => {
+                self.pending_return.is_some() && self.pending_exception.is_none()
+            }
+            FinallyMode::Normal => true,
+        };
+        if !entry_is_consistent {
+            return Err(InterpreterError::InternalError {
+                details: "finally entry lost or mixed its owned abrupt completion".to_string(),
+            });
+        }
+        let frame_bytes = std::mem::size_of::<FinallyFrame>() as u64;
+        self.apply_memory_component_delta(0, frame_bytes)?;
+        if self.finally_frames.try_reserve(1).is_err() {
+            self.estimated_memory_bytes = self.estimated_memory_bytes.saturating_sub(frame_bytes);
+            return Err(self.memory_budget_error(u64::MAX, self.heap_object_count_u32()));
+        }
+
+        let completion = match mode {
+            FinallyMode::Exception => {
+                let exception = self
+                    .pending_exception
+                    .take()
+                    .expect("exception-mode finally entry was validated above");
+                let label = std::mem::replace(&mut self.pending_exception_label, Label::Public);
+                Some(AbruptCompletion::Exception(exception, label))
+            }
+            FinallyMode::Return => self.pending_return.take().map(AbruptCompletion::Return),
+            FinallyMode::Normal => None,
+        };
+        if owns_pending_completion {
+            self.pending_finally_entry = None;
+        }
+        self.finally_frames.push(FinallyFrame { completion });
+        Ok(())
+    }
+
+    /// Pop a finalizer frame while retaining its completion's dynamic charge.
+    /// The caller either moves that completion back into a pending slot or
+    /// explicitly releases its dynamic bytes before completing/discarding it.
+    fn take_finally_completion(&mut self) -> Option<AbruptCompletion> {
+        let frame = self.finally_frames.pop()?;
+        self.estimated_memory_bytes = self
+            .estimated_memory_bytes
+            .saturating_sub(std::mem::size_of::<FinallyFrame>() as u64);
+        frame.completion
+    }
+
+    fn finally_frame_memory_bytes(frame: &FinallyFrame) -> u64 {
+        (std::mem::size_of::<FinallyFrame>() as u64).saturating_add(
+            frame
+                .completion
+                .as_ref()
+                .map(Self::estimate_abrupt_completion_bytes)
+                .unwrap_or(0),
+        )
+    }
+
+    fn finally_frames_memory_bytes(&self) -> u64 {
+        Self::saturating_sum(
+            self.finally_frames
+                .iter()
+                .map(Self::finally_frame_memory_bytes),
+        )
+    }
+
+    fn truncate_finally_frames(&mut self, target_depth: usize) {
+        let released_bytes = self
+            .finally_frames
+            .get(target_depth..)
+            .map(|frames| Self::saturating_sum(frames.iter().map(Self::finally_frame_memory_bytes)))
+            .unwrap_or(0);
+        self.finally_frames.truncate(target_depth);
         self.estimated_memory_bytes = self.estimated_memory_bytes.saturating_sub(released_bytes);
     }
 
+    fn clear_finally_frames(&mut self) {
+        self.truncate_finally_frames(0);
+    }
+
+    fn discard_current_finally_frame(&mut self) {
+        if let Some(frame) = self.finally_frames.pop() {
+            self.estimated_memory_bytes = self
+                .estimated_memory_bytes
+                .saturating_sub(Self::finally_frame_memory_bytes(&frame));
+        }
+    }
+
     fn take_current_abrupt_completion(&mut self) -> Option<AbruptCompletion> {
-        let finally_mode_depth = self.finally_modes.len();
         if let Some(exception) = self.pending_exception.take() {
-            self.pending_return = None;
+            debug_assert!(
+                self.pending_return.is_none(),
+                "only one abrupt completion should be active at a time"
+            );
             let label = std::mem::replace(&mut self.pending_exception_label, Label::Public);
-            Some(AbruptCompletion::Exception(
-                exception,
-                label,
-                finally_mode_depth,
-            ))
+            Some(AbruptCompletion::Exception(exception, label))
         } else {
-            self.pending_return
-                .take()
-                .map(|value| AbruptCompletion::Return(value, finally_mode_depth))
+            self.pending_return.take().map(AbruptCompletion::Return)
         }
     }
 
@@ -31145,36 +31257,38 @@ impl InterpreterCore {
             "only one abrupt completion should be active at a time"
         );
 
-        let finally_mode_depth = self.finally_modes.len();
         let completions = match (pending_exception, pending_return) {
             (Some((exception, label)), None) => {
-                vec![AbruptCompletion::Exception(
-                    exception,
-                    label,
-                    finally_mode_depth,
-                )]
+                [Some(AbruptCompletion::Exception(exception, label)), None]
             }
-            (None, Some(return_val)) => {
-                vec![AbruptCompletion::Return(return_val, finally_mode_depth)]
-            }
-            (None, None) => Vec::new(),
-            (Some((exception, label)), Some(return_val)) => {
-                vec![
-                    AbruptCompletion::Exception(exception, label, finally_mode_depth),
-                    AbruptCompletion::Return(return_val, finally_mode_depth),
-                ]
-            }
+            (None, Some(return_val)) => [Some(AbruptCompletion::Return(return_val)), None],
+            (None, None) => [None, None],
+            (Some((exception, label)), Some(return_val)) => [
+                Some(AbruptCompletion::Exception(exception, label)),
+                Some(AbruptCompletion::Return(return_val)),
+            ],
         };
-        let added_bytes = u64::try_from(completions.len())
+        let completion_count = completions.iter().flatten().count();
+        let added_bytes = u64::try_from(completion_count)
             .unwrap_or(u64::MAX)
             .saturating_mul(std::mem::size_of::<AbruptCompletion>() as u64)
             .saturating_add(Self::saturating_sum(
                 completions
                     .iter()
+                    .flatten()
                     .map(Self::estimate_abrupt_completion_bytes),
             ));
         self.apply_memory_component_delta(0, added_bytes)?;
-        self.suspended_abrupt_completions.extend(completions);
+        if self
+            .suspended_abrupt_completions
+            .try_reserve(completion_count)
+            .is_err()
+        {
+            self.estimated_memory_bytes = self.estimated_memory_bytes.saturating_sub(added_bytes);
+            return Err(self.memory_budget_error(u64::MAX, self.heap_object_count_u32()));
+        }
+        self.suspended_abrupt_completions
+            .extend(completions.into_iter().flatten());
         Ok(())
     }
 
@@ -31183,6 +31297,12 @@ impl InterpreterCore {
             return Ok(());
         }
         self.apply_memory_component_delta(0, std::mem::size_of::<AbruptCompletion>() as u64)?;
+        if self.suspended_abrupt_completions.try_reserve(1).is_err() {
+            self.estimated_memory_bytes = self
+                .estimated_memory_bytes
+                .saturating_sub(std::mem::size_of::<AbruptCompletion>() as u64);
+            return Err(self.memory_budget_error(u64::MAX, self.heap_object_count_u32()));
+        }
         if let Some(completion) = self.take_current_abrupt_completion() {
             self.suspended_abrupt_completions.push(completion);
         }
@@ -31197,11 +31317,11 @@ impl InterpreterCore {
         let previous_bytes = self.call_stack_memory_bytes();
         if let Some(completion) = self.suspended_abrupt_completions.pop() {
             match completion {
-                AbruptCompletion::Exception(exception, label, _) => {
+                AbruptCompletion::Exception(exception, label) => {
                     self.pending_exception = Some(exception);
                     self.pending_exception_label = label;
                 }
-                AbruptCompletion::Return(return_val, _) => {
+                AbruptCompletion::Return(return_val) => {
                     self.pending_return = Some(return_val);
                 }
             }
@@ -31219,7 +31339,7 @@ impl InterpreterCore {
             .rposition(|f| f.call_depth == current_depth && f.finally_target.is_some())?;
         let frame = self.catch_frames[idx].clone();
         self.catch_frames.truncate(idx);
-        self.prune_abrupt_state_to_finally_depth(frame.finally_mode_depth);
+        self.truncate_finally_frames(frame.finally_frame_depth);
         frame.finally_target
     }
 
@@ -32140,32 +32260,47 @@ impl InterpreterCore {
     /// should propagate `err` unchanged (identical surfacing to today).
     fn route_isolated_explicit_throw(
         &mut self,
+        module: &Ir3Module,
         err: InterpreterError,
     ) -> Result<Option<InterpreterError>, InterpreterError> {
         if !matches!(err, InterpreterError::UncaughtException { .. }) {
             return Ok(Some(err));
         }
-        let Some(thrown) = self.pending_exception.clone() else {
+        let Some((thrown, thrown_label)) = self.take_pending_exception_slot() else {
             return Ok(Some(err));
         };
-        // Capture the exception's label before the suspend resets the shadow
-        // (bd-l0d6z), then re-arm the pending exception with the preserved
-        // value+label, exactly like the `Throw` instruction.
-        let thrown_label = self.pending_exception_label.clone();
-        self.suspend_current_abrupt_completion()?;
-        self.replace_pending_abrupt_slots(Some((thrown.clone(), thrown_label.clone())), None)?;
+        // The isolated run already re-armed this exact exception after its
+        // caller snapshot was restored. Move it back into the routing slot;
+        // suspending it here would duplicate and later resurrect the same
+        // completion after `EnterCatch` consumed it.
+        self.pending_finally_entry = None;
+        self.replace_pending_abrupt_slots(Some((thrown, thrown_label)), None)?;
         if let Some(frame) = self.pop_exception_target_frame()? {
-            self.ip = frame.catch_target;
+            self.select_exception_target(Some(module), frame);
             Ok(None)
-        } else if self.reject_nearest_async_boundary(thrown.clone(), thrown_label)? {
+        } else if self.nearest_async_call_depth().is_some() {
+            let (thrown, thrown_label) = self
+                .take_pending_exception_slot()
+                .expect("isolated throw remained pending for async rejection");
+            if !self.reject_nearest_async_boundary(thrown, thrown_label)? {
+                return Err(InterpreterError::InternalError {
+                    details: "async boundary disappeared while routing isolated throw".to_string(),
+                });
+            }
             Ok(None)
         } else {
             // No enclosing handler: surface as an uncaught exception carrying the
             // original thrown value — byte-identical to the inner `Throw` arm's
             // own `UncaughtException` value (both use `uncaught_exception_description`).
             self.clear_suspended_abrupt_completions();
+            self.clear_finally_frames();
+            self.pending_finally_entry = None;
             Ok(Some(InterpreterError::UncaughtException {
-                value: self.uncaught_exception_description(&thrown),
+                value: self.uncaught_exception_description(
+                    self.pending_exception
+                        .as_ref()
+                        .expect("isolated throw remained pending for uncaught propagation"),
+                ),
             }))
         }
     }
@@ -32176,6 +32311,7 @@ impl InterpreterCore {
     /// rejection boundary without allowing the displaced return to resurrect.
     fn route_iterator_close_failure(
         &mut self,
+        module: &Ir3Module,
         err: InterpreterError,
     ) -> Result<Option<InterpreterError>, InterpreterError> {
         let (thrown, thrown_label) = if matches!(err, InterpreterError::UncaughtException { .. }) {
@@ -32189,6 +32325,7 @@ impl InterpreterCore {
             return Ok(Some(err));
         };
 
+        self.pending_finally_entry = None;
         self.replace_pending_abrupt_slots(Some((thrown, thrown_label)), None)?;
         if let Some(async_depth) = self
             .call_stack
@@ -32197,7 +32334,7 @@ impl InterpreterCore {
             .map(|index| index + 1)
         {
             if let Some(frame) = self.pop_exception_target_frame_at_or_above(async_depth)? {
-                self.ip = frame.catch_target;
+                self.select_exception_target(Some(module), frame);
                 return Ok(None);
             }
             let (rejection, rejection_label) =
@@ -32210,13 +32347,17 @@ impl InterpreterCore {
                 return Ok(None);
             }
             self.clear_suspended_abrupt_completions();
+            self.clear_finally_frames();
+            self.pending_finally_entry = None;
             return Ok(Some(err));
         }
         if let Some(frame) = self.pop_exception_target_frame()? {
-            self.ip = frame.catch_target;
+            self.select_exception_target(Some(module), frame);
             Ok(None)
         } else {
             self.clear_suspended_abrupt_completions();
+            self.clear_finally_frames();
+            self.pending_finally_entry = None;
             Ok(Some(err))
         }
     }
@@ -32243,13 +32384,14 @@ impl InterpreterCore {
                             || self.nearest_async_call_depth().is_some()) =>
                 {
                     let thrown = self.native_error_to_thrown_value(&err)?;
+                    self.pending_finally_entry = None;
                     self.suspend_current_abrupt_completion()?;
                     // Engine-constructed error values (native faults surfaced
                     // as JS-catchable errors) carry no data-flow taint.
                     self.replace_pending_abrupt_slots(Some((thrown.clone(), Label::Public)), None)?;
                     match self.pop_exception_target_frame()? {
                         Some(frame) => {
-                            self.ip = frame.catch_target;
+                            self.select_exception_target(Some(module), frame);
                             // Re-enter dispatch at the handler.
                         }
                         None => {
@@ -32259,6 +32401,8 @@ impl InterpreterCore {
                             // `has_active_catch_frame` raced/changed: surface
                             // an uncaught exception rather than the host error.
                             self.clear_suspended_abrupt_completions();
+                            self.clear_finally_frames();
+                            self.pending_finally_entry = None;
                             return Err(InterpreterError::UncaughtException {
                                 value: self.uncaught_exception_description(&thrown),
                             });
@@ -32479,28 +32623,38 @@ impl InterpreterCore {
                             // of letting `?` escape the loop. Non-throw errors (e.g.
                             // a missing `next` TypeError) leave `pending_exception`
                             // unset and propagate unchanged.
-                            let Some(thrown) = self.pending_exception.clone() else {
+                            let Some((thrown, thrown_label)) = self.take_pending_exception_slot()
+                            else {
                                 return Err(err);
                             };
-                            // Same exception, same label: capture before the
-                            // suspend resets the shadow (bd-l0d6z).
-                            let thrown_label = self.pending_exception_label.clone();
-                            self.suspend_current_abrupt_completion()?;
-                            self.replace_pending_abrupt_slots(
-                                Some((thrown.clone(), thrown_label.clone())),
-                                None,
-                            )?;
+                            // The isolated iterator call already re-armed this
+                            // exception. Route that one owned completion without
+                            // suspending a duplicate that a catch could revive.
+                            self.pending_finally_entry = None;
+                            self.replace_pending_abrupt_slots(Some((thrown, thrown_label)), None)?;
                             if let Some(frame) = self.pop_exception_target_frame()? {
-                                self.ip = frame.catch_target;
-                            } else {
-                                if self
-                                    .reject_nearest_async_boundary(thrown.clone(), thrown_label)?
-                                {
-                                    continue;
+                                self.select_exception_target(Some(module), frame);
+                            } else if self.nearest_async_call_depth().is_some() {
+                                let (thrown, thrown_label) = self
+                                    .take_pending_exception_slot()
+                                    .expect("iterator throw remained pending for async rejection");
+                                if !self.reject_nearest_async_boundary(thrown, thrown_label)? {
+                                    return Err(InterpreterError::InternalError {
+                                        details: "async boundary disappeared while routing iterator throw"
+                                            .to_string(),
+                                    });
                                 }
+                                continue;
+                            } else {
                                 self.clear_suspended_abrupt_completions();
+                                self.clear_finally_frames();
+                                self.pending_finally_entry = None;
                                 return Err(InterpreterError::UncaughtException {
-                                    value: self.uncaught_exception_description(&thrown),
+                                    value: self.uncaught_exception_description(
+                                        self.pending_exception.as_ref().expect(
+                                            "iterator throw remained pending for uncaught propagation",
+                                        ),
+                                    ),
                                 });
                             }
                         }
@@ -32508,23 +32662,26 @@ impl InterpreterCore {
                 }
                 Ir3Instruction::IteratorClose { iterator, reason } => {
                     let iterator = self.read_reg(iterator)?;
-                    // A finally-style throw-close handler keeps the original
-                    // exception in pending-completion state. Move that owned
-                    // completion onto the suspension stack before the isolated
-                    // iterator.return call, rather than cloning a potentially
-                    // large custom label across arbitrary callback execution.
-                    let suspended_original_throw =
-                        reason == IteratorCloseReason::Throw && self.pending_exception.is_some();
+                    // A canonical throw-close handler owns the original throw
+                    // in its active finalizer frame. Retain the pending-slot
+                    // fallback for hand-authored legacy IR that reaches this
+                    // instruction without `EnterFinally`.
+                    let frame_owns_original_throw = reason == IteratorCloseReason::Throw
+                        && self.finally_frames.last().is_some_and(|frame| {
+                            matches!(
+                                frame.completion.as_ref(),
+                                Some(AbruptCompletion::Exception(_, _))
+                            )
+                        });
+                    let suspended_original_throw = reason == IteratorCloseReason::Throw
+                        && !frame_owns_original_throw
+                        && self.pending_exception.is_some();
                     if suspended_original_throw {
                         self.suspend_current_abrupt_completion()?;
                     }
-                    // Break/outer-continue can run while a source `finally` is
-                    // carrying an older throw or return. Isolated `return()`
-                    // calls re-arm their own explicit throw after restoring the
-                    // caller snapshot, which would otherwise overwrite that
-                    // inherited completion. Suspend it with its finalizer owner
-                    // depth so a local catch can resume it, while an outer catch
-                    // prunes it during unwinding.
+                    // A non-canonical pending completion still needs the legacy
+                    // suspension path. Canonical source-finally completions stay
+                    // isolated in `finally_frames` across the callback snapshot.
                     let suspended_inherited_completion = matches!(
                         reason,
                         IteratorCloseReason::Break | IteratorCloseReason::Continue
@@ -32553,23 +32710,27 @@ impl InterpreterCore {
                                     && self.pending_exception.is_some();
                             if reason == IteratorCloseReason::Throw
                                 && (explicit_throw || Self::js_catchable_error_name(&err).is_some())
-                                && suspended_original_throw
+                                && (frame_owns_original_throw || suspended_original_throw)
                             {
                                 self.clear_pending_abrupt_slots();
-                                self.restore_suspended_abrupt_completion();
+                                if suspended_original_throw {
+                                    self.restore_suspended_abrupt_completion();
+                                }
                                 self.ip += 1;
                                 continue;
                             }
-                            if suspended_original_throw {
+                            if frame_owns_original_throw || suspended_original_throw {
                                 // Resource/engine faults are not suppressible JS
-                                // completions, but restoring the moved original
-                                // keeps ownership and accounting balanced while
-                                // the engine fault propagates.
+                                // completions. Keep the owned frame (or restore
+                                // the legacy pending completion) while the engine
+                                // fault propagates.
                                 self.clear_pending_abrupt_slots();
-                                self.restore_suspended_abrupt_completion();
+                                if suspended_original_throw {
+                                    self.restore_suspended_abrupt_completion();
+                                }
                                 return Err(err);
                             }
-                            match self.route_iterator_close_failure(err)? {
+                            match self.route_iterator_close_failure(module, err)? {
                                 None => continue,
                                 Some(err) => return Err(err),
                             }
@@ -32660,7 +32821,7 @@ impl InterpreterCore {
                             .dispatch_builtin_function(module, builtin, args, None, None)
                         {
                             Ok(value) => value,
-                            Err(err) => match self.route_isolated_explicit_throw(err)? {
+                            Err(err) => match self.route_isolated_explicit_throw(module, err)? {
                                 None => {
                                     // IFC (bd-8enww.4.8): an explicit throw
                                     // escaping the builtin's callback lane
@@ -32715,7 +32876,7 @@ impl InterpreterCore {
                                 call_labels,
                             ) {
                             Ok(value) => value,
-                            Err(err) => match self.route_isolated_explicit_throw(err)? {
+                            Err(err) => match self.route_isolated_explicit_throw(module, err)? {
                                 None => continue,
                                 Some(err) => return Err(err),
                             },
@@ -32898,7 +33059,7 @@ impl InterpreterCore {
                                 saved_suspended_abrupt_depth: self
                                     .suspended_abrupt_completions
                                     .len(),
-                                saved_finally_mode_depth: self.finally_modes.len(),
+                                saved_finally_mode_depth: self.finally_frames.len(),
                                 saved_scope_depth: scope_depth,
                                 saved_scope_chain: saved_chain,
                                 async_function_id: Some(async_id),
@@ -33088,7 +33249,7 @@ impl InterpreterCore {
                                 saved_suspended_abrupt_depth: self
                                     .suspended_abrupt_completions
                                     .len(),
-                                saved_finally_mode_depth: self.finally_modes.len(),
+                                saved_finally_mode_depth: self.finally_frames.len(),
                                 saved_scope_depth: scope_depth,
                                 saved_scope_chain: saved_chain,
                                 async_function_id: None,
@@ -33181,7 +33342,7 @@ impl InterpreterCore {
                             Some(receiver),
                         ) {
                             Ok(value) => value,
-                            Err(err) => match self.route_isolated_explicit_throw(err)? {
+                            Err(err) => match self.route_isolated_explicit_throw(module, err)? {
                                 None => {
                                     // IFC (bd-8enww.4.8): mirror the success-path
                                     // receiver+args label join (below) onto an
@@ -33261,7 +33422,7 @@ impl InterpreterCore {
                                 call_labels,
                             ) {
                             Ok(value) => value,
-                            Err(err) => match self.route_isolated_explicit_throw(err)? {
+                            Err(err) => match self.route_isolated_explicit_throw(module, err)? {
                                 None => continue,
                                 Some(err) => return Err(err),
                             },
@@ -33408,7 +33569,7 @@ impl InterpreterCore {
                                 saved_suspended_abrupt_depth: self
                                     .suspended_abrupt_completions
                                     .len(),
-                                saved_finally_mode_depth: self.finally_modes.len(),
+                                saved_finally_mode_depth: self.finally_frames.len(),
                                 saved_scope_depth: scope_depth,
                                 saved_scope_chain: saved_chain,
                                 async_function_id: Some(async_id),
@@ -33538,7 +33699,7 @@ impl InterpreterCore {
                         ),
                         saved_pending_return: self.pending_return.take(),
                         saved_suspended_abrupt_depth: self.suspended_abrupt_completions.len(),
-                        saved_finally_mode_depth: self.finally_modes.len(),
+                        saved_finally_mode_depth: self.finally_frames.len(),
                         saved_scope_depth: scope_depth,
                         saved_scope_chain: saved_chain,
                         async_function_id: None,
@@ -33579,6 +33740,7 @@ impl InterpreterCore {
                     // exception, and a return from inside try/catch must still
                     // unwind through enclosing finally blocks before it can
                     // complete.
+                    self.pending_finally_entry = None;
                     self.suspend_current_abrupt_completion()?;
                     self.replace_pending_abrupt_slots(
                         None,
@@ -33588,6 +33750,10 @@ impl InterpreterCore {
                         }),
                     )?;
                     if let Some(finally_target) = self.pop_current_finally_target() {
+                        self.pending_finally_entry = Some(PendingFinallyEntry {
+                            target: finally_target,
+                            mode: FinallyMode::Return,
+                        });
                         self.ip = finally_target;
                     } else {
                         let pending_return = self
@@ -33654,7 +33820,7 @@ impl InterpreterCore {
                         // router and propagate unchanged.)
                         match self.dispatch_builtin_hostcall(&capability.0, args, Some(module)) {
                             Ok(value) => value,
-                            Err(err) => match self.route_isolated_explicit_throw(err)? {
+                            Err(err) => match self.route_isolated_explicit_throw(module, err)? {
                                 None => {
                                     // IFC (bd-8enww.4.8 throw-path mirror): the
                                     // escaping value is seeded from the arg
@@ -34651,7 +34817,7 @@ impl InterpreterCore {
                                 saved_suspended_abrupt_depth: self
                                     .suspended_abrupt_completions
                                     .len(),
-                                saved_finally_mode_depth: self.finally_modes.len(),
+                                saved_finally_mode_depth: self.finally_frames.len(),
                                 saved_scope_depth: scope_depth,
                                 saved_scope_chain: saved_chain,
                                 async_function_id: None,
@@ -34803,7 +34969,7 @@ impl InterpreterCore {
                         catch_target: catch_target as usize,
                         finally_target: finally_target.map(|t| t as usize),
                         call_depth: self.call_stack.len(),
-                        finally_mode_depth: self.finally_modes.len(),
+                        finally_frame_depth: self.finally_frames.len(),
                     });
                     self.ip += 1;
                 }
@@ -34820,6 +34986,7 @@ impl InterpreterCore {
                     // register's label so `EnterCatch` re-establishes it on
                     // the catch binding instead of leaving a stale label.
                     let thrown_label = self.get_register_label(value)?.clone();
+                    self.pending_finally_entry = None;
                     self.suspend_current_abrupt_completion()?;
                     self.replace_pending_abrupt_slots(
                         Some((thrown.clone(), thrown_label.clone())),
@@ -34830,13 +34997,15 @@ impl InterpreterCore {
                     // then truncate to remove it and any frames above it — but
                     // NOT frames below it (which belong to outer try blocks).
                     if let Some(frame) = self.pop_exception_target_frame()? {
-                        self.ip = frame.catch_target;
+                        self.select_exception_target(Some(module), frame);
                     } else {
                         // No catch handler found — uncaught exception.
                         if self.reject_nearest_async_boundary(thrown.clone(), thrown_label)? {
                             continue;
                         }
                         self.clear_suspended_abrupt_completions();
+                        self.clear_finally_frames();
+                        self.pending_finally_entry = None;
                         return Err(InterpreterError::UncaughtException {
                             value: self.uncaught_exception_description(&thrown),
                         });
@@ -34855,70 +35024,65 @@ impl InterpreterCore {
                     self.ip += 1;
                 }
                 Ir3Instruction::EnterFinally => {
-                    // Track whether we entered the finally block via normal
-                    // control flow, exception unwinding, or return unwinding.
-                    if self.pending_exception.is_some() {
-                        self.finally_modes.push(FinallyMode::Exception);
-                    } else if self.pending_return.is_some() {
-                        self.finally_modes.push(FinallyMode::Return);
-                    } else {
-                        self.finally_modes.push(FinallyMode::Normal);
-                    }
+                    self.enter_finally_frame()?;
                     self.ip += 1;
                 }
                 Ir3Instruction::EndFinally => {
-                    let mode = self.finally_modes.pop().unwrap_or(FinallyMode::Normal);
-                    match mode {
-                        FinallyMode::Exception => {
-                            // Re-throw the pending exception after finally completes.
-                            if let Some(thrown) = self.pending_exception.clone() {
-                                let desc = self.uncaught_exception_description(&thrown);
-                                let thrown_label = self.pending_exception_label.clone();
-                                // Look for another catch frame to propagate to.
-                                if let Some(frame) = self.pop_exception_target_frame()? {
-                                    self.ip = frame.catch_target;
-                                } else if self
-                                    .reject_nearest_async_boundary(thrown.clone(), thrown_label)?
-                                {
+                    match self.take_finally_completion() {
+                        Some(AbruptCompletion::Exception(thrown, thrown_label)) => {
+                            self.clear_pending_abrupt_slots();
+                            let desc = self.uncaught_exception_description(&thrown);
+                            self.pending_exception = Some(thrown);
+                            self.pending_exception_label = thrown_label;
+                            if let Some(frame) = self.pop_exception_target_frame()? {
+                                self.select_exception_target(Some(module), frame);
+                            } else if self.nearest_async_call_depth().is_some() {
+                                let (thrown, thrown_label) = self
+                                    .take_pending_exception_slot()
+                                    .expect("owned finally exception remained pending");
+                                if self.reject_nearest_async_boundary(thrown, thrown_label)? {
                                     continue;
-                                } else {
-                                    self.clear_suspended_abrupt_completions();
-                                    return Err(InterpreterError::UncaughtException {
-                                        value: desc,
-                                    });
                                 }
+                                return Err(InterpreterError::InternalError {
+                                    details: "async boundary disappeared while completing finally"
+                                        .to_string(),
+                                });
                             } else {
-                                // Exception was consumed (shouldn't happen, but safe fallthrough).
-                                self.ip += 1;
+                                self.clear_suspended_abrupt_completions();
+                                self.clear_finally_frames();
+                                self.pending_finally_entry = None;
+                                return Err(InterpreterError::UncaughtException { value: desc });
                             }
                         }
-                        FinallyMode::Return => {
-                            if let Some(pending_return) = self.take_pending_return_slot() {
-                                if let Some(finally_target) = self.pop_current_finally_target() {
-                                    self.replace_pending_abrupt_slots(None, Some(pending_return))?;
-                                    self.ip = finally_target;
-                                } else {
-                                    if let Some(final_value) = self.complete_return(
-                                        pending_return.value,
-                                        pending_return.label,
-                                    )? {
-                                        return Ok(final_value);
-                                    }
-                                }
+                        Some(AbruptCompletion::Return(pending_return)) => {
+                            self.clear_pending_abrupt_slots();
+                            if let Some(finally_target) = self.pop_current_finally_target() {
+                                self.pending_return = Some(pending_return);
+                                self.pending_finally_entry = Some(PendingFinallyEntry {
+                                    target: finally_target,
+                                    mode: FinallyMode::Return,
+                                });
+                                self.ip = finally_target;
                             } else {
-                                self.ip += 1;
+                                self.estimated_memory_bytes =
+                                    self.estimated_memory_bytes.saturating_sub(
+                                        Self::estimate_labeled_return_bytes(&pending_return),
+                                    );
+                                if let Some(final_value) = self
+                                    .complete_return(pending_return.value, pending_return.label)?
+                                {
+                                    return Ok(final_value);
+                                }
                             }
                         }
-                        FinallyMode::Normal => {
+                        None => {
                             // Normal completion — just continue.
                             self.ip += 1;
                         }
                     }
                 }
                 Ir3Instruction::DiscardAbruptCompletion => {
-                    self.clear_pending_abrupt_slots();
-                    let _ = self.finally_modes.pop();
-                    self.prune_abrupt_state_to_finally_depth(self.finally_modes.len());
+                    self.discard_current_finally_frame();
                     self.restore_suspended_abrupt_completion();
                     self.ip += 1;
                 }
@@ -46376,7 +46540,8 @@ impl InterpreterCore {
             self.pending_hostcall_result_label = None;
             self.pending_return = None;
             self.suspended_abrupt_completions.clear();
-            self.finally_modes.clear();
+            self.finally_frames.clear();
+            self.pending_finally_entry = None;
             self.current_module_specifier = Some(module.header.source_label.clone());
             self.apply_register_context_scope_call_stack_memory_delta(
                 setup_previous_register_bytes,
@@ -46572,7 +46737,8 @@ impl InterpreterCore {
             self.pending_hostcall_result_label = None;
             self.pending_return = None;
             self.suspended_abrupt_completions.clear();
-            self.finally_modes.clear();
+            self.finally_frames.clear();
+            self.pending_finally_entry = None;
             self.current_module_specifier = Some(module.header.source_label.clone());
             self.apply_register_context_scope_call_stack_memory_delta(
                 setup_previous_register_bytes,
@@ -61215,10 +61381,10 @@ impl InterpreterCore {
 
     fn estimate_abrupt_completion_bytes(completion: &AbruptCompletion) -> u64 {
         match completion {
-            AbruptCompletion::Exception(value, label, _) => {
+            AbruptCompletion::Exception(value, label) => {
                 Self::estimate_value_bytes(value).saturating_add(Self::estimate_label_bytes(label))
             }
-            AbruptCompletion::Return(return_value, _) => {
+            AbruptCompletion::Return(return_value) => {
                 Self::estimate_labeled_return_bytes(return_value)
             }
         }
@@ -61385,6 +61551,7 @@ impl InterpreterCore {
                     .iter()
                     .map(Self::estimate_abrupt_completion_bytes),
             ))
+            .saturating_add(self.finally_frames_memory_bytes())
     }
 
     fn estimate_async_function_bytes(function: &AsyncFunctionObject) -> u64 {
@@ -62649,7 +62816,7 @@ impl InterpreterCore {
             self.pending_return = frame.saved_pending_return;
             self.suspended_abrupt_completions
                 .truncate(frame.saved_suspended_abrupt_depth);
-            self.finally_modes.truncate(frame.saved_finally_mode_depth);
+            self.finally_frames.truncate(frame.saved_finally_mode_depth);
             if let Some(saved) = frame.saved_scope_chain {
                 self.scope_chain.frames = saved;
             } else {
@@ -71885,7 +72052,7 @@ mod async_runtime_tests_current {
     }
 
     #[test]
-    fn caught_throw_restores_suspended_return_label_bd_ur3tk_16() {
+    fn caught_throw_preserves_owned_return_label_bd_ur3tk_16_bd_bvgmr() {
         let module = test_module_with_functions(
             vec![
                 Ir3Instruction::Call {
@@ -71935,6 +72102,11 @@ mod async_runtime_tests_current {
                 .expect("restored suspended return label"),
             &Label::Secret
         );
+        assert!(core.pending_exception.is_none());
+        assert!(core.pending_return.is_none());
+        assert!(core.pending_finally_entry.is_none());
+        assert!(core.finally_frames.is_empty());
+        assert!(core.suspended_abrupt_completions.is_empty());
     }
 
     #[test]
@@ -71954,7 +72126,7 @@ mod async_runtime_tests_current {
         core.replace_pending_abrupt_slots(None, Some(pending.clone()))
             .expect("pending labeled return should fit");
         core.suspended_abrupt_completions
-            .push(AbruptCompletion::Return(suspended.clone(), 0));
+            .push(AbruptCompletion::Return(suspended.clone()));
         core.sync_estimated_memory_bytes()
             .expect("seeded return state should fit");
         let baseline = core.estimated_memory_bytes();
@@ -71969,7 +72141,7 @@ mod async_runtime_tests_current {
         assert_eq!(core.pending_return, Some(pending));
         assert!(matches!(
             core.suspended_abrupt_completions.as_slice(),
-            [AbruptCompletion::Return(restored, 0)] if restored == &suspended
+            [AbruptCompletion::Return(restored)] if restored == &suspended
         ));
         assert_eq!(core.estimated_memory_bytes(), baseline);
         assert_eq!(
@@ -71977,6 +72149,388 @@ mod async_runtime_tests_current {
             core.recompute_estimated_memory_bytes(),
             "snapshot restore must account the returned value and its dynamic label exactly"
         );
+    }
+
+    fn execute_exception_source_with_core_bd_bvgmr(source: &str) -> (Value, InterpreterCore) {
+        let syntax_tree = CanonicalEs2020Parser
+            .parse_with_options(
+                ParserSource {
+                    label: "bd_bvgmr_runtime.js".to_string(),
+                    text: source.to_string(),
+                },
+                ParseGoal::Script,
+                &ParserOptions::default(),
+            )
+            .expect("finally ownership regression source should parse");
+        let module = lower_ir0_to_ir3(
+            &Ir0Module::from_syntax_tree(syntax_tree, "bd_bvgmr_runtime.js"),
+            &LoweringContext::new(
+                "trace-bd-bvgmr-runtime",
+                "decision-bd-bvgmr-runtime",
+                "policy-bd-bvgmr-runtime",
+            ),
+        )
+        .expect("finally ownership regression source should lower")
+        .ir3;
+        let mut core = test_interpreter();
+        let value = core
+            .execute(&module)
+            .expect("finally ownership regression should execute")
+            .value;
+        (value, core)
+    }
+
+    #[test]
+    fn escaped_finally_completion_records_are_balanced_bd_bvgmr() {
+        let (value, core) = execute_exception_source_with_core_bd_bvgmr(
+            "function f(){ try { return \"outer\"; } finally { try { try { return \"inner\"; } finally { throw \"new\"; } } catch(e) {} } } f();",
+        );
+
+        assert_eq!(value, Value::str("outer"));
+        assert!(core.pending_exception.is_none());
+        assert!(core.pending_return.is_none());
+        assert!(core.pending_finally_entry.is_none());
+        assert!(core.finally_frames.is_empty());
+        assert!(core.suspended_abrupt_completions.is_empty());
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes(),
+            "successful nested-finally completion must leave exact accounting"
+        );
+    }
+
+    #[test]
+    fn same_finally_catch_and_normal_nested_entry_preserve_owner_bd_bvgmr() {
+        let (exception_value, exception_core) = execute_exception_source_with_core_bd_bvgmr(
+            "let log=\"\"; try { try { throw \"outer\"; } finally { try { throw \"new\"; } catch(e) { log=e+\";\"; } log=log+\"after;\"; } } catch(e) { log=log+e; } log;",
+        );
+        assert_eq!(exception_value, Value::str("new;after;outer"));
+        assert!(exception_core.pending_exception.is_none());
+        assert!(exception_core.pending_return.is_none());
+        assert!(exception_core.pending_finally_entry.is_none());
+        assert!(exception_core.finally_frames.is_empty());
+        assert!(exception_core.suspended_abrupt_completions.is_empty());
+
+        let (return_value, return_core) = execute_exception_source_with_core_bd_bvgmr(
+            "function f(){ try { return \"outer\"; } finally { while(true) { try {} finally { break; } } } } f();",
+        );
+        assert_eq!(return_value, Value::str("outer"));
+        assert!(return_core.pending_exception.is_none());
+        assert!(return_core.pending_return.is_none());
+        assert!(return_core.pending_finally_entry.is_none());
+        assert!(return_core.finally_frames.is_empty());
+        assert!(return_core.suspended_abrupt_completions.is_empty());
+    }
+
+    #[test]
+    fn isolated_throw_to_explicit_finally_entry_owns_completion_bd_bvgmr() {
+        let module = test_module_with_functions(
+            vec![
+                Ir3Instruction::BeginTry {
+                    catch_target: 7,
+                    finally_target: None,
+                },
+                Ir3Instruction::BeginTry {
+                    catch_target: 4,
+                    // Synthetic unwind handlers may route Throw and Return to
+                    // different targets even though the Throw target itself
+                    // starts with EnterFinally.
+                    finally_target: Some(6),
+                },
+                Ir3Instruction::HostCall {
+                    capability: CapabilityTag("builtin:ArrayPrototypeSome".to_string()),
+                    args: RegRange { start: 8, count: 2 },
+                    dst: 3,
+                },
+                Ir3Instruction::Halt,
+                Ir3Instruction::EnterFinally,
+                Ir3Instruction::EndFinally,
+                Ir3Instruction::Halt,
+                Ir3Instruction::EnterCatch { dst: 1 },
+                Ir3Instruction::Move { dst: 0, src: 1 },
+                Ir3Instruction::Halt,
+                Ir3Instruction::Throw { value: 0 },
+            ],
+            vec![Ir3FunctionDesc {
+                entry: 10,
+                arity: 3,
+                frame_size: 3,
+                name: Some("isolated_explicit_finally_thrower".to_string()),
+                is_generator: false,
+                rest_param_index: None,
+            }],
+        );
+        let mut core = test_interpreter();
+        core.config
+            .granted_capabilities
+            .insert(RuntimeCapability::Builtin);
+        let array = core
+            .alloc_array_from_values(&[Value::Int(1)])
+            .expect("isolated callback receiver should allocate");
+        core.write_reg(8, Value::Object(array))
+            .expect("receiver register should be writable");
+        core.write_reg(9, Value::Function(0))
+            .expect("callback register should be writable");
+
+        assert_eq!(
+            core.execute(&module)
+                .expect("isolated throw should traverse the explicit finalizer")
+                .value,
+            Value::Int(1)
+        );
+        assert!(core.pending_exception.is_none());
+        assert!(core.pending_return.is_none());
+        assert!(core.pending_finally_entry.is_none());
+        assert!(core.finally_frames.is_empty());
+        assert!(core.suspended_abrupt_completions.is_empty());
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+    }
+
+    #[test]
+    fn discard_abrupt_completion_preserves_outer_frame_label_bd_bvgmr() {
+        let module =
+            test_module_with_functions(vec![Ir3Instruction::DiscardAbruptCompletion], Vec::new());
+        let mut core = test_interpreter();
+        let outer = AbruptCompletion::Exception(
+            Value::str("outer"),
+            Label::Custom {
+                name: "outer-finally-label".repeat(8),
+                level: 5,
+            },
+        );
+        core.finally_frames.push(FinallyFrame {
+            completion: Some(outer.clone()),
+        });
+        core.finally_frames.push(FinallyFrame {
+            completion: Some(AbruptCompletion::Return(LabeledReturn {
+                value: Value::str("inner"),
+                label: Label::Public,
+            })),
+        });
+        core.sync_estimated_memory_bytes()
+            .expect("owned completion fixture should fit");
+        let snapshot = core
+            .snapshot_module_execution()
+            .expect("snapshot should preserve finalizer ownership");
+        core.clear_finally_frames();
+        core.restore_module_execution(snapshot, true);
+
+        core.run_loop(&module)
+            .expect("discard should remove only the local finalizer frame");
+
+        assert!(core.pending_exception.is_none());
+        assert!(core.pending_return.is_none());
+        assert!(core.pending_finally_entry.is_none());
+        assert!(matches!(
+            core.finally_frames.as_slice(),
+            [FinallyFrame { completion: Some(restored) }]
+                if matches!((restored, &outer),
+                    (
+                        AbruptCompletion::Exception(restored_value, restored_label),
+                        AbruptCompletion::Exception(expected_value, expected_label)
+                    ) if restored_value == expected_value && restored_label == expected_label)
+        ));
+
+        let mut normal_nested_core = test_interpreter();
+        normal_nested_core.finally_frames.push(FinallyFrame {
+            completion: Some(outer),
+        });
+        normal_nested_core
+            .finally_frames
+            .push(FinallyFrame { completion: None });
+        normal_nested_core
+            .sync_estimated_memory_bytes()
+            .expect("normal nested finalizer fixture should fit");
+        normal_nested_core
+            .run_loop(&module)
+            .expect("normal nested finally must not capture the outer completion");
+        assert_eq!(normal_nested_core.finally_frames.len(), 1);
+        assert_eq!(
+            normal_nested_core.estimated_memory_bytes(),
+            normal_nested_core.recompute_estimated_memory_bytes()
+        );
+    }
+
+    #[test]
+    fn finally_entry_survives_budget_boundary_and_snapshot_bd_bvgmr() {
+        let module = test_module_with_functions(
+            vec![
+                Ir3Instruction::LoadInt { dst: 0, value: 7 },
+                Ir3Instruction::BeginTry {
+                    catch_target: 3,
+                    finally_target: Some(3),
+                },
+                Ir3Instruction::Return { value: 0 },
+                Ir3Instruction::EnterFinally,
+                Ir3Instruction::EndFinally,
+            ],
+            Vec::new(),
+        );
+        let mut core = test_interpreter();
+        core.config.instruction_budget = 3;
+
+        assert!(matches!(
+            core.run_loop(&module),
+            Err(InterpreterError::BudgetExhausted {
+                executed: 3,
+                budget: 3,
+            })
+        ));
+        assert_eq!(core.ip, 3);
+        assert_eq!(
+            core.pending_finally_entry,
+            Some(PendingFinallyEntry {
+                target: 3,
+                mode: FinallyMode::Return,
+            })
+        );
+        assert!(core.finally_frames.is_empty());
+
+        let snapshot = core
+            .snapshot_module_execution()
+            .expect("pending finalizer entry should be snapshot-safe");
+        core.pending_finally_entry = None;
+        core.restore_module_execution(snapshot, true);
+        core.config.instruction_budget = 10;
+
+        assert_eq!(
+            core.run_loop(&module)
+                .expect("resumed finalizer should complete the owned return"),
+            Value::Int(7)
+        );
+        assert!(core.pending_return.is_none());
+        assert!(core.pending_finally_entry.is_none());
+        assert!(core.finally_frames.is_empty());
+    }
+
+    #[test]
+    fn finally_entry_survives_cancellation_boundary_bd_bvgmr() {
+        let module = test_module_with_functions(
+            vec![
+                Ir3Instruction::BeginTry {
+                    catch_target: 2,
+                    finally_target: Some(2),
+                },
+                Ir3Instruction::Throw { value: 0 },
+                Ir3Instruction::EnterFinally,
+                Ir3Instruction::EndFinally,
+            ],
+            Vec::new(),
+        );
+        let token = CancellationToken::new();
+        token.cancel();
+        let mut config = InterpreterConfig::quickjs_defaults();
+        config.granted_capabilities = std::collections::BTreeSet::from([
+            RuntimeCapability::VmDispatch,
+            RuntimeCapability::HeapAllocate,
+        ]);
+        config.cancellation_token = Some(token.clone());
+        config.checkpoint_density = 3;
+        let mut core = InterpreterCore::new(config, "bd-bvgmr-cancel");
+        core.write_reg_with_label(0, Value::str("boom"), Label::Secret)
+            .expect("throw value should fit");
+
+        assert_eq!(core.run_loop(&module), Err(InterpreterError::Cancelled));
+        assert_eq!(core.ip, 2);
+        assert_eq!(
+            core.pending_finally_entry,
+            Some(PendingFinallyEntry {
+                target: 2,
+                mode: FinallyMode::Exception,
+            })
+        );
+
+        token.reset();
+        assert_eq!(
+            core.run_loop(&module),
+            Err(InterpreterError::UncaughtException {
+                value: "boom".to_string(),
+            })
+        );
+        assert!(core.pending_finally_entry.is_none());
+        assert!(core.finally_frames.is_empty());
+        assert!(core.suspended_abrupt_completions.is_empty());
+        assert_eq!(core.pending_exception_label, Label::Secret);
+    }
+
+    #[test]
+    fn uncaught_throw_from_finally_clears_owned_frames_bd_bvgmr() {
+        let module = test_module_with_functions(
+            vec![
+                Ir3Instruction::LoadInt { dst: 0, value: 1 },
+                Ir3Instruction::BeginTry {
+                    catch_target: 3,
+                    finally_target: Some(3),
+                },
+                Ir3Instruction::Return { value: 0 },
+                Ir3Instruction::EnterFinally,
+                Ir3Instruction::Throw { value: 1 },
+            ],
+            Vec::new(),
+        );
+        let mut core = test_interpreter();
+        core.write_reg_with_label(1, Value::str("new"), Label::Secret)
+            .expect("replacement throw should fit");
+
+        assert_eq!(
+            core.run_loop(&module),
+            Err(InterpreterError::UncaughtException {
+                value: "new".to_string(),
+            })
+        );
+        assert!(core.pending_return.is_none());
+        assert!(core.pending_finally_entry.is_none());
+        assert!(core.finally_frames.is_empty());
+        assert!(core.suspended_abrupt_completions.is_empty());
+        assert_eq!(core.pending_exception, Some(Value::str("new")));
+        assert_eq!(core.pending_exception_label, Label::Secret);
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+    }
+
+    #[test]
+    fn finally_frame_budget_refusal_preserves_pending_entry_bd_bvgmr() {
+        let module = test_module_with_functions(vec![Ir3Instruction::EnterFinally], Vec::new());
+        let mut core = test_interpreter();
+        let pending_return = LabeledReturn {
+            value: Value::str("budgeted return"),
+            label: Label::Custom {
+                name: "budgeted-finalizer-label".repeat(8),
+                level: 4,
+            },
+        };
+        core.replace_pending_abrupt_slots(None, Some(pending_return.clone()))
+            .expect("pending return should fit before finalizer entry");
+        core.pending_finally_entry = Some(PendingFinallyEntry {
+            target: 0,
+            mode: FinallyMode::Return,
+        });
+        let baseline = core
+            .sync_estimated_memory_bytes()
+            .expect("pending finalizer fixture should fit");
+        core.config.max_total_memory_bytes = baseline
+            .saturating_add(std::mem::size_of::<FinallyFrame>() as u64)
+            .saturating_sub(1);
+
+        assert!(matches!(
+            core.run_loop(&module),
+            Err(InterpreterError::MemoryBudgetExceeded { .. })
+        ));
+        assert_eq!(core.pending_return, Some(pending_return));
+        assert_eq!(
+            core.pending_finally_entry,
+            Some(PendingFinallyEntry {
+                target: 0,
+                mode: FinallyMode::Return,
+            })
+        );
+        assert!(core.finally_frames.is_empty());
+        assert_eq!(core.estimated_memory_bytes(), baseline);
     }
 
     #[test]
@@ -92502,36 +93056,36 @@ mod tests {
     }
 
     #[test]
-    fn prune_abrupt_state_uses_finally_ownership_and_exact_memory_bd_g73mg() {
+    fn truncating_finally_frames_preserves_outer_owner_and_exact_memory_bd_g73mg() {
         let config = test_quickjs_config();
         let mut core = InterpreterCore::new(config, "finally-depth-prune-memory");
-        core.finally_modes = vec![FinallyMode::Exception, FinallyMode::Return];
-        core.suspended_abrupt_completions = vec![
-            AbruptCompletion::Exception(
-                Value::str("retained exception"),
-                Label::Custom {
-                    name: "retained-label".repeat(8),
-                    level: 3,
-                },
-                1,
-            ),
-            AbruptCompletion::Return(
-                LabeledReturn {
+        core.finally_frames = vec![
+            FinallyFrame {
+                completion: Some(AbruptCompletion::Exception(
+                    Value::str("retained exception"),
+                    Label::Custom {
+                        name: "retained-label".repeat(8),
+                        level: 3,
+                    },
+                )),
+            },
+            FinallyFrame {
+                completion: Some(AbruptCompletion::Return(LabeledReturn {
                     value: Value::str("discarded deep return"),
                     label: Label::Public,
-                },
-                2,
-            ),
+                })),
+            },
         ];
         core.sync_estimated_memory_bytes()
             .expect("seeded completion state should fit memory budget");
 
-        core.prune_abrupt_state_to_finally_depth(1);
+        core.truncate_finally_frames(1);
 
-        assert_eq!(core.finally_modes, vec![FinallyMode::Exception]);
         assert!(matches!(
-            core.suspended_abrupt_completions.as_slice(),
-            [AbruptCompletion::Exception(value, Label::Custom { .. }, 1)]
+            core.finally_frames.as_slice(),
+            [FinallyFrame {
+                completion: Some(AbruptCompletion::Exception(value, Label::Custom { .. }))
+            }]
                 if value == &Value::str("retained exception")
         ));
         assert_eq!(
@@ -92566,11 +93120,8 @@ mod tests {
         assert!(core.pending_exception.is_none());
         assert!(matches!(
             core.suspended_abrupt_completions.last(),
-            Some(AbruptCompletion::Exception(
-                _,
-                Label::Custom { name, level: 7 },
-                0
-            )) if name.as_ptr() == custom_name_ptr
+            Some(AbruptCompletion::Exception(_, Label::Custom { name, level: 7 }))
+                if name.as_ptr() == custom_name_ptr
         ));
         assert_eq!(
             core.estimated_memory_bytes,
@@ -92627,13 +93178,10 @@ mod tests {
                 .expect("scope binding update");
         }
         core.suspended_abrupt_completions
-            .push(AbruptCompletion::Return(
-                LabeledReturn {
-                    value: Value::str("inner"),
-                    label: Label::Public,
-                },
-                0,
-            ));
+            .push(AbruptCompletion::Return(LabeledReturn {
+                value: Value::str("inner"),
+                label: Label::Public,
+            }));
         core.call_stack.push(CallFrame {
             return_ip: 777,
             return_reg: 0,
@@ -92718,14 +93266,16 @@ mod tests {
                 .expect("scope binding update");
         }
         core.suspended_abrupt_completions
-            .push(AbruptCompletion::Return(
-                LabeledReturn {
-                    value: Value::str("inner"),
-                    label: Label::Public,
-                },
-                0,
-            ));
-        core.finally_modes.push(FinallyMode::Return);
+            .push(AbruptCompletion::Return(LabeledReturn {
+                value: Value::str("inner"),
+                label: Label::Public,
+            }));
+        core.finally_frames.push(FinallyFrame {
+            completion: Some(AbruptCompletion::Return(LabeledReturn {
+                value: Value::str("owned finalizer return"),
+                label: Label::Public,
+            })),
+        });
         core.call_stack.push(CallFrame {
             return_ip: 909,
             return_reg: 0,
@@ -92752,7 +93302,7 @@ mod tests {
 
         assert!(core.call_stack.is_empty());
         assert!(core.suspended_abrupt_completions.is_empty());
-        assert!(core.finally_modes.is_empty());
+        assert!(core.finally_frames.is_empty());
         assert_eq!(core.pending_exception, Some(Value::str("outer error")));
         let restored_payload = core
             .scope_chain

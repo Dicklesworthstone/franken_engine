@@ -1755,6 +1755,15 @@ struct AsyncFunctionObject {
     result_promise: u32,
 }
 
+/// Context information for resuming an async function after a pending await.
+#[derive(Debug, Clone)]
+struct AsyncResumptionContext {
+    /// The async function whose activation was suspended.
+    async_function_id: u32,
+    /// Register overwritten by the fulfillment value or rejection completion.
+    result_register: u32,
+}
+
 /// Fully validated state needed to enter an async function call frame.
 struct AsyncCallSetup {
     function_index: u32,
@@ -3255,6 +3264,9 @@ pub struct InterpreterCore {
     async_generators: Vec<AsyncGeneratorObject>,
     /// Async function object store.
     async_functions: Vec<AsyncFunctionObject>,
+    /// Pending await continuations, keyed by the Promise returned from the
+    /// internal await reaction registration.
+    async_resumption_contexts: BTreeMap<u32, AsyncResumptionContext>,
     /// Promise store for ES2020 Promise semantics.
     promise_store: crate::promise_model::PromiseStore,
     /// Deterministic event loop state (microtasks + macrotasks + virtual clock).
@@ -3364,6 +3376,7 @@ impl InterpreterCore {
             generators: Vec::new(),
             async_generators: Vec::new(),
             async_functions: Vec::new(),
+            async_resumption_contexts: BTreeMap::new(),
             promise_store: crate::promise_model::PromiseStore::new(),
             event_loop: crate::promise_model::EventLoop::new(),
             promise_combinators: BTreeMap::new(),
@@ -3472,7 +3485,9 @@ impl InterpreterCore {
 
         // Drain any pending microtasks enqueued during execution
         // (promise reactions, thenable resolutions, etc.).
-        self.drain_microtasks();
+        if let Err(error) = self.drain_microtasks(Some(module)) {
+            result = Err(error);
+        }
 
         // Run the event loop until all pending work is complete after normal
         // top-level termination.  A failed script should not run timer
@@ -3586,6 +3601,7 @@ impl InterpreterCore {
         self.promise_combinators.clear();
         self.promise_combinator_watchers.clear();
         self.next_promise_combinator_id = 0;
+        self.async_resumption_contexts.clear();
         Ok(())
     }
 
@@ -3705,6 +3721,7 @@ impl InterpreterCore {
         self.promise_combinators.clear();
         self.promise_combinator_watchers.clear();
         self.next_promise_combinator_id = 0;
+        self.async_resumption_contexts.clear();
         Ok(())
     }
 
@@ -4757,12 +4774,11 @@ impl InterpreterCore {
             return Err(err);
         }
         let result = self.run_loop(module);
-        self.drain_microtasks();
+        let microtask_result = self.drain_microtasks(Some(module));
         self.restore_module_execution(snapshot);
         self.active_cjs_context = previous_cjs_context;
         match result {
-            Ok(_) => Ok(()),
-            Err(InterpreterError::Halted) => Ok(()),
+            Ok(_) | Err(InterpreterError::Halted) => microtask_result,
             Err(err) => Err(err),
         }
     }
@@ -4795,10 +4811,9 @@ impl InterpreterCore {
         }
         self.active_cjs_context = Some(cjs_context.clone());
         let result = self.run_loop(module);
-        self.drain_microtasks();
+        let microtask_result = self.drain_microtasks(Some(module));
         let eval_outcome = match result {
-            Ok(_) => Ok(()),
-            Err(InterpreterError::Halted) => Ok(()),
+            Ok(_) | Err(InterpreterError::Halted) => microtask_result,
             Err(err) => Err(err),
         };
         let finalize_outcome = if eval_outcome.is_ok() {
@@ -4944,6 +4959,226 @@ impl InterpreterCore {
         Ok(())
     }
 
+    fn suspend_async_function_for_await(
+        &mut self,
+        promise_handle: crate::promise_model::PromiseHandle,
+        result_register: u32,
+        await_label: crate::ifc_artifacts::Label,
+    ) -> Result<(), InterpreterError> {
+        let async_function_id = self
+            .call_stack
+            .last()
+            .and_then(|frame| frame.async_function_id)
+            .ok_or_else(|| InterpreterError::TypeError {
+                expected: "await only in async function".to_string(),
+                got: "await outside async function context".to_string(),
+            })?;
+
+        let async_function = self
+            .async_functions
+            .get(async_function_id as usize)
+            .ok_or_else(|| InterpreterError::TypeError {
+                expected: "valid async function".to_string(),
+                got: format!("async function #{async_function_id} not found"),
+            })?;
+        if async_function.phase != AsyncFunctionPhase::Executing {
+            return Err(InterpreterError::TypeError {
+                expected: "executing async function".to_string(),
+                got: format!("async function phase: {:?}", async_function.phase),
+            });
+        }
+
+        let saved_registers = self.registers[self.register_base..].to_vec();
+        let saved_register_labels =
+            self.register_labels_in_range(self.register_base, self.registers.len());
+        let result_promise = self
+            .promise_store
+            .then_for_await(promise_handle, await_label, &mut self.event_loop.microtasks)
+            .map_err(|error| InterpreterError::TypeError {
+                expected: "valid pending promise for await".to_string(),
+                got: error.to_string(),
+            })?;
+
+        let async_function = self
+            .async_functions
+            .get_mut(async_function_id as usize)
+            .expect("async function was validated before await registration");
+        async_function.saved_ip = self.ip + 1;
+        async_function.saved_registers = saved_registers;
+        async_function.saved_register_labels = saved_register_labels;
+        async_function.saved_register_base = self.register_base;
+        async_function.phase = AsyncFunctionPhase::SuspendedAwait;
+
+        self.async_resumption_contexts.insert(
+            result_promise.0,
+            AsyncResumptionContext {
+                async_function_id,
+                result_register,
+            },
+        );
+        Ok(())
+    }
+
+    fn resume_async_function_after_await(
+        &mut self,
+        resumption_context: AsyncResumptionContext,
+        settled: Result<crate::object_model::JsValue, crate::object_model::JsValue>,
+        settlement_label: crate::ifc_artifacts::Label,
+        module: Option<&Ir3Module>,
+    ) -> Result<(), InterpreterError> {
+        let async_function_id = resumption_context.async_function_id;
+        let (saved_ip, saved_register_base, saved_registers, saved_register_labels) = {
+            let async_function = self
+                .async_functions
+                .get_mut(async_function_id as usize)
+                .ok_or_else(|| InterpreterError::TypeError {
+                    expected: "valid async function".to_string(),
+                    got: format!("async function #{async_function_id} not found"),
+                })?;
+            if async_function.phase != AsyncFunctionPhase::SuspendedAwait {
+                return Err(InterpreterError::TypeError {
+                    expected: "suspended async function".to_string(),
+                    got: format!("async function phase: {:?}", async_function.phase),
+                });
+            }
+            if async_function.saved_registers.len() != async_function.saved_register_labels.len() {
+                return Err(InterpreterError::TypeError {
+                    expected: "equal async register and label snapshot lengths".to_string(),
+                    got: format!(
+                        "{} values and {} labels",
+                        async_function.saved_registers.len(),
+                        async_function.saved_register_labels.len()
+                    ),
+                });
+            }
+
+            (
+                async_function.saved_ip,
+                async_function.saved_register_base,
+                std::mem::take(&mut async_function.saved_registers),
+                std::mem::take(&mut async_function.saved_register_labels),
+            )
+        };
+
+        self.ip = saved_ip;
+        self.register_base = saved_register_base;
+        self.restore_saved_register_range(
+            saved_register_base,
+            saved_registers,
+            saved_register_labels,
+        );
+        self.async_functions[async_function_id as usize].phase = AsyncFunctionPhase::Executing;
+
+        match settled {
+            Ok(argument) => self.write_reg_with_label(
+                resumption_context.result_register,
+                Self::js_value_to_value(&argument),
+                settlement_label,
+            ),
+            Err(reason) => self.raise_resumed_await_rejection(
+                async_function_id,
+                Self::js_value_to_value(&reason),
+                settlement_label,
+                module,
+            ),
+        }
+    }
+
+    fn continue_resumed_async_function(
+        &mut self,
+        module: Option<&Ir3Module>,
+    ) -> Result<(), InterpreterError> {
+        let module = module.ok_or_else(|| InterpreterError::TypeError {
+            expected: "module context for async function resumption".to_string(),
+            got: "missing module context".to_string(),
+        })?;
+        match self.run_loop(module) {
+            Ok(_) | Err(InterpreterError::Halted) => Ok(()),
+            Err(error) => Err(error),
+        }
+    }
+
+    fn raise_resumed_await_rejection(
+        &mut self,
+        async_function_id: u32,
+        error_value: Value,
+        label: crate::ifc_artifacts::Label,
+        module: Option<&Ir3Module>,
+    ) -> Result<(), InterpreterError> {
+        let async_depth = self
+            .call_stack
+            .iter()
+            .rposition(|frame| frame.async_function_id == Some(async_function_id))
+            .map(|index| index + 1)
+            .ok_or_else(|| InterpreterError::TypeError {
+                expected: "active async call frame".to_string(),
+                got: format!("missing frame for async function #{async_function_id}"),
+            })?;
+
+        self.suspend_current_abrupt_completion();
+        self.pending_return = None;
+        self.pending_exception = Some(LabeledException {
+            value: error_value.clone(),
+            label: label.clone(),
+        });
+
+        if let Some(frame) = self.pop_exception_target_frame_at_or_above(async_depth) {
+            self.pending_finally_entry = (frame.finally_target == Some(frame.catch_target)
+                || module.is_some_and(|module| {
+                    matches!(
+                        module.instructions.get(frame.catch_target),
+                        Some(Ir3Instruction::EnterFinally)
+                    )
+                }))
+            .then_some(PendingFinallyEntry {
+                target: frame.catch_target,
+                mode: FinallyMode::Exception,
+            });
+            self.ip = frame.catch_target;
+            return Ok(());
+        }
+
+        self.pending_exception = None;
+        self.pending_finally_entry = None;
+        let result_promise = self
+            .async_functions
+            .get(async_function_id as usize)
+            .ok_or_else(|| InterpreterError::TypeError {
+                expected: "valid async function".to_string(),
+                got: format!("async function #{async_function_id} not found"),
+            })?
+            .result_promise;
+        self.reject_promise(
+            crate::promise_model::PromiseHandle(result_promise),
+            Self::value_to_js_value(&error_value),
+            label,
+        )?;
+        self.async_functions[async_function_id as usize].phase = AsyncFunctionPhase::Completed;
+
+        if self
+            .call_stack
+            .last()
+            .and_then(|frame| frame.async_function_id)
+            != Some(async_function_id)
+        {
+            return Err(InterpreterError::TypeError {
+                expected: "resumed async frame at top of call stack".to_string(),
+                got: format!("async function #{async_function_id} is not active"),
+            });
+        }
+        let _ = self.complete_return(Value::Undefined, crate::ifc_artifacts::Label::Public)?;
+        Ok(())
+    }
+
+    fn promise_rejection_from_error(error: &InterpreterError) -> crate::object_model::JsValue {
+        match error {
+            InterpreterError::UncaughtException { value } => {
+                crate::object_model::JsValue::Str(value.clone().into())
+            }
+            other => crate::object_model::JsValue::Str(other.to_string().into()),
+        }
+    }
+
     fn complete_return(
         &mut self,
         return_val: Value,
@@ -5042,11 +5277,18 @@ impl InterpreterCore {
     }
 
     fn pop_exception_target_frame(&mut self) -> Option<CatchFrame> {
+        self.pop_exception_target_frame_at_or_above(0)
+    }
+
+    fn pop_exception_target_frame_at_or_above(
+        &mut self,
+        minimum_call_depth: usize,
+    ) -> Option<CatchFrame> {
         let current_depth = self.call_stack.len();
         let idx = self
             .catch_frames
             .iter()
-            .rposition(|f| f.call_depth <= current_depth)?;
+            .rposition(|f| f.call_depth >= minimum_call_depth && f.call_depth <= current_depth)?;
         let frame = self.catch_frames[idx].clone();
         self.catch_frames.truncate(idx);
         self.finally_frames.truncate(frame.finally_frame_depth);
@@ -8631,53 +8873,12 @@ impl InterpreterCore {
                             }
                         }
                     } else {
-                        // Promise is pending - suspend the async function execution
-                        let current_frame =
-                            self.call_stack
-                                .last()
-                                .ok_or_else(|| InterpreterError::TypeError {
-                                    expected: "call frame during await".to_string(),
-                                    got: "no call frame found".to_string(),
-                                })?;
-
-                        let async_func_id = current_frame.async_function_id.ok_or_else(|| {
-                            InterpreterError::TypeError {
-                                expected: "await only in async function".to_string(),
-                                got: "await outside async function context".to_string(),
-                            }
-                        })?;
-
-                        let saved_registers = self.registers[self.register_base..].to_vec();
-                        let saved_register_labels =
-                            self.register_labels_in_range(self.register_base, self.registers.len());
-
-                        // Save the current execution state
-                        let async_func = self
-                            .async_functions
-                            .get_mut(async_func_id as usize)
-                            .ok_or_else(|| InterpreterError::TypeError {
-                                expected: "valid async function".to_string(),
-                                got: format!("async function #{async_func_id} not found"),
-                            })?;
-
-                        // Save state for when the promise resolves
-                        async_func.saved_ip = self.ip + 1; // Resume after the await instruction
-                        async_func.saved_registers = saved_registers;
-                        async_func.saved_register_labels = saved_register_labels;
-                        async_func.saved_register_base = self.register_base;
-                        async_func.phase = AsyncFunctionPhase::SuspendedAwait;
-
-                        // franken-core records the suspension state but does not own the
-                        // module-aware scheduler needed to resume pending awaits.
-                        return Err(InterpreterError::TypeError {
-                            expected: "settled promise for franken-core baseline await".to_string(),
-                            got: concat!(
-                                "pending promise await is explicitly unsupported by the ",
-                                "franken-core baseline interpreter; async frame is suspended ",
-                                "and result promise remains pending"
-                            )
-                            .to_string(),
-                        });
+                        self.suspend_async_function_for_await(
+                            promise_handle,
+                            promise_reg,
+                            effective_label,
+                        )?;
+                        return Ok(RunLoopExit::Value(Value::Undefined));
                     }
                 }
                 Ir3Instruction::AsyncReturn { value_reg } => {
@@ -11541,7 +11742,7 @@ impl InterpreterCore {
             }
 
             // Phase 2: Drain all microtasks enqueued during macrotask execution
-            self.drain_microtasks();
+            self.drain_microtasks(Some(module))?;
         }
 
         Ok(())
@@ -11693,33 +11894,73 @@ impl InterpreterCore {
     /// Each microtask may enqueue additional microtasks; the drain continues
     /// until the queue is empty, matching ES2020 semantics (microtask checkpoint).
     /// A safety bound prevents infinite loops from pathological promise chains.
-    fn drain_microtasks(&mut self) {
+    fn drain_microtasks(&mut self, module: Option<&Ir3Module>) -> Result<(), InterpreterError> {
         let max_drain = 10_000u32;
         let mut drained = 0u32;
-        let label = crate::ifc_artifacts::Label::Public;
 
-        while let Some(task) = self.event_loop.microtasks.dequeue() {
-            drained += 1;
-            if drained >= max_drain {
+        while drained < max_drain {
+            let Some(task) = self.event_loop.microtasks.dequeue() else {
                 break;
-            }
+            };
+            drained += 1;
             match task {
                 crate::promise_model::Microtask::PromiseReaction {
-                    handler: _,
+                    handler,
                     argument,
                     result_promise,
                     label: task_label,
                 } => {
-                    // With no closure handler, the identity transform propagates
-                    // the argument to the result promise as a fulfillment value.
-                    let _ = self.fulfill_promise(result_promise, argument, task_label);
+                    if handler.is_none()
+                        && let Some(resumption_context) =
+                            self.async_resumption_contexts.remove(&result_promise.0)
+                    {
+                        if let Err(error) = self
+                            .resume_async_function_after_await(
+                                resumption_context,
+                                Ok(argument),
+                                task_label.clone(),
+                                module,
+                            )
+                            .and_then(|()| self.continue_resumed_async_function(module))
+                        {
+                            self.reject_promise(
+                                result_promise,
+                                Self::promise_rejection_from_error(&error),
+                                task_label,
+                            )?;
+                        }
+                    } else {
+                        // The core baseline does not execute user closure handles in
+                        // Promise jobs yet. Preserve its existing identity behavior.
+                        self.fulfill_promise(result_promise, argument, task_label)?;
+                    }
                 }
                 crate::promise_model::Microtask::PromiseRejection {
                     reason,
                     result_promise,
                     label: task_label,
                 } => {
-                    let _ = self.reject_promise(result_promise, reason, task_label);
+                    if let Some(resumption_context) =
+                        self.async_resumption_contexts.remove(&result_promise.0)
+                    {
+                        if let Err(error) = self
+                            .resume_async_function_after_await(
+                                resumption_context,
+                                Err(reason),
+                                task_label.clone(),
+                                module,
+                            )
+                            .and_then(|()| self.continue_resumed_async_function(module))
+                        {
+                            self.reject_promise(
+                                result_promise,
+                                Self::promise_rejection_from_error(&error),
+                                task_label,
+                            )?;
+                        }
+                    } else {
+                        self.reject_promise(result_promise, reason, task_label)?;
+                    }
                 }
                 crate::promise_model::Microtask::ResolveThenable {
                     promise,
@@ -11730,15 +11971,16 @@ impl InterpreterCore {
                     // Simplified: resolve with undefined (full thenable
                     // unwrapping requires closure execution which is a
                     // follow-up bead).
-                    let _ = self.fulfill_promise(
+                    self.fulfill_promise(
                         promise,
                         crate::object_model::JsValue::Undefined,
-                        label.clone(),
-                    );
+                        crate::ifc_artifacts::Label::Public,
+                    )?;
                 }
             }
         }
         self.event_loop.microtasks.compact();
+        Ok(())
     }
 
     fn executable_property_key(value: &Value) -> RuntimePropertyKey {
@@ -21805,7 +22047,8 @@ mod tests {
                 crate::ifc_artifacts::Label::Public,
             )
             .expect("source Promise should fulfill");
-            core.drain_microtasks();
+            core.drain_microtasks(None)
+                .expect("Promise reaction microtasks should drain");
             let result = core
                 .promise_store
                 .get(crate::promise_model::PromiseHandle(result_handle))
@@ -27482,6 +27725,41 @@ mod tests {
         use super::containment_tests::test_interpreter;
         use super::*;
 
+        fn pending_async_module(
+            mut body: Vec<Ir3Instruction>,
+            arity: u32,
+            frame_size: u32,
+        ) -> Ir3Module {
+            let mut instructions = vec![
+                Ir3Instruction::CreateAsyncFunction {
+                    dst: 0,
+                    function_index: 0,
+                    capture_count: 0,
+                },
+                Ir3Instruction::Call {
+                    callee: 0,
+                    args: RegRange {
+                        start: 10,
+                        count: arity,
+                    },
+                    dst: 1,
+                },
+                Ir3Instruction::Halt,
+            ];
+            instructions.append(&mut body);
+            test_module_with_functions(
+                instructions,
+                vec![Ir3FunctionDesc {
+                    entry: 3,
+                    arity,
+                    frame_size,
+                    name: Some("pending_async_bd_ur3tk_15".to_string()),
+                    is_generator: false,
+                    rest_param_index: None,
+                }],
+            )
+        }
+
         #[test]
         fn create_async_function_stores_closure_reference_without_executor_state() {
             let mut core = InterpreterCore::new(test_quickjs_config(), "async-function-create");
@@ -28302,60 +28580,280 @@ mod tests {
         }
 
         #[test]
-        fn async_function_pending_await_uses_explicit_unsupported_contract() {
-            let mut core = InterpreterCore::new(test_quickjs_config(), "async-function-pending");
-            let module = test_module_with_functions(
+        fn pending_await_fulfillment_restores_values_and_labels_bd_ur3tk_15() {
+            let mut core =
+                InterpreterCore::new(test_quickjs_config(), "pending-await-fulfillment-labels");
+            let module = pending_async_module(
                 vec![
-                    Ir3Instruction::CreateAsyncFunction {
-                        dst: 0,
-                        function_index: 0,
-                        capture_count: 0,
-                    },
-                    Ir3Instruction::Call {
-                        callee: 0,
-                        args: RegRange {
-                            start: 10,
-                            count: 1,
-                        },
-                        dst: 1,
-                    },
-                    Ir3Instruction::Halt,
                     Ir3Instruction::AwaitValue { promise_reg: 0 },
                     Ir3Instruction::AsyncReturn { value_reg: 0 },
                 ],
-                vec![Ir3FunctionDesc {
-                    entry: 3,
-                    arity: 1,
-                    frame_size: 1,
-                    name: Some("pending_async".to_string()),
-                    is_generator: false,
-                    rest_param_index: None,
-                }],
+                2,
+                2,
             );
-            let handle = core.promise_store.create();
-            core.registers[10] = Value::Promise(handle.0);
+            let awaited = core.promise_store.create();
+            core.write_reg_with_label(
+                10,
+                Value::Promise(awaited.0),
+                crate::ifc_artifacts::Label::Secret,
+            )
+            .expect("awaited handle should be writable");
+            core.write_reg_with_label(
+                11,
+                Value::Int(40),
+                crate::ifc_artifacts::Label::Confidential,
+            )
+            .expect("unrelated local should be writable");
 
-            let err = core
+            let suspended = core
                 .execute(&module)
-                .expect_err("pending await should use an explicit franken-core contract");
-            assert!(
-                format!("{err:?}").contains("pending promise await is explicitly unsupported"),
-                "unexpected error: {err:?}"
-            );
+                .expect("pending await should suspend without aborting");
+            assert_eq!(suspended.value, Value::Undefined);
             assert!(matches!(
                 core.async_functions[0].phase,
                 AsyncFunctionPhase::SuspendedAwait
             ));
+            assert_eq!(core.async_resumption_contexts.len(), 1);
             let Value::Promise(result_handle) = core.registers[1] else {
-                panic!("async call should leave result promise before failing closed");
+                panic!("async call should publish its result Promise before suspension");
             };
+
+            let active_base = core.register_base;
+            core.registers[active_base + 1] = Value::Int(999);
+            core.register_labels[active_base + 1] = crate::ifc_artifacts::Label::Public;
+
+            core.fulfill_promise(
+                awaited,
+                crate::object_model::JsValue::Int(2),
+                crate::ifc_artifacts::Label::Public,
+            )
+            .expect("awaited Promise should fulfill");
+            core.drain_microtasks(Some(&module))
+                .expect("fulfillment should resume the async activation");
+
             let record = core
                 .promise_store
                 .get(crate::promise_model::PromiseHandle(result_handle))
                 .expect("result promise exists");
+            assert_eq!(record.label, crate::ifc_artifacts::Label::Secret);
             assert!(matches!(
                 &record.state,
-                crate::promise_model::PromiseState::Pending
+                crate::promise_model::PromiseState::Fulfilled(crate::object_model::JsValue::Int(2))
+            ));
+            assert_eq!(core.registers[active_base + 1], Value::Int(40));
+            assert_eq!(
+                core.register_labels[active_base + 1],
+                crate::ifc_artifacts::Label::Confidential,
+                "the saved unrelated local label must replace intervening live-frame corruption"
+            );
+            assert!(matches!(
+                core.async_functions[0].phase,
+                AsyncFunctionPhase::Completed
+            ));
+            assert!(core.async_resumption_contexts.is_empty());
+            assert!(core.event_loop.microtasks.is_empty());
+            assert_eq!(core.register_base, 0);
+        }
+
+        #[test]
+        fn pending_await_rejection_joins_handle_and_settlement_labels_bd_ur3tk_15() {
+            let mut core =
+                InterpreterCore::new(test_quickjs_config(), "pending-await-rejection-labels");
+            let module = pending_async_module(
+                vec![
+                    Ir3Instruction::AwaitValue { promise_reg: 0 },
+                    Ir3Instruction::AsyncReturn { value_reg: 0 },
+                ],
+                1,
+                1,
+            );
+            let awaited = core.promise_store.create();
+            core.write_reg_with_label(
+                10,
+                Value::Promise(awaited.0),
+                crate::ifc_artifacts::Label::Confidential,
+            )
+            .expect("awaited handle should be writable");
+
+            core.execute(&module)
+                .expect("pending await should suspend without aborting");
+            let Value::Promise(result_handle) = core.registers[1] else {
+                panic!("async call should publish its result Promise");
+            };
+
+            core.reject_promise(
+                awaited,
+                crate::object_model::JsValue::Str("boom".into()),
+                crate::ifc_artifacts::Label::Secret,
+            )
+            .expect("awaited Promise should reject");
+            core.drain_microtasks(Some(&module))
+                .expect("rejection should resume the async activation");
+
+            let record = core
+                .promise_store
+                .get(crate::promise_model::PromiseHandle(result_handle))
+                .expect("result Promise exists");
+            assert_eq!(record.label, crate::ifc_artifacts::Label::Secret);
+            assert!(matches!(
+                &record.state,
+                crate::promise_model::PromiseState::Rejected(
+                    crate::object_model::JsValue::Str(reason)
+                ) if reason == "boom"
+            ));
+            assert!(
+                !core.promise_store.unhandled_rejections().contains(&awaited),
+                "internal await rejection registration must mark its source handled"
+            );
+        }
+
+        #[test]
+        fn pending_await_rejection_resumes_async_catch_with_label_bd_ur3tk_15() {
+            let mut core = InterpreterCore::new(test_quickjs_config(), "pending-await-catch-label");
+            let module = pending_async_module(
+                vec![
+                    Ir3Instruction::BeginTry {
+                        catch_target: 7,
+                        finally_target: None,
+                    },
+                    Ir3Instruction::AwaitValue { promise_reg: 0 },
+                    Ir3Instruction::EndTry,
+                    Ir3Instruction::AsyncReturn { value_reg: 0 },
+                    Ir3Instruction::EnterCatch { dst: 1 },
+                    Ir3Instruction::AsyncReturn { value_reg: 1 },
+                ],
+                1,
+                2,
+            );
+            let awaited = core.promise_store.create();
+            core.write_reg_with_label(
+                10,
+                Value::Promise(awaited.0),
+                crate::ifc_artifacts::Label::Confidential,
+            )
+            .expect("awaited handle should be writable");
+
+            core.execute(&module)
+                .expect("pending await in try should suspend");
+            let Value::Promise(result_handle) = core.registers[1] else {
+                panic!("async call should publish its result Promise");
+            };
+            core.reject_promise(
+                awaited,
+                crate::object_model::JsValue::Str("caught".into()),
+                crate::ifc_artifacts::Label::Secret,
+            )
+            .expect("awaited Promise should reject");
+            core.drain_microtasks(Some(&module))
+                .expect("rejection should enter the suspended catch");
+
+            let record = core
+                .promise_store
+                .get(crate::promise_model::PromiseHandle(result_handle))
+                .expect("result Promise exists");
+            assert_eq!(record.label, crate::ifc_artifacts::Label::Secret);
+            assert!(matches!(
+                &record.state,
+                crate::promise_model::PromiseState::Fulfilled(
+                    crate::object_model::JsValue::Str(value)
+                ) if value == "caught"
+            ));
+        }
+
+        #[test]
+        fn pending_await_fifo_and_replay_witness_are_deterministic_bd_ur3tk_15() {
+            fn run_once() -> (
+                crate::promise_model::PromiseRecord,
+                crate::promise_model::PromiseRecord,
+                Vec<crate::promise_model::WitnessEvent>,
+                Vec<crate::promise_model::WitnessEvent>,
+            ) {
+                let mut core = InterpreterCore::new(test_quickjs_config(), "pending-await-replay");
+                let module = pending_async_module(
+                    vec![
+                        Ir3Instruction::AwaitValue { promise_reg: 0 },
+                        Ir3Instruction::AsyncReturn { value_reg: 0 },
+                    ],
+                    1,
+                    1,
+                );
+                let awaited = core.promise_store.create();
+                core.write_reg_with_label(
+                    10,
+                    Value::Promise(awaited.0),
+                    crate::ifc_artifacts::Label::Secret,
+                )
+                .expect("awaited handle should be writable");
+                core.execute(&module).expect("pending await should suspend");
+                let Value::Promise(async_result) = core.registers[1] else {
+                    panic!("async call should publish its result Promise");
+                };
+
+                let unrelated = core.promise_store.create();
+                let unrelated_result = core
+                    .promise_store
+                    .then(
+                        unrelated,
+                        None,
+                        None,
+                        crate::ifc_artifacts::Label::Internal,
+                        &mut core.event_loop.microtasks,
+                    )
+                    .expect("unrelated reaction should register");
+                core.fulfill_promise(
+                    awaited,
+                    crate::object_model::JsValue::Int(7),
+                    crate::ifc_artifacts::Label::Public,
+                )
+                .expect("awaited Promise should fulfill first");
+                core.fulfill_promise(
+                    unrelated,
+                    crate::object_model::JsValue::Int(9),
+                    crate::ifc_artifacts::Label::Public,
+                )
+                .expect("unrelated Promise should fulfill second");
+                core.drain_microtasks(Some(&module))
+                    .expect("FIFO checkpoint should drain");
+
+                (
+                    core.promise_store
+                        .get(crate::promise_model::PromiseHandle(async_result))
+                        .expect("async result should exist")
+                        .clone(),
+                    core.promise_store
+                        .get(unrelated_result)
+                        .expect("unrelated result should exist")
+                        .clone(),
+                    core.promise_store.witness_log().to_vec(),
+                    core.event_loop.microtasks.witness_log().to_vec(),
+                )
+            }
+
+            let first = run_once();
+            let second = run_once();
+            assert_eq!(
+                first, second,
+                "identical runs must emit identical replay evidence"
+            );
+            assert_eq!(
+                first.3,
+                vec![
+                    crate::promise_model::WitnessEvent::MicrotaskEnqueued { index: 0 },
+                    crate::promise_model::WitnessEvent::MicrotaskEnqueued { index: 1 },
+                    crate::promise_model::WitnessEvent::MicrotaskDequeued { index: 0 },
+                    crate::promise_model::WitnessEvent::MicrotaskDequeued { index: 1 },
+                ],
+                "await resumption must retain strict FIFO ordering with unrelated jobs"
+            );
+            assert_eq!(first.0.label, crate::ifc_artifacts::Label::Secret);
+            assert!(matches!(
+                first.0.state,
+                crate::promise_model::PromiseState::Fulfilled(crate::object_model::JsValue::Int(7))
+            ));
+            assert_eq!(first.1.label, crate::ifc_artifacts::Label::Internal);
+            assert!(matches!(
+                first.1.state,
+                crate::promise_model::PromiseState::Fulfilled(crate::object_model::JsValue::Int(9))
             ));
         }
 

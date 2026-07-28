@@ -551,6 +551,61 @@ impl PromiseStore {
         Ok(result_promise)
     }
 
+    /// Register the internal identity/thrower reactions used by `await`.
+    ///
+    /// Await has no user-visible closure handle, but rejection still resumes the
+    /// suspended async execution context. Keeping this separate from
+    /// `.then(None, None)` lets the interpreter distinguish that internal
+    /// continuation from an ordinary implicit rejection transfer.
+    pub fn then_for_await(
+        &mut self,
+        handle: PromiseHandle,
+        label: Label,
+        queue: &mut MicrotaskQueue,
+    ) -> Result<PromiseHandle, PromiseError> {
+        let record = self.get(handle)?;
+        let state = record.state.clone();
+        let settlement_label = record.label.clone();
+        let result_promise = self.create();
+
+        match state {
+            PromiseState::Pending => {
+                let record = self.get_mut(handle)?;
+                record.rejection_handled = true;
+                record.reactions.push(PromiseReaction {
+                    kind: ReactionKind::Fulfill,
+                    handler: None,
+                    result_promise,
+                    label: label.clone(),
+                });
+                record.reactions.push(PromiseReaction {
+                    kind: ReactionKind::Reject,
+                    handler: None,
+                    result_promise,
+                    label,
+                });
+            }
+            PromiseState::Fulfilled(value) => {
+                queue.enqueue(Microtask::PromiseReaction {
+                    handler: None,
+                    argument: value,
+                    result_promise,
+                    label: settlement_label.join(&label),
+                });
+            }
+            PromiseState::Rejected(reason) => {
+                self.get_mut(handle)?.rejection_handled = true;
+                queue.enqueue(Microtask::PromiseRejection {
+                    reason,
+                    result_promise,
+                    label: settlement_label.join(&label),
+                });
+            }
+        }
+
+        Ok(result_promise)
+    }
+
     /// Create a pre-resolved Promise (`Promise.resolve(value)`).
     pub fn resolve(
         &mut self,

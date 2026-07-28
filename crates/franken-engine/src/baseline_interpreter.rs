@@ -20827,7 +20827,7 @@ impl InterpreterCore {
                 token,
             ));
             let final_label = winner.clone();
-            let mut projected = current.clone();
+            let mut projected = self.try_clone_readable_state(current)?;
             drop(std::mem::replace(
                 &mut projected.lifecycle_label,
                 final_label,
@@ -21725,6 +21725,10 @@ impl InterpreterCore {
             .map(Self::estimate_readable_from_state_bytes)
             .unwrap_or(0);
         let new_bytes = Self::estimate_readable_from_state_bytes(&projected);
+        // Until the replacement is published, both the authoritative state
+        // and its projected copy are live. Refuse that physical peak rather
+        // than checking only the smaller retained delta.
+        self.check_temporary_memory_budget(new_bytes)?;
         self.apply_memory_component_delta(previous_bytes, new_bytes)?;
         let readable_length = projected.buffered_length;
         self.readable_from_streams.insert(object_id, projected);
@@ -21741,12 +21745,22 @@ impl InterpreterCore {
         projected: ReadableFromState,
     ) -> Result<(), InterpreterError> {
         let previous_total = self.estimated_memory_bytes;
+        let next_bytes = Self::estimate_readable_from_state_bytes(&projected);
+        let pump_bytes = if self.has_pending_readable_pump(object_id)
+            || self.readable_pump_reservations.contains_key(&object_id)
+        {
+            0
+        } else {
+            self.readable_pump_registration_bytes()
+        };
+        // `previous` remains owned for rollback until scheduling succeeds, so
+        // the real transaction peak is old state + projection + successor.
+        self.check_temporary_memory_budget(next_bytes.saturating_add(pump_bytes))?;
         let previous = self.readable_from_streams.remove(&object_id);
         let previous_bytes = previous
             .as_ref()
             .map(Self::estimate_readable_from_state_bytes)
             .unwrap_or(0);
-        let next_bytes = Self::estimate_readable_from_state_bytes(&projected);
         if let Err(error) = self.apply_memory_component_delta(previous_bytes, next_bytes) {
             if let Some(previous) = previous {
                 self.readable_from_streams.insert(object_id, previous);
@@ -21768,6 +21782,68 @@ impl InterpreterCore {
         Ok(())
     }
 
+    /// Fallibly clone the allocation-bearing portions of one Readable state.
+    /// Values are shared handles, but the queue and decoder storage are real
+    /// host allocations and must never use their infallible `Clone` paths on
+    /// guest-controlled lengths.
+    fn try_clone_readable_state(
+        &self,
+        state: &ReadableFromState,
+    ) -> Result<ReadableFromState, InterpreterError> {
+        let projected_upper = Self::estimate_readable_from_state_bytes(state);
+        self.check_temporary_memory_budget(projected_upper)?;
+
+        let mut buffer = VecDeque::new();
+        buffer
+            .try_reserve_exact(state.buffer.capacity())
+            .map_err(|_| {
+                self.memory_budget_error(
+                    self.estimated_memory_bytes.saturating_add(projected_upper),
+                    self.heap_object_count_u32(),
+                )
+            })?;
+        buffer.extend(state.buffer.iter().cloned());
+
+        let mut utf8_pending = Vec::new();
+        utf8_pending
+            .try_reserve_exact(state.utf8_pending.capacity())
+            .map_err(|_| {
+                self.memory_budget_error(
+                    self.estimated_memory_bytes.saturating_add(projected_upper),
+                    self.heap_object_count_u32(),
+                )
+            })?;
+        utf8_pending.extend_from_slice(&state.utf8_pending);
+
+        let projected = ReadableFromState {
+            source: state.source.clone(),
+            push_only: state.push_only,
+            object_mode: state.object_mode,
+            high_water_mark: state.high_water_mark,
+            read_callback: state.read_callback.clone(),
+            buffer,
+            buffered_length: state.buffered_length,
+            eof_requested: state.eof_requested,
+            data_readable_pending: state.data_readable_pending,
+            eof_readable_pending: state.eof_readable_pending,
+            read_callback_active: state.read_callback_active,
+            decode_utf8: state.decode_utf8,
+            utf8_pending,
+            destroy_requested: state.destroy_requested,
+            destroy_error: state.destroy_error.clone(),
+            next_index: state.next_index,
+            phase: state.phase,
+            flowing: state.flowing,
+            paused: state.paused,
+            lifecycle_label: state.lifecycle_label.clone(),
+            to_array_waiter: state.to_array_waiter.clone(),
+        };
+        // Allocator rounding is implementation-defined. Recheck the actual
+        // capacities before exposing the projection to a transaction.
+        self.check_temporary_memory_budget(Self::estimate_readable_from_state_bytes(&projected))?;
+        Ok(projected)
+    }
+
     /// Clone engine-owned stream state only after charging the temporary copy
     /// against the interpreter budget. Stream transitions intentionally work
     /// on a projection so a fallible operation cannot partially mutate the
@@ -21779,8 +21855,7 @@ impl InterpreterCore {
         let Some(state) = self.readable_from_streams.get(&object_id) else {
             return Ok(None);
         };
-        self.check_temporary_memory_budget(Self::estimate_readable_from_state_bytes(state))?;
-        Ok(Some(state.clone()))
+        self.try_clone_readable_state(state).map(Some)
     }
 
     /// Update the existing public length mirror after the internal transition
@@ -21839,6 +21914,7 @@ impl InterpreterCore {
         &self,
         pending: &mut Vec<u8>,
         bytes: &[u8],
+        additional_temporary_bytes: u64,
     ) -> Result<Option<Value>, InterpreterError> {
         let combined_len =
             pending
@@ -21849,10 +21925,15 @@ impl InterpreterCore {
                         .to_string(),
                 })?;
         let maximum_output_bytes = combined_len.saturating_mul(3);
-        self.check_buffer_temporary_bytes(combined_len.saturating_add(maximum_output_bytes))?;
+        let decoder_temporary_bytes =
+            u64::try_from(combined_len.saturating_add(maximum_output_bytes)).unwrap_or(u64::MAX);
+        self.check_temporary_memory_budget(
+            additional_temporary_bytes.saturating_add(decoder_temporary_bytes),
+        )?;
         pending.try_reserve(bytes.len()).map_err(|_| {
             self.memory_budget_error(
                 self.estimated_memory_bytes
+                    .saturating_add(additional_temporary_bytes)
                     .saturating_add(u64::try_from(combined_len).unwrap_or(u64::MAX)),
                 self.heap_object_count_u32(),
             )
@@ -21861,10 +21942,12 @@ impl InterpreterCore {
         let mut decoded = String::new();
         decoded.try_reserve(maximum_output_bytes).map_err(|_| {
             self.memory_budget_error(
-                self.estimated_memory_bytes.saturating_add(
-                    u64::try_from(combined_len.saturating_add(maximum_output_bytes))
-                        .unwrap_or(u64::MAX),
-                ),
+                self.estimated_memory_bytes
+                    .saturating_add(additional_temporary_bytes)
+                    .saturating_add(
+                        u64::try_from(combined_len.saturating_add(maximum_output_bytes))
+                            .unwrap_or(u64::MAX),
+                    ),
                 self.heap_object_count_u32(),
             )
         })?;
@@ -21906,6 +21989,7 @@ impl InterpreterCore {
         &self,
         state: &mut ReadableFromState,
         value: Value,
+        additional_temporary_bytes: u64,
     ) -> Result<Option<(Value, usize)>, InterpreterError> {
         if state.object_mode {
             return Ok(Some((value, 1)));
@@ -21934,7 +22018,11 @@ impl InterpreterCore {
             }
         };
         if state.decode_utf8 {
-            let decoded = self.readable_decode_utf8_bytes(&mut state.utf8_pending, &bytes)?;
+            let decoded = self.readable_decode_utf8_bytes(
+                &mut state.utf8_pending,
+                &bytes,
+                additional_temporary_bytes,
+            )?;
             return Ok(decoded.map(|decoded| {
                 let units = match &decoded {
                     Value::Str(text) => text.encode_utf16().count(),
@@ -21962,7 +22050,9 @@ impl InterpreterCore {
         }
         let lifecycle_label = projected.lifecycle_label.join(&label);
         projected.lifecycle_label = lifecycle_label.clone();
-        let Some((value, units)) = self.readable_normalize_push_value(&mut projected, value)?
+        let projection_bytes = Self::estimate_readable_from_state_bytes(&projected);
+        let Some((value, units)) =
+            self.readable_normalize_push_value(&mut projected, value, projection_bytes)?
         else {
             self.commit_readable_state(object_id, projected)?;
             return Ok(true);
@@ -22723,7 +22813,12 @@ impl InterpreterCore {
                 projected.buffered_length = 0;
                 Value::Object(buffer_id)
             } else {
-                self.check_buffer_temporary_bytes(projected.buffered_length)?;
+                let projection_peak_bytes = Self::estimate_readable_from_state_bytes(&projected);
+                self.check_temporary_memory_budget(
+                    projection_peak_bytes.saturating_add(
+                        u64::try_from(projected.buffered_length).unwrap_or(u64::MAX),
+                    ),
+                )?;
                 let mut bytes = Vec::new();
                 bytes
                     .try_reserve_exact(projected.buffered_length)
@@ -22735,6 +22830,9 @@ impl InterpreterCore {
                             self.heap_object_count_u32(),
                         )
                     })?;
+                let coalescing_temporary_bytes = projection_peak_bytes
+                    .saturating_add(u64::try_from(bytes.capacity()).unwrap_or(u64::MAX));
+                self.check_temporary_memory_budget(coalescing_temporary_bytes)?;
                 for chunk in &projected.buffer {
                     match &chunk.value {
                         Value::Str(value) => bytes.extend_from_slice(value.as_bytes()),
@@ -22752,7 +22850,10 @@ impl InterpreterCore {
                 }
                 let consumed = requested_size.unwrap_or(bytes.len()).min(bytes.len());
                 let checkpoint = (self.heap.len(), self.estimated_memory_bytes);
-                let result = match self.alloc_buffer_from_bytes(&bytes[..consumed]) {
+                let result = match self.alloc_buffer_from_bytes_with_temporary(
+                    &bytes[..consumed],
+                    coalescing_temporary_bytes,
+                ) {
                     Ok(result) => Value::Object(result),
                     Err(error) => {
                         self.rollback_heap_to_len(checkpoint.0);
@@ -22765,7 +22866,10 @@ impl InterpreterCore {
                 projected.buffered_length = remainder.len();
                 if !remainder.is_empty() {
                     let remainder_len = remainder.len();
-                    let remainder_buffer = match self.alloc_buffer_from_bytes(remainder) {
+                    let remainder_buffer = match self.alloc_buffer_from_bytes_with_temporary(
+                        remainder,
+                        coalescing_temporary_bytes,
+                    ) {
                         Ok(remainder) => remainder,
                         Err(error) => {
                             self.rollback_heap_to_len(checkpoint.0);
@@ -22894,7 +22998,9 @@ impl InterpreterCore {
             return Ok(Value::Bool(before_eof));
         }
         projected.lifecycle_label = projected.lifecycle_label.join(&trigger_label);
-        let Some((value, units)) = self.readable_normalize_push_value(&mut projected, value)?
+        let projection_bytes = Self::estimate_readable_from_state_bytes(&projected);
+        let Some((value, units)) =
+            self.readable_normalize_push_value(&mut projected, value, projection_bytes)?
         else {
             self.commit_readable_state(object_id, projected)?;
             return Ok(Value::Bool(
@@ -22970,14 +23076,32 @@ impl InterpreterCore {
         let buffered = std::mem::take(&mut projected.buffer);
         let mut decoded = VecDeque::new();
         decoded
-            .try_reserve(buffered.len())
+            .try_reserve_exact(buffered.capacity())
             .map_err(|_| self.memory_budget_error(u64::MAX, self.heap_object_count_u32()))?;
+        self.check_temporary_memory_budget(
+            Self::estimate_readable_from_state_bytes(&projected)
+                .saturating_add(Self::estimate_readable_buffer_bytes(&buffered))
+                .saturating_add(Self::estimate_readable_buffer_bytes(&decoded)),
+        )?;
         projected.buffered_length = 0;
-        for chunk in buffered {
+        let mut buffered = buffered;
+        while let Some(chunk) = buffered.pop_front() {
+            let transaction_bytes = Self::estimate_readable_from_state_bytes(&projected)
+                .saturating_add(Self::estimate_readable_buffer_bytes(&buffered))
+                .saturating_add(Self::estimate_readable_buffer_bytes(&decoded))
+                .saturating_add(Self::estimate_value_bytes(&chunk.value))
+                .saturating_add(Self::estimate_label_bytes(&chunk.label));
             let chunk_label = chunk.label.join(&encoding_label);
             if let Some((value, units)) =
-                self.readable_normalize_push_value(&mut projected, chunk.value)?
+                self.readable_normalize_push_value(&mut projected, chunk.value, transaction_bytes)?
             {
+                self.check_temporary_memory_budget(
+                    Self::estimate_readable_from_state_bytes(&projected)
+                        .saturating_add(Self::estimate_readable_buffer_bytes(&buffered))
+                        .saturating_add(Self::estimate_readable_buffer_bytes(&decoded))
+                        .saturating_add(Self::estimate_value_bytes(&value))
+                        .saturating_add(Self::estimate_label_bytes(&chunk_label)),
+                )?;
                 projected.buffered_length = projected
                     .buffered_length
                     .checked_add(units)
@@ -22992,6 +23116,7 @@ impl InterpreterCore {
                 });
             }
         }
+        drop(buffered);
         projected.buffer = decoded;
         projected.data_readable_pending = !projected.buffer.is_empty();
         self.commit_readable_state_and_schedule(object_id, projected)?;
@@ -23139,7 +23264,6 @@ impl InterpreterCore {
         let mut projected = snapshot;
         let next_index = projected.next_index;
         let phase = projected.phase;
-        let lifecycle_label = projected.lifecycle_label.clone();
         let push_only = projected.push_only;
         let already_waiting = projected.to_array_waiter.is_some();
         if push_only || already_waiting || phase != ReadableFromPumpPhase::Data {
@@ -23168,7 +23292,24 @@ impl InterpreterCore {
             .ok_or_else(|| InterpreterError::RangeError {
                 message: "Readable toArray result length overflows host address space".to_string(),
             })?;
-        let waiter_bytes = Self::estimate_readable_to_array_waiter_bytes(&lifecycle_label);
+        let waiter_bytes =
+            Self::estimate_readable_to_array_waiter_bytes(&projected.lifecycle_label);
+        let projected_state_bytes = Self::estimate_readable_from_state_bytes(&projected);
+        let projected_buffer_bytes = Self::estimate_readable_buffer_bytes(&projected.buffer);
+        let final_state_bytes = projected_state_bytes
+            .saturating_sub(projected_buffer_bytes)
+            .saturating_add(waiter_bytes);
+        let promise_bytes = self
+            .promise_store
+            .projected_create_memory_bytes()
+            .saturating_sub(self.promise_store.estimated_memory_bytes());
+        let pump_bytes = if self.has_pending_readable_pump(object_id)
+            || self.readable_pump_reservations.contains_key(&object_id)
+        {
+            0
+        } else {
+            self.readable_pump_registration_bytes()
+        };
         let mut projected_empty_array = HeapObject::new();
         projected_empty_array.is_array = true;
         projected_empty_array.cached_dense_length = Some(0);
@@ -23182,10 +23323,20 @@ impl InterpreterCore {
                 .unwrap_or(u64::MAX)
                 .saturating_mul(minimum_element_bytes),
         );
+        let minimum_values_bytes = u64::try_from(result_length)
+            .unwrap_or(u64::MAX)
+            .saturating_mul(std::mem::size_of::<Value>() as u64);
+        let minimum_materialization_peak = projected_state_bytes
+            .saturating_add(minimum_values_bytes)
+            .saturating_add(promise_bytes)
+            .saturating_add(minimum_result_bytes);
+        let minimum_commit_peak = final_state_bytes
+            .saturating_add(promise_bytes)
+            .saturating_add(minimum_result_bytes)
+            .saturating_add(pump_bytes);
         let minimum_requested_bytes = self
             .estimated_memory_bytes
-            .saturating_add(waiter_bytes)
-            .saturating_add(minimum_result_bytes);
+            .saturating_add(minimum_materialization_peak.max(minimum_commit_peak));
         let requested_heap_objects = self.heap_object_count_u32().saturating_add(1);
         if Self::memory_request_exceeds_budget(
             minimum_requested_bytes,
@@ -23199,11 +23350,7 @@ impl InterpreterCore {
         values.try_reserve_exact(result_length).map_err(|_| {
             self.memory_budget_error(minimum_requested_bytes, requested_heap_objects)
         })?;
-        values.extend(
-            std::mem::take(&mut projected.buffer)
-                .into_iter()
-                .map(|chunk| chunk.value),
-        );
+        values.extend(projected.buffer.iter().map(|chunk| chunk.value.clone()));
         match &projected.source {
             Value::Str(text) if next_index == 0 => values.push(Value::Str(text.clone())),
             Value::Str(_) => {}
@@ -23227,10 +23374,23 @@ impl InterpreterCore {
                 })
                 .sum::<u64>(),
         );
+        let values_bytes = u64::try_from(values.capacity())
+            .unwrap_or(u64::MAX)
+            .saturating_mul(std::mem::size_of::<Value>() as u64)
+            .saturating_add(Self::saturating_sum(
+                values.iter().map(Self::estimate_value_bytes),
+            ));
+        let materialization_peak = projected_state_bytes
+            .saturating_add(values_bytes)
+            .saturating_add(promise_bytes)
+            .saturating_add(result_bytes);
+        let commit_peak = final_state_bytes
+            .saturating_add(promise_bytes)
+            .saturating_add(result_bytes)
+            .saturating_add(pump_bytes);
         let requested_bytes = self
             .estimated_memory_bytes
-            .saturating_add(result_bytes)
-            .saturating_add(waiter_bytes);
+            .saturating_add(materialization_peak.max(commit_peak));
         if Self::memory_request_exceeds_budget(requested_bytes, self.config.max_total_memory_bytes)
         {
             return Err(self.memory_budget_error(
@@ -23251,7 +23411,9 @@ impl InterpreterCore {
                 return Err(error);
             }
         };
+        drop(values);
         projected.next_index = source_length;
+        projected.buffer = VecDeque::new();
         projected.buffered_length = 0;
         projected.data_readable_pending = false;
         projected.eof_readable_pending = false;
@@ -23260,7 +23422,7 @@ impl InterpreterCore {
         projected.to_array_waiter = Some(ReadableToArrayWaiter {
             promise,
             result,
-            label: lifecycle_label,
+            label: projected.lifecycle_label.clone(),
         });
         if let Err(error) = self.commit_readable_state_and_schedule(object_id, projected) {
             self.rollback_fresh_promise(promise);
@@ -23323,33 +23485,48 @@ impl InterpreterCore {
         &mut self,
         object_id: ObjectId,
         module: &Ir3Module,
-        snapshot: ReadableFromState,
+        mut projected: ReadableFromState,
     ) -> Result<bool, InterpreterError> {
-        let Some(read_callback) = snapshot.read_callback.clone() else {
+        let Some(read_callback) = projected.read_callback.as_ref() else {
             return Ok(false);
         };
-        if !snapshot.push_only
-            || snapshot.eof_requested
-            || snapshot.phase != ReadableFromPumpPhase::Data
-            || snapshot.read_callback_active
+        if !projected.push_only
+            || projected.eof_requested
+            || projected.phase != ReadableFromPumpPhase::Data
+            || projected.read_callback_active
         {
             return Ok(false);
         }
-        self.check_temporary_memory_budget(
-            Self::estimate_readable_from_state_bytes(&snapshot).saturating_mul(2),
+        let pump_bytes = if self.has_pending_readable_pump(object_id)
+            || self.readable_pump_reservations.contains_key(&object_id)
+        {
+            0
+        } else {
+            self.readable_pump_registration_bytes()
+        };
+        self.preflight_inline_method_call_with_argument_label_and_temporary(
+            Some(module),
+            read_callback,
+            1,
+            Some(&projected.lifecycle_label),
+            Self::estimate_readable_from_state_bytes(&projected)
+                .saturating_add(Self::estimate_value_bytes(read_callback))
+                .saturating_add(pump_bytes),
         )?;
-        let mut active = snapshot.clone();
-        active.read_callback_active = true;
-        let lifecycle_label = active.lifecycle_label.clone();
-        let high_water_mark = active.high_water_mark;
+        let read_callback = read_callback.clone();
+        let lifecycle_label = projected.lifecycle_label.clone();
+        let high_water_mark = projected.high_water_mark;
+        let flowing_before = projected.flowing;
+        let paused_before = projected.paused;
+        projected.read_callback_active = true;
         let pump_reserved = self.reserve_readable_pump(object_id)?;
-        if let Err(error) = self.commit_readable_state(object_id, active) {
+        if let Err(error) = self.commit_readable_state(object_id, projected) {
             if pump_reserved {
                 self.release_readable_pump_reservation(object_id);
             }
             return Err(error);
         }
-        let invocation = self.invoke_inline_method_call_with_argument_label(
+        let invocation = self.invoke_inline_method_call_with_argument_label_preflighted(
             Some(module),
             read_callback,
             Value::Object(object_id),
@@ -23361,7 +23538,7 @@ impl InterpreterCore {
         let mut made_progress = false;
         if let Some(state) = self.readable_from_streams.get_mut(&object_id) {
             state.read_callback_active = false;
-            made_progress = state != &snapshot;
+            made_progress = state.flowing != flowing_before || state.paused != paused_before;
         }
         let reschedule_requested = self
             .readable_pump_reservations
@@ -23412,8 +23589,11 @@ impl InterpreterCore {
                 };
                 if !snapshot.flowing {
                     let mut pull_pump_reserved = false;
-                    if snapshot.buffer.is_empty() && !snapshot.push_only && !snapshot.eof_requested
-                    {
+                    let should_pull = snapshot.buffer.is_empty()
+                        && !snapshot.push_only
+                        && !snapshot.eof_requested;
+                    let mut projected = if should_pull {
+                        drop(snapshot);
                         pull_pump_reserved = self.reserve_readable_pump(object_id)?;
                         if let Err(error) = self.readable_pull_source_chunk(object_id) {
                             return self.readable_error_after_reservation(
@@ -23422,20 +23602,23 @@ impl InterpreterCore {
                                 error,
                             );
                         }
-                    }
-                    let projected_result = self.clone_readable_state_with_budget(object_id);
-                    let Some(mut projected) = (match projected_result {
-                        Ok(projected) => projected,
-                        Err(error) => {
-                            return self.readable_error_after_reservation(
-                                object_id,
-                                pull_pump_reserved,
-                                error,
-                            );
-                        }
-                    }) else {
-                        self.settle_readable_pump_reservation(object_id, pull_pump_reserved)?;
-                        return Ok(());
+                        let projected_result = self.clone_readable_state_with_budget(object_id);
+                        let Some(projected) = (match projected_result {
+                            Ok(projected) => projected,
+                            Err(error) => {
+                                return self.readable_error_after_reservation(
+                                    object_id,
+                                    pull_pump_reserved,
+                                    error,
+                                );
+                            }
+                        }) else {
+                            self.settle_readable_pump_reservation(object_id, pull_pump_reserved)?;
+                            return Ok(());
+                        };
+                        projected
+                    } else {
+                        snapshot
                     };
                     let emit_readable = if projected.data_readable_pending {
                         projected.data_readable_pending = false;
@@ -23477,12 +23660,9 @@ impl InterpreterCore {
                     if projected.push_only
                         && !projected.eof_requested
                         && projected.buffered_length < projected.high_water_mark
-                        && self.drive_readable_read_callback(
-                            object_id,
-                            module,
-                            projected.clone(),
-                        )?
+                        && projected.read_callback.is_some()
                     {
+                        let _ = self.drive_readable_read_callback(object_id, module, projected)?;
                         return Ok(());
                     }
                     if projected.eof_requested && projected.buffer.is_empty() {
@@ -45885,6 +46065,25 @@ impl InterpreterCore {
             argument_count,
             argument_label,
             None,
+            0,
+        )
+    }
+
+    fn preflight_inline_method_call_with_argument_label_and_temporary(
+        &self,
+        module: Option<&Ir3Module>,
+        callee: &Value,
+        argument_count: usize,
+        argument_label: Option<&Label>,
+        additional_temporary_bytes: u64,
+    ) -> Result<(), InterpreterError> {
+        self.preflight_inline_method_call_with_labels(
+            module,
+            callee,
+            argument_count,
+            argument_label,
+            None,
+            additional_temporary_bytes,
         )
     }
 
@@ -45895,6 +46094,7 @@ impl InterpreterCore {
         argument_count: usize,
         argument_label: Option<&Label>,
         call_labels: Option<&IsolatedCallLabels>,
+        additional_temporary_bytes: u64,
     ) -> Result<(), InterpreterError> {
         let caller_module = module.ok_or_else(|| InterpreterError::TypeError {
             expected: "module-backed Function.prototype.call/apply dispatch".to_string(),
@@ -45964,7 +46164,8 @@ impl InterpreterCore {
         self.check_temporary_memory_budget(
             transient_execution_bytes
                 .saturating_add(callback_context_bytes)
-                .saturating_add(label_transport_bytes),
+                .saturating_add(label_transport_bytes)
+                .saturating_add(additional_temporary_bytes),
         )
     }
 
@@ -46011,6 +46212,7 @@ impl InterpreterCore {
             arguments.len(),
             argument_label.as_ref(),
             Some(&call_labels),
+            0,
         )?;
         self.invoke_inline_method_call_with_labels_preflighted(
             module,
@@ -60937,6 +61139,17 @@ impl InterpreterCore {
         MEMORY_ESTIMATE_READABLE_TO_ARRAY_WAITER_BYTES.saturating_add(label_bytes)
     }
 
+    fn estimate_readable_buffer_bytes(buffer: &VecDeque<ReadableBufferedChunk>) -> u64 {
+        u64::try_from(buffer.capacity())
+            .unwrap_or(u64::MAX)
+            .saturating_mul(MEMORY_ESTIMATE_READABLE_BUFFERED_CHUNK_BYTES)
+            .saturating_add(buffer.iter().fold(0u64, |total, chunk| {
+                total
+                    .saturating_add(Self::estimate_value_bytes(&chunk.value))
+                    .saturating_add(Self::estimate_label_bytes(&chunk.label))
+            }))
+    }
+
     fn estimate_readable_from_state_bytes(state: &ReadableFromState) -> u64 {
         let label_bytes = match &state.lifecycle_label {
             Label::Custom { name, .. } => Self::estimate_string_bytes(name),
@@ -60951,20 +61164,7 @@ impl InterpreterCore {
                     .map(Self::estimate_value_bytes)
                     .unwrap_or(0),
             )
-            .saturating_add(
-                u64::try_from(state.buffer.capacity())
-                    .unwrap_or(u64::MAX)
-                    .saturating_mul(MEMORY_ESTIMATE_READABLE_BUFFERED_CHUNK_BYTES),
-            )
-            .saturating_add(state.buffer.iter().fold(0u64, |total, chunk| {
-                let label_bytes = match &chunk.label {
-                    Label::Custom { name, .. } => Self::estimate_string_bytes(name),
-                    _ => 0,
-                };
-                total
-                    .saturating_add(Self::estimate_value_bytes(&chunk.value))
-                    .saturating_add(label_bytes)
-            }))
+            .saturating_add(Self::estimate_readable_buffer_bytes(&state.buffer))
             .saturating_add(u64::try_from(state.utf8_pending.capacity()).unwrap_or(u64::MAX))
             .saturating_add(
                 state
@@ -62884,6 +63084,19 @@ impl InterpreterCore {
 
     fn alloc_buffer_from_bytes(&mut self, bytes: &[u8]) -> Result<ObjectId, InterpreterError> {
         self.alloc_fresh_buffer_object(bytes.len(), Some(bytes), bytes.len())
+    }
+
+    fn alloc_buffer_from_bytes_with_temporary(
+        &mut self,
+        bytes: &[u8],
+        temporary_bytes: u64,
+    ) -> Result<ObjectId, InterpreterError> {
+        let temporary_bytes =
+            usize::try_from(temporary_bytes).map_err(|_| InterpreterError::RangeError {
+                message: "Buffer transaction temporary memory exceeds host address space"
+                    .to_string(),
+            })?;
+        self.alloc_fresh_buffer_object(bytes.len(), Some(bytes), temporary_bytes)
     }
 
     fn alloc_typed_array_with_fresh_buffer(
@@ -68216,6 +68429,34 @@ mod async_runtime_tests_current {
             RuntimeCapability::HeapAllocate,
         ]);
         InterpreterCore::new(config, "async-runtime-test")
+    }
+
+    fn calibrate_readable_memory_ceiling<T, F, O>(fixture: F, operation: O) -> u64
+    where
+        T: std::fmt::Debug,
+        F: Fn() -> (InterpreterCore, ObjectId),
+        O: Fn(&mut InterpreterCore, ObjectId) -> Result<T, InterpreterError>,
+    {
+        let (baseline, _) = fixture();
+        let mut ceiling = baseline.estimated_memory_bytes();
+        drop(baseline);
+
+        for attempt in 0..32 {
+            let (mut core, readable) = fixture();
+            core.config.max_total_memory_bytes = ceiling;
+            match operation(&mut core, readable) {
+                Ok(_) => return ceiling,
+                Err(InterpreterError::MemoryBudgetExceeded {
+                    requested_bytes, ..
+                }) if requested_bytes > ceiling => {
+                    ceiling = requested_bytes;
+                }
+                other => panic!(
+                    "Readable ceiling calibration attempt {attempt} stalled at {ceiling}: {other:?}"
+                ),
+            }
+        }
+        panic!("Readable ceiling calibration did not converge from {ceiling}");
     }
 
     fn async_label_test_module(
@@ -79833,6 +80074,372 @@ mod async_runtime_tests_current {
     }
 
     #[test]
+    fn readable_enqueue_peak_is_exact_atomic_and_ifc_preserving_bd_71jw4() {
+        let fixture = || {
+            let mut core = test_interpreter();
+            let Value::Object(readable) = core
+                .construct_stream_readable(RegRange { start: 0, count: 0 })
+                .expect("generic Readable")
+            else {
+                panic!("Readable constructor must return an object");
+            };
+            core.write_reg_with_label(0, Value::str("classified"), Label::Secret)
+                .expect("secret enqueue register");
+            (core, readable)
+        };
+        let operation = |core: &mut InterpreterCore, readable| {
+            core.readable_push(Value::Object(readable), RegRange { start: 0, count: 1 })
+        };
+        let exact_ceiling = calibrate_readable_memory_ceiling(&fixture, &operation);
+
+        let (mut refused, readable) = fixture();
+        let before_state = refused.readable_from_streams[&readable].clone();
+        let before_heap_len = refused.heap.len();
+        let before_memory = refused.estimated_memory_bytes();
+        let before_promise_runtime = refused.promise_runtime_memory_bytes();
+        refused.config.max_total_memory_bytes = exact_ceiling - 1;
+        assert!(matches!(
+            operation(&mut refused, readable),
+            Err(InterpreterError::MemoryBudgetExceeded {
+                requested_bytes,
+                max_bytes,
+                ..
+            }) if requested_bytes == exact_ceiling && max_bytes == exact_ceiling - 1
+        ));
+        assert_eq!(refused.readable_from_streams[&readable], before_state);
+        assert_eq!(refused.heap.len(), before_heap_len);
+        assert!(refused.pending_readable_from_pumps.is_empty());
+        assert!(refused.readable_pump_reservations.is_empty());
+        assert_eq!(
+            refused.promise_runtime_memory_bytes(),
+            before_promise_runtime
+        );
+        assert_eq!(refused.estimated_memory_bytes(), before_memory);
+        assert_eq!(
+            refused.estimated_memory_bytes(),
+            refused.recompute_estimated_memory_bytes()
+        );
+
+        let (mut exact, readable) = fixture();
+        exact.config.max_total_memory_bytes = exact_ceiling;
+        assert_eq!(
+            operation(&mut exact, readable).expect("exact enqueue peak"),
+            Value::Bool(true)
+        );
+        let state = &exact.readable_from_streams[&readable];
+        assert_eq!(state.buffered_length, "classified".len());
+        assert_eq!(state.lifecycle_label, Label::Secret);
+        assert_eq!(
+            state.buffer.front().map(|chunk| &chunk.label),
+            Some(&Label::Secret)
+        );
+        assert_eq!(
+            state.buffer.front().map(|chunk| &chunk.value),
+            Some(&Value::str("classified"))
+        );
+        assert_eq!(exact.pending_readable_from_pumps.len(), 1);
+        assert!(exact.readable_pump_reservations.is_empty());
+        assert!(exact.estimated_memory_bytes() <= exact_ceiling);
+        assert_eq!(
+            exact.estimated_memory_bytes(),
+            exact.recompute_estimated_memory_bytes()
+        );
+    }
+
+    #[test]
+    fn readable_raw_read_coalescing_peak_is_exact_atomic_and_labeled_bd_71jw4() {
+        let fixture = || {
+            let mut core = test_interpreter();
+            let Value::Object(readable) = core
+                .construct_stream_readable(RegRange { start: 0, count: 0 })
+                .expect("generic Readable")
+            else {
+                panic!("Readable constructor must return an object");
+            };
+            for (register, value, label) in [(0, "ab", Label::Public), (1, "cd", Label::Secret)] {
+                core.write_reg_with_label(register, Value::str(value), label)
+                    .expect("coalescing input register");
+                core.readable_push(
+                    Value::Object(readable),
+                    RegRange {
+                        start: register,
+                        count: 1,
+                    },
+                )
+                .expect("queue coalescing input");
+            }
+            core.write_reg(2, Value::Int(3))
+                .expect("read size register");
+            (core, readable)
+        };
+        let operation = |core: &mut InterpreterCore, readable| {
+            core.readable_read(Value::Object(readable), RegRange { start: 2, count: 1 })
+        };
+        let exact_ceiling = calibrate_readable_memory_ceiling(&fixture, &operation);
+
+        let (mut refused, readable) = fixture();
+        let before_state = refused.readable_from_streams[&readable].clone();
+        let before_heap_len = refused.heap.len();
+        let before_memory = refused.estimated_memory_bytes();
+        let before_promise_runtime = refused.promise_runtime_memory_bytes();
+        let before_pumps = refused.pending_readable_from_pumps.clone();
+        refused.config.max_total_memory_bytes = exact_ceiling - 1;
+        assert!(matches!(
+            operation(&mut refused, readable),
+            Err(InterpreterError::MemoryBudgetExceeded {
+                requested_bytes,
+                max_bytes,
+                ..
+            }) if requested_bytes == exact_ceiling && max_bytes == exact_ceiling - 1
+        ));
+        assert_eq!(refused.readable_from_streams[&readable], before_state);
+        assert_eq!(refused.heap.len(), before_heap_len);
+        assert_eq!(refused.pending_readable_from_pumps, before_pumps);
+        assert!(refused.readable_pump_reservations.is_empty());
+        assert_eq!(
+            refused.promise_runtime_memory_bytes(),
+            before_promise_runtime
+        );
+        assert_eq!(refused.estimated_memory_bytes(), before_memory);
+        assert_eq!(
+            refused.estimated_memory_bytes(),
+            refused.recompute_estimated_memory_bytes()
+        );
+
+        let (mut exact, readable) = fixture();
+        exact.config.max_total_memory_bytes = exact_ceiling;
+        let Value::Object(result) = operation(&mut exact, readable).expect("exact raw read peak")
+        else {
+            panic!("raw read must return a Buffer");
+        };
+        let result_view = exact
+            .buffer_like_view(&Value::Object(result))
+            .expect("coalesced result Buffer");
+        assert_eq!(exact.typed_array_view_bytes(&result_view).unwrap(), b"abc");
+        let state = &exact.readable_from_streams[&readable];
+        assert_eq!(state.buffered_length, 1);
+        assert_eq!(state.lifecycle_label, Label::Secret);
+        assert_eq!(
+            state.buffer.front().map(|chunk| &chunk.label),
+            Some(&Label::Secret)
+        );
+        let remainder = state
+            .buffer
+            .front()
+            .expect("one-byte remainder")
+            .value
+            .clone();
+        let remainder_view = exact
+            .buffer_like_view(&remainder)
+            .expect("remainder Buffer");
+        assert_eq!(exact.typed_array_view_bytes(&remainder_view).unwrap(), b"d");
+        assert!(exact.estimated_memory_bytes() <= exact_ceiling);
+        assert_eq!(
+            exact.estimated_memory_bytes(),
+            exact.recompute_estimated_memory_bytes()
+        );
+    }
+
+    #[test]
+    fn readable_custom_read_pump_peak_is_exact_atomic_and_labeled_bd_71jw4() {
+        let mut module = test_module_with_functions(
+            vec![
+                Ir3Instruction::LoadThis { dst: 0 },
+                Ir3Instruction::LoadStr {
+                    dst: 1,
+                    pool_index: 0,
+                },
+                Ir3Instruction::GetProperty {
+                    obj: 0,
+                    key: 1,
+                    dst: 2,
+                },
+                Ir3Instruction::LoadStr {
+                    dst: 3,
+                    pool_index: 1,
+                },
+                Ir3Instruction::CallMethod {
+                    receiver: 0,
+                    callee: 2,
+                    args: RegRange { start: 3, count: 1 },
+                    dst: 4,
+                },
+                Ir3Instruction::LoadUndefined { dst: 5 },
+                Ir3Instruction::Return { value: 5 },
+            ],
+            vec![Ir3FunctionDesc {
+                entry: 0,
+                arity: 1,
+                frame_size: 6,
+                name: Some("custom_read_push".to_string()),
+                is_generator: false,
+                rest_param_index: None,
+            }],
+        );
+        module.constant_pool = vec!["push".into(), "x".into()];
+        let fixture = || {
+            let mut core = test_interpreter();
+            let options = core
+                .alloc_object_with_properties(&[("read", Value::Function(0))])
+                .expect("custom read options");
+            core.write_reg_with_label(0, Value::Object(options), Label::Secret)
+                .expect("secret custom read options register");
+            let Value::Object(readable) = core
+                .construct_stream_readable(RegRange { start: 0, count: 1 })
+                .expect("custom Readable")
+            else {
+                panic!("Readable constructor must return an object");
+            };
+            (core, readable)
+        };
+        let operation = |core: &mut InterpreterCore, readable| {
+            core.drive_readable_from_pump(readable, Some(&module))
+        };
+        let exact_ceiling = calibrate_readable_memory_ceiling(&fixture, &operation);
+
+        let (mut refused, readable) = fixture();
+        let before_state = refused.readable_from_streams[&readable].clone();
+        let before_heap_len = refused.heap.len();
+        let before_memory = refused.estimated_memory_bytes();
+        let before_promise_runtime = refused.promise_runtime_memory_bytes();
+        refused.config.max_total_memory_bytes = exact_ceiling - 1;
+        assert!(matches!(
+            operation(&mut refused, readable),
+            Err(InterpreterError::MemoryBudgetExceeded {
+                requested_bytes,
+                max_bytes,
+                ..
+            }) if requested_bytes == exact_ceiling && max_bytes == exact_ceiling - 1
+        ));
+        assert_eq!(refused.readable_from_streams[&readable], before_state);
+        assert_eq!(refused.heap.len(), before_heap_len);
+        assert!(refused.pending_readable_from_pumps.is_empty());
+        assert!(refused.readable_pump_reservations.is_empty());
+        assert_eq!(
+            refused.promise_runtime_memory_bytes(),
+            before_promise_runtime
+        );
+        assert_eq!(refused.estimated_memory_bytes(), before_memory);
+        assert_eq!(
+            refused.estimated_memory_bytes(),
+            refused.recompute_estimated_memory_bytes()
+        );
+
+        let (mut exact, readable) = fixture();
+        exact.config.max_total_memory_bytes = exact_ceiling;
+        operation(&mut exact, readable).expect("exact custom read pump peak");
+        let state = &exact.readable_from_streams[&readable];
+        assert!(!state.read_callback_active);
+        assert_eq!(state.buffered_length, 1);
+        assert_eq!(state.lifecycle_label, Label::Secret);
+        assert_eq!(
+            state.buffer.front().map(|chunk| &chunk.label),
+            Some(&Label::Secret)
+        );
+        assert_eq!(
+            state.buffer.front().map(|chunk| &chunk.value),
+            Some(&Value::str("x"))
+        );
+        assert_eq!(exact.pending_readable_from_pumps.len(), 1);
+        assert!(exact.readable_pump_reservations.is_empty());
+        assert!(exact.estimated_memory_bytes() <= exact_ceiling);
+        assert_eq!(
+            exact.estimated_memory_bytes(),
+            exact.recompute_estimated_memory_bytes()
+        );
+    }
+
+    #[test]
+    fn readable_set_encoding_peak_is_exact_atomic_and_labeled_bd_71jw4() {
+        let fixture = || {
+            let mut core = test_interpreter();
+            let Value::Object(readable) = core
+                .construct_stream_readable(RegRange { start: 0, count: 0 })
+                .expect("generic Readable")
+            else {
+                panic!("Readable constructor must return an object");
+            };
+            for (register, bytes) in [(1, &[0xe2, 0x82][..]), (2, &[0xac, b'!'][..])] {
+                let buffer = core
+                    .alloc_buffer_from_bytes(bytes)
+                    .expect("UTF-8 input Buffer");
+                core.write_reg_with_label(register, Value::Object(buffer), Label::Secret)
+                    .expect("secret Buffer register");
+                core.readable_push(
+                    Value::Object(readable),
+                    RegRange {
+                        start: register,
+                        count: 1,
+                    },
+                )
+                .expect("queue encoded input");
+            }
+            core.write_reg_with_label(0, Value::str("utf8"), Label::Secret)
+                .expect("secret encoding register");
+            (core, readable)
+        };
+        let operation = |core: &mut InterpreterCore, readable| {
+            core.readable_set_encoding(Value::Object(readable), RegRange { start: 0, count: 1 })
+        };
+        let exact_ceiling = calibrate_readable_memory_ceiling(&fixture, &operation);
+
+        let (mut refused, readable) = fixture();
+        let before_state = refused.readable_from_streams[&readable].clone();
+        let before_heap_len = refused.heap.len();
+        let before_memory = refused.estimated_memory_bytes();
+        let before_promise_runtime = refused.promise_runtime_memory_bytes();
+        let before_pumps = refused.pending_readable_from_pumps.clone();
+        refused.config.max_total_memory_bytes = exact_ceiling - 1;
+        assert!(matches!(
+            operation(&mut refused, readable),
+            Err(InterpreterError::MemoryBudgetExceeded {
+                requested_bytes,
+                max_bytes,
+                ..
+            }) if requested_bytes == exact_ceiling && max_bytes == exact_ceiling - 1
+        ));
+        assert_eq!(refused.readable_from_streams[&readable], before_state);
+        assert_eq!(refused.heap.len(), before_heap_len);
+        assert_eq!(refused.pending_readable_from_pumps, before_pumps);
+        assert!(refused.readable_pump_reservations.is_empty());
+        assert_eq!(
+            refused.promise_runtime_memory_bytes(),
+            before_promise_runtime
+        );
+        assert_eq!(refused.estimated_memory_bytes(), before_memory);
+        assert_eq!(
+            refused.estimated_memory_bytes(),
+            refused.recompute_estimated_memory_bytes()
+        );
+
+        let (mut exact, readable) = fixture();
+        exact.config.max_total_memory_bytes = exact_ceiling;
+        assert_eq!(
+            operation(&mut exact, readable).expect("exact setEncoding peak"),
+            Value::Object(readable)
+        );
+        let state = &exact.readable_from_streams[&readable];
+        assert!(state.decode_utf8);
+        assert!(state.utf8_pending.is_empty());
+        assert_eq!(state.buffered_length, 2);
+        assert_eq!(state.lifecycle_label, Label::Secret);
+        assert_eq!(state.buffer.len(), 1);
+        assert_eq!(
+            state.buffer.front().map(|chunk| &chunk.label),
+            Some(&Label::Secret)
+        );
+        assert_eq!(
+            state.buffer.front().map(|chunk| &chunk.value),
+            Some(&Value::str("€!"))
+        );
+        assert!(exact.estimated_memory_bytes() <= exact_ceiling);
+        assert_eq!(
+            exact.estimated_memory_bytes(),
+            exact.recompute_estimated_memory_bytes()
+        );
+    }
+
+    #[test]
     fn readable_pause_resume_and_push_null_are_synchronous_bd_fw7zd() {
         let module = test_module_with_functions(Vec::new(), Vec::new());
         let mut core = test_interpreter();
@@ -80424,6 +81031,110 @@ mod async_runtime_tests_current {
         assert_eq!(
             core.estimated_memory_bytes(),
             core.recompute_estimated_memory_bytes()
+        );
+    }
+
+    #[test]
+    fn readable_prefetched_to_array_peak_is_exact_atomic_and_labeled_bd_71jw4() {
+        let fixture = || {
+            let mut core = test_interpreter();
+            let source = core
+                .alloc_array_from_values(&[
+                    Value::str("left"),
+                    Value::str("middle"),
+                    Value::str("right"),
+                ])
+                .expect("toArray source");
+            core.write_reg_with_label(0, Value::Object(source), Label::Secret)
+                .expect("secret source register");
+            let Value::Object(readable) = core
+                .construct_readable_from(RegRange { start: 0, count: 1 })
+                .expect("finite Readable")
+            else {
+                panic!("Readable.from must return an object");
+            };
+            assert!(
+                core.readable_pull_source_chunk(readable)
+                    .expect("prefetch first source value")
+            );
+            assert_eq!(core.readable_from_streams[&readable].buffer.len(), 1);
+            (core, readable)
+        };
+        let operation =
+            |core: &mut InterpreterCore, readable| core.readable_to_array(Value::Object(readable));
+        let exact_ceiling = calibrate_readable_memory_ceiling(&fixture, &operation);
+
+        let (mut refused, readable) = fixture();
+        let before_state = refused.readable_from_streams[&readable].clone();
+        let before_heap_len = refused.heap.len();
+        let before_remembered_set = refused.gc_remembered_set.clone();
+        let before_memory = refused.estimated_memory_bytes();
+        let before_promise_runtime = refused.promise_runtime_memory_bytes();
+        let before_promise_count = refused.promise_store.len();
+        let before_promise_witness = refused.promise_store.witness_log().to_vec();
+        let before_pumps = refused.pending_readable_from_pumps.clone();
+        refused.config.max_total_memory_bytes = exact_ceiling - 1;
+        assert!(matches!(
+            operation(&mut refused, readable),
+            Err(InterpreterError::MemoryBudgetExceeded {
+                requested_bytes,
+                max_bytes,
+                ..
+            }) if requested_bytes == exact_ceiling && max_bytes == exact_ceiling - 1
+        ));
+        assert_eq!(refused.readable_from_streams[&readable], before_state);
+        assert_eq!(refused.heap.len(), before_heap_len);
+        assert_eq!(refused.gc_remembered_set, before_remembered_set);
+        assert_eq!(refused.promise_store.len(), before_promise_count);
+        assert_eq!(refused.promise_store.witness_log(), before_promise_witness);
+        assert_eq!(refused.pending_readable_from_pumps, before_pumps);
+        assert!(refused.readable_pump_reservations.is_empty());
+        assert_eq!(
+            refused.promise_runtime_memory_bytes(),
+            before_promise_runtime
+        );
+        assert_eq!(refused.estimated_memory_bytes(), before_memory);
+        assert_eq!(
+            refused.estimated_memory_bytes(),
+            refused.recompute_estimated_memory_bytes()
+        );
+
+        let (mut exact, readable) = fixture();
+        exact.config.max_total_memory_bytes = exact_ceiling;
+        let Value::Promise(promise_id) =
+            operation(&mut exact, readable).expect("exact prefetched toArray peak")
+        else {
+            panic!("toArray must return a Promise");
+        };
+        let promise = crate::promise_model::PromiseHandle(promise_id);
+        assert!(matches!(
+            exact.promise_store.get(promise).map(|record| &record.state),
+            Ok(crate::promise_model::PromiseState::Pending)
+        ));
+        let state = &exact.readable_from_streams[&readable];
+        assert_eq!(state.phase, ReadableFromPumpPhase::End);
+        assert_eq!(state.next_index, 3);
+        assert!(state.buffer.is_empty());
+        assert_eq!(state.buffered_length, 0);
+        assert_eq!(state.lifecycle_label, Label::Secret);
+        let waiter = state.to_array_waiter.as_ref().expect("toArray waiter");
+        assert_eq!(waiter.promise, promise);
+        assert_eq!(waiter.label, Label::Secret);
+        let result = waiter.result;
+        assert_eq!(
+            exact.read_array_like_values(result),
+            vec![
+                Value::str("left"),
+                Value::str("middle"),
+                Value::str("right")
+            ]
+        );
+        assert_eq!(exact.pending_readable_from_pumps.len(), 1);
+        assert!(exact.readable_pump_reservations.is_empty());
+        assert!(exact.estimated_memory_bytes() <= exact_ceiling);
+        assert_eq!(
+            exact.estimated_memory_bytes(),
+            exact.recompute_estimated_memory_bytes()
         );
     }
 

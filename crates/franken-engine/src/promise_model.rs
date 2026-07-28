@@ -485,7 +485,7 @@ impl PromiseStore {
             .saturating_add(estimate_witness_log_memory_bytes(&self.witness))
     }
 
-    fn projected_create_memory_bytes(&self) -> u64 {
+    pub(crate) fn projected_create_memory_bytes(&self) -> u64 {
         self.estimated_memory_bytes()
             .saturating_add(std::mem::size_of::<PromiseRecord>() as u64)
             .saturating_add(std::mem::size_of::<WitnessEvent>() as u64)

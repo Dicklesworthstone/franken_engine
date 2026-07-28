@@ -6,13 +6,14 @@ cd "$root_dir"
 
 print_usage() {
   cat <<'EOF'
-usage: ./scripts/test_standalone_build.sh [standalone-check|standalone-test|full-check|full-integration|sibling-isolation|patch-version-consistency|ci]
+usage: ./scripts/test_standalone_build.sh [standalone-check|standalone-test|standalone-release|full-check|full-integration|sibling-isolation|patch-version-consistency|ci]
 
 Modes:
   standalone-check    rch-backed cargo check in standalone mode
   standalone-test     rch-backed cargo test in standalone mode
+  standalone-release  rch-backed frankenctl release build in standalone mode
   full-check          rch-backed cargo check with all features when sibling deps exist
-  sibling-isolation   assert no /dp sibling enters the --no-default-features graph
+  sibling-isolation   assert no /dp sibling appears in the manifest or standalone graph
   patch-version-consistency
                       assert no [patch.*] entry substitutes a crate whose version
                       differs from what its consumers declare, and prove the guard
@@ -20,18 +21,20 @@ Modes:
   full-integration    per-sibling smoke (asupersync, frankentui, frankensqlite,
                       sqlmodel_rust, fastapi_rust, frankenpandas) recording each
                       as passed / skipped / failed (bd-cixqu.13.1)
-  ci                  standalone-check + standalone-test + full-check +
-                      full-integration + sibling-isolation +
+  ci                  standalone-check + standalone-test + standalone-release +
+                      full-check + full-integration + sibling-isolation +
                       patch-version-consistency, with manifest/report
 
 Environment:
   STANDALONE_BUILD_GATE_ARTIFACT_ROOT  Output root (default: artifacts/standalone_build_gate)
   STANDALONE_BUILD_GATE_SKIP_REMOTE    Set to 1 to skip heavy rch-backed lanes and emit a manifest only
+  STANDALONE_BUILD_GATE_SIBLING_ROOT   Source-checkout smoke root (default: /dp)
   RUSTUP_TOOLCHAIN                     Toolchain for rch-backed cargo lanes (default: nightly)
   CARGO_TARGET_DIR                     Remote cargo target dir (default: repo-local .rch-target/standalone_build_gate_...)
   CARGO_BUILD_JOBS                     Remote cargo build jobs for rch lanes (default: 1)
   CARGO_INCREMENTAL                    Remote cargo incremental mode for rch lanes (default: 0)
-  RCH_EXEC_TIMEOUT_SECONDS             Timeout for each rch lane (default: 900)
+  RCH_EXEC_TIMEOUT_SECONDS             Remote timeout for each rch lane (default: 3600);
+                                       the local wrapper adds 120s for transfer
 EOF
 }
 
@@ -39,7 +42,9 @@ mode="${1:-ci}"
 toolchain="${RUSTUP_TOOLCHAIN:-nightly}"
 artifact_root="${STANDALONE_BUILD_GATE_ARTIFACT_ROOT:-artifacts/standalone_build_gate}"
 skip_remote="${STANDALONE_BUILD_GATE_SKIP_REMOTE:-0}"
-rch_timeout_seconds="${RCH_EXEC_TIMEOUT_SECONDS:-900}"
+sibling_root="${STANDALONE_BUILD_GATE_SIBLING_ROOT:-/dp}"
+rch_timeout_seconds="${RCH_EXEC_TIMEOUT_SECONDS:-3600}"
+rch_outer_timeout_seconds=$((rch_timeout_seconds + 120))
 cargo_build_jobs="${CARGO_BUILD_JOBS:-1}"
 cargo_incremental="${CARGO_INCREMENTAL:-0}"
 timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
@@ -52,7 +57,7 @@ commands_path="${run_dir}/commands.txt"
 step_logs_dir="${run_dir}/step_logs"
 
 case "$mode" in
-  standalone-check|standalone-test|full-check|full-integration|sibling-isolation|patch-version-consistency|ci)
+  standalone-check|standalone-test|standalone-release|full-check|full-integration|sibling-isolation|patch-version-consistency|ci)
     ;;
   -h|--help)
     print_usage
@@ -116,7 +121,7 @@ rch_local_fallback_detected() {
 
 rch_recovered_success() {
   local log_path="$1"
-  if rg -q 'Remote command finished: exit=0|Finished `dev` profile|Finished `test` profile|test result: ok\.' "$log_path" \
+  if rg -q 'Remote command finished: exit=0|Finished `(dev|test|release)` profile|test result: ok\.' "$log_path" \
     && ! rg -qi 'error(\[[[:alnum:]]+\])?:' "$log_path"; then
     return 0
   fi
@@ -191,7 +196,11 @@ run_rch_lane() {
   fi
 
   set +e
-  timeout "${rch_timeout_seconds}" \
+  timeout "${rch_outer_timeout_seconds}" \
+    env \
+      "RCH_REQUIRE_REMOTE=1" \
+      "RCH_BUILD_TIMEOUT_SEC=${rch_timeout_seconds}" \
+      "RCH_TEST_TIMEOUT_SEC=${rch_timeout_seconds}" \
     rch exec -- env \
       "RUSTUP_TOOLCHAIN=${toolchain}" \
       "CARGO_TARGET_DIR=${target_dir}" \
@@ -212,7 +221,7 @@ run_rch_lane() {
     fi
   elif [[ "$run_status" -eq 124 ]]; then
     lane_status="failed"
-    note="rch timeout after ${rch_timeout_seconds}s"
+    note="rch wrapper timeout after ${rch_outer_timeout_seconds}s"
   elif rch_recovered_success "$log_path"; then
     if rch_local_fallback_detected "$log_path"; then
       lane_status="failed"
@@ -271,7 +280,7 @@ mark_full_check_skipped() {
 # because a deployment may legitimately not have the sibling checked
 # out — we record but don't fail the lane.
 
-readonly SIBLING_PASS_CRITERIA_BASE="/dp"
+readonly SIBLING_PASS_CRITERIA_BASE="$sibling_root"
 readonly SIBLINGS=(
   "asupersync"
   "frankentui"
@@ -333,25 +342,17 @@ run_full_integration_lane() {
 
 # bd-ndpm2 — sibling-isolation lane.
 #
-# Guards the property that DOES hold and that nothing else checks: with default
-# features off, no `/dp/*` sibling crate is in the engine's resolved dependency
-# graph. Before this lane, all nine sibling path deps were unconditional, so
-# `--no-default-features` still compiled `/dp/sqlmodel_rust` and (through it)
-# `/dp/frankensqlite` — which is how a broken sibling took the whole engine down
-# with nothing failing until a human noticed a doc regeneration break.
-#
-# What this lane deliberately does NOT claim: that the build works with `/dp`
-# absent. Cargo resolves a path dependency's manifest whether or not a feature
-# activates it, so an absent sibling still fails at resolution time. Verified by
-# experiment and recorded on bd-ndpm2. Delivering the absent-sibling build needs
-# the siblings published to a registry; until then the README says the checkouts
-# are required, and this lane holds the line that they are not *linked*.
+# Guards both properties needed for a genuinely standalone build: the engine
+# manifest contains no `/dp/*` sibling dependency, and no `/dp/*` crate appears
+# in the resolved `--no-default-features` graph. The sibling crates were moved
+# to optional registry dependencies under bd-gw4cg. Cargo still resolves the
+# manifest of an optional path dependency, so merely checking that a `/dp` edge
+# is optional would let the original absent-checkout failure return.
 #
 # Two assertions:
-#   1. Every `/dp/*` path dependency in the engine manifest is `optional = true`.
+#   1. The engine manifest contains zero `/dp/*` path dependencies.
 #   2. `cargo tree --no-default-features -e normal,dev` names zero `/dp/` paths.
-# Assertion 1 catches a newly-added unconditional sibling dep even in a tree
-# where assertion 2 cannot run (no cargo).
+# Assertion 1 catches even an optional path edge when assertion 2 cannot run.
 #
 # `-e normal,dev` rather than `-e normal` is deliberate. The crate carries a self
 # dev-dependency (for `tee-test-mock`); while it lacked `default-features =
@@ -361,38 +362,37 @@ run_full_integration_lane() {
 # that entire class of regression.
 run_sibling_isolation_lane() {
   local lane="sibling-isolation"
-  local command_text="assert no /dp sibling crate enters the --no-default-features dependency graph (normal + dev)"
+  local command_text="assert no /dp sibling dependency appears in the engine manifest or --no-default-features graph (normal + dev)"
   local log_path="${step_logs_dir}/${lane}.log"
   local status="passed"
-  local note="no sibling crate is linked with default features off"
-  local -a non_optional=()
+  local note="no /dp sibling dependency appears in the manifest or standalone graph"
+  local -a manifest_path_deps=()
   local dep_line dep_name tree_out leaked
 
   commands_run+=("$command_text")
   : >"$log_path"
 
-  # (1) Every /dp path dep must carry `optional = true`.
+  # (1) Any /dp path dependency breaks absent-checkout Cargo resolution,
+  # including an optional dependency whose feature is disabled.
   while IFS= read -r dep_line; do
     [[ -z "$dep_line" ]] && continue
-    if [[ "$dep_line" != *"optional"*"="*"true"* ]]; then
-      dep_name="${dep_line%%=*}"
-      non_optional+=("$(printf '%s' "$dep_name" | tr -d '[:space:]')")
-    fi
+    dep_name="${dep_line%%=*}"
+    manifest_path_deps+=("$(printf '%s' "$dep_name" | tr -d '[:space:]')")
   done < <(grep -E '^[A-Za-z0-9_-]+[[:space:]]*=.*path[[:space:]]*=[[:space:]]*"/dp/' \
     crates/franken-engine/Cargo.toml || true)
 
   {
-    printf -- '-- assertion 1: every /dp path dep is optional\n'
-    if [[ "${#non_optional[@]}" -gt 0 ]]; then
-      printf -- '   FAIL: non-optional sibling deps: %s\n' "${non_optional[*]}"
+    printf -- '-- assertion 1: the engine manifest contains zero /dp path dependencies\n'
+    if [[ "${#manifest_path_deps[@]}" -gt 0 ]]; then
+      printf -- '   FAIL: sibling path deps: %s\n' "${manifest_path_deps[*]}"
     else
       printf -- '   ok\n'
     fi
   } >>"$log_path"
 
-  if [[ "${#non_optional[@]}" -gt 0 ]]; then
+  if [[ "${#manifest_path_deps[@]}" -gt 0 ]]; then
     status="failed"
-    note="non-optional /dp sibling dependencies: ${non_optional[*]}"
+    note="/dp sibling dependencies break absent-checkout resolution: ${manifest_path_deps[*]}"
   fi
 
   # (2) The resolved standalone graph must name no /dp path at all.
@@ -523,6 +523,12 @@ run_mode() {
         "cargo test -p frankenengine-engine --no-default-features" \
         cargo test -p frankenengine-engine --no-default-features || run_failures=$((run_failures + 1))
       ;;
+    standalone-release)
+      run_rch_lane \
+        "standalone-release" \
+        "cargo build --release --no-default-features -p frankenengine-engine --bin frankenctl" \
+        cargo build --release --no-default-features -p frankenengine-engine --bin frankenctl || run_failures=$((run_failures + 1))
+      ;;
     full-check)
       if [[ "${#missing_external_dependency_paths[@]}" -gt 0 ]]; then
         mark_full_check_skipped "missing sibling dependency Cargo.toml for: ${missing_external_dependency_paths[*]}"
@@ -554,6 +560,10 @@ run_mode() {
         "standalone-test" \
         "cargo test -p frankenengine-engine --no-default-features" \
         cargo test -p frankenengine-engine --no-default-features || run_failures=$((run_failures + 1))
+      run_rch_lane \
+        "standalone-release" \
+        "cargo build --release --no-default-features -p frankenengine-engine --bin frankenctl" \
+        cargo build --release --no-default-features -p frankenengine-engine --bin frankenctl || run_failures=$((run_failures + 1))
       if [[ "${#missing_external_dependency_paths[@]}" -gt 0 ]]; then
         mark_full_check_skipped "missing sibling dependency Cargo.toml for: ${missing_external_dependency_paths[*]}"
       else
@@ -588,13 +598,19 @@ generated_at_utc="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
 standalone_check_status="$(printf '%s\n' "$lane_results_json" | jq -r 'map(select(.lane == "standalone-check")) | .[0].status // "not_run"')"
 standalone_test_status="$(printf '%s\n' "$lane_results_json" | jq -r 'map(select(.lane == "standalone-test")) | .[0].status // "not_run"')"
+standalone_release_status="$(printf '%s\n' "$lane_results_json" | jq -r 'map(select(.lane == "standalone-release")) | .[0].status // "not_run"')"
 full_check_status="$(printf '%s\n' "$lane_results_json" | jq -r 'map(select(.lane == "full-check")) | .[0].status // "not_run"')"
 sibling_isolation_status="$(printf '%s\n' "$lane_results_json" | jq -r 'map(select(.lane == "sibling-isolation")) | .[0].status // "not_run"')"
+failed_lane_count="$(printf '%s\n' "$lane_results_json" | jq 'map(select(.status == "failed")) | length')"
 
-if [[ "$standalone_check_status" == "passed" && "$standalone_test_status" == "passed" ]]; then
+if [[ "$standalone_check_status" == "passed" \
+  && "$standalone_test_status" == "passed" \
+  && "$standalone_release_status" == "passed" ]]; then
   standalone_status="ready"
   standalone_gate_passed=true
-elif [[ "$standalone_check_status" == "failed" || "$standalone_test_status" == "failed" ]]; then
+elif [[ "$standalone_check_status" == "failed" \
+  || "$standalone_test_status" == "failed" \
+  || "$standalone_release_status" == "failed" ]]; then
   standalone_status="blocked"
   standalone_gate_passed=false
 else
@@ -620,7 +636,9 @@ case "$full_check_status" in
     ;;
 esac
 
-if [[ "$standalone_status" == "ready" && "$full_integration_status" == "ready" ]]; then
+if [[ "$failed_lane_count" -gt 0 ]]; then
+  overall_status="blocked"
+elif [[ "$standalone_status" == "ready" && "$full_integration_status" == "ready" ]]; then
   overall_status="ready"
 elif [[ "$standalone_status" == "ready" && "$full_integration_status" == "skipped_missing_external_deps" ]]; then
   overall_status="standalone_ready_full_integration_skipped"
@@ -632,6 +650,8 @@ else
   overall_status="not_verified"
 fi
 
+# `manifest_path` is serialized as metadata; jq does not read the output file.
+# shellcheck disable=SC2094
 jq -n \
   --arg schema_version "franken-engine.standalone-build-gate.v1" \
   --arg generated_at_utc "$generated_at_utc" \
@@ -652,6 +672,7 @@ jq -n \
   --arg full_integration_status "$full_integration_status" \
   --arg overall_status "$overall_status" \
   --argjson standalone_gate_passed "$standalone_gate_passed" \
+  --argjson failed_lane_count "$failed_lane_count" \
   '{
     schema_version: $schema_version,
     generated_at_utc: $generated_at_utc,
@@ -674,7 +695,8 @@ jq -n \
         gate_passed: $standalone_gate_passed,
         commands: [
           "cargo check -p frankenengine-engine --no-default-features",
-          "cargo test -p frankenengine-engine --no-default-features"
+          "cargo test -p frankenengine-engine --no-default-features",
+          "cargo build --release --no-default-features -p frankenengine-engine --bin frankenctl"
         ]
       },
       full_integration: {
@@ -686,7 +708,7 @@ jq -n \
     },
     summary: {
       lane_count: ($lanes | length),
-      failed_lane_count: ($lanes | map(select(.status == "failed")) | length),
+      failed_lane_count: $failed_lane_count,
       standalone_gate_passed: $standalone_gate_passed,
       overall_status: $overall_status
     }
@@ -696,12 +718,10 @@ echo "wrote ${manifest_path}"
 
 exit_code=0
 
-# bd-ndpm2 — the sibling-isolation lane is a manifest + `cargo tree` assertion.
-# It needs no rch worker, so it stays enforcing even under skip_remote, where
-# every heavy lane is deliberately skipped. Without this, setting
-# STANDALONE_BUILD_GATE_SKIP_REMOTE=1 would silently turn the isolation
-# guarantee off, which is exactly the failure mode this bead exists to close.
-if [[ "$sibling_isolation_status" == "failed" ]]; then
+# Every recorded failure is blocking, including sibling smokes and policy
+# drills. Previously `run_failures` was incremented but never consulted, so the
+# `ci` mode could return success after a non-standalone lane failed.
+if [[ "$run_failures" -gt 0 || "$failed_lane_count" -gt 0 ]]; then
   exit_code=1
 fi
 
@@ -715,6 +735,9 @@ case "$mode" in
     ;;
   standalone-test)
     [[ "$standalone_test_status" == "passed" ]] || exit_code=1
+    ;;
+  standalone-release)
+    [[ "$standalone_release_status" == "passed" ]] || exit_code=1
     ;;
   full-check)
     [[ "$full_integration_status" == "ready" || "$full_integration_status" == "skipped_missing_external_deps" ]] || exit_code=1

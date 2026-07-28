@@ -1,21 +1,23 @@
 # Cross-Repo Dependency Isolation (`bd-6a61n.6`)
 
-Canonical contract for FrankenEngine's optional asupersync dependencies,
-standalone build mode, and full-integration verification posture.
+Updated by `bd-gw4cg`. Canonical contract for FrankenEngine's optional
+cross-repository dependencies, standalone build mode, and full-integration
+verification posture.
 
 ## Scope
 
-`frankenengine-engine` currently carries one asupersync dependency family behind
-a feature gate:
+`frankenengine-engine` carries four registry-backed dependency families behind
+feature gates:
 
-- `franken-kernel = "0.3.1"`
-- `franken-decision = "0.3.1"`
-- `franken-evidence = "0.3.1"`
+- asupersync: `franken-kernel`, `franken-decision`, `franken-evidence` at `0.3.4`
+- persistence: `sqlmodel`, `sqlmodel-core`, `sqlmodel-frankensqlite` at `0.3.1`
+- service API: `fastapi-core` at `0.3.1`
+- dataframes: `fp-io`, `fp-frame`, `fp-columnar`, `fp-index`, `fp-types` at `0.2.0`
 
 These dependencies are optional at the Cargo layer, enabled by default through
-the `asupersync-integration` feature, and consumed as versioned crates rather
-than hard `/dp` path dependencies. That keeps the repo standalone-ready while
-preserving an explicit full-integration feature surface.
+four explicit feature gates, and consumed as versioned crates rather than hard
+`/dp` path dependencies. That keeps the repo standalone-ready while preserving
+an explicit full-integration feature surface.
 
 ## Dependency Manifest
 
@@ -31,9 +33,9 @@ and operator commands.
 
 `crates/franken-engine/Cargo.toml` defines:
 
-- default feature set: `["asupersync-integration"]`
-- gated sibling dependencies: `franken-kernel`, `franken-decision`,
-  `franken-evidence`
+- default feature set: `["asupersync-integration", "sibling-persistence",
+  "sibling-service-api", "sibling-dataframes"]`
+- gated sibling dependencies: the four families listed above
 
 The supported operator build modes are:
 
@@ -41,11 +43,13 @@ The supported operator build modes are:
   `cargo check -p frankenengine-engine --no-default-features`
 - standalone test mode:
   `cargo test -p frankenengine-engine --no-default-features`
+- standalone release mode:
+  `cargo build --release --no-default-features -p frankenengine-engine --bin frankenctl`
 - full integration mode:
   `cargo check -p frankenengine-engine --all-features`
 
 Standalone mode is the blocking portability gate. Full integration mode verifies
-the asupersync-backed control-plane surface with the versioned tripod enabled.
+the registry-backed control-plane, persistence, service, and dataframe surfaces.
 
 ## Verification Surfaces
 
@@ -56,10 +60,10 @@ Two RC-6 operator surfaces are normative:
 
 The audit script enumerates hard `/dp` path dependencies, records boundary
 metadata when such dependencies exist, and optionally uses `rch` to verify each
-sibling crate. A clean manifest with zero hard `/dp` dependencies is
-standalone-ready. The build-gate script records the standalone and
-full-integration outcomes and fails closed on local fallbacks. The
-machine-readable contract pins both surfaces to
+sibling crate. The build gate rejects any `/dp` manifest edge, records the
+standalone and full-integration outcomes, requires check, test, and release
+success for its standalone verdict, and fails closed on local fallbacks or any
+recorded failed lane. The machine-readable contract pins both surfaces to
 `strict_mode: "rch_only_no_local_fallback"` so remote-only verification is part
 of the evidence contract, not just a README note. These exact invocations are
 the canonical operator commands recorded in

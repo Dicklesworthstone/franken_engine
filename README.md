@@ -35,7 +35,7 @@ The rules compose. A containment action is replay-anchored *and* signed, so a co
 
 This is research-grade infrastructure, not a packaged product.
 
-- **First published release: `v0.1.0`.** Prebuilt `frankenctl` binaries (Linux x86_64 and macOS Apple Silicon) ship via [GitHub Releases](https://github.com/Dicklesworthstone/franken_engine/releases) with a checksum-verified `curl | bash` installer ([`install.sh`](./install.sh)); other platforms fall back to a source build. Note that `--no-default-features` links no sibling crates but still requires the `/dp` sibling checkouts to be present at resolution time (`bd-ndpm2`); see *Standalone Mode*. Current `main` stages `frankenengine-core` and `frankenengine-engine` at an unreleased `0.2.0` compatibility boundary; it does not create a `v0.2.0` tag or release. See [`CHANGELOG.md`](./CHANGELOG.md) for the evidence trail.
+- **First published release: `v0.1.0`.** Prebuilt `frankenctl` binaries (Linux x86_64 and macOS Apple Silicon) ship via [GitHub Releases](https://github.com/Dicklesworthstone/franken_engine/releases) with a checksum-verified `curl | bash` installer ([`install.sh`](./install.sh)); the bash installer falls back to a source build on other platforms. The standalone source/release build now resolves only workspace and registry sources and requires no `/dp` sibling checkout (`bd-gw4cg`); see *Standalone Mode*. Current `main` stages `frankenengine-core` and `frankenengine-engine` at an unreleased `0.2.0` compatibility boundary; it does not create a `v0.2.0` tag or release. See [`CHANGELOG.md`](./CHANGELOG.md) for the evidence trail.
 - **Every README claim is gated.** Any wording change runs through [`./scripts/run_claim_to_proof_matrix_gate.sh ci`](./scripts/run_claim_to_proof_matrix_gate.sh) against [`docs/claim_to_proof_matrix_v1.json`](./docs/claim_to_proof_matrix_v1.json). Claims classified `hypothesis` or `target` must say so explicitly; absolute-superiority language without artifacts is rejected.
 - **Automation surfaces ship in advisory-only mode.** The shadow daemon and related automations cannot execute live mutations or production deployments until adoption gates are explicitly verified green. See [`docs/SHADOW_DAEMON_PROOF_STATE.md`](./docs/SHADOW_DAEMON_PROOF_STATE.md).
 
@@ -1429,34 +1429,34 @@ curl -fsSL https://raw.githubusercontent.com/Dicklesworthstone/franken_engine/ma
 irm https://raw.githubusercontent.com/Dicklesworthstone/franken_engine/main/install.ps1 | iex
 ```
 
-The installer downloads the latest `frankenctl` release asset for your platform, verifies it against its `SHA256` sidecar (and a cosign signature when present), and installs to `~/.local/bin` (`%USERPROFILE%\.local\bin` on Windows). Prebuilt binaries ship for **Linux x86_64**, **macOS Apple Silicon (arm64)**, and **Windows x86_64**; on other platforms the bash installer falls back to a source build (`--no-default-features`, which links no sibling crates but still needs the `/dp` checkouts present — see *Standalone Mode*). Pass `--help` (bash) / `-EasyMode` (PowerShell adds the dir to PATH) for options.
+The installers download a matching `frankenctl` release asset, verify its `SHA256` sidecar (and a cosign signature when present), and install to `~/.local/bin` (`%USERPROFILE%\.local\bin` on Windows). The current distribution workflow publishes prebuilt binaries for **Linux x86_64** and **macOS Apple Silicon (arm64)**; on other platforms the bash installer falls back to a standalone source build that requires no `/dp` checkout. Pass `--help` (bash) / `-EasyMode` (PowerShell adds the dir to PATH) for options.
 
 ### Build from source
 
-The `frankenctl` binary also builds directly from source. Standalone mode links no sibling crates, but the sibling *checkouts* must still be present — see the correction note below.
+The `frankenctl` binary also builds directly from source. Standalone mode links no sibling integration crates and requires no sibling source checkout.
 
-### Standalone Mode (no sibling crates linked)
+### Standalone Mode (no sibling source checkout required)
 
 ```bash
-cargo check --no-default-features
-cargo build --no-default-features --release -p frankenengine-engine --bin frankenctl
-cargo test --no-default-features
+cargo check -p frankenengine-engine --no-default-features
+cargo build --release --no-default-features -p frankenengine-engine --bin frankenctl
+cargo test -p frankenengine-engine --no-default-features
 ```
 
 In standalone mode the core interpreter compiles, governance modules fall back to local-only behavior, and external policy integration is disabled. Suitable for development and testing.
 
-**What `--no-default-features` does and does not do (corrected 2026-07-25, `bd-ndpm2`).** It drops all nine `/dp` sibling crates from the build graph: `sqlmodel`, `sqlmodel-core`, `sqlmodel-frankensqlite` (and through them `/dp/frankensqlite`), `fastapi-core`, and the five `fp-*` crates. Nothing from a sibling repository is compiled or linked, and `./scripts/test_standalone_build.sh sibling-isolation` fails closed if any sibling re-enters the graph.
+**What `--no-default-features` does (updated 2026-07-28, `bd-gw4cg`).** It disables all four optional integration families: the three `franken-*` control-plane crates, the three `sqlmodel*` persistence crates, `fastapi-core`, and the five `fp-*` dataframe crates. None is compiled or linked, and `./scripts/test_standalone_build.sh sibling-isolation` fails closed if a `/dp` source edge re-enters the manifest or resolved graph.
 
-It does **not** yet mean you can build without the sibling repositories on disk. Cargo resolves a path dependency's manifest during resolution whether or not a feature activates it, so a checkout that lacks `/dp` still fails at resolution time, before any compilation. (A second cause, the workspace `[patch.crates-io]` block, was removed on 2026-07-25 under `bd-h5cl7`; the nine path dependencies remain.) Making the checkouts genuinely optional requires publishing the sibling crates to a registry (an optional *registry* dependency is skipped when disabled; an optional *path* or *git* dependency is not); none of the nine is currently published. That work is tracked on `bd-gw4cg` — until it lands, treat the sibling repositories as a build prerequisite in every mode.
+The nine former `/dp` path dependencies now use published registry versions (`bd-gw4cg`), and the workspace path patch was removed under `bd-h5cl7`. Pull-request CI asserts that `/dp` is absent and then runs the exact standalone release build above; the operator gate requires standalone check, test, and release success and rejects any recorded failed lane.
 
-What standalone mode buys today is isolation, not independence: a broken or mid-migration sibling can no longer break the engine build, which is the failure this correction came from.
+Standalone mode now provides both source-checkout independence and isolation: `/dp` repositories are needed only for source-level sibling development and the optional local-checkout smoke lanes, not for Cargo resolution or the engine build.
 
-### Full Integration Mode (requires `/dp/asupersync`, `/dp/frankentui`, `/dp/frankensqlite`, `/dp/sqlmodel_rust`, `/dp/fastapi_rust`, `/dp/frankenpandas`)
+### Full Integration Mode (registry-backed sibling features enabled)
 
 ```bash
-cargo check --all-features
-cargo build --all-features --release
-cargo test --all-features
+cargo check -p frankenengine-engine --all-features
+cargo build --release -p frankenengine-engine --all-features
+cargo test -p frankenengine-engine --all-features
 ```
 
 In full integration mode governance and policy enforcement surfaces compile against the sibling control plane, cross-repository coordination is enabled, and TEE attestation bindings + bounded fleet quarantine surfaces compile their integration seams. TEE-backed production guarantees and bounded fleet quarantine SLOs remain HYPOTHESIS / TARGETED until promoted by live proof artifacts.
@@ -1468,7 +1468,7 @@ In full integration mode governance and policy enforcement surfaces compile agai
 ./scripts/test_standalone_build.sh ci
 ```
 
-The second script records artifacts under `artifacts/standalone_build_gate/<timestamp>/`, routes every heavy Cargo lane through `rch` (the remote-compilation hook), and treats standalone mode as the blocking gate. If sibling `/dp` repos are missing, the full-integration lane is recorded as `skipped` rather than silently faked. The canonical dependency-isolation contract for this split lives in [`docs/CROSS_REPO_DEPENDENCY_ISOLATION_V1.md`](./docs/CROSS_REPO_DEPENDENCY_ISOLATION_V1.md).
+The second script records artifacts under `artifacts/standalone_build_gate/<timestamp>/`, routes every heavy Cargo lane through `rch` (the remote-compilation hook), requires standalone check/test/release success, and blocks on every failed lane. If `/dp` source checkouts are missing, only their six local-source smoke lanes are recorded as `skipped`; registry-backed build lanes still run. See the [canonical contract](./docs/CROSS_REPO_DEPENDENCY_ISOLATION_V1.md) and its [`docs/cross_repo_dependency_isolation_v1.json`](./docs/cross_repo_dependency_isolation_v1.json) companion.
 
 ### Optional Operator Stack
 
@@ -2244,7 +2244,7 @@ As of `v0.1.0` the project ships a checksum-verified `curl | bash` installer and
 curl -fsSL https://raw.githubusercontent.com/Dicklesworthstone/franken_engine/main/install.sh | bash
 ```
 
-On platforms without a prebuilt asset the installer falls back to a source build. You can still build directly with `cargo build --release -p frankenengine-engine --bin frankenctl` in either Standalone Mode (`--no-default-features`, which links no sibling crates but still requires the `/dp` checkouts on disk — `bd-ndpm2`) or Full Integration Mode (with `/dp/asupersync`, `/dp/frankentui`, `/dp/frankensqlite`, `/dp/sqlmodel_rust`, `/dp/fastapi_rust`, `/dp/frankenpandas` available). See *Installation* above. The release binary is built in Full Integration Mode and is self-contained; macOS/ARM prebuilt assets are not yet published.
+On platforms without a prebuilt asset the bash installer falls back to a source build. You can build directly in Standalone Mode with `cargo build --release --no-default-features -p frankenengine-engine --bin frankenctl`; it uses workspace and registry sources and needs no `/dp` checkout. Add `--all-features` for the registry-backed Full Integration Mode. See *Installation* above. The release workflow builds the self-contained standalone binary for Linux x86_64 and macOS Apple Silicon.
 
 ### 10. How do I add a new claim to the README?
 
@@ -2441,7 +2441,7 @@ These capabilities are explicitly **not shipped** and must not be relied upon in
 | [`docs/operator-gates/RGC_GATES_REFERENCE.md`](./docs/operator-gates/RGC_GATES_REFERENCE.md) | Complete reference for every RGC gate script, artifact path, and replay command. |
 | [`docs/CROSS_REPO_INTEGRATION_SUITE.md`](./docs/CROSS_REPO_INTEGRATION_SUITE.md) | Operator guide for cross-repo integration verification. |
 | [`docs/CROSS_REPO_DEPENDENCY_ISOLATION_V1.md`](./docs/CROSS_REPO_DEPENDENCY_ISOLATION_V1.md) | Canonical dependency-isolation contract for the standalone/integration split. |
-| [`docs/DEPENDENCY_AUDIT.md`](./docs/DEPENDENCY_AUDIT.md) | External dependency audit. |
+| [`docs/DEPENDENCY_AUDIT.md`](./docs/DEPENDENCY_AUDIT.md) | Historical 2026-04-16 external-dependency audit snapshot (superseded by the canonical isolation contract above). |
 | [`runbooks/scripts/collect_incident_evidence.sh`](./runbooks/scripts/collect_incident_evidence.sh) | Operator incident-evidence collector. |
 | [`runbooks/scripts/emergency_rollback.sh`](./runbooks/scripts/emergency_rollback.sh) | Operator emergency-rollback runbook. |
 | [`CHANGELOG.md`](./CHANGELOG.md) | Synthesized 4-month history with capability waves. |

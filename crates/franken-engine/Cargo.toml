@@ -221,20 +221,20 @@ asupersync-integration = [
     "dep:franken-decision",
     "dep:franken-evidence",
 ]
-# The three features below gate every `/dp/*` sibling *path* dependency, so that
-# `--no-default-features` is a genuine no-siblings build rather than a build that
-# merely drops the crates.io-published asupersync trio (bd-ndpm2).
+# The three features below gate every optional sibling registry dependency, so
+# `--no-default-features` is a genuine no-siblings build (bd-ndpm2, bd-gw4cg).
 #
-# Each is ON by default: a normal `cargo build` in a full checkout is unchanged.
-# Turning one OFF removes the sibling from the dependency graph entirely and
-# compiles out the surface that consumes it. Nothing is stubbed or simulated —
-# the affected API simply does not exist, and the one runtime path that would
-# otherwise silently degrade (Parquet evidence export) fails closed with a
-# typed error instead of emitting a lesser artifact under the same name.
+# Each is ON by default: a normal `cargo build` consumes the published sibling
+# crates without requiring their `/dp` source checkouts. Turning one OFF removes
+# that family from the dependency graph entirely and compiles out the consuming
+# surface. Nothing is stubbed or simulated — the affected API simply does not
+# exist, and the one runtime path that would otherwise silently degrade (Parquet
+# evidence export) fails closed with a typed error instead of emitting a lesser
+# artifact under the same name.
 
-# `/dp/sqlmodel_rust` typed persistence, and through it `/dp/frankensqlite`.
+# sqlmodel_rust typed persistence, and through it frankensqlite.
 # `cargo tree -e normal -i fsqlite` shows sqlmodel-frankensqlite is the *only*
-# edge that pulls fsqlite, so clearing this feature drops both siblings at once.
+# edge that pulls fsqlite, so clearing this feature drops both families at once.
 # Gates: typed_persistence_models typed-session API, storage_adapter's
 # FleetTrustStateFrankensqliteBackend and FleetAuthoritySql-for-transaction impl.
 sibling-persistence = [
@@ -242,10 +242,10 @@ sibling-persistence = [
     "dep:sqlmodel-core",
     "dep:sqlmodel-frankensqlite",
 ]
-# `/dp/fastapi_rust` service/API control surface (ADR-0002).
+# fastapi_rust service/API control surface (ADR-0002).
 # Gates: policy_controller::service_endpoint_template.
 sibling-service-api = ["dep:fastapi-core"]
-# `/dp/frankenpandas` evidence-frame primitives.
+# frankenpandas evidence-frame primitives.
 # Gates: the Parquet evidence-export path in governance_hooks.
 sibling-dataframes = [
     "dep:fp-io",

@@ -1,6 +1,7 @@
 {
   "schema_version": "franken-engine.cross-repo-dependency-isolation.contract.v1",
   "bead_id": "bd-6a61n.6",
+  "updated_by_bead": "bd-gw4cg",
   "component": "cross_repo_dependency_isolation",
   "workspace_crate": "frankenengine-engine",
   "cargo_toml": "crates/franken-engine/Cargo.toml",
@@ -13,6 +14,33 @@
         "franken-decision",
         "franken-evidence"
       ]
+    },
+    {
+      "feature": "sibling-persistence",
+      "default_enabled": true,
+      "enables_dependencies": [
+        "sqlmodel",
+        "sqlmodel-core",
+        "sqlmodel-frankensqlite"
+      ]
+    },
+    {
+      "feature": "sibling-service-api",
+      "default_enabled": true,
+      "enables_dependencies": [
+        "fastapi-core"
+      ]
+    },
+    {
+      "feature": "sibling-dataframes",
+      "default_enabled": true,
+      "enables_dependencies": [
+        "fp-io",
+        "fp-frame",
+        "fp-columnar",
+        "fp-index",
+        "fp-types"
+      ]
     }
   ],
   "dependencies": [
@@ -20,7 +48,7 @@
       "dependency_key": "franken-kernel",
       "crate_module": "franken_kernel",
       "source_kind": "crates.io",
-      "version_requirement": "0.3.1",
+      "version_requirement": "0.3.4",
       "feature_gate": "asupersync-integration",
       "approved_boundary_files": [
         "crates/franken-engine/src/control_plane/mod.rs"
@@ -40,7 +68,7 @@
       "dependency_key": "franken-decision",
       "crate_module": "franken_decision",
       "source_kind": "crates.io",
-      "version_requirement": "0.3.1",
+      "version_requirement": "0.3.4",
       "feature_gate": "asupersync-integration",
       "approved_boundary_files": [
         "crates/franken-engine/src/control_plane/mod.rs",
@@ -60,7 +88,7 @@
       "dependency_key": "franken-evidence",
       "crate_module": "franken_evidence",
       "source_kind": "crates.io",
-      "version_requirement": "0.3.1",
+      "version_requirement": "0.3.4",
       "feature_gate": "asupersync-integration",
       "approved_boundary_files": [
         "crates/franken-engine/src/control_plane/mod.rs"
@@ -69,21 +97,151 @@
         "EvidenceLedger",
         "EvidenceLedgerBuilder"
       ]
+    },
+    {
+      "dependency_key": "sqlmodel",
+      "crate_module": "sqlmodel",
+      "source_kind": "crates.io",
+      "version_requirement": "0.3.1",
+      "feature_gate": "sibling-persistence",
+      "approved_boundary_files": [
+        "crates/franken-engine/src/storage_adapter.rs",
+        "crates/franken-engine/src/typed_persistence_models.rs"
+      ],
+      "imported_symbols": [
+        "Connection",
+        "Model",
+        "Session",
+        "Value"
+      ]
+    },
+    {
+      "dependency_key": "sqlmodel-core",
+      "crate_module": "sqlmodel_core",
+      "source_kind": "crates.io",
+      "version_requirement": "0.3.1",
+      "feature_gate": "sibling-persistence",
+      "approved_boundary_files": [
+        "crates/franken-engine/src/storage_adapter.rs",
+        "crates/franken-engine/src/typed_persistence_models.rs"
+      ],
+      "imported_symbols": [
+        "ConfigError",
+        "Row"
+      ]
+    },
+    {
+      "dependency_key": "sqlmodel-frankensqlite",
+      "crate_module": "sqlmodel_frankensqlite",
+      "source_kind": "crates.io",
+      "version_requirement": "0.3.1",
+      "feature_gate": "sibling-persistence",
+      "approved_boundary_files": [
+        "crates/franken-engine/src/storage_adapter.rs",
+        "crates/franken-engine/src/typed_persistence_models.rs"
+      ],
+      "imported_symbols": [
+        "FrankenConnection",
+        "FrankenExclusiveTransaction"
+      ]
+    },
+    {
+      "dependency_key": "fastapi-core",
+      "crate_module": "fastapi_core",
+      "source_kind": "crates.io",
+      "version_requirement": "0.3.1",
+      "feature_gate": "sibling-service-api",
+      "approved_boundary_files": [
+        "crates/franken-engine/src/policy_controller/service_endpoint_template.rs"
+      ],
+      "imported_symbols": [
+        "Method",
+        "Request",
+        "Response",
+        "StatusCode"
+      ]
+    },
+    {
+      "dependency_key": "fp-io",
+      "crate_module": "fp_io",
+      "source_kind": "crates.io",
+      "version_requirement": "0.2.0",
+      "feature_gate": "sibling-dataframes",
+      "approved_boundary_files": [
+        "crates/franken-engine/src/governance_hooks.rs"
+      ],
+      "imported_symbols": [
+        "write_parquet_bytes"
+      ]
+    },
+    {
+      "dependency_key": "fp-frame",
+      "crate_module": "fp_frame",
+      "source_kind": "crates.io",
+      "version_requirement": "0.2.0",
+      "feature_gate": "sibling-dataframes",
+      "approved_boundary_files": [
+        "crates/franken-engine/src/governance_hooks.rs"
+      ],
+      "imported_symbols": [
+        "DataFrame"
+      ]
+    },
+    {
+      "dependency_key": "fp-columnar",
+      "crate_module": "fp_columnar",
+      "source_kind": "crates.io",
+      "version_requirement": "0.2.0",
+      "feature_gate": "sibling-dataframes",
+      "approved_boundary_files": [
+        "crates/franken-engine/src/governance_hooks.rs"
+      ],
+      "imported_symbols": [
+        "Column"
+      ]
+    },
+    {
+      "dependency_key": "fp-index",
+      "crate_module": "fp_index",
+      "source_kind": "crates.io",
+      "version_requirement": "0.2.0",
+      "feature_gate": "sibling-dataframes",
+      "approved_boundary_files": [
+        "crates/franken-engine/src/governance_hooks.rs"
+      ],
+      "imported_symbols": [
+        "Index",
+        "IndexLabel"
+      ]
+    },
+    {
+      "dependency_key": "fp-types",
+      "crate_module": "fp_types",
+      "source_kind": "crates.io",
+      "version_requirement": "0.2.0",
+      "feature_gate": "sibling-dataframes",
+      "approved_boundary_files": [
+        "crates/franken-engine/src/governance_hooks.rs"
+      ],
+      "imported_symbols": [
+        "Scalar"
+      ]
     }
   ],
   "build_modes": {
     "standalone": {
       "commands": [
         "cargo check -p frankenengine-engine --no-default-features",
-        "cargo test -p frankenengine-engine --no-default-features"
+        "cargo test -p frankenengine-engine --no-default-features",
+        "cargo build --release --no-default-features -p frankenengine-engine --bin frankenctl"
       ],
-      "description": "Compile and test the engine without the default asupersync integration feature."
+      "description": "Compile, test, and release-build the engine without any default cross-repository integration feature."
     },
     "full_integration": {
       "commands": [
         "cargo check -p frankenengine-engine --all-features"
       ],
-      "description": "Verify the feature-gated control-plane surface with the versioned asupersync crates enabled."
+      "description": "Verify the feature-gated control-plane, persistence, service, and dataframe surfaces with registry-backed sibling crates enabled."
     }
   },
   "verification_surfaces": {

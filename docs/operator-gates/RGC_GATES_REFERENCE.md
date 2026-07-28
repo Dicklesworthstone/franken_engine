@@ -2995,25 +2995,26 @@ siblings root), and write the report and summary under
 (`component=sibling_repo_verification`) per pin-update with a `committed` /
 `held` outcome.
 
-### Sibling-isolation lane (`bd-ndpm2`)
+### Sibling-isolation and standalone-release lanes (`bd-ndpm2`, `bd-gw4cg`)
 
 ```bash
 ./scripts/test_standalone_build.sh sibling-isolation   # also runs inside `ci`
 ```
 
-Asserts that **no `/dp` sibling crate is linked when default features are off**:
+The isolation lane asserts that **no `/dp` sibling dependency can affect a
+standalone build**:
 
-1. every `/dp/*` path dependency in `crates/franken-engine/Cargo.toml` carries
-   `optional = true`; and
+1. `crates/franken-engine/Cargo.toml` contains zero `/dp/*` path dependencies;
+   and
 2. `cargo tree -p frankenengine-engine --no-default-features -e normal,dev`
    names zero `/dp/` paths.
 
-Assertion 1 still fires in a tree where cargo is unavailable, so a newly-added
-unconditional sibling dependency is caught either way. `-e normal,dev` is
-deliberate: the crate carries a self dev-dependency, and while that entry lacked
+Assertion 1 still fires in a tree where cargo is unavailable and rejects even
+an optional path edge: Cargo resolves that dependency's manifest before feature
+selection, so an absent `/dp` checkout would fail. `-e normal,dev` is deliberate:
+the crate carries a self dev-dependency, and while that entry lacked
 `default-features = false` it re-enabled `default` for every test target — so
-`cargo test --no-default-features` quietly rebuilt all nine siblings and the
-`standalone-check` / `standalone-test` lanes were proving nothing. A
+`cargo test --no-default-features` quietly rebuilt sibling integrations. A
 normal-only assertion is blind to that whole class of regression.
 
 Unlike the other lanes this one keeps enforcing under
@@ -3021,19 +3022,17 @@ Unlike the other lanes this one keeps enforcing under
 assertion needing no rch worker, and letting the skip flag disable it would turn
 off the guarantee precisely when the heavy lanes are already skipped.
 
-**What this lane does NOT claim.** That the engine builds with `/dp` absent. It
-does not, and cannot today: cargo resolves a path dependency's manifest during
-resolution whether or not a feature activates it. The three experiments
-establishing that are recorded on `bd-ndpm2`; delivering a genuine absent-sibling
-build requires publishing the sibling crates to a registry, which is tracked on
-`bd-gw4cg`. What the lane guarantees is *isolation* — a broken or mid-migration
-sibling cannot break the engine build — which is the failure it was written in
-response to.
+**What this lane does NOT claim by itself.** A dependency-graph assertion is not
+a completed release build. The separate `standalone-release` lane runs
+`cargo build --release --no-default-features -p frankenengine-engine --bin
+frankenctl`; pull-request CI runs that command on a hosted runner only after
+asserting `/dp` is absent. The `ci` mode requires check, test, and release lanes
+for its standalone verdict and blocks on every recorded failed lane.
 
-A second cause used to sit alongside the path dependencies: the workspace
-`[patch.crates-io]` block, which independently required `/dp/frankensqlite`. It
-was removed on 2026-07-25 under `bd-h5cl7` and is now guarded by its own lane —
-see below. The path dependencies remain, so the conclusion above is unchanged.
+The nine former sibling path dependencies moved to versioned registry entries
+under `bd-gw4cg`. A second historical cause, the workspace `[patch.crates-io]`
+block that required `/dp/frankensqlite`, was removed on 2026-07-25 under
+`bd-h5cl7` and is now guarded by its own lane — see below.
 
 ### `patch-version-consistency` lane (`bd-h5cl7`)
 
@@ -3091,8 +3090,8 @@ rather than silently dropped from coverage.
 **Triage.** On failure read
 `artifacts/standalone_build_gate/<ts>/step_logs/sibling-isolation.log`: it prints
 each assertion and, for assertion 2, the offending `cargo tree` lines. The usual
-cause is a new dependency added without `optional = true`, or a dependent crate
-whose engine edge is missing `default-features = false`.
+cause is a reintroduced `/dp` path dependency, or a dependent crate whose engine
+edge is missing `default-features = false`.
 
 ## Self-replacement lineage
 

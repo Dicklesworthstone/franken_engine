@@ -356,15 +356,34 @@ impl CellCleanupEvidence {
     }
 }
 
+/// Serializable evidence that containment committed but its follow-up saga
+/// could not be created.
+///
+/// The receipt proves the security action completed. Returning this artifact
+/// inside the post-cell lifecycle failure prevents a later saga error from
+/// erasing that partial success.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ContainmentSagaFailureEvidence {
+    pub action: ContainmentAction,
+    pub receipt: ContainmentReceipt,
+    pub saga_id: String,
+    pub saga_type: SagaType,
+    pub saga_error: SagaError,
+}
+
 /// Ordered failure report for an orchestration attempt that reached cell
 /// creation.
 ///
 /// `primary_error` is always the first phase failure. Later failures, including
 /// recorder finalization and cell close, are retained in occurrence order.
+/// When containment committed before saga creation failed,
+/// `containment_saga_failure` preserves the successful action receipt and the
+/// rejected saga request.
 #[derive(Debug)]
 pub struct PostCellFailure {
     pub primary_error: Box<OrchestratorError>,
     pub additional_errors: Vec<OrchestratorError>,
+    pub containment_saga_failure: Option<ContainmentSagaFailureEvidence>,
     pub cleanup: CellCleanupEvidence,
 }
 
@@ -439,6 +458,7 @@ struct PreparedLoweringOutput {
 struct PendingPostCellFailure {
     primary_error: Box<OrchestratorError>,
     additional_errors: Vec<OrchestratorError>,
+    containment_saga_failure: Option<Box<ContainmentSagaFailureEvidence>>,
 }
 
 impl From<OrchestratorError> for PendingPostCellFailure {
@@ -446,6 +466,32 @@ impl From<OrchestratorError> for PendingPostCellFailure {
         Self {
             primary_error: Box::new(primary_error),
             additional_errors: Vec::new(),
+            containment_saga_failure: None,
+        }
+    }
+}
+
+#[derive(Debug)]
+enum ContainmentPhaseError {
+    Pipeline(OrchestratorError),
+    SagaCreation(Box<ContainmentSagaFailureEvidence>),
+}
+
+impl From<ContainmentError> for ContainmentPhaseError {
+    fn from(error: ContainmentError) -> Self {
+        Self::Pipeline(OrchestratorError::Containment(error))
+    }
+}
+
+impl From<ContainmentPhaseError> for PendingPostCellFailure {
+    fn from(error: ContainmentPhaseError) -> Self {
+        match error {
+            ContainmentPhaseError::Pipeline(primary_error) => primary_error.into(),
+            ContainmentPhaseError::SagaCreation(evidence) => Self {
+                primary_error: Box::new(OrchestratorError::Saga(evidence.saga_error.clone())),
+                additional_errors: Vec::new(),
+                containment_saga_failure: Some(evidence),
+            },
         }
     }
 }
@@ -545,6 +591,16 @@ impl fmt::Display for OrchestratorError {
             ),
             Self::PostCellFailure(failure) => {
                 write!(f, "{}", failure.primary_error)?;
+                if let Some(evidence) = &failure.containment_saga_failure {
+                    write!(
+                        f,
+                        "; containment {} succeeded with receipt {} before {} saga {} creation failed",
+                        evidence.action,
+                        evidence.receipt.receipt_id,
+                        evidence.saga_type,
+                        evidence.saga_id
+                    )?;
+                }
                 for additional in &failure.additional_errors {
                     write!(f, "; additional failure: {additional}")?;
                 }
@@ -575,6 +631,16 @@ impl OrchestratorError {
     pub fn post_cell_failure(&self) -> Option<&PostCellFailure> {
         match self {
             Self::PostCellFailure(failure) => Some(failure),
+            _ => None,
+        }
+    }
+
+    /// Partial-success evidence when containment committed before saga
+    /// creation failed.
+    #[must_use]
+    pub fn containment_saga_failure(&self) -> Option<&ContainmentSagaFailureEvidence> {
+        match self {
+            Self::PostCellFailure(failure) => failure.containment_saga_failure.as_ref(),
             _ => None,
         }
     }
@@ -693,6 +759,8 @@ pub struct ExecutionOrchestrator {
     evidence_compression_status_override: Option<EvidenceCompressionStatus>,
     #[cfg(test)]
     guardplane_builder_failure_index_override: Option<usize>,
+    #[cfg(test)]
+    containment_action_override: Option<ContainmentAction>,
 }
 
 impl ExecutionOrchestrator {
@@ -799,6 +867,8 @@ impl ExecutionOrchestrator {
             evidence_compression_status_override: None,
             #[cfg(test)]
             guardplane_builder_failure_index_override: None,
+            #[cfg(test)]
+            containment_action_override: None,
             ambient_authority_grant,
             config,
             runtime_config,
@@ -1107,6 +1177,7 @@ impl ExecutionOrchestrator {
                             Err(primary_error) => PendingPostCellFailure {
                                 primary_error: Box::new(primary_error),
                                 additional_errors: vec![finish_error],
+                                containment_saga_failure: None,
                             },
                         });
                     }
@@ -1146,6 +1217,7 @@ impl ExecutionOrchestrator {
                             Err(primary_error) => PendingPostCellFailure {
                                 primary_error: Box::new(primary_error),
                                 additional_errors: vec![finish_error],
+                                containment_saga_failure: None,
                             },
                         });
                     }
@@ -1207,6 +1279,10 @@ impl ExecutionOrchestrator {
                     containment_action,
                     containment_action_for_hook(requested),
                 );
+            }
+            #[cfg(test)]
+            if let Some(action) = self.containment_action_override.take() {
+                containment_action = action;
             }
             cell_cancel_reason = if containment_action.severity() >= 4 {
                 CancelReason::Quarantine
@@ -1308,6 +1384,7 @@ impl ExecutionOrchestrator {
                     PostCellFailure {
                         primary_error: Box::new(OrchestratorError::Cell(close_error)),
                         additional_errors: Vec::new(),
+                        containment_saga_failure: None,
                         cleanup,
                     },
                 )))
@@ -1334,6 +1411,9 @@ impl ExecutionOrchestrator {
                     PostCellFailure {
                         primary_error: failure.primary_error,
                         additional_errors: failure.additional_errors,
+                        containment_saga_failure: failure
+                            .containment_saga_failure
+                            .map(|evidence| *evidence),
                         cleanup,
                     },
                 )))
@@ -2962,7 +3042,7 @@ impl ExecutionOrchestrator {
         package: &ExtensionPackage,
         trace_id: &str,
         decision_id: &str,
-    ) -> Result<(Option<ContainmentReceipt>, Option<String>), OrchestratorError> {
+    ) -> Result<(Option<ContainmentReceipt>, Option<String>), ContainmentPhaseError> {
         if action == ContainmentAction::Allow {
             return Ok((None, None));
         }
@@ -2984,20 +3064,45 @@ impl ExecutionOrchestrator {
 
         // Create saga if applicable.
         let saga_id = if let Some(saga_type) = Self::action_to_saga_type(action) {
+            let saga_id_str = format!("{trace_id}:saga");
             let steps = match saga_type {
                 SagaType::Quarantine => quarantine_saga_steps(&package.extension_id),
                 SagaType::Eviction => eviction_saga_steps(&package.extension_id),
                 SagaType::Revocation => revocation_saga_steps(&package.extension_id),
                 SagaType::Publish => {
-                    return Err(OrchestratorError::Saga(SagaError::InvalidSagaId {
-                        reason: "action_to_saga_type never returns Publish".to_string(),
-                    }));
+                    return Err(ContainmentPhaseError::SagaCreation(Box::new(
+                        ContainmentSagaFailureEvidence {
+                            action,
+                            receipt,
+                            saga_id: saga_id_str,
+                            saga_type,
+                            saga_error: SagaError::InvalidSagaId {
+                                reason: "action_to_saga_type never returns Publish".to_string(),
+                            },
+                        },
+                    )));
                 }
             };
-            let saga_id_str = format!("{trace_id}:saga");
-            let id =
-                self.saga_orchestrator
-                    .create_saga(&saga_id_str, saga_type, steps, trace_id, 0)?;
+            let id = match self.saga_orchestrator.create_saga(
+                &saga_id_str,
+                saga_type,
+                steps,
+                trace_id,
+                0,
+            ) {
+                Ok(id) => id,
+                Err(saga_error) => {
+                    return Err(ContainmentPhaseError::SagaCreation(Box::new(
+                        ContainmentSagaFailureEvidence {
+                            action,
+                            receipt,
+                            saga_id: saga_id_str,
+                            saga_type,
+                            saga_error,
+                        },
+                    )));
+                }
+            };
             Some(id.to_string())
         } else {
             None
@@ -5938,6 +6043,99 @@ mod tests {
     #[test]
     fn action_to_saga_type_challenge_returns_none() {
         assert!(ExecutionOrchestrator::action_to_saga_type(ContainmentAction::Challenge).is_none());
+    }
+
+    fn assert_containment_saga_failure_preserves_receipt_and_closes_cell(
+        action: ContainmentAction,
+        expected_saga_type: SagaType,
+        expected_state: crate::containment_executor::ContainmentState,
+    ) {
+        let mut orchestrator = ExecutionOrchestrator::with_defaults();
+        orchestrator
+            .saga_orchestrator
+            .create_saga(
+                "orch:0:saga",
+                SagaType::Publish,
+                quarantine_saga_steps("preexisting"),
+                "preexisting-trace",
+                0,
+            )
+            .expect("duplicate-saga test precondition must succeed");
+        orchestrator.containment_action_override = Some(action);
+        let package = package_with_id(&format!("bd-ov8qr-{action}"));
+
+        let error = orchestrator
+            .execute(&package)
+            .expect_err("duplicate saga creation must fail after containment");
+        let failure = assert_successful_post_cell_cleanup(&error);
+        assert!(failure.additional_errors.is_empty());
+        assert!(matches!(
+            failure.primary_error.as_ref(),
+            OrchestratorError::Saga(SagaError::SagaAlreadyExists { saga_id })
+                if saga_id == "orch:0:saga"
+        ));
+
+        let evidence = error
+            .containment_saga_failure()
+            .expect("partial success must preserve saga-failure evidence");
+        assert_eq!(failure.containment_saga_failure.as_ref(), Some(evidence));
+        assert_eq!(evidence.action, action);
+        assert_eq!(evidence.receipt.action, action);
+        assert_eq!(evidence.receipt.target_extension_id, package.extension_id);
+        assert!(evidence.receipt.success);
+        assert_eq!(evidence.saga_id, "orch:0:saga");
+        assert_eq!(evidence.saga_type, expected_saga_type);
+        assert!(matches!(
+            &evidence.saga_error,
+            SagaError::SagaAlreadyExists { saga_id } if saga_id == "orch:0:saga"
+        ));
+
+        let encoded =
+            serde_json::to_vec(evidence).expect("saga-failure evidence must be serializable");
+        let decoded: ContainmentSagaFailureEvidence =
+            serde_json::from_slice(&encoded).expect("saga-failure evidence must round-trip");
+        assert_eq!(&decoded, evidence);
+
+        assert_eq!(
+            orchestrator
+                .containment_executor
+                .state(&package.extension_id),
+            Some(expected_state)
+        );
+        let receipts = orchestrator
+            .containment_executor
+            .receipts(&package.extension_id);
+        assert_eq!(receipts.len(), 1);
+        assert_eq!(receipts[0], &evidence.receipt);
+        assert_eq!(orchestrator.saga_orchestrator.total_count(), 1);
+        assert_eq!(orchestrator.execution_count(), 0);
+    }
+
+    #[test]
+    fn containment_saga_failure_preserves_suspend_receipt_and_closes_cell_bd_ov8qr() {
+        assert_containment_saga_failure_preserves_receipt_and_closes_cell(
+            ContainmentAction::Suspend,
+            SagaType::Revocation,
+            crate::containment_executor::ContainmentState::Suspended,
+        );
+    }
+
+    #[test]
+    fn containment_saga_failure_preserves_terminate_receipt_and_closes_cell_bd_ov8qr() {
+        assert_containment_saga_failure_preserves_receipt_and_closes_cell(
+            ContainmentAction::Terminate,
+            SagaType::Eviction,
+            crate::containment_executor::ContainmentState::Terminated,
+        );
+    }
+
+    #[test]
+    fn containment_saga_failure_preserves_quarantine_receipt_and_closes_cell_bd_ov8qr() {
+        assert_containment_saga_failure_preserves_receipt_and_closes_cell(
+            ContainmentAction::Quarantine,
+            SagaType::Quarantine,
+            crate::containment_executor::ContainmentState::Quarantined,
+        );
     }
 
     #[test]

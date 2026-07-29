@@ -6,8 +6,12 @@
 //! a real sandboxed provider is deliberately installed.
 
 use serde::{Deserialize, Serialize};
+#[cfg(unix)]
+use std::ffi::{OsStr, OsString};
 use std::io::{Read, Write};
 use std::net::{Shutdown, TcpStream, ToSocketAddrs};
+#[cfg(unix)]
+use std::os::fd::OwnedFd;
 use std::path::{Component, Path, PathBuf};
 use std::time::Duration;
 
@@ -395,9 +399,10 @@ pub const SANDBOXED_HOST_IO_NETWORK_TIMEOUT: Duration = Duration::from_secs(10);
 ///   (fail-closed; no I/O is attempted).
 /// * **Path-confined** — guest paths are interpreted relative to `root`. Empty
 ///   paths, NUL bytes, backslashes, absolute/rooted paths, and traversal (`..`)
-///   are rejected lexically; symlink escapes are rejected by canonicalizing and
-///   re-checking against the real root. A write never follows a symlinked
-///   intermediate directory or target.
+///   are rejected lexically. Mutations are rooted at a held directory
+///   descriptor and use descriptor-relative, no-follow operations, so a
+///   concurrent pathname or symlink swap cannot redirect them outside the
+///   sandbox. Read-only operations separately canonicalize and re-check paths.
 /// * **Bounded** — reads and writes above `max_bytes` fail closed, defending
 ///   against parser-bomb / OOM inputs (including a file that grows between
 ///   `stat` and `read`).
@@ -419,15 +424,69 @@ pub const SANDBOXED_HOST_IO_NETWORK_TIMEOUT: Duration = Duration::from_secs(10);
 /// guest JS path lowers to a network hostcall — `create_effect_from_hostcall_tag`
 /// has no network arm — so this mechanism stays dormant until that lowering and
 /// the product-layer SSRF gate land together.)
+#[cfg(unix)]
+#[derive(Debug)]
+struct MutationTarget {
+    parent: OwnedFd,
+    name: OsString,
+}
+
+#[cfg(all(test, unix))]
+#[derive(Debug)]
+struct MutationRaceHook {
+    trigger_on_resolution: usize,
+    resolutions: std::sync::atomic::AtomicUsize,
+    resolved: std::sync::Barrier,
+    resume: std::sync::Barrier,
+}
+
+#[cfg(all(test, unix))]
+impl MutationRaceHook {
+    fn new(trigger_on_resolution: usize) -> std::sync::Arc<Self> {
+        assert!(trigger_on_resolution > 0);
+        std::sync::Arc::new(Self {
+            trigger_on_resolution,
+            resolutions: std::sync::atomic::AtomicUsize::new(0),
+            resolved: std::sync::Barrier::new(2),
+            resume: std::sync::Barrier::new(2),
+        })
+    }
+
+    fn after_resolution(&self) {
+        let resolution = self
+            .resolutions
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+            + 1;
+        if resolution == self.trigger_on_resolution {
+            self.resolved.wait();
+            self.resume.wait();
+        }
+    }
+
+    fn wait_until_resolved(&self) {
+        self.resolved.wait();
+    }
+
+    fn resume(&self) {
+        self.resume.wait();
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct SandboxedHostIo {
     root: PathBuf,
+    /// Stable authority for every filesystem mutation. Holding this descriptor
+    /// makes later root-path renames irrelevant to confinement.
+    #[cfg(unix)]
+    root_fd: std::sync::Arc<OwnedFd>,
     max_bytes: u64,
     /// Trust anchors for `use_tls` round trips: the compiled-in webpki (Mozilla)
     /// roots by default, plus any operator-supplied extras added via
     /// [`Self::with_extra_tls_roots_pem`] (private CAs, test anchors). Shared via
     /// `Arc` so cloning the provider does not copy the root set.
     tls_roots: std::sync::Arc<rustls::RootCertStore>,
+    #[cfg(all(test, unix))]
+    mutation_race_hook: Option<std::sync::Arc<MutationRaceHook>>,
 }
 
 impl SandboxedHostIo {
@@ -452,6 +511,16 @@ impl SandboxedHostIo {
         std::fs::create_dir_all(&root)?;
         // Canonicalize once so symlink-escape checks compare real paths.
         let root = root.canonicalize()?;
+        #[cfg(unix)]
+        let root_fd = rustix::fs::open(
+            &root,
+            rustix::fs::OFlags::RDONLY
+                | rustix::fs::OFlags::DIRECTORY
+                | rustix::fs::OFlags::NOFOLLOW
+                | rustix::fs::OFlags::CLOEXEC,
+            rustix::fs::Mode::empty(),
+        )
+        .map_err(std::io::Error::from)?;
         // bd-3894s slice (5): TLS round trips verify the peer against the
         // compiled-in webpki (Mozilla) roots by default; operators extend the
         // set via `with_extra_tls_roots_pem` (private CAs, test anchors).
@@ -459,9 +528,19 @@ impl SandboxedHostIo {
         tls_roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
         Ok(Self {
             root,
+            #[cfg(unix)]
+            root_fd: std::sync::Arc::new(root_fd),
             max_bytes,
             tls_roots: std::sync::Arc::new(tls_roots),
+            #[cfg(all(test, unix))]
+            mutation_race_hook: None,
         })
+    }
+
+    #[cfg(all(test, unix))]
+    fn with_mutation_race_hook(mut self, hook: std::sync::Arc<MutationRaceHook>) -> Self {
+        self.mutation_race_hook = Some(hook);
+        self
     }
 
     /// Append PEM-encoded certificates to the TLS trust anchors used for
@@ -576,6 +655,26 @@ impl SandboxedHostIo {
         }
     }
 
+    #[cfg(not(unix))]
+    fn mutation_not_implemented(action: &str) -> HostIoError {
+        HostIoError::NotImplemented {
+            what: format!(
+                "descriptor-relative filesystem {action} is unavailable on this platform"
+            ),
+        }
+    }
+
+    #[cfg(unix)]
+    fn rustix_fs_error(action: &str, raw: &str, err: rustix::io::Errno) -> HostIoError {
+        if err == rustix::io::Errno::LOOP {
+            HostIoError::SandboxViolation {
+                detail: format!("refusing to mutate through a symlink: {raw}"),
+            }
+        } else {
+            Self::fs_error(action, raw, std::io::Error::from(err))
+        }
+    }
+
     /// Resolve an existing guest path and prove it remains inside the sandbox.
     /// `follow_final=false` canonicalizes only the parent so `lstat`/`readlink`
     /// can inspect a symlink without following its final component.
@@ -610,17 +709,19 @@ impl SandboxedHostIo {
         Ok(real_parent.join(file_name))
     }
 
-    /// Resolve a mutation target while refusing symlink traversal.  When
-    /// `create_parents` is true, missing parents are created one component at a
-    /// time; otherwise they produce the same structured filesystem error as the
-    /// underlying Node operation.
-    fn prepare_write_target(
+    /// Resolve a mutation target to a stable parent-directory capability and a
+    /// single final name. Every intermediate component is opened relative to
+    /// the preceding descriptor with `NOFOLLOW`; no absolute pathname survives
+    /// this function. A rename or symlink swap after resolution therefore
+    /// cannot redirect the caller to a different directory.
+    #[cfg(unix)]
+    fn mutation_target(
         &self,
         raw: &str,
         create_parents: bool,
-    ) -> Result<PathBuf, HostIoError> {
+    ) -> Result<MutationTarget, HostIoError> {
         self.confine(raw)?;
-        let normal: Vec<&std::ffi::OsStr> = Path::new(raw)
+        let normal: Vec<&OsStr> = Path::new(raw)
             .components()
             .filter_map(|component| match component {
                 Component::Normal(part) => Some(part),
@@ -632,39 +733,194 @@ impl SandboxedHostIo {
                 detail: format!("path resolves to no file name: {raw}"),
             });
         };
-        let mut current = self.root.clone();
+        let mut current = rustix::io::dup(self.root_fd.as_ref())
+            .map_err(|err| Self::rustix_fs_error("duplicate sandbox root for", raw, err))?;
+        let directory_flags = rustix::fs::OFlags::RDONLY
+            | rustix::fs::OFlags::DIRECTORY
+            | rustix::fs::OFlags::NOFOLLOW
+            | rustix::fs::OFlags::CLOEXEC;
         for part in parents {
-            current.push(part);
-            match std::fs::symlink_metadata(&current) {
-                Ok(meta) if meta.file_type().is_symlink() => {
-                    return Err(HostIoError::SandboxViolation {
-                        detail: format!("refusing to traverse a symlinked directory: {raw}"),
-                    });
+            let opened = match rustix::fs::openat(
+                &current,
+                *part,
+                directory_flags,
+                rustix::fs::Mode::empty(),
+            ) {
+                Ok(opened) => opened,
+                Err(err) if create_parents && err == rustix::io::Errno::NOENT => {
+                    match rustix::fs::mkdirat(
+                        &current,
+                        *part,
+                        rustix::fs::Mode::from_raw_mode(0o777),
+                    ) {
+                        Ok(()) => {}
+                        // Another actor may have created the component. The
+                        // no-follow open below is the authoritative check.
+                        Err(err) if err == rustix::io::Errno::EXIST => {}
+                        Err(err) => {
+                            return Err(Self::rustix_fs_error("create parent for", raw, err));
+                        }
+                    }
+                    rustix::fs::openat(&current, *part, directory_flags, rustix::fs::Mode::empty())
+                        .map_err(|err| Self::mutation_component_error(&current, part, raw, err))?
                 }
-                Ok(meta) if !meta.is_dir() => {
-                    return Err(HostIoError::Fs {
-                        code: "ENOTDIR".to_string(),
-                        detail: format!("intermediate path component is not a directory: {raw}"),
-                    });
+                Err(err) => {
+                    return Err(Self::mutation_component_error(&current, part, raw, err));
                 }
-                Ok(_) => {}
-                Err(err) if create_parents && err.kind() == std::io::ErrorKind::NotFound => {
-                    std::fs::create_dir(&current)
-                        .map_err(|err| Self::fs_error("create parent for", raw, err))?;
-                }
-                Err(err) => return Err(Self::fs_error("resolve parent for", raw, err)),
+            };
+            current = opened;
+        }
+
+        #[cfg(test)]
+        if let Some(hook) = &self.mutation_race_hook {
+            hook.after_resolution();
+        }
+
+        Ok(MutationTarget {
+            parent: current,
+            name: (*file_name).to_owned(),
+        })
+    }
+
+    #[cfg(unix)]
+    fn mutation_component_error(
+        parent: &OwnedFd,
+        component: &OsStr,
+        raw: &str,
+        err: rustix::io::Errno,
+    ) -> HostIoError {
+        if matches!(err, rustix::io::Errno::NOTDIR | rustix::io::Errno::LOOP)
+            && rustix::fs::statat(parent, component, rustix::fs::AtFlags::SYMLINK_NOFOLLOW)
+                .is_ok_and(|stat| rustix::fs::FileType::from_raw_mode(stat.st_mode).is_symlink())
+        {
+            HostIoError::SandboxViolation {
+                detail: format!("refusing to traverse a symlinked directory: {raw}"),
+            }
+        } else {
+            Self::rustix_fs_error("resolve parent for", raw, err)
+        }
+    }
+
+    #[cfg(unix)]
+    fn open_mutation_file(
+        target: &MutationTarget,
+        flags: rustix::fs::OFlags,
+        raw: &str,
+        action: &str,
+    ) -> Result<std::fs::File, HostIoError> {
+        let descriptor = rustix::fs::openat(
+            &target.parent,
+            &target.name,
+            flags | rustix::fs::OFlags::NOFOLLOW | rustix::fs::OFlags::CLOEXEC,
+            rustix::fs::Mode::from_raw_mode(0o666),
+        )
+        .map_err(|err| Self::rustix_fs_error(action, raw, err))?;
+        Ok(std::fs::File::from(descriptor))
+    }
+
+    #[cfg(unix)]
+    fn mkdir_target(
+        target: &MutationTarget,
+        raw: &str,
+        recursive: bool,
+    ) -> Result<(), HostIoError> {
+        match rustix::fs::mkdirat(
+            &target.parent,
+            &target.name,
+            rustix::fs::Mode::from_raw_mode(0o777),
+        ) {
+            Ok(()) => Ok(()),
+            Err(err) if recursive && err == rustix::io::Errno::EXIST => rustix::fs::openat(
+                &target.parent,
+                &target.name,
+                rustix::fs::OFlags::RDONLY
+                    | rustix::fs::OFlags::DIRECTORY
+                    | rustix::fs::OFlags::NOFOLLOW
+                    | rustix::fs::OFlags::CLOEXEC,
+                rustix::fs::Mode::empty(),
+            )
+            .map(|_| ())
+            .map_err(|err| Self::rustix_fs_error("mkdir", raw, err)),
+            Err(err) => Err(Self::rustix_fs_error("mkdir", raw, err)),
+        }
+    }
+
+    #[cfg(unix)]
+    fn remove_directory_contents(directory: &OwnedFd, raw: &str) -> Result<(), HostIoError> {
+        let mut entries = rustix::fs::Dir::read_from(directory)
+            .map_err(|err| Self::rustix_fs_error("open directory for remove", raw, err))?;
+        while let Some(entry) = entries.read() {
+            let entry = entry
+                .map_err(|err| Self::rustix_fs_error("read directory for remove", raw, err))?;
+            let name = entry.file_name();
+            if matches!(name.to_bytes(), b"." | b"..") {
+                continue;
+            }
+            let stat = rustix::fs::statat(directory, name, rustix::fs::AtFlags::SYMLINK_NOFOLLOW)
+                .map_err(|err| {
+                Self::rustix_fs_error("stat before recursive remove", raw, err)
+            })?;
+            if rustix::fs::FileType::from_raw_mode(stat.st_mode).is_dir() {
+                let child = rustix::fs::openat(
+                    directory,
+                    name,
+                    rustix::fs::OFlags::RDONLY
+                        | rustix::fs::OFlags::DIRECTORY
+                        | rustix::fs::OFlags::NOFOLLOW
+                        | rustix::fs::OFlags::CLOEXEC,
+                    rustix::fs::Mode::empty(),
+                )
+                .map_err(|err| Self::rustix_fs_error("open directory for remove", raw, err))?;
+                Self::remove_directory_contents(&child, raw)?;
+                rustix::fs::unlinkat(directory, name, rustix::fs::AtFlags::REMOVEDIR)
+                    .map_err(|err| Self::rustix_fs_error("remove directory", raw, err))?;
+            } else {
+                rustix::fs::unlinkat(directory, name, rustix::fs::AtFlags::empty())
+                    .map_err(|err| Self::rustix_fs_error("remove file", raw, err))?;
             }
         }
-        current.push(file_name);
-        if std::fs::symlink_metadata(&current)
-            .map(|meta| meta.file_type().is_symlink())
-            .unwrap_or(false)
-        {
-            return Err(HostIoError::SandboxViolation {
-                detail: format!("refusing to mutate through a symlink: {raw}"),
-            });
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    fn remove_target(
+        target: &MutationTarget,
+        raw: &str,
+        recursive: bool,
+        force: bool,
+    ) -> Result<(), HostIoError> {
+        let stat = match rustix::fs::statat(
+            &target.parent,
+            &target.name,
+            rustix::fs::AtFlags::SYMLINK_NOFOLLOW,
+        ) {
+            Ok(stat) => stat,
+            Err(err) if force && err == rustix::io::Errno::NOENT => return Ok(()),
+            Err(err) => return Err(Self::rustix_fs_error("stat before remove", raw, err)),
+        };
+        let outcome = if rustix::fs::FileType::from_raw_mode(stat.st_mode).is_dir() {
+            if recursive {
+                let directory = rustix::fs::openat(
+                    &target.parent,
+                    &target.name,
+                    rustix::fs::OFlags::RDONLY
+                        | rustix::fs::OFlags::DIRECTORY
+                        | rustix::fs::OFlags::NOFOLLOW
+                        | rustix::fs::OFlags::CLOEXEC,
+                    rustix::fs::Mode::empty(),
+                )
+                .map_err(|err| Self::rustix_fs_error("open directory for remove", raw, err))?;
+                Self::remove_directory_contents(&directory, raw)?;
+            }
+            rustix::fs::unlinkat(&target.parent, &target.name, rustix::fs::AtFlags::REMOVEDIR)
+        } else {
+            rustix::fs::unlinkat(&target.parent, &target.name, rustix::fs::AtFlags::empty())
+        };
+        match outcome {
+            Ok(()) => Ok(()),
+            Err(err) if force && err == rustix::io::Errno::NOENT => Ok(()),
+            Err(err) => Err(Self::rustix_fs_error("remove", raw, err)),
         }
-        Ok(current)
     }
 
     fn fs_read(&self, raw: &str) -> HostIoOutcome {
@@ -711,11 +967,26 @@ impl SandboxedHostIo {
                 ),
             });
         }
-        let current = self.prepare_write_target(raw, false)?;
-        std::fs::write(&current, data).map_err(|err| Self::fs_error("write", raw, err))?;
-        Ok(HostIoResponse::FsWrite {
-            bytes_written: u64::try_from(data.len()).unwrap_or(u64::MAX),
-        })
+        #[cfg(not(unix))]
+        {
+            let _ = (raw, data);
+            Err(Self::mutation_not_implemented("write"))
+        }
+        #[cfg(unix)]
+        {
+            let target = self.mutation_target(raw, false)?;
+            let mut file = Self::open_mutation_file(
+                &target,
+                rustix::fs::OFlags::WRONLY | rustix::fs::OFlags::CREATE | rustix::fs::OFlags::TRUNC,
+                raw,
+                "open for write",
+            )?;
+            file.write_all(data)
+                .map_err(|err| Self::fs_error("write", raw, err))?;
+            Ok(HostIoResponse::FsWrite {
+                bytes_written: u64::try_from(data.len()).unwrap_or(u64::MAX),
+            })
+        }
     }
 
     fn fs_argument<'a>(arguments: &'a [String], name: &str) -> Option<&'a str> {
@@ -784,15 +1055,25 @@ impl SandboxedHostIo {
                         ),
                     });
                 }
-                let target = self.prepare_write_target(raw, false)?;
-                let mut file = std::fs::OpenOptions::new()
-                    .create(true)
-                    .append(true)
-                    .open(&target)
-                    .map_err(|err| Self::fs_error("open for append", raw, err))?;
-                file.write_all(data)
-                    .map_err(|err| Self::fs_error("append", raw, err))?;
-                FsMetaResult::Unsigned(u64::try_from(data.len()).unwrap_or(u64::MAX))
+                #[cfg(not(unix))]
+                {
+                    return Err(Self::mutation_not_implemented("append"));
+                }
+                #[cfg(unix)]
+                {
+                    let target = self.mutation_target(raw, false)?;
+                    let mut file = Self::open_mutation_file(
+                        &target,
+                        rustix::fs::OFlags::WRONLY
+                            | rustix::fs::OFlags::CREATE
+                            | rustix::fs::OFlags::APPEND,
+                        raw,
+                        "open for append",
+                    )?;
+                    file.write_all(data)
+                        .map_err(|err| Self::fs_error("append", raw, err))?;
+                    FsMetaResult::Unsigned(u64::try_from(data.len()).unwrap_or(u64::MAX))
+                }
             }
             FsOperation::Exists => match self.existing_path(raw, true) {
                 Ok(_) => FsMetaResult::Bool(true),
@@ -803,14 +1084,17 @@ impl SandboxedHostIo {
             },
             FsOperation::Mkdir => {
                 let recursive = Self::fs_flag(arguments, "recursive");
-                let target = self.prepare_write_target(raw, recursive)?;
-                let outcome = if recursive {
-                    std::fs::create_dir_all(&target)
-                } else {
-                    std::fs::create_dir(&target)
-                };
-                outcome.map_err(|err| Self::fs_error("mkdir", raw, err))?;
-                FsMetaResult::Unit
+                #[cfg(not(unix))]
+                {
+                    let _ = recursive;
+                    return Err(Self::mutation_not_implemented("mkdir"));
+                }
+                #[cfg(unix)]
+                {
+                    let target = self.mutation_target(raw, recursive)?;
+                    Self::mkdir_target(&target, raw, recursive)?;
+                    FsMetaResult::Unit
+                }
             }
             FsOperation::ReadDir => {
                 let directory = self.existing_path(raw, true)?;
@@ -855,17 +1139,15 @@ impl SandboxedHostIo {
                     detail: "symlink requires a destination path".to_string(),
                 })?;
                 self.confine(raw)?;
-                let link = self.prepare_write_target(link_raw, false)?;
                 #[cfg(unix)]
                 {
-                    std::os::unix::fs::symlink(raw, &link)
-                        .map_err(|err| Self::fs_error("symlink", link_raw, err))?;
+                    let link = self.mutation_target(link_raw, false)?;
+                    rustix::fs::symlinkat(raw, &link.parent, &link.name)
+                        .map_err(|err| Self::rustix_fs_error("symlink", link_raw, err))?;
                 }
                 #[cfg(not(unix))]
                 {
-                    return Err(HostIoError::NotImplemented {
-                        what: "filesystem symlinks on this platform".to_string(),
-                    });
+                    return Err(Self::mutation_not_implemented("symlink"));
                 }
                 FsMetaResult::Unit
             }
@@ -880,73 +1162,136 @@ impl SandboxedHostIo {
                     code: "EINVAL".to_string(),
                     detail: format!("{} requires a destination path", operation.as_str()),
                 })?;
-                let source = self.existing_path(raw, operation == FsOperation::CopyFile)?;
-                let destination = self.prepare_write_target(destination_raw, false)?;
-                if operation == FsOperation::Rename {
-                    std::fs::rename(&source, &destination)
-                        .map_err(|err| Self::fs_error("rename", raw, err))?;
-                } else {
-                    std::fs::copy(&source, &destination)
-                        .map_err(|err| Self::fs_error("copy", raw, err))?;
+                #[cfg(not(unix))]
+                {
+                    let _ = destination_raw;
+                    return Err(Self::mutation_not_implemented(operation.as_str()));
                 }
-                FsMetaResult::Unit
+                #[cfg(unix)]
+                {
+                    let source = self.mutation_target(raw, false)?;
+                    let destination = self.mutation_target(destination_raw, false)?;
+                    if operation == FsOperation::Rename {
+                        rustix::fs::renameat(
+                            &source.parent,
+                            &source.name,
+                            &destination.parent,
+                            &destination.name,
+                        )
+                        .map_err(|err| Self::rustix_fs_error("rename", raw, err))?;
+                    } else {
+                        let mut source_file = Self::open_mutation_file(
+                            &source,
+                            rustix::fs::OFlags::RDONLY,
+                            raw,
+                            "open copy source",
+                        )?;
+                        let source_metadata = source_file
+                            .metadata()
+                            .map_err(|err| Self::fs_error("stat copy source", raw, err))?;
+                        if !source_metadata.is_file() {
+                            return Err(HostIoError::Fs {
+                                code: "EISDIR".to_string(),
+                                detail: format!("copy source is not a regular file: {raw}"),
+                            });
+                        }
+                        let mut destination_file = Self::open_mutation_file(
+                            &destination,
+                            rustix::fs::OFlags::WRONLY
+                                | rustix::fs::OFlags::CREATE
+                                | rustix::fs::OFlags::TRUNC,
+                            destination_raw,
+                            "open copy destination",
+                        )?;
+                        std::io::copy(&mut source_file, &mut destination_file)
+                            .map_err(|err| Self::fs_error("copy", raw, err))?;
+                        destination_file
+                            .set_permissions(source_metadata.permissions())
+                            .map_err(|err| Self::fs_error("copy permissions", raw, err))?;
+                    }
+                    FsMetaResult::Unit
+                }
             }
             FsOperation::Unlink => {
-                let target = self.existing_path(raw, false)?;
-                std::fs::remove_file(&target).map_err(|err| Self::fs_error("unlink", raw, err))?;
-                FsMetaResult::Unit
+                #[cfg(not(unix))]
+                {
+                    return Err(Self::mutation_not_implemented("unlink"));
+                }
+                #[cfg(unix)]
+                {
+                    let target = self.mutation_target(raw, false)?;
+                    rustix::fs::unlinkat(
+                        &target.parent,
+                        &target.name,
+                        rustix::fs::AtFlags::empty(),
+                    )
+                    .map_err(|err| Self::rustix_fs_error("unlink", raw, err))?;
+                    FsMetaResult::Unit
+                }
             }
             FsOperation::Remove => {
                 let recursive = Self::fs_flag(arguments, "recursive");
                 let force = Self::fs_flag(arguments, "force");
-                let target = match self.existing_path(raw, false) {
-                    Ok(target) => target,
-                    Err(HostIoError::Fs { code, .. }) if force && code == "ENOENT" => {
-                        return Ok(HostIoResponse::FsMeta {
-                            result: FsMetaResult::Unit,
-                        });
-                    }
-                    Err(err) => return Err(err),
-                };
-                let metadata = match std::fs::symlink_metadata(&target) {
-                    Ok(metadata) => metadata,
-                    Err(err) if force && err.kind() == std::io::ErrorKind::NotFound => {
-                        return Ok(HostIoResponse::FsMeta {
-                            result: FsMetaResult::Unit,
-                        });
-                    }
-                    Err(err) => return Err(Self::fs_error("stat before remove", raw, err)),
-                };
-                let outcome = if metadata.is_dir() {
-                    if recursive {
-                        std::fs::remove_dir_all(&target)
-                    } else {
-                        std::fs::remove_dir(&target)
-                    }
-                } else {
-                    std::fs::remove_file(&target)
-                };
-                outcome.map_err(|err| Self::fs_error("remove", raw, err))?;
-                FsMetaResult::Unit
+                #[cfg(not(unix))]
+                {
+                    let _ = (recursive, force);
+                    return Err(Self::mutation_not_implemented("remove"));
+                }
+                #[cfg(unix)]
+                {
+                    let target = match self.mutation_target(raw, false) {
+                        Ok(target) => target,
+                        Err(HostIoError::Fs { code, .. }) if force && code == "ENOENT" => {
+                            return Ok(HostIoResponse::FsMeta {
+                                result: FsMetaResult::Unit,
+                            });
+                        }
+                        Err(err) => return Err(err),
+                    };
+                    Self::remove_target(&target, raw, recursive, force)?;
+                    FsMetaResult::Unit
+                }
             }
             FsOperation::RemoveDir => {
-                let target = self.existing_path(raw, false)?;
-                std::fs::remove_dir(&target).map_err(|err| Self::fs_error("rmdir", raw, err))?;
-                FsMetaResult::Unit
+                #[cfg(not(unix))]
+                {
+                    return Err(Self::mutation_not_implemented("rmdir"));
+                }
+                #[cfg(unix)]
+                {
+                    let target = self.mutation_target(raw, false)?;
+                    rustix::fs::unlinkat(
+                        &target.parent,
+                        &target.name,
+                        rustix::fs::AtFlags::REMOVEDIR,
+                    )
+                    .map_err(|err| Self::rustix_fs_error("rmdir", raw, err))?;
+                    FsMetaResult::Unit
+                }
             }
             FsOperation::Truncate => {
                 let length = arguments
                     .first()
                     .and_then(|value| value.parse::<u64>().ok())
                     .unwrap_or(0);
-                let target = self.existing_path(raw, true)?;
-                let file = std::fs::OpenOptions::new()
-                    .write(true)
-                    .open(&target)
-                    .map_err(|err| Self::fs_error("open for truncate", raw, err))?;
-                file.set_len(length)
-                    .map_err(|err| Self::fs_error("truncate", raw, err))?;
-                FsMetaResult::Unit
+                #[cfg(not(unix))]
+                {
+                    let _ = length;
+                    return Err(Self::mutation_not_implemented("truncate"));
+                }
+                #[cfg(unix)]
+                {
+                    let target = self.mutation_target(raw, false)?;
+                    let file = Self::open_mutation_file(
+                        &target,
+                        rustix::fs::OFlags::WRONLY,
+                        raw,
+                        "open for truncate",
+                    )?;
+                    file.set_len(length)
+                        .map_err(|err| Self::fs_error("truncate", raw, err))?;
+                    FsMetaResult::Unit
+                }
             }
             FsOperation::Access => {
                 self.existing_path(raw, true)?;
@@ -960,19 +1305,22 @@ impl SandboxedHostIo {
                         code: "EINVAL".to_string(),
                         detail: format!("chmod requires a numeric mode: {raw}"),
                     })?;
-                let target = self.existing_path(raw, true)?;
                 #[cfg(unix)]
                 {
-                    use std::os::unix::fs::PermissionsExt;
-                    std::fs::set_permissions(&target, std::fs::Permissions::from_mode(mode))
-                        .map_err(|err| Self::fs_error("chmod", raw, err))?;
+                    let target = self.mutation_target(raw, false)?;
+                    let file = Self::open_mutation_file(
+                        &target,
+                        rustix::fs::OFlags::RDONLY | rustix::fs::OFlags::NONBLOCK,
+                        raw,
+                        "open for chmod",
+                    )?;
+                    rustix::fs::fchmod(&file, rustix::fs::Mode::from_raw_mode(mode))
+                        .map_err(|err| Self::rustix_fs_error("chmod", raw, err))?;
                 }
                 #[cfg(not(unix))]
                 {
-                    let _ = (mode, target);
-                    return Err(HostIoError::NotImplemented {
-                        what: "filesystem chmod on this platform".to_string(),
-                    });
+                    let _ = mode;
+                    return Err(Self::mutation_not_implemented("chmod"));
                 }
                 FsMetaResult::Unit
             }
@@ -985,20 +1333,30 @@ impl SandboxedHostIo {
                         code: "EINVAL".to_string(),
                         detail: format!("utimes requires numeric millisecond timestamps: {raw}"),
                     })?;
-                let target = self.existing_path(raw, true)?;
-                let file = std::fs::OpenOptions::new()
-                    .write(true)
-                    .open(&target)
-                    .map_err(|err| Self::fs_error("open for utimes", raw, err))?;
                 let modified = std::time::UNIX_EPOCH
                     .checked_add(std::time::Duration::from_millis(modified_millis))
                     .ok_or_else(|| HostIoError::Fs {
                         code: "EINVAL".to_string(),
                         detail: format!("utimes timestamp is out of range: {modified_millis}"),
                     })?;
-                file.set_times(std::fs::FileTimes::new().set_modified(modified))
-                    .map_err(|err| Self::fs_error("utimes", raw, err))?;
-                FsMetaResult::Unit
+                #[cfg(not(unix))]
+                {
+                    let _ = modified;
+                    return Err(Self::mutation_not_implemented("utimes"));
+                }
+                #[cfg(unix)]
+                {
+                    let target = self.mutation_target(raw, false)?;
+                    let file = Self::open_mutation_file(
+                        &target,
+                        rustix::fs::OFlags::WRONLY,
+                        raw,
+                        "open for utimes",
+                    )?;
+                    file.set_times(std::fs::FileTimes::new().set_modified(modified))
+                        .map_err(|err| Self::fs_error("utimes", raw, err))?;
+                    FsMetaResult::Unit
+                }
             }
             FsOperation::Realpath => {
                 let target = self.existing_path(raw, true)?;
@@ -1006,23 +1364,36 @@ impl SandboxedHostIo {
             }
             FsOperation::Mkdtemp => {
                 self.confine(raw)?;
-                let mut created = None;
-                for suffix in 0_u32..1_000_000 {
-                    let candidate_raw = format!("{raw}{suffix:06}");
-                    let candidate = self.prepare_write_target(&candidate_raw, false)?;
-                    match std::fs::create_dir(&candidate) {
-                        Ok(()) => {
-                            created = Some(candidate_raw);
-                            break;
-                        }
-                        Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {}
-                        Err(err) => return Err(Self::fs_error("mkdtemp", raw, err)),
-                    }
+                #[cfg(not(unix))]
+                {
+                    return Err(Self::mutation_not_implemented("mkdtemp"));
                 }
-                FsMetaResult::String(created.ok_or_else(|| HostIoError::Fs {
-                    code: "EEXIST".to_string(),
-                    detail: format!("unable to allocate a unique temporary directory for {raw}"),
-                })?)
+                #[cfg(unix)]
+                {
+                    let mut created = None;
+                    for suffix in 0_u32..1_000_000 {
+                        let candidate_raw = format!("{raw}{suffix:06}");
+                        let candidate = self.mutation_target(&candidate_raw, false)?;
+                        match rustix::fs::mkdirat(
+                            &candidate.parent,
+                            &candidate.name,
+                            rustix::fs::Mode::from_raw_mode(0o777),
+                        ) {
+                            Ok(()) => {
+                                created = Some(candidate_raw);
+                                break;
+                            }
+                            Err(err) if err == rustix::io::Errno::EXIST => {}
+                            Err(err) => return Err(Self::rustix_fs_error("mkdtemp", raw, err)),
+                        }
+                    }
+                    FsMetaResult::String(created.ok_or_else(|| HostIoError::Fs {
+                        code: "EEXIST".to_string(),
+                        detail: format!(
+                            "unable to allocate a unique temporary directory for {raw}"
+                        ),
+                    })?)
+                }
             }
         };
         Ok(HostIoResponse::FsMeta { result })
@@ -2005,6 +2376,372 @@ mod tests {
     impl Drop for ScratchDir {
         fn drop(&mut self) {
             let _ = std::fs::remove_dir_all(&self.path);
+        }
+    }
+
+    #[cfg(unix)]
+    #[derive(Debug, Clone, Copy)]
+    enum MutationRaceCase {
+        Write,
+        Append,
+        Mkdir,
+        MkdirRecursive,
+        Symlink,
+        Rename,
+        CopyFile,
+        Unlink,
+        RemoveFile,
+        RemoveRecursive,
+        RemoveDir,
+        Truncate,
+        Chmod,
+        Utimes,
+        Mkdtemp,
+    }
+
+    #[cfg(unix)]
+    impl MutationRaceCase {
+        const ALL: [Self; 15] = [
+            Self::Write,
+            Self::Append,
+            Self::Mkdir,
+            Self::MkdirRecursive,
+            Self::Symlink,
+            Self::Rename,
+            Self::CopyFile,
+            Self::Unlink,
+            Self::RemoveFile,
+            Self::RemoveRecursive,
+            Self::RemoveDir,
+            Self::Truncate,
+            Self::Chmod,
+            Self::Utimes,
+            Self::Mkdtemp,
+        ];
+
+        fn setup(self, parent: &Path) {
+            use std::os::unix::fs::PermissionsExt;
+
+            std::fs::create_dir_all(parent).expect("create race parent");
+            match self {
+                Self::Write | Self::Append | Self::Truncate | Self::Utimes => {
+                    std::fs::write(parent.join("file.txt"), b"before").expect("seed file");
+                }
+                Self::Mkdir | Self::MkdirRecursive | Self::Mkdtemp => {}
+                Self::Symlink => {
+                    std::fs::write(parent.join("source.txt"), b"source").expect("seed link source");
+                }
+                Self::Rename => {
+                    std::fs::write(parent.join("source.txt"), b"rename source")
+                        .expect("seed rename source");
+                }
+                Self::CopyFile => {
+                    std::fs::write(parent.join("source.txt"), b"copy source")
+                        .expect("seed copy source");
+                    std::fs::write(parent.join("destination.txt"), b"copy destination")
+                        .expect("seed copy destination");
+                }
+                Self::Unlink | Self::RemoveFile => {
+                    std::fs::write(parent.join("remove.txt"), b"remove me")
+                        .expect("seed removed file");
+                }
+                Self::RemoveRecursive => {
+                    std::fs::create_dir_all(parent.join("remove-dir").join("nested"))
+                        .expect("seed recursive directory");
+                    std::fs::write(
+                        parent.join("remove-dir").join("nested").join("file.txt"),
+                        b"remove tree",
+                    )
+                    .expect("seed recursive file");
+                }
+                Self::RemoveDir => {
+                    std::fs::create_dir(parent.join("empty-dir")).expect("seed empty directory");
+                }
+                Self::Chmod => {
+                    let path = parent.join("file.txt");
+                    std::fs::write(&path, b"chmod").expect("seed chmod file");
+                    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))
+                        .expect("seed chmod mode");
+                }
+            }
+        }
+
+        fn trigger_on_resolution(self) -> usize {
+            match self {
+                Self::Rename | Self::CopyFile => 2,
+                _ => 1,
+            }
+        }
+
+        fn request(self) -> HostIoRequest {
+            let fs_meta =
+                |operation, path: &str, arguments: &[&str], data: &[u8]| HostIoRequest::FsMeta {
+                    operation,
+                    path: path.to_string(),
+                    arguments: arguments.iter().map(|value| (*value).to_string()).collect(),
+                    data: data.to_vec(),
+                };
+            match self {
+                Self::Write => HostIoRequest::FsWrite {
+                    path: "slot/file.txt".to_string(),
+                    data: b"after".to_vec(),
+                },
+                Self::Append => fs_meta(FsOperation::Append, "slot/file.txt", &[], b"-after"),
+                Self::Mkdir => fs_meta(FsOperation::Mkdir, "slot/new-dir", &[], &[]),
+                Self::MkdirRecursive => fs_meta(
+                    FsOperation::Mkdir,
+                    "slot/new-parent/new-dir",
+                    &["recursive=true"],
+                    &[],
+                ),
+                Self::Symlink => fs_meta(FsOperation::Symlink, "source.txt", &["slot/link"], &[]),
+                Self::Rename => fs_meta(
+                    FsOperation::Rename,
+                    "slot/source.txt",
+                    &["slot/destination.txt"],
+                    &[],
+                ),
+                Self::CopyFile => fs_meta(
+                    FsOperation::CopyFile,
+                    "slot/source.txt",
+                    &["slot/destination.txt"],
+                    &[],
+                ),
+                Self::Unlink => fs_meta(FsOperation::Unlink, "slot/remove.txt", &[], &[]),
+                Self::RemoveFile => fs_meta(FsOperation::Remove, "slot/remove.txt", &[], &[]),
+                Self::RemoveRecursive => fs_meta(
+                    FsOperation::Remove,
+                    "slot/remove-dir",
+                    &["recursive=true"],
+                    &[],
+                ),
+                Self::RemoveDir => fs_meta(FsOperation::RemoveDir, "slot/empty-dir", &[], &[]),
+                Self::Truncate => fs_meta(FsOperation::Truncate, "slot/file.txt", &["2"], &[]),
+                Self::Chmod => fs_meta(FsOperation::Chmod, "slot/file.txt", &["416"], &[]),
+                Self::Utimes => fs_meta(FsOperation::Utimes, "slot/file.txt", &["1000"], &[]),
+                Self::Mkdtemp => fs_meta(FsOperation::Mkdtemp, "slot/tmp-", &[], &[]),
+            }
+        }
+
+        fn raced_final(self, root: &Path) -> PathBuf {
+            let relative = match self {
+                Self::Write | Self::Append | Self::Truncate | Self::Chmod | Self::Utimes => {
+                    "slot/file.txt"
+                }
+                Self::Mkdir => "slot/new-dir",
+                Self::MkdirRecursive => "slot/new-parent/new-dir",
+                Self::Symlink => "slot/link",
+                Self::Rename | Self::CopyFile => "slot/destination.txt",
+                Self::Unlink | Self::RemoveFile => "slot/remove.txt",
+                Self::RemoveRecursive => "slot/remove-dir",
+                Self::RemoveDir => "slot/empty-dir",
+                Self::Mkdtemp => "slot/tmp-000000",
+            };
+            root.join(relative)
+        }
+
+        fn assert_anchored_effect(self, anchored: &Path) {
+            use std::os::unix::fs::{MetadataExt, PermissionsExt};
+
+            match self {
+                Self::Write => {
+                    assert_eq!(std::fs::read(anchored.join("file.txt")).unwrap(), b"after");
+                }
+                Self::Append => {
+                    assert_eq!(
+                        std::fs::read(anchored.join("file.txt")).unwrap(),
+                        b"before-after"
+                    );
+                }
+                Self::Mkdir => assert!(anchored.join("new-dir").is_dir()),
+                Self::MkdirRecursive => {
+                    assert!(anchored.join("new-parent").join("new-dir").is_dir());
+                }
+                Self::Symlink => {
+                    assert_eq!(
+                        std::fs::read_link(anchored.join("link")).unwrap(),
+                        PathBuf::from("source.txt")
+                    );
+                }
+                Self::Rename => {
+                    assert!(!anchored.join("source.txt").exists());
+                    assert_eq!(
+                        std::fs::read(anchored.join("destination.txt")).unwrap(),
+                        b"rename source"
+                    );
+                }
+                Self::CopyFile => {
+                    assert_eq!(
+                        std::fs::read(anchored.join("source.txt")).unwrap(),
+                        b"copy source"
+                    );
+                    assert_eq!(
+                        std::fs::read(anchored.join("destination.txt")).unwrap(),
+                        b"copy source"
+                    );
+                }
+                Self::Unlink | Self::RemoveFile => {
+                    assert!(!anchored.join("remove.txt").exists());
+                }
+                Self::RemoveRecursive => assert!(!anchored.join("remove-dir").exists()),
+                Self::RemoveDir => assert!(!anchored.join("empty-dir").exists()),
+                Self::Truncate => {
+                    assert_eq!(std::fs::read(anchored.join("file.txt")).unwrap(), b"be");
+                }
+                Self::Chmod => {
+                    let mode = std::fs::metadata(anchored.join("file.txt"))
+                        .unwrap()
+                        .permissions()
+                        .mode();
+                    assert_eq!(mode & 0o777, 0o640);
+                }
+                Self::Utimes => {
+                    let metadata = std::fs::metadata(anchored.join("file.txt")).unwrap();
+                    assert_eq!(metadata.mtime(), 1);
+                }
+                Self::Mkdtemp => assert!(anchored.join("tmp-000000").is_dir()),
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    #[derive(Debug, PartialEq, Eq)]
+    struct TreeEntrySnapshot {
+        relative: PathBuf,
+        mode: u32,
+        length: u64,
+        modified_seconds: i64,
+        modified_nanoseconds: i64,
+        payload: Vec<u8>,
+    }
+
+    #[cfg(unix)]
+    fn tree_snapshot(root: &Path) -> Vec<TreeEntrySnapshot> {
+        fn visit(root: &Path, path: &Path, entries: &mut Vec<TreeEntrySnapshot>) {
+            use std::os::unix::ffi::OsStrExt;
+            use std::os::unix::fs::MetadataExt;
+
+            let metadata = std::fs::symlink_metadata(path).expect("snapshot metadata");
+            let relative = path.strip_prefix(root).expect("snapshot path under root");
+            let payload = if metadata.file_type().is_symlink() {
+                std::fs::read_link(path)
+                    .expect("snapshot symlink")
+                    .as_os_str()
+                    .as_bytes()
+                    .to_vec()
+            } else if metadata.is_file() {
+                std::fs::read(path).expect("snapshot file")
+            } else {
+                Vec::new()
+            };
+            entries.push(TreeEntrySnapshot {
+                relative: relative.to_path_buf(),
+                mode: metadata.mode(),
+                length: metadata.len(),
+                modified_seconds: metadata.mtime(),
+                modified_nanoseconds: metadata.mtime_nsec(),
+                payload,
+            });
+            if metadata.is_dir() {
+                let mut children: Vec<_> = std::fs::read_dir(path)
+                    .expect("snapshot directory")
+                    .map(|entry| entry.expect("snapshot directory entry").path())
+                    .collect();
+                children.sort();
+                for child in children {
+                    visit(root, &child, entries);
+                }
+            }
+        }
+
+        let mut entries = Vec::new();
+        visit(root, root, &mut entries);
+        entries
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn bd_wyff0_all_mutations_stay_on_anchored_parent_after_intermediate_swap() {
+        for case in MutationRaceCase::ALL {
+            let scratch = ScratchDir::new();
+            let outside = ScratchDir::new();
+            let provider = SandboxedHostIo::with_root(&scratch.path).expect("provider");
+            let slot = provider.root().join("slot");
+            let anchored = provider.root().join("anchored");
+            case.setup(&slot);
+            case.setup(&outside.path);
+            let outside_before = tree_snapshot(&outside.path);
+
+            let hook = MutationRaceHook::new(case.trigger_on_resolution());
+            let worker_provider = provider
+                .clone()
+                .with_mutation_race_hook(std::sync::Arc::clone(&hook));
+            let request = case.request();
+            let worker = std::thread::spawn(move || {
+                worker_provider.perform(&request, &[HostIoCapability::FsWrite])
+            });
+
+            hook.wait_until_resolved();
+            std::fs::rename(&slot, &anchored).expect("rename resolved parent");
+            std::os::unix::fs::symlink(&outside.path, &slot)
+                .expect("replace parent with outside symlink");
+            hook.resume();
+
+            let outcome = worker.join().expect("mutation worker");
+            assert!(
+                outcome.is_ok(),
+                "{case:?} failed after parent swap: {outcome:?}"
+            );
+            case.assert_anchored_effect(&anchored);
+            assert_eq!(
+                tree_snapshot(&outside.path),
+                outside_before,
+                "{case:?} mutated the outside tree after an intermediate swap"
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn bd_wyff0_all_mutations_refuse_or_unlink_final_symlink_without_following_it() {
+        for case in MutationRaceCase::ALL {
+            let scratch = ScratchDir::new();
+            let outside = ScratchDir::new();
+            let provider = SandboxedHostIo::with_root(&scratch.path).expect("provider");
+            let slot = provider.root().join("slot");
+            case.setup(&slot);
+            case.setup(&outside.path);
+            let outside_target = outside.path.join("outside-target");
+            std::fs::write(&outside_target, b"must remain unchanged").expect("seed outside target");
+            let outside_before = tree_snapshot(&outside.path);
+
+            let hook = MutationRaceHook::new(case.trigger_on_resolution());
+            let worker_provider = provider
+                .clone()
+                .with_mutation_race_hook(std::sync::Arc::clone(&hook));
+            let request = case.request();
+            let worker = std::thread::spawn(move || {
+                worker_provider.perform(&request, &[HostIoCapability::FsWrite])
+            });
+
+            hook.wait_until_resolved();
+            let raced_final = case.raced_final(provider.root());
+            if std::fs::symlink_metadata(&raced_final).is_ok() {
+                let mut saved = raced_final.as_os_str().to_owned();
+                saved.push(".before-race");
+                std::fs::rename(&raced_final, PathBuf::from(saved))
+                    .expect("save original final entry");
+            }
+            std::os::unix::fs::symlink(&outside_target, &raced_final)
+                .expect("install final outside symlink");
+            hook.resume();
+
+            let _outcome = worker.join().expect("mutation worker");
+            assert_eq!(
+                tree_snapshot(&outside.path),
+                outside_before,
+                "{case:?} followed a raced final symlink outside the sandbox"
+            );
         }
     }
 

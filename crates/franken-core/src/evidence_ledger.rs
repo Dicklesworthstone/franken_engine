@@ -418,6 +418,24 @@ impl std::error::Error for LedgerError {}
 pub trait EvidenceEmitter: fmt::Debug {
     /// Emit an evidence entry to the ledger.
     fn emit(&mut self, entry: EvidenceEntry) -> Result<(), LedgerError>;
+
+    /// Atomically emit an ordered batch of evidence entries.
+    ///
+    /// Implementors that do not provide a transactional batch path fail
+    /// closed before emitting any entry when the batch contains more than one
+    /// item. This preserves source compatibility for single-entry emitters
+    /// without pretending that repeated [`Self::emit`] calls are atomic.
+    fn emit_batch(&mut self, entries: Vec<EvidenceEntry>) -> Result<(), LedgerError> {
+        if entries.len() > 1 {
+            return Err(LedgerError::SchemaValidationFailed {
+                reason: "atomic evidence batch emission is unsupported by this emitter".to_string(),
+            });
+        }
+        for entry in entries {
+            self.emit(entry)?;
+        }
+        Ok(())
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -471,13 +489,23 @@ impl InMemoryLedger {
 
 impl EvidenceEmitter for InMemoryLedger {
     fn emit(&mut self, entry: EvidenceEntry) -> Result<(), LedgerError> {
-        if self.entry_ids.contains(&entry.entry_id) {
-            return Err(LedgerError::DuplicateEntryId {
-                entry_id: entry.entry_id,
-            });
+        self.emit_batch(vec![entry])
+    }
+
+    fn emit_batch(&mut self, entries: Vec<EvidenceEntry>) -> Result<(), LedgerError> {
+        let mut pending_ids = std::collections::BTreeSet::new();
+        for entry in &entries {
+            if self.entry_ids.contains(&entry.entry_id)
+                || !pending_ids.insert(entry.entry_id.clone())
+            {
+                return Err(LedgerError::DuplicateEntryId {
+                    entry_id: entry.entry_id.clone(),
+                });
+            }
         }
-        self.entry_ids.insert(entry.entry_id.clone());
-        self.entries.push(entry);
+
+        self.entry_ids.extend(pending_ids);
+        self.entries.extend(entries);
         Ok(())
     }
 }
@@ -1825,6 +1853,23 @@ mod tests {
         .expect("build sample entry")
     }
 
+    fn batch_entry(decision_id: &str) -> EvidenceEntry {
+        EvidenceEntryBuilder::new(
+            format!("trace-{decision_id}"),
+            decision_id,
+            "policy-v1",
+            SecurityEpoch::from_raw(5),
+            DecisionType::SecurityAction,
+        )
+        .chosen(ChosenAction {
+            action_name: "sandbox".to_string(),
+            expected_loss_millionths: 100_000,
+            rationale: "atomic batch fixture".to_string(),
+        })
+        .build()
+        .expect("build batch entry")
+    }
+
     fn sample_boundary_records() -> Vec<BoundaryCaptureRecord> {
         let mut session = BoundaryCaptureSession::default_v1();
         let context =
@@ -1979,6 +2024,46 @@ mod tests {
 
         let err = ledger.emit(entry).unwrap_err();
         assert!(matches!(err, LedgerError::DuplicateEntryId { .. }));
+    }
+
+    #[test]
+    fn bd_gjrlf_batch_preserves_order_and_rejects_late_duplicate_atomically() {
+        let first = batch_entry("batch-first");
+        let second = batch_entry("batch-second");
+        let mut ledger = InMemoryLedger::new();
+
+        ledger
+            .emit_batch(vec![first.clone(), second.clone()])
+            .expect("valid evidence batch must commit");
+        assert_eq!(
+            ledger
+                .entries()
+                .iter()
+                .map(|entry| entry.entry_id.as_str())
+                .collect::<Vec<_>>(),
+            vec![first.entry_id.as_str(), second.entry_id.as_str()]
+        );
+
+        let before_ids = ledger
+            .entries()
+            .iter()
+            .map(|entry| entry.entry_id.clone())
+            .collect::<Vec<_>>();
+        let late_new_entry = batch_entry("batch-late-new");
+        let error = ledger
+            .emit_batch(vec![late_new_entry, second])
+            .expect_err("a duplicate later in the batch must reject the whole batch");
+
+        assert!(matches!(error, LedgerError::DuplicateEntryId { .. }));
+        assert_eq!(
+            ledger
+                .entries()
+                .iter()
+                .map(|entry| entry.entry_id.clone())
+                .collect::<Vec<_>>(),
+            before_ids,
+            "no valid prefix may be committed before a later batch failure"
+        );
     }
 
     #[test]

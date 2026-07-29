@@ -583,6 +583,8 @@ pub struct ExecutionOrchestrator {
     execution_counter: u64,
     #[cfg(test)]
     evidence_compression_status_override: Option<EvidenceCompressionStatus>,
+    #[cfg(test)]
+    guardplane_builder_failure_index_override: Option<usize>,
 }
 
 impl ExecutionOrchestrator {
@@ -630,6 +632,8 @@ impl ExecutionOrchestrator {
             execution_counter: 0,
             #[cfg(test)]
             evidence_compression_status_override: None,
+            #[cfg(test)]
+            guardplane_builder_failure_index_override: None,
             config,
             runtime_config,
         }
@@ -1607,11 +1611,17 @@ impl ExecutionOrchestrator {
         }
 
         let entry = builder.build()?;
-        self.ledger.emit(entry.clone())?;
-        let mut entries: Vec<EvidenceEntry> = vec![entry];
+        let mut entries: Vec<EvidenceEntry> =
+            Vec::with_capacity(1 + guardplane_report.map_or(0, |report| report.decisions.len()));
+        entries.push(entry);
 
         if let Some(report) = guardplane_report {
             for (index, decision) in report.decisions.iter().enumerate() {
+                #[cfg(test)]
+                if self.guardplane_builder_failure_index_override == Some(index) {
+                    self.guardplane_builder_failure_index_override = None;
+                    return Err(LedgerError::MissingChosenAction.into());
+                }
                 let guardplane_entry = Self::build_guardplane_decision_entry(
                     trace_id,
                     decision_id,
@@ -1620,11 +1630,11 @@ impl ExecutionOrchestrator {
                     decision,
                     &self.config,
                 )?;
-                self.ledger.emit(guardplane_entry.clone())?;
                 entries.push(guardplane_entry);
             }
         }
 
+        self.ledger.emit_batch(entries.clone())?;
         Ok((entries, compression_certificate, compression_status))
     }
 
@@ -2593,6 +2603,19 @@ mod tests {
         }
     }
 
+    fn guardplane_package(extension_id: &str) -> ExtensionPackage {
+        package_with_metadata(
+            extension_id,
+            "const obj = { constructor: 1 }; obj.constructor;",
+            &[
+                ("guardplane.enable_instruction_hooks", "true"),
+                ("capability_witness.trust_level", "suspicious"),
+                ("capability_witness.confidence_millionths", "200000"),
+                ("capability_witness.denied_capabilities", "object.property"),
+            ],
+        )
+    }
+
     fn package_with_source(source: &str) -> ExtensionPackage {
         ExtensionPackage {
             source: source.to_string(),
@@ -2646,6 +2669,124 @@ mod tests {
             failure.primary_error.as_ref(),
             OrchestratorError::Ledger(LedgerError::DuplicateEntryId { .. })
         ));
+    }
+
+    #[test]
+    fn guardplane_builder_failure_leaves_ledger_empty_bd_gjrlf() {
+        let package = guardplane_package("bd-gjrlf-builder-core");
+        let mut orchestrator = ExecutionOrchestrator::with_defaults();
+        orchestrator.guardplane_builder_failure_index_override = Some(0);
+
+        let error = orchestrator
+            .execute(&package)
+            .expect_err("the injected guardplane builder failure must abort evidence");
+        let failure = assert_successful_post_cell_cleanup(&error);
+
+        assert!(matches!(
+            failure.primary_error.as_ref(),
+            OrchestratorError::Ledger(LedgerError::MissingChosenAction)
+        ));
+        assert!(
+            orchestrator.ledger().is_empty(),
+            "the primary entry must not be emitted before all guardplane entries build"
+        );
+    }
+
+    #[test]
+    fn guardplane_late_ledger_failure_rejects_whole_batch_bd_gjrlf() {
+        let package = guardplane_package("bd-gjrlf-ledger-core");
+        let mut donor = ExecutionOrchestrator::with_defaults();
+        let donor_result = donor
+            .execute(&package)
+            .expect("the donor must produce deterministic guardplane evidence");
+        let duplicate_entry = donor_result
+            .evidence_entries
+            .iter()
+            .find(|entry| entry.metadata.contains_key("guardplane_decision_index"))
+            .expect("the fixture must produce a guardplane evidence entry")
+            .clone();
+        let duplicate_id = duplicate_entry.entry_id.clone();
+
+        let mut orchestrator = ExecutionOrchestrator::with_defaults();
+        orchestrator
+            .ledger
+            .emit(duplicate_entry)
+            .expect("the late-duplicate fixture must be admitted once");
+        let before_ids = orchestrator
+            .ledger()
+            .entries()
+            .iter()
+            .map(|entry| entry.entry_id.clone())
+            .collect::<Vec<_>>();
+
+        let error = orchestrator
+            .execute(&package)
+            .expect_err("the duplicate guardplane entry must reject the evidence batch");
+        let failure = assert_successful_post_cell_cleanup(&error);
+
+        assert!(matches!(
+            failure.primary_error.as_ref(),
+            OrchestratorError::Ledger(LedgerError::DuplicateEntryId { entry_id })
+                if entry_id == &duplicate_id
+        ));
+        assert_eq!(
+            orchestrator
+                .ledger()
+                .entries()
+                .iter()
+                .map(|entry| entry.entry_id.clone())
+                .collect::<Vec<_>>(),
+            before_ids,
+            "a later guardplane ledger error must not commit the primary prefix"
+        );
+    }
+
+    #[test]
+    fn evidence_batch_orders_primary_before_guardplane_entries_bd_gjrlf() {
+        let package = guardplane_package("bd-gjrlf-order-core");
+        let mut orchestrator = ExecutionOrchestrator::with_defaults();
+        let result = orchestrator
+            .execute(&package)
+            .expect("valid guardplane evidence must commit atomically");
+
+        assert!(
+            !result.evidence_entries[0]
+                .metadata
+                .contains_key("guardplane_decision_index"),
+            "the primary security-action entry must remain first"
+        );
+        let guardplane_indices = result
+            .evidence_entries
+            .iter()
+            .skip(1)
+            .map(|entry| {
+                entry
+                    .metadata
+                    .get("guardplane_decision_index")
+                    .expect("every entry after the primary must be a guardplane decision")
+                    .parse::<usize>()
+                    .expect("guardplane decision index must be numeric")
+            })
+            .collect::<Vec<_>>();
+        assert!(!guardplane_indices.is_empty());
+        assert_eq!(
+            guardplane_indices,
+            (0..result.evidence_entries.len() - 1).collect::<Vec<_>>()
+        );
+        assert_eq!(
+            orchestrator
+                .ledger()
+                .entries()
+                .iter()
+                .map(|entry| entry.entry_id.as_str())
+                .collect::<Vec<_>>(),
+            result
+                .evidence_entries
+                .iter()
+                .map(|entry| entry.entry_id.as_str())
+                .collect::<Vec<_>>(),
+            "returned evidence and committed ledger order must match"
+        );
     }
 
     #[test]

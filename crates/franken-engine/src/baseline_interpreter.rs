@@ -17652,17 +17652,8 @@ impl InterpreterCore {
                     })
                     .unwrap_or(0),
             );
-        let released_argument_bytes = if let Some(reg) = error_register {
-            error
-                .map(Self::estimate_value_bytes)
-                .unwrap_or(0)
-                .saturating_add(Self::estimate_label_bytes(self.get_register_label(reg)?))
-        } else {
-            0
-        };
         let requested_bytes = self
             .estimated_memory_bytes
-            .saturating_sub(released_argument_bytes)
             .saturating_sub(previous_bytes)
             .saturating_add(destroyed_state_bytes);
         if Self::memory_request_exceeds_budget(requested_bytes, self.config.max_total_memory_bytes)
@@ -17685,12 +17676,7 @@ impl InterpreterCore {
         } else {
             None
         };
-        let error = error_register
-            .map(|reg| {
-                self.take_writable_completion_error(reg)
-                    .map(|(error, _)| error)
-            })
-            .transpose()?;
+        let error = error_register.map(|reg| self.read_reg(reg)).transpose()?;
 
         let mut destroyed = self
             .writable_streams
@@ -18008,46 +17994,30 @@ impl InterpreterCore {
         Ok((!matches!(error, Value::Undefined | Value::Null)).then_some(args.start))
     }
 
-    /// Move a completion error and its IFC label out of the internal callback
-    /// register after the combined register-to-Writable transfer has passed
-    /// its budget and scheduler preflight.
-    fn take_writable_completion_error(
-        &mut self,
+    fn writable_live_binary_label_ref<'a>(
+        &'a self,
+        value: &Value,
+        fallback: &'a Label,
+    ) -> &'a Label {
+        let Value::Object(object_id) = value else {
+            return fallback;
+        };
+        self.binary_storage_label_ref(*object_id)
+            .filter(|storage_label| *storage_label > fallback)
+            .unwrap_or(fallback)
+    }
+
+    /// Retain a completion error without consuming the guest-visible call
+    /// argument. Call/CallMethod joins argument labels into the destination
+    /// only after the builtin returns, so replacing this register early would
+    /// erase both normal guest state and the documented post-call IFC join.
+    fn clone_writable_completion_error(
+        &self,
         reg: u32,
     ) -> Result<(Value, Label), InterpreterError> {
-        if reg >= self.config.max_registers {
-            return Err(InterpreterError::RegisterOutOfBounds {
-                register: reg,
-                max: self.config.max_registers,
-            });
-        }
-        let actual_reg = self.register_base + reg as usize;
-        let previous_value_bytes = self
-            .registers
-            .get(actual_reg)
-            .map(Self::estimate_value_bytes)
-            .unwrap_or(0);
-        let previous_label_bytes = self
-            .register_labels
-            .get(actual_reg)
-            .map(Self::estimate_label_bytes)
-            .unwrap_or(0);
-        let value = self.mutate_registers(|registers| {
-            registers
-                .get_mut(actual_reg)
-                .map(|slot| std::mem::replace(slot, Value::Undefined))
-                .unwrap_or(Value::Undefined)
-        });
-        let label = self
-            .register_labels
-            .get_mut(actual_reg)
-            .map(|slot| std::mem::replace(slot, Label::Public))
-            .unwrap_or(Label::Public);
-        self.estimated_memory_bytes = self
-            .estimated_memory_bytes
-            .saturating_sub(previous_value_bytes)
-            .saturating_sub(previous_label_bytes);
-        Ok((value, label))
+        let value = self.read_reg(reg)?;
+        let label = self.writable_live_binary_label_ref(&value, self.get_register_label(reg)?);
+        Ok((value, label.clone()))
     }
 
     fn writable_write_done(
@@ -18072,28 +18042,24 @@ impl InterpreterCore {
         let units = record.units;
         let resume = !state.inside_write_invocation;
         let old_dynamic = Self::estimate_writable_error_dynamic_bytes(state);
-        let (next_dynamic, released_argument_bytes) = if let Some(reg) = completion_error_register {
+        let next_dynamic = if let Some(reg) = completion_error_register {
             let actual_reg = self.register_base + reg as usize;
             let error = &self.registers[actual_reg];
-            let error_label = self.get_register_label(reg)?;
+            let error_label =
+                self.writable_live_binary_label_ref(error, self.get_register_label(reg)?);
             let next_lifecycle_label = if error_label > &state.lifecycle_label {
                 error_label
             } else {
                 &state.lifecycle_label
             };
-            (
-                Self::estimate_label_bytes(next_lifecycle_label)
-                    .saturating_add(Self::estimate_writable_value_bytes(error))
-                    .saturating_add(Self::estimate_label_bytes(error_label)),
-                Self::estimate_value_bytes(error)
-                    .saturating_add(Self::estimate_label_bytes(error_label)),
-            )
+            Self::estimate_label_bytes(next_lifecycle_label)
+                .saturating_add(Self::estimate_writable_value_bytes(error))
+                .saturating_add(Self::estimate_label_bytes(error_label))
         } else {
-            (old_dynamic, 0)
+            old_dynamic
         };
         let requested_bytes = self
             .estimated_memory_bytes
-            .saturating_sub(released_argument_bytes)
             .saturating_sub(old_dynamic)
             .saturating_add(next_dynamic);
         if Self::memory_request_exceeds_budget(requested_bytes, self.config.max_total_memory_bytes)
@@ -18113,7 +18079,7 @@ impl InterpreterCore {
             None
         };
         let completion_error = completion_error_register
-            .map(|reg| self.take_writable_completion_error(reg))
+            .map(|reg| self.clone_writable_completion_error(reg))
             .transpose()?;
         self.estimated_memory_bytes = requested_bytes;
         let state = self
@@ -18182,28 +18148,24 @@ impl InterpreterCore {
                 })
                 .unwrap_or(0),
         );
-        let (next_dynamic, released_argument_bytes) = if let Some(reg) = completion_error_register {
+        let next_dynamic = if let Some(reg) = completion_error_register {
             let actual_reg = self.register_base + reg as usize;
             let error = &self.registers[actual_reg];
-            let error_label = self.get_register_label(reg)?;
+            let error_label =
+                self.writable_live_binary_label_ref(error, self.get_register_label(reg)?);
             let next_lifecycle_label = if error_label > &state.lifecycle_label {
                 error_label
             } else {
                 &state.lifecycle_label
             };
-            (
-                Self::estimate_label_bytes(next_lifecycle_label)
-                    .saturating_add(Self::estimate_writable_value_bytes(error))
-                    .saturating_add(Self::estimate_label_bytes(error_label)),
-                Self::estimate_value_bytes(error)
-                    .saturating_add(Self::estimate_label_bytes(error_label)),
-            )
+            Self::estimate_label_bytes(next_lifecycle_label)
+                .saturating_add(Self::estimate_writable_value_bytes(error))
+                .saturating_add(Self::estimate_label_bytes(error_label))
         } else {
-            (old_dynamic, 0)
+            old_dynamic
         };
         let requested_bytes = self
             .estimated_memory_bytes
-            .saturating_sub(released_argument_bytes)
             .saturating_sub(old_dynamic)
             .saturating_add(next_dynamic);
         if Self::memory_request_exceeds_budget(requested_bytes, self.config.max_total_memory_bytes)
@@ -18227,7 +18189,7 @@ impl InterpreterCore {
             None
         };
         let completion_error = completion_error_register
-            .map(|reg| self.take_writable_completion_error(reg))
+            .map(|reg| self.clone_writable_completion_error(reg))
             .transpose()?;
         self.estimated_memory_bytes = requested_bytes;
         let state = self
@@ -18593,7 +18555,7 @@ impl InterpreterCore {
                 }
             };
 
-            let Some((is_final, record_index, callback, value, label, flavor)) = action else {
+            let Some((is_final, record_index, callback, value, mut label, flavor)) = action else {
                 return Ok(());
             };
             if !is_final && callback.is_none() {
@@ -18603,6 +18565,11 @@ impl InterpreterCore {
                 });
             }
             if !is_final {
+                if let Value::Object(value_id) = &value
+                    && let Some(storage_label) = self.binary_storage_label_ref(*value_id)
+                {
+                    label = self.join_owned_label_with_temporary_budget(label, storage_label)?;
+                }
                 self.preflight_inline_method_call_with_argument_label(
                     Some(module),
                     callback
@@ -18883,11 +18850,115 @@ impl InterpreterCore {
             .clone())
     }
 
+    /// Persist backing-store taint that appeared after a binary error value was
+    /// recorded. Buffer and typed-array aliases share their ArrayBuffer label,
+    /// so a deferred Writable callback must not trust the earlier snapshot.
+    fn rejoin_writable_terminal_error_binary_label(
+        &mut self,
+        object_id: ObjectId,
+    ) -> Result<(), InterpreterError> {
+        let Some((error_id, old_dynamic, next_dynamic, rejoin_lifecycle, rejoin_error)) = ({
+            let state = self.writable_streams.get(&object_id);
+            state.and_then(|state| {
+                let (Value::Object(error_id), error_label) = state.terminal_error.as_ref()? else {
+                    return None;
+                };
+                let storage_label = self.binary_storage_label_ref(*error_id)?;
+                let rejoin_lifecycle = storage_label > &state.lifecycle_label;
+                let rejoin_error = storage_label > error_label;
+                if !rejoin_lifecycle && !rejoin_error {
+                    return None;
+                }
+                let old_dynamic = Self::estimate_writable_error_dynamic_bytes(state);
+                let next_dynamic = Self::estimate_label_bytes(if rejoin_lifecycle {
+                    storage_label
+                } else {
+                    &state.lifecycle_label
+                })
+                .saturating_add(Self::estimate_writable_value_bytes(
+                    &state
+                        .terminal_error
+                        .as_ref()
+                        .expect("Writable terminal error was matched above")
+                        .0,
+                ))
+                .saturating_add(Self::estimate_label_bytes(if rejoin_error {
+                    storage_label
+                } else {
+                    error_label
+                }));
+                Some((
+                    *error_id,
+                    old_dynamic,
+                    next_dynamic,
+                    rejoin_lifecycle,
+                    rejoin_error,
+                ))
+            })
+        }) else {
+            return Ok(());
+        };
+
+        // Refusal is atomic: no retained label changes until the complete
+        // replacement state fits.
+        self.apply_memory_component_delta(old_dynamic, next_dynamic)?;
+
+        if rejoin_lifecycle {
+            let previous = {
+                let state = self
+                    .writable_streams
+                    .get_mut(&object_id)
+                    .expect("Writable state survived binary-label preflight");
+                std::mem::replace(&mut state.lifecycle_label, Label::Public)
+            };
+            drop(previous);
+            let storage_label = self
+                .binary_storage_label_ref(error_id)
+                .expect("binary backing survived Writable label preflight")
+                .clone();
+            self.writable_streams
+                .get_mut(&object_id)
+                .expect("Writable state survived lifecycle-label replacement")
+                .lifecycle_label = storage_label;
+        }
+        if rejoin_error {
+            let previous = {
+                let state = self
+                    .writable_streams
+                    .get_mut(&object_id)
+                    .expect("Writable state survived binary-label preflight");
+                let (_, error_label) = state
+                    .terminal_error
+                    .as_mut()
+                    .expect("Writable terminal error survived label preflight");
+                std::mem::replace(error_label, Label::Public)
+            };
+            drop(previous);
+            let storage_label = self
+                .binary_storage_label_ref(error_id)
+                .expect("binary backing survived Writable label preflight")
+                .clone();
+            self.writable_streams
+                .get_mut(&object_id)
+                .and_then(|state| state.terminal_error.as_mut())
+                .expect("Writable terminal error survived label replacement")
+                .1 = storage_label;
+        }
+        debug_assert_eq!(
+            self.writable_streams
+                .get(&object_id)
+                .map(Self::estimate_writable_error_dynamic_bytes),
+            Some(next_dynamic)
+        );
+        Ok(())
+    }
+
     fn clone_charged_writable_terminal_error(
         &mut self,
         object_id: ObjectId,
         invocation_charge: &mut u64,
     ) -> Result<Option<(Value, Label)>, InterpreterError> {
+        self.rejoin_writable_terminal_error_binary_label(object_id)?;
         let error_bytes = self
             .writable_streams
             .get(&object_id)
@@ -18909,15 +18980,57 @@ impl InterpreterCore {
         error: &Option<(Value, Label)>,
         invocation_charge: &mut u64,
     ) -> Result<Option<(Value, Label)>, InterpreterError> {
-        let error_bytes = error
-            .as_ref()
-            .map(|(value, label)| {
-                Self::estimate_writable_value_bytes(value)
-                    .saturating_add(Self::estimate_label_bytes(label))
-            })
-            .unwrap_or(0);
+        let Some((value, label)) = error.as_ref() else {
+            return Ok(None);
+        };
+        let error_bytes = Self::estimate_writable_value_bytes(value).saturating_add(
+            Self::estimate_label_bytes(self.writable_live_binary_label_ref(value, label)),
+        );
         self.add_writable_in_flight_charge(invocation_charge, error_bytes)?;
-        Ok(error.clone())
+        let live_label = self.writable_live_binary_label_ref(value, label).clone();
+        Ok(Some((value.clone(), live_label)))
+    }
+
+    /// Replace one already charged label with a later, dominant backing-store
+    /// label without charging an artificial old-plus-new peak.
+    fn rejoin_charged_writable_binary_label(
+        &mut self,
+        value: &Value,
+        label: Label,
+        invocation_charge: &mut u64,
+    ) -> Result<Label, InterpreterError> {
+        let Value::Object(object_id) = value else {
+            return Ok(label);
+        };
+        let Some(next_label_bytes) = self
+            .binary_storage_label_ref(*object_id)
+            .filter(|storage_label| *storage_label > &label)
+            .map(Self::estimate_label_bytes)
+        else {
+            return Ok(label);
+        };
+        let previous_label_bytes = Self::estimate_label_bytes(&label);
+        let requested_bytes = self
+            .estimated_memory_bytes
+            .saturating_sub(previous_label_bytes)
+            .saturating_add(next_label_bytes);
+        if Self::memory_request_exceeds_budget(requested_bytes, self.config.max_total_memory_bytes)
+        {
+            return Err(self.memory_budget_error(requested_bytes, self.heap_object_count_u32()));
+        }
+        self.writable_in_flight_callback_bytes = self
+            .writable_in_flight_callback_bytes
+            .saturating_sub(previous_label_bytes)
+            .saturating_add(next_label_bytes);
+        *invocation_charge = invocation_charge
+            .saturating_sub(previous_label_bytes)
+            .saturating_add(next_label_bytes);
+        self.estimated_memory_bytes = requested_bytes;
+        drop(label);
+        Ok(self
+            .binary_storage_label_ref(*object_id)
+            .expect("binary backing survived charged Writable label preflight")
+            .clone())
     }
 
     fn charged_writable_error_value(
@@ -19008,12 +19121,20 @@ impl InterpreterCore {
         object_id: ObjectId,
         event: &str,
         arguments: Vec<Value>,
-        emission_label: Label,
+        mut emission_label: Label,
         mut invocation_charge: u64,
     ) -> Result<(), InterpreterError> {
-        let result = self
-            .emit_event_listener_records(module, object_id, event, arguments, emission_label)
-            .map(|_| ());
+        let result = (|| {
+            for argument in &arguments {
+                emission_label = self.rejoin_charged_writable_binary_label(
+                    argument,
+                    emission_label,
+                    &mut invocation_charge,
+                )?;
+            }
+            self.emit_event_listener_records(module, object_id, event, arguments, emission_label)
+                .map(|_| ())
+        })();
         let remaining_charge = invocation_charge;
         self.release_writable_in_flight_charge(&mut invocation_charge, remaining_charge);
         result
@@ -19097,6 +19218,11 @@ impl InterpreterCore {
             let (arguments, label, argument_value_handoff_bytes) = match error {
                 Some((error, error_label)) => {
                     let handoff_bytes = Self::estimate_value_bytes(&error);
+                    let error_label = self.rejoin_charged_writable_binary_label(
+                        &error,
+                        error_label,
+                        &mut invocation_charge,
+                    )?;
                     let label = self.take_dominant_charged_writable_label(
                         callback_label,
                         error_label,
@@ -77534,10 +77660,19 @@ mod async_runtime_tests_current {
             state.end_requested = true;
             state.final_status = WritableFinalStatus::Done;
         }
+        let write_error = Value::str("ceiling-write-error");
         write_core
-            .write_reg(0, Value::str("ceiling-write-error"))
+            .write_reg(0, write_error.clone())
             .expect("write error argument");
-        write_core.config.max_total_memory_bytes = write_core.estimated_memory_bytes();
+        let retained_write_error_bytes = InterpreterCore::estimate_writable_value_bytes(
+            &write_error,
+        )
+        .saturating_add(InterpreterCore::estimate_label_bytes(
+            write_core.get_register_label(0).expect("write error label"),
+        ));
+        write_core.config.max_total_memory_bytes = write_core
+            .estimated_memory_bytes()
+            .saturating_add(retained_write_error_bytes);
         let write_completion = BuiltinFunction::writable_completion(
             BuiltinFunctionKind::StreamWritableWriteDone,
             write_stream,
@@ -77551,6 +77686,12 @@ mod async_runtime_tests_current {
             WritableWriteStatus::Completed
         );
         assert!(write_core.writable_streams[&write_stream].writes[0].completion_failed);
+        assert_eq!(
+            write_core
+                .read_reg(0)
+                .expect("retained write error argument"),
+            write_error
+        );
         write_core.config.max_total_memory_bytes = u64::MAX;
         write_core
             .drain_runtime_checkpoint(Some(&module))
@@ -77585,10 +77726,19 @@ mod async_runtime_tests_current {
             state.end_requested = true;
             state.final_status = WritableFinalStatus::Active(22);
         }
+        let final_error = Value::str("ceiling-final-error");
         final_core
-            .write_reg(0, Value::str("ceiling-final-error"))
+            .write_reg(0, final_error.clone())
             .expect("final error argument");
-        final_core.config.max_total_memory_bytes = final_core.estimated_memory_bytes();
+        let retained_final_error_bytes = InterpreterCore::estimate_writable_value_bytes(
+            &final_error,
+        )
+        .saturating_add(InterpreterCore::estimate_label_bytes(
+            final_core.get_register_label(0).expect("final error label"),
+        ));
+        final_core.config.max_total_memory_bytes = final_core
+            .estimated_memory_bytes()
+            .saturating_add(retained_final_error_bytes);
         let final_completion = BuiltinFunction::writable_completion(
             BuiltinFunctionKind::StreamWritableFinalDone,
             final_stream,
@@ -77600,6 +77750,12 @@ mod async_runtime_tests_current {
         assert_eq!(
             final_core.writable_streams[&final_stream].final_status,
             WritableFinalStatus::Done
+        );
+        assert_eq!(
+            final_core
+                .read_reg(0)
+                .expect("retained final error argument"),
+            final_error
         );
         final_core.config.max_total_memory_bytes = u64::MAX;
         final_core
@@ -77626,14 +77782,12 @@ mod async_runtime_tests_current {
         refusal_core
             .write_reg(0, Value::Int(1))
             .expect("zero-byte error value");
+        let refusal_label = Label::Custom {
+            name: "ceiling-label".repeat(32),
+            level: 3,
+        };
         refusal_core
-            .set_register_label(
-                0,
-                Label::Custom {
-                    name: "ceiling-label".repeat(32),
-                    level: 3,
-                },
-            )
+            .set_register_label(0, refusal_label.clone())
             .expect("large error label");
         refusal_core.config.max_total_memory_bytes = refusal_core.estimated_memory_bytes();
         let refusal_completion = BuiltinFunction::writable_completion(
@@ -77674,15 +77828,21 @@ mod async_runtime_tests_current {
                 &refusal_completion,
                 RegRange { start: 0, count: 1 },
             )
-            .expect("the exact completion transfer charge must succeed");
+            .expect("the exact retained completion charge must succeed");
         assert_eq!(
             refusal_core.writable_streams[&refusal_stream].writes[0].status,
             WritableWriteStatus::Completed
         );
         assert!(refusal_core.writable_streams[&refusal_stream].writes[0].completion_failed);
         assert_eq!(
-            refusal_core.read_reg(0).expect("consumed error argument"),
-            Value::Undefined
+            refusal_core.read_reg(0).expect("retained error argument"),
+            Value::Int(1)
+        );
+        assert_eq!(
+            refusal_core
+                .get_register_label(0)
+                .expect("retained error argument label"),
+            &refusal_label
         );
 
         let mut final_refusal_core = test_interpreter();
@@ -77703,14 +77863,12 @@ mod async_runtime_tests_current {
         final_refusal_core
             .write_reg(0, Value::Int(2))
             .expect("zero-byte final error value");
+        let final_refusal_label = Label::Custom {
+            name: "final-ceiling-label".repeat(32),
+            level: 4,
+        };
         final_refusal_core
-            .set_register_label(
-                0,
-                Label::Custom {
-                    name: "final-ceiling-label".repeat(32),
-                    level: 4,
-                },
-            )
+            .set_register_label(0, final_refusal_label.clone())
             .expect("large final error label");
         final_refusal_core.config.max_total_memory_bytes =
             final_refusal_core.estimated_memory_bytes();
@@ -77756,7 +77914,7 @@ mod async_runtime_tests_current {
                 &final_refusal_completion,
                 RegRange { start: 0, count: 1 },
             )
-            .expect("the exact final transfer charge must succeed");
+            .expect("the exact retained final charge must succeed");
         assert_eq!(
             final_refusal_core.writable_streams[&final_refusal_stream].final_status,
             WritableFinalStatus::Done
@@ -77764,8 +77922,14 @@ mod async_runtime_tests_current {
         assert_eq!(
             final_refusal_core
                 .read_reg(0)
-                .expect("consumed final error argument"),
-            Value::Undefined
+                .expect("retained final error argument"),
+            Value::Int(2)
+        );
+        assert_eq!(
+            final_refusal_core
+                .get_register_label(0)
+                .expect("retained final error argument label"),
+            &final_refusal_label
         );
 
         let mut overflow_core = test_interpreter();
@@ -79057,13 +79221,31 @@ mod async_runtime_tests_current {
         transfer_core
             .write_reg(0, Value::str("owned error"))
             .expect("owned error register");
-        transfer_core.config.max_total_memory_bytes = transfer_core.estimated_memory_bytes();
+        let retained_destroy_error_bytes = InterpreterCore::estimate_writable_value_bytes(
+            &transfer_core
+                .read_reg(0)
+                .expect("retained destroy error value"),
+        )
+        .saturating_add(InterpreterCore::estimate_label_bytes(
+            transfer_core
+                .get_register_label(0)
+                .expect("retained destroy error label"),
+        ));
+        transfer_core.config.max_total_memory_bytes = transfer_core
+            .estimated_memory_bytes()
+            .saturating_add(retained_destroy_error_bytes);
         transfer_core
             .writable_destroy(
                 Value::Object(transfer_writable),
                 RegRange { start: 0, count: 1 },
             )
-            .expect("destroy must transfer error ownership at the exact ceiling");
+            .expect("destroy must retain its error clone at the exact ceiling");
+        assert_eq!(
+            transfer_core
+                .read_reg(0)
+                .expect("destroy argument remains guest-visible"),
+            Value::str("owned error")
+        );
         assert_eq!(
             transfer_core.estimated_memory_bytes(),
             transfer_core.recompute_estimated_memory_bytes()
@@ -79221,6 +79403,288 @@ mod async_runtime_tests_current {
         ));
         assert_eq!(core.pending_exception, Some(Value::Int(41)));
         assert_eq!(core.pending_exception_label, Label::Secret);
+    }
+
+    #[test]
+    fn writable_write_dispatch_rejoins_live_aliased_binary_label_bd_bjwzv() {
+        let module = test_module_with_functions(
+            vec![
+                Ir3Instruction::LoadInt { dst: 0, value: 97 },
+                Ir3Instruction::Throw { value: 0 },
+            ],
+            vec![Ir3FunctionDesc {
+                entry: 0,
+                arity: 3,
+                frame_size: 4,
+                name: Some("aliased_buffer_write".to_string()),
+                is_generator: false,
+                rest_param_index: None,
+            }],
+        );
+        let mut core = test_interpreter();
+        let options = core
+            .alloc_object_with_properties(&[("write", Value::Function(0))])
+            .expect("Writable write options");
+        core.write_reg(0, Value::Object(options))
+            .expect("Writable options register");
+        let Value::Object(writable) = core
+            .construct_stream_writable(RegRange { start: 0, count: 1 })
+            .expect("Writable with throwing write callback")
+        else {
+            panic!("Writable constructor must return an object");
+        };
+        core.writable_cork(Value::Object(writable), RegRange { start: 3, count: 0 })
+            .expect("cork before enqueue");
+
+        let chunk = core
+            .alloc_buffer_from_bytes(b"public-at-enqueue")
+            .expect("queued Buffer");
+        let backing = core
+            .array_buffer_id_for_object(chunk)
+            .expect("Buffer backing");
+        let alias = core
+            .alloc_buffer_view_object(backing, 0, b"public-at-enqueue".len())
+            .expect("shared Buffer alias");
+        core.write_reg_with_label(1, Value::Object(chunk), Label::Public)
+            .expect("public Buffer argument");
+        core.writable_write(
+            &module,
+            Value::Object(writable),
+            RegRange { start: 1, count: 1 },
+        )
+        .expect("corked write enqueue");
+        assert_eq!(
+            core.writable_streams[&writable].writes[0].label,
+            Label::Public,
+            "enqueue must capture the then-current backing label"
+        );
+        assert_eq!(
+            core.writable_streams[&writable].writes[0].status,
+            WritableWriteStatus::Pending
+        );
+
+        core.join_binary_storage_label(alias, &Label::Secret)
+            .expect("Secret alias mutation");
+        assert!(matches!(
+            core.writable_uncork(
+                &module,
+                Value::Object(writable),
+                RegRange { start: 3, count: 0 },
+            ),
+            Err(InterpreterError::UncaughtException { .. })
+        ));
+        assert_eq!(core.pending_exception, Some(Value::Int(97)));
+        assert_eq!(
+            core.pending_exception_label,
+            Label::Secret,
+            "_write dispatch must resolve the shared backing label again"
+        );
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+    }
+
+    #[test]
+    fn writable_completion_errors_preserve_arguments_and_rejoin_binary_labels_bd_bjwzv() {
+        let module = test_module_with_functions(
+            vec![
+                Ir3Instruction::CallMethod {
+                    receiver: 0,
+                    callee: 1,
+                    args: RegRange { start: 2, count: 1 },
+                    dst: 3,
+                },
+                Ir3Instruction::Halt,
+                Ir3Instruction::LoadInt { dst: 0, value: 313 },
+                Ir3Instruction::Throw { value: 0 },
+            ],
+            vec![Ir3FunctionDesc {
+                entry: 2,
+                arity: 1,
+                frame_size: 2,
+                name: Some("deferred_writable_error_listener".to_string()),
+                is_generator: false,
+                rest_param_index: None,
+            }],
+        );
+        let consume_scheduled_tick = |core: &mut InterpreterCore, object_id: ObjectId| {
+            assert!(
+                core.writable_streams
+                    .get_mut(&object_id)
+                    .expect("scheduled live Writable")
+                    .tick_sequence
+                    .take()
+                    .is_some(),
+                "direct tick driving must consume the scheduler-owned sequence"
+            );
+        };
+
+        let mut core = test_interpreter();
+        let Value::Object(writable) = core
+            .construct_stream_writable(RegRange { start: 4, count: 0 })
+            .expect("write-error Writable")
+        else {
+            panic!("Writable constructor must return an object");
+        };
+        core.writable_enqueue(writable, Value::str("x"), Label::Public, None)
+            .expect("active write record");
+        {
+            let state = core
+                .writable_streams
+                .get_mut(&writable)
+                .expect("write-error state");
+            state.writes[0].status = WritableWriteStatus::Active(31);
+            state.end_requested = true;
+            state.final_status = WritableFinalStatus::Done;
+        }
+        let error = core
+            .alloc_buffer_from_bytes(b"binary-error")
+            .expect("Buffer completion error");
+        let backing = core
+            .array_buffer_id_for_object(error)
+            .expect("Buffer error backing");
+        let alias = core
+            .alloc_buffer_view_object(backing, 0, b"binary-error".len())
+            .expect("Buffer error alias");
+        core.join_binary_storage_label(alias, &Label::Secret)
+            .expect("Secret completion backing");
+        core.write_reg(0, Value::Undefined)
+            .expect("public CallMethod receiver");
+        core.write_reg(
+            1,
+            Value::BuiltinFunction(BuiltinFunction::writable_completion(
+                BuiltinFunctionKind::StreamWritableWriteDone,
+                writable,
+                31,
+            )),
+        )
+        .expect("write completion callee");
+        core.write_reg_with_label(2, Value::Object(error), Label::Confidential)
+            .expect("guest-visible completion argument");
+        core.write_reg(3, Value::Int(-1))
+            .expect("completion destination sentinel");
+
+        assert_eq!(core.run_loop(&module), Err(InterpreterError::Halted));
+        assert_eq!(
+            core.read_reg(2).expect("preserved completion argument"),
+            Value::Object(error)
+        );
+        assert_eq!(
+            core.get_register_label(2)
+                .expect("preserved completion argument label"),
+            &Label::Confidential
+        );
+        assert_eq!(
+            core.get_register_label(3)
+                .expect("post-CallMethod destination label"),
+            &Label::Confidential,
+            "the normal post-call argument-label join must still observe r2"
+        );
+        assert_eq!(
+            core.writable_streams[&writable].terminal_error,
+            Some((Value::Object(error), Label::Secret))
+        );
+        assert_eq!(
+            core.writable_streams[&writable].lifecycle_label,
+            Label::Secret
+        );
+
+        core.join_binary_storage_label(alias, &Label::TopSecret)
+            .expect("post-record TopSecret alias mutation");
+        core.insert_event_listener(
+            writable,
+            "error",
+            EventListenerRecord {
+                listener: Value::Function(0),
+                once: false,
+            },
+            false,
+        )
+        .expect("throwing error listener");
+        consume_scheduled_tick(&mut core, writable);
+        core.drive_writable_tick(writable, Some(&module))
+            .expect("remove completed callback-free write");
+        consume_scheduled_tick(&mut core, writable);
+        assert!(matches!(
+            core.drive_writable_tick(writable, Some(&module)),
+            Err(InterpreterError::UncaughtException { .. })
+        ));
+        assert_eq!(core.pending_exception, Some(Value::Int(313)));
+        assert_eq!(
+            core.pending_exception_label,
+            Label::TopSecret,
+            "error emission must resolve the backing label after record creation"
+        );
+        assert_eq!(
+            core.writable_streams[&writable].lifecycle_label,
+            Label::TopSecret
+        );
+        assert_eq!(
+            core.writable_streams[&writable]
+                .terminal_error
+                .as_ref()
+                .map(|(_, label)| label),
+            Some(&Label::TopSecret)
+        );
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+
+        let mut final_core = test_interpreter();
+        let Value::Object(final_writable) = final_core
+            .construct_stream_writable(RegRange { start: 4, count: 0 })
+            .expect("final-error Writable")
+        else {
+            panic!("Writable constructor must return an object");
+        };
+        final_core
+            .writable_streams
+            .get_mut(&final_writable)
+            .expect("final-error state")
+            .final_status = WritableFinalStatus::Active(32);
+        let final_error = final_core
+            .alloc_buffer_from_bytes(b"final-binary-error")
+            .expect("final Buffer error");
+        final_core
+            .join_binary_storage_label(final_error, &Label::Secret)
+            .expect("Secret final backing");
+        final_core
+            .write_reg_with_label(0, Value::Object(final_error), Label::Public)
+            .expect("final completion argument");
+        let final_completion = BuiltinFunction::writable_completion(
+            BuiltinFunctionKind::StreamWritableFinalDone,
+            final_writable,
+            32,
+        );
+        final_core
+            .writable_final_done(&module, &final_completion, RegRange { start: 0, count: 1 })
+            .expect("final completion with binary error");
+        assert_eq!(
+            final_core
+                .read_reg(0)
+                .expect("preserved final completion argument"),
+            Value::Object(final_error)
+        );
+        assert_eq!(
+            final_core
+                .get_register_label(0)
+                .expect("preserved final argument label"),
+            &Label::Public
+        );
+        assert_eq!(
+            final_core.writable_streams[&final_writable].terminal_error,
+            Some((Value::Object(final_error), Label::Secret))
+        );
+        assert_eq!(
+            final_core.writable_streams[&final_writable].lifecycle_label,
+            Label::Secret
+        );
+        assert_eq!(
+            final_core.estimated_memory_bytes(),
+            final_core.recompute_estimated_memory_bytes()
+        );
     }
 
     #[test]

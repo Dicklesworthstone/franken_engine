@@ -9105,6 +9105,42 @@ fn oracle_run_json_summary(
     })
 }
 
+/// Render untrusted oracle text without allowing it to alter terminal state or
+/// the visual ordering of the surrounding audit record.
+///
+/// Ordinary Unicode remains readable. Terminal controls, line separators, and
+/// Unicode bidirectional formatting controls are rendered as visible escapes.
+fn escape_oracle_human_text(value: &str) -> String {
+    let mut escaped = String::with_capacity(value.len());
+    for character in value.chars() {
+        match character {
+            '\n' => escaped.push_str("\\n"),
+            '\r' => escaped.push_str("\\r"),
+            '\t' => escaped.push_str("\\t"),
+            character
+                if character.is_control()
+                    || matches!(character, '\u{2028}' | '\u{2029}')
+                    || is_unicode_directional_control(character) =>
+            {
+                escaped.extend(character.escape_unicode());
+            }
+            character => escaped.push(character),
+        }
+    }
+    escaped
+}
+
+fn is_unicode_directional_control(character: char) -> bool {
+    matches!(
+        character,
+        '\u{061c}'
+            | '\u{200e}'
+            | '\u{200f}'
+            | '\u{202a}'..='\u{202e}'
+            | '\u{2066}'..='\u{2069}'
+    )
+}
+
 fn render_oracle_run_human(
     report: &DifferentialOracleReport,
     bundle: Option<&OracleBundleSummary>,
@@ -9112,10 +9148,10 @@ fn render_oracle_run_human(
     exit_code: i32,
 ) -> String {
     let mut lines = vec![
-        format!("oracle run: {}", report.case_id),
+        format!("oracle run: {}", escape_oracle_human_text(&report.case_id)),
         format!(
             "  source: {} (sha256:{})",
-            report.source_path.as_deref().unwrap_or("<inline>"),
+            escape_oracle_human_text(report.source_path.as_deref().unwrap_or("<inline>")),
             report.source_sha256
         ),
         format!(
@@ -9125,8 +9161,8 @@ fn render_oracle_run_human(
     ];
     lines.push("  backends:".to_string());
     for receipt in &report.backends {
-        let value = receipt.value.as_deref().unwrap_or("-");
-        let version = receipt.version.as_deref().unwrap_or("n/a");
+        let value = escape_oracle_human_text(receipt.value.as_deref().unwrap_or("-"));
+        let version = escape_oracle_human_text(receipt.version.as_deref().unwrap_or("n/a"));
         lines.push(format!(
             "    {:<16} {:<11} value={value} ({version}, {}us)",
             receipt.backend.to_string(),
@@ -9145,20 +9181,20 @@ fn render_oracle_run_human(
             lines.push(format!(
                 "    [{}] {}",
                 finding.class.stable_label(),
-                finding.message
+                escape_oracle_human_text(&finding.message)
             ));
         }
     }
     if degraded {
         for reason in oracle_external_degradations(report) {
-            lines.push(format!("  degraded: {reason}"));
+            lines.push(format!("  degraded: {}", escape_oracle_human_text(&reason)));
         }
     }
     if let Some(summary) = bundle {
         lines.push(format!(
             "  bundle: {} ({})",
-            summary.dir.display(),
-            summary.bundle_id
+            escape_oracle_human_text(&summary.dir.display().to_string()),
+            escape_oracle_human_text(&summary.bundle_id)
         ));
     }
     lines.join("\n")
@@ -9712,7 +9748,10 @@ fn execute_oracle_report(args: OracleReportArgs) -> Result<i32, String> {
         }
         CheckOutputFormat::Human => {
             let mut lines = vec![
-                format!("oracle bundle: {}", dir.display()),
+                format!(
+                    "oracle bundle: {}",
+                    escape_oracle_human_text(&dir.display().to_string())
+                ),
                 "  integrity: verified (sha256 artifacts + bundle_id)".to_string(),
                 "  taxonomy: recomputed from receipts; stored classes and waivers are non-authoritative".to_string(),
             ];
@@ -12103,6 +12142,9 @@ fn runtime_usage() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use frankenengine_engine::differential_oracle::{
+        DifferentialComparisonMode, DifferentialDivergenceClass, DifferentialDivergenceFinding,
+    };
     use frankenengine_engine::receipt_verifier_pipeline::VerifierLogEvent;
     use frankenengine_engine::runtime_diagnostics_cli::EvidenceSeverity;
 
@@ -14972,6 +15014,86 @@ mod tests {
                 "exit_codes": "0 consensus | 3 divergence | 4 insufficient-data/degraded",
             },
         })
+    }
+
+    #[test]
+    fn bd_drrka_oracle_human_escape_preserves_unicode_and_neutralizes_controls() {
+        let unsafe_text = concat!(
+            "readable café 雪 🙂 ",
+            "\u{001b}[31mred\u{001b}[0m ",
+            "\u{001b}]8;;https://example.invalid\u{0007}link\u{001b}]8;;\u{0007}",
+            "\n\r\t\u{009b}31m\u{009d}title\u{009c}",
+            "\u{2028}\u{2029}\u{061c}\u{200e}\u{200f}\u{202e}\u{2066}"
+        );
+
+        assert_eq!(
+            escape_oracle_human_text(unsafe_text),
+            concat!(
+                "readable café 雪 🙂 ",
+                "\\u{1b}[31mred\\u{1b}[0m ",
+                "\\u{1b}]8;;https://example.invalid\\u{7}link",
+                "\\u{1b}]8;;\\u{7}",
+                "\\n\\r\\t\\u{9b}31m\\u{9d}title\\u{9c}",
+                "\\u{2028}\\u{2029}\\u{61c}\\u{200e}\\u{200f}",
+                "\\u{202e}\\u{2066}"
+            )
+        );
+    }
+
+    #[test]
+    fn bd_drrka_oracle_human_renderer_is_safe_while_json_is_lossless() {
+        let mut report = oracle_semantic_test_report(false);
+        let unsafe_text = "readable café 雪 🙂\u{001b}[2J\u{001b}]0;forged\u{0007}\nnext\rline\u{202e}txt\u{2066}";
+        report.case_id = unsafe_text.to_string();
+        report.source_path = Some(unsafe_text.to_string());
+        report.backends[0].value = Some(unsafe_text.to_string());
+        report.backends[0].version = Some(unsafe_text.to_string());
+        let finding_index = report.divergence_taxonomy.findings.len();
+        report
+            .divergence_taxonomy
+            .findings
+            .push(DifferentialDivergenceFinding {
+                class: DifferentialDivergenceClass::Runtime,
+                comparison_mode: DifferentialComparisonMode::ExactStdout,
+                message: unsafe_text.to_string(),
+                affected_backends: vec![report.backends[0].backend],
+                reference_backends: Vec::new(),
+                evidence_group_hashes: Vec::new(),
+                remediation_hint: "fixture".to_string(),
+                waiver_id: None,
+            });
+        let bundle = OracleBundleSummary {
+            dir: PathBuf::from(unsafe_text),
+            bundle_id: unsafe_text.to_string(),
+            degraded: false,
+        };
+
+        let human = render_oracle_run_human(&report, Some(&bundle), false, 3);
+        let expected_line_count =
+            3 + 1 + report.backends.len() + 1 + report.divergence_taxonomy.findings.len() + 1;
+        assert_eq!(human.lines().count(), expected_line_count);
+        assert!(human.contains("readable café 雪 🙂"));
+        assert!(human.contains("\\u{1b}[2J"));
+        assert!(human.contains("\\u{1b}]0;forged\\u{7}"));
+        assert!(human.contains("\\nnext\\rline\\u{202e}txt\\u{2066}"));
+        assert!(human.chars().all(|character| {
+            character == '\n'
+                || (!character.is_control()
+                    && !matches!(character, '\u{2028}' | '\u{2029}')
+                    && !is_unicode_directional_control(character))
+        }));
+
+        let json = oracle_run_json_summary(&report, Some(&bundle), false, 3);
+        assert_eq!(json["case_id"].as_str(), Some(unsafe_text));
+        assert_eq!(json["source_path"].as_str(), Some(unsafe_text));
+        assert_eq!(json["backends"][0]["value"].as_str(), Some(unsafe_text));
+        assert_eq!(json["backends"][0]["version"].as_str(), Some(unsafe_text));
+        assert_eq!(
+            json["divergences"][finding_index]["message"].as_str(),
+            Some(unsafe_text)
+        );
+        assert_eq!(json["bundle"]["dir"].as_str(), Some(unsafe_text));
+        assert_eq!(json["bundle"]["bundle_id"].as_str(), Some(unsafe_text));
     }
 
     #[test]

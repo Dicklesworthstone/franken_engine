@@ -1099,9 +1099,7 @@ fn select_markdown_section<'a>(document: &'a str, heading_prefix: &str) -> Optio
 
 fn build_harness_families(repo_root: &Path) -> Result<Vec<HarnessFamily>, String> {
     let aggregate_owner = "bd-performance-conformance-bridge-tu32j.22.27";
-    let mut families = Vec::with_capacity(16);
-
-    families.push(family_from_spec(
+    let mut families = vec![family_from_spec(
         repo_root,
         FamilySpec {
             family_id: "verification-coverage-contract",
@@ -1154,7 +1152,7 @@ fn build_harness_families(repo_root: &Path) -> Result<Vec<HarnessFamily>, String
             ],
             successor_bead: "bd-performance-conformance-bridge-tu32j.22.27",
         },
-    )?);
+    )?];
 
     families.push(family_from_spec(
         repo_root,

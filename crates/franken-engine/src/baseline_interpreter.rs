@@ -9780,8 +9780,7 @@ impl InterpreterCore {
                 let error_value = if exit.success {
                     Value::Null
                 } else {
-                    let error =
-                        Self::process_run_error(exit.clone(), stdout.clone(), stderr.clone());
+                    let error = Self::process_run_error(exit, stdout.clone(), stderr.clone());
                     self.native_error_to_thrown_value(&error)?
                 };
                 (

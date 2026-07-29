@@ -23293,11 +23293,10 @@ fn process_spawn_request_label(inputs: &[FlowValue]) -> Label {
                 .is_some_and(|value| value.shape == FlowValueShape::Callable)
             {
                 2
-            } else if source_argument(3)
-                .is_some_and(|value| value.shape == FlowValueShape::Callable)
-            {
-                3
             } else {
+                // `execFile(file[, args][, options][, callback])` has at most
+                // three request-bearing arguments. A callback at index 3 and
+                // an omitted callback therefore both join the first three.
                 3
             }
         }
@@ -24719,6 +24718,69 @@ mod tests {
             span: span(),
         };
         Ir0Module::from_syntax_tree(tree, "fixture.js")
+    }
+
+    #[test]
+    fn bd_qsiov_exec_file_request_label_excludes_only_callable_callbacks() {
+        let exec_file_inputs = |source_arguments: Vec<(Label, FlowValueShape)>| {
+            let mut inputs = source_arguments
+                .into_iter()
+                .enumerate()
+                .rev()
+                .map(|(identity, (label, shape))| FlowValue {
+                    identity,
+                    label,
+                    crypto_origin: None,
+                    shape,
+                    process_operation: None,
+                })
+                .collect::<Vec<_>>();
+            inputs.push(FlowValue {
+                identity: usize::MAX,
+                label: Label::Public,
+                crypto_origin: None,
+                shape: FlowValueShape::Primitive,
+                process_operation: Some(ChildProcessOperation::ExecFile),
+            });
+            inputs
+        };
+
+        assert_eq!(
+            process_spawn_request_label(&exec_file_inputs(vec![
+                (Label::Public, FlowValueShape::Primitive),
+                (Label::TopSecret, FlowValueShape::Callable),
+            ])),
+            Label::Public,
+            "a callback in the args slot is not request data"
+        );
+        assert_eq!(
+            process_spawn_request_label(&exec_file_inputs(vec![
+                (Label::Public, FlowValueShape::Primitive),
+                (Label::Secret, FlowValueShape::Unknown),
+                (Label::TopSecret, FlowValueShape::Callable),
+            ])),
+            Label::Secret,
+            "a callback in the options slot is not request data"
+        );
+        assert_eq!(
+            process_spawn_request_label(&exec_file_inputs(vec![
+                (Label::Public, FlowValueShape::Primitive),
+                (Label::Internal, FlowValueShape::Unknown),
+                (Label::Secret, FlowValueShape::Unknown),
+                (Label::TopSecret, FlowValueShape::Callable),
+            ])),
+            Label::Secret,
+            "the fourth callback is excluded from the three request fields"
+        );
+        assert_eq!(
+            process_spawn_request_label(&exec_file_inputs(vec![
+                (Label::Public, FlowValueShape::Primitive),
+                (Label::Internal, FlowValueShape::Unknown),
+                (Label::TopSecret, FlowValueShape::Unknown),
+            ])),
+            Label::TopSecret,
+            "without a callback all three optional request positions are joined"
+        );
     }
 
     #[test]

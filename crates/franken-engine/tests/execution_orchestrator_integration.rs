@@ -281,7 +281,7 @@ fn missing_package_capability_denies_orchestrated_hostcall_execution() {
         .execute(&pkg)
         .expect_err("hostcall should fail closed when package capability is missing");
 
-    match err {
+    match err.primary_error() {
         OrchestratorError::Interpreter(InterpreterError::CapabilityDenied { capability }) => {
             assert_eq!(capability, "net.write");
         }
@@ -365,7 +365,7 @@ fn unresolved_declassification_obligation_surfaces_operator_detail_on_execute_pa
     let err = orch
         .execute(&pkg)
         .expect_err("unresolved declassification should fail closed on the execute path");
-    match err {
+    match err.primary_error() {
         OrchestratorError::IfcRuntimeGuardBlocked { detail } => {
             assert!(detail.contains("unresolved IFC runtime obligations"));
             assert!(detail.contains("pending declassifications=1"));
@@ -414,7 +414,7 @@ fn staged_receipt_with_route_mismatch_fails_closed_after_preflight() {
     let err = orch
         .execute(&pkg)
         .expect_err("route-mismatched staged receipt must fail closed");
-    match err {
+    match err.primary_error() {
         OrchestratorError::IfcRuntimeGuardBlocked { detail } => {
             assert!(detail.contains("receipt-linked declassification failed"));
             assert!(detail.contains("route"));
@@ -463,7 +463,7 @@ fn failed_staged_receipt_with_decision_contract_mismatch_allows_clean_retry() {
     let first_err = orch
         .execute(&pkg)
         .expect_err("contract-mismatched staged receipt should fail closed");
-    match first_err {
+    match first_err.primary_error() {
         OrchestratorError::IfcRuntimeGuardBlocked { detail } => {
             assert!(detail.contains("receipt-linked declassification failed"));
             assert!(detail.contains("decision contract"));
@@ -538,7 +538,7 @@ fn failed_staged_receipt_with_source_label_mismatch_allows_clean_retry() {
     let first_err = orch
         .execute(&pkg)
         .expect_err("source-label-mismatched staged receipt should fail closed");
-    match first_err {
+    match first_err.primary_error() {
         OrchestratorError::IfcRuntimeGuardBlocked { detail } => {
             assert!(detail.contains("receipt-linked declassification failed"));
             assert!(detail.contains("source label does not match"));
@@ -613,7 +613,7 @@ fn failed_staged_receipt_with_sink_clearance_mismatch_allows_clean_retry() {
     let first_err = orch
         .execute(&pkg)
         .expect_err("sink-clearance-mismatched staged receipt should fail closed");
-    match first_err {
+    match first_err.primary_error() {
         OrchestratorError::IfcRuntimeGuardBlocked { detail } => {
             assert!(detail.contains("receipt-linked declassification failed"));
             assert!(detail.contains("sink clearance internal cannot flow"));
@@ -687,7 +687,7 @@ fn failed_staged_receipt_allows_clean_retry_via_fresh_preflight_and_receipt() {
     let first_err = orch
         .execute(&pkg)
         .expect_err("invalid staged receipt should fail closed");
-    match first_err {
+    match first_err.primary_error() {
         OrchestratorError::IfcRuntimeGuardBlocked { detail } => {
             assert!(detail.contains("receipt-linked declassification failed"));
             assert!(detail.contains("replay linkage does not match trace"));
@@ -766,18 +766,25 @@ fn low_cell_close_budget_returns_cell_budget_exhausted_error() {
     let err = orch
         .execute(&simple_package("ext-budget", "42"))
         .expect_err("close budget should fail fast");
+    let failure = err
+        .post_cell_failure()
+        .expect("cell-close failures must retain cleanup evidence");
 
-    match err {
+    match failure.primary_error.as_ref() {
         OrchestratorError::Cell(CellError::BudgetExhausted {
             requested_ms,
             remaining_ms,
             ..
         }) => {
-            assert_eq!(requested_ms, 2);
-            assert_eq!(remaining_ms, 1);
+            assert_eq!(*requested_ms, 2);
+            assert_eq!(*remaining_ms, 1);
         }
         other => panic!("unexpected error: {other:?}"),
     }
+    assert!(matches!(
+        failure.cleanup.close_error,
+        Some(CellError::BudgetExhausted { .. })
+    ));
 }
 
 #[test]

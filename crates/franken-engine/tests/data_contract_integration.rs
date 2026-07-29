@@ -596,7 +596,7 @@ fn labeled_secret_to_egress_sink_without_receipt_is_denied_and_recorded() {
     let err = orchestrator
         .execute(&ingress_package())
         .expect_err("secret ingress to a public egress sink must fail closed");
-    match &err {
+    match err.primary_error() {
         OrchestratorError::IfcRuntimeGuardBlocked { detail } => {
             assert!(detail.contains("raw-network-egress"), "detail: {detail}");
             assert!(detail.contains("Secret"), "detail: {detail}");
@@ -646,7 +646,7 @@ fn secret_with_unreceipted_declassification_route_is_denied_naming_the_route() {
     let err = orchestrator
         .execute(&ingress_package())
         .expect_err("route without receipt must fail closed");
-    match &err {
+    match err.primary_error() {
         OrchestratorError::IfcRuntimeGuardBlocked { detail } => {
             assert!(detail.contains("route-secret-public"), "detail: {detail}");
         }

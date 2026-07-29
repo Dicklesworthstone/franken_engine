@@ -363,7 +363,7 @@ fn execute_blocks_unresolved_ifc_runtime_checkpoint_before_interpreter() {
     let err = orch
         .execute(&pkg)
         .expect_err("unresolved runtime checkpoint must fail closed");
-    match err {
+    match err.primary_error() {
         OrchestratorError::IfcRuntimeGuardBlocked { detail } => {
             assert!(detail.contains("runtime checkpoints=1"));
             assert!(detail.contains("hostcall.invoke"));
@@ -709,7 +709,7 @@ fn source_file_basename_keeps_parent_import_outside_cached_root_bd_fw7zd_4() {
             .expect_err("parent import outside cached root must be refused");
         assert!(
             matches!(
-                error,
+                error.primary_error(),
                 OrchestratorError::Interpreter(InterpreterError::ModuleResolutionFailed {
                     reason: ModuleResolutionFailureReason::Other(reason),
                     ..
@@ -767,7 +767,7 @@ fn source_file_basename_rejects_in_root_symlink_escape_bd_fw7zd_4() {
             .expect_err("symlink import outside cached root must be refused");
         assert!(
             matches!(
-                error,
+                error.primary_error(),
                 OrchestratorError::Interpreter(InterpreterError::ModuleResolutionFailed {
                     reason: ModuleResolutionFailureReason::Other(reason),
                     ..

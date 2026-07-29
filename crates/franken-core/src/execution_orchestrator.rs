@@ -290,6 +290,39 @@ pub struct OrchestratorResult {
     pub epoch: SecurityEpoch,
 }
 
+/// Inspectable evidence from the mandatory execution-cell close attempt.
+///
+/// This artifact is returned with every failure that occurs after cell
+/// creation. Exactly one of `finalize_result` and `close_error` is populated.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CellCleanupEvidence {
+    pub cell_id: String,
+    pub trace_id: String,
+    pub cancel_reason: CancelReason,
+    pub cell_events: Vec<CellEvent>,
+    pub finalize_result: Option<FinalizeResult>,
+    pub close_error: Option<CellError>,
+}
+
+impl CellCleanupEvidence {
+    #[must_use]
+    pub fn close_succeeded(&self) -> bool {
+        self.finalize_result.is_some() && self.close_error.is_none()
+    }
+}
+
+/// Ordered failure report for an orchestration attempt that reached cell
+/// creation.
+///
+/// `primary_error` is always the first phase failure. Later failures, including
+/// cell close, are retained in occurrence order.
+#[derive(Debug)]
+pub struct PostCellFailure {
+    pub primary_error: Box<OrchestratorError>,
+    pub additional_errors: Vec<OrchestratorError>,
+    pub cleanup: CellCleanupEvidence,
+}
+
 /// Preflighted runtime-flow guard context for the next execution attempt.
 #[derive(Debug, Clone)]
 pub struct PreparedRuntimeFlowGuards {
@@ -357,6 +390,21 @@ struct PreparedLoweringOutput {
     lowering_output: LoweringPipelineOutput,
 }
 
+#[derive(Debug)]
+struct PendingPostCellFailure {
+    primary_error: Box<OrchestratorError>,
+    additional_errors: Vec<OrchestratorError>,
+}
+
+impl From<OrchestratorError> for PendingPostCellFailure {
+    fn from(primary_error: OrchestratorError) -> Self {
+        Self {
+            primary_error: Box::new(primary_error),
+            additional_errors: Vec::new(),
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // OrchestratorError
 // ---------------------------------------------------------------------------
@@ -390,6 +438,7 @@ pub enum OrchestratorError {
         reserved_extension_id: String,
         requested_extension_id: String,
     },
+    PostCellFailure(Box<PostCellFailure>),
 }
 
 impl fmt::Display for OrchestratorError {
@@ -424,11 +473,42 @@ impl fmt::Display for OrchestratorError {
                 f,
                 "prepared execution context is reserved for extension {reserved_extension_id}, not {requested_extension_id}"
             ),
+            Self::PostCellFailure(failure) => {
+                write!(f, "{}", failure.primary_error)?;
+                for additional in &failure.additional_errors {
+                    write!(f, "; additional failure: {additional}")?;
+                }
+                if failure.cleanup.close_succeeded() {
+                    f.write_str("; execution cell close succeeded")
+                } else {
+                    f.write_str("; execution cell close failed")
+                }
+            }
         }
     }
 }
 
 impl std::error::Error for OrchestratorError {}
+
+impl OrchestratorError {
+    /// First error observed by the post-cell pipeline.
+    #[must_use]
+    pub fn primary_error(&self) -> &Self {
+        match self {
+            Self::PostCellFailure(failure) => failure.primary_error.primary_error(),
+            other => other,
+        }
+    }
+
+    /// Full lifecycle report when this attempt reached execution-cell creation.
+    #[must_use]
+    pub fn post_cell_failure(&self) -> Option<&PostCellFailure> {
+        match self {
+            Self::PostCellFailure(failure) => Some(failure),
+            _ => None,
+        }
+    }
+}
 
 impl From<ParseError> for OrchestratorError {
     fn from(e: ParseError) -> Self {
@@ -683,120 +763,173 @@ impl ExecutionOrchestrator {
             &self.config.policy_id,
         );
 
-        // Step 3: Register extension in containment executor.
-        self.containment_executor.register(&package.extension_id);
-        let lowering_events = lowering_output.events.clone();
-        let lowering_witnesses = lowering_output.witnesses.clone();
-        self.phase_enforce_runtime_flow_guards(&lowering_output.ir2_flow_proof_artifact)?;
-        let ir3_schedule_cost = Self::estimate_ir3_schedule_cost(&lowering_output.ir3);
+        let mut cell_cancel_reason = CancelReason::OperatorShutdown;
+        let pipeline_result = (|| -> Result<OrchestratorResult, PendingPostCellFailure> {
+            // Step 3: Register extension in containment executor.
+            self.containment_executor.register(&package.extension_id);
+            let lowering_events = lowering_output.events.clone();
+            let lowering_witnesses = lowering_output.witnesses.clone();
+            self.phase_enforce_runtime_flow_guards(&lowering_output.ir2_flow_proof_artifact)?;
+            let ir3_schedule_cost = Self::estimate_ir3_schedule_cost(&lowering_output.ir3);
 
-        // Step 6: Execute IR3.
-        let (routed, guardplane_report) =
-            self.phase_execute(package, &lowering_output.ir3, &trace_id)?;
-        let lane = routed.lane;
-        let lane_reason = routed.reason;
-        let exec_result = routed.result;
-        let execution_value = format!("{}", exec_result.value);
-        let instructions_executed = exec_result.instructions_executed;
-        let adaptive_router_summary = self.update_adaptive_router(lane, &exec_result);
+            // Step 6: Execute IR3.
+            let (routed, guardplane_report) =
+                self.phase_execute(package, &lowering_output.ir3, &trace_id)?;
+            let lane = routed.lane;
+            let lane_reason = routed.reason;
+            let exec_result = routed.result;
+            let execution_value = format!("{}", exec_result.value);
+            let instructions_executed = exec_result.instructions_executed;
+            let adaptive_router_summary = self.update_adaptive_router(lane, &exec_result);
 
-        // Step 7: Assess risk.
-        let evidence = Self::build_evidence(package, &exec_result, self.config.epoch);
-        let update_result = self.posterior_updater.update(&evidence);
-        let posterior = update_result.posterior.clone();
-        let risk_state = posterior.map_estimate();
+            // Step 7: Assess risk.
+            let evidence = Self::build_evidence(package, &exec_result, self.config.epoch);
+            let update_result = self.posterior_updater.update(&evidence);
+            let posterior = update_result.posterior.clone();
+            let risk_state = posterior.map_estimate();
 
-        // Step 8: Decide action.
-        let action_decision = self.loss_selector.select(&posterior);
-        let expected_loss_millionths = action_decision.expected_loss_millionths;
-        let (stopping_decision, optimal_stopping_certificate) =
-            self.observe_optimal_stopping(&update_result, package, attempt_index);
-        let mut containment_action = action_decision.action;
-        if stopping_decision == StoppingDecision::Stop
-            && containment_action == ContainmentAction::Allow
-        {
-            containment_action = ContainmentAction::Sandbox;
-        }
-        if let Some(requested) = exec_result.requested_hook_action.as_ref() {
-            containment_action = more_severe_containment_action(
+            // Step 8: Decide action.
+            let action_decision = self.loss_selector.select(&posterior);
+            let expected_loss_millionths = action_decision.expected_loss_millionths;
+            let (stopping_decision, optimal_stopping_certificate) =
+                self.observe_optimal_stopping(&update_result, package, attempt_index);
+            let mut containment_action = action_decision.action;
+            if stopping_decision == StoppingDecision::Stop
+                && containment_action == ContainmentAction::Allow
+            {
+                containment_action = ContainmentAction::Sandbox;
+            }
+            if let Some(requested) = exec_result.requested_hook_action.as_ref() {
+                containment_action = more_severe_containment_action(
+                    containment_action,
+                    containment_action_for_hook(requested),
+                );
+            }
+            cell_cancel_reason = if containment_action.severity() >= 4 {
+                CancelReason::Quarantine
+            } else {
+                CancelReason::OperatorShutdown
+            };
+
+            // Step 9: Record evidence.
+            let (entries, evidence_compression_certificate, evidence_compression_status) = self
+                .phase_record_evidence(EvidenceRecordInput {
+                    trace_id: &trace_id,
+                    decision_id: &decision_id,
+                    package,
+                    decision: &action_decision,
+                    effective_action: containment_action,
+                    exec: &exec_result,
+                    update: &update_result,
+                    ir3_schedule_cost,
+                    adaptive_router_summary: adaptive_router_summary.as_ref(),
+                    optimal_stopping_certificate: optimal_stopping_certificate.as_ref(),
+                    guardplane_report: guardplane_report.as_ref(),
+                    capability_summary: evidence_capability_summary,
+                })?;
+            let evidence_entries = entries;
+
+            // Step 10: Execute any selected containment action and attach a saga
+            // only for the actions that require follow-up orchestration.
+            let (containment_receipt, saga_id) = self.phase_execute_containment(
                 containment_action,
-                containment_action_for_hook(requested),
-            );
-        }
-
-        // Step 9: Record evidence.
-        let (entries, evidence_compression_certificate, evidence_compression_status) = self
-            .phase_record_evidence(EvidenceRecordInput {
-                trace_id: &trace_id,
-                decision_id: &decision_id,
                 package,
-                decision: &action_decision,
-                effective_action: containment_action,
-                exec: &exec_result,
-                update: &update_result,
+                &trace_id,
+                &decision_id,
+            )?;
+
+            Ok(OrchestratorResult {
+                extension_id: package.extension_id.clone(),
+                trace_id: trace_id.clone(),
+                decision_id: decision_id.clone(),
+                source_label,
+                source_ingestion,
+                lowering_events,
+                lowering_witnesses,
+                lane,
+                lane_reason,
+                execution_value,
+                instructions_executed,
+                adaptive_router_summary,
                 ir3_schedule_cost,
-                adaptive_router_summary: adaptive_router_summary.as_ref(),
-                optimal_stopping_certificate: optimal_stopping_certificate.as_ref(),
-                guardplane_report: guardplane_report.as_ref(),
-                capability_summary: evidence_capability_summary,
-            })?;
-        let evidence_entries = entries;
+                posterior,
+                risk_state,
+                containment_action,
+                expected_loss_millionths,
+                action_decision,
+                optimal_stopping_certificate,
+                evidence_entries,
+                evidence_compression_certificate,
+                evidence_compression_status,
+                containment_receipt,
+                saga_id,
+                cell_events: Vec::new(),
+                finalize_result: None,
+                epoch: self.config.epoch,
+            })
+        })();
 
-        // Step 10: Execute any selected containment action and attach a saga
-        // only for the actions that require follow-up orchestration.
-        let (containment_receipt, saga_id) =
-            self.phase_execute_containment(containment_action, package, &trace_id, &decision_id)?;
-
-        // Step 11: Close execution cell.
-        let cancel_reason = if containment_action.severity() >= 4 {
-            CancelReason::Quarantine
-        } else {
-            CancelReason::OperatorShutdown
-        };
+        // Step 11: Close the execution cell after every post-creation outcome.
         let deadline = DrainDeadline {
             max_ticks: self.config.drain_deadline_ticks,
         };
         let mut close_cx =
             Self::build_cell_close_context(&trace_id, self.config.cell_close_budget_ms);
-        let finalize_result = Some(
-            cell.close(&mut close_cx, cancel_reason, deadline)
-                .map_err(OrchestratorError::Cell)?,
-        );
-
-        // Step 12: Drain cell events and assemble result.
+        let cell_id = cell.cell_id().to_string();
+        let close_result = cell.close(&mut close_cx, cell_cancel_reason.clone(), deadline);
         let cell_events = cell.drain_events();
 
-        self.execution_counter = self.execution_counter.saturating_add(1);
-
-        Ok(OrchestratorResult {
-            extension_id: package.extension_id.clone(),
-            trace_id,
-            decision_id,
-            source_label,
-            source_ingestion,
-            lowering_events,
-            lowering_witnesses,
-            lane,
-            lane_reason,
-            execution_value,
-            instructions_executed,
-            adaptive_router_summary,
-            ir3_schedule_cost,
-            posterior,
-            risk_state,
-            containment_action,
-            expected_loss_millionths,
-            action_decision,
-            optimal_stopping_certificate,
-            evidence_entries,
-            evidence_compression_certificate,
-            evidence_compression_status,
-            containment_receipt,
-            saga_id,
-            cell_events,
-            finalize_result,
-            epoch: self.config.epoch,
-        })
+        match (pipeline_result, close_result) {
+            (Ok(mut result), Ok(finalize_result)) => {
+                result.cell_events = cell_events;
+                result.finalize_result = Some(finalize_result);
+                self.execution_counter = self.execution_counter.saturating_add(1);
+                Ok(result)
+            }
+            (Ok(_), Err(close_error)) => {
+                let cleanup = CellCleanupEvidence {
+                    cell_id,
+                    trace_id,
+                    cancel_reason: cell_cancel_reason,
+                    cell_events,
+                    finalize_result: None,
+                    close_error: Some(close_error.clone()),
+                };
+                Err(OrchestratorError::PostCellFailure(Box::new(
+                    PostCellFailure {
+                        primary_error: Box::new(OrchestratorError::Cell(close_error)),
+                        additional_errors: Vec::new(),
+                        cleanup,
+                    },
+                )))
+            }
+            (Err(mut failure), close_result) => {
+                let (finalize_result, close_error) = match close_result {
+                    Ok(finalize_result) => (Some(finalize_result), None),
+                    Err(close_error) => {
+                        failure
+                            .additional_errors
+                            .push(OrchestratorError::Cell(close_error.clone()));
+                        (None, Some(close_error))
+                    }
+                };
+                let cleanup = CellCleanupEvidence {
+                    cell_id,
+                    trace_id,
+                    cancel_reason: cell_cancel_reason,
+                    cell_events,
+                    finalize_result,
+                    close_error,
+                };
+                Err(OrchestratorError::PostCellFailure(Box::new(
+                    PostCellFailure {
+                        primary_error: failure.primary_error,
+                        additional_errors: failure.additional_errors,
+                        cleanup,
+                    },
+                )))
+            }
+        }
     }
 
     // -- Private helpers -----------------------------------------------------
@@ -2417,6 +2550,24 @@ mod tests {
         }
     }
 
+    fn assert_successful_post_cell_cleanup(error: &OrchestratorError) -> &PostCellFailure {
+        let failure = error
+            .post_cell_failure()
+            .expect("post-cell failures must carry cleanup evidence");
+        assert!(failure.cleanup.close_succeeded());
+        assert!(failure.cleanup.close_error.is_none());
+        assert_eq!(failure.cleanup.cell_id, failure.cleanup.trace_id);
+        assert!(
+            failure
+                .cleanup
+                .cell_events
+                .iter()
+                .any(|event| event.event == "finalize"),
+            "successful cleanup must retain the finalize event"
+        );
+        failure
+    }
+
     fn package_with_id(extension_id: &str) -> ExtensionPackage {
         ExtensionPackage {
             extension_id: extension_id.to_string(),
@@ -2447,6 +2598,130 @@ mod tests {
             source: source.to_string(),
             ..simple_package()
         }
+    }
+
+    #[test]
+    fn post_cell_interpreter_failure_returns_close_evidence_bd_9rhwp() {
+        let package = package_with_source(r#"throw "bd-9rhwp";"#);
+        let error = ExecutionOrchestrator::with_defaults()
+            .execute(&package)
+            .expect_err("an uncaught throw must fail in the interpreter");
+        let failure = assert_successful_post_cell_cleanup(&error);
+
+        assert!(failure.additional_errors.is_empty());
+        assert!(matches!(
+            failure.primary_error.as_ref(),
+            OrchestratorError::Interpreter(InterpreterError::UncaughtException { value })
+                if value.contains("bd-9rhwp")
+        ));
+    }
+
+    #[test]
+    fn post_cell_ledger_failure_returns_close_evidence_bd_9rhwp() {
+        let package = simple_package();
+        let mut donor = ExecutionOrchestrator::with_defaults();
+        donor
+            .execute(&package)
+            .expect("the donor execution must produce deterministic evidence");
+        let duplicate_entry = donor
+            .ledger
+            .entries()
+            .first()
+            .expect("the donor execution must emit evidence")
+            .clone();
+
+        let mut orchestrator = ExecutionOrchestrator::with_defaults();
+        orchestrator
+            .ledger
+            .emit(duplicate_entry)
+            .expect("the duplicate fixture must be admitted once");
+
+        let error = orchestrator
+            .execute(&package)
+            .expect_err("the ledger must reject duplicate deterministic evidence");
+        let failure = assert_successful_post_cell_cleanup(&error);
+
+        assert!(failure.additional_errors.is_empty());
+        assert!(matches!(
+            failure.primary_error.as_ref(),
+            OrchestratorError::Ledger(LedgerError::DuplicateEntryId { .. })
+        ));
+    }
+
+    #[test]
+    fn post_cell_containment_failure_returns_close_evidence_bd_9rhwp() {
+        let mut package = package_with_metadata(
+            "bd-9rhwp-containment",
+            "const obj = { constructor: 1 }; obj.constructor;",
+            &[
+                ("guardplane.enable_instruction_hooks", "true"),
+                ("capability_witness.trust_level", "suspicious"),
+                ("capability_witness.confidence_millionths", "200000"),
+                ("capability_witness.denied_capabilities", "object.property"),
+            ],
+        );
+        package.capabilities = vec!["vm_dispatch".to_string(), "heap_allocate".to_string()];
+        let mut orchestrator = ExecutionOrchestrator::with_defaults();
+        orchestrator
+            .containment_executor
+            .register(&package.extension_id);
+        let preexisting_context = ContainmentContext {
+            decision_id: "bd-9rhwp-preexisting".to_string(),
+            epoch: orchestrator.config.epoch,
+            ..ContainmentContext::default()
+        };
+        orchestrator
+            .containment_executor
+            .execute(
+                ContainmentAction::Quarantine,
+                &package.extension_id,
+                &preexisting_context,
+            )
+            .expect("test precondition must put the extension in a dead state");
+
+        let error = orchestrator
+            .execute(&package)
+            .expect_err("the selected containment action must reject the dead state");
+        let failure = assert_successful_post_cell_cleanup(&error);
+
+        assert!(failure.additional_errors.is_empty());
+        assert!(matches!(
+            failure.primary_error.as_ref(),
+            OrchestratorError::Containment(ContainmentError::InvalidTransition {
+                from: crate::containment_executor::ContainmentState::Quarantined,
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn post_cell_primary_error_precedes_close_failure_bd_9rhwp() {
+        let config = OrchestratorConfig {
+            cell_close_budget_ms: 1,
+            ..OrchestratorConfig::default()
+        };
+        let package = package_with_source(r#"throw "bd-9rhwp";"#);
+        let error = ExecutionOrchestrator::new(config)
+            .execute(&package)
+            .expect_err("the interpreter and close must both fail");
+        let failure = error
+            .post_cell_failure()
+            .expect("both failures must be returned in one lifecycle report");
+
+        assert!(matches!(
+            failure.primary_error.as_ref(),
+            OrchestratorError::Interpreter(InterpreterError::UncaughtException { value })
+                if value.contains("bd-9rhwp")
+        ));
+        assert!(matches!(
+            failure.additional_errors.as_slice(),
+            [OrchestratorError::Cell(CellError::BudgetExhausted { .. })]
+        ));
+        assert!(!failure.cleanup.close_succeeded());
+        assert!(matches!(
+            failure.cleanup.close_error,
+            Some(CellError::BudgetExhausted { .. })
+        ));
     }
 
     fn empty_flow_artifact() -> Ir2FlowProofArtifact {
@@ -2666,7 +2941,7 @@ mod tests {
         let err = orch
             .execute(&pkg)
             .expect_err("unresolved runtime checkpoint must fail closed");
-        match err {
+        match err.primary_error() {
             OrchestratorError::IfcRuntimeGuardBlocked { detail } => {
                 assert!(detail.contains("runtime checkpoints=1"));
                 assert!(detail.contains("hostcall.invoke"));
@@ -3780,18 +4055,26 @@ mod tests {
         let err = orch
             .execute(&simple_package())
             .expect_err("cell close should fail on insufficient canonical budget");
+        let failure = err
+            .post_cell_failure()
+            .expect("cell-close failures must retain cleanup evidence");
 
-        match err {
+        match failure.primary_error.as_ref() {
             OrchestratorError::Cell(CellError::BudgetExhausted {
                 requested_ms,
                 remaining_ms,
                 ..
             }) => {
-                assert_eq!(requested_ms, 2);
-                assert_eq!(remaining_ms, 1);
+                assert_eq!(*requested_ms, 2);
+                assert_eq!(*remaining_ms, 1);
             }
             other => panic!("unexpected error: {other:?}"),
         }
+        assert!(failure.cleanup.finalize_result.is_none());
+        assert!(matches!(
+            failure.cleanup.close_error,
+            Some(CellError::BudgetExhausted { .. })
+        ));
     }
 
     // -- Enrichment: evidence entries have trace_id --

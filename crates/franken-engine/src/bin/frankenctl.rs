@@ -6228,7 +6228,7 @@ fn format_run_error(input: &Path, error: &OrchestratorError) -> String {
 }
 
 fn classify_run_error(error: &OrchestratorError) -> Option<&'static str> {
-    match error {
+    match error.primary_error() {
         OrchestratorError::Interpreter(
             InterpreterError::ModuleResolutionFailed { .. }
             | InterpreterError::ModuleReadFailed { .. }

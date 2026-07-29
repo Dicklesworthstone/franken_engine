@@ -1396,7 +1396,7 @@ fn compare_verify_compile_artifact_records(
 }
 
 fn classify_orchestrator_error(error: &OrchestratorError) -> FailureClass {
-    match error {
+    match error.primary_error() {
         OrchestratorError::Parse(_) | OrchestratorError::EmptySource => FailureClass::Parse,
         OrchestratorError::Lowering(_) => FailureClass::Lowering,
         OrchestratorError::TsNormalization(_) => FailureClass::SourceIngestion,
@@ -1414,6 +1414,9 @@ fn classify_orchestrator_error(error: &OrchestratorError) -> FailureClass {
         | OrchestratorError::InvalidConcurrencyEnvelope { .. }
         | OrchestratorError::EmptyExtensionId
         | OrchestratorError::PreparedExecutionContextMismatch { .. } => FailureClass::Runtime,
+        OrchestratorError::PostCellFailure(_) => {
+            unreachable!("primary_error recursively unwraps post-cell failures")
+        }
     }
 }
 

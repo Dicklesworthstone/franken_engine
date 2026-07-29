@@ -314,6 +314,38 @@ fn max_listener_and_module_constants_match_node_defaults() {
 }
 
 #[test]
+fn events_module_parameter_shadow_uses_local_value_bd_2dmnn_1() {
+    let src = r#"
+        const events = require('events');
+        const read = (events) => events.captureRejections;
+        {
+          const events = { captureRejections: 'block' };
+          console.log(events.captureRejections);
+        }
+        console.log(events.captureRejections);
+        console.log(read({ captureRejections: 'local' }));
+    "#;
+    assert_eq!(eval_console(src), "block\nfalse\nlocal");
+}
+
+#[test]
+fn event_emitter_local_shadow_uses_local_constructor_bd_2dmnn_1() {
+    let src = r#"
+        const { EventEmitter } = require('events');
+        const outer = new EventEmitter();
+        function make() {
+          const EventEmitter = function LocalEmitter() {
+            this.kind = 'local';
+          };
+          return new EventEmitter();
+        }
+        console.log(outer.getMaxListeners());
+        console.log(make().kind);
+    "#;
+    assert_eq!(eval_console(src), "10\nlocal");
+}
+
+#[test]
 fn handled_error_emits_and_unhandled_error_throws_original_value() {
     let src = r#"
         const { EventEmitter } = require('events');

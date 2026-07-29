@@ -2244,6 +2244,7 @@ fn reserve_and_mark_source_scope_bindings(
     suppress_zlib_module_sentinels(binding_lookup, &lexical_names);
     suppress_cluster_module_sentinels(binding_lookup, &lexical_names);
     suppress_child_process_module_sentinels(binding_lookup, &lexical_names);
+    suppress_events_module_sentinels(binding_lookup, &lexical_names);
     for name in reserve_root_scope_bindings(statements, binding_lookup, binding_index) {
         binding_lookup.insert(lexical_binding_sentinel(&name), 0);
         let binding_id = *binding_lookup
@@ -2267,6 +2268,7 @@ fn mark_pre_reserved_source_scope_bindings(
     suppress_zlib_module_sentinels(binding_lookup, &reserved);
     suppress_cluster_module_sentinels(binding_lookup, &reserved);
     suppress_child_process_module_sentinels(binding_lookup, &reserved);
+    suppress_events_module_sentinels(binding_lookup, &reserved);
     for name in reserved {
         binding_lookup.insert(lexical_binding_sentinel(&name), 0);
         let binding_id = *binding_lookup
@@ -2338,6 +2340,9 @@ fn binding_entry_snapshot(
             let pending_stream_promises = pending_stream_promises_binding_sentinel(name);
             let net_module = net_module_alias_sentinel(name);
             let tls_module = tls_module_alias_sentinel(name);
+            let event_emitter = event_emitter_binding_sentinel(name);
+            let events_once = events_once_binding_sentinel(name);
+            let events_module = events_module_alias_sentinel(name);
             let crypto_hash_object = crypto_hash_object_alias_sentinel(name);
             let crypto_hmac_object = crypto_hmac_object_alias_sentinel(name);
             let crypto_cipher_object = crypto_cipher_object_alias_sentinel(name);
@@ -2398,6 +2403,18 @@ fn binding_entry_snapshot(
                 ),
                 (net_module.clone(), binding_lookup.get(&net_module).copied()),
                 (tls_module.clone(), binding_lookup.get(&tls_module).copied()),
+                (
+                    event_emitter.clone(),
+                    binding_lookup.get(&event_emitter).copied(),
+                ),
+                (
+                    events_once.clone(),
+                    binding_lookup.get(&events_once).copied(),
+                ),
+                (
+                    events_module.clone(),
+                    binding_lookup.get(&events_module).copied(),
+                ),
                 (
                     crypto_hash_object.clone(),
                     binding_lookup.get(&crypto_hash_object).copied(),
@@ -2526,6 +2543,7 @@ fn prepare_function_body_bindings(
         suppress_zlib_module_sentinel(body_lookup, name);
         suppress_cluster_module_sentinel(body_lookup, name);
         suppress_child_process_module_sentinel(body_lookup, name);
+        suppress_events_module_sentinel(body_lookup, name);
     }
     for name in &local_names {
         body_lookup.insert(lexical_binding_sentinel(name), 0);
@@ -2539,6 +2557,7 @@ fn prepare_function_body_bindings(
         suppress_zlib_module_sentinel(body_lookup, name);
         suppress_cluster_module_sentinel(body_lookup, name);
         suppress_child_process_module_sentinel(body_lookup, name);
+        suppress_events_module_sentinel(body_lookup, name);
         body_lookup.insert(lexical_binding_sentinel(name), 0);
     }
 
@@ -3242,6 +3261,7 @@ fn allocate_destructure_param_bindings(
             suppress_zlib_module_sentinel(binding_lookup, inner_name);
             suppress_cluster_module_sentinel(binding_lookup, inner_name);
             suppress_child_process_module_sentinel(binding_lookup, inner_name);
+            suppress_events_module_sentinel(binding_lookup, inner_name);
         }
     }
     Ok(())
@@ -4103,6 +4123,7 @@ fn lower_statement_to_ir1_with_flow(
             suppress_zlib_module_sentinels(binding_lookup, &lexical_names);
             suppress_cluster_module_sentinels(binding_lookup, &lexical_names);
             suppress_child_process_module_sentinels(binding_lookup, &lexical_names);
+            suppress_events_module_sentinels(binding_lookup, &lexical_names);
             if let Some(binding_kind) = for_in_stmt.binding_kind {
                 for name in for_in_stmt.binding.binding_names() {
                     let binding_id = if binding_kind == VariableDeclarationKind::Var {
@@ -4318,6 +4339,7 @@ fn lower_statement_to_ir1_with_flow(
             suppress_zlib_module_sentinels(binding_lookup, &lexical_names);
             suppress_cluster_module_sentinels(binding_lookup, &lexical_names);
             suppress_child_process_module_sentinels(binding_lookup, &lexical_names);
+            suppress_events_module_sentinels(binding_lookup, &lexical_names);
             if let Some(binding_kind) = for_of_stmt.binding_kind {
                 for name in for_of_stmt.binding.binding_names() {
                     let binding_id = if binding_kind == VariableDeclarationKind::Var {
@@ -4983,6 +5005,7 @@ fn lower_statement_to_ir1_with_flow(
                     suppress_zlib_module_sentinels(binding_lookup, &catch_lexical_names);
                     suppress_cluster_module_sentinels(binding_lookup, &catch_lexical_names);
                     suppress_child_process_module_sentinels(binding_lookup, &catch_lexical_names);
+                    suppress_events_module_sentinels(binding_lookup, &catch_lexical_names);
                     reserve_and_mark_source_scope_bindings(
                         &handler.body.body,
                         binding_lookup,
@@ -5385,6 +5408,7 @@ fn lower_statement_to_ir1_with_flow(
                 suppress_zlib_module_sentinel(&mut body_lookup, pname);
                 suppress_cluster_module_sentinel(&mut body_lookup, pname);
                 suppress_child_process_module_sentinel(&mut body_lookup, pname);
+                suppress_events_module_sentinel(&mut body_lookup, pname);
             }
             // For destructuring-pattern params, allocate inner identifier
             // bindings and emit destructuring ops that copy from each
@@ -5548,6 +5572,7 @@ fn lower_statement_to_ir1_with_flow(
                 suppress_zlib_module_sentinel(&mut body_lookup, pname);
                 suppress_cluster_module_sentinel(&mut body_lookup, pname);
                 suppress_child_process_module_sentinel(&mut body_lookup, pname);
+                suppress_events_module_sentinel(&mut body_lookup, pname);
             }
             // Destructure non-identifier ctor params (applies defaults) before the body.
             allocate_destructure_param_bindings(
@@ -5752,6 +5777,7 @@ fn lower_statement_to_ir1_with_flow(
                     suppress_zlib_module_sentinel(&mut m_lookup, pname);
                     suppress_cluster_module_sentinel(&mut m_lookup, pname);
                     suppress_child_process_module_sentinel(&mut m_lookup, pname);
+                    suppress_events_module_sentinel(&mut m_lookup, pname);
                 }
                 // Destructure non-identifier params (applies defaults) before the body.
                 allocate_destructure_param_bindings(
@@ -5924,6 +5950,7 @@ fn lower_switch_to_ir1(
     suppress_zlib_module_sentinels(binding_lookup, &lexical_names);
     suppress_cluster_module_sentinels(binding_lookup, &lexical_names);
     suppress_child_process_module_sentinels(binding_lookup, &lexical_names);
+    suppress_events_module_sentinels(binding_lookup, &lexical_names);
     for name in &lexical_names {
         let binding_id = reserve_fresh_binding_id(binding_lookup, binding_index, name);
         binding_lookup.insert(lexical_binding_sentinel(name), 0);
@@ -14332,6 +14359,7 @@ fn lower_expression_to_ir1_inner(
                 suppress_zlib_module_sentinel(&mut body_lookup, pname);
                 suppress_cluster_module_sentinel(&mut body_lookup, pname);
                 suppress_child_process_module_sentinel(&mut body_lookup, pname);
+                suppress_events_module_sentinel(&mut body_lookup, pname);
             }
             // Destructure non-identifier params (applies defaults) before the body.
             allocate_destructure_param_bindings(
@@ -14477,6 +14505,7 @@ fn lower_expression_to_ir1_inner(
                 suppress_zlib_module_sentinel(&mut body_lookup, self_name);
                 suppress_cluster_module_sentinel(&mut body_lookup, self_name);
                 suppress_child_process_module_sentinel(&mut body_lookup, self_name);
+                suppress_events_module_sentinel(&mut body_lookup, self_name);
             }
             let mut body_binding_index: BindingId = 0;
             let body_scope = ScopeId { depth: 0, index: 0 };
@@ -14508,6 +14537,7 @@ fn lower_expression_to_ir1_inner(
                 suppress_zlib_module_sentinel(&mut body_lookup, pname);
                 suppress_cluster_module_sentinel(&mut body_lookup, pname);
                 suppress_child_process_module_sentinel(&mut body_lookup, pname);
+                suppress_events_module_sentinel(&mut body_lookup, pname);
             }
             allocate_destructure_param_bindings(
                 &destructure_params,
@@ -15069,6 +15099,7 @@ fn lower_expression_to_ir1_inner(
                 suppress_zlib_module_sentinel(&mut body_lookup, self_name);
                 suppress_cluster_module_sentinel(&mut body_lookup, self_name);
                 suppress_child_process_module_sentinel(&mut body_lookup, self_name);
+                suppress_events_module_sentinel(&mut body_lookup, self_name);
             }
             let mut body_binding_index: BindingId = 0;
             let body_scope = ScopeId { depth: 0, index: 0 };
@@ -15088,6 +15119,7 @@ fn lower_expression_to_ir1_inner(
                 suppress_zlib_module_sentinel(&mut body_lookup, pname);
                 suppress_cluster_module_sentinel(&mut body_lookup, pname);
                 suppress_child_process_module_sentinel(&mut body_lookup, pname);
+                suppress_events_module_sentinel(&mut body_lookup, pname);
             }
             // Destructure non-identifier ctor params (applies defaults) before the body.
             allocate_destructure_param_bindings(
@@ -15280,6 +15312,7 @@ fn lower_expression_to_ir1_inner(
                     suppress_zlib_module_sentinel(&mut m_lookup, self_name);
                     suppress_cluster_module_sentinel(&mut m_lookup, self_name);
                     suppress_child_process_module_sentinel(&mut m_lookup, self_name);
+                    suppress_events_module_sentinel(&mut m_lookup, self_name);
                 }
                 let method_self_snapshot = name.as_deref().map(|self_name| {
                     expose_class_expression_self_binding(binding_lookup, self_name, bid)
@@ -15302,6 +15335,7 @@ fn lower_expression_to_ir1_inner(
                     suppress_zlib_module_sentinel(&mut m_lookup, pname);
                     suppress_cluster_module_sentinel(&mut m_lookup, pname);
                     suppress_child_process_module_sentinel(&mut m_lookup, pname);
+                    suppress_events_module_sentinel(&mut m_lookup, pname);
                 }
                 // Destructure non-identifier params (applies defaults) before the body.
                 allocate_destructure_param_bindings(
@@ -18465,6 +18499,9 @@ enum LoweringOnlyModuleAliasSurface {
     StreamConstructor,
     StreamPipeline,
     StreamPromises,
+    EventEmitter,
+    EventsOnce,
+    EventsModule,
 }
 
 impl LoweringOnlyModuleAliasSurface {
@@ -18589,6 +18626,12 @@ fn is_module_alias_usage(
         }
         LoweringOnlyModuleAliasSurface::StreamPromises => {
             is_stream_promises_pipeline_call(expr, alias)
+        }
+        LoweringOnlyModuleAliasSurface::EventEmitter => is_event_emitter_usage(expr, alias),
+        LoweringOnlyModuleAliasSurface::EventsOnce => is_events_once_direct_call(expr, alias),
+        LoweringOnlyModuleAliasSurface::EventsModule => {
+            is_events_alias_capture_rejections_read(expr, alias)
+                || is_events_alias_once_call(expr, alias)
         }
     }
 }
@@ -19071,6 +19114,9 @@ fn module_alias_expr_has_rejected_use(
             LoweringOnlyModuleAliasSurface::StreamPromises => {
                 is_stream_promises_pipeline_call(expr, alias)
             }
+            LoweringOnlyModuleAliasSurface::EventEmitter => false,
+            LoweringOnlyModuleAliasSurface::EventsOnce => is_events_once_direct_call(expr, alias),
+            LoweringOnlyModuleAliasSurface::EventsModule => is_events_alias_once_call(expr, alias),
         } =>
         {
             is_discarded_crypto_identity_call(expr, alias, surface)
@@ -19097,6 +19143,14 @@ fn module_alias_expr_has_rejected_use(
         Expression::New { callee, arguments }
             if surface == LoweringOnlyModuleAliasSurface::StreamConstructor
                 && matches!(callee.as_ref(), Expression::Identifier(name) if name == alias) =>
+        {
+            arguments
+                .iter()
+                .any(|argument| module_alias_expr_has_rejected_use(argument, alias, surface))
+        }
+        Expression::New { arguments, .. }
+            if surface == LoweringOnlyModuleAliasSurface::EventEmitter
+                && is_event_emitter_usage(expr, alias) =>
         {
             arguments
                 .iter()
@@ -19140,6 +19194,15 @@ fn module_alias_expr_has_rejected_use(
             if surface == LoweringOnlyModuleAliasSurface::Cluster
                 && module_alias_member_name(expr, alias)
                     .is_some_and(cluster_property_is_supported) =>
+        {
+            false
+        }
+        Expression::Member { .. }
+            if matches!(
+                surface,
+                LoweringOnlyModuleAliasSurface::EventEmitter
+                    | LoweringOnlyModuleAliasSurface::EventsModule
+            ) && is_module_alias_usage(expr, alias, surface) =>
         {
             false
         }
@@ -21037,8 +21100,12 @@ fn confirmed_event_emitter_destructured_requires(
     candidates
         .into_iter()
         .filter(|local| {
-            body.iter().any(|stmt| {
-                timers_scan_statement_deep(stmt, &|expr| is_event_emitter_usage(expr, local))
+            body.iter().any(|statement| {
+                module_alias_statement_contains_unshadowed_usage(
+                    statement,
+                    local,
+                    LoweringOnlyModuleAliasSurface::EventEmitter,
+                )
             })
         })
         .collect()
@@ -21078,8 +21145,12 @@ fn confirmed_events_once_destructured_requires(
     candidates
         .into_iter()
         .filter(|local| {
-            body.iter().any(|stmt| {
-                timers_scan_statement_deep(stmt, &|expr| is_events_once_direct_call(expr, local))
+            body.iter().any(|statement| {
+                module_alias_statement_contains_unshadowed_usage(
+                    statement,
+                    local,
+                    LoweringOnlyModuleAliasSurface::EventsOnce,
+                )
             })
         })
         .collect()
@@ -21103,8 +21174,12 @@ fn confirmed_events_once_named_imports(body: &[Statement]) -> BTreeSet<String> {
     candidates
         .into_iter()
         .filter(|local| {
-            body.iter().any(|stmt| {
-                timers_scan_statement_deep(stmt, &|expr| is_events_once_direct_call(expr, local))
+            body.iter().any(|statement| {
+                module_alias_statement_contains_unshadowed_usage(
+                    statement,
+                    local,
+                    LoweringOnlyModuleAliasSurface::EventsOnce,
+                )
             })
         })
         .collect()
@@ -21131,11 +21206,12 @@ fn confirmed_events_module_aliases(
     candidates
         .into_iter()
         .filter(|alias| {
-            body.iter().any(|stmt| {
-                timers_scan_statement_deep(stmt, &|expr| {
-                    is_events_alias_capture_rejections_read(expr, alias)
-                        || is_events_alias_once_call(expr, alias)
-                })
+            body.iter().any(|statement| {
+                module_alias_statement_contains_unshadowed_usage(
+                    statement,
+                    alias,
+                    LoweringOnlyModuleAliasSurface::EventsModule,
+                )
             })
         })
         .collect()
@@ -21187,6 +21263,21 @@ fn seed_events_module_sentinels(
         {
             body_lookup.insert(key.clone(), 0);
         }
+    }
+}
+
+fn suppress_events_module_sentinel(binding_lookup: &mut BTreeMap<String, BindingId>, name: &str) {
+    binding_lookup.remove(&event_emitter_binding_sentinel(name));
+    binding_lookup.remove(&events_once_binding_sentinel(name));
+    binding_lookup.remove(&events_module_alias_sentinel(name));
+}
+
+fn suppress_events_module_sentinels(
+    binding_lookup: &mut BTreeMap<String, BindingId>,
+    names: &BTreeSet<String>,
+) {
+    for name in names {
+        suppress_events_module_sentinel(binding_lookup, name);
     }
 }
 
@@ -27771,6 +27862,21 @@ mod tests {
             .sum()
     }
 
+    fn count_ops_deep(ops: &[Ir1Op], predicate: &impl Fn(&Ir1Op) -> bool) -> usize {
+        ops.iter()
+            .map(|op| {
+                usize::from(predicate(op))
+                    + match op {
+                        Ir1Op::DeclareFunction { body_ops, .. }
+                        | Ir1Op::CreateFunction { body_ops, .. } => {
+                            count_ops_deep(body_ops, predicate)
+                        }
+                        _ => 0,
+                    }
+            })
+            .sum()
+    }
+
     fn assert_crypto_ambient_denied_bd_2z157(source: &str, label: &str) {
         let tree = if matches!(
             label,
@@ -29713,6 +29819,85 @@ mod tests {
             "events_capture_rejections_bd_2dmnn.js",
         );
         assert!(module_ops.iter().any(|op| matches!(
+            op,
+            Ir1Op::LoadLiteral {
+                value: Ir1Literal::Boolean(false)
+            }
+        )));
+    }
+
+    #[test]
+    fn events_shadowed_only_uses_do_not_confirm_outer_requires_bd_2dmnn_1() {
+        for (label, source) in [
+            (
+                "module-parameter",
+                "const events = require('events');\n\
+                 function read(events) { return events.captureRejections; }\n\
+                 read({ captureRejections: 'local' });\n",
+            ),
+            (
+                "constructor-local",
+                "const { EventEmitter } = require('events');\n\
+                 function make() {\n\
+                   const EventEmitter = function LocalEmitter() {};\n\
+                   return new EventEmitter();\n\
+                 }\n\
+                 make();\n",
+            ),
+        ] {
+            let tree = crate::parser_api_stability::parse_script(source).expect("parse script");
+            let ir0 = Ir0Module::from_syntax_tree(
+                tree,
+                format!("events_shadowed_only_{label}_bd_2dmnn_1.js"),
+            );
+            let error = lower_ir0_to_ir1(&ir0)
+                .expect_err("a shadow-only events use must not confirm the outer require");
+            assert!(
+                matches!(
+                    error,
+                    LoweringPipelineError::AmbientAuthorityViolation { .. }
+                ),
+                "{label} should preserve ambient require denial, got {error:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn events_confirmed_outer_sentinels_stop_at_child_shadows_bd_2dmnn_1() {
+        let ops = lower_script_source_ops(
+            "const events = require('events');\n\
+             const { EventEmitter } = require('events');\n\
+             console.log(events.captureRejections);\n\
+             new EventEmitter();\n\
+             const read = (events) => events.captureRejections;\n\
+             function make() {\n\
+               const EventEmitter = function LocalEmitter() {};\n\
+               return new EventEmitter();\n\
+             }\n",
+            "events_confirmed_outer_child_shadows_bd_2dmnn_1.js",
+        );
+
+        let folded_capture_rejections = count_ops_deep(&ops, &|op| {
+            matches!(
+                op,
+                Ir1Op::LoadLiteral {
+                    value: Ir1Literal::Boolean(false)
+                }
+            )
+        });
+        assert_eq!(folded_capture_rejections, 1);
+        assert_eq!(count_hostcall_deep(&ops, "builtin:EventEmitter"), 1);
+    }
+
+    #[test]
+    fn events_module_sentinel_reaches_unshadowed_nested_body_bd_2dmnn_1() {
+        let ops = lower_script_source_ops(
+            "const events = require('node:events');\n\
+             function captureRejections() { return events.captureRejections; }\n\
+             captureRejections();\n",
+            "events_nested_module_alias_bd_2dmnn_1.js",
+        );
+        assert!(ops_deep_match(&ops, &|op| matches!(
             op,
             Ir1Op::LoadLiteral {
                 value: Ir1Literal::Boolean(false)

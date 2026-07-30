@@ -3134,6 +3134,31 @@ enum FunctionObjectKey {
     Builtin(BuiltinFunctionKind),
 }
 
+#[derive(Debug, Clone)]
+struct CallSetupRegisterSlotSnapshot {
+    index: usize,
+    value: Option<Value>,
+    label: Option<crate::ifc_artifacts::Label>,
+}
+
+#[derive(Debug, Clone)]
+struct CallSetupSnapshot {
+    heap_len: usize,
+    function_prototypes: Option<BTreeMap<FunctionObjectKey, ObjectId>>,
+    call_stack_depth: usize,
+    register_base: usize,
+    ip: usize,
+    registers_len: usize,
+    register_labels_len: usize,
+    callee_register_start: usize,
+    callee_registers: Vec<Value>,
+    callee_register_labels: Vec<crate::ifc_artifacts::Label>,
+    result_register: Option<CallSetupRegisterSlotSnapshot>,
+    async_functions_len: usize,
+    profiling_memory_stats: Option<crate::profiling::MemoryStats>,
+    estimated_memory_bytes: u64,
+}
+
 // ---------------------------------------------------------------------------
 // Promise combinator state (Promise.all / race / allSettled / any)
 // ---------------------------------------------------------------------------
@@ -4884,78 +4909,91 @@ impl InterpreterCore {
         } = setup;
 
         let promise_handle = self.promise_store.create();
-        let async_func_id =
-            u32::try_from(self.async_functions.len()).map_err(|_| InterpreterError::TypeError {
-                expected: "async function table capacity".into(),
-                got: format!("exceeded u32::MAX ({})", self.async_functions.len()),
+        let setup_result = (|| -> Result<(), InterpreterError> {
+            let async_func_id = u32::try_from(self.async_functions.len()).map_err(|_| {
+                InterpreterError::TypeError {
+                    expected: "async function table capacity".into(),
+                    got: format!("exceeded u32::MAX ({})", self.async_functions.len()),
+                }
             })?;
-        self.async_functions.push(AsyncFunctionObject {
-            function_index,
-            closure_index,
-            saved_ip: 0,
-            saved_registers: Vec::new(),
-            saved_register_labels: Vec::new(),
-            saved_register_base: 0,
-            phase: AsyncFunctionPhase::Executing,
-            result_promise: promise_handle.0,
-        });
-        self.write_reg(result_register, Value::Promise(promise_handle.0))?;
+            self.async_functions.push(AsyncFunctionObject {
+                function_index,
+                closure_index,
+                saved_ip: 0,
+                saved_registers: Vec::new(),
+                saved_register_labels: Vec::new(),
+                saved_register_base: 0,
+                phase: AsyncFunctionPhase::Executing,
+                result_promise: promise_handle.0,
+            });
+            self.write_reg(result_register, Value::Promise(promise_handle.0))?;
 
-        let scope_depth = self.scope_chain.depth();
-        let captured_env_bytes = captured_env
-            .as_ref()
-            .map(|env| Self::estimate_scope_chain_bytes(env))
-            .unwrap_or(0);
-        let saved_chain = if captured_env.is_some() {
-            Some(self.snapshot_scope_chain_with_temporary_budget(captured_env_bytes)?)
-        } else {
-            None
-        };
+            let scope_depth = self.scope_chain.depth();
+            let captured_env_bytes = captured_env
+                .as_ref()
+                .map(|env| Self::estimate_scope_chain_bytes(env))
+                .unwrap_or(0);
+            let saved_chain = if captured_env.is_some() {
+                Some(self.snapshot_scope_chain_with_temporary_budget(captured_env_bytes)?)
+            } else {
+                None
+            };
 
-        self.call_stack.push(CallFrame {
-            return_ip: self.ip + 1,
-            return_reg: None,
-            register_base: self.register_base,
-            function_index: Some(function_index),
-            this_value,
-            this_label,
-            new_target_value: Value::Undefined,
-            new_target_label: crate::ifc_artifacts::Label::Public,
-            super_value,
-            super_label,
-            construct_this: None,
-            saved_pending_exception: self.pending_exception.take(),
-            saved_pending_return: self.pending_return.take(),
-            saved_suspended_abrupt_depth: self.suspended_abrupt_completions.len(),
-            saved_finally_mode_depth: self.finally_frames.len(),
-            saved_scope_depth: scope_depth,
-            saved_scope_chain: saved_chain,
-            async_function_id: Some(async_func_id),
-        });
+            self.call_stack.push(CallFrame {
+                return_ip: self.ip + 1,
+                return_reg: None,
+                register_base: self.register_base,
+                function_index: Some(function_index),
+                this_value,
+                this_label,
+                new_target_value: Value::Undefined,
+                new_target_label: crate::ifc_artifacts::Label::Public,
+                super_value,
+                super_label,
+                construct_this: None,
+                saved_pending_exception: self.pending_exception.take(),
+                saved_pending_return: self.pending_return.take(),
+                saved_suspended_abrupt_depth: self.suspended_abrupt_completions.len(),
+                saved_finally_mode_depth: self.finally_frames.len(),
+                saved_scope_depth: scope_depth,
+                saved_scope_chain: saved_chain,
+                async_function_id: Some(async_func_id),
+            });
 
-        if let Some(env) = captured_env {
-            self.scope_chain.frames = env;
-        }
-        if let Err(err) = self.scope_chain.push(self.config.max_scope_depth) {
-            self.rollback_call_setup();
-            return Err(err);
-        }
-        if let Err(err) = self.sync_estimated_memory_bytes() {
-            self.rollback_call_setup();
-            return Err(err);
-        }
-
-        self.register_base += self.config.max_registers as usize;
-        let req_len = self.register_base + self.config.max_registers as usize;
-        self.clear_register_range(self.register_base, req_len);
-        for (index, (value, label)) in arguments.into_iter().enumerate() {
-            let register = index as u32;
-            if register < self.config.max_registers {
-                self.write_reg_with_label(register, value, label)?;
+            if let Some(env) = captured_env {
+                self.scope_chain.frames = env;
             }
-        }
+            if let Err(err) = self.scope_chain.push(self.config.max_scope_depth) {
+                self.rollback_call_setup();
+                return Err(err);
+            }
+            if let Err(err) = self.sync_estimated_memory_bytes() {
+                self.rollback_call_setup();
+                return Err(err);
+            }
 
-        self.ip = function_entry as usize;
+            self.register_base += self.config.max_registers as usize;
+            let req_len = self.register_base + self.config.max_registers as usize;
+            self.clear_register_range(self.register_base, req_len);
+            for (index, (value, label)) in arguments.into_iter().enumerate() {
+                let register = index as u32;
+                if register < self.config.max_registers {
+                    self.write_reg_with_label(register, value, label)?;
+                }
+            }
+
+            self.ip = function_entry as usize;
+            Ok(())
+        })();
+
+        if let Err(error) = setup_result {
+            let rolled_back = self.promise_store.rollback_last_created(promise_handle);
+            debug_assert!(
+                rolled_back,
+                "failed async call setup must leave its fresh Promise rollbackable"
+            );
+            return Err(error);
+        }
         Ok(())
     }
 
@@ -5890,62 +5928,70 @@ impl InterpreterCore {
 
         self.run_pre_call_hook(module, &callee_val, func_idx, &arg_vals)?;
 
-        let scope_depth = self.scope_chain.depth();
-        let captured_env_bytes = captured_env
-            .as_ref()
-            .map(|env| Self::estimate_scope_chain_bytes(env))
-            .unwrap_or(0);
-        let saved_chain = if captured_env.is_some() {
-            Some(self.snapshot_scope_chain_with_temporary_budget(captured_env_bytes)?)
-        } else {
-            None
-        };
-        let super_value = self.method_super_value(&callee_val, &this_value)?;
-        self.call_stack.push(CallFrame {
-            return_ip,
-            return_reg,
-            register_base: self.register_base,
-            function_index: Some(func_idx),
-            this_value,
-            this_label: crate::ifc_artifacts::Label::Public,
-            new_target_value: Value::Undefined,
-            new_target_label: crate::ifc_artifacts::Label::Public,
-            super_value,
-            super_label: crate::ifc_artifacts::Label::Public,
-            construct_this: None,
-            saved_pending_exception: self.pending_exception.take(),
-            saved_pending_return: self.pending_return.take(),
-            saved_suspended_abrupt_depth: self.suspended_abrupt_completions.len(),
-            saved_finally_mode_depth: self.finally_frames.len(),
-            saved_scope_depth: scope_depth,
-            saved_scope_chain: saved_chain,
-            async_function_id: None,
-        });
+        let setup_snapshot = self.snapshot_call_setup(None, false);
+        let setup_result = (|| -> Result<(), InterpreterError> {
+            let scope_depth = self.scope_chain.depth();
+            let captured_env_bytes = captured_env
+                .as_ref()
+                .map(|env| Self::estimate_scope_chain_bytes(env))
+                .unwrap_or(0);
+            let saved_chain = if captured_env.is_some() {
+                Some(self.snapshot_scope_chain_with_temporary_budget(captured_env_bytes)?)
+            } else {
+                None
+            };
+            let super_value = self.method_super_value(&callee_val, &this_value)?;
+            self.call_stack.push(CallFrame {
+                return_ip,
+                return_reg,
+                register_base: self.register_base,
+                function_index: Some(func_idx),
+                this_value,
+                this_label: crate::ifc_artifacts::Label::Public,
+                new_target_value: Value::Undefined,
+                new_target_label: crate::ifc_artifacts::Label::Public,
+                super_value,
+                super_label: crate::ifc_artifacts::Label::Public,
+                construct_this: None,
+                saved_pending_exception: self.pending_exception.take(),
+                saved_pending_return: self.pending_return.take(),
+                saved_suspended_abrupt_depth: self.suspended_abrupt_completions.len(),
+                saved_finally_mode_depth: self.finally_frames.len(),
+                saved_scope_depth: scope_depth,
+                saved_scope_chain: saved_chain,
+                async_function_id: None,
+            });
 
-        if let Some(env) = captured_env {
-            self.scope_chain.frames = env;
-        }
-        if let Err(err) = self.scope_chain.push(self.config.max_scope_depth) {
-            self.rollback_call_setup();
-            return Err(err);
-        }
-        if let Err(err) = self.sync_estimated_memory_bytes() {
-            self.rollback_call_setup();
-            return Err(err);
-        }
-
-        self.register_base += self.config.max_registers as usize;
-        let req_len = self.register_base + self.config.max_registers as usize;
-        self.clear_register_range(self.register_base, req_len);
-
-        for (i, val) in arg_vals.into_iter().enumerate() {
-            let reg = i as u32;
-            if reg < self.config.max_registers {
-                self.write_reg(reg, val)?;
+            if let Some(env) = captured_env {
+                self.scope_chain.frames = env;
             }
-        }
+            if let Err(err) = self.scope_chain.push(self.config.max_scope_depth) {
+                self.rollback_call_setup();
+                return Err(err);
+            }
+            if let Err(err) = self.sync_estimated_memory_bytes() {
+                self.rollback_call_setup();
+                return Err(err);
+            }
 
-        self.ip = func.entry as usize;
+            self.register_base += self.config.max_registers as usize;
+            let req_len = self.register_base + self.config.max_registers as usize;
+            self.clear_register_range(self.register_base, req_len);
+
+            for (i, val) in arg_vals.into_iter().enumerate() {
+                let reg = i as u32;
+                if reg < self.config.max_registers {
+                    self.write_reg(reg, val)?;
+                }
+            }
+
+            self.ip = func.entry as usize;
+            Ok(())
+        })();
+        if let Err(error) = setup_result {
+            self.restore_call_setup(setup_snapshot);
+            return Err(error);
+        }
         Ok(())
     }
 
@@ -6928,33 +6974,40 @@ impl InterpreterCore {
                         }
                         arg_vals.truncate(func.arity as usize);
                         arg_labels.truncate(func.arity as usize);
-                        self.apply_rest_param(
-                            module,
-                            &mut arg_vals,
-                            func.rest_param_index,
-                            func.arity,
-                            args,
-                        )?;
-                        self.apply_rest_param_labels(
-                            &mut arg_labels,
-                            func.rest_param_index,
-                            func.arity,
-                            args,
-                        )?;
-                        self.run_pre_call_hook(module, &callee_val, func_idx, &arg_vals)?;
+                        let setup_snapshot = self.snapshot_call_setup(Some(dst), false);
+                        let setup_result = (|| -> Result<(), InterpreterError> {
+                            self.apply_rest_param(
+                                module,
+                                &mut arg_vals,
+                                func.rest_param_index,
+                                func.arity,
+                                args,
+                            )?;
+                            self.apply_rest_param_labels(
+                                &mut arg_labels,
+                                func.rest_param_index,
+                                func.arity,
+                                args,
+                            )?;
+                            self.run_pre_call_hook(module, &callee_val, func_idx, &arg_vals)?;
 
-                        self.enter_async_function_call(AsyncCallSetup {
-                            function_index: func_idx,
-                            function_entry: func.entry,
-                            closure_index: closure_id,
-                            captured_env,
-                            arguments: arg_vals.into_iter().zip(arg_labels).collect(),
-                            this_value: Value::Undefined,
-                            this_label: crate::ifc_artifacts::Label::Public,
-                            super_value: Value::Undefined,
-                            super_label: callee_label,
-                            result_register: dst,
-                        })?;
+                            self.enter_async_function_call(AsyncCallSetup {
+                                function_index: func_idx,
+                                function_entry: func.entry,
+                                closure_index: closure_id,
+                                captured_env,
+                                arguments: arg_vals.into_iter().zip(arg_labels).collect(),
+                                this_value: Value::Undefined,
+                                this_label: crate::ifc_artifacts::Label::Public,
+                                super_value: Value::Undefined,
+                                super_label: callee_label,
+                                result_register: dst,
+                            })
+                        })();
+                        if let Err(error) = setup_result {
+                            self.restore_call_setup(setup_snapshot);
+                            return Err(error);
+                        }
                         continue;
                     }
 
@@ -7161,107 +7214,119 @@ impl InterpreterCore {
                             }
                             arg_vals.truncate(func.arity as usize);
                             arg_labels.truncate(func.arity as usize);
-                            self.apply_rest_param(
-                                module,
-                                &mut arg_vals,
-                                func.rest_param_index,
-                                func.arity,
-                                args,
-                            )?;
-                            self.apply_rest_param_labels(
-                                &mut arg_labels,
-                                func.rest_param_index,
-                                func.arity,
-                                args,
-                            )?;
-                            self.run_pre_call_hook(module, &callee_val, func_idx, &arg_vals)?;
+                            let setup_snapshot = self.snapshot_call_setup(None, false);
+                            let setup_result = (|| -> Result<(), InterpreterError> {
+                                self.apply_rest_param(
+                                    module,
+                                    &mut arg_vals,
+                                    func.rest_param_index,
+                                    func.arity,
+                                    args,
+                                )?;
+                                self.apply_rest_param_labels(
+                                    &mut arg_labels,
+                                    func.rest_param_index,
+                                    func.arity,
+                                    args,
+                                )?;
+                                self.run_pre_call_hook(module, &callee_val, func_idx, &arg_vals)?;
 
-                            // Push frame. For closure calls, save the
-                            // entire caller scope chain so it can be
-                            // restored on return (the closure replaces
-                            // the chain with its captured environment).
-                            let scope_depth = self.scope_chain.depth();
-                            let captured_env_bytes = captured_env
-                                .as_ref()
-                                .map(|env| Self::estimate_scope_chain_bytes(env))
-                                .unwrap_or(0);
-                            let saved_chain = if captured_env.is_some() {
-                                Some(self.snapshot_scope_chain_with_temporary_budget(
-                                    captured_env_bytes,
-                                )?)
-                            } else {
-                                None
-                            };
-                            // Plain calls do not supply a receiver. Closures inherit the
-                            // defining frame's `this`; non-closure calls use `undefined`.
-                            let (frame_this, frame_this_label) = self.call_stack.last().map_or(
-                                (Value::Undefined, crate::ifc_artifacts::Label::Public),
-                                |frame| (frame.this_value.clone(), frame.this_label.clone()),
-                            );
-                            // Arrow closures inherit `this` from the defining frame.
-                            let (call_this, call_this_label) = if captured_env.is_some() {
-                                (frame_this, frame_this_label)
-                            } else {
-                                (Value::Undefined, crate::ifc_artifacts::Label::Public)
-                            };
-                            let super_value = self
-                                .function_super_value(&callee_val, IR_SUPER_PROTOTYPE_PROPERTY)?;
+                                // Push frame. For closure calls, save the
+                                // entire caller scope chain so it can be
+                                // restored on return (the closure replaces
+                                // the chain with its captured environment).
+                                let scope_depth = self.scope_chain.depth();
+                                let captured_env_bytes = captured_env
+                                    .as_ref()
+                                    .map(|env| Self::estimate_scope_chain_bytes(env))
+                                    .unwrap_or(0);
+                                let saved_chain = if captured_env.is_some() {
+                                    Some(self.snapshot_scope_chain_with_temporary_budget(
+                                        captured_env_bytes,
+                                    )?)
+                                } else {
+                                    None
+                                };
+                                // Plain calls do not supply a receiver. Closures inherit the
+                                // defining frame's `this`; non-closure calls use `undefined`.
+                                let (frame_this, frame_this_label) = self.call_stack.last().map_or(
+                                    (Value::Undefined, crate::ifc_artifacts::Label::Public),
+                                    |frame| (frame.this_value.clone(), frame.this_label.clone()),
+                                );
+                                // Arrow closures inherit `this` from the defining frame.
+                                let (call_this, call_this_label) = if captured_env.is_some() {
+                                    (frame_this, frame_this_label)
+                                } else {
+                                    (Value::Undefined, crate::ifc_artifacts::Label::Public)
+                                };
+                                let super_value = self.function_super_value(
+                                    &callee_val,
+                                    IR_SUPER_PROTOTYPE_PROPERTY,
+                                )?;
 
-                            self.call_stack.push(CallFrame {
-                                return_ip: self.ip + 1,
-                                return_reg: Some(dst),
-                                register_base: self.register_base,
-                                function_index: Some(func_idx),
-                                this_value: call_this,
-                                this_label: call_this_label,
-                                new_target_value: Value::Undefined,
-                                new_target_label: crate::ifc_artifacts::Label::Public,
-                                super_value,
-                                super_label: callee_label,
-                                construct_this: None,
-                                saved_pending_exception: self.pending_exception.take(),
-                                saved_pending_return: self.pending_return.take(),
-                                saved_suspended_abrupt_depth: self
-                                    .suspended_abrupt_completions
-                                    .len(),
-                                saved_finally_mode_depth: self.finally_frames.len(),
-                                saved_scope_depth: scope_depth,
-                                saved_scope_chain: saved_chain,
-                                async_function_id: None,
-                            });
+                                self.call_stack.push(CallFrame {
+                                    return_ip: self.ip + 1,
+                                    return_reg: Some(dst),
+                                    register_base: self.register_base,
+                                    function_index: Some(func_idx),
+                                    this_value: call_this,
+                                    this_label: call_this_label,
+                                    new_target_value: Value::Undefined,
+                                    new_target_label: crate::ifc_artifacts::Label::Public,
+                                    super_value,
+                                    super_label: callee_label,
+                                    construct_this: None,
+                                    saved_pending_exception: self.pending_exception.take(),
+                                    saved_pending_return: self.pending_return.take(),
+                                    saved_suspended_abrupt_depth: self
+                                        .suspended_abrupt_completions
+                                        .len(),
+                                    saved_finally_mode_depth: self.finally_frames.len(),
+                                    saved_scope_depth: scope_depth,
+                                    saved_scope_chain: saved_chain,
+                                    async_function_id: None,
+                                });
 
-                            // If calling a closure, restore its captured environment.
-                            if let Some(env) = captured_env {
-                                self.scope_chain.frames = env;
-                            }
-
-                            // Push a fresh scope for the callee's locals.
-                            if let Err(err) = self.scope_chain.push(self.config.max_scope_depth) {
-                                self.rollback_call_setup();
-                                return Err(err);
-                            }
-                            if let Err(err) = self.sync_estimated_memory_bytes() {
-                                self.rollback_call_setup();
-                                return Err(err);
-                            }
-
-                            self.register_base += self.config.max_registers as usize;
-
-                            // Clear all registers in the new frame to prevent data leakage from previous calls
-                            let req_len = self.register_base + self.config.max_registers as usize;
-                            self.clear_register_range(self.register_base, req_len);
-
-                            // Copy arguments into registers for the callee.
-                            for (i, (val, label)) in
-                                arg_vals.into_iter().zip(arg_labels).enumerate()
-                            {
-                                let reg = i as u32;
-                                if reg < self.config.max_registers {
-                                    self.write_reg_with_label(reg, val, label)?;
+                                // If calling a closure, restore its captured environment.
+                                if let Some(env) = captured_env {
+                                    self.scope_chain.frames = env;
                                 }
-                            }
 
-                            self.ip = func.entry as usize;
+                                // Push a fresh scope for the callee's locals.
+                                if let Err(err) = self.scope_chain.push(self.config.max_scope_depth)
+                                {
+                                    self.rollback_call_setup();
+                                    return Err(err);
+                                }
+                                if let Err(err) = self.sync_estimated_memory_bytes() {
+                                    self.rollback_call_setup();
+                                    return Err(err);
+                                }
+
+                                self.register_base += self.config.max_registers as usize;
+
+                                // Clear all registers in the new frame to prevent data leakage from previous calls
+                                let req_len =
+                                    self.register_base + self.config.max_registers as usize;
+                                self.clear_register_range(self.register_base, req_len);
+
+                                // Copy arguments into registers for the callee.
+                                for (i, (val, label)) in
+                                    arg_vals.into_iter().zip(arg_labels).enumerate()
+                                {
+                                    let reg = i as u32;
+                                    if reg < self.config.max_registers {
+                                        self.write_reg_with_label(reg, val, label)?;
+                                    }
+                                }
+
+                                self.ip = func.entry as usize;
+                                Ok(())
+                            })();
+                            if let Err(error) = setup_result {
+                                self.restore_call_setup(setup_snapshot);
+                                return Err(error);
+                            }
                         }
                         _ => {
                             return Err(InterpreterError::TypeError {
@@ -7489,93 +7554,108 @@ impl InterpreterCore {
                     }
                     arg_vals.truncate(func.arity as usize);
                     arg_labels.truncate(func.arity as usize);
-                    self.apply_rest_param(
-                        module,
-                        &mut arg_vals,
-                        func.rest_param_index,
-                        func.arity,
-                        args,
-                    )?;
-                    self.apply_rest_param_labels(
-                        &mut arg_labels,
-                        func.rest_param_index,
-                        func.arity,
-                        args,
-                    )?;
-                    self.run_pre_call_hook(module, &callee_val, func_idx, &arg_vals)?;
+                    let setup_snapshot = self.snapshot_call_setup(Some(dst), false);
+                    let setup_result = (|| -> Result<bool, InterpreterError> {
+                        self.apply_rest_param(
+                            module,
+                            &mut arg_vals,
+                            func.rest_param_index,
+                            func.arity,
+                            args,
+                        )?;
+                        self.apply_rest_param_labels(
+                            &mut arg_labels,
+                            func.rest_param_index,
+                            func.arity,
+                            args,
+                        )?;
+                        self.run_pre_call_hook(module, &callee_val, func_idx, &arg_vals)?;
 
-                    let super_value = self.method_super_value(&callee_val, &receiver_val)?;
-                    if matches!(&callee_val, Value::AsyncFunction(_)) {
-                        self.enter_async_function_call(AsyncCallSetup {
-                            function_index: func_idx,
-                            function_entry: func.entry,
-                            closure_index: closure_id,
-                            captured_env,
-                            arguments: arg_vals.into_iter().zip(arg_labels).collect(),
+                        let super_value = self.method_super_value(&callee_val, &receiver_val)?;
+                        if matches!(&callee_val, Value::AsyncFunction(_)) {
+                            self.enter_async_function_call(AsyncCallSetup {
+                                function_index: func_idx,
+                                function_entry: func.entry,
+                                closure_index: closure_id,
+                                captured_env,
+                                arguments: arg_vals.into_iter().zip(arg_labels).collect(),
+                                this_value: receiver_val,
+                                this_label: receiver_label,
+                                super_value,
+                                super_label: callee_label,
+                                result_register: dst,
+                            })?;
+                            return Ok(true);
+                        }
+
+                        let scope_depth = self.scope_chain.depth();
+                        let captured_env_bytes = captured_env
+                            .as_ref()
+                            .map(|env| Self::estimate_scope_chain_bytes(env))
+                            .unwrap_or(0);
+                        let saved_chain =
+                            if captured_env.is_some() {
+                                Some(self.snapshot_scope_chain_with_temporary_budget(
+                                    captured_env_bytes,
+                                )?)
+                            } else {
+                                None
+                            };
+                        self.call_stack.push(CallFrame {
+                            return_ip: self.ip + 1,
+                            return_reg: Some(dst),
+                            register_base: self.register_base,
+                            function_index: Some(func_idx),
                             this_value: receiver_val,
                             this_label: receiver_label,
+                            new_target_value: Value::Undefined,
+                            new_target_label: crate::ifc_artifacts::Label::Public,
                             super_value,
                             super_label: callee_label,
-                            result_register: dst,
-                        })?;
-                        continue;
-                    }
+                            construct_this: None,
+                            saved_pending_exception: self.pending_exception.take(),
+                            saved_pending_return: self.pending_return.take(),
+                            saved_suspended_abrupt_depth: self.suspended_abrupt_completions.len(),
+                            saved_finally_mode_depth: self.finally_frames.len(),
+                            saved_scope_depth: scope_depth,
+                            saved_scope_chain: saved_chain,
+                            async_function_id: None,
+                        });
 
-                    let scope_depth = self.scope_chain.depth();
-                    let captured_env_bytes = captured_env
-                        .as_ref()
-                        .map(|env| Self::estimate_scope_chain_bytes(env))
-                        .unwrap_or(0);
-                    let saved_chain = if captured_env.is_some() {
-                        Some(self.snapshot_scope_chain_with_temporary_budget(captured_env_bytes)?)
-                    } else {
-                        None
-                    };
-                    self.call_stack.push(CallFrame {
-                        return_ip: self.ip + 1,
-                        return_reg: Some(dst),
-                        register_base: self.register_base,
-                        function_index: Some(func_idx),
-                        this_value: receiver_val,
-                        this_label: receiver_label,
-                        new_target_value: Value::Undefined,
-                        new_target_label: crate::ifc_artifacts::Label::Public,
-                        super_value,
-                        super_label: callee_label,
-                        construct_this: None,
-                        saved_pending_exception: self.pending_exception.take(),
-                        saved_pending_return: self.pending_return.take(),
-                        saved_suspended_abrupt_depth: self.suspended_abrupt_completions.len(),
-                        saved_finally_mode_depth: self.finally_frames.len(),
-                        saved_scope_depth: scope_depth,
-                        saved_scope_chain: saved_chain,
-                        async_function_id: None,
-                    });
+                        if let Some(env) = captured_env {
+                            self.scope_chain.frames = env;
+                        }
+                        if let Err(err) = self.scope_chain.push(self.config.max_scope_depth) {
+                            self.rollback_call_setup();
+                            return Err(err);
+                        }
+                        if let Err(err) = self.sync_estimated_memory_bytes() {
+                            self.rollback_call_setup();
+                            return Err(err);
+                        }
 
-                    if let Some(env) = captured_env {
-                        self.scope_chain.frames = env;
-                    }
-                    if let Err(err) = self.scope_chain.push(self.config.max_scope_depth) {
-                        self.rollback_call_setup();
-                        return Err(err);
-                    }
-                    if let Err(err) = self.sync_estimated_memory_bytes() {
-                        self.rollback_call_setup();
-                        return Err(err);
-                    }
+                        self.register_base += self.config.max_registers as usize;
+                        let req_len = self.register_base + self.config.max_registers as usize;
+                        self.clear_register_range(self.register_base, req_len);
 
-                    self.register_base += self.config.max_registers as usize;
-                    let req_len = self.register_base + self.config.max_registers as usize;
-                    self.clear_register_range(self.register_base, req_len);
+                        for (i, (val, label)) in arg_vals.into_iter().zip(arg_labels).enumerate() {
+                            let reg = i as u32;
+                            if reg < self.config.max_registers {
+                                self.write_reg_with_label(reg, val, label)?;
+                            }
+                        }
 
-                    for (i, (val, label)) in arg_vals.into_iter().zip(arg_labels).enumerate() {
-                        let reg = i as u32;
-                        if reg < self.config.max_registers {
-                            self.write_reg_with_label(reg, val, label)?;
+                        self.ip = func.entry as usize;
+                        Ok(false)
+                    })();
+                    match setup_result {
+                        Ok(true) => continue,
+                        Ok(false) => {}
+                        Err(error) => {
+                            self.restore_call_setup(setup_snapshot);
+                            return Err(error);
                         }
                     }
-
-                    self.ip = func.entry as usize;
                 }
                 Ir3Instruction::Return { value } => {
                     let return_val = self.read_reg(value)?;
@@ -8324,107 +8404,117 @@ impl InterpreterCore {
                             }
                             arg_vals.truncate(func.arity as usize);
                             arg_labels.truncate(func.arity as usize);
-                            self.apply_rest_param(
-                                module,
-                                &mut arg_vals,
-                                func.rest_param_index,
-                                func.arity,
-                                args,
-                            )?;
-                            self.apply_rest_param_labels(
-                                &mut arg_labels,
-                                func.rest_param_index,
-                                func.arity,
-                                args,
-                            )?;
+                            let setup_snapshot = self.snapshot_call_setup(None, true);
+                            let setup_result = (|| -> Result<(), InterpreterError> {
+                                self.apply_rest_param(
+                                    module,
+                                    &mut arg_vals,
+                                    func.rest_param_index,
+                                    func.arity,
+                                    args,
+                                )?;
+                                self.apply_rest_param_labels(
+                                    &mut arg_labels,
+                                    func.rest_param_index,
+                                    func.arity,
+                                    args,
+                                )?;
 
-                            // Materializing the implicit rest Array is policy-
-                            // guarded. Allocate the constructor receiver only
-                            // after that guard succeeds so a denied rest
-                            // allocation leaves no constructor setup behind.
-                            let prototype = self
-                                .function_prototype_for_value(&callee_val)?
-                                .ok_or_else(|| InterpreterError::TypeError {
-                                    expected: "constructor function".to_string(),
-                                    got: callee_val.type_name().to_string(),
-                                })?;
-                            let this_id = self.alloc_object_with_prototype(Some(prototype))?;
-                            if let Some(this_obj) = self.heap.get_mut(this_id.0 as usize) {
-                                this_obj.constructor_function = Some(func_idx);
-                            }
-                            let this_val = Value::Object(this_id);
-                            self.run_pre_call_hook(module, &callee_val, func_idx, &arg_vals)?;
-
-                            // Push constructor frame with `construct_this`.
-                            let scope_depth = self.scope_chain.depth();
-                            let captured_env_bytes = captured_env
-                                .as_ref()
-                                .map(|env| Self::estimate_scope_chain_bytes(env))
-                                .unwrap_or(0);
-                            let saved_chain = if captured_env.is_some() {
-                                Some(self.snapshot_scope_chain_with_temporary_budget(
-                                    captured_env_bytes,
-                                )?)
-                            } else {
-                                None
-                            };
-                            let super_value = self.function_metadata_property(
-                                &callee_val,
-                                IR_SUPER_CONSTRUCTOR_PROPERTY,
-                            )?;
-                            self.call_stack.push(CallFrame {
-                                return_ip: self.ip + 1,
-                                return_reg: Some(dst),
-                                register_base: self.register_base,
-                                function_index: Some(func_idx),
-                                this_value: this_val.clone(),
-                                this_label: callee_label.clone(),
-                                new_target_value: callee_val.clone(),
-                                new_target_label: callee_label.clone(),
-                                super_value,
-                                super_label: callee_label,
-                                construct_this: Some(this_val.clone()),
-                                saved_pending_exception: self.pending_exception.take(),
-                                saved_pending_return: self.pending_return.take(),
-                                saved_suspended_abrupt_depth: self
-                                    .suspended_abrupt_completions
-                                    .len(),
-                                saved_finally_mode_depth: self.finally_frames.len(),
-                                saved_scope_depth: scope_depth,
-                                saved_scope_chain: saved_chain,
-                                async_function_id: None,
-                            });
-
-                            // If calling a closure, restore its captured environment.
-                            if let Some(env) = captured_env {
-                                self.scope_chain.frames = env;
-                            }
-                            if let Err(err) = self.scope_chain.push(self.config.max_scope_depth) {
-                                self.rollback_call_setup();
-                                return Err(err);
-                            }
-                            if let Err(err) = self.sync_estimated_memory_bytes() {
-                                self.rollback_call_setup();
-                                return Err(err);
-                            }
-
-                            self.register_base += self.config.max_registers as usize;
-                            let req_len = self.register_base + self.config.max_registers as usize;
-                            self.clear_register_range(self.register_base, req_len);
-
-                            // Parameters occupy r0..rN-1, matching deferred
-                            // function lowering. `this` is carried by the call
-                            // frame and recovered through `LoadThis`.
-                            for (i, (val, label)) in
-                                arg_vals.into_iter().zip(arg_labels).enumerate()
-                            {
-                                let reg = i as u32;
-                                if reg < self.config.max_registers {
-                                    self.write_reg_with_label(reg, val, label)?;
+                                // Materializing the implicit rest Array is policy-
+                                // guarded. Allocate the constructor receiver only
+                                // after that guard succeeds so a denied rest
+                                // allocation leaves no constructor setup behind.
+                                let prototype = self
+                                    .function_prototype_for_value(&callee_val)?
+                                    .ok_or_else(|| InterpreterError::TypeError {
+                                        expected: "constructor function".to_string(),
+                                        got: callee_val.type_name().to_string(),
+                                    })?;
+                                let this_id = self.alloc_object_with_prototype(Some(prototype))?;
+                                if let Some(this_obj) = self.heap.get_mut(this_id.0 as usize) {
+                                    this_obj.constructor_function = Some(func_idx);
                                 }
-                            }
+                                let this_val = Value::Object(this_id);
+                                self.run_pre_call_hook(module, &callee_val, func_idx, &arg_vals)?;
 
-                            self.ip = func.entry as usize;
+                                // Push constructor frame with `construct_this`.
+                                let scope_depth = self.scope_chain.depth();
+                                let captured_env_bytes = captured_env
+                                    .as_ref()
+                                    .map(|env| Self::estimate_scope_chain_bytes(env))
+                                    .unwrap_or(0);
+                                let saved_chain = if captured_env.is_some() {
+                                    Some(self.snapshot_scope_chain_with_temporary_budget(
+                                        captured_env_bytes,
+                                    )?)
+                                } else {
+                                    None
+                                };
+                                let super_value = self.function_metadata_property(
+                                    &callee_val,
+                                    IR_SUPER_CONSTRUCTOR_PROPERTY,
+                                )?;
+                                self.call_stack.push(CallFrame {
+                                    return_ip: self.ip + 1,
+                                    return_reg: Some(dst),
+                                    register_base: self.register_base,
+                                    function_index: Some(func_idx),
+                                    this_value: this_val.clone(),
+                                    this_label: callee_label.clone(),
+                                    new_target_value: callee_val.clone(),
+                                    new_target_label: callee_label.clone(),
+                                    super_value,
+                                    super_label: callee_label,
+                                    construct_this: Some(this_val.clone()),
+                                    saved_pending_exception: self.pending_exception.take(),
+                                    saved_pending_return: self.pending_return.take(),
+                                    saved_suspended_abrupt_depth: self
+                                        .suspended_abrupt_completions
+                                        .len(),
+                                    saved_finally_mode_depth: self.finally_frames.len(),
+                                    saved_scope_depth: scope_depth,
+                                    saved_scope_chain: saved_chain,
+                                    async_function_id: None,
+                                });
+
+                                // If calling a closure, restore its captured environment.
+                                if let Some(env) = captured_env {
+                                    self.scope_chain.frames = env;
+                                }
+                                if let Err(err) = self.scope_chain.push(self.config.max_scope_depth)
+                                {
+                                    self.rollback_call_setup();
+                                    return Err(err);
+                                }
+                                if let Err(err) = self.sync_estimated_memory_bytes() {
+                                    self.rollback_call_setup();
+                                    return Err(err);
+                                }
+
+                                self.register_base += self.config.max_registers as usize;
+                                let req_len =
+                                    self.register_base + self.config.max_registers as usize;
+                                self.clear_register_range(self.register_base, req_len);
+
+                                // Parameters occupy r0..rN-1, matching deferred
+                                // function lowering. `this` is carried by the call
+                                // frame and recovered through `LoadThis`.
+                                for (i, (val, label)) in
+                                    arg_vals.into_iter().zip(arg_labels).enumerate()
+                                {
+                                    let reg = i as u32;
+                                    if reg < self.config.max_registers {
+                                        self.write_reg_with_label(reg, val, label)?;
+                                    }
+                                }
+
+                                self.ip = func.entry as usize;
+                                Ok(())
+                            })();
+                            if let Err(error) = setup_result {
+                                self.restore_call_setup(setup_snapshot);
+                                return Err(error);
+                            }
                         }
                         _ => {
                             return Err(InterpreterError::TypeError {
@@ -12032,70 +12122,80 @@ impl InterpreterCore {
         let mut arg_vals = Vec::new();
         let mut arg_labels = Vec::new();
         let empty_args = RegRange { start: 0, count: 0 };
-        self.apply_rest_param(
-            module,
-            &mut arg_vals,
-            func.rest_param_index,
-            func.arity,
-            empty_args,
-        )?;
-        self.apply_rest_param_labels(
-            &mut arg_labels,
-            func.rest_param_index,
-            func.arity,
-            empty_args,
-        )?;
-        self.run_pre_call_hook(module, &callee, func_idx, &arg_vals)?;
-
         let initial_call_depth = self.call_stack.len();
         let saved_ip = self.ip;
         let saved_return_reg = self.read_reg(0).unwrap_or(Value::Undefined);
-        let scope_depth = self.scope_chain.depth();
-        let captured_env_bytes = Self::estimate_scope_chain_bytes(&captured_env);
-        let saved_chain = self.snapshot_scope_chain_with_temporary_budget(captured_env_bytes)?;
+        let setup_snapshot = self.snapshot_call_setup(None, false);
+        let setup_result = (|| -> Result<(), InterpreterError> {
+            self.apply_rest_param(
+                module,
+                &mut arg_vals,
+                func.rest_param_index,
+                func.arity,
+                empty_args,
+            )?;
+            self.apply_rest_param_labels(
+                &mut arg_labels,
+                func.rest_param_index,
+                func.arity,
+                empty_args,
+            )?;
+            self.run_pre_call_hook(module, &callee, func_idx, &arg_vals)?;
 
-        self.call_stack.push(CallFrame {
-            return_ip: module.instructions.len(),
-            return_reg: Some(0),
-            register_base: self.register_base,
-            function_index: Some(func_idx),
-            this_value: Value::Undefined,
-            this_label: crate::ifc_artifacts::Label::Public,
-            new_target_value: Value::Undefined,
-            new_target_label: crate::ifc_artifacts::Label::Public,
-            super_value: self.function_super_value(&callee, IR_SUPER_PROTOTYPE_PROPERTY)?,
-            super_label: crate::ifc_artifacts::Label::Public,
-            construct_this: None,
-            saved_pending_exception: self.pending_exception.take(),
-            saved_pending_return: self.pending_return.take(),
-            saved_suspended_abrupt_depth: self.suspended_abrupt_completions.len(),
-            saved_finally_mode_depth: self.finally_frames.len(),
-            saved_scope_depth: scope_depth,
-            saved_scope_chain: Some(saved_chain),
-            async_function_id: None,
-        });
+            let scope_depth = self.scope_chain.depth();
+            let captured_env_bytes = Self::estimate_scope_chain_bytes(&captured_env);
+            let saved_chain =
+                self.snapshot_scope_chain_with_temporary_budget(captured_env_bytes)?;
 
-        self.scope_chain.frames = captured_env;
-        if let Err(err) = self.scope_chain.push(self.config.max_scope_depth) {
-            self.rollback_call_setup();
-            return Err(err);
-        }
-        if let Err(err) = self.sync_estimated_memory_bytes() {
-            self.rollback_call_setup();
-            return Err(err);
-        }
+            self.call_stack.push(CallFrame {
+                return_ip: module.instructions.len(),
+                return_reg: Some(0),
+                register_base: self.register_base,
+                function_index: Some(func_idx),
+                this_value: Value::Undefined,
+                this_label: crate::ifc_artifacts::Label::Public,
+                new_target_value: Value::Undefined,
+                new_target_label: crate::ifc_artifacts::Label::Public,
+                super_value: self.function_super_value(&callee, IR_SUPER_PROTOTYPE_PROPERTY)?,
+                super_label: crate::ifc_artifacts::Label::Public,
+                construct_this: None,
+                saved_pending_exception: self.pending_exception.take(),
+                saved_pending_return: self.pending_return.take(),
+                saved_suspended_abrupt_depth: self.suspended_abrupt_completions.len(),
+                saved_finally_mode_depth: self.finally_frames.len(),
+                saved_scope_depth: scope_depth,
+                saved_scope_chain: Some(saved_chain),
+                async_function_id: None,
+            });
 
-        self.register_base += self.config.max_registers as usize;
-        let req_len = self.register_base + self.config.max_registers as usize;
-        self.clear_register_range(self.register_base, req_len);
-        for (index, (value, label)) in arg_vals.into_iter().zip(arg_labels).enumerate() {
-            let reg = index as u32;
-            if reg < self.config.max_registers {
-                self.write_reg_with_label(reg, value, label)?;
+            self.scope_chain.frames = captured_env;
+            if let Err(err) = self.scope_chain.push(self.config.max_scope_depth) {
+                self.rollback_call_setup();
+                return Err(err);
             }
+            if let Err(err) = self.sync_estimated_memory_bytes() {
+                self.rollback_call_setup();
+                return Err(err);
+            }
+
+            self.register_base += self.config.max_registers as usize;
+            let req_len = self.register_base + self.config.max_registers as usize;
+            self.clear_register_range(self.register_base, req_len);
+            for (index, (value, label)) in arg_vals.into_iter().zip(arg_labels).enumerate() {
+                let reg = index as u32;
+                if reg < self.config.max_registers {
+                    self.write_reg_with_label(reg, value, label)?;
+                }
+            }
+
+            self.ip = func.entry as usize;
+            Ok(())
+        })();
+        if let Err(error) = setup_result {
+            self.restore_call_setup(setup_snapshot);
+            return Err(error);
         }
 
-        self.ip = func.entry as usize;
         let result = self.run_loop(module);
         if self.call_stack.len() > initial_call_depth {
             let (restored_pending_exception, restored_pending_return) =
@@ -14775,8 +14875,121 @@ impl InterpreterCore {
         Ok(self.scope_chain.snapshot())
     }
 
+    fn snapshot_call_setup(
+        &self,
+        result_register: Option<u32>,
+        capture_function_prototypes: bool,
+    ) -> CallSetupSnapshot {
+        let frame_width = self.config.max_registers as usize;
+        let callee_register_start = self.register_base.saturating_add(frame_width);
+        let callee_register_end = callee_register_start.saturating_add(frame_width);
+        let saved_register_end = callee_register_end.min(self.registers.len());
+        let saved_label_end = callee_register_end.min(self.register_labels.len());
+        let callee_registers = if callee_register_start < saved_register_end {
+            self.registers[callee_register_start..saved_register_end].to_vec()
+        } else {
+            Vec::new()
+        };
+        let callee_register_labels = if callee_register_start < saved_label_end {
+            self.register_labels[callee_register_start..saved_label_end].to_vec()
+        } else {
+            Vec::new()
+        };
+        let result_register = result_register
+            .filter(|register| *register < self.config.max_registers)
+            .map(|register| {
+                let index = self.register_base.saturating_add(register as usize);
+                CallSetupRegisterSlotSnapshot {
+                    index,
+                    value: self.registers.get(index).cloned(),
+                    label: self.register_labels.get(index).cloned(),
+                }
+            });
+
+        CallSetupSnapshot {
+            heap_len: self.heap.len(),
+            function_prototypes: capture_function_prototypes
+                .then(|| self.function_prototypes.clone()),
+            call_stack_depth: self.call_stack.len(),
+            register_base: self.register_base,
+            ip: self.ip,
+            registers_len: self.registers.len(),
+            register_labels_len: self.register_labels.len(),
+            callee_register_start,
+            callee_registers,
+            callee_register_labels,
+            result_register,
+            async_functions_len: self.async_functions.len(),
+            profiling_memory_stats: self
+                .profiling_data
+                .as_ref()
+                .map(crate::profiling::Profiler::memory_stats_snapshot),
+            estimated_memory_bytes: self.estimated_memory_bytes,
+        }
+    }
+
+    fn restore_call_setup(&mut self, snapshot: CallSetupSnapshot) {
+        while self.call_stack.len() > snapshot.call_stack_depth {
+            self.rollback_call_setup();
+        }
+        debug_assert_eq!(self.call_stack.len(), snapshot.call_stack_depth);
+        self.register_base = snapshot.register_base;
+        self.ip = snapshot.ip;
+
+        if self.registers.len() < snapshot.registers_len {
+            self.registers
+                .resize(snapshot.registers_len, Value::Undefined);
+        }
+        if !snapshot.callee_registers.is_empty() {
+            let end = snapshot
+                .callee_register_start
+                .saturating_add(snapshot.callee_registers.len());
+            self.registers[snapshot.callee_register_start..end]
+                .clone_from_slice(&snapshot.callee_registers);
+        }
+        self.registers.truncate(snapshot.registers_len);
+
+        if self.register_labels.len() < snapshot.register_labels_len {
+            self.register_labels.resize(
+                snapshot.register_labels_len,
+                crate::ifc_artifacts::Label::Public,
+            );
+        }
+        if !snapshot.callee_register_labels.is_empty() {
+            let end = snapshot
+                .callee_register_start
+                .saturating_add(snapshot.callee_register_labels.len());
+            self.register_labels[snapshot.callee_register_start..end]
+                .clone_from_slice(&snapshot.callee_register_labels);
+        }
+        self.register_labels.truncate(snapshot.register_labels_len);
+
+        if let Some(result_register) = snapshot.result_register {
+            if let Some(value) = result_register.value {
+                self.registers[result_register.index] = value;
+            }
+            if let Some(label) = result_register.label {
+                self.register_labels[result_register.index] = label;
+            }
+        }
+
+        self.async_functions.truncate(snapshot.async_functions_len);
+        self.heap.truncate(snapshot.heap_len);
+        if let Some(function_prototypes) = snapshot.function_prototypes {
+            self.function_prototypes = function_prototypes;
+        }
+        if let (Some(profiler), Some(memory_stats)) =
+            (&mut self.profiling_data, snapshot.profiling_memory_stats)
+        {
+            profiler.restore_memory_stats(memory_stats);
+        }
+
+        self.estimated_memory_bytes = snapshot.estimated_memory_bytes;
+    }
+
     fn rollback_call_setup(&mut self) {
         if let Some(frame) = self.call_stack.pop() {
+            self.register_base = frame.register_base;
             self.pending_exception = frame.saved_pending_exception;
             self.pending_return = frame.saved_pending_return;
             self.suspended_abrupt_completions
@@ -18884,6 +19097,13 @@ mod tests {
             }
         }
 
+        fn with_call_action(action: HookAction) -> Self {
+            Self {
+                call_action: action,
+                ..Self::allow_all()
+            }
+        }
+
         fn records(&self) -> Vec<HookRecord> {
             self.records.lock().unwrap().clone()
         }
@@ -21649,6 +21869,433 @@ mod tests {
              }\
              unpack(secret_input);",
         );
+    }
+
+    #[derive(Debug, Clone, Copy)]
+    enum TransactionalCallKindBdUr3tk12 {
+        Call,
+        AsyncCall,
+        CallMethod,
+        AsyncCallMethod,
+        Construct,
+    }
+
+    impl TransactionalCallKindBdUr3tk12 {
+        fn is_async(self) -> bool {
+            matches!(self, Self::AsyncCall | Self::AsyncCallMethod)
+        }
+
+        fn is_method(self) -> bool {
+            matches!(self, Self::CallMethod | Self::AsyncCallMethod)
+        }
+    }
+
+    #[derive(Debug)]
+    struct CallSetupStateBdUr3tk12 {
+        execution_seed: ExecutionSeed,
+        promise_store: serde_json::Value,
+        active_timers: serde_json::Value,
+        next_timer_id: u32,
+        async_functions_len: usize,
+        closures_len: usize,
+        call_stack_len: usize,
+        scope_depth: usize,
+        register_base: usize,
+        ip: usize,
+        pending_exception: Option<LabeledException>,
+        pending_return: Option<LabeledReturn>,
+        profiling_memory_stats: Option<serde_json::Value>,
+        estimated_memory_bytes: u64,
+    }
+
+    fn capture_call_setup_state_bd_ur3tk_12(core: &InterpreterCore) -> CallSetupStateBdUr3tk12 {
+        CallSetupStateBdUr3tk12 {
+            execution_seed: core.capture_execution_seed(),
+            promise_store: serde_json::to_value(&core.promise_store)
+                .expect("PromiseStore should serialize for replay comparison"),
+            active_timers: serde_json::to_value(&core.active_timers)
+                .expect("active timers should serialize for replay comparison"),
+            next_timer_id: core.next_timer_id,
+            async_functions_len: core.async_functions.len(),
+            closures_len: core.closures.len(),
+            call_stack_len: core.call_stack.len(),
+            scope_depth: core.scope_chain.depth(),
+            register_base: core.register_base,
+            ip: core.ip,
+            pending_exception: core.pending_exception.clone(),
+            pending_return: core.pending_return.clone(),
+            profiling_memory_stats: core.profiling_data.as_ref().map(|profiler| {
+                serde_json::to_value(profiler.memory_stats_snapshot())
+                    .expect("profiling memory statistics should serialize")
+            }),
+            estimated_memory_bytes: core.estimated_memory_bytes,
+        }
+    }
+
+    fn assert_call_setup_state_bd_ur3tk_12(
+        core: &InterpreterCore,
+        expected: &CallSetupStateBdUr3tk12,
+    ) {
+        assert_eq!(core.capture_execution_seed(), expected.execution_seed);
+        assert_eq!(
+            serde_json::to_value(&core.promise_store)
+                .expect("PromiseStore should serialize after refusal"),
+            expected.promise_store
+        );
+        assert_eq!(
+            serde_json::to_value(&core.active_timers)
+                .expect("active timers should serialize after refusal"),
+            expected.active_timers
+        );
+        assert_eq!(core.next_timer_id, expected.next_timer_id);
+        assert_eq!(core.async_functions.len(), expected.async_functions_len);
+        assert_eq!(core.closures.len(), expected.closures_len);
+        assert_eq!(core.call_stack.len(), expected.call_stack_len);
+        assert_eq!(core.scope_chain.depth(), expected.scope_depth);
+        assert_eq!(core.register_base, expected.register_base);
+        assert_eq!(core.ip, expected.ip);
+        assert_eq!(core.pending_exception, expected.pending_exception);
+        assert_eq!(core.pending_return, expected.pending_return);
+        assert_eq!(
+            core.profiling_data.as_ref().map(|profiler| {
+                serde_json::to_value(profiler.memory_stats_snapshot())
+                    .expect("profiling memory statistics should serialize after refusal")
+            }),
+            expected.profiling_memory_stats
+        );
+        assert_eq!(core.estimated_memory_bytes, expected.estimated_memory_bytes);
+        assert_eq!(
+            core.estimated_memory_bytes,
+            core.recompute_estimated_memory_bytes(),
+            "rollback must leave eager and recomputed accounting equal"
+        );
+    }
+
+    fn transactional_call_module_bd_ur3tk_12(kind: TransactionalCallKindBdUr3tk12) -> Ir3Module {
+        let call = match kind {
+            TransactionalCallKindBdUr3tk12::Call | TransactionalCallKindBdUr3tk12::AsyncCall => {
+                Ir3Instruction::Call {
+                    callee: 0,
+                    args: RegRange { start: 1, count: 2 },
+                    dst: 4,
+                }
+            }
+            TransactionalCallKindBdUr3tk12::CallMethod
+            | TransactionalCallKindBdUr3tk12::AsyncCallMethod => Ir3Instruction::CallMethod {
+                receiver: 5,
+                callee: 0,
+                args: RegRange { start: 1, count: 2 },
+                dst: 4,
+            },
+            TransactionalCallKindBdUr3tk12::Construct => Ir3Instruction::Construct {
+                callee: 0,
+                args: RegRange { start: 1, count: 2 },
+                dst: 4,
+            },
+        };
+        let body_return = if kind.is_async() {
+            Ir3Instruction::AsyncReturn { value_reg: 0 }
+        } else {
+            Ir3Instruction::Return { value: 0 }
+        };
+        test_module_with_functions(
+            vec![call, Ir3Instruction::Halt, body_return],
+            vec![Ir3FunctionDesc {
+                entry: 2,
+                arity: 2,
+                frame_size: 2,
+                name: Some(format!("transactional_{kind:?}_bd_ur3tk_12")),
+                is_generator: false,
+                rest_param_index: Some(1),
+            }],
+        )
+    }
+
+    fn transactional_call_core_bd_ur3tk_12(
+        kind: TransactionalCallKindBdUr3tk12,
+        max_scope_depth: u32,
+    ) -> InterpreterCore {
+        let mut config = test_quickjs_config();
+        config.max_scope_depth = max_scope_depth;
+        let mut core = InterpreterCore::new(config, format!("transactional-{kind:?}"));
+        core.enable_profiling(crate::profiling::ProfilingConfig::default());
+        if kind.is_async() {
+            core.closures.push(ClosureValue {
+                function_index: 0,
+                captured_env: core.scope_chain.snapshot(),
+            });
+            core.registers[0] = Value::AsyncFunction(0);
+        } else {
+            core.registers[0] = Value::Function(0);
+        }
+        core.registers[1] = Value::Int(10);
+        core.registers[2] = Value::str("rest-tail");
+        core.registers[4] = Value::str("destination-sentinel");
+        core.register_labels[4] = crate::ifc_artifacts::Label::Secret;
+        if kind.is_method() {
+            core.registers[5] = Value::str("receiver");
+            core.register_labels[5] = crate::ifc_artifacts::Label::Confidential;
+        }
+        core.pending_return = Some(LabeledReturn {
+            value: Value::str("pending-return"),
+            label: crate::ifc_artifacts::Label::TopSecret,
+        });
+        core.sync_estimated_memory_bytes()
+            .expect("seed call state should fit its initial budget");
+        core
+    }
+
+    fn assert_materialized_rest_hook_records_bd_ur3tk_12(hook: &RecordingHook) {
+        let records = hook.records_without_startup_module_record();
+        assert_eq!(records.len(), 2);
+        assert!(matches!(
+            records.first(),
+            Some(HookRecord::Allocation {
+                kind: AllocKind::Array,
+                size_hint: 1,
+                ..
+            })
+        ));
+        let Some(HookRecord::Call { args, .. }) = records.get(1) else {
+            panic!("pre-call hook must observe the materialized rest carrier");
+        };
+        assert_eq!(args.first(), Some(&Value::Int(10)));
+        assert!(matches!(args.get(1), Some(Value::Object(_))));
+    }
+
+    #[test]
+    fn denied_implicit_call_setup_is_transactional_bd_ur3tk_12() {
+        for kind in [
+            TransactionalCallKindBdUr3tk12::Call,
+            TransactionalCallKindBdUr3tk12::AsyncCall,
+            TransactionalCallKindBdUr3tk12::CallMethod,
+            TransactionalCallKindBdUr3tk12::AsyncCallMethod,
+            TransactionalCallKindBdUr3tk12::Construct,
+        ] {
+            let module = transactional_call_module_bd_ur3tk_12(kind);
+            let hook = Arc::new(RecordingHook::with_call_action(HookAction::Terminate(
+                format!("{kind:?} denied"),
+            )));
+            let mut core = transactional_call_core_bd_ur3tk_12(kind, 100);
+            core.set_hook(hook.clone());
+            let before = capture_call_setup_state_bd_ur3tk_12(&core);
+
+            let error = core
+                .run_loop(&module)
+                .expect_err("pre-call denial must refuse the entire setup transaction");
+
+            assert!(matches!(
+                error,
+                InterpreterError::ContainmentActionRequested { action, .. }
+                    if action == "terminate"
+            ));
+            assert_call_setup_state_bd_ur3tk_12(&core, &before);
+            assert_materialized_rest_hook_records_bd_ur3tk_12(&hook);
+        }
+    }
+
+    #[test]
+    fn scope_refused_call_setup_is_transactional_bd_ur3tk_12() {
+        for kind in [
+            TransactionalCallKindBdUr3tk12::Call,
+            TransactionalCallKindBdUr3tk12::AsyncCall,
+            TransactionalCallKindBdUr3tk12::CallMethod,
+            TransactionalCallKindBdUr3tk12::AsyncCallMethod,
+            TransactionalCallKindBdUr3tk12::Construct,
+        ] {
+            let module = transactional_call_module_bd_ur3tk_12(kind);
+            let hook = Arc::new(RecordingHook::allow_all());
+            let mut core = transactional_call_core_bd_ur3tk_12(kind, 1);
+            core.set_hook(hook.clone());
+            let before = capture_call_setup_state_bd_ur3tk_12(&core);
+
+            let error = core
+                .run_loop(&module)
+                .expect_err("callee scope refusal must roll back the entire setup");
+
+            assert!(matches!(error, InterpreterError::ScopeDepthExceeded { .. }));
+            assert_call_setup_state_bd_ur3tk_12(&core, &before);
+            assert_materialized_rest_hook_records_bd_ur3tk_12(&hook);
+        }
+    }
+
+    fn async_memory_failure_module_bd_ur3tk_12(method: bool) -> Ir3Module {
+        let call = if method {
+            Ir3Instruction::CallMethod {
+                receiver: 5,
+                callee: 0,
+                args: RegRange { start: 1, count: 1 },
+                dst: 4,
+            }
+        } else {
+            Ir3Instruction::Call {
+                callee: 0,
+                args: RegRange { start: 1, count: 1 },
+                dst: 4,
+            }
+        };
+        test_module_with_functions(
+            vec![
+                call,
+                Ir3Instruction::Halt,
+                Ir3Instruction::AsyncReturn { value_reg: 0 },
+            ],
+            vec![Ir3FunctionDesc {
+                entry: 2,
+                arity: 1,
+                frame_size: 1,
+                name: Some(format!("async_memory_failure_method_{method}_bd_ur3tk_12")),
+                is_generator: false,
+                rest_param_index: None,
+            }],
+        )
+    }
+
+    fn async_memory_failure_core_bd_ur3tk_12(method: bool) -> InterpreterCore {
+        let mut core = InterpreterCore::new(
+            test_quickjs_config(),
+            format!("async-memory-failure-method-{method}"),
+        );
+        core.closures.push(ClosureValue {
+            function_index: 0,
+            captured_env: core.scope_chain.snapshot(),
+        });
+        core.registers[0] = Value::AsyncFunction(0);
+        core.registers[1] = Value::str("duplicated-argument".repeat(64));
+        core.registers[4] = Value::str("destination-sentinel");
+        core.register_labels[4] = crate::ifc_artifacts::Label::Secret;
+        if method {
+            core.registers[5] = Value::str("method-receiver");
+            core.register_labels[5] = crate::ifc_artifacts::Label::Confidential;
+        }
+        core.sync_estimated_memory_bytes()
+            .expect("seed async call state should fit");
+        core
+    }
+
+    fn async_scope_sync_ceiling_bd_ur3tk_12(method: bool) -> u64 {
+        let mut calibration = async_memory_failure_core_bd_ur3tk_12(method);
+        let captured_env = calibration.scope_chain.snapshot();
+        calibration
+            .enter_async_function_call(AsyncCallSetup {
+                function_index: 0,
+                function_entry: 2,
+                closure_index: Some(0),
+                captured_env: Some(captured_env),
+                arguments: Vec::new(),
+                this_value: if method {
+                    Value::str("method-receiver")
+                } else {
+                    Value::Undefined
+                },
+                this_label: if method {
+                    crate::ifc_artifacts::Label::Confidential
+                } else {
+                    crate::ifc_artifacts::Label::Public
+                },
+                super_value: Value::Undefined,
+                super_label: crate::ifc_artifacts::Label::Public,
+                result_register: 4,
+            })
+            .expect("unbounded calibration setup should reach the argument-copy boundary");
+        calibration.estimated_memory_bytes
+    }
+
+    #[test]
+    fn async_memory_and_argument_refusals_restore_plain_and_method_setup_bd_ur3tk_12() {
+        for method in [false, true] {
+            let module = async_memory_failure_module_bd_ur3tk_12(method);
+            let scope_sync_ceiling = async_scope_sync_ceiling_bd_ur3tk_12(method);
+
+            let mut scope_refused = async_memory_failure_core_bd_ur3tk_12(method);
+            scope_refused.config.max_total_memory_bytes = scope_sync_ceiling.saturating_sub(1);
+            let before_scope = capture_call_setup_state_bd_ur3tk_12(&scope_refused);
+            let scope_error = scope_refused
+                .run_loop(&module)
+                .expect_err("one byte below the frame/scope estimate must refuse setup");
+            assert!(matches!(
+                scope_error,
+                InterpreterError::MemoryBudgetExceeded { .. }
+            ));
+            assert_call_setup_state_bd_ur3tk_12(&scope_refused, &before_scope);
+
+            let mut argument_refused = async_memory_failure_core_bd_ur3tk_12(method);
+            argument_refused.config.max_total_memory_bytes = scope_sync_ceiling;
+            let before_argument = capture_call_setup_state_bd_ur3tk_12(&argument_refused);
+            let argument_error = argument_refused.run_loop(&module).expect_err(
+                "argument copy must refuse after frame/scope setup reaches its ceiling",
+            );
+            assert!(matches!(
+                argument_error,
+                InterpreterError::MemoryBudgetExceeded { .. }
+            ));
+            assert_call_setup_state_bd_ur3tk_12(&argument_refused, &before_argument);
+        }
+    }
+
+    #[test]
+    fn timer_callback_refusals_restore_rest_and_frame_setup_bd_ur3tk_12() {
+        for (call_action, max_scope_depth) in [
+            (
+                HookAction::Terminate("timer callback denied".to_string()),
+                100,
+            ),
+            (HookAction::Allow, 1),
+        ] {
+            let module = test_module_with_functions(
+                vec![Ir3Instruction::Halt],
+                vec![Ir3FunctionDesc {
+                    entry: 0,
+                    arity: 1,
+                    frame_size: 1,
+                    name: Some("transactional_timer_callback_bd_ur3tk_12".to_string()),
+                    is_generator: false,
+                    rest_param_index: Some(0),
+                }],
+            );
+            let mut config = test_quickjs_config();
+            config.max_scope_depth = max_scope_depth;
+            let mut core = InterpreterCore::new(config, "transactional-timer-callback");
+            core.enable_profiling(crate::profiling::ProfilingConfig::default());
+            core.closures.push(ClosureValue {
+                function_index: 0,
+                captured_env: core.scope_chain.snapshot(),
+            });
+            core.sync_estimated_memory_bytes()
+                .expect("seed timer callback state should fit");
+            let hook = Arc::new(RecordingHook::with_call_action(call_action.clone()));
+            core.set_hook(hook.clone());
+            let before = capture_call_setup_state_bd_ur3tk_12(&core);
+
+            let error = core
+                .execute_timer_closure(&module, 0)
+                .expect_err("timer callback setup refusal must remain transactional");
+
+            match call_action {
+                HookAction::Terminate(_) => assert!(matches!(
+                    error,
+                    InterpreterError::ContainmentActionRequested { action, .. }
+                        if action == "terminate"
+                )),
+                HookAction::Allow => {
+                    assert!(matches!(error, InterpreterError::ScopeDepthExceeded { .. }))
+                }
+                _ => unreachable!("test matrix uses only termination and scope refusal"),
+            }
+            assert_call_setup_state_bd_ur3tk_12(&core, &before);
+            let records = hook.records_without_startup_module_record();
+            assert!(matches!(
+                records.as_slice(),
+                [
+                    HookRecord::Allocation {
+                        kind: AllocKind::Array,
+                        size_hint: 0,
+                        ..
+                    },
+                    HookRecord::Call { args, .. }
+                ] if matches!(args.first(), Some(Value::Object(_)))
+            ));
+        }
     }
 
     fn assert_rest_array_result_bd_ur3tk_9(

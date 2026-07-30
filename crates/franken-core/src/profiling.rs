@@ -202,6 +202,14 @@ impl Profiler {
         self.memory_stats.total_bytes_allocated += size_bytes;
     }
 
+    pub(crate) fn memory_stats_snapshot(&self) -> MemoryStats {
+        self.memory_stats.clone()
+    }
+
+    pub(crate) fn restore_memory_stats(&mut self, snapshot: MemoryStats) {
+        self.memory_stats = snapshot;
+    }
+
     /// Record garbage collection.
     pub fn record_gc_cycle(&mut self, duration: Duration) {
         if !self.config.enable_memory_profiling {

@@ -397,12 +397,13 @@ pub const SANDBOXED_HOST_IO_NETWORK_TIMEOUT: Duration = Duration::from_secs(10);
 /// * **Capability-checked** — the request's [`HostIoRequest::required_capability`]
 ///   must be present in `granted`, else [`HostIoError::CapabilityMissing`]
 ///   (fail-closed; no I/O is attempted).
-/// * **Path-confined** — guest paths are interpreted relative to `root`. Empty
-///   paths, NUL bytes, backslashes, absolute/rooted paths, and traversal (`..`)
-///   are rejected lexically. Mutations are rooted at a held directory
-///   descriptor and use descriptor-relative, no-follow operations, so a
-///   concurrent pathname or symlink swap cannot redirect them outside the
-///   sandbox. Read-only operations separately canonicalize and re-check paths.
+/// * **Path-confined** — guest paths are interpreted relative to `root`, with a
+///   leading slash denoting the guest's virtual root rather than the host root.
+///   Empty paths, NUL bytes, backslashes, host prefixes, and traversal (`..`) are
+///   rejected lexically. Mutations are rooted at a held directory descriptor
+///   and use descriptor-relative, no-follow operations, so a concurrent
+///   pathname or symlink swap cannot redirect them outside the sandbox.
+///   Read-only operations separately canonicalize and re-check paths.
 /// * **Bounded** — reads and writes above `max_bytes` fail closed, defending
 ///   against parser-bomb / OOM inputs (including a file that grows between
 ///   `stat` and `read`).
@@ -592,10 +593,10 @@ impl SandboxedHostIo {
         &self.root
     }
 
-    /// Lexically resolve a guest-supplied path to an absolute path under `root`,
-    /// rejecting anything that could escape the sandbox. Does not touch the
-    /// filesystem; callers additionally re-check the canonicalized real path to
-    /// defeat symlink escapes.
+    /// Lexically resolve a guest-supplied path to an absolute path under `root`.
+    /// A leading slash denotes the guest's virtual root; it never selects the
+    /// host filesystem root. Does not touch the filesystem; callers additionally
+    /// re-check the canonicalized real path to defeat symlink escapes.
     fn confine(&self, raw: &str) -> Result<PathBuf, HostIoError> {
         if raw.is_empty() {
             return Err(HostIoError::SandboxViolation {
@@ -612,23 +613,24 @@ impl SandboxedHostIo {
                 detail: "path contains a backslash".to_string(),
             });
         }
-        let candidate = Path::new(raw);
-        for component in candidate.components() {
+        let mut relative = PathBuf::new();
+        for component in Path::new(raw).components() {
             match component {
-                Component::Normal(_) | Component::CurDir => {}
+                Component::Normal(part) => relative.push(part),
+                Component::CurDir | Component::RootDir => {}
                 Component::ParentDir => {
                     return Err(HostIoError::SandboxViolation {
                         detail: format!("path traversal ('..') is not permitted: {raw}"),
                     });
                 }
-                Component::RootDir | Component::Prefix(_) => {
+                Component::Prefix(_) => {
                     return Err(HostIoError::SandboxViolation {
-                        detail: format!("absolute / rooted paths are not permitted: {raw}"),
+                        detail: format!("host path prefixes are not permitted: {raw}"),
                     });
                 }
             }
         }
-        let joined = self.root.join(candidate);
+        let joined = self.root.join(relative);
         // Lexical defense in depth (the component scan already rejects `..`).
         if !joined.starts_with(&self.root) {
             return Err(HostIoError::SandboxViolation {
@@ -636,6 +638,45 @@ impl SandboxedHostIo {
             });
         }
         Ok(joined)
+    }
+
+    /// Render a canonical host path as an exact guest-visible virtual absolute
+    /// path. The physical root is never exposed, and an unrepresentable
+    /// component fails explicitly rather than being replaced with U+FFFD.
+    fn guest_absolute_path(&self, real: &Path) -> Result<String, HostIoError> {
+        let relative =
+            real.strip_prefix(&self.root)
+                .map_err(|_| HostIoError::SandboxViolation {
+                    detail: "canonical path is outside the sandbox root".to_string(),
+                })?;
+        let mut rendered = String::from("/");
+        for component in relative.components() {
+            match component {
+                Component::Normal(part) => {
+                    let part = part.to_str().ok_or_else(|| HostIoError::Fs {
+                        code: "EINVAL".to_string(),
+                        detail: "realpath result contains a non-UTF-8 path component".to_string(),
+                    })?;
+                    if part.contains('\\') {
+                        return Err(HostIoError::Fs {
+                            code: "EINVAL".to_string(),
+                            detail: "realpath result contains a path component that cannot be represented in the guest path grammar".to_string(),
+                        });
+                    }
+                    if rendered.len() > 1 {
+                        rendered.push('/');
+                    }
+                    rendered.push_str(part);
+                }
+                Component::CurDir => {}
+                Component::ParentDir | Component::RootDir | Component::Prefix(_) => {
+                    return Err(HostIoError::SandboxViolation {
+                        detail: "canonical path has an invalid relative component".to_string(),
+                    });
+                }
+            }
+        }
+        Ok(rendered)
     }
 
     fn fs_error(action: &str, raw: &str, err: std::io::Error) -> HostIoError {
@@ -1138,6 +1179,17 @@ impl SandboxedHostIo {
                     code: "EINVAL".to_string(),
                     detail: "symlink requires a destination path".to_string(),
                 })?;
+                if Path::new(raw).has_root() {
+                    // The kernel interprets a stored absolute symlink target in
+                    // the host namespace. Until guest-absolute targets have a
+                    // dedicated encoding, preserve the previous fail-closed
+                    // behavior rather than writing a host-rooted link.
+                    return Err(HostIoError::SandboxViolation {
+                        detail: format!(
+                            "virtual-absolute symlink targets are not supported: {raw}"
+                        ),
+                    });
+                }
                 self.confine(raw)?;
                 #[cfg(unix)]
                 {
@@ -1360,7 +1412,7 @@ impl SandboxedHostIo {
             }
             FsOperation::Realpath => {
                 let target = self.existing_path(raw, true)?;
-                FsMetaResult::String(target.to_string_lossy().into_owned())
+                FsMetaResult::String(self.guest_absolute_path(&target)?)
             }
             FsOperation::Mkdtemp => {
                 self.confine(raw)?;
@@ -2379,6 +2431,24 @@ mod tests {
         }
     }
 
+    fn sandboxed_realpath(provider: &SandboxedHostIo, path: &str) -> Result<String, HostIoError> {
+        match provider.perform(
+            &HostIoRequest::FsMeta {
+                operation: FsOperation::Realpath,
+                path: path.to_string(),
+                arguments: Vec::new(),
+                data: Vec::new(),
+            },
+            &[HostIoCapability::FsRead],
+        ) {
+            Ok(HostIoResponse::FsMeta {
+                result: FsMetaResult::String(path),
+            }) => Ok(path),
+            Ok(other) => panic!("realpath returned the wrong response shape: {other:?}"),
+            Err(error) => Err(error),
+        }
+    }
+
     #[cfg(unix)]
     #[derive(Debug, Clone, Copy)]
     enum MutationRaceCase {
@@ -2790,6 +2860,176 @@ mod tests {
     }
 
     #[test]
+    fn bd_p5bsj_realpath_is_virtual_absolute_reusable_and_root_private() {
+        let scratch = ScratchDir::new();
+        let provider = SandboxedHostIo::with_root(&scratch.path).expect("provider");
+        std::fs::create_dir_all(provider.root().join("nested")).expect("create nested directory");
+        std::fs::write(
+            provider.root().join("nested").join("data.txt"),
+            b"guest bytes",
+        )
+        .expect("seed guest file");
+
+        let guest_path =
+            sandboxed_realpath(&provider, "nested/data.txt").expect("resolve guest path");
+        assert_eq!(guest_path, "/nested/data.txt");
+        assert!(
+            !guest_path.contains(provider.root().to_str().expect("scratch root is UTF-8")),
+            "realpath must not expose the physical sandbox root"
+        );
+
+        let reused = provider
+            .perform(
+                &HostIoRequest::FsRead { path: guest_path },
+                &[HostIoCapability::FsRead],
+            )
+            .expect("reuse virtual absolute realpath result");
+        assert_eq!(
+            reused,
+            HostIoResponse::FsRead {
+                bytes: b"guest bytes".to_vec(),
+            }
+        );
+    }
+
+    #[test]
+    fn bd_p5bsj_realpath_transcript_is_independent_of_physical_root() {
+        let left_scratch = ScratchDir::new();
+        let right_scratch = ScratchDir::new();
+        let left = SandboxedHostIo::with_root(&left_scratch.path).expect("left provider");
+        let right = SandboxedHostIo::with_root(&right_scratch.path).expect("right provider");
+        assert_ne!(left.root(), right.root());
+        for provider in [&left, &right] {
+            std::fs::create_dir_all(provider.root().join("same")).expect("create same directory");
+            std::fs::write(provider.root().join("same").join("file.txt"), b"same")
+                .expect("seed same file");
+        }
+        let request = HostIoRequest::FsMeta {
+            operation: FsOperation::Realpath,
+            path: "same/file.txt".to_string(),
+            arguments: Vec::new(),
+            data: Vec::new(),
+        };
+        let capture = |provider: &SandboxedHostIo| {
+            let transcript = InMemoryHostIoTranscript::recording();
+            transcript.begin_execution().expect("begin recording");
+            let outcome = provider.perform(&request, &[HostIoCapability::FsRead]);
+            transcript.record(&request, &outcome);
+            transcript.finish_execution().expect("finish recording")
+        };
+
+        let left_transcript = capture(&left);
+        let right_transcript = capture(&right);
+        assert_eq!(left_transcript, right_transcript);
+        assert_eq!(
+            left_transcript[0].1,
+            Ok(HostIoResponse::FsMeta {
+                result: FsMetaResult::String("/same/file.txt".to_string()),
+            })
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn bd_p5bsj_realpath_canonicalizes_symlink_aliases_in_guest_namespace() {
+        let scratch = ScratchDir::new();
+        let provider = SandboxedHostIo::with_root(&scratch.path).expect("provider");
+        std::fs::create_dir_all(provider.root().join("actual")).expect("create actual directory");
+        std::fs::write(provider.root().join("actual").join("target.txt"), b"target")
+            .expect("seed target");
+        std::os::unix::fs::symlink("actual/target.txt", provider.root().join("alias.txt"))
+            .expect("create guest symlink alias");
+
+        assert_eq!(
+            sandboxed_realpath(&provider, "/alias.txt").expect("resolve alias"),
+            "/actual/target.txt"
+        );
+    }
+
+    #[test]
+    fn bd_p5bsj_realpath_dot_and_virtual_slash_are_the_same_root() {
+        let scratch = ScratchDir::new();
+        let provider = SandboxedHostIo::with_root(&scratch.path).expect("provider");
+
+        assert_eq!(sandboxed_realpath(&provider, ".").unwrap(), "/");
+        assert_eq!(sandboxed_realpath(&provider, "/").unwrap(), "/");
+    }
+
+    #[test]
+    fn bd_p5bsj_virtual_absolute_paths_never_select_the_host_root() {
+        let scratch = ScratchDir::new();
+        let provider = SandboxedHostIo::with_root(&scratch.path).expect("provider");
+        std::fs::create_dir_all(provider.root().join("etc")).expect("create virtual etc");
+        std::fs::write(
+            provider.root().join("etc").join("passwd"),
+            b"sandbox-only passwd",
+        )
+        .expect("seed virtual passwd");
+
+        let read = provider
+            .perform(
+                &HostIoRequest::FsRead {
+                    path: "/etc/passwd".to_string(),
+                },
+                &[HostIoCapability::FsRead],
+            )
+            .expect("read virtual absolute path");
+        assert_eq!(
+            read,
+            HostIoResponse::FsRead {
+                bytes: b"sandbox-only passwd".to_vec(),
+            }
+        );
+        assert!(matches!(
+            provider.perform(
+                &HostIoRequest::FsRead {
+                    path: "/../etc/passwd".to_string(),
+                },
+                &[HostIoCapability::FsRead],
+            ),
+            Err(HostIoError::SandboxViolation { .. })
+        ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn bd_p5bsj_realpath_rejects_non_utf8_canonical_components() {
+        use std::os::unix::ffi::OsStringExt;
+
+        let scratch = ScratchDir::new();
+        let provider = SandboxedHostIo::with_root(&scratch.path).expect("provider");
+        let non_utf8_name =
+            std::ffi::OsString::from_vec(vec![b'n', b'o', b'n', b'u', b't', b'f', 0xff]);
+        std::fs::write(provider.root().join(&non_utf8_name), b"unrepresentable")
+            .expect("seed non-UTF-8 target");
+        std::os::unix::fs::symlink(&non_utf8_name, provider.root().join("alias"))
+            .expect("create UTF-8 alias");
+
+        assert!(matches!(
+            sandboxed_realpath(&provider, "alias"),
+            Err(HostIoError::Fs { code, detail })
+                if code == "EINVAL" && detail.contains("non-UTF-8")
+        ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn bd_p5bsj_realpath_rejects_components_outside_the_guest_path_grammar() {
+        let scratch = ScratchDir::new();
+        let provider = SandboxedHostIo::with_root(&scratch.path).expect("provider");
+        std::fs::write(provider.root().join("actual\\name"), b"unrepresentable")
+            .expect("seed backslash target");
+        std::os::unix::fs::symlink("actual\\name", provider.root().join("alias"))
+            .expect("create reusable alias");
+
+        assert!(matches!(
+            sandboxed_realpath(&provider, "alias"),
+            Err(HostIoError::Fs { code, detail })
+                if code == "EINVAL" && detail.contains("guest path grammar")
+        ));
+    }
+
+    #[test]
     fn sandboxed_fs_meta_operations_are_typed_and_path_jailed() {
         let scratch = ScratchDir::new();
         let provider = SandboxedHostIo::with_root(&scratch.path).expect("provider");
@@ -2960,13 +3200,13 @@ mod tests {
     }
 
     #[test]
-    fn sandboxed_traversal_and_absolute_and_degenerate_paths_are_rejected() {
+    fn sandboxed_traversal_and_degenerate_paths_are_rejected() {
         let scratch = ScratchDir::new();
         let provider = SandboxedHostIo::with_root(&scratch.path).expect("provider");
         for raw in [
             "../escape.txt",
             "a/../../escape.txt",
-            "/etc/passwd",
+            "/../escape.txt",
             "with\0nul.txt",
             "back\\slash.txt",
             "",

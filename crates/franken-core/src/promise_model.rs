@@ -374,6 +374,30 @@ impl PromiseStore {
         handle
     }
 
+    /// Roll back the most recent still-pending creation when an enclosing
+    /// interpreter transaction refuses before publishing the Promise.
+    pub(crate) fn rollback_last_created(&mut self, handle: PromiseHandle) -> bool {
+        let is_last_pending = self.promises.last().is_some_and(|record| {
+            record.handle == handle
+                && matches!(record.state, PromiseState::Pending)
+                && record.reactions.is_empty()
+        });
+        let has_matching_witness = matches!(
+            self.witness.last(),
+            Some(WitnessEvent::PromiseCreated {
+                handle: witness_handle,
+                ..
+            }) if *witness_handle == handle
+        );
+        if !is_last_pending || !has_matching_witness {
+            return false;
+        }
+        self.promises.pop();
+        self.witness.pop();
+        self.next_seq = self.next_seq.saturating_sub(1);
+        true
+    }
+
     /// Get a Promise by handle.
     pub fn get(&self, handle: PromiseHandle) -> Result<&PromiseRecord, PromiseError> {
         self.promises
@@ -1448,6 +1472,32 @@ mod tests {
             .expect("operation should succeed for valid inputs");
         assert_eq!(p.state, PromiseState::Pending);
         assert!(!p.state.is_settled());
+    }
+
+    #[test]
+    fn fresh_promise_rollback_restores_store_witness_and_sequence_bd_ur3tk_8() {
+        let mut store = PromiseStore::new();
+        let first = store.create();
+        assert_eq!(first, PromiseHandle(0));
+        assert_eq!(store.len(), 1);
+        assert!(matches!(
+            store.witness_log(),
+            [WitnessEvent::PromiseCreated { handle, seq: 0 }] if *handle == first
+        ));
+
+        assert!(store.rollback_last_created(first));
+        assert_eq!(store.len(), 0);
+        assert!(store.witness_log().is_empty());
+        assert!(!store.rollback_last_created(first));
+
+        let reused = store.create();
+        assert_eq!(reused, first);
+        let mut queue = MicrotaskQueue::new();
+        store
+            .fulfill(reused, js_int(7), Label::Public, &mut queue)
+            .expect("settling the reused handle should succeed");
+        assert!(!store.rollback_last_created(reused));
+        assert_eq!(store.len(), 1);
     }
 
     #[test]

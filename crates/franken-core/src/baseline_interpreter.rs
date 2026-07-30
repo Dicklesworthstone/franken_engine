@@ -3593,7 +3593,6 @@ impl InterpreterCore {
         self.copy_data_properties_states.clear();
         self.temporarily_suspended_execution_bytes = 0;
         self.temporarily_suspended_call_depth = 0;
-        self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
         self.module_state = ModuleState::new();
         self.active_cjs_context = None;
         self.current_module_specifier = None;
@@ -3601,6 +3600,7 @@ impl InterpreterCore {
         self.promise_combinator_watchers.clear();
         self.next_promise_combinator_id = 0;
         self.async_resumption_contexts.clear();
+        self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
         Ok(())
     }
 
@@ -3713,7 +3713,6 @@ impl InterpreterCore {
         self.copy_data_properties_states.clear();
         self.temporarily_suspended_execution_bytes = 0;
         self.temporarily_suspended_call_depth = 0;
-        self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
         self.module_state = ModuleState::new();
         self.active_cjs_context = None;
         self.current_module_specifier = None;
@@ -3721,6 +3720,7 @@ impl InterpreterCore {
         self.promise_combinator_watchers.clear();
         self.next_promise_combinator_id = 0;
         self.async_resumption_contexts.clear();
+        self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
         Ok(())
     }
 
@@ -4988,6 +4988,26 @@ impl InterpreterCore {
             });
         }
 
+        let saved_snapshot_bytes = self.registers[self.register_base..]
+            .iter()
+            .map(Self::estimate_value_bytes)
+            .sum::<u64>()
+            .saturating_add(
+                (self.register_base..self.registers.len())
+                    .map(|index| {
+                        self.register_labels
+                            .get(index)
+                            .map(Self::estimate_label_bytes)
+                            .unwrap_or_else(|| {
+                                Self::estimate_label_bytes(&crate::ifc_artifacts::Label::Public)
+                            })
+                    })
+                    .sum::<u64>(),
+            );
+        // The async object owns a second complete register/label file while
+        // the active frame remains installed. Preflight that physical clone
+        // before either vector allocates or the await reaction is registered.
+        self.check_temporary_memory_budget(saved_snapshot_bytes)?;
         let saved_registers = self.registers[self.register_base..].to_vec();
         let saved_register_labels =
             self.register_labels_in_range(self.register_base, self.registers.len());
@@ -5008,6 +5028,7 @@ impl InterpreterCore {
         async_function.saved_register_labels = saved_register_labels;
         async_function.saved_register_base = self.register_base;
         async_function.phase = AsyncFunctionPhase::SuspendedAwait;
+        self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
 
         self.async_resumption_contexts.insert(
             result_promise.0,
@@ -5068,6 +5089,7 @@ impl InterpreterCore {
             saved_register_labels,
         );
         self.async_functions[async_function_id as usize].phase = AsyncFunctionPhase::Executing;
+        self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
 
         match settled {
             Ok(argument) => self.write_reg_with_label(
@@ -11266,11 +11288,80 @@ impl InterpreterCore {
         Ok(Self::value_to_js_value(&Value::Object(error_id)))
     }
 
-    fn register_combinator(&mut self, state: LabeledPromiseCombinatorState) -> u64 {
+    fn register_combinator(
+        &mut self,
+        state: LabeledPromiseCombinatorState,
+    ) -> Result<u64, InterpreterError> {
+        let retained_label_bytes = Self::estimate_label_bytes(&state.accumulated_label);
+        self.check_temporary_memory_budget(retained_label_bytes)?;
         let id = self.next_promise_combinator_id;
         self.next_promise_combinator_id = self.next_promise_combinator_id.saturating_add(1);
         self.promise_combinators.insert(id, state);
-        id
+        self.estimated_memory_bytes = self
+            .estimated_memory_bytes
+            .saturating_add(retained_label_bytes);
+        Ok(id)
+    }
+
+    fn join_promise_combinator_label(
+        &mut self,
+        combinator_id: u64,
+        label: &crate::ifc_artifacts::Label,
+    ) -> Result<(), InterpreterError> {
+        let Some(state) = self.promise_combinators.get(&combinator_id) else {
+            return Ok(());
+        };
+        let previous_bytes = Self::estimate_label_bytes(&state.accumulated_label);
+        let winner = if state.accumulated_label.level() >= label.level() {
+            &state.accumulated_label
+        } else {
+            label
+        };
+        let next_bytes = Self::estimate_label_bytes(winner);
+        // Joining clones the dominant Custom label before the old accumulator
+        // is released. Charge that physical peak as well as the retained
+        // replacement so a one-byte-short ceiling fails atomically.
+        self.check_temporary_memory_budget(next_bytes)?;
+        let joined = state.accumulated_label.join(label);
+        let requested_bytes = self
+            .estimated_memory_bytes
+            .saturating_sub(previous_bytes)
+            .saturating_add(next_bytes);
+        if requested_bytes > self.config.max_total_memory_bytes {
+            return Err(self.memory_budget_error(requested_bytes, self.heap_object_count_u32()));
+        }
+        self.promise_combinators
+            .get_mut(&combinator_id)
+            .expect("combinator remained present across label preflight")
+            .accumulated_label = joined;
+        self.estimated_memory_bytes = requested_bytes;
+        Ok(())
+    }
+
+    fn clone_promise_combinator_label_with_budget(
+        &self,
+        combinator_id: u64,
+    ) -> Result<Option<crate::ifc_artifacts::Label>, InterpreterError> {
+        let Some(label) = self
+            .promise_combinators
+            .get(&combinator_id)
+            .map(|state| &state.accumulated_label)
+        else {
+            return Ok(None);
+        };
+        self.check_temporary_memory_budget(Self::estimate_label_bytes(label))?;
+        Ok(Some(label.clone()))
+    }
+
+    fn remove_promise_combinator(
+        &mut self,
+        combinator_id: u64,
+    ) -> Option<LabeledPromiseCombinatorState> {
+        let state = self.promise_combinators.remove(&combinator_id)?;
+        self.estimated_memory_bytes = self
+            .estimated_memory_bytes
+            .saturating_sub(Self::estimate_label_bytes(&state.accumulated_label));
+        Some(state)
     }
 
     fn add_combinator_watcher(
@@ -11379,8 +11470,8 @@ impl InterpreterCore {
         }
 
         let mut resolution: Option<ResolutionData> = None;
+        self.join_promise_combinator_label(combinator_id, &label)?;
         if let Some(state) = self.promise_combinators.get_mut(&combinator_id) {
-            state.accumulated_label = state.accumulated_label.join(&label);
             match &mut state.tracker {
                 PromiseCombinatorState::All(tracker) => {
                     if tracker.settled {
@@ -11421,9 +11512,7 @@ impl InterpreterCore {
 
         if let Some(resolution) = resolution {
             let resolution_label = self
-                .promise_combinators
-                .get(&combinator_id)
-                .map(|state| state.accumulated_label.clone())
+                .clone_promise_combinator_label_with_budget(combinator_id)?
                 .unwrap_or(label);
             let (handle, value) = match resolution {
                 ResolutionData::Fulfill(handle, value) => (handle, value),
@@ -11437,7 +11526,7 @@ impl InterpreterCore {
                 }
             };
             self.fulfill_promise(handle, value, resolution_label)?;
-            self.promise_combinators.remove(&combinator_id);
+            self.remove_promise_combinator(combinator_id);
         }
         Ok(())
     }
@@ -11466,8 +11555,8 @@ impl InterpreterCore {
         }
 
         let mut resolution: Option<ResolutionData> = None;
+        self.join_promise_combinator_label(combinator_id, &label)?;
         if let Some(state) = self.promise_combinators.get_mut(&combinator_id) {
-            state.accumulated_label = state.accumulated_label.join(&label);
             match &mut state.tracker {
                 PromiseCombinatorState::All(tracker) => {
                     if tracker.settled {
@@ -11506,9 +11595,7 @@ impl InterpreterCore {
 
         if let Some(resolution) = resolution {
             let resolution_label = self
-                .promise_combinators
-                .get(&combinator_id)
-                .map(|state| state.accumulated_label.clone())
+                .clone_promise_combinator_label_with_budget(combinator_id)?
                 .unwrap_or(label);
             match resolution {
                 ResolutionData::FulfillAllSettled(handle, outcomes, total) => {
@@ -11523,7 +11610,7 @@ impl InterpreterCore {
                     self.reject_promise(handle, aggregate, resolution_label)?;
                 }
             }
-            self.promise_combinators.remove(&combinator_id);
+            self.remove_promise_combinator(combinator_id);
         }
         Ok(())
     }
@@ -11603,10 +11690,30 @@ impl InterpreterCore {
             }
         };
 
-        let combinator_id = self.register_combinator(LabeledPromiseCombinatorState {
+        let retained_label_bytes = Self::estimate_label_bytes(&accumulated_label);
+        if let Err(error) = self.check_temporary_memory_budget(retained_label_bytes) {
+            let rolled_back = self.promise_store.rollback_last_created(result_promise);
+            debug_assert!(
+                rolled_back,
+                "fresh aggregate Promise must remain rollbackable"
+            );
+            return Err(error);
+        }
+        let combinator_state = LabeledPromiseCombinatorState {
             tracker: state,
             accumulated_label: accumulated_label.clone(),
-        });
+        };
+        let combinator_id = match self.register_combinator(combinator_state) {
+            Ok(combinator_id) => combinator_id,
+            Err(error) => {
+                let rolled_back = self.promise_store.rollback_last_created(result_promise);
+                debug_assert!(
+                    rolled_back,
+                    "fresh aggregate Promise must remain rollbackable"
+                );
+                return Err(error);
+            }
+        };
 
         for (index, (input, input_label)) in inputs.into_iter().enumerate() {
             if !self.promise_combinators.contains_key(&combinator_id) {
@@ -14376,6 +14483,35 @@ impl InterpreterCore {
         }
     }
 
+    fn estimate_async_function_snapshot_bytes(function: &AsyncFunctionObject) -> u64 {
+        function
+            .saved_registers
+            .iter()
+            .map(Self::estimate_value_bytes)
+            .sum::<u64>()
+            .saturating_add(
+                function
+                    .saved_register_labels
+                    .iter()
+                    .map(Self::estimate_label_bytes)
+                    .sum::<u64>(),
+            )
+    }
+
+    fn async_function_snapshots_memory_bytes(&self) -> u64 {
+        self.async_functions
+            .iter()
+            .map(Self::estimate_async_function_snapshot_bytes)
+            .sum::<u64>()
+    }
+
+    fn promise_combinator_labels_memory_bytes(&self) -> u64 {
+        self.promise_combinators
+            .values()
+            .map(|state| Self::estimate_label_bytes(&state.accumulated_label))
+            .sum::<u64>()
+    }
+
     fn estimate_module_execution_bytes(execution: &ModuleExecutionSnapshot) -> u64 {
         execution
             .registers
@@ -14584,6 +14720,8 @@ impl InterpreterCore {
                     .map(Self::estimate_async_generator_bytes)
                     .sum::<u64>(),
             )
+            .saturating_add(self.async_function_snapshots_memory_bytes())
+            .saturating_add(self.promise_combinator_labels_memory_bytes())
             .saturating_add(self.temporarily_suspended_execution_bytes)
     }
 
@@ -24767,6 +24905,200 @@ mod tests {
             .snapshot_scope_chain_with_temporary_budget(snapshot_bytes)
             .unwrap_err();
         assert!(matches!(err, InterpreterError::MemoryBudgetExceeded { .. }));
+    }
+
+    #[test]
+    fn async_saved_label_snapshot_refuses_one_short_and_releases_bd_ur3tk_8() {
+        let mut core = quickjs_test_core();
+        core.write_reg_with_label(
+            1,
+            Value::Int(41),
+            crate::ifc_artifacts::Label::Custom {
+                name: "async-snapshot-label".repeat(23),
+                level: 3,
+            },
+        )
+        .expect("custom-labeled async register");
+        core.async_functions.push(AsyncFunctionObject {
+            function_index: 0,
+            closure_index: None,
+            saved_ip: 0,
+            saved_registers: Vec::new(),
+            saved_register_labels: Vec::new(),
+            saved_register_base: 0,
+            phase: AsyncFunctionPhase::Executing,
+            result_promise: 0,
+        });
+        core.call_stack.push(CallFrame {
+            return_ip: 0,
+            return_reg: None,
+            register_base: 0,
+            function_index: Some(0),
+            this_value: Value::Undefined,
+            this_label: crate::ifc_artifacts::Label::Public,
+            new_target_value: Value::Undefined,
+            new_target_label: crate::ifc_artifacts::Label::Public,
+            super_value: Value::Undefined,
+            super_label: crate::ifc_artifacts::Label::Public,
+            construct_this: None,
+            saved_pending_exception: None,
+            saved_pending_return: None,
+            saved_suspended_abrupt_depth: 0,
+            saved_finally_mode_depth: 0,
+            saved_scope_depth: core.scope_chain.depth(),
+            saved_scope_chain: None,
+            async_function_id: Some(0),
+        });
+        let awaited = core.promise_store.create();
+        let baseline = core
+            .sync_estimated_memory_bytes()
+            .expect("async snapshot baseline");
+        let snapshot_bytes = core
+            .registers
+            .iter()
+            .map(InterpreterCore::estimate_value_bytes)
+            .sum::<u64>()
+            .saturating_add(
+                core.register_labels
+                    .iter()
+                    .map(InterpreterCore::estimate_label_bytes)
+                    .sum::<u64>(),
+            );
+        let promise_count = core.promise_store.len();
+
+        core.config.max_total_memory_bytes = baseline + snapshot_bytes - 1;
+        let error = core
+            .suspend_async_function_for_await(awaited, 0, crate::ifc_artifacts::Label::Public)
+            .expect_err("one-byte-short async label snapshot must fail before cloning");
+        assert!(matches!(
+            error,
+            InterpreterError::MemoryBudgetExceeded { .. }
+        ));
+        assert_eq!(core.promise_store.len(), promise_count);
+        assert!(core.async_resumption_contexts.is_empty());
+        assert_eq!(core.async_functions[0].phase, AsyncFunctionPhase::Executing);
+        assert!(core.async_functions[0].saved_registers.is_empty());
+        assert!(core.async_functions[0].saved_register_labels.is_empty());
+        assert_eq!(core.estimated_memory_bytes(), baseline);
+
+        core.config.max_total_memory_bytes = baseline + snapshot_bytes;
+        core.suspend_async_function_for_await(awaited, 0, crate::ifc_artifacts::Label::Public)
+            .expect("exact async label snapshot ceiling");
+        assert_eq!(
+            core.async_functions[0].phase,
+            AsyncFunctionPhase::SuspendedAwait
+        );
+        assert_eq!(core.estimated_memory_bytes(), baseline + snapshot_bytes);
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+        assert!(matches!(
+            core.async_functions[0].saved_register_labels.get(1),
+            Some(crate::ifc_artifacts::Label::Custom { level: 3, .. })
+        ));
+
+        let (_, context) = core
+            .async_resumption_contexts
+            .pop_first()
+            .expect("await registration should publish one resumption context");
+        core.resume_async_function_after_await(
+            context,
+            Ok(crate::object_model::JsValue::Int(9)),
+            crate::ifc_artifacts::Label::Public,
+            None,
+        )
+        .expect("resuming should move the saved label file back without cloning it");
+        assert!(core.async_functions[0].saved_registers.is_empty());
+        assert!(core.async_functions[0].saved_register_labels.is_empty());
+        assert_eq!(core.estimated_memory_bytes(), baseline);
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+    }
+
+    #[test]
+    fn promise_combinator_label_refuses_clone_peak_and_releases_bd_ur3tk_8() {
+        let mut core = quickjs_test_core();
+        let baseline = core
+            .sync_estimated_memory_bytes()
+            .expect("promise-combinator label baseline");
+        let initial_label = crate::ifc_artifacts::Label::Custom {
+            name: "aggregate-input-label".repeat(19),
+            level: 2,
+        };
+        let initial_bytes = InterpreterCore::estimate_label_bytes(&initial_label);
+        let state = || LabeledPromiseCombinatorState {
+            tracker: PromiseCombinatorState::Race(crate::promise_model::PromiseRaceTracker {
+                result_promise: crate::promise_model::PromiseHandle(0),
+                settled: false,
+            }),
+            accumulated_label: initial_label.clone(),
+        };
+
+        core.config.max_total_memory_bytes = baseline + initial_bytes - 1;
+        let error = core
+            .register_combinator(state())
+            .expect_err("one-byte-short accumulator must not publish");
+        assert!(matches!(
+            error,
+            InterpreterError::MemoryBudgetExceeded { .. }
+        ));
+        assert!(core.promise_combinators.is_empty());
+        assert_eq!(core.next_promise_combinator_id, 0);
+        assert_eq!(core.estimated_memory_bytes(), baseline);
+
+        core.config.max_total_memory_bytes = baseline + initial_bytes;
+        let combinator_id = core
+            .register_combinator(state())
+            .expect("exact accumulator ceiling");
+        assert_eq!(core.estimated_memory_bytes(), baseline + initial_bytes);
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+
+        let dominant_label = crate::ifc_artifacts::Label::Custom {
+            name: "dominant-aggregate-label".repeat(29),
+            level: 4,
+        };
+        let dominant_bytes = InterpreterCore::estimate_label_bytes(&dominant_label);
+        let before_join = core.estimated_memory_bytes();
+        core.config.max_total_memory_bytes = before_join + dominant_bytes - 1;
+        let error = core
+            .join_promise_combinator_label(combinator_id, &dominant_label)
+            .expect_err("one-byte-short dominant-label clone peak must fail atomically");
+        assert!(matches!(
+            error,
+            InterpreterError::MemoryBudgetExceeded { .. }
+        ));
+        assert_eq!(
+            core.promise_combinators[&combinator_id].accumulated_label,
+            initial_label
+        );
+        assert_eq!(core.estimated_memory_bytes(), before_join);
+
+        core.config.max_total_memory_bytes = before_join + dominant_bytes;
+        core.join_promise_combinator_label(combinator_id, &dominant_label)
+            .expect("exact dominant-label clone peak");
+        assert_eq!(
+            core.promise_combinators[&combinator_id].accumulated_label,
+            dominant_label
+        );
+        assert_eq!(core.estimated_memory_bytes(), baseline + dominant_bytes);
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+
+        core.remove_promise_combinator(combinator_id)
+            .expect("registered combinator should be removable");
+        assert_eq!(core.estimated_memory_bytes(), baseline);
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
     }
 
     #[test]

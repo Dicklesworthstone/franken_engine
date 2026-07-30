@@ -28,6 +28,7 @@ use frankenengine_core::baseline_interpreter::{
     QuickJsLane as CoreQuickJsLane, Value as CoreValue,
 };
 use frankenengine_core::capability::RuntimeCapability as CoreRuntimeCapability;
+use frankenengine_core::ifc_artifacts::Label as CoreIfcLabel;
 use frankenengine_core::ir_contract::{
     Ir0Module as CoreIr0Module, Ir3Instruction as CoreIr3Instruction, Ir3Module as CoreIr3Module,
 };
@@ -367,6 +368,10 @@ pub struct DifferentialBackendReceipt {
     pub duration_micros: u128,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub value: Option<String>,
+    /// IFC provenance of the completion value when an in-process backend
+    /// exposes it. Historical receipts and external runtimes omit this field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub completion_label: Option<CoreIfcLabel>,
     /// Exact UTF-16 code units of the completion value, present iff it is a
     /// string containing lone surrogates (bd-2vzgi). `value` then carries the
     /// lossy U+FFFD projection, which collapses distinct lone surrogates (and
@@ -1077,6 +1082,7 @@ fn run_external_backend(
                 exit_code: None,
                 duration_micros: 0,
                 value: None,
+                completion_label: None,
                 value_wtf16: None,
                 stdout: String::new(),
                 stderr: String::new(),
@@ -1155,6 +1161,7 @@ fn run_external_backend(
                 exit_code: output.status.code(),
                 duration_micros: output.duration_micros,
                 value: None,
+                completion_label: None,
                 value_wtf16: None,
                 stdout,
                 stderr,
@@ -1171,6 +1178,7 @@ fn run_external_backend(
             exit_code: None,
             duration_micros: 0,
             value: None,
+            completion_label: None,
             value_wtf16: None,
             stdout: String::new(),
             stderr: String::new(),
@@ -1192,6 +1200,7 @@ fn run_external_backend(
             exit_code: None,
             duration_micros: 0,
             value: None,
+            completion_label: None,
             value_wtf16: None,
             stdout: String::new(),
             stderr: error.to_string(),
@@ -1285,6 +1294,7 @@ fn run_franken_engine_backend(
                 exit_code: Some(0),
                 duration_micros: started.elapsed().as_micros(),
                 value: Some(outcome.value),
+                completion_label: None,
                 value_wtf16: outcome.value_wtf16,
                 stdout_sha256: sha256_hex(stdout.as_bytes()),
                 stderr_sha256: sha256_hex(stderr.as_bytes()),
@@ -1307,6 +1317,7 @@ fn run_franken_engine_backend(
                     exit_code: Some(1),
                     duration_micros: started.elapsed().as_micros(),
                     value: None,
+                    completion_label: None,
                     value_wtf16: None,
                     stdout: String::new(),
                     stderr,
@@ -1341,7 +1352,7 @@ fn run_franken_core_backend(
         ));
     }
     match eval_with_franken_core(source, instruction_budget, memory_budget_override) {
-        Ok((value, value_wtf16)) => {
+        Ok((value, value_wtf16, completion_label)) => {
             let stdout = value.clone();
             let mut diagnostics = vec![
                 "frankenengine-core path dependency executed in-process through parser/lowering/QuickJsLane".to_string(),
@@ -1363,6 +1374,7 @@ fn run_franken_core_backend(
                 exit_code: Some(0),
                 duration_micros: started.elapsed().as_micros(),
                 value: Some(value),
+                completion_label: Some(completion_label),
                 value_wtf16,
                 stdout_sha256: sha256_hex(stdout.as_bytes()),
                 stderr_sha256: sha256_hex(b""),
@@ -1402,6 +1414,7 @@ fn run_franken_core_backend(
                     exit_code: Some(1),
                     duration_micros: started.elapsed().as_micros(),
                     value: None,
+                    completion_label: None,
                     value_wtf16: None,
                     stdout: String::new(),
                     stderr,
@@ -1467,14 +1480,14 @@ impl FrankenCoreBackendError {
 }
 
 /// Evaluate `source` on the franken-core lane, returning the rendered
-/// completion value plus its exact UTF-16 code units when (and only when)
-/// the completion value is a lone-surrogate string that the rendered
-/// projection cannot represent (bd-2vzgi).
+/// completion value, exact UTF-16 code units when (and only when) the value is
+/// a lone-surrogate string that the rendered projection cannot represent, and
+/// the completion's IFC label (bd-2vzgi, bd-ur3tk.17).
 fn eval_with_franken_core(
     source: &str,
     instruction_budget: Option<u64>,
     memory_budget_override: Option<EngineMemoryBudget>,
-) -> Result<(String, Option<Vec<u16>>), FrankenCoreBackendError> {
+) -> Result<(String, Option<Vec<u16>>, CoreIfcLabel), FrankenCoreBackendError> {
     let normalized = source.trim();
     if normalized.is_empty() {
         return Err(FrankenCoreBackendError {
@@ -1546,7 +1559,11 @@ fn eval_with_franken_core(
         CoreValue::Str(s) if !s.is_well_formed() => Some(s.code_units_vec()),
         _ => None,
     };
-    Ok((result.value.to_string(), value_wtf16))
+    Ok((
+        result.value.to_string(),
+        value_wtf16,
+        result.completion_label,
+    ))
 }
 
 fn core_parse_goal(source: &str) -> CoreParseGoal {
@@ -3645,7 +3662,22 @@ mod tests {
         // The String channel carries the lossy projection; the exact code
         // units ride alongside.
         assert_eq!(receipt.value.as_deref(), Some("\u{FFFD}"));
+        assert_eq!(receipt.completion_label, Some(CoreIfcLabel::Public));
         assert_eq!(receipt.value_wtf16, Some(vec![0xD83D]));
+    }
+
+    #[test]
+    fn legacy_backend_receipt_without_completion_label_remains_readable_bd_ur3tk_17() {
+        let receipt = run_franken_core_backend("1 + 1;", None, None).receipt;
+        assert_eq!(receipt.completion_label, Some(CoreIfcLabel::Public));
+
+        let mut wire = serde_json::to_value(receipt).expect("receipt should serialize");
+        wire.as_object_mut()
+            .expect("receipt wire should be an object")
+            .remove("completion_label");
+        let restored: DifferentialBackendReceipt =
+            serde_json::from_value(wire).expect("legacy receipt should deserialize");
+        assert_eq!(restored.completion_label, None);
     }
 
     #[test]
@@ -5482,6 +5514,7 @@ mod tests {
             }),
             duration_micros: 2_500,
             value: value.map(str::to_string),
+            completion_label: None,
             value_wtf16: None,
             stdout: stdout.to_string(),
             stderr: stderr.to_string(),

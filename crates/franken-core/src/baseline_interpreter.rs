@@ -2940,6 +2940,8 @@ pub struct ConsoleEntry {
 pub struct ExecutionResult {
     /// Final value (from the return register or last evaluated expression).
     pub value: Value,
+    /// IFC provenance paired with [`Self::value`] at the execution boundary.
+    pub completion_label: crate::ifc_artifacts::Label,
     /// Number of instructions executed.
     pub instructions_executed: u64,
     /// Optional containment action requested by an interpreter hook.
@@ -3110,7 +3112,7 @@ enum RunLoopMode {
 
 #[derive(Debug)]
 enum RunLoopExit {
-    Value(Value),
+    Value(LabeledReturn),
     GeneratorBodyStart,
     GeneratorYield {
         result: Value,
@@ -3447,11 +3449,13 @@ impl InterpreterCore {
 
     fn take_execution_result(
         &mut self,
-        value: Value,
+        completion: LabeledReturn,
         requested_hook_action: Option<HookAction>,
     ) -> ExecutionResult {
+        let LabeledReturn { value, label } = completion;
         ExecutionResult {
             value,
+            completion_label: label,
             instructions_executed: self.instructions_executed,
             requested_hook_action,
             witness_events: std::mem::take(&mut self.witness_events),
@@ -3499,7 +3503,7 @@ impl InterpreterCore {
 
         self.push_event("execution_started", "ok", None);
 
-        let mut result = self.run_loop(module);
+        let mut result = self.run_loop_labeled(module);
         if result.is_err() {
             // CopyDataProperties continuations are internal to this execution.
             // A fresh execute() always restarts from its caller-visible seed,
@@ -3558,8 +3562,17 @@ impl InterpreterCore {
             Err(InterpreterError::Halted) => {
                 // Halt is normal termination; return whatever is in r0.
                 let final_value = self.read_reg(0).unwrap_or(Value::Undefined);
+                let completion_label = self
+                    .read_reg_label(0)
+                    .unwrap_or(crate::ifc_artifacts::Label::Public);
                 self.emit_witness(WitnessEventKind::ExecutionCompleted, None);
-                Ok(self.take_execution_result(final_value, None))
+                Ok(self.take_execution_result(
+                    LabeledReturn {
+                        value: final_value,
+                        label: completion_label,
+                    },
+                    None,
+                ))
             }
             Err(e) => Err(e),
         }
@@ -5243,7 +5256,7 @@ impl InterpreterCore {
         &mut self,
         return_val: Value,
         return_label: crate::ifc_artifacts::Label,
-    ) -> Result<Option<Value>, InterpreterError> {
+    ) -> Result<Option<LabeledReturn>, InterpreterError> {
         let current_depth = self.call_stack.len();
         // A function can return from inside an active try block before `EndTry`
         // executes. Those catch frames belong to the returning callee and must
@@ -5280,7 +5293,10 @@ impl InterpreterCore {
             self.finally_frames.clear();
             self.pending_finally_entry = None;
             self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
-            Ok(Some(return_val))
+            Ok(Some(LabeledReturn {
+                value: return_val,
+                label: return_label,
+            }))
         }
     }
 
@@ -6350,15 +6366,15 @@ impl InterpreterCore {
                 self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
                 Ok((self.generator_result_object(value, true)?, label))
             }
-            Ok(RunLoopExit::Value(value)) => {
+            Ok(RunLoopExit::Value(completion)) => {
                 let generator = &mut self.generators[gen_id as usize];
                 generator.execution = None;
                 generator.resume_dst = None;
                 generator.phase = GeneratorPhase::Completed;
                 self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
                 Ok((
-                    self.generator_result_object(value, true)?,
-                    crate::ifc_artifacts::Label::Public,
+                    self.generator_result_object(completion.value, true)?,
+                    completion.label,
                 ))
             }
             Ok(RunLoopExit::GeneratorThrow {
@@ -6583,17 +6599,17 @@ impl InterpreterCore {
                     crate::ifc_artifacts::Label::Public,
                 )?;
             }
-            Ok(RunLoopExit::Value(value)) => {
+            Ok(RunLoopExit::Value(completion)) => {
                 let async_generator = &mut self.async_generators[generator_index];
                 async_generator.execution = None;
                 async_generator.resume_dst = None;
                 async_generator.phase = AsyncGeneratorPhase::Completed;
                 self.sync_estimated_memory_bytes()?;
-                let result = self.generator_result_object(value, true)?;
+                let result = self.generator_result_object(completion.value, true)?;
                 self.fulfill_promise(
                     promise_handle,
                     Self::value_to_js_value(&result),
-                    crate::ifc_artifacts::Label::Public,
+                    completion.label,
                 )?;
             }
             Err(InterpreterError::Halted) => {
@@ -6631,11 +6647,15 @@ impl InterpreterCore {
         Ok(Value::Promise(result_promise))
     }
 
-    fn run_loop(&mut self, module: &Ir3Module) -> Result<Value, InterpreterError> {
+    fn run_loop_labeled(&mut self, module: &Ir3Module) -> Result<LabeledReturn, InterpreterError> {
         match self.run_loop_with_mode(module, RunLoopMode::Normal)? {
-            RunLoopExit::Value(value)
-            | RunLoopExit::GeneratorReturn { value, .. }
-            | RunLoopExit::GeneratorYield { result: value, .. } => Ok(value),
+            RunLoopExit::Value(completion) => Ok(completion),
+            RunLoopExit::GeneratorReturn { value, label }
+            | RunLoopExit::GeneratorYield {
+                result: value,
+                label,
+                ..
+            } => Ok(LabeledReturn { value, label }),
             RunLoopExit::GeneratorBodyStart => Err(InterpreterError::TypeError {
                 expected: "generator activation".to_string(),
                 got: "generator body boundary outside generator invocation".to_string(),
@@ -6648,6 +6668,11 @@ impl InterpreterCore {
                 Err(InterpreterError::UncaughtException { value: description })
             }
         }
+    }
+
+    fn run_loop(&mut self, module: &Ir3Module) -> Result<Value, InterpreterError> {
+        self.run_loop_labeled(module)
+            .map(|completion| completion.value)
     }
 
     fn run_loop_with_mode(
@@ -6693,7 +6718,10 @@ impl InterpreterCore {
                     }
                     continue;
                 } else {
-                    return self.read_reg(0).map(RunLoopExit::Value);
+                    return Ok(RunLoopExit::Value(LabeledReturn {
+                        value: self.read_reg(0)?,
+                        label: self.read_reg_label(0)?,
+                    }));
                 }
             }
 
@@ -9012,7 +9040,10 @@ impl InterpreterCore {
                         });
                     }
                     self.write_reg(resume_dst, Value::Undefined)?;
-                    return Ok(RunLoopExit::Value(result));
+                    return Ok(RunLoopExit::Value(LabeledReturn {
+                        value: result,
+                        label: yielded_label,
+                    }));
                 }
                 Ir3Instruction::AwaitValue { promise_reg } => {
                     let awaited_value = self.read_reg(promise_reg)?;
@@ -9106,7 +9137,10 @@ impl InterpreterCore {
                             promise_reg,
                             effective_label,
                         )?;
-                        return Ok(RunLoopExit::Value(Value::Undefined));
+                        return Ok(RunLoopExit::Value(LabeledReturn {
+                            value: Value::Undefined,
+                            label: crate::ifc_artifacts::Label::Public,
+                        }));
                     }
                 }
                 Ir3Instruction::AsyncReturn { value_reg } => {
@@ -15980,7 +16014,13 @@ impl QuickJsLane {
                 let requested_hook_action =
                     requested_hook_action_from_error(action.as_str(), reason.clone())
                         .ok_or(InterpreterError::ContainmentActionRequested { action, reason })?;
-                core.take_execution_result(Value::Undefined, Some(requested_hook_action))
+                core.take_execution_result(
+                    LabeledReturn {
+                        value: Value::Undefined,
+                        label: crate::ifc_artifacts::Label::Public,
+                    },
+                    Some(requested_hook_action),
+                )
             }
             Err(err) => return Err(err),
         };
@@ -16048,7 +16088,13 @@ impl V8Lane {
                 let requested_hook_action =
                     requested_hook_action_from_error(action.as_str(), reason.clone())
                         .ok_or(InterpreterError::ContainmentActionRequested { action, reason })?;
-                core.take_execution_result(Value::Undefined, Some(requested_hook_action))
+                core.take_execution_result(
+                    LabeledReturn {
+                        value: Value::Undefined,
+                        label: crate::ifc_artifacts::Label::Public,
+                    },
+                    Some(requested_hook_action),
+                )
             }
             Err(err) => return Err(err),
         };
@@ -19816,7 +19862,7 @@ mod tests {
     }
 
     #[test]
-    fn lane_execute_with_hook_preserves_requested_containment_in_result() {
+    fn lane_execute_with_hook_preserves_requested_containment_in_result_bd_ur3tk_17() {
         let hook = Arc::new(RecordingHook::with_allocation_action(
             HookAction::Terminate("policy denied object allocation".to_string()),
         ));
@@ -19836,6 +19882,7 @@ mod tests {
             ))
         );
         assert_eq!(result.value, Value::Undefined);
+        assert_eq!(result.completion_label, crate::ifc_artifacts::Label::Public);
         assert_eq!(result.instructions_executed, 0);
     }
 
@@ -21828,10 +21875,99 @@ mod tests {
             .execute(&module)
             .expect("source-lowered value transfers should execute");
         assert_eq!(result.value, Value::str("source-secret"));
-        assert_eq!(
-            core.read_reg_label(0).expect("source completion label"),
-            crate::ifc_artifacts::Label::Secret
-        );
+        assert_eq!(result.completion_label, crate::ifc_artifacts::Label::Secret);
+    }
+
+    #[test]
+    fn direct_top_level_return_exposes_secret_completion_label_bd_ur3tk_17() {
+        let module = test_module(vec![Ir3Instruction::Return { value: 0 }]);
+        let mut core = quickjs_test_core();
+        core.write_reg_with_label(
+            0,
+            Value::str("direct-secret"),
+            crate::ifc_artifacts::Label::Secret,
+        )
+        .expect("secret completion should be seedable");
+
+        let result = core
+            .execute(&module)
+            .expect("direct top-level return should execute");
+        assert_eq!(result.value, Value::str("direct-secret"));
+        assert_eq!(result.completion_label, crate::ifc_artifacts::Label::Secret);
+    }
+
+    #[test]
+    fn halt_exposes_secret_register_completion_label_bd_ur3tk_17() {
+        let module = test_module(vec![Ir3Instruction::Halt]);
+        let mut core = quickjs_test_core();
+        core.write_reg_with_label(
+            0,
+            Value::str("halt-secret"),
+            crate::ifc_artifacts::Label::Secret,
+        )
+        .expect("secret halt completion should be seedable");
+
+        let result = core.execute(&module).expect("halt should execute");
+        assert_eq!(result.value, Value::str("halt-secret"));
+        assert_eq!(result.completion_label, crate::ifc_artifacts::Label::Secret);
+    }
+
+    #[test]
+    fn fallthrough_exposes_secret_register_completion_label_bd_ur3tk_17() {
+        let module = test_module(Vec::new());
+        let mut core = quickjs_test_core();
+        core.write_reg_with_label(
+            0,
+            Value::str("fallthrough-secret"),
+            crate::ifc_artifacts::Label::Secret,
+        )
+        .expect("secret fallthrough completion should be seedable");
+
+        let result = core.execute(&module).expect("fallthrough should execute");
+        assert_eq!(result.value, Value::str("fallthrough-secret"));
+        assert_eq!(result.completion_label, crate::ifc_artifacts::Label::Secret);
+    }
+
+    #[test]
+    fn finally_unwound_top_level_return_exposes_secret_completion_label_bd_ur3tk_17() {
+        let module = test_module(vec![
+            Ir3Instruction::BeginTry {
+                catch_target: 2,
+                finally_target: Some(2),
+            },
+            Ir3Instruction::Return { value: 0 },
+            Ir3Instruction::EnterFinally,
+            Ir3Instruction::EndFinally,
+        ]);
+        let mut core = quickjs_test_core();
+        core.write_reg_with_label(
+            0,
+            Value::str("finally-secret"),
+            crate::ifc_artifacts::Label::Secret,
+        )
+        .expect("secret pending return should be seedable");
+
+        let result = core
+            .execute(&module)
+            .expect("finally-unwound top-level return should execute");
+        assert_eq!(result.value, Value::str("finally-secret"));
+        assert_eq!(result.completion_label, crate::ifc_artifacts::Label::Secret);
+    }
+
+    #[test]
+    fn both_lane_wrappers_expose_completion_label_bd_ur3tk_17() {
+        let module = test_module(vec![
+            Ir3Instruction::LoadInt { dst: 0, value: 17 },
+            Ir3Instruction::Return { value: 0 },
+        ]);
+
+        for result in [
+            quickjs_execute(&module).expect("QuickJsLane should execute"),
+            v8_execute(&module).expect("V8Lane should execute"),
+        ] {
+            assert_eq!(result.value, Value::Int(17));
+            assert_eq!(result.completion_label, crate::ifc_artifacts::Label::Public);
+        }
     }
 
     #[test]

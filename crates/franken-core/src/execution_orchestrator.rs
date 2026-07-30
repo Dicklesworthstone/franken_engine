@@ -96,7 +96,7 @@ const DEFAULT_MAX_CONCURRENT_SAGAS: usize = 4;
 #[allow(dead_code)]
 const IFC_RUNTIME_GUARD_CAPABILITY: &str = "ifc.check_flow";
 const SCALE_MILLION: i64 = 1_000_000;
-const EVIDENCE_COMPRESSION_SKETCH_SCHEMA: &str = "franken-engine.evidence-compression-sketch.v2";
+const EVIDENCE_COMPRESSION_SKETCH_SCHEMA: &str = "franken-engine.evidence-compression-sketch.v3";
 const EVIDENCE_COMPRESSION_SKETCH_MAX_BYTES: usize = 512;
 
 // ---------------------------------------------------------------------------
@@ -259,6 +259,7 @@ pub struct OrchestratorResult {
     pub lane: LaneChoice,
     pub lane_reason: LaneReason,
     pub execution_value: String,
+    pub completion_label: Label,
     pub instructions_executed: u64,
     pub adaptive_router_summary: Option<RouterSummary>,
     pub ir3_schedule_cost: Option<TropicalWeight>,
@@ -852,6 +853,7 @@ impl ExecutionOrchestrator {
             let lane_reason = routed.reason;
             let exec_result = routed.result;
             let execution_value = format!("{}", exec_result.value);
+            let completion_label = exec_result.completion_label.clone();
             let instructions_executed = exec_result.instructions_executed;
             let adaptive_router_summary = self.update_adaptive_router(lane, &exec_result);
 
@@ -926,6 +928,7 @@ impl ExecutionOrchestrator {
                 lane,
                 lane_reason,
                 execution_value,
+                completion_label,
                 instructions_executed,
                 adaptive_router_summary,
                 ir3_schedule_cost,
@@ -1505,10 +1508,11 @@ impl ExecutionOrchestrator {
             witness_id: format!("{trace_id}:execution"),
             witness_type: "execution_telemetry".to_string(),
             value: format!(
-                "instructions={} hostcalls={} value={}",
+                "instructions={} hostcalls={} value={} completion_label={}",
                 exec.instructions_executed,
                 exec.hostcall_decisions.len(),
-                exec.value
+                exec.value,
+                exec.completion_label
             ),
         });
 
@@ -1518,6 +1522,10 @@ impl ExecutionOrchestrator {
         builder = builder.meta(
             "capabilities_count".to_string(),
             package.capabilities.len().to_string(),
+        );
+        builder = builder.meta(
+            "execution_completion_label".to_string(),
+            exec.completion_label.to_string(),
         );
 
         if let Some(cost) = ir3_schedule_cost {
@@ -2312,6 +2320,7 @@ impl ExecutionOrchestrator {
             &Self::risk_state_symbol(update.posterior.map_estimate()).to_be_bytes(),
         );
         bytes.extend_from_slice(&exec.instructions_executed.to_be_bytes());
+        bytes.extend_from_slice(Self::completion_label_hash(&exec.completion_label).as_bytes());
         bytes.extend_from_slice(&Self::usize_to_u64(exec.hostcall_decisions.len()).to_be_bytes());
         bytes.extend_from_slice(&capability_summary.total.to_be_bytes());
         bytes.extend_from_slice(capability_summary.multiset_hash.as_bytes());
@@ -2416,6 +2425,23 @@ impl ExecutionOrchestrator {
     fn append_len_prefixed_bytes(output: &mut Vec<u8>, value: &[u8]) {
         output.extend_from_slice(&Self::usize_to_u64(value.len()).to_be_bytes());
         output.extend_from_slice(value);
+    }
+
+    fn completion_label_hash(label: &Label) -> ContentHash {
+        let mut preimage = b"franken-core.execution-completion-label.v1".to_vec();
+        match label {
+            Label::Public => preimage.push(0),
+            Label::Internal => preimage.push(1),
+            Label::Confidential => preimage.push(2),
+            Label::Secret => preimage.push(3),
+            Label::TopSecret => preimage.push(4),
+            Label::Custom { name, level } => {
+                preimage.push(5);
+                Self::append_len_prefixed_bytes(&mut preimage, name.as_bytes());
+                preimage.extend_from_slice(&level.to_be_bytes());
+            }
+        }
+        ContentHash::compute(&preimage)
     }
 
     fn usize_to_u64(value: usize) -> u64 {
@@ -3265,6 +3291,7 @@ mod tests {
     fn execution_reward_saturates_for_extreme_instruction_count() {
         let exec = ExecutionResult {
             value: crate::baseline_interpreter::Value::Null,
+            completion_label: Label::Public,
             hostcall_decisions: Vec::new(),
             instructions_executed: u64::MAX,
             requested_hook_action: None,
@@ -3734,6 +3761,62 @@ mod tests {
         let mut orch = ExecutionOrchestrator::with_defaults();
         let result = orch.execute(&simple_package()).unwrap();
         assert!(result.source_label.contains("test-ext-1"));
+    }
+
+    #[test]
+    fn orchestrator_result_and_evidence_expose_completion_label_bd_ur3tk_17() {
+        let mut orch = ExecutionOrchestrator::with_defaults();
+        let result = orch.execute(&simple_package()).unwrap();
+        assert_eq!(result.completion_label, Label::Public);
+        assert_eq!(
+            result.evidence_entries[0]
+                .metadata
+                .get("execution_completion_label")
+                .map(String::as_str),
+            Some("public")
+        );
+        assert!(
+            result.evidence_entries[0]
+                .witnesses
+                .iter()
+                .find(|witness| witness.witness_type == "execution_telemetry")
+                .is_some_and(|witness| witness.value.contains("completion_label=public"))
+        );
+    }
+
+    #[test]
+    fn completion_label_evidence_hash_is_exact_and_domain_separated_bd_ur3tk_17() {
+        let public_hash = ExecutionOrchestrator::completion_label_hash(&Label::Public);
+        let mut public_preimage = b"franken-core.execution-completion-label.v1".to_vec();
+        public_preimage.push(0);
+        assert_eq!(public_hash, ContentHash::compute(&public_preimage));
+        assert_ne!(public_hash, ContentHash::compute(&[0]));
+
+        let labels = [
+            Label::Public,
+            Label::Internal,
+            Label::Confidential,
+            Label::Secret,
+            Label::TopSecret,
+            Label::Custom {
+                name: "tenant-a".to_string(),
+                level: 3,
+            },
+            Label::Custom {
+                name: "tenant-b".to_string(),
+                level: 3,
+            },
+            Label::Custom {
+                name: "tenant-a".to_string(),
+                level: 4,
+            },
+        ];
+        let hashes = labels
+            .iter()
+            .map(ExecutionOrchestrator::completion_label_hash)
+            .map(|hash| hash.to_hex())
+            .collect::<BTreeSet<_>>();
+        assert_eq!(hashes.len(), labels.len());
     }
 
     #[test]
@@ -4361,6 +4444,7 @@ mod tests {
     fn execution_reward_zero_instructions() {
         let exec = ExecutionResult {
             value: crate::baseline_interpreter::Value::Null,
+            completion_label: Label::Public,
             hostcall_decisions: Vec::new(),
             instructions_executed: 0,
             requested_hook_action: None,
@@ -4683,6 +4767,7 @@ mod tests {
         let pkg = simple_package();
         let exec = ExecutionResult {
             value: crate::baseline_interpreter::Value::Int(42_000_000),
+            completion_label: Label::Public,
             hostcall_decisions: Vec::new(),
             instructions_executed: 10,
             requested_hook_action: None,
@@ -4702,6 +4787,7 @@ mod tests {
         let pkg = simple_package();
         let exec = ExecutionResult {
             value: crate::baseline_interpreter::Value::Null,
+            completion_label: Label::Public,
             hostcall_decisions: Vec::new(),
             instructions_executed: u64::MAX,
             requested_hook_action: None,
@@ -4725,6 +4811,7 @@ mod tests {
         };
         let exec = ExecutionResult {
             value: crate::baseline_interpreter::Value::Null,
+            completion_label: Label::Public,
             hostcall_decisions: Vec::new(),
             instructions_executed: 5,
             requested_hook_action: None,
@@ -4767,6 +4854,7 @@ mod tests {
     fn execution_reward_one_instruction() {
         let exec = ExecutionResult {
             value: crate::baseline_interpreter::Value::Null,
+            completion_label: Label::Public,
             hostcall_decisions: Vec::new(),
             instructions_executed: 1,
             requested_hook_action: None,
@@ -4929,6 +5017,7 @@ mod tests {
         let pkg = simple_package();
         let exec = ExecutionResult {
             value: crate::baseline_interpreter::Value::Null,
+            completion_label: Label::Public,
             hostcall_decisions: Vec::new(),
             instructions_executed: 0,
             requested_hook_action: None,
@@ -4947,6 +5036,7 @@ mod tests {
         use crate::ir_contract::{CapabilityTag, HostcallDecisionRecord};
         let exec = ExecutionResult {
             value: crate::baseline_interpreter::Value::Null,
+            completion_label: Label::Public,
             hostcall_decisions: vec![
                 HostcallDecisionRecord {
                     seq: 0,
@@ -4985,6 +5075,7 @@ mod tests {
             .collect();
         let exec = ExecutionResult {
             value: crate::baseline_interpreter::Value::Null,
+            completion_label: Label::Public,
             hostcall_decisions: many_hostcalls,
             instructions_executed: 0,
             requested_hook_action: None,
@@ -5143,6 +5234,7 @@ mod tests {
         let pkg = simple_package();
         let exec = ExecutionResult {
             value: crate::baseline_interpreter::Value::Int(1_000_000),
+            completion_label: Label::Public,
             hostcall_decisions: Vec::new(),
             instructions_executed: 5,
             requested_hook_action: None,

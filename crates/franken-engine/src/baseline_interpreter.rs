@@ -303,6 +303,9 @@ const MEMORY_ESTIMATE_READABLE_BUFFERED_CHUNK_BYTES: u64 = 32;
 /// Additional retained side-table charge while `Readable.toArray()` waits for
 /// the stream's terminal close phase before settling its Promise.
 const MEMORY_ESTIMATE_READABLE_TO_ARRAY_WAITER_BYTES: u64 = 48;
+/// Fixed charge retained after a Readable releases its live kernel. The
+/// terminal lifecycle label is charged separately.
+const MEMORY_ESTIMATE_READABLE_TERMINAL_BASE_BYTES: u64 = 64;
 /// Conservative fixed charges for the engine-owned Writable kernel. Retained
 /// strings and custom IFC-label names are charged separately.
 // Fixed state-side charges include the inline state payload plus conservative
@@ -7830,6 +7833,14 @@ struct ReadableFromState {
     to_array_waiter: Option<ReadableToArrayWaiter>,
 }
 
+/// Compact engine-owned provenance retained after the live Readable kernel
+/// releases its queue and callbacks. Ordinary terminal heap mirrors remain
+/// guest-mutable compatibility data and are never trusted as IFC authority.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ReadableTerminalState {
+    lifecycle_label: Label,
+}
+
 /// Exact scheduler headroom retained across one guest Readable callback.
 /// Re-entrant stream operations cannot materialize the successor while the
 /// callback is active without violating registration order, so they record
@@ -8532,6 +8543,9 @@ pub struct InterpreterCore {
     /// Values and IFC labels remain engine-owned while lifecycle events reuse
     /// the shared EventEmitter tables above.
     readable_from_streams: BTreeMap<ObjectId, ReadableFromState>,
+    /// Released Readable instances retain compact IFC provenance without
+    /// participating in live pump scans.
+    readable_terminal_states: BTreeMap<ObjectId, ReadableTerminalState>,
     /// Scheduled pure-compute stream pumps keyed by their `IoCompletion`
     /// registration sequence. At most one pump is queued per readable object.
     pending_readable_from_pumps: BTreeMap<u64, ObjectId>,
@@ -9018,6 +9032,7 @@ impl InterpreterCore {
             next_stream_pipeline_token: 0,
             pending_stream_emissions: BTreeMap::new(),
             readable_from_streams: BTreeMap::new(),
+            readable_terminal_states: BTreeMap::new(),
             pending_readable_from_pumps: BTreeMap::new(),
             readable_pump_reservations: BTreeMap::new(),
             readable_pipe_links: BTreeMap::new(),
@@ -16270,16 +16285,23 @@ impl InterpreterCore {
         }
         let released_promise_bytes =
             previous_promise_bytes.saturating_sub(self.promise_runtime_memory_bytes());
-        let retained_bytes =
-            self.readable_from_streams_memory_bytes()
-                .saturating_add(Self::saturating_sum(
-                    self.readable_pump_reservations
-                        .values()
-                        .map(|reservation| reservation.bytes),
-                ));
-        let targets: Vec<ObjectId> = self.readable_from_streams.keys().copied().collect();
+        let retained_bytes = self
+            .readable_from_streams_memory_bytes()
+            .saturating_add(self.readable_terminal_states_memory_bytes())
+            .saturating_add(Self::saturating_sum(
+                self.readable_pump_reservations
+                    .values()
+                    .map(|reservation| reservation.bytes),
+            ));
+        let targets: BTreeSet<ObjectId> = self
+            .readable_from_streams
+            .keys()
+            .chain(self.readable_terminal_states.keys())
+            .copied()
+            .collect();
 
         self.readable_from_streams.clear();
+        self.readable_terminal_states.clear();
         self.pending_readable_from_pumps.clear();
         self.readable_pump_reservations.clear();
         for target in targets {
@@ -23642,13 +23664,31 @@ impl InterpreterCore {
         &mut self,
         object_id: ObjectId,
     ) -> Result<(), InterpreterError> {
-        let Some(state) = self.readable_from_streams.remove(&object_id) else {
+        if self.readable_terminal_states.contains_key(&object_id)
+            && self.readable_from_streams.contains_key(&object_id)
+        {
+            return Err(InterpreterError::InternalError {
+                details: "Readable terminalization found live state beside an existing tombstone"
+                    .to_string(),
+            });
+        }
+        let Some(mut state) = self.readable_from_streams.remove(&object_id) else {
             return Ok(());
         };
         debug_assert_eq!(state.phase, ReadableFromPumpPhase::SettleToArray);
         let previous_total = self.estimated_memory_bytes;
         let state_bytes = Self::estimate_readable_from_state_bytes(&state);
-        self.estimated_memory_bytes = self.estimated_memory_bytes.saturating_sub(state_bytes);
+        let terminal_bytes = MEMORY_ESTIMATE_READABLE_TERMINAL_BASE_BYTES
+            .saturating_add(Self::estimate_label_bytes(&state.lifecycle_label));
+        debug_assert!(terminal_bytes <= state_bytes);
+        // Releasing a live kernel must keep making progress even when the
+        // caller lowers the configured ceiling below already-resident state.
+        // Account the smaller tombstone before Promise settlement so nested
+        // admission observes the retained terminal provenance.
+        self.estimated_memory_bytes = self
+            .estimated_memory_bytes
+            .saturating_sub(state_bytes)
+            .saturating_add(terminal_bytes);
 
         let settlement = if let Some(waiter) = state.to_array_waiter.as_ref() {
             if state.destroy_requested {
@@ -23681,6 +23721,16 @@ impl InterpreterCore {
             );
             return Err(error);
         }
+        let terminal = ReadableTerminalState {
+            lifecycle_label: std::mem::replace(&mut state.lifecycle_label, Label::Public),
+        };
+        debug_assert_eq!(
+            Self::estimate_readable_terminal_state_bytes(&terminal),
+            terminal_bytes
+        );
+        let previous = self.readable_terminal_states.insert(object_id, terminal);
+        debug_assert!(previous.is_none());
+        drop(state);
         Ok(())
     }
 
@@ -24746,6 +24796,12 @@ impl InterpreterCore {
                 break;
             }
             if let Some(state) = self.readable_from_streams.get(&id) {
+                let candidate = &state.lifecycle_label;
+                if label.is_none_or(|winner| candidate > winner) {
+                    label = Some(candidate);
+                }
+            }
+            if let Some(state) = self.readable_terminal_states.get(&id) {
                 let candidate = &state.lifecycle_label;
                 if label.is_none_or(|winner| candidate > winner) {
                     label = Some(candidate);
@@ -61816,6 +61872,11 @@ impl InterpreterCore {
             )
     }
 
+    fn estimate_readable_terminal_state_bytes(state: &ReadableTerminalState) -> u64 {
+        MEMORY_ESTIMATE_READABLE_TERMINAL_BASE_BYTES
+            .saturating_add(Self::estimate_label_bytes(&state.lifecycle_label))
+    }
+
     fn estimate_label_bytes(label: &Label) -> u64 {
         match label {
             Label::Custom { name, .. } => Self::estimate_string_bytes(name),
@@ -63081,6 +63142,14 @@ impl InterpreterCore {
         )
     }
 
+    fn readable_terminal_states_memory_bytes(&self) -> u64 {
+        Self::saturating_sum(
+            self.readable_terminal_states
+                .values()
+                .map(Self::estimate_readable_terminal_state_bytes),
+        )
+    }
+
     fn readable_pipe_links_memory_bytes(&self) -> u64 {
         u64::try_from(
             self.readable_pipe_links
@@ -63191,6 +63260,7 @@ impl InterpreterCore {
             .saturating_add(self.crypto_objects_memory_bytes())
             .saturating_add(self.stream_pipelines_memory_bytes())
             .saturating_add(self.readable_from_streams_memory_bytes())
+            .saturating_add(self.readable_terminal_states_memory_bytes())
             .saturating_add(Self::saturating_sum(
                 self.readable_pump_reservations
                     .values()
@@ -73514,8 +73584,8 @@ mod async_runtime_tests_current {
     }
 
     /// bd-fw7zd: the engine-owned finite stream queue must participate in both
-    /// incremental and recomputed memory totals, and terminal close must release
-    /// its side-table charge exactly once.
+    /// incremental and recomputed memory totals, and terminal close must
+    /// replace its live charge exactly once.
     #[test]
     fn readable_from_state_is_memory_accounted_and_released_bd_fw7zd() {
         let module = test_module_with_functions(Vec::new(), Vec::new());
@@ -74340,6 +74410,7 @@ mod async_runtime_tests_current {
         core.drive_readable_from_pump(readable, Some(&module))
             .expect("terminal cleanup must not reinsert deleted mirrors");
         assert!(!core.readable_from_streams.contains_key(&readable));
+        assert!(core.readable_terminal_states.contains_key(&readable));
         assert!(
             !core.heap[readable.0 as usize]
                 .properties
@@ -83136,6 +83207,181 @@ mod async_runtime_tests_current {
                 reason
             )) if reason == "abort"
         ));
+    }
+
+    #[test]
+    fn readable_terminal_provenance_survives_close_destroy_and_repeated_reads_bd_k2ig3() {
+        let lifecycle_module = test_module_with_functions(Vec::new(), Vec::new());
+        let property_module = test_module_with_functions(
+            vec![
+                Ir3Instruction::GetProperty {
+                    obj: 0,
+                    key: 1,
+                    dst: 4,
+                },
+                Ir3Instruction::GetProperty {
+                    obj: 0,
+                    key: 2,
+                    dst: 5,
+                },
+                Ir3Instruction::GetProperty {
+                    obj: 0,
+                    key: 3,
+                    dst: 6,
+                },
+                Ir3Instruction::GetProperty {
+                    obj: 0,
+                    key: 1,
+                    dst: 7,
+                },
+                Ir3Instruction::GetProperty {
+                    obj: 0,
+                    key: 2,
+                    dst: 8,
+                },
+                Ir3Instruction::GetProperty {
+                    obj: 0,
+                    key: 3,
+                    dst: 9,
+                },
+                Ir3Instruction::Halt,
+            ],
+            Vec::new(),
+        );
+        let assert_repeated_terminal_reads =
+            |core: &mut InterpreterCore, readable: ObjectId, expected_label: &Label| {
+                // Forge every ordinary terminal mirror back to Public-looking
+                // values. The read values remain compatibility data, but their
+                // provenance must come from the engine-owned tombstone.
+                for key in ["closed", "destroyed", "readableEnded"] {
+                    core.set_object_property(readable, key.to_string(), Value::Bool(false))
+                        .expect("forge ordinary terminal mirror");
+                }
+                core.write_reg_with_label(0, Value::Object(readable), Label::Public)
+                    .expect("terminal Readable receiver");
+                for (register, key) in [(1, "closed"), (2, "destroyed"), (3, "readableEnded")] {
+                    core.write_reg_with_label(register, Value::str(key), Label::Public)
+                        .expect("terminal property key");
+                }
+                for register in 4..=9 {
+                    core.write_reg_with_label(register, Value::Undefined, Label::Public)
+                        .expect("Public property destination");
+                }
+                core.ip = 0;
+                assert_eq!(
+                    core.run_loop(&property_module),
+                    Err(InterpreterError::Halted)
+                );
+                for register in 4..=9 {
+                    assert_eq!(
+                        core.read_reg(register).expect("terminal property value"),
+                        Value::Bool(false),
+                        "the test must actually observe the guest-forged mirror"
+                    );
+                    assert_eq!(
+                        core.get_register_label(register)
+                            .expect("terminal property label"),
+                        expected_label,
+                        "every repeated terminal observation retains lifecycle provenance"
+                    );
+                }
+                assert_eq!(core.stream_state_label(readable), expected_label.clone());
+                assert_eq!(
+                    core.estimated_memory_bytes(),
+                    core.recompute_estimated_memory_bytes()
+                );
+            };
+
+        let mut close_core = test_interpreter();
+        let reset_seed = close_core.capture_execution_seed();
+        let options = close_core
+            .alloc_object_with_properties(&[("highWaterMark", Value::Int(4))])
+            .expect("configured Readable options");
+        let config_label = Label::Custom {
+            name: "terminal-readable-config".to_string(),
+            level: 4,
+        };
+        close_core
+            .write_reg_with_label(0, Value::Object(options), config_label.clone())
+            .expect("classified Readable options");
+        let Value::Object(closed_readable) = close_core
+            .construct_stream_readable(RegRange { start: 0, count: 1 })
+            .expect("configured Readable")
+        else {
+            panic!("Readable constructor must return an object");
+        };
+        close_core
+            .readable_request_eof(closed_readable, Label::Public)
+            .expect("request configured Readable EOF");
+        close_core
+            .run_event_loop_until_idle_with_module(Some(&lifecycle_module))
+            .expect("configured Readable close");
+        assert!(
+            !close_core
+                .readable_from_streams
+                .contains_key(&closed_readable)
+        );
+        assert_eq!(
+            close_core.readable_terminal_states[&closed_readable].lifecycle_label,
+            config_label
+        );
+        assert_repeated_terminal_reads(&mut close_core, closed_readable, &config_label);
+
+        let previous_register_bytes = close_core.registers_memory_bytes();
+        let previous_heap_bytes = close_core.heap_memory_bytes();
+        close_core
+            .reset_execution_state_from_seed(&reset_seed)
+            .expect("reset terminal Readable state");
+        close_core
+            .apply_register_heap_memory_delta(previous_register_bytes, previous_heap_bytes)
+            .expect("terminal Readable reset memory delta");
+        assert!(close_core.readable_terminal_states.is_empty());
+        assert_eq!(
+            close_core.stream_state_label(closed_readable),
+            Label::Public,
+            "a reset heap identity cannot inherit terminal provenance"
+        );
+        assert_eq!(
+            close_core.estimated_memory_bytes(),
+            close_core.recompute_estimated_memory_bytes()
+        );
+
+        let mut error_core = test_interpreter();
+        let Value::Object(destroyed_readable) = error_core
+            .construct_stream_readable(RegRange { start: 0, count: 0 })
+            .expect("destroyed Readable")
+        else {
+            panic!("Readable constructor must return an object");
+        };
+        error_core
+            .write_reg_with_label(1, Value::str("classified failure"), Label::Secret)
+            .expect("classified destroy error");
+        error_core
+            .readable_destroy(
+                Value::Object(destroyed_readable),
+                RegRange { start: 1, count: 1 },
+            )
+            .expect("destroy(error)");
+        assert!(matches!(
+            error_core.drive_readable_from_pump(destroyed_readable, Some(&lifecycle_module)),
+            Err(InterpreterError::UncaughtException { .. })
+        ));
+        error_core
+            .drive_readable_from_pump(destroyed_readable, Some(&lifecycle_module))
+            .expect("close after unhandled destroy error");
+        error_core
+            .run_event_loop_until_idle_with_module(Some(&lifecycle_module))
+            .expect("drain stale scheduled Readable pump");
+        assert!(
+            !error_core
+                .readable_from_streams
+                .contains_key(&destroyed_readable)
+        );
+        assert_eq!(
+            error_core.readable_terminal_states[&destroyed_readable].lifecycle_label,
+            Label::Secret
+        );
+        assert_repeated_terminal_reads(&mut error_core, destroyed_readable, &Label::Secret);
     }
 
     #[test]

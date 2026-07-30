@@ -1796,18 +1796,13 @@ struct GeneratorCallSetup {
 #[allow(dead_code)]
 #[derive(Debug, Clone)]
 struct AsyncGeneratorObject {
-    /// Function index in the function table.
-    function_index: u32,
-    /// Closure index (captures from the enclosing scope).
-    closure_index: Option<u32>,
-    /// Saved instruction pointer (resume point after yield/await).
-    saved_ip: usize,
-    /// Saved register file snapshot at suspension.
-    saved_registers: Vec<Value>,
-    /// Saved IFC label snapshot at suspension.
-    saved_register_labels: Vec<crate::ifc_artifacts::Label>,
-    /// Saved register base offset.
-    saved_register_base: usize,
+    /// Complete isolated activation captured after parameter initialization or
+    /// a yield. Values, labels, lexical state, and abrupt-completion carriers
+    /// move together.
+    execution: Option<ModuleExecutionSnapshot>,
+    /// Destination register that receives the argument to the next
+    /// `.next(value)` after a yield.
+    resume_dst: Option<u32>,
     /// Current phase of the async generator.
     phase: AsyncGeneratorPhase,
 }
@@ -3119,9 +3114,13 @@ enum RunLoopExit {
     GeneratorBodyStart,
     GeneratorYield {
         result: Value,
+        label: crate::ifc_artifacts::Label,
         resume_dst: u32,
     },
-    GeneratorReturn(Value),
+    GeneratorReturn {
+        value: Value,
+        label: crate::ifc_artifacts::Label,
+    },
     GeneratorThrow {
         exception: LabeledException,
         description: String,
@@ -4285,8 +4284,8 @@ impl InterpreterCore {
         builtin: &BuiltinFunction,
         receiver: Option<&Value>,
         args: RegRange,
-    ) -> Result<Value, InterpreterError> {
-        match builtin.kind {
+    ) -> Result<(Value, crate::ifc_artifacts::Label), InterpreterError> {
+        let result = match builtin.kind {
             BuiltinFunctionKind::Require => {
                 let spec_val = if args.count > 0 {
                     self.read_reg(args.start)?
@@ -4379,7 +4378,7 @@ impl InterpreterCore {
                 } else {
                     crate::ifc_artifacts::Label::Public
                 };
-                self.generator_next(module, *generator_id, argument, argument_label)
+                return self.generator_next(module, *generator_id, argument, argument_label);
             }
             BuiltinFunctionKind::StringPrototypeCharAt
             | BuiltinFunctionKind::StringPrototypeCharCodeAt
@@ -4427,7 +4426,8 @@ impl InterpreterCore {
                     }
                 }
             }
-        }
+        };
+        result.map(|value| (value, crate::ifc_artifacts::Label::Public))
     }
 
     /// Single semantic implementation shared by the direct
@@ -6078,7 +6078,7 @@ impl InterpreterCore {
                 Err(error)
             }
             Ok(
-                RunLoopExit::GeneratorReturn(_)
+                RunLoopExit::GeneratorReturn { .. }
                 | RunLoopExit::GeneratorYield { .. }
                 | RunLoopExit::Value(_),
             ) => Err(InterpreterError::TypeError {
@@ -6113,6 +6113,31 @@ impl InterpreterCore {
         Ok(generator_id)
     }
 
+    fn publish_async_generator(
+        &mut self,
+        dst: u32,
+        generator: AsyncGeneratorObject,
+    ) -> Result<u32, InterpreterError> {
+        let generator_id = u32::try_from(self.async_generators.len()).map_err(|_| {
+            InterpreterError::TypeError {
+                expected: "async generator table capacity".into(),
+                got: format!("exceeded u32::MAX ({})", self.async_generators.len()),
+            }
+        })?;
+        self.async_generators.push(generator);
+        if let Err(error) = self.sync_estimated_memory_bytes() {
+            self.async_generators.pop();
+            self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
+            return Err(error);
+        }
+        if let Err(error) = self.write_reg(dst, Value::AsyncGeneratorObject(generator_id)) {
+            self.async_generators.pop();
+            self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
+            return Err(error);
+        }
+        Ok(generator_id)
+    }
+
     /// Step a generator: install its isolated activation, run until Yield or
     /// Return, then transfer the activation back. Returns `{ value, done }`.
     fn generator_next(
@@ -6121,7 +6146,7 @@ impl InterpreterCore {
         gen_id: u32,
         argument: Value,
         argument_label: crate::ifc_artifacts::Label,
-    ) -> Result<Value, InterpreterError> {
+    ) -> Result<(Value, crate::ifc_artifacts::Label), InterpreterError> {
         let phase = {
             let generator = self.generators.get(gen_id as usize).ok_or_else(|| {
                 InterpreterError::TypeError {
@@ -6131,7 +6156,10 @@ impl InterpreterCore {
             })?;
             match generator.phase {
                 GeneratorPhase::Completed => {
-                    return self.generator_result_object(Value::Undefined, true);
+                    return Ok((
+                        self.generator_result_object(Value::Undefined, true)?,
+                        crate::ifc_artifacts::Label::Public,
+                    ));
                 }
                 GeneratorPhase::Executing => {
                     return Err(InterpreterError::TypeError {
@@ -6148,6 +6176,23 @@ impl InterpreterCore {
         // synchronously active caller chain. Apply the same fail-closed depth
         // check used by ordinary calls before moving either execution context.
         self.ensure_call_depth_available()?;
+
+        let (value_count, label_count) = {
+            let activation = self.generators[gen_id as usize]
+                .execution
+                .as_ref()
+                .ok_or_else(|| InterpreterError::TypeError {
+                    expected: "suspended generator activation".into(),
+                    got: "generator has no saved execution context".into(),
+                })?;
+            (activation.registers.len(), activation.register_labels.len())
+        };
+        if value_count != label_count {
+            return Err(InterpreterError::TypeError {
+                expected: "generator snapshot with one IFC label per register".into(),
+                got: format!("values={value_count}, labels={label_count}"),
+            });
+        }
 
         let (resume_dst, activation) = {
             let generator = &mut self.generators[gen_id as usize];
@@ -6210,7 +6255,11 @@ impl InterpreterCore {
         self.restore_module_execution(caller_execution);
 
         match outcome {
-            Ok(RunLoopExit::GeneratorYield { result, resume_dst }) => {
+            Ok(RunLoopExit::GeneratorYield {
+                result,
+                label,
+                resume_dst,
+            }) => {
                 let generator = &mut self.generators[gen_id as usize];
                 generator.execution = Some(activation);
                 generator.resume_dst = Some(resume_dst);
@@ -6223,15 +6272,26 @@ impl InterpreterCore {
                     self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
                     return Err(error);
                 }
-                Ok(result)
+                Ok((result, label))
             }
-            Ok(RunLoopExit::GeneratorReturn(value) | RunLoopExit::Value(value)) => {
+            Ok(RunLoopExit::GeneratorReturn { value, label }) => {
                 let generator = &mut self.generators[gen_id as usize];
                 generator.execution = None;
                 generator.resume_dst = None;
                 generator.phase = GeneratorPhase::Completed;
                 self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
-                self.generator_result_object(value, true)
+                Ok((self.generator_result_object(value, true)?, label))
+            }
+            Ok(RunLoopExit::Value(value)) => {
+                let generator = &mut self.generators[gen_id as usize];
+                generator.execution = None;
+                generator.resume_dst = None;
+                generator.phase = GeneratorPhase::Completed;
+                self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
+                Ok((
+                    self.generator_result_object(value, true)?,
+                    crate::ifc_artifacts::Label::Public,
+                ))
             }
             Ok(RunLoopExit::GeneratorThrow {
                 exception,
@@ -6262,7 +6322,10 @@ impl InterpreterCore {
                 generator.resume_dst = None;
                 generator.phase = GeneratorPhase::Completed;
                 self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
-                self.generator_result_object(Value::Undefined, true)
+                Ok((
+                    self.generator_result_object(Value::Undefined, true)?,
+                    crate::ifc_artifacts::Label::Public,
+                ))
             }
             Err(error) => {
                 let generator = &mut self.generators[gen_id as usize];
@@ -6285,36 +6348,30 @@ impl InterpreterCore {
     #[allow(dead_code)]
     fn async_generator_next(
         &mut self,
-        _module: &Ir3Module,
+        module: &Ir3Module,
         gen_id: u32,
-        _arg: Value,
+        argument: Value,
+        argument_label: crate::ifc_artifacts::Label,
     ) -> Result<Value, InterpreterError> {
-        let async_gen = self
+        let generator_index = gen_id as usize;
+        let phase = self
             .async_generators
-            .get_mut(gen_id as usize)
+            .get(generator_index)
             .ok_or_else(|| InterpreterError::TypeError {
                 expected: "valid async generator".into(),
                 got: format!("async_generator#{gen_id} not found"),
-            })?;
+            })?
+            .phase;
 
-        match async_gen.phase {
+        match phase {
             AsyncGeneratorPhase::Completed => {
-                // Return a resolved Promise with {value: undefined, done: true}
                 let result_promise = self.promise_store.create().0;
-                let result_id = self.alloc_object_with_prototype(None)?;
-                {
-                    self.set_object_property(result_id, "value".to_string(), Value::Undefined)?;
-                    self.set_object_property(result_id, "done".to_string(), Value::Bool(true))?;
-                }
-                let js_val = crate::object_model::JsValue::Object(
-                    crate::object_model::ObjectHandle(result_id.0),
-                );
-                let label = crate::ifc_artifacts::Label::Public;
+                let result = self.generator_result_object(Value::Undefined, true)?;
                 self.promise_store
                     .fulfill(
                         crate::promise_model::PromiseHandle(result_promise),
-                        js_val,
-                        label,
+                        Self::value_to_js_value(&result),
+                        crate::ifc_artifacts::Label::Public,
                         &mut self.event_loop.microtasks,
                     )
                     .map_err(|e| InterpreterError::TypeError {
@@ -6334,202 +6391,174 @@ impl InterpreterCore {
             | AsyncGeneratorPhase::SuspendedAwait => {}
         }
 
-        // Save caller execution context
-        let caller_ip = self.ip;
-        let caller_register_base = self.register_base;
-        let caller_scope = self.snapshot_scope_chain()?;
-        let caller_scope_bytes = Self::estimate_scope_chain_bytes(&caller_scope);
-
-        // Create promise for the async generator result
-        let result_promise = self.promise_store.create().0;
-
-        let (is_start, func_idx, closure_idx) = {
-            let async_gen = &mut self.async_generators[gen_id as usize];
-            let is_start = async_gen.phase == AsyncGeneratorPhase::SuspendedStart;
-            let func_idx = async_gen.function_index;
-            let closure_idx = async_gen.closure_index;
-            async_gen.phase = AsyncGeneratorPhase::Executing;
-            (is_start, func_idx, closure_idx)
+        self.ensure_call_depth_available()?;
+        let (value_count, label_count) = {
+            let activation = self.async_generators[generator_index]
+                .execution
+                .as_ref()
+                .ok_or_else(|| InterpreterError::TypeError {
+                    expected: "suspended async generator activation".into(),
+                    got: "async generator has no saved execution context".into(),
+                })?;
+            (activation.registers.len(), activation.register_labels.len())
         };
-
-        // Set up execution context
-        if is_start {
-            let start_result = (|| -> Result<(), InterpreterError> {
-                let func = _module.function_table.get(func_idx as usize).ok_or(
-                    InterpreterError::FunctionNotFound {
-                        index: func_idx,
-                        table_size: _module.function_table.len() as u32,
-                    },
-                )?;
-
-                if let Some(cid) = closure_idx {
-                    let closure = self.closures.get(cid as usize).ok_or_else(|| {
-                        InterpreterError::TypeError {
-                            expected: "valid closure".into(),
-                            got: format!("closure#{cid} not found"),
-                        }
-                    })?;
-                    self.scope_chain.frames = self.clone_scope_frames_with_temporary_budget(
-                        &closure.captured_env,
-                        caller_scope_bytes,
-                    )?;
-                }
-                self.scope_chain.push(self.config.max_scope_depth)?;
-                self.sync_estimated_memory_bytes()?;
-
-                self.register_base = self.registers.len();
-                let req_len = self.register_base + self.config.max_registers as usize;
-                self.clear_register_range(self.register_base, req_len);
-
-                self.ip = func.entry as usize;
-                Ok(())
-            })();
-
-            if let Err(err) = start_result {
-                // Restore caller context on error
-                self.ip = caller_ip;
-                self.register_base = caller_register_base;
-                self.scope_chain.frames = caller_scope;
-                let async_gen = &mut self.async_generators[gen_id as usize];
-                async_gen.phase = AsyncGeneratorPhase::SuspendedStart;
-                self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
-
-                // Reject the promise with the error
-                let js_val = crate::object_model::JsValue::Str(JsString::from(format!("{err:?}")));
-                let label = crate::ifc_artifacts::Label::Public;
-                self.promise_store
-                    .reject(
-                        crate::promise_model::PromiseHandle(result_promise),
-                        js_val,
-                        label,
-                        &mut self.event_loop.microtasks,
-                    )
-                    .map_err(|e| InterpreterError::TypeError {
-                        expected: "promise rejection".into(),
-                        got: format!("failed to reject promise: {e:?}"),
-                    })?;
-                return Ok(Value::Promise(result_promise));
-            }
-        } else {
-            // Resume from saved state (SuspendedYield/SuspendedAwait)
-            let (saved_ip, saved_regs, saved_labels, saved_base) = {
-                let async_gen = &mut self.async_generators[gen_id as usize];
-                (
-                    async_gen.saved_ip,
-                    std::mem::take(&mut async_gen.saved_registers),
-                    std::mem::take(&mut async_gen.saved_register_labels),
-                    async_gen.saved_register_base,
-                )
-            };
-
-            self.ip = saved_ip;
-            self.register_base = saved_base;
-            self.restore_saved_register_range(saved_base, saved_regs, saved_labels);
+        if value_count != label_count {
+            return Err(InterpreterError::TypeError {
+                expected: "async generator snapshot with one IFC label per register".into(),
+                got: format!("values={value_count}, labels={label_count}"),
+            });
         }
 
-        // Execute until yield/return/throw
-        let execution_result = self.run_loop(_module);
-
-        // Handle execution result and fulfill promise accordingly
-        let promise_result = match &execution_result {
-            Ok(result_value)
-                if matches!(
-                    _module.instructions.get(self.ip),
-                    Some(Ir3Instruction::Return { .. })
-                ) =>
+        let result_promise = self.promise_store.create().0;
+        let (activation, resume_dst) =
             {
-                let async_gen = &mut self.async_generators[gen_id as usize];
-                async_gen.phase = AsyncGeneratorPhase::Completed;
+                let async_generator = &mut self.async_generators[generator_index];
+                let activation = async_generator.execution.take().ok_or_else(|| {
+                    InterpreterError::TypeError {
+                        expected: "suspended async generator activation".into(),
+                        got: "async generator has no saved execution context".into(),
+                    }
+                })?;
+                let resume_dst = async_generator.resume_dst.take();
+                async_generator.phase = AsyncGeneratorPhase::Executing;
+                (activation, resume_dst)
+            };
 
-                let result_id = self.alloc_object_with_prototype(None)?;
-                self.set_object_property(result_id, "value".to_string(), result_value.clone())?;
-                self.set_object_property(result_id, "done".to_string(), Value::Bool(true))?;
+        let caller_execution = self.take_module_execution();
+        let caller_bytes = Self::estimate_module_execution_bytes(&caller_execution);
+        let previous_suspended_bytes = self.temporarily_suspended_execution_bytes;
+        let previous_suspended_call_depth = self.temporarily_suspended_call_depth;
+        self.temporarily_suspended_execution_bytes =
+            previous_suspended_bytes.saturating_add(caller_bytes);
+        self.temporarily_suspended_call_depth =
+            previous_suspended_call_depth.saturating_add(caller_execution.call_stack.len());
+        self.install_module_execution(activation);
 
-                let js_val = crate::object_model::JsValue::Object(
-                    crate::object_model::ObjectHandle(result_id.0),
-                );
-                let label = crate::ifc_artifacts::Label::Public;
-                self.promise_store.fulfill(
-                    crate::promise_model::PromiseHandle(result_promise),
-                    js_val,
-                    label,
-                    &mut self.event_loop.microtasks,
-                )
+        let setup_result = if phase == AsyncGeneratorPhase::SuspendedYield
+            && let Some(resume_dst) = resume_dst
+        {
+            self.write_reg_with_label(resume_dst, argument, argument_label)
+        } else {
+            Ok(())
+        };
+        if let Err(error) = setup_result {
+            let activation = self.take_module_execution();
+            self.temporarily_suspended_execution_bytes = previous_suspended_bytes;
+            self.temporarily_suspended_call_depth = previous_suspended_call_depth;
+            self.restore_module_execution(caller_execution);
+            let async_generator = &mut self.async_generators[generator_index];
+            async_generator.execution = Some(activation);
+            async_generator.resume_dst = resume_dst;
+            async_generator.phase = phase;
+            self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
+            self.reject_promise(
+                crate::promise_model::PromiseHandle(result_promise),
+                crate::object_model::JsValue::Str(JsString::from(format!("{error:?}"))),
+                crate::ifc_artifacts::Label::Public,
+            )?;
+            return Ok(Value::Promise(result_promise));
+        }
+
+        let outcome = self.run_loop_with_mode(module, RunLoopMode::Generator);
+        let mut activation = self.take_module_execution();
+        let escaped_exception = activation.pending_exception.take();
+        self.temporarily_suspended_execution_bytes = previous_suspended_bytes;
+        self.temporarily_suspended_call_depth = previous_suspended_call_depth;
+        self.restore_module_execution(caller_execution);
+
+        let promise_handle = crate::promise_model::PromiseHandle(result_promise);
+        match outcome {
+            Ok(RunLoopExit::GeneratorYield {
+                result,
+                label,
+                resume_dst,
+            }) => {
+                let async_generator = &mut self.async_generators[generator_index];
+                async_generator.execution = Some(activation);
+                async_generator.resume_dst = Some(resume_dst);
+                async_generator.phase = AsyncGeneratorPhase::SuspendedYield;
+                self.sync_estimated_memory_bytes()?;
+                self.fulfill_promise(promise_handle, Self::value_to_js_value(&result), label)?;
             }
-            Ok(yield_result) => {
-                // Yield already returns the generator result object
-                // `{ value, done: false }`; promise-wrap it directly.
-                let max_regs = self.config.max_registers as usize;
-                let saved_regs: Vec<Value> =
-                    self.registers[self.register_base..self.register_base + max_regs].to_vec();
-                let saved_labels = self
-                    .register_labels_in_range(self.register_base, self.register_base + max_regs);
-
-                let async_gen = &mut self.async_generators[gen_id as usize];
-                async_gen.saved_ip = self.ip;
-                async_gen.saved_registers = saved_regs;
-                async_gen.saved_register_labels = saved_labels;
-                async_gen.saved_register_base = self.register_base;
-                async_gen.phase = AsyncGeneratorPhase::SuspendedYield;
-
-                let js_val = Self::value_to_js_value(yield_result);
-                let label = crate::ifc_artifacts::Label::Public;
-                self.promise_store.fulfill(
-                    crate::promise_model::PromiseHandle(result_promise),
-                    js_val,
-                    label,
-                    &mut self.event_loop.microtasks,
-                )
+            Ok(RunLoopExit::GeneratorReturn { value, label }) => {
+                let async_generator = &mut self.async_generators[generator_index];
+                async_generator.execution = None;
+                async_generator.resume_dst = None;
+                async_generator.phase = AsyncGeneratorPhase::Completed;
+                self.sync_estimated_memory_bytes()?;
+                let result = self.generator_result_object(value, true)?;
+                self.fulfill_promise(promise_handle, Self::value_to_js_value(&result), label)?;
+            }
+            Ok(RunLoopExit::GeneratorThrow { exception, .. }) => {
+                let async_generator = &mut self.async_generators[generator_index];
+                async_generator.execution = None;
+                async_generator.resume_dst = None;
+                async_generator.phase = AsyncGeneratorPhase::Completed;
+                self.sync_estimated_memory_bytes()?;
+                self.reject_promise(
+                    promise_handle,
+                    Self::value_to_js_value(&exception.value),
+                    exception.label,
+                )?;
+            }
+            Ok(RunLoopExit::GeneratorBodyStart) => {
+                let async_generator = &mut self.async_generators[generator_index];
+                async_generator.execution = None;
+                async_generator.resume_dst = None;
+                async_generator.phase = AsyncGeneratorPhase::Completed;
+                self.sync_estimated_memory_bytes()?;
+                self.reject_promise(
+                    promise_handle,
+                    crate::object_model::JsValue::Str(JsString::from(
+                        "unexpected async generator body boundary",
+                    )),
+                    crate::ifc_artifacts::Label::Public,
+                )?;
+            }
+            Ok(RunLoopExit::Value(value)) => {
+                let async_generator = &mut self.async_generators[generator_index];
+                async_generator.execution = None;
+                async_generator.resume_dst = None;
+                async_generator.phase = AsyncGeneratorPhase::Completed;
+                self.sync_estimated_memory_bytes()?;
+                let result = self.generator_result_object(value, true)?;
+                self.fulfill_promise(
+                    promise_handle,
+                    Self::value_to_js_value(&result),
+                    crate::ifc_artifacts::Label::Public,
+                )?;
             }
             Err(InterpreterError::Halted) => {
-                // Generator completed
-                let async_gen = &mut self.async_generators[gen_id as usize];
-                async_gen.phase = AsyncGeneratorPhase::Completed;
-
-                // Create {value: undefined, done: true} object
-                let result_id = self.alloc_object_with_prototype(None)?;
-                self.set_object_property(result_id, "value".to_string(), Value::Undefined)?;
-                self.set_object_property(result_id, "done".to_string(), Value::Bool(true))?;
-
-                let js_val = crate::object_model::JsValue::Object(
-                    crate::object_model::ObjectHandle(result_id.0),
+                let async_generator = &mut self.async_generators[generator_index];
+                async_generator.execution = None;
+                async_generator.resume_dst = None;
+                async_generator.phase = AsyncGeneratorPhase::Completed;
+                self.sync_estimated_memory_bytes()?;
+                let result = self.generator_result_object(Value::Undefined, true)?;
+                self.fulfill_promise(
+                    promise_handle,
+                    Self::value_to_js_value(&result),
+                    crate::ifc_artifacts::Label::Public,
+                )?;
+            }
+            Err(error) => {
+                let async_generator = &mut self.async_generators[generator_index];
+                async_generator.execution = None;
+                async_generator.resume_dst = None;
+                async_generator.phase = AsyncGeneratorPhase::Completed;
+                self.sync_estimated_memory_bytes()?;
+                let (reason, label) = escaped_exception.map_or_else(
+                    || {
+                        (
+                            crate::object_model::JsValue::Str(JsString::from(format!("{error:?}"))),
+                            crate::ifc_artifacts::Label::Public,
+                        )
+                    },
+                    |exception| (Self::value_to_js_value(&exception.value), exception.label),
                 );
-                let label = crate::ifc_artifacts::Label::Public;
-                self.promise_store.fulfill(
-                    crate::promise_model::PromiseHandle(result_promise),
-                    js_val,
-                    label,
-                    &mut self.event_loop.microtasks,
-                )
+                self.reject_promise(promise_handle, reason, label)?;
             }
-            Err(err) => {
-                // Generator threw an error
-                let async_gen = &mut self.async_generators[gen_id as usize];
-                async_gen.phase = AsyncGeneratorPhase::Completed;
-
-                // Reject the promise with the error
-                let js_val = crate::object_model::JsValue::Str(JsString::from(format!("{err:?}")));
-                let label = crate::ifc_artifacts::Label::Public;
-                self.promise_store.reject(
-                    crate::promise_model::PromiseHandle(result_promise),
-                    js_val,
-                    label,
-                    &mut self.event_loop.microtasks,
-                )
-            }
-        };
-
-        // Restore caller execution context
-        self.ip = caller_ip;
-        self.register_base = caller_register_base;
-        self.scope_chain.frames = caller_scope;
-        self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
-
-        // Handle promise operation result
-        promise_result.map_err(|e| InterpreterError::TypeError {
-            expected: "promise operation".into(),
-            got: format!("failed promise operation: {e:?}"),
-        })?;
+        }
 
         Ok(Value::Promise(result_promise))
     }
@@ -6537,7 +6566,7 @@ impl InterpreterCore {
     fn run_loop(&mut self, module: &Ir3Module) -> Result<Value, InterpreterError> {
         match self.run_loop_with_mode(module, RunLoopMode::Normal)? {
             RunLoopExit::Value(value)
-            | RunLoopExit::GeneratorReturn(value)
+            | RunLoopExit::GeneratorReturn { value, .. }
             | RunLoopExit::GeneratorYield { result: value, .. } => Ok(value),
             RunLoopExit::GeneratorBodyStart => Err(InterpreterError::TypeError {
                 expected: "generator activation".to_string(),
@@ -6584,7 +6613,10 @@ impl InterpreterCore {
                             Value::Undefined,
                             crate::ifc_artifacts::Label::Public,
                         )?;
-                        return Ok(RunLoopExit::GeneratorReturn(Value::Undefined));
+                        return Ok(RunLoopExit::GeneratorReturn {
+                            value: Value::Undefined,
+                            label: crate::ifc_artifacts::Label::Public,
+                        });
                     }
                     if let Some(final_value) =
                         self.complete_return(Value::Undefined, crate::ifc_artifacts::Label::Public)?
@@ -6805,8 +6837,8 @@ impl InterpreterCore {
 
                     if let Value::BuiltinFunction(builtin) = &callee_val {
                         match self.dispatch_builtin_function(module, builtin, None, args) {
-                            Ok(result) => {
-                                self.write_reg(dst, result)?;
+                            Ok((result, result_label)) => {
+                                self.write_reg_with_label(dst, result, result_label)?;
                                 self.ip += 1;
                             }
                             Err(error) => {
@@ -6914,29 +6946,35 @@ impl InterpreterCore {
                                 table_size: module.function_table.len() as u32,
                             },
                         )?;
-                        if func.rest_param_index.is_some() {
-                            return Err(InterpreterError::TypeError {
-                                expected: "generator call without unsupported rest metadata"
-                                    .to_string(),
-                                got: "generator rest parameters are not implemented".to_string(),
-                            });
-                        }
+                        self.validate_function_rest_param(func)?;
                         let function_entry = func.entry;
-                        let function_arity = func.arity;
-                        let mut arguments = Vec::new();
-                        for offset in 0..args.count.min(function_arity) {
+                        let mut argument_values = Vec::new();
+                        let mut argument_labels = Vec::new();
+                        for offset in 0..args.count {
                             let reg = args.start.checked_add(offset).ok_or(
                                 InterpreterError::RegisterOutOfBounds {
                                     register: args.start,
                                     max: self.config.max_registers,
                                 },
                             )?;
-                            arguments.push((self.read_reg(reg)?, self.read_reg_label(reg)?));
+                            argument_values.push(self.read_reg(reg)?);
+                            argument_labels.push(self.read_reg_label(reg)?);
                         }
-                        let argument_values = arguments
-                            .iter()
-                            .map(|(value, _)| value.clone())
-                            .collect::<Vec<_>>();
+                        argument_values.truncate(func.arity as usize);
+                        argument_labels.truncate(func.arity as usize);
+                        self.apply_rest_param(
+                            module,
+                            &mut argument_values,
+                            func.rest_param_index,
+                            func.arity,
+                            args,
+                        )?;
+                        self.apply_rest_param_labels(
+                            &mut argument_labels,
+                            func.rest_param_index,
+                            func.arity,
+                            args,
+                        )?;
                         if let Err(error) =
                             self.run_pre_call_hook(module, &callee_val, func_idx, &argument_values)
                         {
@@ -6953,7 +6991,10 @@ impl InterpreterCore {
                                 function_index: func_idx,
                                 function_entry,
                                 captured_env: captured_env.unwrap_or_default(),
-                                arguments,
+                                arguments: argument_values
+                                    .into_iter()
+                                    .zip(argument_labels)
+                                    .collect(),
                                 this_value: Value::Undefined,
                                 this_label: crate::ifc_artifacts::Label::Public,
                                 super_value,
@@ -6979,41 +7020,68 @@ impl InterpreterCore {
                     }
 
                     // Async generator function call: create a suspended AsyncGeneratorObject.
-                    if let Value::AsyncGeneratorFunction(cid) = &callee_val {
+                    if let Value::AsyncGeneratorFunction(_) = &callee_val {
                         let func = module.function_table.get(func_idx as usize).ok_or(
                             InterpreterError::FunctionNotFound {
                                 index: func_idx,
                                 table_size: module.function_table.len() as u32,
                             },
                         )?;
-                        if func.rest_param_index.is_some() {
-                            return Err(InterpreterError::TypeError {
-                                expected: "async-generator call without unsupported rest metadata"
-                                    .to_string(),
-                                got: "async-generator rest parameters are not implemented"
-                                    .to_string(),
-                            });
+                        self.validate_function_rest_param(func)?;
+                        let mut argument_values = Vec::new();
+                        let mut argument_labels = Vec::new();
+                        for offset in 0..args.count {
+                            let reg = args.start.checked_add(offset).ok_or(
+                                InterpreterError::RegisterOutOfBounds {
+                                    register: args.start,
+                                    max: self.config.max_registers,
+                                },
+                            )?;
+                            argument_values.push(self.read_reg(reg)?);
+                            argument_labels.push(self.read_reg_label(reg)?);
                         }
-                        let async_gen_id =
-                            u32::try_from(self.async_generators.len()).map_err(|_| {
-                                InterpreterError::TypeError {
-                                    expected: "async generator table capacity".into(),
-                                    got: format!(
-                                        "exceeded u32::MAX ({})",
-                                        self.async_generators.len()
-                                    ),
-                                }
-                            })?;
-                        self.async_generators.push(AsyncGeneratorObject {
-                            function_index: func_idx,
-                            closure_index: Some(*cid),
-                            saved_ip: 0,
-                            saved_registers: Vec::new(),
-                            saved_register_labels: Vec::new(),
-                            saved_register_base: 0,
-                            phase: AsyncGeneratorPhase::SuspendedStart,
-                        });
-                        self.write_reg(dst, Value::AsyncGeneratorObject(async_gen_id))?;
+                        argument_values.truncate(func.arity as usize);
+                        argument_labels.truncate(func.arity as usize);
+                        self.apply_rest_param(
+                            module,
+                            &mut argument_values,
+                            func.rest_param_index,
+                            func.arity,
+                            args,
+                        )?;
+                        self.apply_rest_param_labels(
+                            &mut argument_labels,
+                            func.rest_param_index,
+                            func.arity,
+                            args,
+                        )?;
+                        self.run_pre_call_hook(module, &callee_val, func_idx, &argument_values)?;
+                        let super_value =
+                            self.function_super_value(&callee_val, IR_SUPER_PROTOTYPE_PROPERTY)?;
+                        let generator = self.prepare_generator_activation(
+                            module,
+                            GeneratorCallSetup {
+                                function_index: func_idx,
+                                function_entry: func.entry,
+                                captured_env: captured_env.unwrap_or_default(),
+                                arguments: argument_values
+                                    .into_iter()
+                                    .zip(argument_labels)
+                                    .collect(),
+                                this_value: Value::Undefined,
+                                this_label: crate::ifc_artifacts::Label::Public,
+                                super_value,
+                                super_label: callee_label.clone(),
+                            },
+                        )?;
+                        self.publish_async_generator(
+                            dst,
+                            AsyncGeneratorObject {
+                                execution: generator.execution,
+                                resume_dst: None,
+                                phase: AsyncGeneratorPhase::SuspendedStart,
+                            },
+                        )?;
                         self.ip += 1;
                         continue;
                     }
@@ -7199,8 +7267,8 @@ impl InterpreterCore {
                             Some(&receiver_val),
                             args,
                         ) {
-                            Ok(result) => {
-                                self.write_reg(dst, result)?;
+                            Ok((result, result_label)) => {
+                                self.write_reg_with_label(dst, result, result_label)?;
                                 self.ip += 1;
                             }
                             Err(error) => {
@@ -7250,29 +7318,35 @@ impl InterpreterCore {
                     // Method invocation preserves its receiver in the isolated
                     // generator activation while defaults run synchronously.
                     if let Value::GeneratorFunction(_) = &callee_val {
-                        if func.rest_param_index.is_some() {
-                            return Err(InterpreterError::TypeError {
-                                expected: "generator call without unsupported rest metadata"
-                                    .to_string(),
-                                got: "generator rest parameters are not implemented".to_string(),
-                            });
-                        }
+                        self.validate_function_rest_param(func)?;
                         let function_entry = func.entry;
-                        let function_arity = func.arity;
-                        let mut arguments = Vec::new();
-                        for offset in 0..args.count.min(function_arity) {
+                        let mut argument_values = Vec::new();
+                        let mut argument_labels = Vec::new();
+                        for offset in 0..args.count {
                             let reg = args.start.checked_add(offset).ok_or(
                                 InterpreterError::RegisterOutOfBounds {
                                     register: args.start,
                                     max: self.config.max_registers,
                                 },
                             )?;
-                            arguments.push((self.read_reg(reg)?, self.read_reg_label(reg)?));
+                            argument_values.push(self.read_reg(reg)?);
+                            argument_labels.push(self.read_reg_label(reg)?);
                         }
-                        let argument_values = arguments
-                            .iter()
-                            .map(|(value, _)| value.clone())
-                            .collect::<Vec<_>>();
+                        argument_values.truncate(func.arity as usize);
+                        argument_labels.truncate(func.arity as usize);
+                        self.apply_rest_param(
+                            module,
+                            &mut argument_values,
+                            func.rest_param_index,
+                            func.arity,
+                            args,
+                        )?;
+                        self.apply_rest_param_labels(
+                            &mut argument_labels,
+                            func.rest_param_index,
+                            func.arity,
+                            args,
+                        )?;
                         if let Err(error) =
                             self.run_pre_call_hook(module, &callee_val, func_idx, &argument_values)
                         {
@@ -7288,7 +7362,10 @@ impl InterpreterCore {
                                 function_index: func_idx,
                                 function_entry,
                                 captured_env: captured_env.unwrap_or_default(),
-                                arguments,
+                                arguments: argument_values
+                                    .into_iter()
+                                    .zip(argument_labels)
+                                    .collect(),
                                 this_value: receiver_val.clone(),
                                 this_label: receiver_label.clone(),
                                 super_value,
@@ -7313,35 +7390,61 @@ impl InterpreterCore {
                         continue;
                     }
 
-                    if let Value::AsyncGeneratorFunction(closure_id) = &callee_val {
-                        if func.rest_param_index.is_some() {
-                            return Err(InterpreterError::TypeError {
-                                expected: "async-generator call without unsupported rest metadata"
-                                    .to_string(),
-                                got: "async-generator rest parameters are not implemented"
-                                    .to_string(),
-                            });
+                    if let Value::AsyncGeneratorFunction(_) = &callee_val {
+                        self.validate_function_rest_param(func)?;
+                        let mut argument_values = Vec::new();
+                        let mut argument_labels = Vec::new();
+                        for offset in 0..args.count {
+                            let reg = args.start.checked_add(offset).ok_or(
+                                InterpreterError::RegisterOutOfBounds {
+                                    register: args.start,
+                                    max: self.config.max_registers,
+                                },
+                            )?;
+                            argument_values.push(self.read_reg(reg)?);
+                            argument_labels.push(self.read_reg_label(reg)?);
                         }
-                        let generator_id =
-                            u32::try_from(self.async_generators.len()).map_err(|_| {
-                                InterpreterError::TypeError {
-                                    expected: "async generator table capacity".into(),
-                                    got: format!(
-                                        "exceeded u32::MAX ({})",
-                                        self.async_generators.len()
-                                    ),
-                                }
-                            })?;
-                        self.async_generators.push(AsyncGeneratorObject {
-                            function_index: func_idx,
-                            closure_index: Some(*closure_id),
-                            saved_ip: 0,
-                            saved_registers: Vec::new(),
-                            saved_register_labels: Vec::new(),
-                            saved_register_base: 0,
-                            phase: AsyncGeneratorPhase::SuspendedStart,
-                        });
-                        self.write_reg(dst, Value::AsyncGeneratorObject(generator_id))?;
+                        argument_values.truncate(func.arity as usize);
+                        argument_labels.truncate(func.arity as usize);
+                        self.apply_rest_param(
+                            module,
+                            &mut argument_values,
+                            func.rest_param_index,
+                            func.arity,
+                            args,
+                        )?;
+                        self.apply_rest_param_labels(
+                            &mut argument_labels,
+                            func.rest_param_index,
+                            func.arity,
+                            args,
+                        )?;
+                        self.run_pre_call_hook(module, &callee_val, func_idx, &argument_values)?;
+                        let super_value = self.method_super_value(&callee_val, &receiver_val)?;
+                        let generator = self.prepare_generator_activation(
+                            module,
+                            GeneratorCallSetup {
+                                function_index: func_idx,
+                                function_entry: func.entry,
+                                captured_env: captured_env.unwrap_or_default(),
+                                arguments: argument_values
+                                    .into_iter()
+                                    .zip(argument_labels)
+                                    .collect(),
+                                this_value: receiver_val.clone(),
+                                this_label: receiver_label.clone(),
+                                super_value,
+                                super_label: callee_label.clone(),
+                            },
+                        )?;
+                        self.publish_async_generator(
+                            dst,
+                            AsyncGeneratorObject {
+                                execution: generator.execution,
+                                resume_dst: None,
+                                phase: AsyncGeneratorPhase::SuspendedStart,
+                            },
+                        )?;
                         self.ip += 1;
                         continue;
                     }
@@ -7477,8 +7580,12 @@ impl InterpreterCore {
                             mode == RunLoopMode::Generator && self.call_stack.len() == 1;
                         if generator_root {
                             let completed_value = return_val.clone();
+                            let completed_label = return_label.clone();
                             let _ = self.complete_return(return_val, return_label)?;
-                            return Ok(RunLoopExit::GeneratorReturn(completed_value));
+                            return Ok(RunLoopExit::GeneratorReturn {
+                                value: completed_value,
+                                label: completed_label,
+                            });
                         }
                         if let Some(final_value) = self.complete_return(return_val, return_label)? {
                             return Ok(RunLoopExit::Value(final_value));
@@ -8545,11 +8652,15 @@ impl InterpreterCore {
                                     mode == RunLoopMode::Generator && self.call_stack.len() == 1;
                                 if generator_root {
                                     let completed_value = pending_return.value.clone();
+                                    let completed_label = pending_return.label.clone();
                                     let _ = self.complete_return(
                                         pending_return.value,
                                         pending_return.label,
                                     )?;
-                                    return Ok(RunLoopExit::GeneratorReturn(completed_value));
+                                    return Ok(RunLoopExit::GeneratorReturn {
+                                        value: completed_value,
+                                        label: completed_label,
+                                    });
                                 }
                                 if let Some(final_value) = self
                                     .complete_return(pending_return.value, pending_return.label)?
@@ -8769,6 +8880,7 @@ impl InterpreterCore {
                     resume_dst,
                 } => {
                     let yielded = self.read_reg(value)?;
+                    let yielded_label = self.read_reg_label(value)?;
                     let result_id = self.alloc_object_with_prototype(None)?;
                     {
                         self.set_object_property(result_id, "value".to_string(), yielded)?;
@@ -8781,7 +8893,11 @@ impl InterpreterCore {
                     self.ip += 1;
                     let result = Value::Object(result_id);
                     if mode == RunLoopMode::Generator {
-                        return Ok(RunLoopExit::GeneratorYield { result, resume_dst });
+                        return Ok(RunLoopExit::GeneratorYield {
+                            result,
+                            label: yielded_label,
+                            resume_dst,
+                        });
                     }
                     self.write_reg(resume_dst, Value::Undefined)?;
                     return Ok(RunLoopExit::Value(result));
@@ -14036,7 +14152,11 @@ impl InterpreterCore {
     fn estimate_call_frame_bytes(frame: &CallFrame) -> u64 {
         MEMORY_ESTIMATE_CALL_FRAME_BASE_BYTES
             .saturating_add(Self::estimate_value_bytes(&frame.this_value))
+            .saturating_add(Self::estimate_label_bytes(&frame.this_label))
             .saturating_add(Self::estimate_value_bytes(&frame.new_target_value))
+            .saturating_add(Self::estimate_label_bytes(&frame.new_target_label))
+            .saturating_add(Self::estimate_value_bytes(&frame.super_value))
+            .saturating_add(Self::estimate_label_bytes(&frame.super_label))
             .saturating_add(
                 frame
                     .construct_this
@@ -14048,14 +14168,14 @@ impl InterpreterCore {
                 frame
                     .saved_pending_exception
                     .as_ref()
-                    .map(|pending| Self::estimate_value_bytes(&pending.value))
+                    .map(Self::estimate_labeled_exception_bytes)
                     .unwrap_or(0),
             )
             .saturating_add(
                 frame
                     .saved_pending_return
                     .as_ref()
-                    .map(|pending| Self::estimate_value_bytes(&pending.value))
+                    .map(Self::estimate_labeled_return_bytes)
                     .unwrap_or(0),
             )
             .saturating_add(
@@ -14338,6 +14458,16 @@ impl InterpreterCore {
         )
     }
 
+    fn estimate_async_generator_bytes(generator: &AsyncGeneratorObject) -> u64 {
+        MEMORY_ESTIMATE_GENERATOR_BASE_BYTES.saturating_add(
+            generator
+                .execution
+                .as_ref()
+                .map(Self::estimate_module_execution_bytes)
+                .unwrap_or(0),
+        )
+    }
+
     fn heap_object_count_u32(&self) -> u32 {
         u32::try_from(self.heap.len()).unwrap_or(u32::MAX)
     }
@@ -14446,6 +14576,12 @@ impl InterpreterCore {
                 self.generators
                     .iter()
                     .map(Self::estimate_generator_bytes)
+                    .sum::<u64>(),
+            )
+            .saturating_add(
+                self.async_generators
+                    .iter()
+                    .map(Self::estimate_async_generator_bytes)
                     .sum::<u64>(),
             )
             .saturating_add(self.temporarily_suspended_execution_bytes)
@@ -24963,7 +25099,7 @@ mod tests {
             .expect("caller and generator activation should fit initially");
         core.config.max_total_memory_bytes = baseline.saturating_add(16 * 1024);
 
-        let yielded = core
+        let (yielded, _) = core
             .generator_next(
                 &module,
                 0,
@@ -24986,6 +25122,204 @@ mod tests {
             core.estimated_memory_bytes(),
             core.recompute_estimated_memory_bytes()
         );
+    }
+
+    #[test]
+    fn generator_value_and_resume_labels_are_isolated_bd_ur3tk_5() {
+        let module = test_module(vec![
+            Ir3Instruction::GeneratorBodyStart,
+            Ir3Instruction::Yield {
+                value: 0,
+                delegate: false,
+                resume_dst: 1,
+            },
+            Ir3Instruction::Return { value: 1 },
+        ]);
+        let mut core = InterpreterCore::new(test_quickjs_config(), "generator-label-isolation");
+        core.write_reg_with_label(5, Value::Int(99), crate::ifc_artifacts::Label::TopSecret)
+            .expect("caller sentinel should be writable");
+
+        for (value, label) in [
+            (Value::Int(11), crate::ifc_artifacts::Label::Secret),
+            (Value::Int(22), crate::ifc_artifacts::Label::Internal),
+        ] {
+            let generator = core
+                .prepare_generator_activation(
+                    &module,
+                    GeneratorCallSetup {
+                        function_index: 0,
+                        function_entry: 0,
+                        captured_env: core.scope_chain.snapshot(),
+                        arguments: vec![(value, label)],
+                        this_value: Value::Undefined,
+                        this_label: crate::ifc_artifacts::Label::Public,
+                        super_value: Value::Undefined,
+                        super_label: crate::ifc_artifacts::Label::Public,
+                    },
+                )
+                .expect("generator activation should suspend at its body boundary");
+            core.generators.push(generator);
+        }
+
+        let (_, first_label) = core
+            .generator_next(
+                &module,
+                0,
+                Value::Undefined,
+                crate::ifc_artifacts::Label::Public,
+            )
+            .expect("first generator should yield");
+        let (_, second_label) = core
+            .generator_next(
+                &module,
+                1,
+                Value::Undefined,
+                crate::ifc_artifacts::Label::Public,
+            )
+            .expect("second generator should yield independently");
+        assert_eq!(first_label, crate::ifc_artifacts::Label::Secret);
+        assert_eq!(second_label, crate::ifc_artifacts::Label::Internal);
+
+        let (_, return_label) = core
+            .generator_next(
+                &module,
+                0,
+                Value::Int(33),
+                crate::ifc_artifacts::Label::Confidential,
+            )
+            .expect("resume argument should become the first generator's return value");
+        assert_eq!(return_label, crate::ifc_artifacts::Label::Confidential);
+        assert_eq!(
+            core.read_reg_label(5).expect("caller label should survive"),
+            crate::ifc_artifacts::Label::TopSecret
+        );
+        assert_eq!(
+            core.generators[1]
+                .execution
+                .as_ref()
+                .expect("second generator should remain suspended")
+                .register_labels[0],
+            crate::ifc_artifacts::Label::Internal
+        );
+    }
+
+    #[test]
+    fn generator_rejects_mismatched_value_and_label_snapshot_bd_ur3tk_5() {
+        let module = test_module(vec![
+            Ir3Instruction::GeneratorBodyStart,
+            Ir3Instruction::Return { value: 0 },
+        ]);
+        let mut core = InterpreterCore::new(test_quickjs_config(), "generator-label-shape");
+        let mut generator = core
+            .prepare_generator_activation(
+                &module,
+                GeneratorCallSetup {
+                    function_index: 0,
+                    function_entry: 0,
+                    captured_env: core.scope_chain.snapshot(),
+                    arguments: Vec::new(),
+                    this_value: Value::Undefined,
+                    this_label: crate::ifc_artifacts::Label::Public,
+                    super_value: Value::Undefined,
+                    super_label: crate::ifc_artifacts::Label::Public,
+                },
+            )
+            .expect("generator activation should reach its body boundary");
+        generator
+            .execution
+            .as_mut()
+            .expect("prepared generator activation")
+            .register_labels
+            .pop();
+        core.generators.push(generator);
+
+        let error = core
+            .generator_next(
+                &module,
+                0,
+                Value::Undefined,
+                crate::ifc_artifacts::Label::Public,
+            )
+            .expect_err("a missing register label must fail closed");
+        assert!(matches!(
+            error,
+            InterpreterError::TypeError { expected, got }
+                if expected.contains("one IFC label per register")
+                    && got.contains("values=")
+                    && got.contains("labels=")
+        ));
+        assert_eq!(core.generators[0].phase, GeneratorPhase::SuspendedStart);
+        assert!(core.generators[0].execution.is_some());
+    }
+
+    #[test]
+    fn generator_return_completion_survives_finally_yield_bd_ur3tk_5() {
+        let module = test_module(vec![
+            Ir3Instruction::GeneratorBodyStart,
+            Ir3Instruction::BeginTry {
+                catch_target: 3,
+                finally_target: Some(3),
+            },
+            Ir3Instruction::Return { value: 0 },
+            Ir3Instruction::EnterFinally,
+            Ir3Instruction::Yield {
+                value: 0,
+                delegate: false,
+                resume_dst: 1,
+            },
+            Ir3Instruction::EndFinally,
+        ]);
+        let mut core = InterpreterCore::new(test_quickjs_config(), "generator-finally-snapshot");
+        let generator = core
+            .prepare_generator_activation(
+                &module,
+                GeneratorCallSetup {
+                    function_index: 0,
+                    function_entry: 0,
+                    captured_env: core.scope_chain.snapshot(),
+                    arguments: vec![(Value::Int(7), crate::ifc_artifacts::Label::Secret)],
+                    this_value: Value::Undefined,
+                    this_label: crate::ifc_artifacts::Label::Public,
+                    super_value: Value::Undefined,
+                    super_label: crate::ifc_artifacts::Label::Public,
+                },
+            )
+            .expect("generator activation should suspend at its body boundary");
+        core.generators.push(generator);
+
+        let (_, yield_label) = core
+            .generator_next(
+                &module,
+                0,
+                Value::Undefined,
+                crate::ifc_artifacts::Label::Public,
+            )
+            .expect("finally should yield before completing the pending return");
+        assert_eq!(yield_label, crate::ifc_artifacts::Label::Secret);
+        let suspended = core.generators[0]
+            .execution
+            .as_ref()
+            .expect("yield should preserve the generator activation");
+        assert!(matches!(
+            suspended.finally_frames.last(),
+            Some(FinallyFrame {
+                completion: Some(AbruptCompletion::Return(LabeledReturn {
+                    value: Value::Int(7),
+                    label: crate::ifc_artifacts::Label::Secret,
+                })),
+            })
+        ));
+
+        let (_, return_label) = core
+            .generator_next(
+                &module,
+                0,
+                Value::Undefined,
+                crate::ifc_artifacts::Label::Public,
+            )
+            .expect("resuming after the yield should complete the original return");
+        assert_eq!(return_label, crate::ifc_artifacts::Label::Secret);
+        assert_eq!(core.generators[0].phase, GeneratorPhase::Completed);
     }
 
     fn markerless_generator_module_bd_093id() -> Ir3Module {
@@ -25072,7 +25406,7 @@ mod tests {
         assert_eq!(invocation.value, Value::Generator(0));
         assert_eq!(core.generators[0].phase, GeneratorPhase::SuspendedStart);
 
-        let yielded = core
+        let (yielded, _) = core
             .generator_next(
                 &module,
                 0,
@@ -27760,6 +28094,33 @@ mod tests {
             )
         }
 
+        fn prepared_async_generator(
+            core: &mut InterpreterCore,
+            module: &Ir3Module,
+            arguments: Vec<(Value, crate::ifc_artifacts::Label)>,
+        ) -> AsyncGeneratorObject {
+            let generator = core
+                .prepare_generator_activation(
+                    module,
+                    GeneratorCallSetup {
+                        function_index: 0,
+                        function_entry: 0,
+                        captured_env: core.scope_chain.snapshot(),
+                        arguments,
+                        this_value: Value::Undefined,
+                        this_label: crate::ifc_artifacts::Label::Public,
+                        super_value: Value::Undefined,
+                        super_label: crate::ifc_artifacts::Label::Public,
+                    },
+                )
+                .expect("async generator activation should reach its body boundary");
+            AsyncGeneratorObject {
+                execution: generator.execution,
+                resume_dst: None,
+                phase: AsyncGeneratorPhase::SuspendedStart,
+            }
+        }
+
         #[test]
         fn create_async_function_stores_closure_reference_without_executor_state() {
             let mut core = InterpreterCore::new(test_quickjs_config(), "async-function-create");
@@ -29000,7 +29361,8 @@ mod tests {
                         dst: 1,
                     },
                     Ir3Instruction::Halt,
-                    Ir3Instruction::Halt,
+                    Ir3Instruction::GeneratorBodyStart,
+                    Ir3Instruction::Return { value: 0 },
                 ],
                 vec![Ir3FunctionDesc {
                     entry: 3,
@@ -29017,8 +29379,11 @@ mod tests {
 
             assert_eq!(core.async_generators.len(), 1);
             let created = &core.async_generators[0];
-            assert_eq!(created.function_index, 0);
-            assert_eq!(created.closure_index, Some(0));
+            let execution = created
+                .execution
+                .as_ref()
+                .expect("created async generator should own its activation");
+            assert_eq!(execution.call_stack[0].function_index, Some(0));
             assert!(matches!(created.phase, AsyncGeneratorPhase::SuspendedStart));
             assert!(matches!(core.registers[1], Value::AsyncGeneratorObject(0)));
         }
@@ -29033,19 +29398,20 @@ mod tests {
             // Create async generator, call it to get object, then call .next()
             let async_gen_id = {
                 core.async_generators.push(AsyncGeneratorObject {
-                    function_index: 0,
-                    closure_index: None,
-                    saved_ip: 0,
-                    saved_registers: Vec::new(),
-                    saved_register_labels: Vec::new(),
-                    saved_register_base: 0,
+                    execution: None,
+                    resume_dst: None,
                     phase: AsyncGeneratorPhase::Completed,
                 });
                 (core.async_generators.len() - 1) as u32
             };
 
             let result = core
-                .async_generator_next(&test_module(vec![]), async_gen_id, Value::Undefined)
+                .async_generator_next(
+                    &test_module(vec![]),
+                    async_gen_id,
+                    Value::Undefined,
+                    crate::ifc_artifacts::Label::Public,
+                )
                 .unwrap();
 
             match result {
@@ -29061,6 +29427,7 @@ mod tests {
             // Create a simple async generator function that yields then returns
             let module = test_module_with_pool_and_functions(
                 vec![
+                    Ir3Instruction::GeneratorBodyStart,
                     Ir3Instruction::LoadStr {
                         dst: 0,
                         pool_index: 0,
@@ -29088,20 +29455,18 @@ mod tests {
             );
 
             let async_gen_id = {
-                core.async_generators.push(AsyncGeneratorObject {
-                    function_index: 0,
-                    closure_index: None,
-                    saved_ip: 0,
-                    saved_registers: Vec::new(),
-                    saved_register_labels: Vec::new(),
-                    saved_register_base: 0,
-                    phase: AsyncGeneratorPhase::SuspendedStart,
-                });
+                let generator = prepared_async_generator(&mut core, &module, Vec::new());
+                core.async_generators.push(generator);
                 (core.async_generators.len() - 1) as u32
             };
 
             let result = core
-                .async_generator_next(&module, async_gen_id, Value::Undefined)
+                .async_generator_next(
+                    &module,
+                    async_gen_id,
+                    Value::Undefined,
+                    crate::ifc_artifacts::Label::Public,
+                )
                 .expect("async generator execution should succeed");
 
             // Should return a promise
@@ -29124,6 +29489,7 @@ mod tests {
             // Create a simple async generator function that yields then returns
             let module = test_module_with_pool_and_functions(
                 vec![
+                    Ir3Instruction::GeneratorBodyStart,
                     Ir3Instruction::LoadStr {
                         dst: 0,
                         pool_index: 0,
@@ -29151,20 +29517,25 @@ mod tests {
             );
 
             let async_gen_id = {
-                core.async_generators.push(AsyncGeneratorObject {
-                    function_index: 0,
-                    closure_index: None,
-                    saved_ip: 2, // Resume after yield
-                    saved_registers: vec![Value::Undefined],
-                    saved_register_labels: vec![crate::ifc_artifacts::Label::Public],
-                    saved_register_base: 0,
-                    phase: AsyncGeneratorPhase::SuspendedYield,
-                });
+                let generator = prepared_async_generator(&mut core, &module, Vec::new());
+                core.async_generators.push(generator);
                 (core.async_generators.len() - 1) as u32
             };
 
+            core.async_generator_next(
+                &module,
+                async_gen_id,
+                Value::Undefined,
+                crate::ifc_artifacts::Label::Public,
+            )
+            .expect("first async generator step should yield");
             let result = core
-                .async_generator_next(&module, async_gen_id, Value::Undefined)
+                .async_generator_next(
+                    &module,
+                    async_gen_id,
+                    Value::Undefined,
+                    crate::ifc_artifacts::Label::Public,
+                )
                 .expect("async generator resume should succeed");
 
             // Should return a promise
@@ -29177,6 +29548,183 @@ mod tests {
             assert!(matches!(
                 core.async_generators[async_gen_id as usize].phase,
                 AsyncGeneratorPhase::Completed
+            ));
+        }
+
+        #[test]
+        fn async_generator_rejects_mismatched_value_and_label_snapshot_bd_ur3tk_5() {
+            let module = test_module(vec![
+                Ir3Instruction::GeneratorBodyStart,
+                Ir3Instruction::Return { value: 0 },
+            ]);
+            let mut core = test_interpreter();
+            let mut generator = prepared_async_generator(&mut core, &module, Vec::new());
+            generator
+                .execution
+                .as_mut()
+                .expect("prepared async generator activation")
+                .register_labels
+                .pop();
+            core.async_generators.push(generator);
+            let promise_count = core.promise_store.len();
+
+            let error = core
+                .async_generator_next(
+                    &module,
+                    0,
+                    Value::Undefined,
+                    crate::ifc_artifacts::Label::Public,
+                )
+                .expect_err("a missing async-generator register label must fail closed");
+            assert!(matches!(
+                error,
+                InterpreterError::TypeError { expected, got }
+                    if expected.contains("one IFC label per register")
+                        && got.contains("values=")
+                        && got.contains("labels=")
+            ));
+            assert_eq!(core.promise_store.len(), promise_count);
+            assert_eq!(
+                core.async_generators[0].phase,
+                AsyncGeneratorPhase::SuspendedStart
+            );
+            assert!(core.async_generators[0].execution.is_some());
+        }
+
+        #[test]
+        fn async_generator_preserves_yield_resume_and_rejection_labels_bd_ur3tk_5() {
+            let value_module = test_module(vec![
+                Ir3Instruction::GeneratorBodyStart,
+                Ir3Instruction::Yield {
+                    value: 0,
+                    delegate: false,
+                    resume_dst: 1,
+                },
+                Ir3Instruction::Return { value: 1 },
+            ]);
+            let mut core = test_interpreter();
+            let generator = prepared_async_generator(
+                &mut core,
+                &value_module,
+                vec![(Value::Int(7), crate::ifc_artifacts::Label::Secret)],
+            );
+            core.async_generators.push(generator);
+
+            let Value::Promise(yield_handle) = core
+                .async_generator_next(
+                    &value_module,
+                    0,
+                    Value::Undefined,
+                    crate::ifc_artifacts::Label::Public,
+                )
+                .expect("first async generator step should yield")
+            else {
+                panic!("async generator next should return a Promise");
+            };
+            assert_eq!(
+                core.promise_store
+                    .get(crate::promise_model::PromiseHandle(yield_handle))
+                    .expect("yield Promise should exist")
+                    .label,
+                crate::ifc_artifacts::Label::Secret
+            );
+
+            let Value::Promise(return_handle) = core
+                .async_generator_next(
+                    &value_module,
+                    0,
+                    Value::Int(9),
+                    crate::ifc_artifacts::Label::Confidential,
+                )
+                .expect("second async generator step should return")
+            else {
+                panic!("async generator next should return a Promise");
+            };
+            assert_eq!(
+                core.promise_store
+                    .get(crate::promise_model::PromiseHandle(return_handle))
+                    .expect("return Promise should exist")
+                    .label,
+                crate::ifc_artifacts::Label::Confidential
+            );
+
+            let throw_module = test_module(vec![
+                Ir3Instruction::GeneratorBodyStart,
+                Ir3Instruction::BeginTry {
+                    catch_target: 3,
+                    finally_target: Some(3),
+                },
+                Ir3Instruction::Throw { value: 0 },
+                Ir3Instruction::EnterFinally,
+                Ir3Instruction::Yield {
+                    value: 1,
+                    delegate: false,
+                    resume_dst: 2,
+                },
+                Ir3Instruction::EndFinally,
+            ]);
+            let throwing = prepared_async_generator(
+                &mut core,
+                &throw_module,
+                vec![
+                    (Value::str("boom"), crate::ifc_artifacts::Label::TopSecret),
+                    (Value::str("cleanup"), crate::ifc_artifacts::Label::Internal),
+                ],
+            );
+            core.async_generators.push(throwing);
+            let Value::Promise(finally_yield_handle) = core
+                .async_generator_next(
+                    &throw_module,
+                    1,
+                    Value::Undefined,
+                    crate::ifc_artifacts::Label::Public,
+                )
+                .expect("throwing async generator should yield from its finally body")
+            else {
+                panic!("async generator next should return a Promise");
+            };
+            assert_eq!(
+                core.promise_store
+                    .get(crate::promise_model::PromiseHandle(finally_yield_handle))
+                    .expect("finally-yield Promise should exist")
+                    .label,
+                crate::ifc_artifacts::Label::Internal
+            );
+            let suspended = core.async_generators[1]
+                .execution
+                .as_ref()
+                .expect("finally yield should retain the async-generator activation");
+            assert!(matches!(
+                suspended.finally_frames.last(),
+                Some(FinallyFrame {
+                    completion: Some(AbruptCompletion::Exception(LabeledException {
+                        value: Value::Str(reason),
+                        label: crate::ifc_artifacts::Label::TopSecret,
+                    })),
+                }) if reason == "boom"
+            ));
+
+            let Value::Promise(rejection_handle) = core
+                .async_generator_next(
+                    &throw_module,
+                    1,
+                    Value::Undefined,
+                    crate::ifc_artifacts::Label::Public,
+                )
+                .expect("resuming the finally body should reject with the retained throw")
+            else {
+                panic!("async generator next should return a Promise");
+            };
+            let rejection = core
+                .promise_store
+                .get(crate::promise_model::PromiseHandle(rejection_handle))
+                .expect("rejection Promise should exist");
+            assert_eq!(rejection.label, crate::ifc_artifacts::Label::TopSecret);
+            assert!(matches!(
+                &rejection.state,
+                crate::promise_model::PromiseState::Rejected(
+                    crate::object_model::JsValue::Str(reason)
+                ) if reason == "boom"
             ));
         }
 

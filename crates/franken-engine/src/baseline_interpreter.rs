@@ -5323,18 +5323,66 @@ enum GeneratorPhase {
 /// A generator object holds the suspended state of a generator function.
 #[derive(Debug, Clone)]
 struct GeneratorObject {
+    /// Invocation state retained until the first `.next()` enters the frame.
+    invocation: Option<GeneratorInvocation>,
+    /// Complete execution-local state retained after a `yield`.
+    execution: Option<GeneratorExecutionSnapshot>,
+    /// Destination register written by the next `.next(value)` resumption.
+    resume_dst: Option<u32>,
+    /// Current phase of the generator.
+    phase: GeneratorPhase,
+}
+
+/// Generator arguments and receiver state captured synchronously at call time.
+///
+/// The raw trailing arguments deliberately remain unmaterialized until the
+/// first frame entry. This matches the engine's existing first-`.next()`
+/// parameter timing while ensuring rest arrays are built from the original
+/// invocation rather than whichever caller frame happens to be active later.
+#[derive(Debug, Clone)]
+struct GeneratorInvocation {
     /// Function index in the function table.
     function_index: u32,
     /// Closure index (captures from the enclosing scope).
     closure_index: Option<u32>,
-    /// Saved instruction pointer (resume point after yield).
-    saved_ip: usize,
-    /// Saved register file snapshot at the time of yield.
-    saved_registers: Vec<Value>,
-    /// Saved register base offset.
-    saved_register_base: usize,
-    /// Current phase of the generator.
-    phase: GeneratorPhase,
+    /// All invocation arguments, including the trailing rest tail.
+    arguments: Vec<Value>,
+    /// IFC labels parallel to `arguments`.
+    argument_labels: Vec<Label>,
+    /// Receiver captured for method calls (`undefined` for plain calls).
+    this_value: Value,
+    /// IFC label paired with `this_value`.
+    this_label: Label,
+    /// PC-style label active at generator creation.
+    inline_context_label: Option<Label>,
+}
+
+/// Complete execution-local activation owned by a suspended generator.
+///
+/// Heap/closure/realm state remains shared, but every frame-local carrier is
+/// transferred as one unit. In particular, values and labels cannot diverge,
+/// and an in-flight return/throw/finally completion cannot leak into or inherit
+/// state from the caller that resumes the generator.
+#[derive(Debug, Clone)]
+struct GeneratorExecutionSnapshot {
+    registers: Vec<Value>,
+    register_labels: Vec<Label>,
+    active_inline_callback_context_label: Option<Label>,
+    call_stack: Vec<CallFrame>,
+    ip: usize,
+    register_base: usize,
+    catch_frames: Vec<CatchFrame>,
+    pending_exception: Option<Value>,
+    pending_exception_label: Label,
+    pending_hostcall_result_label: Option<Label>,
+    pending_return: Option<LabeledReturn>,
+    suspended_abrupt_completions: Vec<AbruptCompletion>,
+    finally_frames: Vec<FinallyFrame>,
+    pending_finally_entry: Option<PendingFinallyEntry>,
+    scope_chain: ScopeChain,
+    pending_captures: Vec<u32>,
+    generated_functions: Vec<GeneratedFunctionArtifact>,
+    current_module_specifier: Option<String>,
 }
 
 /// Execution phases for async function objects.
@@ -5422,8 +5470,14 @@ struct AsyncGeneratorObject {
     saved_ip: usize,
     /// Saved register file snapshot at suspension.
     saved_registers: Vec<Value>,
+    /// Saved IFC label snapshot parallel to `saved_registers`.
+    saved_register_labels: Vec<Label>,
     /// Saved register base offset.
     saved_register_base: usize,
+    /// Raw invocation arguments retained until body execution is supported.
+    pending_arguments: Vec<Value>,
+    /// IFC labels parallel to `pending_arguments`.
+    pending_argument_labels: Vec<Label>,
     /// Current phase of the async generator.
     phase: AsyncGeneratorPhase,
 }
@@ -8258,6 +8312,10 @@ pub struct InterpreterCore {
     /// Resident ownership held by nested module/callback snapshots while the
     /// corresponding active core fields are temporarily replaced.
     module_snapshot_in_flight_bytes: u64,
+    /// Active caller execution moved to a stack-local owner while a generator
+    /// activation is installed. It remains logically resident and therefore
+    /// charged until the caller context is restored.
+    temporarily_suspended_execution_bytes: u64,
     /// Dedicated iterator runtime state used by iterator-specific IR3 ops.
     iterators: Vec<RuntimeIteratorState>,
     /// Replay-visible iterator protocol traces keyed by runtime iterator state.
@@ -8385,6 +8443,12 @@ pub struct InterpreterCore {
     /// generator body runs off the end or hits `Return`). Reset to `false`
     /// before each `run_loop` resume and consumed immediately after.
     generator_yielded: bool,
+    /// Destination register associated with the most recent generator yield.
+    /// Cleared before every resume and consumed together with
+    /// `generator_yielded`.
+    generator_resume_dst: Option<u32>,
+    /// IFC label of the value yielded by the most recent generator suspension.
+    generator_result_label: Label,
     /// Async function object store.
     async_functions: Vec<AsyncFunctionObject>,
     /// Context information for async function resumption after await.
@@ -8888,6 +8952,7 @@ impl InterpreterCore {
             heap: SeedTrackedField::new(Vec::new()),
             estimated_memory_bytes,
             module_snapshot_in_flight_bytes: 0,
+            temporarily_suspended_execution_bytes: 0,
             iterators: Vec::new(),
             iteration_traces: Vec::new(),
             function_prototypes: SeedTrackedField::new(BTreeMap::new()),
@@ -8926,6 +8991,8 @@ impl InterpreterCore {
             pending_captures: Vec::new(),
             generators: Vec::new(),
             generator_yielded: false,
+            generator_resume_dst: None,
+            generator_result_label: Label::Public,
             async_functions: Vec::new(),
             async_resumption_contexts: BTreeMap::new(),
             top_level_await_resumption_contexts: BTreeMap::new(),
@@ -32039,49 +32106,270 @@ impl InterpreterCore {
         self.enforce_hook_action(hook.pre_import(&ctx, specifier))
     }
 
-    fn restore_generator_caller_state(
+    fn generator_result_object(
         &mut self,
-        caller_ip: usize,
-        caller_register_base: usize,
-        caller_scope: Vec<ScopeFrame>,
-        previous_register_bytes: u64,
-        previous_scope_bytes: u64,
-        previous_generator_bytes: u64,
-    ) -> Result<(), InterpreterError> {
-        self.ip = caller_ip;
-        self.register_base = caller_register_base;
-        self.scope_chain.frames = caller_scope;
-        self.apply_register_scope_generator_memory_delta(
-            previous_register_bytes,
-            previous_scope_bytes,
-            previous_generator_bytes,
-        )?;
-        Ok(())
+        value: Value,
+        done: bool,
+    ) -> Result<Value, InterpreterError> {
+        let result_id = self.alloc_object_with_prototype(None)?;
+        self.set_object_property(result_id, "value".to_string(), value)?;
+        self.set_object_property(result_id, "done".to_string(), Value::Bool(done))?;
+        Ok(Value::Object(result_id))
     }
 
-    /// Step a generator: resume from its saved state, run until Yield or
-    /// Return, then snapshot the state back. Returns the {value, done} object.
+    fn capture_generator_arguments(
+        &self,
+        args: RegRange,
+    ) -> Result<(Vec<Value>, Vec<Label>), InterpreterError> {
+        let mut arguments = Vec::new();
+        let mut labels = Vec::new();
+        for offset in 0..args.count {
+            let reg =
+                args.start
+                    .checked_add(offset)
+                    .ok_or(InterpreterError::RegisterOutOfBounds {
+                        register: args.start,
+                        max: self.config.max_registers,
+                    })?;
+            arguments.push(self.read_reg(reg)?);
+            labels.push(self.get_register_label(reg)?.clone());
+        }
+        Ok((arguments, labels))
+    }
+
+    fn materialize_generator_arguments(
+        &mut self,
+        func: &crate::ir_contract::Ir3FunctionDesc,
+        mut arguments: Vec<Value>,
+        mut labels: Vec<Label>,
+    ) -> Result<(Vec<Value>, Vec<Label>), InterpreterError> {
+        if arguments.len() != labels.len() {
+            return Err(InterpreterError::InternalError {
+                details: format!(
+                    "generator invocation value/label length mismatch: values={}, labels={}",
+                    arguments.len(),
+                    labels.len()
+                ),
+            });
+        }
+
+        let Some(rest_index) = func.rest_param_index else {
+            arguments.truncate(func.arity as usize);
+            labels.truncate(func.arity as usize);
+            return Ok((arguments, labels));
+        };
+        if rest_index.checked_add(1) != Some(func.arity) || rest_index >= self.config.max_registers
+        {
+            return Err(InterpreterError::TypeError {
+                expected: format!(
+                    "final generator rest parameter index for arity {} below register limit {}",
+                    func.arity, self.config.max_registers
+                ),
+                got: format!("rest index {rest_index}"),
+            });
+        }
+
+        let rest_slot = rest_index as usize;
+        let rest_values = arguments
+            .get(rest_slot..)
+            .map_or_else(Vec::new, |values| values.to_vec());
+        let rest_label = labels
+            .get(rest_slot..)
+            .unwrap_or(&[])
+            .iter()
+            .fold(Label::Public, |joined, label| joined.join(label));
+        let array_id = self.alloc_array_with_prototype(None)?;
+        for (index, value) in rest_values.into_iter().enumerate() {
+            self.set_object_property(array_id, index.to_string(), value)?;
+        }
+        let length = arguments.len().saturating_sub(rest_slot);
+        self.set_object_property(
+            array_id,
+            "length".to_string(),
+            Value::Int(i64::try_from(length).unwrap_or(i64::MAX)),
+        )?;
+        let dense_length = u32::try_from(length).unwrap_or(u32::MAX);
+        self.mutate_heap(|heap| {
+            if let Some(object) = heap.get_mut(array_id.0 as usize) {
+                object.cached_dense_length = Some(dense_length);
+            }
+        });
+
+        arguments.resize(rest_slot + 1, Value::Undefined);
+        arguments.truncate(rest_slot + 1);
+        arguments[rest_slot] = Value::Object(array_id);
+        labels.resize(rest_slot + 1, Label::Public);
+        labels.truncate(rest_slot + 1);
+        labels[rest_slot] = rest_label;
+        Ok((arguments, labels))
+    }
+
+    fn prepare_generator_execution(
+        &mut self,
+        module: &Ir3Module,
+        invocation: GeneratorInvocation,
+    ) -> Result<GeneratorExecutionSnapshot, InterpreterError> {
+        let func = module
+            .function_table
+            .get(invocation.function_index as usize)
+            .cloned()
+            .ok_or(InterpreterError::FunctionNotFound {
+                index: invocation.function_index,
+                table_size: module.function_table.len() as u32,
+            })?;
+        let (arguments, argument_labels) = self.materialize_generator_arguments(
+            &func,
+            invocation.arguments,
+            invocation.argument_labels,
+        )?;
+
+        let captured_env = if let Some(closure_id) = invocation.closure_index {
+            let closure = self.closures.get(closure_id as usize).ok_or_else(|| {
+                InterpreterError::TypeError {
+                    expected: "valid closure".into(),
+                    got: format!("closure#{closure_id} not found"),
+                }
+            })?;
+            self.clone_scope_frames_with_budget(&closure.captured_env)?
+        } else {
+            Vec::new()
+        };
+        let mut scope_chain = ScopeChain {
+            frames: captured_env,
+        };
+        scope_chain.push(self.config.max_scope_depth)?;
+
+        let max_registers = self.config.max_registers as usize;
+        let mut registers = vec![Value::Undefined; max_registers];
+        let mut register_labels = vec![Label::Public; max_registers];
+        for (index, (value, label)) in arguments
+            .into_iter()
+            .zip(argument_labels)
+            .enumerate()
+            .take(max_registers)
+        {
+            registers[index] = value;
+            register_labels[index] = label;
+        }
+
+        let execution = GeneratorExecutionSnapshot {
+            registers,
+            register_labels,
+            active_inline_callback_context_label: invocation.inline_context_label,
+            call_stack: vec![CallFrame {
+                return_ip: module.instructions.len(),
+                return_reg: 0,
+                register_base: 0,
+                function_index: Some(invocation.function_index),
+                this_value: invocation.this_value,
+                this_label: invocation.this_label,
+                new_target_value: Value::Undefined,
+                super_value: Value::Undefined,
+                construct_this: None,
+                saved_pending_exception: None,
+                saved_pending_exception_label: Label::Public,
+                saved_pending_return: None,
+                saved_suspended_abrupt_depth: 0,
+                saved_finally_mode_depth: 0,
+                saved_scope_depth: 0,
+                saved_scope_chain: None,
+                async_function_id: None,
+            }],
+            ip: func.entry as usize,
+            register_base: 0,
+            catch_frames: Vec::new(),
+            pending_exception: None,
+            pending_exception_label: Label::Public,
+            pending_hostcall_result_label: None,
+            pending_return: None,
+            suspended_abrupt_completions: Vec::new(),
+            finally_frames: Vec::new(),
+            pending_finally_entry: None,
+            scope_chain,
+            pending_captures: Vec::new(),
+            generated_functions: Vec::new(),
+            current_module_specifier: self.current_module_specifier.clone(),
+        };
+        self.check_temporary_memory_budget(Self::estimate_generator_execution_bytes(&execution))?;
+        Ok(execution)
+    }
+
+    fn take_generator_execution(&mut self) -> GeneratorExecutionSnapshot {
+        self.before_seed_surface_write();
+        GeneratorExecutionSnapshot {
+            registers: std::mem::take(&mut self.registers.value),
+            register_labels: std::mem::take(&mut self.register_labels),
+            active_inline_callback_context_label: self.active_inline_callback_context_label.take(),
+            call_stack: std::mem::take(&mut self.call_stack),
+            ip: std::mem::take(&mut self.ip),
+            register_base: std::mem::take(&mut self.register_base),
+            catch_frames: std::mem::take(&mut self.catch_frames),
+            pending_exception: self.pending_exception.take(),
+            pending_exception_label: std::mem::replace(
+                &mut self.pending_exception_label,
+                Label::Public,
+            ),
+            pending_hostcall_result_label: self.pending_hostcall_result_label.take(),
+            pending_return: self.pending_return.take(),
+            suspended_abrupt_completions: std::mem::take(&mut self.suspended_abrupt_completions),
+            finally_frames: std::mem::take(&mut self.finally_frames),
+            pending_finally_entry: self.pending_finally_entry.take(),
+            scope_chain: std::mem::replace(&mut self.scope_chain, ScopeChain::new()),
+            pending_captures: std::mem::take(&mut self.pending_captures),
+            generated_functions: std::mem::take(&mut self.generated_functions),
+            current_module_specifier: self.current_module_specifier.take(),
+        }
+    }
+
+    fn install_generator_execution(&mut self, execution: GeneratorExecutionSnapshot) {
+        self.before_seed_surface_write();
+        self.registers.value = execution.registers;
+        self.register_labels = execution.register_labels;
+        self.active_inline_callback_context_label = execution.active_inline_callback_context_label;
+        self.call_stack = execution.call_stack;
+        self.ip = execution.ip;
+        self.register_base = execution.register_base;
+        self.catch_frames = execution.catch_frames;
+        self.pending_exception = execution.pending_exception;
+        self.pending_exception_label = execution.pending_exception_label;
+        self.pending_hostcall_result_label = execution.pending_hostcall_result_label;
+        self.pending_return = execution.pending_return;
+        self.suspended_abrupt_completions = execution.suspended_abrupt_completions;
+        self.finally_frames = execution.finally_frames;
+        self.pending_finally_entry = execution.pending_finally_entry;
+        self.scope_chain = execution.scope_chain;
+        self.pending_captures = execution.pending_captures;
+        self.generated_functions = execution.generated_functions;
+        self.current_module_specifier = execution.current_module_specifier;
+    }
+
+    /// Step a generator by swapping its complete isolated activation into the
+    /// interpreter. Returns the `{value, done}` object and the exact label of
+    /// the yielded/returned value that the object carries.
     fn generator_next(
         &mut self,
         module: &Ir3Module,
         gen_id: u32,
-        _arg: Value,
-    ) -> Result<Value, InterpreterError> {
-        let gobj = self.generators.get_mut(gen_id as usize).ok_or_else(|| {
-            InterpreterError::TypeError {
+        argument: Value,
+        argument_label: Label,
+    ) -> Result<(Value, Label), InterpreterError> {
+        let generator_index = gen_id as usize;
+        let phase = self
+            .generators
+            .get(generator_index)
+            .ok_or_else(|| InterpreterError::TypeError {
                 expected: "valid generator".into(),
                 got: format!("generator#{gen_id} not found"),
-            }
-        })?;
+            })?
+            .phase
+            .clone();
 
-        match gobj.phase {
+        match phase {
             GeneratorPhase::Completed => {
-                let result_id = self.alloc_object_with_prototype(None)?;
-                {
-                    self.set_object_property(result_id, "value".to_string(), Value::Undefined)?;
-                    self.set_object_property(result_id, "done".to_string(), Value::Bool(true))?;
-                }
-                return Ok(Value::Object(result_id));
+                return Ok((
+                    self.generator_result_object(Value::Undefined, true)?,
+                    Label::Public,
+                ));
             }
             GeneratorPhase::Executing => {
                 return Err(InterpreterError::TypeError {
@@ -32092,197 +32380,186 @@ impl InterpreterCore {
             GeneratorPhase::SuspendedStart | GeneratorPhase::SuspendedYield => {}
         }
 
-        let caller_ip = self.ip;
-        let caller_register_base = self.register_base;
-        let caller_scope = self.snapshot_scope_chain()?;
-        let caller_scope_bytes = Self::estimate_scope_chain_bytes(&caller_scope);
-
-        let previous_resume_register_bytes = self.registers_memory_bytes();
-        let previous_resume_scope_bytes = self.scope_chain_memory_bytes();
-        let previous_resume_generator_bytes = self.generators_memory_bytes();
-
-        let (is_start, func_idx, closure_idx) = {
-            let gobj = &mut self.generators[gen_id as usize];
-            let is_start = gobj.phase == GeneratorPhase::SuspendedStart;
-            let func_idx = gobj.function_index;
-            let closure_idx = gobj.closure_index;
-            gobj.phase = GeneratorPhase::Executing;
-            (is_start, func_idx, closure_idx)
-        };
-
-        if is_start {
-            let start_result = (|| -> Result<(), InterpreterError> {
-                let func = module.function_table.get(func_idx as usize).ok_or(
-                    InterpreterError::FunctionNotFound {
-                        index: func_idx,
-                        table_size: module.function_table.len() as u32,
-                    },
-                )?;
-
-                if let Some(cid) = closure_idx {
-                    let closure = self.closures.get(cid as usize).ok_or_else(|| {
-                        InterpreterError::TypeError {
-                            expected: "valid closure".into(),
-                            got: format!("closure#{cid} not found"),
-                        }
-                    })?;
-                    self.scope_chain.frames = self.clone_scope_frames_with_temporary_budget(
-                        &closure.captured_env,
-                        caller_scope_bytes,
-                    )?;
-                }
-                self.scope_chain.push(self.config.max_scope_depth)?;
-                self.apply_scope_chain_memory_delta(previous_resume_scope_bytes)?;
-
-                self.register_base = self.registers.len();
-                self.clear_current_register_frame();
-
-                self.ip = func.entry as usize;
-                Ok(())
-            })();
-
-            if let Err(err) = start_result {
-                let gobj = &mut self.generators[gen_id as usize];
-                gobj.phase = GeneratorPhase::SuspendedStart;
-                self.restore_generator_caller_state(
-                    caller_ip,
-                    caller_register_base,
-                    caller_scope,
-                    previous_resume_register_bytes,
-                    previous_resume_scope_bytes,
-                    previous_resume_generator_bytes,
-                )?;
-                return Err(err);
-            }
-        } else {
-            let (saved_ip, saved_regs, saved_base) = {
-                let gobj = &mut self.generators[gen_id as usize];
-                (
-                    gobj.saved_ip,
-                    std::mem::take(&mut gobj.saved_registers),
-                    gobj.saved_register_base,
-                )
-            };
-
-            self.ip = saved_ip;
-            self.register_base = saved_base;
-            let req_len = saved_base + saved_regs.len();
-            self.mutate_registers(|r| {
-                if req_len > r.len() {
-                    r.resize(req_len, Value::Undefined);
-                }
-                for (i, val) in saved_regs.into_iter().enumerate() {
-                    r[saved_base + i] = val;
-                }
+        let caller_depth = self.effective_call_depth();
+        if caller_depth >= self.config.max_call_depth {
+            return Err(InterpreterError::StackOverflow {
+                depth: caller_depth,
+                max: self.config.max_call_depth,
             });
-            self.apply_register_scope_generator_memory_delta(
-                previous_resume_register_bytes,
-                previous_resume_scope_bytes,
-                previous_resume_generator_bytes,
-            )?;
         }
 
-        // bd-hoplz: clear the yield marker; the `Yield` handler re-sets it on a
-        // genuine yield-suspension. A bare `Ok` with the marker still `false` means
-        // the generator body ran to completion via `Return` / falling off the end.
-        self.generator_yielded = false;
-        let result = self.run_loop(module);
-
-        match &result {
-            Ok(_) if !self.generator_yielded => {
-                // Completion-by-return: the body returned `return_val` (or
-                // `undefined` when it ran off the end). ES2020 wraps this as
-                // `{ value: return_val, done: true }` and marks the generator done.
-                let return_val = match &result {
-                    Ok(v) => v.clone(),
-                    _ => Value::Undefined,
-                };
-                let previous_register_bytes = self.registers_memory_bytes();
-                let previous_scope_bytes = self.scope_chain_memory_bytes();
-                let previous_generator_bytes = self.generators_memory_bytes();
-                let gobj = &mut self.generators[gen_id as usize];
-                gobj.phase = GeneratorPhase::Completed;
-
-                self.restore_generator_caller_state(
-                    caller_ip,
-                    caller_register_base,
-                    caller_scope,
-                    previous_register_bytes,
-                    previous_scope_bytes,
-                    previous_generator_bytes,
-                )?;
-
-                let result_id = self.alloc_object_with_prototype(None)?;
-                self.set_object_property(result_id, "value".to_string(), return_val)?;
-                self.set_object_property(result_id, "done".to_string(), Value::Bool(true))?;
-                Ok(Value::Object(result_id))
+        let mut start_heap_checkpoint = None;
+        let (activation, resume_dst) = if phase == GeneratorPhase::SuspendedStart {
+            let invocation = self.generators[generator_index]
+                .invocation
+                .as_ref()
+                .ok_or_else(|| InterpreterError::InternalError {
+                    details: format!("generator#{gen_id} lost its invocation state"),
+                })?;
+            self.check_temporary_memory_budget(Self::estimate_generator_invocation_bytes(
+                invocation,
+            ))?;
+            let previous_heap_len = self.heap.len();
+            let previous_estimated_bytes = self.estimated_memory_bytes;
+            start_heap_checkpoint = Some(previous_heap_len);
+            let activation = match self.prepare_generator_execution(module, invocation.clone()) {
+                Ok(activation) => activation,
+                Err(error) => {
+                    self.rollback_heap_to_len(previous_heap_len);
+                    self.estimated_memory_bytes = previous_estimated_bytes;
+                    return Err(error);
+                }
+            };
+            (activation, None)
+        } else {
+            let generator = &mut self.generators[generator_index];
+            let activation =
+                generator
+                    .execution
+                    .take()
+                    .ok_or_else(|| InterpreterError::InternalError {
+                        details: format!("generator#{gen_id} lost its suspended activation"),
+                    })?;
+            (activation, generator.resume_dst.take())
+        };
+        if activation.registers.len() != activation.register_labels.len() {
+            let value_count = activation.registers.len();
+            let label_count = activation.register_labels.len();
+            if phase == GeneratorPhase::SuspendedYield {
+                let generator = &mut self.generators[generator_index];
+                generator.execution = Some(activation);
+                generator.resume_dst = resume_dst;
             }
-            Ok(yielded_val) => {
-                self.generator_yielded = false;
-                let max_regs = self.config.max_registers as usize;
-                let saved_regs: Vec<Value> =
-                    self.registers[self.register_base..self.register_base + max_regs].to_vec();
+            return Err(InterpreterError::InternalError {
+                details: format!(
+                    "generator#{gen_id} value/label snapshot mismatch: values={}, labels={}",
+                    value_count, label_count
+                ),
+            });
+        }
 
-                let previous_register_bytes = self.registers_memory_bytes();
-                let previous_scope_bytes = self.scope_chain_memory_bytes();
-                let previous_generator_bytes = self.generators_memory_bytes();
-                let gobj = &mut self.generators[gen_id as usize];
-                gobj.saved_ip = self.ip;
-                gobj.saved_registers = saved_regs;
-                gobj.saved_register_base = self.register_base;
-                gobj.phase = GeneratorPhase::SuspendedYield;
+        {
+            let generator = &mut self.generators[generator_index];
+            generator.phase = GeneratorPhase::Executing;
+        }
 
-                self.restore_generator_caller_state(
-                    caller_ip,
-                    caller_register_base,
-                    caller_scope,
-                    previous_register_bytes,
-                    previous_scope_bytes,
-                    previous_generator_bytes,
-                )?;
+        let caller_generator_yielded = std::mem::replace(&mut self.generator_yielded, false);
+        let caller_generator_resume_dst = self.generator_resume_dst.take();
+        let caller_generator_result_label =
+            std::mem::replace(&mut self.generator_result_label, Label::Public);
+        let caller_execution = self.take_generator_execution();
+        let caller_execution_bytes = Self::estimate_generator_execution_bytes(&caller_execution);
+        let previous_suspended_bytes = self.temporarily_suspended_execution_bytes;
+        let previous_reentrant_depth = self.module_reentrant_call_depth;
+        self.temporarily_suspended_execution_bytes =
+            previous_suspended_bytes.saturating_add(caller_execution_bytes);
+        self.module_reentrant_call_depth =
+            previous_reentrant_depth.saturating_add(caller_execution.call_stack.len());
+        self.install_generator_execution(activation);
 
-                Ok(yielded_val.clone())
+        let setup_result = (|| -> Result<(), InterpreterError> {
+            self.sync_estimated_memory_bytes()?;
+            if phase == GeneratorPhase::SuspendedYield
+                && let Some(resume_dst) = resume_dst
+            {
+                self.write_reg_with_label(resume_dst, argument, argument_label)?;
+            }
+            Ok(())
+        })();
+        if let Err(error) = setup_result {
+            let activation = self.take_generator_execution();
+            self.temporarily_suspended_execution_bytes = previous_suspended_bytes;
+            self.module_reentrant_call_depth = previous_reentrant_depth;
+            self.install_generator_execution(caller_execution);
+            self.generator_yielded = caller_generator_yielded;
+            self.generator_resume_dst = caller_generator_resume_dst;
+            self.generator_result_label = caller_generator_result_label;
+            let generator = &mut self.generators[generator_index];
+            if phase == GeneratorPhase::SuspendedYield {
+                generator.execution = Some(activation);
+                generator.resume_dst = resume_dst;
+            }
+            generator.phase = phase;
+            if let Some(previous_heap_len) = start_heap_checkpoint {
+                self.rollback_heap_to_len(previous_heap_len);
+            }
+            self.sync_estimated_memory_bytes()?;
+            return Err(error);
+        }
+        if phase == GeneratorPhase::SuspendedStart {
+            self.generators[generator_index].invocation = None;
+        }
+
+        let result = self.run_loop(module);
+        let yielded = std::mem::replace(&mut self.generator_yielded, false);
+        let yielded_resume_dst = self.generator_resume_dst.take();
+        let yielded_label = std::mem::replace(&mut self.generator_result_label, Label::Public);
+        let return_label = self
+            .register_labels
+            .first()
+            .cloned()
+            .unwrap_or(Label::Public);
+        let mut activation = self.take_generator_execution();
+        let escaped_exception =
+            if matches!(&result, Err(InterpreterError::UncaughtException { .. })) {
+                activation.pending_exception.take().map(|value| {
+                    let label =
+                        std::mem::replace(&mut activation.pending_exception_label, Label::Public);
+                    (value, label)
+                })
+            } else {
+                None
+            };
+
+        self.temporarily_suspended_execution_bytes = previous_suspended_bytes;
+        self.module_reentrant_call_depth = previous_reentrant_depth;
+        self.install_generator_execution(caller_execution);
+        self.generator_yielded = caller_generator_yielded;
+        self.generator_resume_dst = caller_generator_resume_dst;
+        self.generator_result_label = caller_generator_result_label;
+
+        match result {
+            Ok(yielded_value) if yielded => {
+                let generator = &mut self.generators[generator_index];
+                generator.execution = Some(activation);
+                generator.resume_dst = yielded_resume_dst;
+                generator.phase = GeneratorPhase::SuspendedYield;
+                self.sync_estimated_memory_bytes()?;
+                Ok((yielded_value, yielded_label))
+            }
+            Ok(return_value) => {
+                let generator = &mut self.generators[generator_index];
+                generator.execution = None;
+                generator.resume_dst = None;
+                generator.phase = GeneratorPhase::Completed;
+                self.sync_estimated_memory_bytes()?;
+                Ok((
+                    self.generator_result_object(return_value, true)?,
+                    return_label,
+                ))
             }
             Err(InterpreterError::Halted) => {
-                let previous_register_bytes = self.registers_memory_bytes();
-                let previous_scope_bytes = self.scope_chain_memory_bytes();
-                let previous_generator_bytes = self.generators_memory_bytes();
-                let gobj = &mut self.generators[gen_id as usize];
-                gobj.phase = GeneratorPhase::Completed;
-
-                self.restore_generator_caller_state(
-                    caller_ip,
-                    caller_register_base,
-                    caller_scope,
-                    previous_register_bytes,
-                    previous_scope_bytes,
-                    previous_generator_bytes,
-                )?;
-
-                let result_id = self.alloc_object_with_prototype(None)?;
-                {
-                    self.set_object_property(result_id, "value".to_string(), Value::Undefined)?;
-                    self.set_object_property(result_id, "done".to_string(), Value::Bool(true))?;
-                }
-                Ok(Value::Object(result_id))
+                let generator = &mut self.generators[generator_index];
+                generator.execution = None;
+                generator.resume_dst = None;
+                generator.phase = GeneratorPhase::Completed;
+                self.sync_estimated_memory_bytes()?;
+                Ok((
+                    self.generator_result_object(Value::Undefined, true)?,
+                    Label::Public,
+                ))
             }
-            Err(_) => {
-                let previous_register_bytes = self.registers_memory_bytes();
-                let previous_scope_bytes = self.scope_chain_memory_bytes();
-                let previous_generator_bytes = self.generators_memory_bytes();
-                let gobj = &mut self.generators[gen_id as usize];
-                gobj.phase = GeneratorPhase::Completed;
-
-                self.restore_generator_caller_state(
-                    caller_ip,
-                    caller_register_base,
-                    caller_scope,
-                    previous_register_bytes,
-                    previous_scope_bytes,
-                    previous_generator_bytes,
-                )?;
-
-                result
+            Err(error) => {
+                let generator = &mut self.generators[generator_index];
+                generator.execution = None;
+                generator.resume_dst = None;
+                generator.phase = GeneratorPhase::Completed;
+                if let Some((value, label)) = escaped_exception {
+                    self.suspend_current_abrupt_completion()?;
+                    self.replace_pending_abrupt_slots(Some((value, label)), None)?;
+                }
+                self.sync_estimated_memory_bytes()?;
+                Err(error)
             }
         }
     }
@@ -32923,13 +33200,25 @@ impl InterpreterCore {
                     // Generator .next() call: step the generator.
                     if let Value::Generator(gen_id) = &callee_val {
                         let gen_id = *gen_id;
-                        let arg = if args.count > 0 {
-                            self.read_reg(args.start)?
+                        let (argument, argument_label) = if args.count > 0 {
+                            (
+                                self.read_reg(args.start)?,
+                                self.get_register_label(args.start)?.clone(),
+                            )
                         } else {
-                            Value::Undefined
+                            (Value::Undefined, Label::Public)
                         };
-                        let result = self.generator_next(module, gen_id, arg)?;
-                        self.write_reg(dst, result)?;
+                        let (result, result_label) =
+                            match self.generator_next(module, gen_id, argument, argument_label) {
+                                Ok(result) => result,
+                                Err(error) => {
+                                    match self.route_isolated_explicit_throw(module, error)? {
+                                        None => continue,
+                                        Some(error) => return Err(error),
+                                    }
+                                }
+                            };
+                        self.write_reg_with_label(dst, result, result_label)?;
                         self.ip += 1;
                         continue;
                     }
@@ -33051,12 +33340,22 @@ impl InterpreterCore {
 
                     // Generator function call: create a suspended GeneratorObject.
                     if let Value::GeneratorFunction(cid) = &callee_val {
+                        let (arguments, argument_labels) =
+                            self.capture_generator_arguments(args)?;
                         let gen_id = self.push_generator_object(GeneratorObject {
-                            function_index: func_idx,
-                            closure_index: Some(*cid),
-                            saved_ip: 0,
-                            saved_registers: Vec::new(),
-                            saved_register_base: 0,
+                            invocation: Some(GeneratorInvocation {
+                                function_index: func_idx,
+                                closure_index: Some(*cid),
+                                arguments,
+                                argument_labels,
+                                this_value: Value::Undefined,
+                                this_label: Label::Public,
+                                inline_context_label: self
+                                    .active_inline_callback_context_label
+                                    .clone(),
+                            }),
+                            execution: None,
+                            resume_dst: None,
                             phase: GeneratorPhase::SuspendedStart,
                         })?;
                         if let Err(error) = self.write_reg(dst, Value::Generator(gen_id)) {
@@ -33230,13 +33529,18 @@ impl InterpreterCore {
 
                     // Async generator function call: create a suspended AsyncGeneratorObject.
                     if let Value::AsyncGeneratorFunction(cid) = &callee_val {
+                        let (pending_arguments, pending_argument_labels) =
+                            self.capture_generator_arguments(args)?;
                         let async_gen_id =
                             self.push_async_generator_object(AsyncGeneratorObject {
                                 function_index: func_idx,
                                 closure_index: Some(*cid),
                                 saved_ip: 0,
                                 saved_registers: Vec::new(),
+                                saved_register_labels: Vec::new(),
                                 saved_register_base: 0,
+                                pending_arguments,
+                                pending_argument_labels,
                                 phase: AsyncGeneratorPhase::SuspendedStart,
                             })?;
                         if let Err(error) =
@@ -33439,14 +33743,26 @@ impl InterpreterCore {
                     // via generator_next, yielding the {value, done} object.
                     if let Value::Generator(gen_id) = &callee_val {
                         let gen_id = *gen_id;
-                        let arg = if args.count > 0 {
-                            self.read_reg(args.start)?
+                        let (argument, argument_label) = if args.count > 0 {
+                            (
+                                self.read_reg(args.start)?,
+                                self.get_register_label(args.start)?.clone(),
+                            )
                         } else {
-                            Value::Undefined
+                            (Value::Undefined, Label::Public)
                         };
                         self.mark_inline_callback_started();
-                        let result = self.generator_next(module, gen_id, arg)?;
-                        self.write_reg(dst, result)?;
+                        let (result, result_label) =
+                            match self.generator_next(module, gen_id, argument, argument_label) {
+                                Ok(result) => result,
+                                Err(error) => {
+                                    match self.route_isolated_explicit_throw(module, error)? {
+                                        None => continue,
+                                        Some(error) => return Err(error),
+                                    }
+                                }
+                            };
+                        self.write_reg_with_label(dst, result, result_label)?;
                         self.ip += 1;
                         continue;
                     }
@@ -33585,12 +33901,24 @@ impl InterpreterCore {
 
                     if let Value::GeneratorFunction(cid) = &callee_val {
                         self.mark_inline_callback_started();
+                        let (arguments, argument_labels) =
+                            self.capture_generator_arguments(args)?;
+                        let receiver_label =
+                            self.clone_register_label_with_temporary_budget(receiver)?;
                         let gen_id = self.push_generator_object(GeneratorObject {
-                            function_index: func_idx,
-                            closure_index: Some(*cid),
-                            saved_ip: 0,
-                            saved_registers: Vec::new(),
-                            saved_register_base: 0,
+                            invocation: Some(GeneratorInvocation {
+                                function_index: func_idx,
+                                closure_index: Some(*cid),
+                                arguments,
+                                argument_labels,
+                                this_value: receiver_val.clone(),
+                                this_label: receiver_label,
+                                inline_context_label: self
+                                    .active_inline_callback_context_label
+                                    .clone(),
+                            }),
+                            execution: None,
+                            resume_dst: None,
                             phase: GeneratorPhase::SuspendedStart,
                         })?;
                         if let Err(error) = self.write_reg(dst, Value::Generator(gen_id)) {
@@ -33740,13 +34068,18 @@ impl InterpreterCore {
 
                     if let Value::AsyncGeneratorFunction(cid) = &callee_val {
                         self.mark_inline_callback_started();
+                        let (pending_arguments, pending_argument_labels) =
+                            self.capture_generator_arguments(args)?;
                         let async_gen_id =
                             self.push_async_generator_object(AsyncGeneratorObject {
                                 function_index: func_idx,
                                 closure_index: Some(*cid),
                                 saved_ip: 0,
                                 saved_registers: Vec::new(),
+                                saved_register_labels: Vec::new(),
                                 saved_register_base: 0,
+                                pending_arguments,
+                                pending_argument_labels,
                                 phase: AsyncGeneratorPhase::SuspendedStart,
                             })?;
                         if let Err(error) =
@@ -35399,6 +35732,13 @@ impl InterpreterCore {
                     resume_dst,
                 } => {
                     let yielded = self.read_reg(value)?;
+                    let yielded_label = self.clone_register_label_with_temporary_budget(value)?;
+                    let yielded_label =
+                        if let Some(context) = &self.active_inline_callback_context_label {
+                            self.join_owned_label_with_temporary_budget(yielded_label, context)?
+                        } else {
+                            yielded_label
+                        };
                     let result_id = self.alloc_object_with_prototype(None)?;
                     {
                         self.set_object_property(result_id, "value".to_string(), yielded)?;
@@ -35413,6 +35753,8 @@ impl InterpreterCore {
                     // bd-hoplz: mark this `run_loop` exit as a yield-suspension so
                     // `generator_next` does not mistake it for a completion-by-return.
                     self.generator_yielded = true;
+                    self.generator_resume_dst = Some(resume_dst);
+                    self.generator_result_label = yielded_label;
                     return Ok(Value::Object(result_id));
                 }
                 await_instruction @ (Ir3Instruction::AwaitValue { promise_reg }
@@ -61698,6 +62040,13 @@ impl InterpreterCore {
     fn estimate_async_generator_bytes(generator: &AsyncGeneratorObject) -> u64 {
         MEMORY_ESTIMATE_GENERATOR_BASE_BYTES
             .saturating_add(Self::estimate_value_vec_bytes(&generator.saved_registers))
+            .saturating_add(Self::estimate_label_vec_bytes(
+                &generator.saved_register_labels,
+            ))
+            .saturating_add(Self::estimate_value_vec_bytes(&generator.pending_arguments))
+            .saturating_add(Self::estimate_label_vec_bytes(
+                &generator.pending_argument_labels,
+            ))
     }
 
     fn async_generators_memory_bytes(&self) -> u64 {
@@ -62366,9 +62715,126 @@ impl InterpreterCore {
         }
     }
 
+    fn estimate_generator_invocation_bytes(invocation: &GeneratorInvocation) -> u64 {
+        Self::estimate_value_vec_bytes(&invocation.arguments)
+            .saturating_add(Self::estimate_label_vec_bytes(&invocation.argument_labels))
+            .saturating_add(Self::estimate_value_bytes(&invocation.this_value))
+            .saturating_add(Self::estimate_label_bytes(&invocation.this_label))
+            .saturating_add(
+                invocation
+                    .inline_context_label
+                    .as_ref()
+                    .map(Self::estimate_label_bytes)
+                    .unwrap_or(0),
+            )
+    }
+
+    fn estimate_generator_execution_bytes(execution: &GeneratorExecutionSnapshot) -> u64 {
+        let pending_abrupt = execution
+            .pending_exception
+            .as_ref()
+            .map(Self::estimate_value_bytes)
+            .unwrap_or(0)
+            .saturating_add(Self::estimate_label_bytes(
+                &execution.pending_exception_label,
+            ))
+            .saturating_add(
+                execution
+                    .pending_return
+                    .as_ref()
+                    .map(Self::estimate_labeled_return_bytes)
+                    .unwrap_or(0),
+            );
+        let suspended_abrupt = u64::try_from(execution.suspended_abrupt_completions.len())
+            .unwrap_or(u64::MAX)
+            .saturating_mul(std::mem::size_of::<AbruptCompletion>() as u64)
+            .saturating_add(Self::saturating_sum(
+                execution
+                    .suspended_abrupt_completions
+                    .iter()
+                    .map(Self::estimate_abrupt_completion_bytes),
+            ));
+        let finally_frames = Self::saturating_sum(
+            execution
+                .finally_frames
+                .iter()
+                .map(Self::finally_frame_memory_bytes),
+        );
+
+        Self::estimate_value_vec_bytes(&execution.registers)
+            .saturating_add(Self::estimate_label_vec_bytes(&execution.register_labels))
+            .saturating_add(
+                execution
+                    .active_inline_callback_context_label
+                    .as_ref()
+                    .map(Self::estimate_label_bytes)
+                    .unwrap_or(0),
+            )
+            .saturating_add(Self::saturating_sum(
+                execution
+                    .call_stack
+                    .iter()
+                    .map(Self::estimate_call_frame_bytes),
+            ))
+            .saturating_add(
+                u64::try_from(execution.catch_frames.len())
+                    .unwrap_or(u64::MAX)
+                    .saturating_mul(std::mem::size_of::<CatchFrame>() as u64),
+            )
+            .saturating_add(pending_abrupt)
+            .saturating_add(
+                execution
+                    .pending_hostcall_result_label
+                    .as_ref()
+                    .map(Self::estimate_label_bytes)
+                    .unwrap_or(0),
+            )
+            .saturating_add(suspended_abrupt)
+            .saturating_add(finally_frames)
+            .saturating_add(Self::estimate_scope_chain_bytes(
+                &execution.scope_chain.frames,
+            ))
+            .saturating_add(
+                u64::try_from(execution.pending_captures.len())
+                    .unwrap_or(u64::MAX)
+                    .saturating_mul(std::mem::size_of::<u32>() as u64),
+            )
+            .saturating_add(
+                u64::try_from(execution.generated_functions.len())
+                    .unwrap_or(u64::MAX)
+                    .saturating_mul(std::mem::size_of::<GeneratedFunctionArtifact>() as u64),
+            )
+            .saturating_add(Self::saturating_sum(
+                execution
+                    .generated_functions
+                    .iter()
+                    .map(Self::estimate_generated_function_artifact_clone_bytes),
+            ))
+            .saturating_add(
+                execution
+                    .current_module_specifier
+                    .as_deref()
+                    .map(Self::estimate_string_bytes)
+                    .unwrap_or(0),
+            )
+    }
+
     fn estimate_generator_bytes(generator: &GeneratorObject) -> u64 {
         MEMORY_ESTIMATE_GENERATOR_BASE_BYTES
-            .saturating_add(Self::estimate_value_vec_bytes(&generator.saved_registers))
+            .saturating_add(
+                generator
+                    .invocation
+                    .as_ref()
+                    .map(Self::estimate_generator_invocation_bytes)
+                    .unwrap_or(0),
+            )
+            .saturating_add(
+                generator
+                    .execution
+                    .as_ref()
+                    .map(Self::estimate_generator_execution_bytes)
+                    .unwrap_or(0),
+            )
     }
 
     fn estimate_generators_bytes(generators: &[GeneratorObject]) -> u64 {
@@ -62744,10 +63210,9 @@ impl InterpreterCore {
             .saturating_add(self.module_exports_memory_bytes())
             .saturating_add(self.state_capture_memory_bytes())
             .saturating_add(self.module_snapshot_in_flight_bytes)
+            .saturating_add(self.temporarily_suspended_execution_bytes)
     }
 
-    #[cfg(test)]
-    #[allow(dead_code)]
     fn sync_estimated_memory_bytes(&mut self) -> Result<u64, InterpreterError> {
         let requested_bytes = self.recompute_estimated_memory_bytes();
         if Self::memory_request_exceeds_budget(requested_bytes, self.config.max_total_memory_bytes)
@@ -62873,22 +63338,6 @@ impl InterpreterCore {
                 .saturating_add(self.register_context_labels_memory_bytes())
                 .saturating_add(self.scope_chain_memory_bytes())
                 .saturating_add(self.call_stack_memory_bytes()),
-        )
-    }
-
-    fn apply_register_scope_generator_memory_delta(
-        &mut self,
-        previous_register_bytes: u64,
-        previous_scope_bytes: u64,
-        previous_generator_bytes: u64,
-    ) -> Result<u64, InterpreterError> {
-        self.apply_memory_component_delta(
-            previous_register_bytes
-                .saturating_add(previous_scope_bytes)
-                .saturating_add(previous_generator_bytes),
-            self.registers_memory_bytes()
-                .saturating_add(self.scope_chain_memory_bytes())
-                .saturating_add(self.generators_memory_bytes()),
         )
     }
 
@@ -74691,7 +75140,13 @@ mod async_runtime_tests_current {
             closure_index: Some(13),
             saved_ip: 17,
             saved_registers: saved,
+            saved_register_labels: vec![Label::Custom {
+                name: "async-generator-register-label".repeat(29),
+                level: 4,
+            }],
             saved_register_base: 0,
+            pending_arguments: Vec::new(),
+            pending_argument_labels: Vec::new(),
             phase: AsyncGeneratorPhase::SuspendedYield,
         };
 
@@ -94578,15 +95033,15 @@ mod tests {
             .saturating_sub(1);
 
         let err = core
-            .generator_next(&module, 0, Value::Undefined)
+            .generator_next(&module, 0, Value::Undefined, Label::Public)
             .unwrap_err();
         assert!(matches!(err, InterpreterError::MemoryBudgetExceeded { .. }));
         assert_eq!(core.generators[0].phase, GeneratorPhase::SuspendedStart);
         assert_eq!(core.estimated_memory_bytes(), baseline_memory);
 
         core.config.max_total_memory_bytes = u64::MAX;
-        let yielded = core
-            .generator_next(&module, 0, Value::Undefined)
+        let (yielded, _) = core
+            .generator_next(&module, 0, Value::Undefined, Label::Public)
             .expect("operation should succeed for valid inputs");
         assert_eq!(core.generators[0].phase, GeneratorPhase::SuspendedYield);
 
@@ -94636,18 +95091,24 @@ mod tests {
 
         let mut core = InterpreterCore::new(test_quickjs_config(), "generator-memory-delta");
         core.generators.push(GeneratorObject {
-            function_index: 0,
-            closure_index: None,
-            saved_ip: 0,
-            saved_registers: Vec::new(),
-            saved_register_base: 0,
+            invocation: Some(GeneratorInvocation {
+                function_index: 0,
+                closure_index: None,
+                arguments: Vec::new(),
+                argument_labels: Vec::new(),
+                this_value: Value::Undefined,
+                this_label: Label::Public,
+                inline_context_label: None,
+            }),
+            execution: None,
+            resume_dst: None,
             phase: GeneratorPhase::SuspendedStart,
         });
         core.sync_estimated_memory_bytes()
             .expect("seed generator object should fit memory budget");
 
-        let first = core
-            .generator_next(&module, 0, Value::Undefined)
+        let (first, _) = core
+            .generator_next(&module, 0, Value::Undefined, Label::Public)
             .expect("initial generator resume should yield");
         assert_eq!(core.generators[0].phase, GeneratorPhase::SuspendedYield);
         assert_eq!(
@@ -94668,8 +95129,8 @@ mod tests {
             Some(&Value::Bool(false))
         );
 
-        let second = core
-            .generator_next(&module, 0, Value::Undefined)
+        let (second, _) = core
+            .generator_next(&module, 0, Value::Undefined, Label::Public)
             .expect("second generator resume should complete");
         assert_eq!(core.generators[0].phase, GeneratorPhase::Completed);
         assert_eq!(
@@ -94689,6 +95150,351 @@ mod tests {
             second_result.properties.get("done"),
             Some(&Value::Bool(true))
         );
+    }
+
+    #[test]
+    fn generator_invocation_argument_label_survives_first_yield_bd_ur3tk_5() {
+        let mut module = test_module_with_pool(
+            vec![
+                Ir3Instruction::Call {
+                    callee: 0,
+                    args: RegRange { start: 1, count: 1 },
+                    dst: 2,
+                },
+                Ir3Instruction::Call {
+                    callee: 2,
+                    args: RegRange { start: 8, count: 0 },
+                    dst: 3,
+                },
+                Ir3Instruction::LoadStr {
+                    dst: 4,
+                    pool_index: 0,
+                },
+                Ir3Instruction::GetProperty {
+                    obj: 3,
+                    key: 4,
+                    dst: 5,
+                },
+                Ir3Instruction::Return { value: 5 },
+                Ir3Instruction::Yield {
+                    value: 0,
+                    delegate: false,
+                    resume_dst: 1,
+                },
+                Ir3Instruction::Return { value: 0 },
+            ],
+            vec!["value".to_string()],
+        );
+        module.function_table.push(Ir3FunctionDesc {
+            entry: 5,
+            arity: 1,
+            frame_size: 2,
+            name: Some("labeled_generator".to_string()),
+            is_generator: true,
+            rest_param_index: None,
+        });
+
+        let mut core =
+            InterpreterCore::new(test_quickjs_config(), "generator-invocation-label-snapshot");
+        core.closures.push(ClosureValue {
+            function_index: 0,
+            captured_env: Vec::new(),
+        });
+        core.write_reg(0, Value::GeneratorFunction(0))
+            .expect("generator function register");
+        core.write_reg_with_label(1, Value::str("secret-argument"), Label::Secret)
+            .expect("secret generator argument");
+
+        assert_eq!(
+            core.run_loop(&module)
+                .expect("generator invocation and first next should execute"),
+            Value::str("secret-argument")
+        );
+        assert_eq!(
+            core.get_register_label(5)
+                .expect("yielded property result label"),
+            &Label::Secret
+        );
+        assert_eq!(core.generators[0].phase, GeneratorPhase::SuspendedYield);
+    }
+
+    #[test]
+    fn generator_rest_values_and_labels_survive_first_yield_bd_ur3tk_5() {
+        let mut module = test_module(vec![
+            Ir3Instruction::Yield {
+                value: 1,
+                delegate: false,
+                resume_dst: 2,
+            },
+            Ir3Instruction::Return { value: 2 },
+        ]);
+        module.function_table.push(Ir3FunctionDesc {
+            entry: 0,
+            arity: 2,
+            frame_size: 3,
+            name: Some("rest_snapshot".to_string()),
+            is_generator: true,
+            rest_param_index: Some(1),
+        });
+        let mut core = InterpreterCore::new(test_quickjs_config(), "generator-rest-label-snapshot");
+        for (arguments, argument_labels) in [
+            (vec![Value::Int(10)], vec![Label::Public]),
+            (
+                vec![Value::Int(10), Value::Int(20), Value::Int(22)],
+                vec![Label::Public, Label::Secret, Label::Confidential],
+            ),
+        ] {
+            core.generators.push(GeneratorObject {
+                invocation: Some(GeneratorInvocation {
+                    function_index: 0,
+                    closure_index: None,
+                    arguments,
+                    argument_labels,
+                    this_value: Value::Undefined,
+                    this_label: Label::Public,
+                    inline_context_label: None,
+                }),
+                execution: None,
+                resume_dst: None,
+                phase: GeneratorPhase::SuspendedStart,
+            });
+        }
+
+        let (empty_yield, empty_label) = core
+            .generator_next(&module, 0, Value::Undefined, Label::Public)
+            .expect("empty rest tail should yield");
+        assert_eq!(empty_label, Label::Public);
+        let Value::Object(empty_result_id) = empty_yield else {
+            panic!("generator.next() should return a result object");
+        };
+        let Some(Value::Object(empty_rest_id)) = core.heap[empty_result_id.0 as usize]
+            .properties
+            .get("value")
+            .cloned()
+        else {
+            panic!("yielded value should be the materialized empty rest Array");
+        };
+        assert_eq!(
+            core.heap[empty_rest_id.0 as usize].properties.get("length"),
+            Some(&Value::Int(0))
+        );
+
+        let (fixed_yield, fixed_label) = core
+            .generator_next(&module, 1, Value::Undefined, Label::Public)
+            .expect("fixed and trailing arguments should yield their rest Array");
+        assert_eq!(
+            fixed_label,
+            Label::Secret.join(&Label::Confidential),
+            "the rest Array must carry the join of every retained tail label"
+        );
+        let Value::Object(fixed_result_id) = fixed_yield else {
+            panic!("generator.next() should return a result object");
+        };
+        let Some(Value::Object(fixed_rest_id)) = core.heap[fixed_result_id.0 as usize]
+            .properties
+            .get("value")
+            .cloned()
+        else {
+            panic!("yielded value should be the materialized fixed rest Array");
+        };
+        let fixed_rest = &core.heap[fixed_rest_id.0 as usize];
+        assert_eq!(fixed_rest.properties.get("0"), Some(&Value::Int(20)));
+        assert_eq!(fixed_rest.properties.get("1"), Some(&Value::Int(22)));
+        assert_eq!(fixed_rest.properties.get("length"), Some(&Value::Int(2)));
+
+        let (_, return_label) = core
+            .generator_next(&module, 1, Value::Int(42), Label::Internal)
+            .expect("resume input should reach the retained rest generator frame");
+        assert_eq!(return_label, Label::Internal);
+    }
+
+    #[test]
+    fn generator_resume_labels_and_instances_are_isolated_bd_ur3tk_5() {
+        let mut module = test_module(vec![
+            Ir3Instruction::Yield {
+                value: 0,
+                delegate: false,
+                resume_dst: 1,
+            },
+            Ir3Instruction::Return { value: 1 },
+        ]);
+        module.function_table.push(Ir3FunctionDesc {
+            entry: 0,
+            arity: 1,
+            frame_size: 2,
+            name: Some("isolated_labels".to_string()),
+            is_generator: true,
+            rest_param_index: None,
+        });
+        let mut core =
+            InterpreterCore::new(test_quickjs_config(), "generator-instance-label-isolation");
+        for (value, label) in [
+            (Value::Int(11), Label::Secret),
+            (Value::Int(22), Label::Internal),
+        ] {
+            core.generators.push(GeneratorObject {
+                invocation: Some(GeneratorInvocation {
+                    function_index: 0,
+                    closure_index: None,
+                    arguments: vec![value],
+                    argument_labels: vec![label],
+                    this_value: Value::Undefined,
+                    this_label: Label::Public,
+                    inline_context_label: None,
+                }),
+                execution: None,
+                resume_dst: None,
+                phase: GeneratorPhase::SuspendedStart,
+            });
+        }
+
+        let (_, first_label) = core
+            .generator_next(&module, 0, Value::Undefined, Label::Public)
+            .expect("first generator should yield");
+        let (_, second_label) = core
+            .generator_next(&module, 1, Value::Undefined, Label::Public)
+            .expect("second generator should yield independently");
+        assert_eq!(first_label, Label::Secret);
+        assert_eq!(second_label, Label::Internal);
+
+        let (_, return_label) = core
+            .generator_next(&module, 0, Value::Int(33), Label::Confidential)
+            .expect("resume value should become the first generator's return value");
+        assert_eq!(return_label, Label::Confidential);
+        assert_eq!(
+            core.generators[1]
+                .execution
+                .as_ref()
+                .expect("second generator should remain suspended")
+                .register_labels[0],
+            Label::Internal
+        );
+    }
+
+    #[test]
+    fn generator_rejects_mismatched_value_and_label_snapshot_bd_ur3tk_5() {
+        let mut module = test_module(vec![
+            Ir3Instruction::Yield {
+                value: 0,
+                delegate: false,
+                resume_dst: 1,
+            },
+            Ir3Instruction::Return { value: 1 },
+        ]);
+        module.function_table.push(Ir3FunctionDesc {
+            entry: 0,
+            arity: 1,
+            frame_size: 2,
+            name: Some("mismatched_label_snapshot".to_string()),
+            is_generator: true,
+            rest_param_index: None,
+        });
+        let mut core =
+            InterpreterCore::new(test_quickjs_config(), "generator-label-snapshot-mismatch");
+        core.generators.push(GeneratorObject {
+            invocation: Some(GeneratorInvocation {
+                function_index: 0,
+                closure_index: None,
+                arguments: vec![Value::Int(7)],
+                argument_labels: vec![Label::Secret],
+                this_value: Value::Undefined,
+                this_label: Label::Public,
+                inline_context_label: None,
+            }),
+            execution: None,
+            resume_dst: None,
+            phase: GeneratorPhase::SuspendedStart,
+        });
+
+        core.generator_next(&module, 0, Value::Undefined, Label::Public)
+            .expect("first resume should create a suspended activation");
+        core.generators[0]
+            .execution
+            .as_mut()
+            .expect("generator should be suspended after yield")
+            .register_labels
+            .pop();
+
+        let error = core
+            .generator_next(&module, 0, Value::Int(9), Label::Confidential)
+            .expect_err("a mismatched label file must fail closed");
+        assert!(matches!(
+            error,
+            InterpreterError::InternalError { details }
+                if details.contains("value/label snapshot mismatch")
+        ));
+        assert_eq!(core.generators[0].phase, GeneratorPhase::SuspendedYield);
+        assert!(
+            core.generators[0].execution.is_some(),
+            "the corrupt snapshot must remain quarantined instead of becoming active"
+        );
+        assert_eq!(core.generators[0].resume_dst, Some(1));
+    }
+
+    #[test]
+    fn generator_return_completion_survives_finally_yield_bd_ur3tk_5() {
+        let mut module = test_module(vec![
+            Ir3Instruction::BeginTry {
+                catch_target: 2,
+                finally_target: Some(2),
+            },
+            Ir3Instruction::Return { value: 0 },
+            Ir3Instruction::EnterFinally,
+            Ir3Instruction::Yield {
+                value: 0,
+                delegate: false,
+                resume_dst: 1,
+            },
+            Ir3Instruction::EndFinally,
+        ]);
+        module.function_table.push(Ir3FunctionDesc {
+            entry: 0,
+            arity: 1,
+            frame_size: 2,
+            name: Some("finally_snapshot".to_string()),
+            is_generator: true,
+            rest_param_index: None,
+        });
+        let mut core =
+            InterpreterCore::new(test_quickjs_config(), "generator-finally-label-snapshot");
+        core.generators.push(GeneratorObject {
+            invocation: Some(GeneratorInvocation {
+                function_index: 0,
+                closure_index: None,
+                arguments: vec![Value::Int(7)],
+                argument_labels: vec![Label::Secret],
+                this_value: Value::Undefined,
+                this_label: Label::Public,
+                inline_context_label: None,
+            }),
+            execution: None,
+            resume_dst: None,
+            phase: GeneratorPhase::SuspendedStart,
+        });
+
+        let (_, yield_label) = core
+            .generator_next(&module, 0, Value::Undefined, Label::Public)
+            .expect("finally should yield before completing the pending return");
+        assert_eq!(yield_label, Label::Secret);
+        let suspended = core.generators[0]
+            .execution
+            .as_ref()
+            .expect("yield should preserve the generator activation");
+        assert!(matches!(
+            suspended.finally_frames.last(),
+            Some(FinallyFrame {
+                completion: Some(AbruptCompletion::Return(LabeledReturn {
+                    value: Value::Int(7),
+                    label: Label::Secret,
+                })),
+            })
+        ));
+
+        let (_, return_label) = core
+            .generator_next(&module, 0, Value::Undefined, Label::Public)
+            .expect("resuming after yield should complete the original return");
+        assert_eq!(return_label, Label::Secret);
+        assert_eq!(core.generators[0].phase, GeneratorPhase::Completed);
     }
 
     #[test]
@@ -96935,7 +97741,10 @@ mod tests {
                     closure_index: None,
                     saved_ip: 0,
                     saved_registers: Vec::new(),
+                    saved_register_labels: Vec::new(),
                     saved_register_base: 0,
+                    pending_arguments: Vec::new(),
+                    pending_argument_labels: Vec::new(),
                     phase: AsyncGeneratorPhase::Completed,
                 });
                 (core.async_generators.len() - 1) as u32
@@ -96959,7 +97768,10 @@ mod tests {
                 closure_index: None,
                 saved_ip: 0,
                 saved_registers: Vec::new(),
+                saved_register_labels: Vec::new(),
                 saved_register_base: 0,
+                pending_arguments: Vec::new(),
+                pending_argument_labels: Vec::new(),
                 phase: AsyncGeneratorPhase::SuspendedStart,
             });
 

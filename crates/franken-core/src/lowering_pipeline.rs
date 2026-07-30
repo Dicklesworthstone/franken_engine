@@ -4952,15 +4952,6 @@ fn lower_statement_to_ir1_with_flow(
                 &mut body_binding_index,
                 body_scope,
             )?;
-            if rest_param_index.is_some() && func.is_generator {
-                return Err(unsupported_frontier_expression_error(
-                    "generator_rest_parameters",
-                    "FE-LOWER-UNSUPPORTED-GENERATOR-REST-0001",
-                    "core.generator_rest_parameter_runtime",
-                    "generator rest parameters require suspended-frame argument persistence",
-                    Some(func.span.clone()),
-                ));
-            }
             let parameter_binding_names = body_lookup.keys().cloned().collect();
             let parameter_prologue_captures = lower_function_parameter_prologue(
                 &parameter_steps,
@@ -12010,15 +12001,6 @@ fn lower_expression_to_ir1(
                 &mut body_binding_index,
                 body_scope,
             )?;
-            if rest_param_index.is_some() && *is_generator {
-                return Err(unsupported_frontier_expression_error(
-                    "generator_rest_parameters",
-                    "FE-LOWER-UNSUPPORTED-GENERATOR-REST-0001",
-                    "core.generator_rest_parameter_runtime",
-                    "generator rest parameters require suspended-frame argument persistence",
-                    Some(body.span.clone()),
-                ));
-            }
             let parameter_binding_names = body_lookup.keys().cloned().collect();
             let parameter_prologue_captures = lower_function_parameter_prologue(
                 &parameter_steps,
@@ -19391,6 +19373,29 @@ mod tests {
     }
 
     #[test]
+    fn generator_rest_arguments_survive_invocation_and_resume_bd_ur3tk_5() {
+        let (_, _, value) = lower_and_execute_deferred_source_bd_6pvhn(
+            "function* empty(...tail) {\
+                 yield tail.length;\
+                 return tail.length;\
+             }\
+             function* fixed(head, ...tail) {\
+                 yield head + ':' + tail.length + ':' + tail[0] + ':' + tail[1];\
+                 return tail[0] + tail[1];\
+             }\
+             let emptyIterator = empty();\
+             let fixedIterator = fixed('h', 20, 22);\
+             let emptyFirst = emptyIterator.next();\
+             let fixedFirst = fixedIterator.next();\
+             let fixedDone = fixedIterator.next();\
+             emptyFirst.value + ':' + emptyFirst.done + ':'\
+                 + fixedFirst.value + ':' + fixedFirst.done + ':'\
+                 + fixedDone.value + ':' + fixedDone.done;",
+        );
+        assert_eq!(value, Value::str("0:false:h:2:20:22:false:42:true"));
+    }
+
+    #[test]
     fn legacy_markerless_generator_keeps_schema_through_ir1_ir2_ir3_bd_093id() {
         let tree = CanonicalEs2020Parser
             .parse(
@@ -19490,17 +19495,23 @@ mod tests {
     }
 
     #[test]
-    fn generator_rest_remains_fail_closed_until_tail_is_persisted_bd_ur3tk_9() {
-        let error = lower_rest_source_to_ir3("function* generated(...tail) { yield tail; }")
-            .expect_err("generator rest arguments remain intentionally fail-closed");
-        let LoweringPipelineError::UnsupportedSyntax(diagnostic) = error else {
-            panic!("expected fail-closed generator-rest diagnostic");
-        };
+    fn generator_rest_metadata_reaches_suspended_runtime_bd_ur3tk_5() {
+        let module = lower_rest_source_to_ir3("function* generated(...tail) { yield tail; }")
+            .expect("generator rest arguments should lower once the frame persists its tail");
+        let function = module
+            .function_table
+            .iter()
+            .find(|function| function.name.as_deref() == Some("generated"))
+            .expect("lowered generator descriptor");
+        assert_eq!(function.rest_param_index, Some(0));
         assert_eq!(
-            diagnostic.diagnostic_code,
-            "FE-LOWER-UNSUPPORTED-GENERATOR-REST-0001"
+            module
+                .instructions
+                .iter()
+                .filter(|instruction| matches!(instruction, Ir3Instruction::GeneratorBodyStart))
+                .count(),
+            1
         );
-        assert_eq!(diagnostic.site_id, "core.generator_rest_parameter_runtime");
     }
 
     #[test]

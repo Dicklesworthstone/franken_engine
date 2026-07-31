@@ -65,6 +65,11 @@ pub(crate) fn estimate_js_value_memory_bytes(value: &JsValue) -> u64 {
 /// Dynamic payload retained by an IFC label.
 pub(crate) fn estimate_label_memory_bytes(label: &Label) -> u64 {
     match label {
+        // `String::new()` is the allocation-free carrier used by fatal Promise
+        // tombstones. The enum already owns the inline String header through
+        // its containing record/queue slot, so an empty name has no dynamic
+        // resident allocation to charge.
+        Label::Custom { name, .. } if name.is_empty() && name.capacity() == 0 => 0,
         Label::Custom { name, .. } => estimate_string_memory_bytes(name),
         Label::Public
         | Label::Internal
@@ -179,6 +184,10 @@ pub struct PromiseRecord {
     pub creation_seq: u64,
     /// Whether an unhandled rejection has been observed.
     pub rejection_handled: bool,
+    /// Allocation-free marker for one fatal dependency-closure pass.
+    #[doc(hidden)]
+    #[serde(skip)]
+    pub terminal_epoch: u64,
 }
 
 impl PromiseRecord {
@@ -190,6 +199,7 @@ impl PromiseRecord {
             label: Label::Public,
             creation_seq,
             rejection_handled: false,
+            terminal_epoch: 0,
         }
     }
 }
@@ -735,6 +745,102 @@ impl PromiseStore {
         }
 
         Ok(())
+    }
+
+    /// Fail-closed settlement used only after the ordinary, fully witnessed
+    /// rejection path has refused its memory preflight.
+    ///
+    /// This operation performs no allocation and enqueues no reaction jobs. It
+    /// rejects the target and every still-pending Promise returned by its stored
+    /// `.then` reactions with `undefined`, then drops those now-unschedulable
+    /// reactions. Handles are monotonic, so a forward walk over the authoritative
+    /// retained reaction edges marks every descendant before it is visited; a
+    /// reverse pass then clears and settles the marked records. No temporary
+    /// worklist or newly serialized dependency metadata is needed.
+    ///
+    /// No witness is appended: this path exists precisely for the case where
+    /// even one additional witness record cannot be admitted. The enclosing
+    /// interpreter propagates the fatal resource error as the durable outcome.
+    pub(crate) fn terminally_reject_without_jobs(
+        &mut self,
+        handle: PromiseHandle,
+        label: &Label,
+    ) -> Result<u64, PromiseError> {
+        let terminal_epoch = u64::from(handle.0).saturating_add(1);
+        self.extend_terminal_rejection_without_jobs(handle, label, terminal_epoch)?;
+        Ok(terminal_epoch)
+    }
+
+    /// Extend an existing fatal dependency-closure pass from another root.
+    pub(crate) fn extend_terminal_rejection_without_jobs(
+        &mut self,
+        handle: PromiseHandle,
+        label: &Label,
+        terminal_epoch: u64,
+    ) -> Result<usize, PromiseError> {
+        let root_index = handle.0 as usize;
+        let root = self.get(handle)?;
+        if root.terminal_epoch == terminal_epoch {
+            return Ok(0);
+        }
+        if root.state.is_settled() {
+            return Err(PromiseError::AlreadySettled { handle });
+        }
+
+        let terminal_label = match label {
+            Label::Public => Label::Public,
+            Label::Internal => Label::Internal,
+            Label::Confidential => Label::Confidential,
+            Label::Secret => Label::Secret,
+            Label::TopSecret => Label::TopSecret,
+            Label::Custom { level, .. } => Label::Custom {
+                name: String::new(),
+                level: *level,
+            },
+        };
+
+        self.promises[root_index].terminal_epoch = terminal_epoch;
+        for parent_index in root_index..self.promises.len() {
+            if self.promises[parent_index].terminal_epoch != terminal_epoch {
+                continue;
+            }
+            for reaction_index in 0..self.promises[parent_index].reactions.len() {
+                let child = self.promises[parent_index].reactions[reaction_index].result_promise;
+                let child_index = child.0 as usize;
+                if child_index <= parent_index || child_index >= self.promises.len() {
+                    continue;
+                }
+                if matches!(self.promises[child_index].state, PromiseState::Pending) {
+                    self.promises[child_index].terminal_epoch = terminal_epoch;
+                }
+            }
+        }
+
+        let mut rejected_count = 0usize;
+        for candidate_index in (root_index..self.promises.len()).rev() {
+            if self.promises[candidate_index].terminal_epoch == terminal_epoch
+                && matches!(self.promises[candidate_index].state, PromiseState::Pending)
+            {
+                let record = &mut self.promises[candidate_index];
+                record.state = PromiseState::Rejected(JsValue::Undefined);
+                record.label = terminal_label.clone();
+                record.rejection_handled = false;
+                record.reactions = Vec::new();
+                record.terminal_epoch = terminal_epoch;
+                rejected_count = rejected_count.saturating_add(1);
+            }
+        }
+        Ok(rejected_count)
+    }
+
+    pub(crate) fn was_terminally_rejected_in_epoch(
+        &self,
+        handle: PromiseHandle,
+        terminal_epoch: u64,
+    ) -> bool {
+        self.promises
+            .get(handle.0 as usize)
+            .is_some_and(|record| record.terminal_epoch == terminal_epoch)
     }
 
     /// Register a `.then(onFulfilled, onRejected)` reaction.
@@ -1983,6 +2089,62 @@ mod tests {
     }
 
     #[test]
+    fn terminal_rejection_drops_fanout_without_allocating_jobs_bd_fw7zd_6() {
+        let mut store = PromiseStore::new();
+        let mut queue = MicrotaskQueue::new();
+        let root = store.create();
+        let first_child = store
+            .then(root, None, None, Label::Secret, &mut queue)
+            .expect("root reaction");
+        let second_child = store
+            .then(root, None, None, Label::Confidential, &mut queue)
+            .expect("root fanout reaction");
+        let grandchild = store
+            .then(first_child, None, None, Label::Internal, &mut queue)
+            .expect("nested reaction");
+        let unrelated = store.create();
+        assert!(queue.is_empty());
+
+        let encoded = serde_json::to_string(&store).expect("serialize pending reaction graph");
+        let mut store: PromiseStore =
+            serde_json::from_str(&encoded).expect("restore legacy-compatible reaction graph");
+        let witness_count = store.witness_log().len();
+        let previous_bytes = store.estimated_memory_bytes();
+        let terminal_label = Label::Custom {
+            name: "attacker-controlled".repeat(4096),
+            level: u32::MAX,
+        };
+        store
+            .terminally_reject_without_jobs(root, &terminal_label)
+            .expect("fatal rejection should settle a pending root");
+
+        for handle in [root, first_child, second_child, grandchild] {
+            let record = store.get(handle).expect("affected Promise");
+            assert_eq!(
+                record.state,
+                PromiseState::Rejected(JsValue::Undefined),
+                "{handle} must not remain resumable"
+            );
+            assert_eq!(
+                record.label,
+                Label::Custom {
+                    name: String::new(),
+                    level: u32::MAX,
+                }
+            );
+            assert!(record.reactions.is_empty());
+            assert!(!record.rejection_handled);
+        }
+        assert_eq!(
+            store.get(unrelated).expect("unrelated Promise").state,
+            PromiseState::Pending
+        );
+        assert!(queue.is_empty());
+        assert_eq!(store.witness_log().len(), witness_count);
+        assert!(store.estimated_memory_bytes() <= previous_bytes);
+    }
+
+    #[test]
     fn double_fulfill_fails() {
         let mut store = PromiseStore::new();
         let mut queue = MicrotaskQueue::new();
@@ -2205,6 +2367,7 @@ mod tests {
                 label: label.clone(),
                 creation_seq: 0,
                 rejection_handled: false,
+                terminal_epoch: 0,
             }],
             next_seq: 1,
             witness: vec![WitnessEvent::PromiseFulfilled {

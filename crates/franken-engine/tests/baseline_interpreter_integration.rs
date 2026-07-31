@@ -2322,6 +2322,232 @@ fn imported_closure_calls_use_the_exporting_module_function_table() {
 }
 
 #[test]
+fn imported_generators_resume_against_the_exporting_module_function_table_bd_fw7zd_6() {
+    let root = temp_module_dir("module_import_generator_origin");
+    fs::create_dir_all(&root).expect("create module root");
+    fs::write(
+        root.join("dep.mjs"),
+        "export function* sequence(value) { yield value + 40; return value + 41; }",
+    )
+    .expect("write generator dependency");
+
+    // The dependency lowers `sequence` to function-table index 1. Install a
+    // colliding importer function at that index: both the initial `.next()`
+    // and the post-yield resume must remain bound to the retained dependency
+    // program for direct and method-style construction.
+    let mut module = test_module_with_pool(
+        vec![
+            Ir3Instruction::LoadStr {
+                dst: 0,
+                pool_index: 0,
+            },
+            Ir3Instruction::ImportModule {
+                specifier: 0,
+                dst: 1,
+            },
+            Ir3Instruction::LoadStr {
+                dst: 2,
+                pool_index: 1,
+            },
+            Ir3Instruction::GetProperty {
+                obj: 1,
+                key: 2,
+                dst: 3,
+            },
+            Ir3Instruction::LoadInt { dst: 4, value: 2 },
+            Ir3Instruction::Call {
+                callee: 3,
+                args: RegRange { start: 4, count: 1 },
+                dst: 5,
+            },
+            Ir3Instruction::Call {
+                callee: 5,
+                args: RegRange {
+                    start: 16,
+                    count: 0,
+                },
+                dst: 6,
+            },
+            Ir3Instruction::LoadStr {
+                dst: 7,
+                pool_index: 2,
+            },
+            Ir3Instruction::GetProperty {
+                obj: 6,
+                key: 7,
+                dst: 8,
+            },
+            Ir3Instruction::LoadInt { dst: 4, value: 3 },
+            Ir3Instruction::CallMethod {
+                receiver: 1,
+                callee: 3,
+                args: RegRange { start: 4, count: 1 },
+                dst: 9,
+            },
+            Ir3Instruction::Call {
+                callee: 9,
+                args: RegRange {
+                    start: 16,
+                    count: 0,
+                },
+                dst: 10,
+            },
+            Ir3Instruction::GetProperty {
+                obj: 10,
+                key: 7,
+                dst: 11,
+            },
+            Ir3Instruction::Call {
+                callee: 5,
+                args: RegRange {
+                    start: 16,
+                    count: 0,
+                },
+                dst: 12,
+            },
+            Ir3Instruction::GetProperty {
+                obj: 12,
+                key: 7,
+                dst: 13,
+            },
+            Ir3Instruction::Add {
+                dst: 14,
+                lhs: 8,
+                rhs: 11,
+            },
+            Ir3Instruction::Add {
+                dst: 15,
+                lhs: 14,
+                rhs: 13,
+            },
+            Ir3Instruction::Return { value: 15 },
+            Ir3Instruction::LoadUndefined { dst: 0 },
+            Ir3Instruction::Return { value: 0 },
+            Ir3Instruction::LoadInt { dst: 0, value: 999 },
+            Ir3Instruction::Return { value: 0 },
+        ],
+        vec![
+            "./dep.mjs".to_string(),
+            "sequence".to_string(),
+            "value".to_string(),
+        ],
+    );
+    module.function_table = vec![
+        Ir3FunctionDesc {
+            name: Some("main".to_string()),
+            entry: 18,
+            arity: 0,
+            frame_size: 16,
+            is_generator: false,
+            rest_param_index: None,
+        },
+        Ir3FunctionDesc {
+            name: Some("wrong_importer_function".to_string()),
+            entry: 20,
+            arity: 1,
+            frame_size: 16,
+            is_generator: true,
+            rest_param_index: None,
+        },
+    ];
+    module.header.source_label = root.join("main.mjs").display().to_string();
+
+    let mut config = InterpreterConfig::quickjs_defaults();
+    config.module_root = Some(root.display().to_string());
+    config.granted_capabilities = capabilities_with([RuntimeCapability::ModuleLoad]);
+    let result = QuickJsLane::with_config(config)
+        .execute(&module, "module-import-generator-origin-trace")
+        .expect("execute imported generator calls and resumptions");
+    assert_eq!(result.value, Value::Int(128));
+}
+
+#[test]
+fn imported_async_functions_use_the_exporting_module_for_direct_and_method_calls_bd_fw7zd_6() {
+    let root = temp_module_dir("module_import_async_origin");
+    fs::create_dir_all(&root).expect("create module root");
+    fs::write(
+        root.join("dep.mjs"),
+        "export async function plus(value) { return value + 40; }",
+    )
+    .expect("write async dependency");
+
+    let mut module = test_module_with_pool(
+        vec![
+            Ir3Instruction::LoadStr {
+                dst: 0,
+                pool_index: 0,
+            },
+            Ir3Instruction::ImportModule {
+                specifier: 0,
+                dst: 1,
+            },
+            Ir3Instruction::LoadStr {
+                dst: 2,
+                pool_index: 1,
+            },
+            Ir3Instruction::GetProperty {
+                obj: 1,
+                key: 2,
+                dst: 3,
+            },
+            Ir3Instruction::LoadInt { dst: 4, value: 2 },
+            Ir3Instruction::Call {
+                callee: 3,
+                args: RegRange { start: 4, count: 1 },
+                dst: 5,
+            },
+            Ir3Instruction::ModuleAwaitValue { promise_reg: 5 },
+            Ir3Instruction::LoadInt { dst: 4, value: 3 },
+            Ir3Instruction::CallMethod {
+                receiver: 1,
+                callee: 3,
+                args: RegRange { start: 4, count: 1 },
+                dst: 6,
+            },
+            Ir3Instruction::ModuleAwaitValue { promise_reg: 6 },
+            Ir3Instruction::Add {
+                dst: 7,
+                lhs: 5,
+                rhs: 6,
+            },
+            Ir3Instruction::Return { value: 7 },
+            Ir3Instruction::LoadUndefined { dst: 0 },
+            Ir3Instruction::Return { value: 0 },
+            Ir3Instruction::LoadInt { dst: 0, value: 999 },
+            Ir3Instruction::Return { value: 0 },
+        ],
+        vec!["./dep.mjs".to_string(), "plus".to_string()],
+    );
+    module.function_table = vec![
+        Ir3FunctionDesc {
+            name: Some("main".to_string()),
+            entry: 12,
+            arity: 0,
+            frame_size: 8,
+            is_generator: false,
+            rest_param_index: None,
+        },
+        Ir3FunctionDesc {
+            name: Some("wrong_importer_async".to_string()),
+            entry: 14,
+            arity: 1,
+            frame_size: 8,
+            is_generator: false,
+            rest_param_index: None,
+        },
+    ];
+    module.header.source_label = root.join("main.mjs").display().to_string();
+
+    let mut config = InterpreterConfig::quickjs_defaults();
+    config.module_root = Some(root.display().to_string());
+    config.granted_capabilities = capabilities_with([RuntimeCapability::ModuleLoad]);
+    let result = QuickJsLane::with_config(config)
+        .execute(&module, "module-import-async-origin-trace")
+        .expect("execute and await imported async direct and method calls");
+    assert_eq!(result.value, Value::Int(85));
+}
+
+#[test]
 fn imported_closure_dynamic_function_construction_fails_closed() {
     let root = temp_module_dir("module_import_generated_callable");
     fs::create_dir_all(&root).expect("create module root");

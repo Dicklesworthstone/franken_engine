@@ -252,6 +252,8 @@ const MEMORY_ESTIMATE_CALL_FRAME_BASE_BYTES: u64 = 64;
 const MEMORY_ESTIMATE_ITERATOR_BASE_BYTES: u64 = 32;
 /// Approximate per-generator base footprint.
 const MEMORY_ESTIMATE_GENERATOR_BASE_BYTES: u64 = 48;
+/// One shared owner-program handle retained by every suspended continuation.
+const MEMORY_ESTIMATE_CONTINUATION_OWNER_BYTES: u64 = std::mem::size_of::<Arc<Ir3Module>>() as u64;
 /// Conservative per-record charge for the emitter listener side table. The
 /// event name and any string-backed listener payload are charged separately.
 const MEMORY_ESTIMATE_EVENT_LISTENER_BASE_BYTES: u64 = 48;
@@ -5326,6 +5328,10 @@ enum GeneratorPhase {
 /// A generator object holds the suspended state of a generator function.
 #[derive(Debug, Clone)]
 struct GeneratorObject {
+    /// Immutable program that owns `function_index` and every suspended
+    /// continuation created from it. An imported generator must never
+    /// reinterpret this module-local index against the resumer's table.
+    owner_module: Arc<Ir3Module>,
     /// Invocation state retained until the first `.next()` enters the frame.
     invocation: Option<GeneratorInvocation>,
     /// Complete execution-local state retained after a `yield`.
@@ -5423,6 +5429,13 @@ enum AsyncGeneratorPhase {
 #[allow(dead_code)]
 #[derive(Debug, Clone)]
 struct AsyncFunctionObject {
+    /// Immutable program that owns `function_index` and every post-`await`
+    /// continuation created from it.
+    owner_module: Arc<Ir3Module>,
+    /// Complete isolated activation retained when a cross-module async call
+    /// suspends inside the owner-module wrapper. Same-module async calls keep
+    /// using the already-active execution state and therefore leave this empty.
+    isolated_execution: Option<GeneratorExecutionSnapshot>,
     /// Function index in the function table.
     function_index: u32,
     /// Closure index (captures from the enclosing scope).
@@ -5465,6 +5478,9 @@ struct TopLevelAwaitResumptionContext {
 #[allow(dead_code)]
 #[derive(Debug, Clone)]
 struct AsyncGeneratorObject {
+    /// Immutable program that owns `function_index` and all future
+    /// yield/await resumptions.
+    owner_module: Arc<Ir3Module>,
     /// Function index in the function table.
     function_index: u32,
     /// Closure index (captures from the enclosing scope).
@@ -25853,6 +25869,12 @@ impl InterpreterCore {
         // Writable completion callbacks occupy Node's internal stream-tick
         // checkpoint ahead of Promise/nextTick work and Immediate macrotasks.
         let checkpoint_error = self.drain_runtime_checkpoint(Some(module)).err();
+        if checkpoint_error
+            .as_ref()
+            .is_some_and(|error| Self::js_catchable_error_name(error).is_none())
+        {
+            return Err(checkpoint_error.expect("non-catchable checkpoint error was checked"));
+        }
 
         // Run the event loop until all pending work is complete
         // (macrotasks like timers, with microtask draining after each).
@@ -30784,18 +30806,35 @@ impl InterpreterCore {
                 _ => (return_val, return_label),
             };
             let async_function_id = frame.async_function_id;
+            let async_failure_label =
+                async_function_id.map(|_| Self::terminal_async_failure_label(&effective_label));
+            let return_ip = frame.return_ip;
             self.restore_call_frame_state(&mut frame);
-            self.apply_scope_closure_call_stack_memory_delta(
+            self.ip = return_ip;
+            let frame_memory_result = self.apply_scope_closure_call_stack_memory_delta(
                 previous_scope_bytes,
                 previous_closure_bytes,
                 previous_call_stack_bytes,
-            )?;
+            );
+            if let Err(error) = frame_memory_result {
+                if let (Some(async_id), Some(label)) = (async_function_id, async_failure_label) {
+                    self.terminally_reject_abandoned_async_functions(&[async_id], label);
+                }
+                return Err(error);
+            }
             if let Some(async_id) = async_function_id {
-                self.settle_async_function(async_id, Ok(effective_val), effective_label)?;
+                if let Err(error) =
+                    self.settle_async_function(async_id, Ok(effective_val), effective_label)
+                {
+                    self.terminally_reject_abandoned_async_functions(
+                        &[async_id],
+                        async_failure_label.expect("async completion retained its failure label"),
+                    );
+                    return Err(error);
+                }
             } else {
                 self.write_reg_with_label(frame.return_reg, effective_val, effective_label)?;
             }
-            self.ip = frame.return_ip;
             Ok(None)
         } else {
             self.clear_pending_abrupt_slots();
@@ -30824,17 +30863,14 @@ impl InterpreterCore {
         resolution: Result<Value, Value>,
         label: Label,
     ) -> Result<(), InterpreterError> {
-        let result_promise = {
-            let async_function =
-                self.async_functions
-                    .get_mut(async_id as usize)
-                    .ok_or_else(|| InterpreterError::TypeError {
-                        expected: "valid async function".to_string(),
-                        got: format!("async#{async_id} not found"),
-                    })?;
-            async_function.phase = AsyncFunctionPhase::Completed;
-            async_function.result_promise
-        };
+        let result_promise = self
+            .async_functions
+            .get(async_id as usize)
+            .ok_or_else(|| InterpreterError::TypeError {
+                expected: "valid async function".to_string(),
+                got: format!("async#{async_id} not found"),
+            })?
+            .result_promise;
         let promise_handle = crate::promise_model::PromiseHandle(result_promise);
 
         match resolution {
@@ -30847,6 +30883,7 @@ impl InterpreterCore {
                 self.reject_promise(promise_handle, js_reason, label)?;
             }
         }
+        self.async_functions[async_id as usize].phase = AsyncFunctionPhase::Completed;
         Ok(())
     }
 
@@ -30867,15 +30904,24 @@ impl InterpreterCore {
         let previous_call_stack_bytes = self
             .call_stack_memory_bytes()
             .saturating_add(Self::estimate_call_frame_bytes(&frame));
+        let return_ip = frame.return_ip;
+        let failure_label = Self::terminal_async_failure_label(&label);
         self.restore_call_frame_state(&mut frame);
-        self.apply_scope_closure_call_stack_memory_delta(
-            previous_scope_bytes,
-            previous_closure_bytes,
-            previous_call_stack_bytes,
-        )?;
-        self.settle_async_function(async_id, resolution, label)?;
-        self.ip = frame.return_ip;
-        Ok(None)
+        self.ip = return_ip;
+        let completion = self
+            .apply_scope_closure_call_stack_memory_delta(
+                previous_scope_bytes,
+                previous_closure_bytes,
+                previous_call_stack_bytes,
+            )
+            .and_then(|_| self.settle_async_function(async_id, resolution, label));
+        match completion {
+            Ok(()) => Ok(None),
+            Err(error) => {
+                self.terminally_reject_abandoned_async_functions(&[async_id], failure_label);
+                Err(error)
+            }
+        }
     }
 
     fn complete_current_async_frame(
@@ -30983,6 +31029,14 @@ impl InterpreterCore {
             })?;
         let previous_async_bytes = Self::estimate_async_function_bytes(async_function);
         let next_async_bytes = MEMORY_ESTIMATE_GENERATOR_BASE_BYTES
+            .saturating_add(MEMORY_ESTIMATE_CONTINUATION_OWNER_BYTES)
+            .saturating_add(
+                async_function
+                    .isolated_execution
+                    .as_ref()
+                    .map(Self::estimate_generator_execution_bytes)
+                    .unwrap_or(0),
+            )
             .saturating_add(Self::estimate_value_vec_bytes(
                 &self.registers[reg_start..reg_end],
             ))
@@ -31188,6 +31242,181 @@ impl InterpreterCore {
         match self.run_loop(module) {
             Ok(_) | Err(InterpreterError::Halted) => Ok(()),
             Err(err) => Err(err),
+        }
+    }
+
+    fn resume_async_function_task(
+        &mut self,
+        resumption_context: AsyncResumptionContext,
+        settled: Result<crate::object_model::JsValue, crate::object_model::JsValue>,
+        settlement_label: Label,
+        fallback_module: Option<&Ir3Module>,
+    ) -> Result<(), InterpreterError> {
+        let async_function_id = resumption_context.async_function_id;
+        let (owner_module, has_isolated_execution) = {
+            let function = self
+                .async_functions
+                .get(async_function_id as usize)
+                .ok_or_else(|| InterpreterError::TypeError {
+                    expected: "valid async function".to_string(),
+                    got: format!("async#{async_function_id} not found"),
+                })?;
+            (
+                Arc::clone(&function.owner_module),
+                function.isolated_execution.is_some(),
+            )
+        };
+
+        if !has_isolated_execution {
+            let async_function_count_before_run = self.async_functions.len();
+            let mut abandoned_async_ids =
+                Self::async_function_ids_in_call_stack(&self.call_stack, 0);
+            Self::extend_unique_async_function_ids(
+                &mut abandoned_async_ids,
+                std::iter::once(async_function_id),
+            );
+            let failure_label = Self::terminal_async_failure_label(&settlement_label);
+            let result = self
+                .resume_async_function_after_await(resumption_context, settled, settlement_label)
+                .and_then(|()| self.continue_resumed_async_function(Some(owner_module.as_ref())));
+            if let Err(error) = result {
+                Self::extend_unique_async_function_ids(
+                    &mut abandoned_async_ids,
+                    Self::async_function_ids_in_call_stack(&self.call_stack, 0),
+                );
+                Self::extend_unique_async_function_ids(
+                    &mut abandoned_async_ids,
+                    self.async_function_ids_created_since(async_function_count_before_run),
+                );
+                self.discard_abandoned_async_call_stack(&abandoned_async_ids);
+                self.terminally_reject_abandoned_async_functions(
+                    &abandoned_async_ids,
+                    failure_label,
+                );
+                return Err(error);
+            }
+            return Ok(());
+        }
+
+        let failure_label = Self::terminal_async_failure_label(&settlement_label);
+        let async_function_count_before_run = self.async_functions.len();
+        let activation = self.async_functions[async_function_id as usize]
+            .isolated_execution
+            .take()
+            .expect("isolated async execution was checked");
+        let owner_is_foreign = fallback_module
+            .is_some_and(|module| module.header.source_label != owner_module.header.source_label);
+
+        let caller_generator_yielded = std::mem::replace(&mut self.generator_yielded, false);
+        let caller_generator_resume_dst = self.generator_resume_dst.take();
+        let caller_generator_result_label =
+            std::mem::replace(&mut self.generator_result_label, Label::Public);
+        let caller_execution = self.take_generator_execution();
+        let caller_execution_bytes = Self::estimate_generator_execution_bytes(&caller_execution);
+        let previous_suspended_bytes = self.temporarily_suspended_execution_bytes;
+        let previous_reentrant_depth = self.module_reentrant_call_depth;
+        let previous_foreign_call_depth = self.active_foreign_module_call_depth;
+        self.temporarily_suspended_execution_bytes =
+            previous_suspended_bytes.saturating_add(caller_execution_bytes);
+        self.module_reentrant_call_depth =
+            previous_reentrant_depth.saturating_add(caller_execution.call_stack.len());
+        if owner_is_foreign {
+            self.active_foreign_module_call_depth = previous_foreign_call_depth.saturating_add(1);
+        }
+        self.install_generator_execution(activation);
+        let initial_async_ids = Self::async_function_ids_in_call_stack(&self.call_stack, 0);
+
+        let result = self.sync_estimated_memory_bytes().and_then(|_| {
+            self.resume_async_function_after_await(resumption_context, settled, settlement_label)
+                .and_then(|()| self.continue_resumed_async_function(Some(owner_module.as_ref())))
+        });
+        let mut continuation = Some(self.take_generator_execution());
+        let mut active_async_ids = initial_async_ids;
+        Self::extend_unique_async_function_ids(
+            &mut active_async_ids,
+            Self::async_function_ids_in_call_stack(
+                &continuation
+                    .as_ref()
+                    .expect("isolated continuation is present")
+                    .call_stack,
+                0,
+            ),
+        );
+        Self::extend_unique_async_function_ids(
+            &mut active_async_ids,
+            self.async_function_ids_created_since(async_function_count_before_run),
+        );
+        let post_run_stack_async_ids = Self::async_function_ids_in_call_stack(
+            &continuation
+                .as_ref()
+                .expect("isolated continuation is present")
+                .call_stack,
+            0,
+        );
+        let suspended_async_id = self.suspended_async_function_id_in_call_stack(
+            &continuation
+                .as_ref()
+                .expect("isolated continuation is present")
+                .call_stack,
+            0,
+        );
+        let result = if result.is_ok()
+            && suspended_async_id.is_none()
+            && !post_run_stack_async_ids.is_empty()
+        {
+            Err(InterpreterError::InternalError {
+                details: "isolated async execution exited without completing or suspending its active async frames"
+                    .to_string(),
+            })
+        } else {
+            result
+        };
+
+        self.temporarily_suspended_execution_bytes = previous_suspended_bytes;
+        self.module_reentrant_call_depth = previous_reentrant_depth;
+        self.active_foreign_module_call_depth = previous_foreign_call_depth;
+        self.install_generator_execution(caller_execution);
+        self.generator_yielded = caller_generator_yielded;
+        self.generator_resume_dst = caller_generator_resume_dst;
+        self.generator_result_label = caller_generator_result_label;
+
+        if result.is_ok()
+            && let Some(suspended_id) = suspended_async_id
+        {
+            self.async_functions[suspended_id as usize].isolated_execution = continuation.take();
+        }
+        drop(continuation);
+
+        match result {
+            Ok(()) => {
+                if let Err(error) = self.sync_estimated_memory_bytes() {
+                    let mut abandoned_async_ids = active_async_ids.clone();
+                    let retained_async_ids = suspended_async_id
+                        .and_then(|suspended_id| {
+                            self.async_functions[suspended_id as usize]
+                                .isolated_execution
+                                .take()
+                        })
+                        .map(|execution| {
+                            Self::async_function_ids_in_call_stack(&execution.call_stack, 0)
+                        })
+                        .unwrap_or_default();
+                    Self::extend_unique_async_function_ids(
+                        &mut abandoned_async_ids,
+                        retained_async_ids,
+                    );
+                    self.terminally_reject_abandoned_async_functions(
+                        &abandoned_async_ids,
+                        failure_label,
+                    );
+                    return Err(error);
+                }
+                Ok(())
+            }
+            Err(error) => {
+                self.terminally_reject_abandoned_async_functions(&active_async_ids, failure_label);
+                Err(error)
+            }
         }
     }
 
@@ -31611,11 +31840,11 @@ impl InterpreterCore {
         callee: &Value,
         current_module: &Ir3Module,
     ) -> Result<Option<Arc<Ir3Module>>, InterpreterError> {
-        let (closure_id, resumable_kind) = match callee {
-            Value::Closure(id) => (*id, None),
-            Value::GeneratorFunction(id) => (*id, Some("generator")),
-            Value::AsyncFunction(id) => (*id, Some("async function")),
-            Value::AsyncGeneratorFunction(id) => (*id, Some("async generator")),
+        let closure_id = match callee {
+            Value::Closure(id)
+            | Value::GeneratorFunction(id)
+            | Value::AsyncFunction(id)
+            | Value::AsyncGeneratorFunction(id) => *id,
             _ => return Ok(None),
         };
         let Some(origin) = self.closure_module_origins.get(&closure_id) else {
@@ -31624,21 +31853,18 @@ impl InterpreterCore {
         if origin == &current_module.header.source_label {
             return Ok(None);
         }
-        // Suspended runtime objects currently retain a closure index but not
-        // an owner program. Starting one through a foreign wrapper would work
-        // only until `.next()`/`await` resumed it against the entry module.
-        // Fail closed until continuation objects carry the same provenance.
-        if let Some(kind) = resumable_kind {
-            return Err(InterpreterError::ModuleEvaluationFailed {
-                specifier: origin.clone(),
-                reason: format!(
-                    "cross-module {kind} invocation requires owner-program continuation support"
-                ),
-            });
-        }
+        self.retained_closure_module(closure_id, origin).map(Some)
+    }
+
+    /// Resolve the immutable retained program for a closure provenance key.
+    fn retained_closure_module(
+        &self,
+        closure_id: u32,
+        origin: &str,
+    ) -> Result<Arc<Ir3Module>, InterpreterError> {
         let record = self.module_state.modules.get(origin).ok_or_else(|| {
             InterpreterError::ModuleEvaluationFailed {
-                specifier: origin.clone(),
+                specifier: origin.to_string(),
                 reason: format!(
                     "closure#{closure_id} refers to a module program that is not retained"
                 ),
@@ -31646,13 +31872,29 @@ impl InterpreterCore {
         })?;
         let compiled_module = record.compiled_module.as_ref().ok_or_else(|| {
             InterpreterError::ModuleEvaluationFailed {
-                specifier: origin.clone(),
+                specifier: origin.to_string(),
                 reason: format!(
                     "closure#{closure_id} refers to a module record without retained code"
                 ),
             }
         })?;
-        Ok(Some(Arc::clone(compiled_module)))
+        Ok(Arc::clone(compiled_module))
+    }
+
+    /// Return the program that must own a newly-created continuation object.
+    ///
+    /// Live closure creation always records an origin whose module program was
+    /// retained during evaluation. The fallback preserves private unit
+    /// fixtures that seed closure tables directly without an origin record.
+    fn continuation_owner_module(
+        &self,
+        closure_id: u32,
+        current_module: &Ir3Module,
+    ) -> Result<Arc<Ir3Module>, InterpreterError> {
+        match self.closure_module_origins.get(&closure_id) {
+            Some(origin) => self.retained_closure_module(closure_id, origin),
+            None => Ok(Arc::new(current_module.clone())),
+        }
     }
 
     fn effective_call_depth(&self) -> usize {
@@ -32290,9 +32532,14 @@ impl InterpreterCore {
         } else {
             Vec::new()
         };
-        let mut scope_chain = ScopeChain {
-            frames: captured_env,
+        let mut scope_chain = if captured_env.is_empty() {
+            ScopeChain::new()
+        } else {
+            ScopeChain {
+                frames: captured_env,
+            }
         };
+        let saved_scope_depth = scope_chain.depth();
         scope_chain.push(self.config.max_scope_depth)?;
 
         let max_registers = self.config.max_registers as usize;
@@ -32327,7 +32574,7 @@ impl InterpreterCore {
                 saved_pending_return: None,
                 saved_suspended_abrupt_depth: 0,
                 saved_finally_mode_depth: 0,
-                saved_scope_depth: 0,
+                saved_scope_depth,
                 saved_scope_chain: None,
                 async_function_id: None,
             }],
@@ -32377,6 +32624,319 @@ impl InterpreterCore {
         }
     }
 
+    fn async_function_ids_in_call_stack(
+        call_stack: &[CallFrame],
+        minimum_index: usize,
+    ) -> Vec<u32> {
+        let mut ids = Vec::new();
+        for async_id in call_stack
+            .iter()
+            .filter_map(|frame| frame.async_function_id)
+        {
+            if async_id as usize >= minimum_index && !ids.contains(&async_id) {
+                ids.push(async_id);
+            }
+        }
+        ids
+    }
+
+    fn extend_unique_async_function_ids(
+        ids: &mut Vec<u32>,
+        additional_ids: impl IntoIterator<Item = u32>,
+    ) {
+        for async_id in additional_ids {
+            if !ids.contains(&async_id) {
+                ids.push(async_id);
+            }
+        }
+    }
+
+    fn async_function_ids_created_since(&self, minimum_index: usize) -> Vec<u32> {
+        (minimum_index..self.async_functions.len())
+            .map(|index| {
+                u32::try_from(index)
+                    .expect("async function table capacity is checked before every insertion")
+            })
+            .collect()
+    }
+
+    fn suspended_async_function_id_in_call_stack(
+        &self,
+        call_stack: &[CallFrame],
+        minimum_index: usize,
+    ) -> Option<u32> {
+        call_stack
+            .iter()
+            .rev()
+            .filter_map(|frame| frame.async_function_id)
+            .find(|async_id| {
+                *async_id as usize >= minimum_index
+                    && self
+                        .async_functions
+                        .get(*async_id as usize)
+                        .is_some_and(|function| {
+                            function.phase == AsyncFunctionPhase::SuspendedAwait
+                                && function.isolated_execution.is_none()
+                        })
+            })
+    }
+
+    fn discard_abandoned_async_call_stack(&mut self, async_ids: &[u32]) {
+        let Some(first_async_frame_index) = self.call_stack.iter().position(|frame| {
+            frame
+                .async_function_id
+                .is_some_and(|async_id| async_ids.contains(&async_id))
+        }) else {
+            return;
+        };
+        let return_ip = self.call_stack[first_async_frame_index].return_ip;
+        let _ = self.unwind_call_stack_to(first_async_frame_index);
+        self.catch_frames
+            .retain(|frame| frame.call_depth <= first_async_frame_index);
+        self.clear_pending_abrupt_slots();
+        self.clear_suspended_abrupt_completions();
+        self.clear_finally_frames();
+        self.pending_finally_entry = None;
+        self.ip = return_ip;
+        self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
+    }
+
+    /// Preserve the raw IFC level in an allocation-free terminal carrier. The
+    /// tombstone cannot re-enter join/name-sensitive execution: the same fatal
+    /// repair removes its reaction jobs, await contexts, and combinator owners.
+    /// This keeps `can_flow_to` confidentiality intact even when the original
+    /// Custom name is attacker-sized or its exact clone cannot fit the ceiling.
+    fn terminal_async_failure_label(label: &Label) -> Label {
+        match label {
+            Label::Public => Label::Public,
+            Label::Internal => Label::Internal,
+            Label::Confidential => Label::Confidential,
+            Label::Secret => Label::Secret,
+            Label::TopSecret => Label::TopSecret,
+            Label::Custom { level, .. } => Label::Custom {
+                name: String::new(),
+                level: *level,
+            },
+        }
+    }
+
+    /// Close every Promise/await/combinator dependency made unreachable by an
+    /// allocation-free terminal rejection. The epoch marker lives inline in
+    /// Promise records, so each pass can prune owners without allocating a
+    /// worklist after a resource failure.
+    fn close_terminal_async_promise_dependencies(&mut self, terminal_epoch: u64, label: &Label) {
+        loop {
+            let mut changed = false;
+
+            {
+                let promise_store = &mut self.promise_store;
+                let async_functions = &mut self.async_functions;
+                self.async_resumption_contexts
+                    .retain(|result_promise, context| {
+                        let result_promise = crate::promise_model::PromiseHandle(*result_promise);
+                        if !promise_store
+                            .was_terminally_rejected_in_epoch(result_promise, terminal_epoch)
+                        {
+                            return true;
+                        }
+                        if let Some(async_function) =
+                            async_functions.get_mut(context.async_function_id as usize)
+                        {
+                            async_function.phase = AsyncFunctionPhase::Completed;
+                            async_function.isolated_execution = None;
+                            async_function.saved_registers = Vec::new();
+                            async_function.saved_register_labels = Vec::new();
+                            let published_promise =
+                                crate::promise_model::PromiseHandle(async_function.result_promise);
+                            let _ = promise_store.extend_terminal_rejection_without_jobs(
+                                published_promise,
+                                label,
+                                terminal_epoch,
+                            );
+                        }
+                        changed = true;
+                        false
+                    });
+            }
+
+            {
+                let promise_store = &self.promise_store;
+                self.top_level_await_resumption_contexts
+                    .retain(|result_promise, _| {
+                        let retain = !promise_store.was_terminally_rejected_in_epoch(
+                            crate::promise_model::PromiseHandle(*result_promise),
+                            terminal_epoch,
+                        );
+                        changed |= !retain;
+                        retain
+                    });
+            }
+
+            {
+                let promise_store = &mut self.promise_store;
+                let combinators = &mut self.promise_combinators;
+                for (input_promise, entries) in &self.promise_combinator_watchers {
+                    if !promise_store
+                        .was_terminally_rejected_in_epoch(*input_promise, terminal_epoch)
+                    {
+                        continue;
+                    }
+                    for entry in entries {
+                        let Some(state) = combinators.remove(&entry.combinator_id) else {
+                            continue;
+                        };
+                        let result_promise = match &state {
+                            PromiseCombinatorState::All(tracker) => tracker.result_promise,
+                            PromiseCombinatorState::AllSettled(tracker) => tracker.result_promise,
+                            PromiseCombinatorState::Race(tracker) => tracker.result_promise,
+                            PromiseCombinatorState::Any(tracker) => tracker.result_promise,
+                        };
+                        let _ = promise_store.extend_terminal_rejection_without_jobs(
+                            result_promise,
+                            label,
+                            terminal_epoch,
+                        );
+                        changed = true;
+                    }
+                }
+            }
+
+            {
+                let combinators = &self.promise_combinators;
+                self.promise_combinator_watchers.retain(|_, entries| {
+                    entries.retain(|entry| combinators.contains_key(&entry.combinator_id));
+                    !entries.is_empty()
+                });
+            }
+
+            // Every changing round removes at least one await context or
+            // combinator owner. Watchers are scanned once per round, so this
+            // allocation-free fixed point has a finite owner-removal bound.
+            if !changed {
+                break;
+            }
+        }
+    }
+
+    /// Fail closed when an isolated owner-module activation cannot continue.
+    /// Every active async boundary can have published its own Promise before
+    /// the resource fault, so terminally reject all of them and remove their
+    /// now-unreachable await contexts.
+    fn terminally_reject_abandoned_async_functions(&mut self, async_ids: &[u32], label: Label) {
+        self.async_resumption_contexts
+            .retain(|_, context| !async_ids.contains(&context.async_function_id));
+
+        let mut terminal_epoch = None;
+        for async_id in async_ids.iter().rev().copied() {
+            let Some(async_function) = self.async_functions.get_mut(async_id as usize) else {
+                continue;
+            };
+            let result_promise = crate::promise_model::PromiseHandle(async_function.result_promise);
+            let promise_is_pending = self
+                .promise_store
+                .get(result_promise)
+                .is_ok_and(|record| record.state == crate::promise_model::PromiseState::Pending);
+            if async_function.phase == AsyncFunctionPhase::Completed && !promise_is_pending {
+                continue;
+            }
+            async_function.phase = AsyncFunctionPhase::Completed;
+            async_function.isolated_execution = None;
+            async_function.saved_registers = Vec::new();
+            async_function.saved_register_labels = Vec::new();
+
+            // Reconcile after releasing the activation before asking the
+            // ordinary Promise path to admit the bounded terminal record.
+            self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
+            if promise_is_pending
+                && self
+                    .reject_promise(
+                        result_promise,
+                        crate::object_model::JsValue::Undefined,
+                        label.clone(),
+                    )
+                    .is_err()
+                && self
+                    .promise_store
+                    .get(result_promise)
+                    .is_ok_and(|record| record.state == crate::promise_model::PromiseState::Pending)
+            {
+                // A resource fault can leave no headroom for even one witness
+                // or reaction job. The Promise store's emergency transition is
+                // allocation-free, closes the `.then` descendant graph, and
+                // leaves unrelated event-loop work untouched.
+                let result = match terminal_epoch {
+                    Some(epoch) => self.promise_store.extend_terminal_rejection_without_jobs(
+                        result_promise,
+                        &label,
+                        epoch,
+                    ),
+                    None => self
+                        .promise_store
+                        .terminally_reject_without_jobs(result_promise, &label)
+                        .map(|epoch| {
+                            terminal_epoch = Some(epoch);
+                            1
+                        }),
+                };
+                let _ = result;
+            }
+        }
+        if let Some(epoch) = terminal_epoch {
+            self.close_terminal_async_promise_dependencies(epoch, &label);
+        }
+        self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
+        debug_assert!(
+            self.estimated_memory_bytes <= self.config.max_total_memory_bytes,
+            "fatal async repair must not exceed its configured memory ceiling"
+        );
+    }
+
+    /// Retain the complete owner-module wrapper activation for a foreign async
+    /// call that stopped at a pending `await`. The published Promise belongs to
+    /// the outer imported call in absolute wrapper register zero, while a
+    /// nested async function may own the suspended activation.
+    fn retain_isolated_async_execution(
+        &mut self,
+        published_async_index: usize,
+    ) -> Result<Option<(u32, Label, u32)>, InterpreterError> {
+        let published_promise = self
+            .async_functions
+            .get(published_async_index)
+            .ok_or_else(|| InterpreterError::InternalError {
+                details: format!(
+                    "foreign async call did not create object at index {published_async_index}"
+                ),
+            })?
+            .result_promise;
+        let Some(suspended_async_id) =
+            self.suspended_async_function_id_in_call_stack(&self.call_stack, published_async_index)
+        else {
+            return Ok(None);
+        };
+        match self.registers.first() {
+            Some(Value::Promise(handle)) if *handle == published_promise => {}
+            other => {
+                return Err(InterpreterError::InternalError {
+                    details: format!(
+                        "foreign async wrapper lost published Promise {published_promise} in register zero: {other:?}"
+                    ),
+                });
+            }
+        }
+
+        let mut execution = self.take_generator_execution();
+        // The synthetic caller's destination is absolute register zero. Move
+        // its label out instead of cloning an attacker-sized Custom label; the
+        // resumed wrapper's Return value is internal and discarded.
+        let result_label = execution
+            .register_labels
+            .first_mut()
+            .map(|label| std::mem::replace(label, Label::Public))
+            .unwrap_or(Label::Public);
+        self.async_functions[suspended_async_id as usize].isolated_execution = Some(execution);
+        Ok(Some((published_promise, result_label, suspended_async_id)))
+    }
+
     fn install_generator_execution(&mut self, execution: GeneratorExecutionSnapshot) {
         self.before_seed_surface_write();
         self.registers.value = execution.registers;
@@ -32410,6 +32970,17 @@ impl InterpreterCore {
         argument_label: Label,
     ) -> Result<(Value, Label), InterpreterError> {
         let generator_index = gen_id as usize;
+        let owner_module = Arc::clone(
+            &self
+                .generators
+                .get(generator_index)
+                .ok_or_else(|| InterpreterError::TypeError {
+                    expected: "valid generator".into(),
+                    got: format!("generator#{gen_id} not found"),
+                })?
+                .owner_module,
+        );
+        let owner_is_foreign = owner_module.header.source_label != module.header.source_label;
         let phase = self
             .generators
             .get(generator_index)
@@ -32458,14 +33029,15 @@ impl InterpreterCore {
             let previous_heap_len = self.heap.len();
             let previous_estimated_bytes = self.estimated_memory_bytes;
             start_heap_checkpoint = Some(previous_heap_len);
-            let activation = match self.prepare_generator_execution(module, invocation.clone()) {
-                Ok(activation) => activation,
-                Err(error) => {
-                    self.rollback_heap_to_len(previous_heap_len);
-                    self.estimated_memory_bytes = previous_estimated_bytes;
-                    return Err(error);
-                }
-            };
+            let activation =
+                match self.prepare_generator_execution(owner_module.as_ref(), invocation.clone()) {
+                    Ok(activation) => activation,
+                    Err(error) => {
+                        self.rollback_heap_to_len(previous_heap_len);
+                        self.estimated_memory_bytes = previous_estimated_bytes;
+                        return Err(error);
+                    }
+                };
             (activation, None)
         } else {
             let generator = &mut self.generators[generator_index];
@@ -32546,7 +33118,12 @@ impl InterpreterCore {
             self.generators[generator_index].invocation = None;
         }
 
-        let result = self.run_loop(module);
+        let previous_foreign_call_depth = self.active_foreign_module_call_depth;
+        if owner_is_foreign {
+            self.active_foreign_module_call_depth = previous_foreign_call_depth.saturating_add(1);
+        }
+        let result = self.run_loop(owner_module.as_ref());
+        self.active_foreign_module_call_depth = previous_foreign_call_depth;
         let yielded = std::mem::replace(&mut self.generator_yielded, false);
         let yielded_resume_dst = self.generator_resume_dst.take();
         let yielded_label = std::mem::replace(&mut self.generator_result_label, Label::Public);
@@ -33398,7 +33975,9 @@ impl InterpreterCore {
                     if let Value::GeneratorFunction(cid) = &callee_val {
                         let (arguments, argument_labels) =
                             self.capture_generator_arguments(args)?;
+                        let owner_module = self.continuation_owner_module(*cid, module)?;
                         let gen_id = self.push_generator_object(GeneratorObject {
+                            owner_module,
                             invocation: Some(GeneratorInvocation {
                                 function_index: func_idx,
                                 closure_index: Some(*cid),
@@ -33424,6 +34003,7 @@ impl InterpreterCore {
 
                     // Async function call: create a suspended AsyncFunctionObject and result Promise.
                     if let Value::AsyncFunction(cid) = &callee_val {
+                        let owner_module = self.continuation_owner_module(*cid, module)?;
                         let func = module.function_table.get(func_idx as usize).ok_or(
                             InterpreterError::FunctionNotFound {
                                 index: func_idx,
@@ -33481,6 +34061,8 @@ impl InterpreterCore {
                             let result_promise = result_promise_handle.0;
                             let async_id =
                                 self.push_async_function_object(AsyncFunctionObject {
+                                    owner_module,
+                                    isolated_execution: None,
                                     function_index: func_idx,
                                     closure_index: Some(*cid),
                                     saved_ip: 0,
@@ -33587,8 +34169,10 @@ impl InterpreterCore {
                     if let Value::AsyncGeneratorFunction(cid) = &callee_val {
                         let (pending_arguments, pending_argument_labels) =
                             self.capture_generator_arguments(args)?;
+                        let owner_module = self.continuation_owner_module(*cid, module)?;
                         let async_gen_id =
                             self.push_async_generator_object(AsyncGeneratorObject {
+                                owner_module,
                                 function_index: func_idx,
                                 closure_index: Some(*cid),
                                 saved_ip: 0,
@@ -33961,7 +34545,9 @@ impl InterpreterCore {
                             self.capture_generator_arguments(args)?;
                         let receiver_label =
                             self.clone_register_label_with_temporary_budget(receiver)?;
+                        let owner_module = self.continuation_owner_module(*cid, module)?;
                         let gen_id = self.push_generator_object(GeneratorObject {
+                            owner_module,
                             invocation: Some(GeneratorInvocation {
                                 function_index: func_idx,
                                 closure_index: Some(*cid),
@@ -33986,6 +34572,7 @@ impl InterpreterCore {
                     }
 
                     if let Value::AsyncFunction(cid) = &callee_val {
+                        let owner_module = self.continuation_owner_module(*cid, module)?;
                         let func = module.function_table.get(func_idx as usize).ok_or(
                             InterpreterError::FunctionNotFound {
                                 index: func_idx,
@@ -34029,6 +34616,8 @@ impl InterpreterCore {
                             let result_promise = result_promise_handle.0;
                             let async_id =
                                 self.push_async_function_object(AsyncFunctionObject {
+                                    owner_module,
+                                    isolated_execution: None,
                                     function_index: func_idx,
                                     closure_index: Some(*cid),
                                     saved_ip: 0,
@@ -34126,8 +34715,10 @@ impl InterpreterCore {
                         self.mark_inline_callback_started();
                         let (pending_arguments, pending_argument_labels) =
                             self.capture_generator_arguments(args)?;
+                        let owner_module = self.continuation_owner_module(*cid, module)?;
                         let async_gen_id =
                             self.push_async_generator_object(AsyncGeneratorObject {
+                                owner_module,
                                 function_index: func_idx,
                                 closure_index: Some(*cid),
                                 saved_ip: 0,
@@ -41628,20 +42219,19 @@ impl InterpreterCore {
                                 self.async_resumption_contexts.remove(&result_promise.0)
                             {
                                 // Resume the async function
-                                if let Err(err) = self
-                                    .resume_async_function_after_await(
-                                        resumption_context,
-                                        Ok(argument.clone()),
-                                        task_label.clone(),
-                                    )
-                                    .and_then(|()| self.continue_resumed_async_function(module))
-                                {
+                                if let Err(err) = self.resume_async_function_task(
+                                    resumption_context,
+                                    Ok(argument.clone()),
+                                    task_label.clone(),
+                                    module,
+                                ) {
                                     let reason = Self::promise_rejection_from_error(&err);
-                                    self.reject_promise(
+                                    let _ = self.reject_promise(
                                         *result_promise,
                                         reason,
                                         task_label.clone(),
-                                    )?;
+                                    );
+                                    return Err(err);
                                 }
                             } else if let Some(resumption_context) = self
                                 .top_level_await_resumption_contexts
@@ -41702,16 +42292,19 @@ impl InterpreterCore {
                         if let Some(resumption_context) =
                             self.async_resumption_contexts.remove(&result_promise.0)
                         {
-                            if let Err(err) = self
-                                .resume_async_function_after_await(
-                                    resumption_context,
-                                    Err(reason.clone()),
-                                    task_label.clone(),
-                                )
-                                .and_then(|()| self.continue_resumed_async_function(module))
-                            {
+                            if let Err(err) = self.resume_async_function_task(
+                                resumption_context,
+                                Err(reason.clone()),
+                                task_label.clone(),
+                                module,
+                            ) {
                                 let reason = Self::promise_rejection_from_error(&err);
-                                self.reject_promise(*result_promise, reason, task_label.clone())?;
+                                let _ = self.reject_promise(
+                                    *result_promise,
+                                    reason,
+                                    task_label.clone(),
+                                );
+                                return Err(err);
                             }
                         } else if let Some(resumption_context) = self
                             .top_level_await_resumption_contexts
@@ -46949,6 +47542,8 @@ impl InterpreterCore {
         // cross-module function-index collision.
         let foreign_module = self.foreign_closure_module(&callee, caller_module)?;
         let is_foreign_call = foreign_module.is_some();
+        let foreign_async_call = is_foreign_call && matches!(&callee, Value::AsyncFunction(_));
+        let foreign_async_index = foreign_async_call.then_some(self.async_functions.len());
         if is_foreign_call {
             self.check_module_reentrant_call_depth()?;
         }
@@ -47049,7 +47644,7 @@ impl InterpreterCore {
         let setup_previous_scope_bytes = self.scope_chain_memory_bytes();
         let setup_previous_call_stack_bytes = self.call_stack_memory_bytes();
         let mut wrapper_memory_committed = false;
-        let result = (|| -> Result<Value, InterpreterError> {
+        let mut result = (|| -> Result<Value, InterpreterError> {
             self.registers =
                 SeedTrackedField::new(vec![Value::Undefined; self.config.max_registers as usize]);
             self.register_labels.fill(Label::Public);
@@ -47101,8 +47696,46 @@ impl InterpreterCore {
                 self.run_loop(&wrapper)
             }
         })();
+        let mut isolated_async_result_label = None;
+        let mut isolated_async_execution_rehomed = false;
+        let mut isolated_async_execution_owner = None;
+        let mut abandoned_async_ids = Vec::new();
+        let mut abandoned_async_label = Label::Public;
+        if let Some(async_index) = foreign_async_index {
+            if result.is_ok() {
+                // A pending `await` exits with the async callee's register base
+                // still active. The synthetic caller's destination is absolute
+                // register zero, not `read_reg(0)` in that callee frame.
+                match self.retain_isolated_async_execution(async_index) {
+                    Ok(Some((result_promise, result_label, suspended_async_id))) => {
+                        isolated_async_result_label = Some(result_label);
+                        isolated_async_execution_rehomed = true;
+                        isolated_async_execution_owner = Some(suspended_async_id);
+                        result = Ok(Value::Promise(result_promise));
+                    }
+                    Ok(None) => {}
+                    Err(error) => {
+                        abandoned_async_ids = self.async_function_ids_created_since(async_index);
+                        abandoned_async_label = self
+                            .active_inline_callback_context_label
+                            .as_ref()
+                            .map_or(Label::Public, Self::terminal_async_failure_label);
+                        result = Err(error);
+                    }
+                }
+            } else {
+                abandoned_async_ids = self.async_function_ids_created_since(async_index);
+                abandoned_async_label = self
+                    .active_inline_callback_context_label
+                    .as_ref()
+                    .map_or(Label::Public, Self::terminal_async_failure_label);
+            }
+        }
         let result_label = if result.is_ok() {
-            self.clone_register_label_with_temporary_budget(0)
+            match isolated_async_result_label {
+                Some(label) => Ok(label),
+                None => self.clone_register_label_with_temporary_budget(0),
+            }
         } else {
             Ok(Label::Public)
         };
@@ -47123,8 +47756,43 @@ impl InterpreterCore {
         self.estimated_memory_bytes = self.estimated_memory_bytes.saturating_sub(
             transient_execution_bytes.saturating_add(remaining_label_transport_bytes),
         );
-        self.restore_module_execution(snapshot, wrapper_memory_committed);
+        self.restore_module_execution(
+            snapshot,
+            wrapper_memory_committed && !isolated_async_execution_rehomed,
+        );
         self.active_cjs_context = saved_active_cjs_context;
+        if result.is_err() && !abandoned_async_ids.is_empty() {
+            self.terminally_reject_abandoned_async_functions(
+                &abandoned_async_ids,
+                abandoned_async_label,
+            );
+        }
+        if isolated_async_execution_rehomed && let Err(error) = self.sync_estimated_memory_bytes() {
+            let mut abandoned_async_ids = self.async_function_ids_created_since(
+                foreign_async_index
+                    .expect("rehomed foreign async execution has a published object"),
+            );
+            let retained_async_ids = isolated_async_execution_owner
+                .and_then(|owner_id| {
+                    self.async_functions[owner_id as usize]
+                        .isolated_execution
+                        .take()
+                })
+                .map(|execution| {
+                    Self::async_function_ids_in_call_stack(
+                        &execution.call_stack,
+                        foreign_async_index
+                            .expect("rehomed foreign async execution has a published object"),
+                    )
+                })
+                .unwrap_or_default();
+            Self::extend_unique_async_function_ids(&mut abandoned_async_ids, retained_async_ids);
+            let failure_label = result_label.as_ref().map_or(Label::Public, |label| {
+                Self::terminal_async_failure_label(label)
+            });
+            self.terminally_reject_abandoned_async_functions(&abandoned_async_ids, failure_label);
+            result = Err(error);
+        }
         if let Some((value, label)) = thrown_value {
             self.replace_pending_abrupt_slots(Some((value, label)), None)?;
         }
@@ -62084,10 +62752,18 @@ impl InterpreterCore {
 
     fn estimate_async_function_bytes(function: &AsyncFunctionObject) -> u64 {
         MEMORY_ESTIMATE_GENERATOR_BASE_BYTES
+            .saturating_add(MEMORY_ESTIMATE_CONTINUATION_OWNER_BYTES)
             .saturating_add(Self::estimate_value_vec_bytes(&function.saved_registers))
             .saturating_add(Self::estimate_label_vec_bytes(
                 &function.saved_register_labels,
             ))
+            .saturating_add(
+                function
+                    .isolated_execution
+                    .as_ref()
+                    .map(Self::estimate_generator_execution_bytes)
+                    .unwrap_or(0),
+            )
     }
 
     fn async_functions_memory_bytes(&self) -> u64 {
@@ -62100,6 +62776,7 @@ impl InterpreterCore {
 
     fn estimate_async_generator_bytes(generator: &AsyncGeneratorObject) -> u64 {
         MEMORY_ESTIMATE_GENERATOR_BASE_BYTES
+            .saturating_add(MEMORY_ESTIMATE_CONTINUATION_OWNER_BYTES)
             .saturating_add(Self::estimate_value_vec_bytes(&generator.saved_registers))
             .saturating_add(Self::estimate_label_vec_bytes(
                 &generator.saved_register_labels,
@@ -62882,6 +63559,7 @@ impl InterpreterCore {
 
     fn estimate_generator_bytes(generator: &GeneratorObject) -> u64 {
         MEMORY_ESTIMATE_GENERATOR_BASE_BYTES
+            .saturating_add(MEMORY_ESTIMATE_CONTINUATION_OWNER_BYTES)
             .saturating_add(
                 generator
                     .invocation
@@ -75193,7 +75871,10 @@ mod async_runtime_tests_current {
     #[test]
     fn async_saved_register_stores_refuse_one_short_and_release_exactly_bd_zpn45() {
         let saved = vec![Value::BigInt(Arc::from("async-register".repeat(37)))];
+        let owner_module = Arc::new(test_module_with_functions(Vec::new(), Vec::new()));
         let function = AsyncFunctionObject {
+            owner_module: Arc::clone(&owner_module),
+            isolated_execution: None,
             function_index: 2,
             closure_index: Some(3),
             saved_ip: 5,
@@ -75207,6 +75888,7 @@ mod async_runtime_tests_current {
             result_promise: 7,
         };
         let generator = AsyncGeneratorObject {
+            owner_module,
             function_index: 11,
             closure_index: Some(13),
             saved_ip: 17,
@@ -86259,14 +86941,43 @@ mod function_prototype_call_apply_tests_current {
         }
     }
 
-    fn test_interpreter() -> InterpreterCore {
+    fn test_config() -> InterpreterConfig {
         let mut config = InterpreterConfig::quickjs_defaults();
         config.granted_capabilities = std::collections::BTreeSet::from([
             RuntimeCapability::VmDispatch,
             RuntimeCapability::HeapAllocate,
             RuntimeCapability::Builtin,
         ]);
-        InterpreterCore::new(config, "function-prototype-call-apply-test")
+        config
+    }
+
+    fn test_interpreter() -> InterpreterCore {
+        InterpreterCore::new(test_config(), "function-prototype-call-apply-test")
+    }
+
+    fn assert_terminal_async_failure(
+        core: &InterpreterCore,
+        async_id: usize,
+        expected_label: Label,
+    ) {
+        let async_function = &core.async_functions[async_id];
+        assert_eq!(async_function.phase, AsyncFunctionPhase::Completed);
+        assert!(async_function.isolated_execution.is_none());
+        assert!(async_function.saved_registers.is_empty());
+        assert_eq!(async_function.saved_registers.capacity(), 0);
+        assert!(async_function.saved_register_labels.is_empty());
+        assert_eq!(async_function.saved_register_labels.capacity(), 0);
+        let record = core
+            .promise_store
+            .get(crate::promise_model::PromiseHandle(
+                async_function.result_promise,
+            ))
+            .expect("async result Promise");
+        assert_eq!(
+            record.state,
+            crate::promise_model::PromiseState::Rejected(crate::object_model::JsValue::Undefined)
+        );
+        assert_eq!(record.label, expected_label);
     }
 
     fn seed_object(core: &mut InterpreterCore, properties: &[(&str, Value)]) -> ObjectId {
@@ -86547,6 +87258,946 @@ mod function_prototype_call_apply_tests_current {
             core.estimated_memory_bytes(),
             core.recompute_estimated_memory_bytes(),
             "Custom transport ownership must be fully released after restoring the caller"
+        );
+    }
+
+    #[test]
+    fn deferred_foreign_async_resume_retains_owner_activation_bd_fw7zd_6() {
+        let mut owner = test_module_with_functions(
+            vec![
+                Ir3Instruction::AwaitValue { promise_reg: 0 },
+                Ir3Instruction::LoadInt { dst: 1, value: 40 },
+                Ir3Instruction::Add {
+                    dst: 0,
+                    lhs: 0,
+                    rhs: 1,
+                },
+                Ir3Instruction::AsyncReturn { value_reg: 0 },
+            ],
+            vec![Ir3FunctionDesc {
+                entry: 0,
+                arity: 1,
+                frame_size: 2,
+                name: Some("foreign_await".to_string()),
+                is_generator: false,
+                rest_param_index: None,
+            }],
+        );
+        owner.header.source_label = "foreign-async-owner.mjs".to_string();
+        // If post-await execution is accidentally dispatched against the
+        // resumer, saved ip=1 produces 999 instead of the owner's 42.
+        let caller = test_module_with_functions(
+            vec![
+                Ir3Instruction::Halt,
+                Ir3Instruction::LoadInt { dst: 0, value: 999 },
+                Ir3Instruction::AsyncReturn { value_reg: 0 },
+            ],
+            vec![Ir3FunctionDesc {
+                entry: 1,
+                arity: 1,
+                frame_size: 2,
+                name: Some("wrong_importer_async".to_string()),
+                is_generator: false,
+                rest_param_index: None,
+            }],
+        );
+
+        let mut core = test_interpreter();
+        core.ensure_module_record(&owner, "foreign-async-owner.mjs")
+            .expect("foreign async owner program should be retained");
+        core.closures.push(ClosureValue {
+            function_index: 0,
+            captured_env: core.scope_chain.snapshot(),
+        });
+        core.closure_module_origins
+            .insert(0, "foreign-async-owner.mjs".to_string());
+        let awaited = core.promise_store.create();
+        core.write_reg_with_label(7, Value::str("caller-sentinel"), Label::Internal)
+            .expect("caller sentinel register");
+        core.sync_estimated_memory_bytes()
+            .expect("foreign async fixture accounting");
+        let previous_reentrant_depth = core.module_reentrant_call_depth;
+        let previous_foreign_call_depth = core.active_foreign_module_call_depth;
+
+        // This is the isolated invocation path used by deferred timers,
+        // EventEmitter listeners, stream callbacks, and Promise jobs.
+        let (result, result_label) = core
+            .invoke_inline_method_call_with_argument_label(
+                Some(&caller),
+                Value::AsyncFunction(0),
+                Value::Undefined,
+                vec![Value::Promise(awaited.0)],
+                Some(Label::Confidential),
+            )
+            .expect("foreign async callback should publish its result Promise");
+        let Value::Promise(async_result_promise) = result else {
+            panic!("foreign async callback should return a Promise, got {result:?}");
+        };
+        assert_eq!(result_label, Label::Confidential);
+        assert_eq!(
+            core.read_reg(7).expect("restored caller sentinel"),
+            Value::str("caller-sentinel")
+        );
+        assert_eq!(
+            core.get_register_label(7)
+                .expect("restored caller sentinel label"),
+            &Label::Internal
+        );
+        assert_eq!(core.module_reentrant_call_depth, previous_reentrant_depth);
+        assert_eq!(
+            core.active_foreign_module_call_depth,
+            previous_foreign_call_depth
+        );
+
+        let suspended = core
+            .async_functions
+            .first()
+            .expect("foreign async object should exist");
+        assert_eq!(suspended.phase, AsyncFunctionPhase::SuspendedAwait);
+        assert!(
+            suspended.isolated_execution.is_some(),
+            "the owner wrapper activation must survive after the caller is restored"
+        );
+        let retained_owner = core.module_state.modules["foreign-async-owner.mjs"]
+            .compiled_module
+            .as_ref()
+            .expect("retained owner program");
+        assert!(Arc::ptr_eq(&suspended.owner_module, retained_owner));
+
+        core.fulfill_promise(awaited, crate::object_model::JsValue::Int(2), Label::Secret)
+            .expect("awaited Promise should be fulfillable");
+        core.drain_microtasks(Some(&caller))
+            .expect("foreign async resumption should use the retained owner");
+
+        let result_record = core
+            .promise_store
+            .get(crate::promise_model::PromiseHandle(async_result_promise))
+            .expect("foreign async result Promise");
+        assert_eq!(
+            result_record.state,
+            crate::promise_model::PromiseState::Fulfilled(crate::object_model::JsValue::Int(42))
+        );
+        assert_eq!(result_record.label, Label::Secret);
+        assert_eq!(core.async_functions[0].phase, AsyncFunctionPhase::Completed);
+        assert!(core.async_functions[0].isolated_execution.is_none());
+        assert_eq!(core.module_reentrant_call_depth, previous_reentrant_depth);
+        assert_eq!(
+            core.active_foreign_module_call_depth,
+            previous_foreign_call_depth
+        );
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes(),
+            "retained activation ownership must reconcile exactly after completion"
+        );
+    }
+
+    #[test]
+    fn nested_foreign_async_suspension_keeps_outer_promise_identity_bd_fw7zd_6() {
+        let mut owner = test_module_with_functions(
+            vec![
+                Ir3Instruction::Call {
+                    callee: 1,
+                    args: RegRange { start: 0, count: 1 },
+                    dst: 3,
+                },
+                Ir3Instruction::AwaitValue { promise_reg: 3 },
+                Ir3Instruction::AwaitValue { promise_reg: 2 },
+                Ir3Instruction::LoadInt { dst: 4, value: 1 },
+                Ir3Instruction::Add {
+                    dst: 3,
+                    lhs: 3,
+                    rhs: 4,
+                },
+                Ir3Instruction::AsyncReturn { value_reg: 3 },
+                Ir3Instruction::AwaitValue { promise_reg: 0 },
+                Ir3Instruction::LoadInt { dst: 1, value: 40 },
+                Ir3Instruction::Add {
+                    dst: 0,
+                    lhs: 0,
+                    rhs: 1,
+                },
+                Ir3Instruction::AsyncReturn { value_reg: 0 },
+            ],
+            vec![
+                Ir3FunctionDesc {
+                    entry: 0,
+                    arity: 3,
+                    frame_size: 5,
+                    name: Some("foreign_outer".to_string()),
+                    is_generator: false,
+                    rest_param_index: None,
+                },
+                Ir3FunctionDesc {
+                    entry: 6,
+                    arity: 1,
+                    frame_size: 2,
+                    name: Some("foreign_inner".to_string()),
+                    is_generator: false,
+                    rest_param_index: None,
+                },
+            ],
+        );
+        owner.header.source_label = "foreign-nested-async-owner.mjs".to_string();
+        // The outer and inner continuations resume at owner ip=3 and ip=7.
+        // Caller dispatch collisions at both positions would resolve 999.
+        let caller = test_module_with_functions(
+            vec![
+                Ir3Instruction::Halt,
+                Ir3Instruction::Halt,
+                Ir3Instruction::Halt,
+                Ir3Instruction::LoadInt { dst: 3, value: 999 },
+                Ir3Instruction::AsyncReturn { value_reg: 3 },
+                Ir3Instruction::Halt,
+                Ir3Instruction::Halt,
+                Ir3Instruction::LoadInt { dst: 0, value: 999 },
+                Ir3Instruction::AsyncReturn { value_reg: 0 },
+            ],
+            vec![
+                Ir3FunctionDesc {
+                    entry: 3,
+                    arity: 3,
+                    frame_size: 5,
+                    name: Some("wrong_outer".to_string()),
+                    is_generator: false,
+                    rest_param_index: None,
+                },
+                Ir3FunctionDesc {
+                    entry: 7,
+                    arity: 1,
+                    frame_size: 2,
+                    name: Some("wrong_inner".to_string()),
+                    is_generator: false,
+                    rest_param_index: None,
+                },
+            ],
+        );
+
+        let mut core = test_interpreter();
+        core.ensure_module_record(&owner, "foreign-nested-async-owner.mjs")
+            .expect("nested async owner program should be retained");
+        for function_index in 0..2 {
+            let closure_id = core.closures.len() as u32;
+            core.closures.push(ClosureValue {
+                function_index,
+                captured_env: core.scope_chain.snapshot(),
+            });
+            core.closure_module_origins
+                .insert(closure_id, "foreign-nested-async-owner.mjs".to_string());
+        }
+        let awaited = core.promise_store.create();
+        let outer_awaited = core.promise_store.create();
+        core.write_reg_with_label(7, Value::str("caller-sentinel"), Label::Internal)
+            .expect("caller sentinel register");
+        core.sync_estimated_memory_bytes()
+            .expect("nested async fixture accounting");
+
+        let (result, result_label) = core
+            .invoke_inline_method_call_with_argument_label(
+                Some(&caller),
+                Value::AsyncFunction(0),
+                Value::Undefined,
+                vec![
+                    Value::Promise(awaited.0),
+                    Value::AsyncFunction(1),
+                    Value::Promise(outer_awaited.0),
+                ],
+                Some(Label::Confidential),
+            )
+            .expect("nested foreign async callback should publish its outer Promise");
+        let Value::Promise(outer_promise) = result else {
+            panic!("nested foreign async callback should return a Promise, got {result:?}");
+        };
+        assert_eq!(result_label, Label::Confidential);
+        assert_eq!(outer_promise, core.async_functions[0].result_promise);
+        assert_eq!(core.async_functions[0].phase, AsyncFunctionPhase::Executing);
+        assert!(core.async_functions[0].isolated_execution.is_none());
+        assert_eq!(
+            core.async_functions[1].phase,
+            AsyncFunctionPhase::SuspendedAwait
+        );
+        assert!(
+            core.async_functions[1].isolated_execution.is_some(),
+            "the innermost suspended async object must own the full activation"
+        );
+        assert_ne!(
+            outer_promise, core.async_functions[1].result_promise,
+            "the wrapper must not publish the inner suspended function's Promise"
+        );
+
+        core.fulfill_promise(awaited, crate::object_model::JsValue::Int(2), Label::Secret)
+            .expect("inner awaited Promise should be fulfillable");
+        core.drain_microtasks(Some(&caller))
+            .expect("inner activation should resume and rehome onto the outer await");
+
+        assert_eq!(
+            core.async_functions[0].phase,
+            AsyncFunctionPhase::SuspendedAwait
+        );
+        assert!(core.async_functions[0].isolated_execution.is_some());
+        assert_eq!(core.async_functions[1].phase, AsyncFunctionPhase::Completed);
+        assert!(core.async_functions[1].isolated_execution.is_none());
+        assert_eq!(
+            core.promise_store
+                .get(crate::promise_model::PromiseHandle(outer_promise))
+                .expect("still-pending outer async result Promise")
+                .state,
+            crate::promise_model::PromiseState::Pending
+        );
+
+        core.fulfill_promise(
+            outer_awaited,
+            crate::object_model::JsValue::Int(9),
+            Label::Secret,
+        )
+        .expect("outer awaited Promise should be fulfillable");
+        core.drain_microtasks(Some(&caller))
+            .expect("outer activation should resume against its retained owner");
+
+        let outer_record = core
+            .promise_store
+            .get(crate::promise_model::PromiseHandle(outer_promise))
+            .expect("outer async result Promise");
+        assert_eq!(
+            outer_record.state,
+            crate::promise_model::PromiseState::Fulfilled(crate::object_model::JsValue::Int(43))
+        );
+        assert_eq!(outer_record.label, Label::Secret);
+        assert_eq!(
+            core.promise_store
+                .get(crate::promise_model::PromiseHandle(
+                    core.async_functions[1].result_promise
+                ))
+                .expect("inner async result Promise")
+                .state,
+            crate::promise_model::PromiseState::Fulfilled(crate::object_model::JsValue::Int(42))
+        );
+        assert!(
+            core.async_functions
+                .iter()
+                .all(|function| function.phase == AsyncFunctionPhase::Completed
+                    && function.isolated_execution.is_none())
+        );
+        assert_eq!(
+            core.read_reg(7).expect("restored caller sentinel"),
+            Value::str("caller-sentinel")
+        );
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+    }
+
+    #[test]
+    fn foreign_async_initial_resource_failures_are_terminal_bd_fw7zd_6() {
+        let mut owner = test_module_with_functions(
+            vec![
+                Ir3Instruction::LoadInt { dst: 0, value: 7 },
+                Ir3Instruction::AsyncReturn { value_reg: 0 },
+            ],
+            vec![Ir3FunctionDesc {
+                entry: 0,
+                arity: 0,
+                frame_size: 1,
+                name: Some("foreign_resource_failure".to_string()),
+                is_generator: false,
+                rest_param_index: None,
+            }],
+        );
+        owner.header.source_label = "foreign-async-resource-owner.mjs".to_string();
+        let caller = test_module_with_functions(vec![Ir3Instruction::Halt], Vec::new());
+
+        for cancellation in [false, true] {
+            let token = CancellationToken::new();
+            let mut config = test_config();
+            if cancellation {
+                token.cancel();
+                config.cancellation_token = Some(token.clone());
+                // Wrapper CallMethod executes at count one; cancellation fires
+                // at count two before the async body executes.
+                config.checkpoint_density = 2;
+            } else {
+                // The wrapper CallMethod consumes the only admitted
+                // instruction, so the async body fails before first entry.
+                config.instruction_budget = 1;
+            }
+            let mut core = InterpreterCore::new(config, "foreign-async-initial-failure");
+            core.ensure_module_record(&owner, "foreign-async-resource-owner.mjs")
+                .expect("resource-test owner program should be retained");
+            core.closures.push(ClosureValue {
+                function_index: 0,
+                captured_env: core.scope_chain.snapshot(),
+            });
+            core.closure_module_origins
+                .insert(0, "foreign-async-resource-owner.mjs".to_string());
+            core.write_reg_with_label(7, Value::str("caller-sentinel"), Label::Internal)
+                .expect("caller sentinel register");
+            core.sync_estimated_memory_bytes()
+                .expect("initial resource-failure fixture accounting");
+            let previous_reentrant_depth = core.module_reentrant_call_depth;
+            let previous_foreign_call_depth = core.active_foreign_module_call_depth;
+
+            let error = core
+                .invoke_inline_method_call_with_argument_label(
+                    Some(&caller),
+                    Value::AsyncFunction(0),
+                    Value::Undefined,
+                    Vec::new(),
+                    Some(Label::Confidential),
+                )
+                .expect_err("resource failure must escape the isolated callback");
+            if cancellation {
+                assert_eq!(error, InterpreterError::Cancelled);
+                token.reset();
+            } else {
+                assert_eq!(
+                    error,
+                    InterpreterError::BudgetExhausted {
+                        executed: 1,
+                        budget: 1,
+                    }
+                );
+            }
+
+            assert_eq!(core.async_functions.len(), 1);
+            assert_terminal_async_failure(&core, 0, Label::Confidential);
+            assert_eq!(
+                core.read_reg(7).expect("restored caller sentinel"),
+                Value::str("caller-sentinel")
+            );
+            assert_eq!(core.module_reentrant_call_depth, previous_reentrant_depth);
+            assert_eq!(
+                core.active_foreign_module_call_depth,
+                previous_foreign_call_depth
+            );
+            assert_eq!(
+                core.estimated_memory_bytes(),
+                core.recompute_estimated_memory_bytes()
+            );
+        }
+    }
+
+    #[test]
+    fn foreign_async_resumption_resource_failures_are_terminal_bd_fw7zd_6() {
+        let mut owner = test_module_with_functions(
+            vec![
+                Ir3Instruction::AwaitValue { promise_reg: 0 },
+                Ir3Instruction::LoadInt { dst: 0, value: 7 },
+                Ir3Instruction::AsyncReturn { value_reg: 0 },
+            ],
+            vec![Ir3FunctionDesc {
+                entry: 0,
+                arity: 1,
+                frame_size: 1,
+                name: Some("foreign_resume_resource_failure".to_string()),
+                is_generator: false,
+                rest_param_index: None,
+            }],
+        );
+        owner.header.source_label = "foreign-async-resume-resource-owner.mjs".to_string();
+        let caller = test_module_with_functions(vec![Ir3Instruction::Halt], Vec::new());
+
+        for cancellation in [false, true] {
+            let token = CancellationToken::new();
+            let mut config = test_config();
+            if cancellation {
+                config.cancellation_token = Some(token.clone());
+                config.checkpoint_density = u64::MAX;
+            }
+            let mut core = InterpreterCore::new(config, "foreign-async-resume-failure");
+            core.ensure_module_record(&owner, "foreign-async-resume-resource-owner.mjs")
+                .expect("resume resource-test owner program should be retained");
+            core.closures.push(ClosureValue {
+                function_index: 0,
+                captured_env: core.scope_chain.snapshot(),
+            });
+            core.closure_module_origins
+                .insert(0, "foreign-async-resume-resource-owner.mjs".to_string());
+            let awaited = core.promise_store.create();
+            core.write_reg_with_label(7, Value::str("caller-sentinel"), Label::Internal)
+                .expect("caller sentinel register");
+            core.sync_estimated_memory_bytes()
+                .expect("resume resource-failure fixture accounting");
+            let previous_reentrant_depth = core.module_reentrant_call_depth;
+            let previous_foreign_call_depth = core.active_foreign_module_call_depth;
+
+            let (result, _) = core
+                .invoke_inline_method_call_with_argument_label(
+                    Some(&caller),
+                    Value::AsyncFunction(0),
+                    Value::Undefined,
+                    vec![Value::Promise(awaited.0)],
+                    Some(Label::Confidential),
+                )
+                .expect("foreign async callback should reach its first await");
+            let Value::Promise(result_promise) = result else {
+                panic!("foreign async callback should publish a Promise, got {result:?}");
+            };
+            assert_eq!(
+                core.async_functions[0].phase,
+                AsyncFunctionPhase::SuspendedAwait
+            );
+            assert!(core.async_functions[0].isolated_execution.is_some());
+
+            if cancellation {
+                token.cancel();
+                core.config.checkpoint_density = 1;
+            } else {
+                core.config.instruction_budget = core.instructions_executed;
+            }
+            core.fulfill_promise(awaited, crate::object_model::JsValue::Int(2), Label::Secret)
+                .expect("awaited Promise should be fulfillable");
+            let error = core
+                .drain_microtasks(Some(&caller))
+                .expect_err("resumption resource failure must escape the microtask drain");
+            if cancellation {
+                assert_eq!(error, InterpreterError::Cancelled);
+                token.reset();
+            } else {
+                assert!(matches!(
+                    error,
+                    InterpreterError::BudgetExhausted {
+                        executed,
+                        budget
+                    } if executed == budget
+                ));
+            }
+
+            assert_eq!(result_promise, core.async_functions[0].result_promise);
+            assert_terminal_async_failure(&core, 0, Label::Secret);
+            assert!(core.async_resumption_contexts.is_empty());
+            assert_eq!(
+                core.read_reg(7).expect("restored caller sentinel"),
+                Value::str("caller-sentinel")
+            );
+            assert_eq!(core.module_reentrant_call_depth, previous_reentrant_depth);
+            assert_eq!(
+                core.active_foreign_module_call_depth,
+                previous_foreign_call_depth
+            );
+            assert_eq!(
+                core.estimated_memory_bytes(),
+                core.recompute_estimated_memory_bytes()
+            );
+        }
+    }
+
+    #[test]
+    fn async_completion_memory_failure_repairs_the_popped_frame_bd_fw7zd_6() {
+        let owner = Arc::new(test_module_with_functions(Vec::new(), Vec::new()));
+        let mut core = test_interpreter();
+        let result_promise = core
+            .create_promise()
+            .expect("async result Promise should fit");
+        let async_id = core
+            .push_async_function_object(AsyncFunctionObject {
+                owner_module: owner,
+                isolated_execution: None,
+                function_index: 0,
+                closure_index: None,
+                saved_ip: 0,
+                saved_registers: Vec::new(),
+                saved_register_labels: Vec::new(),
+                saved_register_base: 0,
+                phase: AsyncFunctionPhase::Executing,
+                result_promise: result_promise.0,
+            })
+            .expect("async object should fit");
+        core.call_stack.push(CallFrame {
+            return_ip: 0,
+            return_reg: 0,
+            register_base: 0,
+            function_index: Some(0),
+            this_value: Value::Undefined,
+            this_label: Label::Public,
+            new_target_value: Value::Undefined,
+            super_value: Value::Undefined,
+            construct_this: None,
+            saved_pending_exception: None,
+            saved_pending_exception_label: Label::Public,
+            saved_pending_return: None,
+            saved_suspended_abrupt_depth: 0,
+            saved_finally_mode_depth: 0,
+            saved_scope_depth: core.scope_chain.depth(),
+            saved_scope_chain: None,
+            async_function_id: Some(async_id),
+        });
+        core.register_base = core.config.max_registers as usize;
+        core.sync_estimated_memory_bytes()
+            .expect("completion memory fixture accounting");
+        core.config.max_total_memory_bytes = core.estimated_memory_bytes();
+
+        let error = core
+            .complete_current_async_frame(Ok(Value::str("x".repeat(16 * 1024))), Label::Secret)
+            .expect_err("Promise fulfillment must exceed the calibrated ceiling");
+        assert!(matches!(
+            error,
+            InterpreterError::MemoryBudgetExceeded { .. }
+        ));
+        assert_eq!(core.async_functions.len(), 1);
+        assert_terminal_async_failure(&core, 0, Label::Secret);
+        assert!(core.call_stack.is_empty());
+        assert_eq!(core.register_base, 0);
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+    }
+
+    #[test]
+    fn fatal_async_repair_closes_await_and_combinator_fanout_bd_fw7zd_6() {
+        let owner = Arc::new(test_module_with_functions(Vec::new(), Vec::new()));
+        let mut core = test_interpreter();
+        let root_promise = core.create_promise().expect("root async Promise");
+        let waiting_promise = core.create_promise().expect("waiting async Promise");
+
+        let root_async_id = core
+            .push_async_function_object(AsyncFunctionObject {
+                owner_module: Arc::clone(&owner),
+                isolated_execution: None,
+                function_index: 0,
+                closure_index: None,
+                saved_ip: 0,
+                saved_registers: Vec::new(),
+                saved_register_labels: Vec::new(),
+                saved_register_base: 0,
+                phase: AsyncFunctionPhase::Executing,
+                result_promise: root_promise.0,
+            })
+            .expect("root async object");
+        let waiting_async_id = core
+            .push_async_function_object(AsyncFunctionObject {
+                owner_module: owner,
+                isolated_execution: None,
+                function_index: 0,
+                closure_index: None,
+                saved_ip: 1,
+                saved_registers: vec![Value::Int(7)],
+                saved_register_labels: vec![Label::Secret],
+                saved_register_base: 0,
+                phase: AsyncFunctionPhase::SuspendedAwait,
+                result_promise: waiting_promise.0,
+            })
+            .expect("waiting async object");
+        assert_eq!(root_async_id, 0);
+        assert_eq!(waiting_async_id, 1);
+
+        let await_result = core
+            .register_promise_then_for_await(root_promise, Label::Secret)
+            .expect("async await dependency");
+        core.async_resumption_contexts.insert(
+            await_result.0,
+            AsyncResumptionContext {
+                async_function_id: waiting_async_id,
+                result_register: 0,
+            },
+        );
+
+        let root_combinator_result = core.create_promise().expect("root combinator result");
+        let root_combinator_id = core
+            .register_combinator(PromiseCombinatorState::Race(
+                crate::promise_model::PromiseRaceTracker {
+                    result_promise: root_combinator_result,
+                    settled: false,
+                },
+            ))
+            .expect("root combinator");
+        core.add_combinator_watcher(
+            root_promise,
+            PromiseCombinatorWatcher {
+                combinator_id: root_combinator_id,
+                index: 0,
+            },
+        )
+        .expect("root combinator watcher");
+
+        let waiting_combinator_result = core.create_promise().expect("waiting combinator result");
+        let waiting_combinator_id = core
+            .register_combinator(PromiseCombinatorState::Race(
+                crate::promise_model::PromiseRaceTracker {
+                    result_promise: waiting_combinator_result,
+                    settled: false,
+                },
+            ))
+            .expect("waiting combinator");
+        core.add_combinator_watcher(
+            waiting_promise,
+            PromiseCombinatorWatcher {
+                combinator_id: waiting_combinator_id,
+                index: 0,
+            },
+        )
+        .expect("waiting combinator watcher");
+
+        let top_level_result = core
+            .register_promise_then_for_await(root_combinator_result, Label::TopSecret)
+            .expect("top-level await dependency");
+        core.top_level_await_resumption_contexts.insert(
+            top_level_result.0,
+            TopLevelAwaitResumptionContext { result_register: 0 },
+        );
+        let combinator_descendant = core
+            .register_promise_then(waiting_combinator_result, None, None, Label::Confidential)
+            .expect("combinator reaction descendant");
+        let unrelated = core.create_promise().expect("unrelated Promise");
+
+        core.sync_estimated_memory_bytes()
+            .expect("fanout fixture accounting");
+        core.config.max_total_memory_bytes = core.estimated_memory_bytes();
+        let previous_witness_count = core.promise_store.witness_log().len();
+        let previous_microtask_count = core.event_loop.microtasks.pending_count();
+        let terminal_label = Label::Custom {
+            name: "attacker-controlled-terminal-label".repeat(4096),
+            level: u32::MAX,
+        };
+
+        core.terminally_reject_abandoned_async_functions(&[root_async_id], terminal_label);
+
+        let compact_terminal_label = Label::Custom {
+            name: String::new(),
+            level: u32::MAX,
+        };
+        for handle in [
+            root_promise,
+            await_result,
+            waiting_promise,
+            root_combinator_result,
+            waiting_combinator_result,
+            top_level_result,
+            combinator_descendant,
+        ] {
+            let record = core.promise_store.get(handle).expect("affected Promise");
+            assert_eq!(
+                record.state,
+                crate::promise_model::PromiseState::Rejected(
+                    crate::object_model::JsValue::Undefined
+                ),
+                "{handle} must not remain resumable"
+            );
+            assert_eq!(record.label, compact_terminal_label);
+        }
+        assert_eq!(
+            core.promise_store
+                .get(unrelated)
+                .expect("unrelated Promise")
+                .state,
+            crate::promise_model::PromiseState::Pending
+        );
+        assert!(
+            core.async_functions
+                .iter()
+                .all(|function| function.phase == AsyncFunctionPhase::Completed)
+        );
+        assert!(core.async_functions.iter().all(|function| {
+            function.saved_registers.capacity() == 0
+                && function.saved_register_labels.capacity() == 0
+        }));
+        assert!(core.async_resumption_contexts.is_empty());
+        assert!(core.top_level_await_resumption_contexts.is_empty());
+        assert!(core.promise_combinators.is_empty());
+        assert!(core.promise_combinator_watchers.is_empty());
+        assert_eq!(
+            core.event_loop.microtasks.pending_count(),
+            previous_microtask_count
+        );
+        assert_eq!(
+            core.promise_store.witness_log().len(),
+            previous_witness_count
+        );
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+        assert!(core.estimated_memory_bytes() <= core.config.max_total_memory_bytes);
+    }
+
+    #[test]
+    fn top_level_stops_after_same_module_async_resume_failure_bd_fw7zd_6() {
+        let module = test_module_with_functions(
+            vec![
+                Ir3Instruction::Call {
+                    callee: 0,
+                    args: RegRange { start: 1, count: 1 },
+                    dst: 2,
+                },
+                Ir3Instruction::Halt,
+                Ir3Instruction::AwaitValue { promise_reg: 0 },
+                Ir3Instruction::LoadInt { dst: 0, value: 7 },
+                Ir3Instruction::AsyncReturn { value_reg: 0 },
+            ],
+            vec![Ir3FunctionDesc {
+                entry: 2,
+                arity: 1,
+                frame_size: 1,
+                name: Some("same_module_async".to_string()),
+                is_generator: false,
+                rest_param_index: None,
+            }],
+        );
+        let mut core = test_interpreter();
+        core.closures.push(ClosureValue {
+            function_index: 0,
+            captured_env: core.scope_chain.snapshot(),
+        });
+        let awaited = core
+            .create_promise()
+            .expect("same-module awaited Promise should fit");
+        core.write_reg(0, Value::AsyncFunction(0))
+            .expect("same-module async callee");
+        core.write_reg(1, Value::Promise(awaited.0))
+            .expect("same-module awaited argument");
+        core.sync_estimated_memory_bytes()
+            .expect("same-module async fixture accounting");
+
+        assert_eq!(
+            core.run_loop(&module)
+                .expect("same-module async call should reach its first await"),
+            Value::Undefined
+        );
+        let Value::Promise(result_promise) = core.registers[2].clone() else {
+            panic!(
+                "same-module async call should publish a Promise, got {:?}",
+                core.registers[2]
+            );
+        };
+        assert_eq!(
+            core.async_functions[0].phase,
+            AsyncFunctionPhase::SuspendedAwait
+        );
+        assert!(core.async_functions[0].isolated_execution.is_none());
+
+        core.fulfill_promise(awaited, crate::object_model::JsValue::Int(2), Label::Secret)
+            .expect("same-module awaited Promise should be fulfillable");
+        let trailing_promise = core
+            .create_promise()
+            .expect("trailing observable Promise should fit");
+        let previous_promise_bytes = core.promise_runtime_memory_bytes();
+        core.event_loop
+            .microtasks
+            .enqueue(crate::promise_model::Microtask::PromiseReaction {
+                handler: None,
+                argument: crate::object_model::JsValue::Int(99),
+                result_promise: trailing_promise,
+                label: Label::Public,
+            });
+        core.apply_promise_runtime_memory_delta(previous_promise_bytes)
+            .expect("trailing microtask should fit");
+
+        // Let the top-level driver execute one Halt and charge the mandatory
+        // empty Writable-scheduler scan, then fail the resumed async body
+        // before its next instruction. The trailing microtask must remain
+        // untouched after the fatal checkpoint error.
+        core.ip = 1;
+        core.config.instruction_budget = core.instructions_executed + 2;
+        let error = core
+            .run_top_level_execution(&module)
+            .expect_err("same-module resumption budget failure must escape");
+        assert!(matches!(
+            error,
+            InterpreterError::BudgetExhausted {
+                executed,
+                budget
+            } if executed == budget
+        ));
+        assert_eq!(result_promise, core.async_functions[0].result_promise);
+        assert_terminal_async_failure(&core, 0, Label::Secret);
+        assert!(core.async_resumption_contexts.is_empty());
+        assert!(core.call_stack.is_empty());
+        assert_eq!(core.register_base, 0);
+        assert_eq!(
+            core.promise_store
+                .get(trailing_promise)
+                .expect("trailing observable Promise")
+                .state,
+            crate::promise_model::PromiseState::Pending,
+            "fatal checkpoint failure must not execute trailing event-loop work"
+        );
+        assert!(core.event_loop.has_pending_work());
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+    }
+
+    #[test]
+    fn foreign_async_generators_retain_owner_before_body_fail_closed_bd_fw7zd_6() {
+        let mut owner = test_module_with_functions(
+            Vec::new(),
+            vec![Ir3FunctionDesc {
+                entry: 0,
+                arity: 0,
+                frame_size: 1,
+                name: Some("foreign_async_generator".to_string()),
+                is_generator: true,
+                rest_param_index: None,
+            }],
+        );
+        owner.header.source_label = "foreign-async-generator-owner.mjs".to_string();
+        let caller = test_module_with_functions(
+            vec![
+                Ir3Instruction::Call {
+                    callee: 0,
+                    args: RegRange { start: 4, count: 0 },
+                    dst: 1,
+                },
+                Ir3Instruction::CallMethod {
+                    receiver: 2,
+                    callee: 0,
+                    args: RegRange { start: 4, count: 0 },
+                    dst: 3,
+                },
+                Ir3Instruction::Return { value: 3 },
+            ],
+            vec![Ir3FunctionDesc {
+                entry: 0,
+                arity: 0,
+                frame_size: 1,
+                name: Some("wrong_importer_async_generator".to_string()),
+                is_generator: true,
+                rest_param_index: None,
+            }],
+        );
+
+        let mut core = test_interpreter();
+        core.ensure_module_record(&owner, "foreign-async-generator-owner.mjs")
+            .expect("foreign async-generator owner program should be retained");
+        core.closures.push(ClosureValue {
+            function_index: 0,
+            captured_env: core.scope_chain.snapshot(),
+        });
+        core.closure_module_origins
+            .insert(0, "foreign-async-generator-owner.mjs".to_string());
+        core.write_reg(0, Value::AsyncGeneratorFunction(0))
+            .expect("async-generator callee");
+        core.sync_estimated_memory_bytes()
+            .expect("foreign async-generator fixture accounting");
+
+        assert_eq!(
+            core.run_loop(&caller)
+                .expect("direct and method async-generator construction"),
+            Value::AsyncGeneratorObject(1)
+        );
+        let retained_owner = core.module_state.modules["foreign-async-generator-owner.mjs"]
+            .compiled_module
+            .as_ref()
+            .expect("retained async-generator owner");
+        assert_eq!(core.async_generators.len(), 2);
+        for generator in &core.async_generators {
+            assert!(Arc::ptr_eq(&generator.owner_module, retained_owner));
+            assert_eq!(generator.phase, AsyncGeneratorPhase::SuspendedStart);
+        }
+
+        let error = core
+            .async_generator_next(&caller, 0, Value::Undefined)
+            .expect_err("unsupported body execution must still fail closed");
+        assert!(matches!(
+            error,
+            InterpreterError::TypeError { expected, .. }
+                if expected == "implemented async generator body execution"
+        ));
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
         );
     }
 
@@ -94160,6 +95811,8 @@ mod tests {
         let result_promise = core.promise_store.create().0;
         let async_function_id = core.async_functions.len() as u32;
         core.async_functions.push(AsyncFunctionObject {
+            owner_module: Arc::new(test_module(vec![])),
+            isolated_execution: None,
             function_index: 7,
             closure_index: Some(0),
             saved_ip: 0,
@@ -95337,6 +96990,7 @@ mod tests {
 
         let mut core = InterpreterCore::new(test_quickjs_config(), "generator-memory-delta");
         core.generators.push(GeneratorObject {
+            owner_module: Arc::new(module.clone()),
             invocation: Some(GeneratorInvocation {
                 function_index: 0,
                 closure_index: None,
@@ -95491,6 +97145,7 @@ mod tests {
             ),
         ] {
             core.generators.push(GeneratorObject {
+                owner_module: Arc::new(module.clone()),
                 invocation: Some(GeneratorInvocation {
                     function_index: 0,
                     closure_index: None,
@@ -95579,6 +97234,7 @@ mod tests {
             (Value::Int(22), Label::Internal),
         ] {
             core.generators.push(GeneratorObject {
+                owner_module: Arc::new(module.clone()),
                 invocation: Some(GeneratorInvocation {
                     function_index: 0,
                     closure_index: None,
@@ -95638,6 +97294,7 @@ mod tests {
         let mut core =
             InterpreterCore::new(test_quickjs_config(), "generator-label-snapshot-mismatch");
         core.generators.push(GeneratorObject {
+            owner_module: Arc::new(module.clone()),
             invocation: Some(GeneratorInvocation {
                 function_index: 0,
                 closure_index: None,
@@ -95704,6 +97361,7 @@ mod tests {
         let mut core =
             InterpreterCore::new(test_quickjs_config(), "generator-finally-label-snapshot");
         core.generators.push(GeneratorObject {
+            owner_module: Arc::new(module.clone()),
             invocation: Some(GeneratorInvocation {
                 function_index: 0,
                 closure_index: None,
@@ -97524,6 +99182,8 @@ mod tests {
             // Create a simple async function object in the store
             let async_func_id = core.async_functions.len() as u32;
             core.async_functions.push(AsyncFunctionObject {
+                owner_module: Arc::new(test_module(vec![])),
+                isolated_execution: None,
                 function_index: 0, // dummy function index
                 closure_index: None,
                 saved_ip: 0,
@@ -97983,6 +99643,7 @@ mod tests {
             // Create async generator, call it to get object, then call .next()
             let async_gen_id = {
                 core.async_generators.push(AsyncGeneratorObject {
+                    owner_module: Arc::new(test_module(vec![])),
                     function_index: 0,
                     closure_index: None,
                     saved_ip: 0,
@@ -98010,6 +99671,7 @@ mod tests {
         fn async_generator_next_fails_closed_for_suspended_body() {
             let mut core = test_interpreter();
             core.async_generators.push(AsyncGeneratorObject {
+                owner_module: Arc::new(test_module(vec![])),
                 function_index: 0,
                 closure_index: None,
                 saved_ip: 0,

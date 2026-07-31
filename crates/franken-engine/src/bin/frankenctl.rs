@@ -136,6 +136,8 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use sha2::{Digest, Sha256};
 
 const FRANKENCTL_SCHEMA_VERSION: &str = "franken-engine.frankenctl.v1";
+const RUN_COMMAND_SCHEMA_VERSION: &str = "franken-engine.frankenctl.run.v2";
+const AGENT_SANDBOX_COMMAND_SCHEMA_VERSION: &str = "franken-engine.frankenctl.agent-sandbox.v2";
 const COMPILE_ARTIFACT_SCHEMA_VERSION: &str = "franken-engine.frankenctl.compile-artifact.v1";
 const RUN_REPORT_SCHEMA_VERSION: &str = "franken-engine.frankenctl.run-report.v1";
 const RUN_SOURCE_SCHEMA_VERSION: &str = "franken-engine.frankenctl.run-source.v1";
@@ -930,7 +932,6 @@ struct RunCommandOutput {
     trace_id: String,
     decision_id: String,
     policy_id: String,
-    evidence_verification_identity: EvidenceVerificationIdentity,
     parse_goal: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     report_path: Option<String>,
@@ -950,6 +951,7 @@ struct RunCommandOutput {
     expected_loss_millionths: i64,
     instructions_executed: u64,
     evidence_entries: usize,
+    evidence_chain_instance_id: String,
     evidence_ledger_id: String,
     evidence_chain_head: String,
     evidence_chain_artifact: EvidenceChainArtifact,
@@ -4237,6 +4239,27 @@ fn execute_run(args: RunArgs) -> Result<i32, String> {
     let result = orchestrator
         .execute(&package)
         .map_err(|error| format_run_error(&args.input, &error))?;
+    // Authenticate the exact emitted entries against the composition root's
+    // in-memory trust anchor before any trace, certificate, explain bundle, or
+    // report write becomes externally visible. The serialized report does not
+    // carry this identity as a self-authenticating trust root; later verifiers
+    // must resolve the receipt's signer through their own registry.
+    let trusted_runtime_identity = orchestrator.evidence_verification_identity();
+    let evidence_chain_instance_id = orchestrator.evidence_chain_instance_id().to_string();
+    let evidence_ledger_id = orchestrator.evidence_ledger_id().to_string();
+    let evidence_chain_artifact = EvidenceChainArtifact::new(
+        result.evidence_entries.clone(),
+        result.evidence_chain_receipt.clone(),
+    );
+    evidence_chain_artifact
+        .verify_genesis(
+            &trusted_runtime_identity,
+            &evidence_ledger_id,
+            &result.trace_id,
+        )
+        .map_err(|error| {
+            format!("generated run evidence chain failed exact verification: {error}")
+        })?;
     // bd-9mr8o: hand operators the exact trace `frankenctl replay debug
     // --trace` consumes, enabling the end-to-end --input inspection loop.
     if let Some(path) = args.emit_trace.as_ref() {
@@ -4282,27 +4305,12 @@ fn execute_run(args: RunArgs) -> Result<i32, String> {
         _ => None,
     };
 
-    let evidence_ledger_id = orchestrator.evidence_ledger_id().to_string();
-    let evidence_chain_artifact = EvidenceChainArtifact::new(
-        result.evidence_entries.clone(),
-        result.evidence_chain_receipt.clone(),
-    );
-    evidence_chain_artifact
-        .verify_genesis(
-            &result.evidence_verification_identity,
-            &evidence_ledger_id,
-            &result.trace_id,
-        )
-        .map_err(|error| {
-            format!("generated run evidence chain failed exact verification: {error}")
-        })?;
     let output = RunCommandOutput {
-        schema_version: FRANKENCTL_SCHEMA_VERSION.to_string(),
+        schema_version: RUN_COMMAND_SCHEMA_VERSION.to_string(),
         extension_id: result.extension_id.clone(),
         trace_id: result.trace_id.clone(),
         decision_id: result.decision_id.clone(),
         policy_id,
-        evidence_verification_identity: result.evidence_verification_identity.clone(),
         parse_goal: args.parse_goal.as_str().to_string(),
         report_path: args.out.as_ref().map(|path| path.display().to_string()),
         explain_bundle_path: explain_bundle_path_string,
@@ -4317,6 +4325,7 @@ fn execute_run(args: RunArgs) -> Result<i32, String> {
         expected_loss_millionths: result.expected_loss_millionths,
         instructions_executed: result.instructions_executed,
         evidence_entries: result.evidence_entries.len(),
+        evidence_chain_instance_id,
         evidence_ledger_id,
         evidence_chain_head: result.evidence_chain_receipt.head_chain_hash.clone(),
         evidence_chain_artifact,
@@ -4441,6 +4450,10 @@ struct AgentSandboxCommandOutput {
     e8_preflight_receipt: Option<E8RefusalLedgerReceipt>,
     #[serde(skip_serializing_if = "Option::is_none")]
     certificate_bundle: Option<CertificateBundleSummary>,
+    evidence_chain_instance_id: String,
+    evidence_ledger_id: String,
+    evidence_chain_head: String,
+    evidence_chain_artifact: EvidenceChainArtifact,
     observability_mode: ObservabilityModeOutput,
 }
 
@@ -4546,6 +4559,22 @@ fn execute_agent_sandbox(args: AgentSandboxArgs) -> Result<i32, String> {
     let result = orchestrator
         .execute(&package)
         .map_err(|error| format_run_error(&args.input, &error))?;
+    let trusted_runtime_identity = orchestrator.evidence_verification_identity();
+    let evidence_chain_instance_id = orchestrator.evidence_chain_instance_id().to_string();
+    let evidence_ledger_id = orchestrator.evidence_ledger_id().to_string();
+    let evidence_chain_artifact = EvidenceChainArtifact::new(
+        result.evidence_entries.clone(),
+        result.evidence_chain_receipt.clone(),
+    );
+    evidence_chain_artifact
+        .verify_genesis(
+            &trusted_runtime_identity,
+            &evidence_ledger_id,
+            &result.trace_id,
+        )
+        .map_err(|error| {
+            format!("generated agent-sandbox evidence chain failed exact verification: {error}")
+        })?;
 
     let report = AgentSandboxReport::from_run(&manifest, &result, module_goal)
         .map_err(|error| format!("failed to build agent-sandbox report: {error}"))?;
@@ -4579,13 +4608,17 @@ fn execute_agent_sandbox(args: AgentSandboxArgs) -> Result<i32, String> {
     };
 
     let output = AgentSandboxCommandOutput {
-        schema_version: FRANKENCTL_SCHEMA_VERSION.to_string(),
+        schema_version: AGENT_SANDBOX_COMMAND_SCHEMA_VERSION.to_string(),
         manifest_schema_version: AGENT_SANDBOX_MANIFEST_SCHEMA_VERSION.to_string(),
         report,
         report_path: args.out.as_ref().map(|path| path.display().to_string()),
         data_contract: bound_contract.map(|(_, binding)| binding),
         e8_preflight_receipt,
         certificate_bundle,
+        evidence_chain_instance_id,
+        evidence_ledger_id,
+        evidence_chain_head: result.evidence_chain_receipt.head_chain_hash.clone(),
+        evidence_chain_artifact,
         observability_mode: default_capture_observability_mode(),
     };
     if let Some(path) = args.out.as_ref() {

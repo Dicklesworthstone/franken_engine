@@ -1086,10 +1086,16 @@ impl EvidenceChainReceipt {
             });
         }
         let mut links = Vec::with_capacity(entries.len());
+        let mut entry_ids = BTreeSet::new();
         let mut sequence = first_sequence;
         let mut previous = previous_chain_hash.map(str::to_string);
 
         for entry in entries {
+            if !entry_ids.insert(entry.entry_id.clone()) {
+                return Err(LedgerError::DuplicateEntryId {
+                    entry_id: entry.entry_id.clone(),
+                });
+            }
             if entry.trace_id != run_id {
                 return Err(LedgerError::SchemaValidationFailed {
                     reason: format!(
@@ -1203,9 +1209,15 @@ impl EvidenceChainReceipt {
         self.signed_envelope
             .verify_detached(&self.signature_payload()?, trusted_identity)?;
         let signed_epoch = self.signed_envelope.signed_epoch;
+        let mut entry_ids = BTreeSet::new();
         let mut sequence = expected_first_sequence;
         let mut previous = expected_previous_chain_hash.map(str::to_string);
         for (entry, link) in entries.iter().zip(&self.links) {
+            if !entry_ids.insert(entry.entry_id.clone()) {
+                return Err(LedgerError::DuplicateEntryId {
+                    entry_id: entry.entry_id.clone(),
+                });
+            }
             entry.verify_with_trusted_identity(trusted_identity)?;
             if entry.trace_id != self.run_id {
                 return Err(LedgerError::SchemaValidationFailed {
@@ -2106,11 +2118,11 @@ impl InMemoryLedger {
 
     /// Atomically emit an exact batch whose signed chain receipt extends the
     /// currently bound ledger tip.
-    pub fn emit_chained_batch(
-        &mut self,
-        entries: Vec<EvidenceEntry>,
-        receipt: EvidenceChainReceipt,
-    ) -> Result<(), LedgerError> {
+    fn validate_chained_batch_inner(
+        &self,
+        entries: &[EvidenceEntry],
+        receipt: &EvidenceChainReceipt,
+    ) -> Result<(BTreeSet<String>, u64), LedgerError> {
         let ledger_id = self.evidence_chain_ledger_id.as_deref().ok_or_else(|| {
             LedgerError::SchemaValidationFailed {
                 reason: "evidence ledger must be bound before chained emission".to_string(),
@@ -2123,7 +2135,7 @@ impl InMemoryLedger {
             .ok_or_else(|| LedgerError::SchemaValidationFailed {
                 reason: "evidence chain receipt cannot seal an empty batch".to_string(),
             })?;
-        for entry in &entries {
+        for entry in entries {
             if self.entry_ids.contains(&entry.entry_id)
                 || !pending_ids.insert(entry.entry_id.clone())
             {
@@ -2135,7 +2147,7 @@ impl InMemoryLedger {
         }
         let trusted_identity = self.trusted_identity_for_envelope(receipt.signed_envelope())?;
         receipt.verify_exact_batch(
-            &entries,
+            entries,
             &trusted_identity,
             ledger_id,
             expected_run_id,
@@ -2152,6 +2164,32 @@ impl InMemoryLedger {
             .ok_or_else(|| LedgerError::SchemaValidationFailed {
                 reason: "evidence chain sequence overflow".to_string(),
             })?;
+        Ok((pending_ids, next_sequence))
+    }
+
+    /// Validate an exact signed batch against the current chain tip without
+    /// mutating the ledger.
+    ///
+    /// The orchestrator uses this before fallible containment/cell-close work
+    /// so a later lifecycle failure cannot consume sequence numbers while
+    /// discarding the only portable receipt for that transition.
+    pub fn validate_chained_batch(
+        &self,
+        entries: &[EvidenceEntry],
+        receipt: &EvidenceChainReceipt,
+    ) -> Result<(), LedgerError> {
+        self.validate_chained_batch_inner(entries, receipt)
+            .map(|_| ())
+    }
+
+    /// Atomically emit an exact batch whose signed chain receipt extends the
+    /// currently bound ledger tip.
+    pub fn emit_chained_batch(
+        &mut self,
+        entries: Vec<EvidenceEntry>,
+        receipt: EvidenceChainReceipt,
+    ) -> Result<(), LedgerError> {
+        let (pending_ids, next_sequence) = self.validate_chained_batch_inner(&entries, &receipt)?;
 
         self.entry_ids.extend(pending_ids);
         self.entries.extend(entries);
@@ -6107,6 +6145,18 @@ mod tests {
         artifact
             .verify_genesis(&trusted_identity, "ledger-bd-8yhg4", "trace-bd-8yhg4")
             .expect("exact artifact");
+
+        let duplicate_entries = vec![entries[0].clone(), entries[0].clone()];
+        assert!(matches!(
+            EvidenceChainReceipt::issue_with_authority(
+                "ledger-bd-8yhg4",
+                0,
+                None,
+                &duplicate_entries,
+                &signing_authority,
+            ),
+            Err(LedgerError::DuplicateEntryId { .. })
+        ));
 
         let mut missing = artifact.clone();
         missing.entries.pop();

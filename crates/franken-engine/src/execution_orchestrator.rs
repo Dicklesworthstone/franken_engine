@@ -16,6 +16,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::sync::Arc;
 
+use rand::RngCore;
 use serde::{Deserialize, Serialize};
 
 use crate::ast::ParseGoal;
@@ -127,7 +128,11 @@ const SCALE_MILLION: i64 = 1_000_000;
 const EVIDENCE_COMPRESSION_SKETCH_SCHEMA: &str = "franken-engine.evidence-compression-sketch.v2";
 const EVIDENCE_COMPRESSION_SKETCH_MAX_BYTES: usize = 512;
 const ORCHESTRATOR_EVIDENCE_LEDGER_ID_DOMAIN: &str =
-    "franken-engine.execution-orchestrator.evidence-ledger-id.v1";
+    "franken-engine.execution-orchestrator.evidence-ledger-id.v2";
+const LAB_EVIDENCE_CHAIN_INSTANCE_ID: &str =
+    "franken-engine.execution-orchestrator.lab-chain-instance.v1";
+const RUNTIME_EVIDENCE_CHAIN_INSTANCE_DOMAIN: &str =
+    "franken-engine.execution-orchestrator.runtime-chain-instance.v1";
 
 // ---------------------------------------------------------------------------
 // LossMatrixPreset
@@ -736,6 +741,7 @@ pub struct ExecutionOrchestrator {
     posterior_updater: BayesianPosteriorUpdater,
     loss_selector: ExpectedLossSelector,
     ledger: InMemoryLedger,
+    evidence_chain_instance_id: String,
     evidence_signing_authority: EvidenceSigningAuthority,
     saga_orchestrator: SagaOrchestrator,
     containment_executor: ContainmentExecutor,
@@ -862,11 +868,13 @@ impl ExecutionOrchestrator {
         ambient_authority_grant: AmbientAuthorityGrant,
         evidence_authority: RuntimeEvidenceAuthority,
     ) -> Result<Self, OrchestratorError> {
+        let evidence_chain_instance_id = Self::fresh_runtime_evidence_chain_instance_id()?;
         Self::try_new_with_resolved_evidence_authority(
             config,
             runtime_config,
             ambient_authority_grant,
             EvidenceSigningAuthority::Runtime(evidence_authority),
+            evidence_chain_instance_id,
         )
     }
 
@@ -961,6 +969,7 @@ impl ExecutionOrchestrator {
             runtime_config,
             ambient_authority_grant,
             EvidenceSigningAuthority::Lab(evidence_authority),
+            LAB_EVIDENCE_CHAIN_INSTANCE_ID.to_string(),
         )
     }
 
@@ -969,10 +978,15 @@ impl ExecutionOrchestrator {
         runtime_config: RuntimeConfig,
         ambient_authority_grant: AmbientAuthorityGrant,
         evidence_signing_authority: EvidenceSigningAuthority,
+        evidence_chain_instance_id: String,
     ) -> Result<Self, OrchestratorError> {
         Self::validate_concurrency_envelope(config.max_concurrent_sagas)?;
         let verification_identity = evidence_signing_authority.verification_identity();
-        let evidence_ledger_id = Self::derive_evidence_ledger_id(&config, &verification_identity)?;
+        let evidence_ledger_id = Self::derive_evidence_ledger_id(
+            &config,
+            &verification_identity,
+            &evidence_chain_instance_id,
+        )?;
         let mut ledger = if evidence_signing_authority.is_lab() {
             InMemoryLedger::for_lab_verification_identity(config.epoch, &verification_identity)?
         } else {
@@ -1004,6 +1018,7 @@ impl ExecutionOrchestrator {
             posterior_updater: BayesianPosteriorUpdater::new(prior, "orchestrator"),
             loss_selector: ExpectedLossSelector::new(loss_matrix),
             ledger,
+            evidence_chain_instance_id,
             evidence_signing_authority,
             saga_orchestrator: SagaOrchestrator::new(config.epoch, config.max_concurrent_sagas),
             containment_executor: ContainmentExecutor::new(),
@@ -1131,19 +1146,46 @@ impl ExecutionOrchestrator {
     fn derive_evidence_ledger_id(
         config: &OrchestratorConfig,
         identity: &EvidenceVerificationIdentity,
+        chain_instance_id: &str,
     ) -> Result<String, LedgerError> {
+        if chain_instance_id.trim().is_empty() {
+            return Err(LedgerError::SchemaValidationFailed {
+                reason: "orchestrator evidence chain instance id must not be empty".to_string(),
+            });
+        }
         let payload = serde_json::to_vec(&(
             ORCHESTRATOR_EVIDENCE_LEDGER_ID_DOMAIN,
             &config.policy_id,
             config.epoch.as_u64(),
             &config.trace_id_prefix,
             identity,
+            chain_instance_id,
         ))
         .map_err(|error| LedgerError::SchemaValidationFailed {
             reason: format!("orchestrator evidence ledger id serialization failed: {error}"),
         })?;
         Ok(format!(
             "evidence-ledger-{}",
+            ContentHash::compute(&payload).to_hex()
+        ))
+    }
+
+    fn fresh_runtime_evidence_chain_instance_id() -> Result<String, LedgerError> {
+        let mut nonce = [0u8; 32];
+        rand::rngs::OsRng
+            .try_fill_bytes(&mut nonce)
+            .map_err(|error| LedgerError::SchemaValidationFailed {
+                reason: format!(
+                    "operating-system CSPRNG unavailable for evidence chain instance: {error}"
+                ),
+            })?;
+        let mut payload =
+            Vec::with_capacity(RUNTIME_EVIDENCE_CHAIN_INSTANCE_DOMAIN.len() + nonce.len() + 8);
+        payload.extend_from_slice(RUNTIME_EVIDENCE_CHAIN_INSTANCE_DOMAIN.as_bytes());
+        payload.extend_from_slice(&(nonce.len() as u64).to_be_bytes());
+        payload.extend_from_slice(&nonce);
+        Ok(format!(
+            "evidence-chain-instance-{}",
             ContentHash::compute(&payload).to_hex()
         ))
     }
@@ -1203,6 +1245,15 @@ impl ExecutionOrchestrator {
         self.ledger
             .evidence_chain_ledger_id()
             .expect("execution orchestrator always binds its evidence chain")
+    }
+
+    /// Unique namespace for this in-memory chain instance.
+    ///
+    /// Production constructors generate this from the operating-system CSPRNG,
+    /// so two processes using the same runtime authority/configuration cannot
+    /// accidentally mint competing genesis receipts under one ledger ID.
+    pub fn evidence_chain_instance_id(&self) -> &str {
+        &self.evidence_chain_instance_id
     }
 
     /// Access the saga orchestrator.
@@ -1482,7 +1533,10 @@ impl ExecutionOrchestrator {
                 CancelReason::OperatorShutdown
             };
 
-            // Step 9: Record evidence.
+            // Step 9: Build and pre-validate the exact signed evidence batch.
+            // The ledger transition is committed only after containment and
+            // execution-cell close both succeed, so a later lifecycle failure
+            // cannot advance the chain while discarding its portable receipt.
             let (
                 entries,
                 evidence_chain_receipt,
@@ -1564,6 +1618,27 @@ impl ExecutionOrchestrator {
 
         match (pipeline_result, close_result) {
             (Ok(mut result), Ok(finalize_result)) => {
+                if let Err(ledger_error) = self.ledger.emit_chained_batch(
+                    result.evidence_entries.clone(),
+                    result.evidence_chain_receipt.clone(),
+                ) {
+                    let cleanup = CellCleanupEvidence {
+                        cell_id,
+                        trace_id,
+                        cancel_reason: cell_cancel_reason,
+                        cell_events,
+                        finalize_result: Some(finalize_result),
+                        close_error: None,
+                    };
+                    return Err(OrchestratorError::PostCellFailure(Box::new(
+                        PostCellFailure {
+                            primary_error: Box::new(OrchestratorError::Ledger(ledger_error)),
+                            additional_errors: Vec::new(),
+                            containment_saga_failure: None,
+                            cleanup,
+                        },
+                    )));
+                }
                 result.cell_events = cell_events;
                 result.finalize_result = Some(finalize_result);
                 self.execution_counter = self.execution_counter.saturating_add(1);
@@ -2487,8 +2562,7 @@ impl ExecutionOrchestrator {
             &entries,
             &self.evidence_signing_authority,
         )?;
-        self.ledger
-            .emit_chained_batch(entries.clone(), receipt.clone())?;
+        self.ledger.validate_chained_batch(&entries, &receipt)?;
         Ok((
             entries,
             receipt,

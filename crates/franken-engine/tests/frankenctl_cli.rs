@@ -23,7 +23,7 @@ use frankenengine_engine::attested_execution_cell::{
 use frankenengine_engine::containment_executor::ContainmentState;
 use frankenengine_engine::deterministic_replay::{NondeterminismSource, NondeterminismTrace};
 use frankenengine_engine::engine_object_id::EngineObjectId;
-use frankenengine_engine::evidence_ledger::{EvidenceChainArtifact, EvidenceVerificationIdentity};
+use frankenengine_engine::evidence_ledger::EvidenceChainArtifact;
 use frankenengine_engine::hash_tiers::{AuthenticityHash, ContentHash};
 use frankenengine_engine::mmr_proof::MerkleMountainRange;
 use frankenengine_engine::parser_oracle::{
@@ -1545,7 +1545,7 @@ fn bd_8yhg4_frankenctl_run_writes_exact_evidence_chain_report() {
     let stdout_json = parse_stdout_json(&output);
     assert_eq!(
         stdout_json["schema_version"].as_str(),
-        Some("franken-engine.frankenctl.v1")
+        Some("franken-engine.frankenctl.run.v2")
     );
     assert_eq!(stdout_json["extension_id"].as_str(), Some("ext-cli-run"));
     assert!(stdout_json["trace_id"].as_str().is_some());
@@ -1602,24 +1602,36 @@ fn bd_8yhg4_frankenctl_run_writes_exact_evidence_chain_report() {
         report_json["observability_mode"]["mode_id"].as_str(),
         Some("default_capture")
     );
-    let trusted_identity: EvidenceVerificationIdentity =
-        serde_json::from_value(report_json["evidence_verification_identity"].clone())
-            .expect("run report should carry a parseable evidence identity");
+    assert!(
+        report_json.get("evidence_verification_identity").is_none(),
+        "a claimant-controlled run report must not serialize its own trust root"
+    );
     let chain_artifact: EvidenceChainArtifact =
         serde_json::from_value(report_json["evidence_chain_artifact"].clone())
             .expect("run report should carry the exact evidence chain artifact");
     let ledger_id = report_json["evidence_ledger_id"]
         .as_str()
         .expect("run report should expose its evidence ledger id");
-    chain_artifact
-        .verify_genesis(
-            &trusted_identity,
-            ledger_id,
-            report_json["trace_id"]
-                .as_str()
-                .expect("run report should expose its trace id"),
-        )
-        .expect("run report should contain an internally valid exact chain artifact");
+    assert_eq!(chain_artifact.receipt.ledger_id, ledger_id);
+    assert_eq!(
+        chain_artifact.receipt.run_id,
+        report_json["trace_id"]
+            .as_str()
+            .expect("run report should expose its trace id")
+    );
+    assert!(
+        report_json["evidence_chain_instance_id"]
+            .as_str()
+            .is_some_and(|value| !value.is_empty())
+    );
+    assert!(
+        !chain_artifact
+            .receipt
+            .signed_envelope()
+            .producer_id
+            .is_empty(),
+        "the artifact must expose signer coordinates for external registry lookup"
+    );
     assert_eq!(
         report_json["evidence_chain_head"].as_str(),
         Some(chain_artifact.receipt.head_chain_hash.as_str())
@@ -1631,6 +1643,73 @@ fn bd_8yhg4_frankenctl_run_writes_exact_evidence_chain_report() {
 
     let _ = fs::remove_file(source_path);
     let _ = fs::remove_file(report_path);
+}
+
+#[test]
+fn bd_8yhg4_agent_sandbox_emits_the_verified_exact_chain_artifact() {
+    let source_path = temp_path("frankenctl_agent_sandbox_chain_source", "js");
+    let manifest_path = temp_path("frankenctl_agent_sandbox_chain_manifest", "json");
+    write_source(&source_path, "const answer = 40 + 2; answer;\n");
+    let manifest = serde_json::json!({
+        "schema_version": "franken-engine.agent-sandbox-manifest.v1",
+        "agent_id": "bd-8yhg4-agent",
+        "tool_grants": [],
+        "denied_capability_tags": [],
+        "acknowledge_unfiltered_network": false,
+        "metadata": {}
+    });
+    fs::write(
+        &manifest_path,
+        serde_json::to_vec_pretty(&manifest).expect("manifest serializes"),
+    )
+    .expect("manifest writes");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_frankenctl"))
+        .args([
+            "agent-sandbox",
+            "--manifest",
+            manifest_path
+                .to_str()
+                .expect("manifest path should be valid utf8"),
+            "--input",
+            source_path
+                .to_str()
+                .expect("source path should be valid utf8"),
+        ])
+        .output()
+        .expect("agent-sandbox command should execute");
+
+    assert!(
+        output.status.success(),
+        "agent-sandbox failed with stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let output_json = parse_stdout_json(&output);
+    assert_eq!(
+        output_json["schema_version"].as_str(),
+        Some("franken-engine.frankenctl.agent-sandbox.v2")
+    );
+    let chain_artifact: EvidenceChainArtifact =
+        serde_json::from_value(output_json["evidence_chain_artifact"].clone())
+            .expect("agent-sandbox should emit its exact chain artifact");
+    assert_eq!(
+        output_json["evidence_ledger_id"].as_str(),
+        Some(chain_artifact.receipt.ledger_id.as_str())
+    );
+    assert_eq!(
+        output_json["evidence_chain_head"].as_str(),
+        Some(chain_artifact.receipt.head_chain_hash.as_str())
+    );
+    assert_eq!(
+        output_json["report"]["trace_id"].as_str(),
+        Some(chain_artifact.receipt.run_id.as_str())
+    );
+    assert!(
+        output_json["evidence_chain_instance_id"]
+            .as_str()
+            .is_some_and(|value| !value.is_empty())
+    );
+    assert!(!chain_artifact.entries.is_empty());
 }
 
 #[test]

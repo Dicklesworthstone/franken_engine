@@ -214,7 +214,7 @@ fn bd_90u6o_normal_orchestrator_e2e_uses_runtime_owned_signer() {
 }
 
 #[test]
-fn bd_90u6o_explicit_identity_preserves_in_memory_replay_stability() {
+fn bd_90u6o_explicit_identity_preserves_entry_replay_but_not_chain_namespace() {
     let identity = RuntimeEvidenceAuthority::from_signing_key(
         "bd-90u6o-recorded-runtime",
         SigningKey::from_bytes([0x42; 32]).expect("non-zero test key"),
@@ -243,10 +243,19 @@ fn bd_90u6o_explicit_identity_preserves_in_memory_replay_stability() {
         first_result.evidence_entries, replay_result.evidence_entries,
         "the same explicitly supplied signing identity must reproduce byte-stable evidence"
     );
-    assert_eq!(first.evidence_ledger_id(), replay.evidence_ledger_id());
-    assert_eq!(
+    assert_ne!(
+        first.evidence_chain_instance_id(),
+        replay.evidence_chain_instance_id(),
+        "independent production instances must receive distinct chain namespaces"
+    );
+    assert_ne!(
+        first.evidence_ledger_id(),
+        replay.evidence_ledger_id(),
+        "independent production instances must not fork one ledger id at genesis"
+    );
+    assert_ne!(
         first_result.evidence_chain_receipt, replay_result.evidence_chain_receipt,
-        "the same identity and configuration must reproduce the signed chain receipt"
+        "the signed receipt must bind the unique chain namespace"
     );
 }
 
@@ -296,6 +305,60 @@ fn bd_8yhg4_reused_orchestrator_extends_one_contiguous_evidence_chain() {
         orchestrator.ledger().evidence_chain_head(),
         Some(second.evidence_chain_receipt.head_chain_hash.as_str())
     );
+}
+
+#[test]
+fn bd_8yhg4_production_instances_cannot_fork_one_genesis_namespace() {
+    let authority = RuntimeEvidenceAuthority::from_signing_key(
+        "bd-8yhg4-instance-runtime",
+        SigningKey::from_bytes([0x45; 32]).expect("non-zero test key"),
+        SecurityEpoch::from_raw(1),
+        1,
+        None,
+    )
+    .expect("recorded test identity");
+    let first = ExecutionOrchestrator::try_new_with_runtime_authority(
+        OrchestratorConfig::default(),
+        authority.clone(),
+    )
+    .expect("first orchestrator");
+    let second = ExecutionOrchestrator::try_new_with_runtime_authority(
+        OrchestratorConfig::default(),
+        authority,
+    )
+    .expect("second orchestrator");
+
+    assert_ne!(
+        first.evidence_chain_instance_id(),
+        second.evidence_chain_instance_id()
+    );
+    assert_ne!(first.evidence_ledger_id(), second.evidence_ledger_id());
+}
+
+#[test]
+fn bd_8yhg4_cell_close_failure_does_not_commit_the_staged_receipt() {
+    let authority = RuntimeEvidenceAuthority::from_signing_key(
+        "bd-8yhg4-close-runtime",
+        SigningKey::from_bytes([0x46; 32]).expect("non-zero test key"),
+        SecurityEpoch::from_raw(1),
+        1,
+        None,
+    )
+    .expect("recorded test identity");
+    let config = OrchestratorConfig {
+        cell_close_budget_ms: 1,
+        ..OrchestratorConfig::default()
+    };
+    let mut orchestrator = ExecutionOrchestrator::try_new_with_runtime_authority(config, authority)
+        .expect("orchestrator");
+
+    let error = orchestrator
+        .execute(&simple_package("bd-8yhg4-close", "42"))
+        .expect_err("cell close must exhaust the one-millisecond budget");
+    assert!(error.post_cell_failure().is_some());
+    assert!(orchestrator.ledger().is_empty());
+    assert_eq!(orchestrator.ledger().evidence_chain_next_sequence(), 0);
+    assert!(orchestrator.ledger().evidence_chain_head().is_none());
 }
 
 #[test]

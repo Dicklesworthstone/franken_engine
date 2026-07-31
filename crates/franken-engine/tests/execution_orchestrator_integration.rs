@@ -31,6 +31,7 @@ use frankenengine_engine::declassification_pipeline::{
     DeclassificationPipeline, DeclassificationRequest, LossAssessment,
 };
 use frankenengine_engine::execution_cell::CellError;
+use frankenengine_engine::execution_orchestrator::LabFixtureExecutionOrchestratorExt as _;
 use frankenengine_engine::execution_orchestrator::{
     EvidenceCompressionStatus, ExecutionOrchestrator, ExtensionPackage, LossMatrixPreset,
     OrchestratorConfig, OrchestratorError, OrchestratorResult,

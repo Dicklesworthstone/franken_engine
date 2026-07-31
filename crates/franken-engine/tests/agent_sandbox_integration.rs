@@ -16,14 +16,16 @@ use frankenengine_engine::data_contract::{
     DATA_CONTRACT_SCHEMA_VERSION, DEFAULT_DATA_CONTRACT_PURPOSE, DataBinding, DataBindingRole,
     DataContract, RequestedOutputClaim, SinkBinding,
 };
+use frankenengine_engine::evidence_ledger::LabEvidenceAuthority;
+use frankenengine_engine::execution_orchestrator::LabFixtureExecutionOrchestratorExt as _;
 use frankenengine_engine::execution_orchestrator::{
     ExecutionOrchestrator, OrchestratorConfig, OrchestratorResult,
 };
 use frankenengine_engine::hash_tiers::ContentHash;
 use frankenengine_engine::ifc_artifacts::{ClearanceClass, Label};
 use frankenengine_engine::non_use_certificate::{
-    CertificateStatus, CertifierInputs, NON_USE_CERTIFICATE_FILE, NonUseCertificate,
-    emit_certificate_bundle,
+    CertificateStatus, CertifierInputs, E8_CERTIFIER_PRODUCER_ID, NON_USE_CERTIFICATE_FILE,
+    NonUseCertificate, emit_certificate_bundle_lab,
 };
 
 const GENERATED_SOURCE: &str = "const parts = ['4', '2']; const result = parts.join('');";
@@ -179,7 +181,15 @@ fn agent_framework_receives_certificate_bundle_on_exit() {
         execution_value: &run.result.execution_value,
         replay_trace_content_hash_hex: &replay_hash,
     };
-    let bundle = emit_certificate_bundle(&inputs).expect("certificate bundle emits on exit");
+    let certificate_authority = LabEvidenceAuthority::deterministic_fixture(
+        E8_CERTIFIER_PRODUCER_ID,
+        "agent-sandbox-integration-certificate",
+        run.result.epoch,
+    )
+    .expect("lab certificate authority derives");
+    let trusted_identity = certificate_authority.verification_identity();
+    let bundle = emit_certificate_bundle_lab(&inputs, &certificate_authority)
+        .expect("certificate bundle emits on exit");
 
     assert_eq!(bundle.files.len(), 6);
     assert_eq!(
@@ -209,7 +219,7 @@ fn agent_framework_receives_certificate_bundle_on_exit() {
     )
     .expect("certificate parses");
     parsed
-        .verify()
+        .verify_with_trusted_identity(&trusted_identity)
         .expect("signature verifies for the framework");
 }
 

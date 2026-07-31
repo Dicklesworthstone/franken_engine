@@ -19,6 +19,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
+use crate::evidence_ledger::LabEvidenceAuthority;
 use crate::execution_orchestrator::{
     ExecutionOrchestrator, ExtensionPackage, OrchestratorConfig, OrchestratorError,
 };
@@ -708,7 +709,17 @@ fn classify_compatibility(
 }
 
 fn run_single_esm_cjs_specimen(specimen: &EsmCjsParitySpecimen) -> EsmCjsParitySpecimenEvidence {
-    let mut orch = ExecutionOrchestrator::new(OrchestratorConfig::default());
+    let signing_identity = LabEvidenceAuthority::deterministic_fixture(
+        "franken-engine.lab.esm-cjs-parity",
+        "rgc-309c-esm-cjs-parity-v1",
+        crate::security_epoch::SecurityEpoch::GENESIS,
+    )
+    .expect("ESM/CJS parity lab identity must be derivable");
+    let mut orch = ExecutionOrchestrator::try_new_lab_with_authority(
+        OrchestratorConfig::default(),
+        signing_identity,
+    )
+    .expect("ESM/CJS parity lab orchestrator configuration must be valid");
 
     let package = ExtensionPackage {
         extension_id: format!("esm-cjs-parity-{}", specimen.specimen_id),

@@ -49,6 +49,9 @@ use frankenengine_engine::differential_oracle_perf::{
     PerfArmConfig, load_runtime_comparison_corpus, run_differential_perf,
 };
 use frankenengine_engine::e8_analyzed_subset::{E8AnalyzedSubsetScan, scan_source};
+use frankenengine_engine::evidence_ledger::{
+    EvidenceVerificationIdentity, RuntimeEvidenceAuthority,
+};
 use frankenengine_engine::execution_orchestrator::{
     ExecutionOrchestrator, ExtensionPackage, OrchestratorConfig, OrchestratorError,
     OrchestratorResult,
@@ -64,7 +67,8 @@ use frankenengine_engine::lowering_pipeline::{
 };
 use frankenengine_engine::module_compatibility_matrix::CompatibilityScenarioReport;
 use frankenengine_engine::non_use_certificate::{
-    CertificateStatus, CertifierInputs, emit_certificate_bundle,
+    CertificateStatus, CertifierInputs, E8_CERTIFIER_PRODUCER_ID,
+    emit_certificate_bundle_with_runtime_authority,
 };
 use frankenengine_engine::package_intake::{PackageIntakeReport, onboard_package};
 use frankenengine_engine::parser::{CanonicalEs2020Parser, ParseEventIr, ParserOptions};
@@ -126,6 +130,7 @@ use frankenengine_engine::ts_normalization::{
     SourceIngestionSummary, prepare_source_entry_for_public_entrypoints,
 };
 use frankenengine_extension_host::host_io::{InMemoryHostIoTranscript, SandboxedHostIo};
+use rand::RngCore;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use sha2::{Digest, Sha256};
 
@@ -924,6 +929,7 @@ struct RunCommandOutput {
     trace_id: String,
     decision_id: String,
     policy_id: String,
+    evidence_verification_identity: EvidenceVerificationIdentity,
     parse_goal: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     report_path: Option<String>,
@@ -954,6 +960,7 @@ struct CertificateBundleSummary {
     path: String,
     certificate_status: CertificateStatus,
     bundle_content_hash_hex: String,
+    evidence_verification_identity: EvidenceVerificationIdentity,
     files: Vec<CertificateBundleFileSummary>,
 }
 
@@ -4198,11 +4205,23 @@ fn execute_run(args: RunArgs) -> Result<i32, String> {
         metadata: BTreeMap::new(),
     };
     let policy_id = OrchestratorConfig::default().policy_id;
-    let mut orchestrator = ExecutionOrchestrator::new(OrchestratorConfig {
+    let orchestrator_config = OrchestratorConfig {
         parse_goal: args.parse_goal,
         trace_id_prefix: "frankenctl-run".to_string(),
         ..OrchestratorConfig::default()
-    });
+    };
+    let evidence_authority = RuntimeEvidenceAuthority::generate_runtime_owned(
+        fresh_runtime_evidence_producer_id("frankenctl.run", &source_hash.to_hex())?,
+        orchestrator_config.epoch,
+        1,
+        None,
+    )
+    .map_err(|error| format!("failed to initialize runtime evidence authority: {error}"))?;
+    let mut orchestrator = ExecutionOrchestrator::try_new_with_runtime_authority(
+        orchestrator_config,
+        evidence_authority,
+    )
+    .map_err(|error| format!("failed to initialize execution orchestrator: {error}"))?;
     // bd-fqlfw.8.2: the bound contract's ingress label + sink surface gates
     // execution fail-closed and records flow edges in the provenance index.
     if let Some((contract, binding)) = bound_contract.as_ref() {
@@ -4265,6 +4284,7 @@ fn execute_run(args: RunArgs) -> Result<i32, String> {
         trace_id: result.trace_id.clone(),
         decision_id: result.decision_id.clone(),
         policy_id,
+        evidence_verification_identity: result.evidence_verification_identity.clone(),
         parse_goal: args.parse_goal.as_str().to_string(),
         report_path: args.out.as_ref().map(|path| path.display().to_string()),
         explain_bundle_path: explain_bundle_path_string,
@@ -4356,7 +4376,15 @@ fn write_certificate_bundle(
         execution_value: &result.execution_value,
         replay_trace_content_hash_hex: &replay_trace_hash,
     };
-    let bundle = emit_certificate_bundle(&inputs)
+    let certificate_authority = RuntimeEvidenceAuthority::generate_runtime_owned(
+        fresh_runtime_evidence_producer_id(E8_CERTIFIER_PRODUCER_ID, &result.trace_id)?,
+        result.epoch,
+        1,
+        None,
+    )
+    .map_err(|error| format!("failed to initialize E8 certificate authority: {error}"))?;
+    let certificate_verification_identity = certificate_authority.verification_identity();
+    let bundle = emit_certificate_bundle_with_runtime_authority(&inputs, &certificate_authority)
         .map_err(|error| format!("failed to emit E8 certificate bundle: {error}"))?;
     for file in &bundle.files {
         write_bytes_file(&dir.join(&file.name), &file.bytes)?;
@@ -4365,6 +4393,7 @@ fn write_certificate_bundle(
         path: dir.display().to_string(),
         certificate_status: bundle.non_use_certificate.certificate_status,
         bundle_content_hash_hex: bundle.bundle_content_hash_hex.clone(),
+        evidence_verification_identity: certificate_verification_identity,
         files: bundle
             .files
             .iter()
@@ -4455,11 +4484,23 @@ fn execute_agent_sandbox(args: AgentSandboxArgs) -> Result<i32, String> {
         .map_err(|error| format!("agent-sandbox manifest rejected: {error}"))?;
 
     let policy_id = OrchestratorConfig::default().policy_id;
-    let mut orchestrator = ExecutionOrchestrator::new(OrchestratorConfig {
+    let orchestrator_config = OrchestratorConfig {
         parse_goal: args.parse_goal,
         trace_id_prefix: "frankenctl-agent-sandbox".to_string(),
         ..OrchestratorConfig::default()
-    });
+    };
+    let evidence_authority = RuntimeEvidenceAuthority::generate_runtime_owned(
+        fresh_runtime_evidence_producer_id("frankenctl.agent-sandbox", &source_hash.to_hex())?,
+        orchestrator_config.epoch,
+        1,
+        None,
+    )
+    .map_err(|error| format!("failed to initialize runtime evidence authority: {error}"))?;
+    let mut orchestrator = ExecutionOrchestrator::try_new_with_runtime_authority(
+        orchestrator_config,
+        evidence_authority,
+    )
+    .map_err(|error| format!("failed to initialize execution orchestrator: {error}"))?;
     if let Some((contract, binding)) = bound_contract.as_ref() {
         let ingress = contract.ifc_ingress(binding).map_err(|error| {
             format!("failed to derive data-contract IFC ingress binding: {error}")
@@ -4848,6 +4889,46 @@ fn build_run_explain_bundle(
     }
 
     Ok(builder.build())
+}
+
+fn fresh_runtime_evidence_producer_id(
+    producer_prefix: &str,
+    run_binding: &str,
+) -> Result<String, String> {
+    if producer_prefix.trim().is_empty() || run_binding.trim().is_empty() {
+        return Err(
+            "runtime evidence producer prefix and run binding must not be empty".to_string(),
+        );
+    }
+    let mut nonce = [0u8; 16];
+    rand::rngs::OsRng
+        .try_fill_bytes(&mut nonce)
+        .map_err(|error| format!("failed to generate runtime evidence producer nonce: {error}"))?;
+    runtime_evidence_producer_id_from_nonce(producer_prefix, run_binding, &nonce)
+}
+
+fn runtime_evidence_producer_id_from_nonce(
+    producer_prefix: &str,
+    run_binding: &str,
+    nonce: &[u8; 16],
+) -> Result<String, String> {
+    if producer_prefix.trim().is_empty() || run_binding.trim().is_empty() {
+        return Err(
+            "runtime evidence producer prefix and run binding must not be empty".to_string(),
+        );
+    }
+    let mut nonce_preimage =
+        Vec::with_capacity(producer_prefix.len() + run_binding.len() + nonce.len() + 24);
+    nonce_preimage.extend_from_slice(b"frankenctl-runtime-evidence-producer-v1");
+    nonce_preimage.extend_from_slice(&(producer_prefix.len() as u64).to_be_bytes());
+    nonce_preimage.extend_from_slice(producer_prefix.as_bytes());
+    nonce_preimage.extend_from_slice(&(run_binding.len() as u64).to_be_bytes());
+    nonce_preimage.extend_from_slice(run_binding.as_bytes());
+    nonce_preimage.extend_from_slice(nonce);
+    Ok(format!(
+        "{producer_prefix}:{run_binding}:{}",
+        ContentHash::compute(&nonce_preimage).to_hex()
+    ))
 }
 
 fn content_hash_for_json<T: Serialize>(value: &T, target: &str) -> Result<ContentHash, String> {
@@ -12147,6 +12228,20 @@ mod tests {
     };
     use frankenengine_engine::receipt_verifier_pipeline::VerifierLogEvent;
     use frankenengine_engine::runtime_diagnostics_cli::EvidenceSeverity;
+
+    #[test]
+    fn runtime_evidence_producer_ids_bind_each_fresh_run() {
+        let first =
+            runtime_evidence_producer_id_from_nonce("frankenctl.run", "source-hash", &[0x11; 16])
+                .expect("first producer id");
+        let second =
+            runtime_evidence_producer_id_from_nonce("frankenctl.run", "source-hash", &[0x22; 16])
+                .expect("second producer id");
+
+        assert_ne!(first, second);
+        assert!(first.starts_with("frankenctl.run:source-hash:"));
+        assert!(second.starts_with("frankenctl.run:source-hash:"));
+    }
 
     #[test]
     fn parse_version_command() {

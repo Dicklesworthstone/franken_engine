@@ -15,6 +15,8 @@ use frankenengine_engine::data_contract::{
     SinkBinding,
 };
 use frankenengine_engine::e8_analyzed_subset::scan_source;
+use frankenengine_engine::evidence_ledger::{EvidenceVerificationIdentity, LabEvidenceAuthority};
+use frankenengine_engine::execution_orchestrator::LabFixtureExecutionOrchestratorExt as _;
 use frankenengine_engine::execution_orchestrator::{
     ExecutionOrchestrator, ExtensionPackage, OrchestratorConfig, OrchestratorResult,
 };
@@ -22,13 +24,27 @@ use frankenengine_engine::hash_tiers::ContentHash;
 use frankenengine_engine::ifc_artifacts::{ClearanceClass, Label};
 use frankenengine_engine::non_use_certificate::{
     AUDIT_FILE, CAPABILITY_TRACE_FILE, CertificateBundle, CertificateStatus, CertifierInputs,
-    ClaimEvaluation, DECLASSIFICATION_RECEIPTS_FILE, NON_USE_CERTIFICATE_FILE, NonUseCertificate,
-    REPRO_LOCK_FILE, USE_CERTIFICATE_FILE, UseCertificate, emit_certificate_bundle,
+    ClaimEvaluation, DECLASSIFICATION_RECEIPTS_FILE, E8_CERTIFIER_PRODUCER_ID,
+    NON_USE_CERTIFICATE_FILE, NonUseCertificate, REPRO_LOCK_FILE, USE_CERTIFICATE_FILE,
+    UseCertificate, emit_certificate_bundle_lab,
 };
 
 const SOURCE: &str = "const answer = 40 + 2;";
 const EXTENSION_ID: &str = "ext-e8t3-cert";
 const INPUT_PATH: &str = "fixtures/agent.js";
+
+struct TrustedCertificateBundle {
+    bundle: CertificateBundle,
+    trusted_identity: EvidenceVerificationIdentity,
+}
+
+impl std::ops::Deref for TrustedCertificateBundle {
+    type Target = CertificateBundle;
+
+    fn deref(&self) -> &Self::Target {
+        &self.bundle
+    }
+}
 
 fn contract() -> DataContract {
     DataContract {
@@ -143,7 +159,7 @@ fn completed_run() -> CompletedRun {
     }
 }
 
-fn emit(run: &CompletedRun) -> CertificateBundle {
+fn emit(run: &CompletedRun) -> TrustedCertificateBundle {
     let replay_hash = ContentHash::compute(
         &serde_json::to_vec(&run.result.nondeterminism_trace)
             .expect("nondeterminism trace serializes"),
@@ -170,7 +186,19 @@ fn emit(run: &CompletedRun) -> CertificateBundle {
         execution_value: &run.result.execution_value,
         replay_trace_content_hash_hex: &replay_hash,
     };
-    emit_certificate_bundle(&inputs).expect("bundle emits from a completed run")
+    let authority = LabEvidenceAuthority::deterministic_fixture(
+        E8_CERTIFIER_PRODUCER_ID,
+        "e8-certificate-integration-v2",
+        frankenengine_engine::security_epoch::SecurityEpoch::GENESIS,
+    )
+    .expect("integration lab certificate authority");
+    let trusted_identity = authority.verification_identity();
+    let bundle = emit_certificate_bundle_lab(&inputs, &authority)
+        .expect("bundle emits from a completed run");
+    TrustedCertificateBundle {
+        bundle,
+        trusted_identity,
+    }
 }
 
 /// ACCEPTANCE (bd-fqlfw.8.3): the bundle replays byte-identically — two
@@ -226,23 +254,29 @@ fn certificates_are_signed_and_tamper_evident() {
 
     bundle
         .non_use_certificate
-        .verify()
+        .verify_with_trusted_identity(&bundle.trusted_identity)
         .expect("non-use certificate signature verifies");
     bundle
         .use_certificate
-        .verify()
+        .verify_with_trusted_identity(&bundle.trusted_identity)
         .expect("use certificate signature verifies");
 
     let mut tampered = bundle.non_use_certificate.clone();
     tampered.certificate_status = CertificateStatus::CertifiedWithinAnalyzedScope;
     assert!(
-        tampered.verify().is_err(),
+        tampered
+            .verify_with_trusted_identity(&bundle.trusted_identity)
+            .is_err(),
         "a certificate whose status was upgraded after signing must fail verification"
     );
 
     let mut tampered_use = bundle.use_certificate.clone();
     tampered_use.instructions_executed += 1;
-    assert!(tampered_use.verify().is_err());
+    assert!(
+        tampered_use
+            .verify_with_trusted_identity(&bundle.trusted_identity)
+            .is_err()
+    );
 }
 
 /// The persisted JSON files round-trip into the certificate types and still
@@ -259,13 +293,17 @@ fn persisted_certificates_round_trip_and_verify() {
             .bytes,
     )
     .expect("non-use certificate parses");
-    non_use.verify().expect("parsed non-use verifies");
+    non_use
+        .verify_with_trusted_identity(&bundle.trusted_identity)
+        .expect("parsed non-use verifies");
     assert_eq!(non_use, bundle.non_use_certificate);
 
     let use_cert: UseCertificate =
         serde_json::from_slice(&bundle.file(USE_CERTIFICATE_FILE).expect("use file").bytes)
             .expect("use certificate parses");
-    use_cert.verify().expect("parsed use verifies");
+    use_cert
+        .verify_with_trusted_identity(&bundle.trusted_identity)
+        .expect("parsed use verifies");
     assert_eq!(use_cert, bundle.use_certificate);
 }
 

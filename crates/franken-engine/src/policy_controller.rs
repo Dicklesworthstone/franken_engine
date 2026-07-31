@@ -64,7 +64,7 @@ mod loss_entries_serde {
 
 use crate::evidence_ledger::{
     CandidateAction, ChosenAction, Constraint, DecisionType, EvidenceEntry, EvidenceEntryBuilder,
-    LedgerError,
+    EvidenceSigningAuthority, LabEvidenceAuthority, LedgerError, RuntimeEvidenceAuthority,
 };
 use crate::security_epoch::SecurityEpoch;
 
@@ -262,16 +262,50 @@ pub struct ActionSelection {
 pub struct PolicyController {
     config: ControllerConfig,
     loss_matrix: LossMatrix,
+    evidence_signing_authority: EvidenceSigningAuthority,
     guardrails: Vec<Guardrail>,
     decision_count: u64,
     decisions: Vec<ActionSelection>,
 }
 
 impl PolicyController {
-    /// Create a new controller.
-    pub fn new(
+    /// Create a controller with an explicit runtime evidence authority.
+    pub fn new_with_runtime_authority(
         config: ControllerConfig,
         loss_matrix: LossMatrix,
+        evidence_authority: RuntimeEvidenceAuthority,
+    ) -> Result<Self, PolicyControllerError> {
+        Self::new_with_authority(
+            config,
+            loss_matrix,
+            EvidenceSigningAuthority::Runtime(evidence_authority),
+        )
+    }
+
+    /// Create an explicitly lab-scoped controller.
+    pub fn new_lab(
+        config: ControllerConfig,
+        loss_matrix: LossMatrix,
+    ) -> Result<Self, PolicyControllerError> {
+        let authority = LabEvidenceAuthority::deterministic_fixture(
+            "franken-engine.policy-controller",
+            "policy-controller-lab-v2",
+            SecurityEpoch::GENESIS,
+        )
+        .map_err(|error| PolicyControllerError::EvidenceEmissionFailed {
+            reason: error.to_string(),
+        })?;
+        Self::new_with_authority(
+            config,
+            loss_matrix,
+            EvidenceSigningAuthority::Lab(authority),
+        )
+    }
+
+    fn new_with_authority(
+        config: ControllerConfig,
+        loss_matrix: LossMatrix,
+        evidence_signing_authority: EvidenceSigningAuthority,
     ) -> Result<Self, PolicyControllerError> {
         if config.action_set.is_empty() {
             return Err(PolicyControllerError::EmptyActionSet);
@@ -284,10 +318,20 @@ impl PolicyController {
         Ok(Self {
             config,
             loss_matrix,
+            evidence_signing_authority,
             guardrails: Vec::new(),
             decision_count: 0,
             decisions: Vec::new(),
         })
+    }
+
+    /// Create a test controller with the deterministic fixture identity.
+    #[cfg(test)]
+    pub fn new(
+        config: ControllerConfig,
+        loss_matrix: LossMatrix,
+    ) -> Result<Self, PolicyControllerError> {
+        Self::new_lab(config, loss_matrix)
     }
 
     /// Add a guardrail.
@@ -382,12 +426,13 @@ impl PolicyController {
         epoch: SecurityEpoch,
         trace_id: &str,
     ) -> Result<EvidenceEntry, LedgerError> {
-        let mut builder = EvidenceEntryBuilder::new(
+        let mut builder = EvidenceEntryBuilder::new_with_authority(
             trace_id,
             &selection.decision_id,
             &self.config.policy_id,
             epoch,
             DecisionType::CapabilityDecision,
+            &self.evidence_signing_authority,
         );
 
         // Add candidates.
@@ -455,6 +500,25 @@ impl PolicyController {
     /// Decision history.
     pub fn decisions(&self) -> &[ActionSelection] {
         &self.decisions
+    }
+}
+
+/// Deliberate opt-in for legacy-shaped deterministic lab fixtures.
+///
+/// Production code must use [`PolicyController::new_with_runtime_authority`].
+pub trait LabFixturePolicyControllerExt: Sized {
+    fn new(
+        config: ControllerConfig,
+        loss_matrix: LossMatrix,
+    ) -> Result<PolicyController, PolicyControllerError>;
+}
+
+impl LabFixturePolicyControllerExt for PolicyController {
+    fn new(
+        config: ControllerConfig,
+        loss_matrix: LossMatrix,
+    ) -> Result<PolicyController, PolicyControllerError> {
+        PolicyController::new_lab(config, loss_matrix)
     }
 }
 

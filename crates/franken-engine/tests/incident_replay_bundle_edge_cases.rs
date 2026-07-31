@@ -23,7 +23,9 @@ use frankenengine_engine::causal_replay::{
     ActionDeltaReport, CounterfactualConfig, DecisionSnapshot, NondeterminismLog,
     NondeterminismSource, RecorderConfig, RecordingMode, TraceRecord, TraceRecorder,
 };
-use frankenengine_engine::evidence_ledger::{ChosenAction, DecisionType, EvidenceEntryBuilder};
+use frankenengine_engine::evidence_ledger::{
+    ChosenAction, DecisionType, EvidenceEntryBuilder, LabFixtureEvidenceEntryBuilderExt as _,
+};
 use frankenengine_engine::hash_tiers::ContentHash;
 use frankenengine_engine::incident_replay_bundle::{
     ArtifactEntry, BUNDLE_FORMAT_VERSION, BundleArtifactKind, BundleBuilder, BundleError,

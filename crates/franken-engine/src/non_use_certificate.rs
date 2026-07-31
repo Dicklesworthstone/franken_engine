@@ -6,7 +6,8 @@
 //! data-contract IFC ingress, the flow edges the orchestrator recorded into
 //! the provenance index, the capability-metered host-effect transcript, and
 //! the staged declassification receipts — and signs the two certificates with
-//! the engine's deterministic runtime evidence key (bd-k2bz7):
+//! a runtime evidence authority supplied by the product composition root (or
+//! an explicitly labelled lab authority in deterministic fixtures):
 //!
 //! 1. `non_use_certificate.json` — verdicts for the contract's negative
 //!    claims (no flow label X → sink class Y, capability Z not used, no
@@ -54,19 +55,27 @@ use crate::data_contract::{
 };
 use crate::deterministic_serde::{CanonicalValue, SchemaHash};
 use crate::engine_object_id::ObjectDomain;
-use crate::evidence_ledger::{shared_evidence_verification_key, sign_evidence_preimage};
+use crate::evidence_ledger::{
+    EvidenceAuthorityClass, EvidenceSignatureEnvelope, EvidenceSigningAuthority,
+    EvidenceVerificationIdentity, LabEvidenceAuthority, RuntimeEvidenceAuthority,
+};
 use crate::hash_tiers::ContentHash;
 use crate::ifc_artifacts::{ClearanceClass, DeclassificationReceipt, Label};
 use crate::ifc_provenance_index::{FlowDecision, FlowEventRecord};
-use crate::signature_preimage::{
-    SIGNATURE_SENTINEL, Signature, SignaturePreimage, VerificationKey, verify_signature,
-};
+use crate::signature_preimage::{SIGNATURE_SENTINEL, Signature, SignaturePreimage};
 
-pub const NON_USE_CERTIFICATE_SCHEMA_VERSION: &str = "franken-engine.non-use-certificate.v1";
-pub const USE_CERTIFICATE_SCHEMA_VERSION: &str = "franken-engine.use-certificate.v1";
-pub const E8_CERTIFICATE_BUNDLE_SCHEMA_VERSION: &str = "franken-engine.e8-certificate-bundle.v1";
-pub const E8_CERTIFICATE_REPRO_LOCK_SCHEMA_VERSION: &str = "franken-engine.repro-lock.v1";
+pub const NON_USE_CERTIFICATE_SCHEMA_VERSION: &str = "franken-engine.non-use-certificate.v2";
+pub const USE_CERTIFICATE_SCHEMA_VERSION: &str = "franken-engine.use-certificate.v2";
+pub const E8_CERTIFICATE_BUNDLE_SCHEMA_VERSION: &str = "franken-engine.e8-certificate-bundle.v2";
+pub const E8_CERTIFICATE_REPRO_LOCK_SCHEMA_VERSION: &str = "franken-engine.repro-lock.v2";
 pub const E8_CERTIFIER_PRODUCER_ID: &str = "franken-engine.e8-certifier";
+
+fn is_e8_certifier_producer(producer_id: &str) -> bool {
+    producer_id == E8_CERTIFIER_PRODUCER_ID
+        || producer_id
+            .strip_prefix(E8_CERTIFIER_PRODUCER_ID)
+            .is_some_and(|suffix| suffix.starts_with(':') && suffix.len() > 1)
+}
 pub const E8_CERTIFICATE_ANALYSIS_POSTURE: &str = "conservative_ingress_over_approximation_v1";
 
 pub const NON_USE_CERTIFICATE_FILE: &str = "non_use_certificate.json";
@@ -78,13 +87,13 @@ pub const AUDIT_FILE: &str = "audit.md";
 
 fn non_use_certificate_schema() -> &'static SchemaHash {
     static HASH: LazyLock<SchemaHash> =
-        LazyLock::new(|| SchemaHash::from_definition(b"e8_non_use_certificate_v1"));
+        LazyLock::new(|| SchemaHash::from_definition(b"e8_non_use_certificate_v2"));
     &HASH
 }
 
 fn use_certificate_schema() -> &'static SchemaHash {
     static HASH: LazyLock<SchemaHash> =
-        LazyLock::new(|| SchemaHash::from_definition(b"e8_use_certificate_v1"));
+        LazyLock::new(|| SchemaHash::from_definition(b"e8_use_certificate_v2"));
     &HASH
 }
 
@@ -192,6 +201,38 @@ impl From<DataContractError> for CertifierError {
     fn from(error: DataContractError) -> Self {
         Self::ContractBinding(error)
     }
+}
+
+fn require_lab_integrity_envelope(
+    envelope: &EvidenceSignatureEnvelope,
+    target: &str,
+) -> Result<(), CertifierError> {
+    if envelope.key_provenance.authority_class != EvidenceAuthorityClass::LabFixture {
+        return Err(CertifierError::SignatureInvalid {
+            target: target.to_string(),
+            detail: "integrity-only verification is restricted to lab-fixture authority; runtime \
+                     certificates require an independently trusted identity"
+                .to_string(),
+        });
+    }
+    Ok(())
+}
+
+fn require_certificate_signature_epoch(
+    envelope: &EvidenceSignatureEnvelope,
+    policy_epoch: u64,
+    target: &str,
+) -> Result<(), CertifierError> {
+    if envelope.signed_epoch.as_u64() != policy_epoch {
+        return Err(CertifierError::SignatureInvalid {
+            target: target.to_string(),
+            detail: format!(
+                "certificate signature epoch {} does not match policy epoch {policy_epoch}",
+                envelope.signed_epoch.as_u64()
+            ),
+        });
+    }
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -372,8 +413,7 @@ pub struct NonUseCertificate {
     /// The complete recorded flow-edge evidence (allowed AND blocked).
     pub flow_events: Vec<FlowEventRecord>,
     pub declassification_receipt_count: u64,
-    pub signed_by: VerificationKey,
-    pub signature: Signature,
+    pub signature_envelope: EvidenceSignatureEnvelope,
 }
 
 impl SignaturePreimage for NonUseCertificate {
@@ -387,28 +427,69 @@ impl SignaturePreimage for NonUseCertificate {
 
     fn unsigned_view(&self) -> CanonicalValue {
         let mut copy = self.clone();
-        copy.signature = Signature::from_bytes(SIGNATURE_SENTINEL);
+        copy.signature_envelope.signature = Signature::from_bytes(SIGNATURE_SENTINEL);
         CanonicalValue::Bytes(serde_json::to_vec(&copy).expect("serialization should succeed"))
     }
 }
 
 impl NonUseCertificate {
-    /// Sign with the engine's deterministic runtime evidence key (bd-k2bz7).
-    fn sign_with_runtime_key(&mut self) {
-        self.signed_by = shared_evidence_verification_key();
-        self.signature = Signature::from_bytes(SIGNATURE_SENTINEL);
-        let preimage = self.preimage_bytes();
-        self.signature = sign_evidence_preimage(&preimage);
-    }
-
-    /// Verify the embedded signature against the embedded verification key.
-    pub fn verify(&self) -> Result<(), CertifierError> {
-        verify_signature(&self.signed_by, &self.preimage_bytes(), &self.signature).map_err(
-            |error| CertifierError::SignatureInvalid {
+    fn sign_with_identity(
+        &mut self,
+        identity: &EvidenceSigningAuthority,
+    ) -> Result<(), CertifierError> {
+        let epoch = crate::security_epoch::SecurityEpoch::from_raw(self.scope.policy_epoch);
+        self.signature_envelope = identity.sign_detached(&[], epoch).map_err(|error| {
+            CertifierError::SignatureInvalid {
                 target: "non_use_certificate".to_string(),
                 detail: error.to_string(),
-            },
-        )
+            }
+        })?;
+        let preimage = self.preimage_bytes();
+        self.signature_envelope = identity.sign_detached(&preimage, epoch).map_err(|error| {
+            CertifierError::SignatureInvalid {
+                target: "non_use_certificate".to_string(),
+                detail: error.to_string(),
+            }
+        })?;
+        Ok(())
+    }
+
+    /// Verify against a trust root obtained independently of this certificate.
+    pub fn verify_with_trusted_identity(
+        &self,
+        trusted_identity: &EvidenceVerificationIdentity,
+    ) -> Result<(), CertifierError> {
+        if self.schema_version != NON_USE_CERTIFICATE_SCHEMA_VERSION {
+            return Err(CertifierError::SignatureInvalid {
+                target: "non_use_certificate".to_string(),
+                detail: format!("unsupported schema version {}", self.schema_version),
+            });
+        }
+        require_certificate_signature_epoch(
+            &self.signature_envelope,
+            self.scope.policy_epoch,
+            "non_use_certificate",
+        )?;
+        self.signature_envelope
+            .verify_detached(&self.preimage_bytes(), trusted_identity)
+            .map_err(|error| CertifierError::SignatureInvalid {
+                target: "non_use_certificate".to_string(),
+                detail: error.to_string(),
+            })
+    }
+
+    /// Check signature integrity using the claimant-carried key.
+    ///
+    /// This is intentionally named as lab/integrity-only: it does not
+    /// authenticate runtime origin. Product code must call
+    /// [`Self::verify_with_trusted_identity`].
+    pub fn verify_integrity_only_lab(&self) -> Result<(), CertifierError> {
+        require_lab_integrity_envelope(&self.signature_envelope, "non_use_certificate")?;
+        self.verify_with_trusted_identity(&EvidenceVerificationIdentity {
+            producer_id: self.signature_envelope.producer_id.clone(),
+            key_provenance: self.signature_envelope.key_provenance.clone(),
+            verification_key: self.signature_envelope.verification_key.clone(),
+        })
     }
 
     pub fn content_hash(&self) -> ContentHash {
@@ -463,8 +544,7 @@ pub struct UseCertificate {
     pub console_entry_count: u64,
     pub instructions_executed: u64,
     pub execution_value_content_hash_hex: String,
-    pub signed_by: VerificationKey,
-    pub signature: Signature,
+    pub signature_envelope: EvidenceSignatureEnvelope,
 }
 
 impl SignaturePreimage for UseCertificate {
@@ -478,26 +558,63 @@ impl SignaturePreimage for UseCertificate {
 
     fn unsigned_view(&self) -> CanonicalValue {
         let mut copy = self.clone();
-        copy.signature = Signature::from_bytes(SIGNATURE_SENTINEL);
+        copy.signature_envelope.signature = Signature::from_bytes(SIGNATURE_SENTINEL);
         CanonicalValue::Bytes(serde_json::to_vec(&copy).expect("serialization should succeed"))
     }
 }
 
 impl UseCertificate {
-    fn sign_with_runtime_key(&mut self) {
-        self.signed_by = shared_evidence_verification_key();
-        self.signature = Signature::from_bytes(SIGNATURE_SENTINEL);
-        let preimage = self.preimage_bytes();
-        self.signature = sign_evidence_preimage(&preimage);
-    }
-
-    pub fn verify(&self) -> Result<(), CertifierError> {
-        verify_signature(&self.signed_by, &self.preimage_bytes(), &self.signature).map_err(
-            |error| CertifierError::SignatureInvalid {
+    fn sign_with_identity(
+        &mut self,
+        identity: &EvidenceSigningAuthority,
+    ) -> Result<(), CertifierError> {
+        let epoch = crate::security_epoch::SecurityEpoch::from_raw(self.scope.policy_epoch);
+        self.signature_envelope = identity.sign_detached(&[], epoch).map_err(|error| {
+            CertifierError::SignatureInvalid {
                 target: "use_certificate".to_string(),
                 detail: error.to_string(),
-            },
-        )
+            }
+        })?;
+        let preimage = self.preimage_bytes();
+        self.signature_envelope = identity.sign_detached(&preimage, epoch).map_err(|error| {
+            CertifierError::SignatureInvalid {
+                target: "use_certificate".to_string(),
+                detail: error.to_string(),
+            }
+        })?;
+        Ok(())
+    }
+
+    pub fn verify_with_trusted_identity(
+        &self,
+        trusted_identity: &EvidenceVerificationIdentity,
+    ) -> Result<(), CertifierError> {
+        if self.schema_version != USE_CERTIFICATE_SCHEMA_VERSION {
+            return Err(CertifierError::SignatureInvalid {
+                target: "use_certificate".to_string(),
+                detail: format!("unsupported schema version {}", self.schema_version),
+            });
+        }
+        require_certificate_signature_epoch(
+            &self.signature_envelope,
+            self.scope.policy_epoch,
+            "use_certificate",
+        )?;
+        self.signature_envelope
+            .verify_detached(&self.preimage_bytes(), trusted_identity)
+            .map_err(|error| CertifierError::SignatureInvalid {
+                target: "use_certificate".to_string(),
+                detail: error.to_string(),
+            })
+    }
+
+    pub fn verify_integrity_only_lab(&self) -> Result<(), CertifierError> {
+        require_lab_integrity_envelope(&self.signature_envelope, "use_certificate")?;
+        self.verify_with_trusted_identity(&EvidenceVerificationIdentity {
+            producer_id: self.signature_envelope.producer_id.clone(),
+            key_provenance: self.signature_envelope.key_provenance.clone(),
+            verification_key: self.signature_envelope.verification_key.clone(),
+        })
     }
 
     pub fn content_hash(&self) -> ContentHash {
@@ -565,8 +682,8 @@ pub struct CertificateBundleFileDigest {
 }
 
 /// The bundle's reproducibility lock (`repro.lock`), house schema
-/// `franken-engine.repro-lock.v1`. Carries no wall-clock so the bundle is
-/// byte-identical across re-runs of the same fixed inputs.
+/// `franken-engine.repro-lock.v2`. Carries no wall-clock so the bundle is
+/// byte-identical across re-runs of the same fixed inputs and authority.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CertificateReproLock {
     pub schema_version: String,
@@ -1192,8 +1309,9 @@ fn render_audit_markdown(
     ));
     out.push_str(&format!(
         "\n## Verification\n\n\
-         1. Verify both certificate signatures against the embedded engine verification key \
-         (`signed_by`) over the domain-separated, schema-hash-prefixed preimage.\n\
+         1. Verify both certificate signature envelopes against the runtime identity from an \
+         independently authenticated trust registry or recorded-run input. Never trust the \
+         verification key embedded in the claimant artifact as its own anchor.\n\
          2. Replay the run: `frankenctl replay run --trace <nondeterminism-trace.json> --mode \
          strict` and confirm the trace content hash `{}`.\n\
          3. Re-emit the bundle from the same fixed inputs and confirm byte-identical files \
@@ -1218,11 +1336,58 @@ fn render_audit_markdown(
 /// Assemble, sign, and serialize the certificate bundle from a completed
 /// data-contract run. Pure function of its inputs: identical inputs yield
 /// byte-identical files.
-pub fn emit_certificate_bundle(
+pub fn emit_certificate_bundle_with_runtime_authority(
     inputs: &CertifierInputs<'_>,
+    evidence_authority: &RuntimeEvidenceAuthority,
+) -> Result<CertificateBundle, CertifierError> {
+    if !is_e8_certifier_producer(evidence_authority.producer_id()) {
+        return Err(CertifierError::SignatureInvalid {
+            target: "certificate_bundle".to_string(),
+            detail: format!(
+                "certificate authority producer must be {E8_CERTIFIER_PRODUCER_ID}, got {}",
+                evidence_authority.producer_id()
+            ),
+        });
+    }
+    emit_certificate_bundle_with_authority(
+        inputs,
+        &EvidenceSigningAuthority::Runtime(evidence_authority.clone()),
+    )
+}
+
+/// Emit a deterministic lab certificate bundle.
+pub fn emit_certificate_bundle_lab(
+    inputs: &CertifierInputs<'_>,
+    evidence_authority: &LabEvidenceAuthority,
+) -> Result<CertificateBundle, CertifierError> {
+    if !is_e8_certifier_producer(evidence_authority.producer_id()) {
+        return Err(CertifierError::SignatureInvalid {
+            target: "certificate_bundle".to_string(),
+            detail: format!(
+                "lab certificate authority producer must be {E8_CERTIFIER_PRODUCER_ID}, got {}",
+                evidence_authority.producer_id()
+            ),
+        });
+    }
+    emit_certificate_bundle_with_authority(
+        inputs,
+        &EvidenceSigningAuthority::Lab(evidence_authority.clone()),
+    )
+}
+
+fn emit_certificate_bundle_with_authority(
+    inputs: &CertifierInputs<'_>,
+    evidence_signing_authority: &EvidenceSigningAuthority,
 ) -> Result<CertificateBundle, CertifierError> {
     let ingress = inputs.contract.ifc_ingress(inputs.binding)?;
     validate_evidence(&ingress, inputs)?;
+    let certificate_epoch = crate::security_epoch::SecurityEpoch::from_raw(inputs.policy_epoch);
+    let signature_placeholder = evidence_signing_authority
+        .sign_detached(&[], certificate_epoch)
+        .map_err(|error| CertifierError::SignatureInvalid {
+            target: "certificate_bundle".to_string(),
+            detail: error.to_string(),
+        })?;
 
     let mut declared_sinks: Vec<DeclaredSinkScope> = ingress
         .sinks
@@ -1295,7 +1460,7 @@ pub fn emit_certificate_bundle(
     .to_hex();
 
     let mut certificate_seed = Vec::new();
-    certificate_seed.extend_from_slice(b"e8-certificate-v1");
+    certificate_seed.extend_from_slice(b"e8-certificate-v2");
     append_seed_field(&mut certificate_seed, "trace_id", inputs.trace_id);
     append_seed_field(
         &mut certificate_seed,
@@ -1318,7 +1483,7 @@ pub fn emit_certificate_bundle(
     let mut non_use = NonUseCertificate {
         schema_version: NON_USE_CERTIFICATE_SCHEMA_VERSION.to_string(),
         certificate_id: format!("e8-nuc-{certificate_seed_hash}"),
-        producer_id: E8_CERTIFIER_PRODUCER_ID.to_string(),
+        producer_id: evidence_signing_authority.producer_id().to_string(),
         scope: scope.clone(),
         certificate_status: derive_certificate_status(inputs.refusal_receipt, &claims),
         refusal_ledger_id: inputs.refusal_receipt.ledger_id.clone(),
@@ -1327,10 +1492,9 @@ pub fn emit_certificate_bundle(
         claims,
         flow_events: inputs.flow_events.to_vec(),
         declassification_receipt_count: inputs.declassification_receipts.len() as u64,
-        signed_by: shared_evidence_verification_key(),
-        signature: Signature::from_bytes(SIGNATURE_SENTINEL),
+        signature_envelope: signature_placeholder.clone(),
     };
-    non_use.sign_with_runtime_key();
+    non_use.sign_with_identity(evidence_signing_authority)?;
 
     let capabilities_granted_beyond_contract: Vec<RuntimeCapability> = inputs
         .runtime_granted_capabilities
@@ -1382,7 +1546,7 @@ pub fn emit_certificate_bundle(
     let mut use_certificate = UseCertificate {
         schema_version: USE_CERTIFICATE_SCHEMA_VERSION.to_string(),
         certificate_id: format!("e8-uc-{certificate_seed_hash}"),
-        producer_id: E8_CERTIFIER_PRODUCER_ID.to_string(),
+        producer_id: evidence_signing_authority.producer_id().to_string(),
         scope,
         inputs_bound: inputs
             .contract
@@ -1410,10 +1574,9 @@ pub fn emit_certificate_bundle(
         instructions_executed: inputs.instructions_executed,
         execution_value_content_hash_hex: ContentHash::compute(inputs.execution_value.as_bytes())
             .to_hex(),
-        signed_by: shared_evidence_verification_key(),
-        signature: Signature::from_bytes(SIGNATURE_SENTINEL),
+        signature_envelope: signature_placeholder,
     };
-    use_certificate.sign_with_runtime_key();
+    use_certificate.sign_with_identity(evidence_signing_authority)?;
 
     let mut sorted_receipts = inputs.declassification_receipts.to_vec();
     sorted_receipts.sort_by(|a, b| a.receipt_id.cmp(&b.receipt_id));
@@ -1448,7 +1611,7 @@ pub fn emit_certificate_bundle(
         .collect();
 
     let mut lock_seed = Vec::new();
-    lock_seed.extend_from_slice(b"e8-cert-lock-v1");
+    lock_seed.extend_from_slice(b"e8-cert-lock-v2");
     for digest in &files_digests {
         append_seed_field(&mut lock_seed, &digest.name, &digest.sha256_hex);
     }
@@ -1529,6 +1692,25 @@ pub fn emit_certificate_bundle(
         files,
         bundle_content_hash_hex: ContentHash::compute(&bundle_seed).to_hex(),
     })
+}
+
+/// Test-only compatibility entry point using the deterministic fixture
+/// identity. Product code must call
+/// [`emit_certificate_bundle_with_runtime_authority`].
+#[cfg(test)]
+pub fn emit_certificate_bundle(
+    inputs: &CertifierInputs<'_>,
+) -> Result<CertificateBundle, CertifierError> {
+    let authority = LabEvidenceAuthority::deterministic_fixture(
+        E8_CERTIFIER_PRODUCER_ID,
+        "e8-certificate-lab-v2",
+        crate::security_epoch::SecurityEpoch::GENESIS,
+    )
+    .map_err(|error| CertifierError::SignatureInvalid {
+        target: "certificate_bundle".to_string(),
+        detail: error.to_string(),
+    })?;
+    emit_certificate_bundle_lab(inputs, &authority)
 }
 
 #[cfg(test)]
@@ -1958,12 +2140,61 @@ mod tests {
         let bundle = emit(&fixture());
         bundle
             .non_use_certificate
-            .verify()
+            .verify_integrity_only_lab()
             .expect("non-use signature verifies");
         bundle
             .use_certificate
-            .verify()
+            .verify_integrity_only_lab()
             .expect("use signature verifies");
+    }
+
+    #[test]
+    fn runtime_certificates_require_an_external_trust_root() {
+        let fixture = fixture();
+        let authority = RuntimeEvidenceAuthority::generate_runtime_owned(
+            E8_CERTIFIER_PRODUCER_ID,
+            crate::security_epoch::SecurityEpoch::from_raw(7),
+            1,
+            None,
+        )
+        .expect("runtime certificate authority");
+        let trusted_identity = authority.verification_identity();
+        let bundle =
+            emit_certificate_bundle_with_runtime_authority(&inputs(&fixture, &[], &[]), &authority)
+                .expect("runtime certificate bundle");
+
+        bundle
+            .non_use_certificate
+            .verify_with_trusted_identity(&trusted_identity)
+            .expect("trusted runtime non-use certificate");
+        bundle
+            .use_certificate
+            .verify_with_trusted_identity(&trusted_identity)
+            .expect("trusted runtime use certificate");
+
+        let wrong_epoch = crate::security_epoch::SecurityEpoch::from_raw(8);
+        let mut epoch_mismatch = bundle.non_use_certificate.clone();
+        epoch_mismatch.signature_envelope = authority
+            .sign_detached(&epoch_mismatch.preimage_bytes(), wrong_epoch)
+            .expect("valid signature over wrong epoch");
+        assert!(matches!(
+            epoch_mismatch.verify_with_trusted_identity(&trusted_identity),
+            Err(CertifierError::SignatureInvalid { detail, .. })
+                if detail.contains("does not match policy epoch")
+        ));
+
+        assert!(matches!(
+            bundle
+                .non_use_certificate
+                .verify_integrity_only_lab(),
+            Err(CertifierError::SignatureInvalid { detail, .. })
+                if detail.contains("independently trusted identity")
+        ));
+        assert!(matches!(
+            bundle.use_certificate.verify_integrity_only_lab(),
+            Err(CertifierError::SignatureInvalid { detail, .. })
+                if detail.contains("independently trusted identity")
+        ));
     }
 
     #[test]
@@ -1972,7 +2203,7 @@ mod tests {
         let mut tampered = bundle.non_use_certificate.clone();
         tampered.certificate_status = CertificateStatus::CertifiedWithinAnalyzedScope;
         assert!(matches!(
-            tampered.verify(),
+            tampered.verify_integrity_only_lab(),
             Err(CertifierError::SignatureInvalid { .. })
         ));
     }
@@ -2249,7 +2480,9 @@ mod tests {
         let parsed: NonUseCertificate =
             serde_json::from_slice(&file.bytes).expect("certificate parses");
         assert_eq!(parsed, bundle.non_use_certificate);
-        parsed.verify().expect("parsed certificate verifies");
+        parsed
+            .verify_integrity_only_lab()
+            .expect("parsed certificate verifies");
     }
 
     #[test]
@@ -2258,7 +2491,9 @@ mod tests {
         let file = bundle.file(USE_CERTIFICATE_FILE).expect("file");
         let parsed: UseCertificate = serde_json::from_slice(&file.bytes).expect("parses");
         assert_eq!(parsed, bundle.use_certificate);
-        parsed.verify().expect("parsed certificate verifies");
+        parsed
+            .verify_integrity_only_lab()
+            .expect("parsed certificate verifies");
     }
 
     #[test]

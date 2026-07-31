@@ -12,6 +12,7 @@ use frankenengine_engine::e9_shadow_candidate_discovery::{
     BaselineRunFacts, E9_SHADOW_MODE, RegionKind, ShadowDiscoveryPolicy, discover_candidates,
     emit_candidates_into_index,
 };
+use frankenengine_engine::execution_orchestrator::LabFixtureExecutionOrchestratorExt as _;
 use frankenengine_engine::execution_orchestrator::{
     ExecutionOrchestrator, ExtensionPackage, OrchestratorConfig, OrchestratorResult,
 };

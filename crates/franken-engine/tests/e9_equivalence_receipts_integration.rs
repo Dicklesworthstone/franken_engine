@@ -19,6 +19,7 @@ use frankenengine_engine::e9_shadow_candidate_discovery::{
     BaselineRunFacts, ShadowDiscoveryPolicy, ShadowDiscoveryReport, discover_candidates,
 };
 use frankenengine_engine::engine_object_id::EngineObjectId;
+use frankenengine_engine::execution_orchestrator::LabFixtureExecutionOrchestratorExt as _;
 use frankenengine_engine::execution_orchestrator::{
     ExecutionOrchestrator, ExtensionPackage, OrchestratorConfig, OrchestratorResult,
 };

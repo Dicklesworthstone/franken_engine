@@ -16,8 +16,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use frankenengine_engine::counterexample_synthesizer::{
     ConcreteScenario, ControllerConfig, ControllerInterference, ControllerInterferenceEvent,
     CounterexampleSynthesizer, DEFAULT_BUDGET_NS, DEFAULT_MAX_MINIMIZATION_ROUNDS,
-    InterferenceKind, MinimalityEvidence, MutationKind, PolicyMutation, SynthesisConfig,
-    SynthesisError, SynthesisOutcome, SynthesisStrategy,
+    InterferenceKind, LabFixtureCounterexampleSynthesizerExt as _, MinimalityEvidence,
+    MutationKind, PolicyMutation, SynthesisConfig, SynthesisError, SynthesisOutcome,
+    SynthesisStrategy,
 };
 
 fn set(values: &[&str]) -> BTreeSet<String> {

@@ -1,6 +1,6 @@
 ---
 source: tests/perf_h6_capacity_hints_integration.rs
-expression: actual.trim_end()
+expression: "serde_json::to_string_pretty(&normalized).expect(\"normalized output must serialize\")"
 ---
 {
   "schema_version": "franken-engine.frankenctl.v1",
@@ -8,6 +8,16 @@ expression: actual.trim_end()
   "trace_id": "frankenctl-run:0",
   "decision_id": "frankenctl-run:decision:0",
   "policy_id": "default-policy",
+  "evidence_verification_identity": {
+    "producer_id": "[RUNTIME_PRODUCER_ID]",
+    "key_provenance": {
+      "authority_class": "runtime",
+      "key_id": "[RUNTIME_KEY_ID]",
+      "activation_epoch": 0,
+      "rotation_sequence": 1
+    },
+    "verification_key": "[RUNTIME_VERIFICATION_KEY]"
+  },
   "parse_goal": "script",
   "source_ingestion": {
     "source_language": "javascript",

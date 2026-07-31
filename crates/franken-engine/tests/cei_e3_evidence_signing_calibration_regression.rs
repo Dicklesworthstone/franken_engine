@@ -17,6 +17,7 @@
 
 use frankenengine_engine::change_point_detector::{
     ChangePointDetector, ChangePointVerdict, CompositeAlternative,
+    LabFixtureChangePointDetectorExt as _,
 };
 use frankenengine_engine::runtime_decision_theory::{
     CalibrationStatus, ConformalCalibrator, ConformalConfig,

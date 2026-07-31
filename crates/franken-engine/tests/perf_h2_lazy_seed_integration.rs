@@ -16,7 +16,8 @@ use std::time::Instant;
 use frankenengine_engine::deterministic_replay::{NondeterminismSource, NondeterminismTrace};
 use frankenengine_engine::evidence_ledger::{
     CandidateAction, ChosenAction, Constraint, DecisionType, EvidenceEmitter, EvidenceEntryBuilder,
-    InMemoryLedger, Witness,
+    InMemoryLedger, LabFixtureEvidenceEntryBuilderExt as _, LabFixtureInMemoryLedgerExt as _,
+    Witness,
 };
 use frankenengine_engine::security_epoch::SecurityEpoch;
 use proptest::prelude::*;
@@ -94,22 +95,88 @@ fn run_frankenctl_fixture() -> String {
         .expect("frankenctl run must spawn")
 }
 
+fn normalize_fresh_runtime_evidence_identity(actual: &str) -> Value {
+    let mut parsed: Value = serde_json::from_str(actual).expect("run output must be JSON");
+    let source_hash = parsed["source_ingestion"]["original_source_hash"]
+        .as_str()
+        .expect("run output must carry the source hash")
+        .strip_prefix("sha256:")
+        .expect("source hash must use the sha256 prefix")
+        .to_string();
+    let identity = parsed["evidence_verification_identity"]
+        .as_object_mut()
+        .expect("run output must carry an evidence verification identity");
+    let producer_id = identity["producer_id"]
+        .as_str()
+        .expect("runtime producer id must be a string");
+    assert!(
+        producer_id.starts_with(&format!("frankenctl.run:{source_hash}:")),
+        "runtime producer id must bind the source hash"
+    );
+    let verification_key = identity["verification_key"]
+        .as_object()
+        .and_then(|value| value.get("inner"))
+        .and_then(Value::as_array)
+        .expect("runtime verification key must use the canonical wire form");
+    assert_eq!(verification_key.len(), 32);
+    assert!(
+        verification_key
+            .iter()
+            .any(|byte| byte.as_u64().is_some_and(|byte| byte != 0)),
+        "runtime verification key must not be all zero"
+    );
+    let provenance = identity["key_provenance"]
+        .as_object_mut()
+        .expect("runtime identity must carry key provenance");
+    assert_eq!(provenance["authority_class"], "runtime");
+    assert_eq!(provenance["activation_epoch"], 0);
+    assert_eq!(provenance["rotation_sequence"], 1);
+    assert!(!provenance.contains_key("previous_key_id"));
+    let key_id = provenance["key_id"]
+        .as_str()
+        .expect("runtime key id must be a string");
+    assert!(
+        key_id
+            .strip_prefix("ed25519:")
+            .is_some_and(|digest| digest.len() == 64),
+        "runtime key id must be a domain-separated SHA-256 identifier"
+    );
+    provenance.insert(
+        "key_id".to_string(),
+        Value::String("[RUNTIME_KEY_ID]".to_string()),
+    );
+
+    identity.insert(
+        "producer_id".to_string(),
+        Value::String("[RUNTIME_PRODUCER_ID]".to_string()),
+    );
+    identity.insert(
+        "verification_key".to_string(),
+        Value::String("[RUNTIME_VERIFICATION_KEY]".to_string()),
+    );
+    parsed
+}
+
 #[test]
-fn frankenctl_run_evidence_byte_identical_under_lazy_seed() {
+fn frankenctl_run_evidence_stable_besides_runtime_authority_under_lazy_seed() {
     let start = Instant::now();
     let actual = run_frankenctl_fixture();
+    let normalized = normalize_fresh_runtime_evidence_identity(&actual);
 
-    insta::assert_snapshot!("frankenctl_run_evidence_under_lazy_seed", actual.trim_end());
+    insta::assert_snapshot!(
+        "frankenctl_run_evidence_under_lazy_seed",
+        serde_json::to_string_pretty(&normalized).expect("normalized output must serialize")
+    );
 
     let second = run_frankenctl_fixture();
     assert_eq!(
-        actual, second,
-        "frankenctl run output must remain byte-identical across repeated H2 runs"
+        normalized,
+        normalize_fresh_runtime_evidence_identity(&second),
+        "frankenctl run output must remain stable apart from fresh runtime authority"
     );
 
-    let parsed: Value = serde_json::from_str(&actual).expect("run output must be JSON");
-    assert_eq!(parsed["evidence_entries"], 1);
-    assert_eq!(parsed["execution_value"], "60");
+    assert_eq!(normalized["evidence_entries"], 1);
+    assert_eq!(normalized["execution_value"], "60");
     assert!(
         start.elapsed().as_secs() < 60,
         "H2.8 acceptance: runtime must be <= 60 s (was {:?})",
@@ -244,13 +311,14 @@ fn capture_reset_idempotence_under_proptest_inputs() {
 
             let first = run_frankenctl(&source_path, "perf-h2-proptest");
             let second = run_frankenctl(&source_path, "perf-h2-proptest");
+            let first = normalize_fresh_runtime_evidence_identity(&first);
+            let second = normalize_fresh_runtime_evidence_identity(&second);
             prop_assert_eq!(&first, &second);
 
-            let parsed: Value = serde_json::from_str(&first).expect("run output must be JSON");
             let expected = (a + b + c).to_string();
-            prop_assert_eq!(parsed["execution_value"].as_str(), Some(expected.as_str()));
-            prop_assert_eq!(parsed["evidence_entries"].as_u64(), Some(1));
+            prop_assert_eq!(first["execution_value"].as_str(), Some(expected.as_str()));
+            prop_assert_eq!(first["evidence_entries"].as_u64(), Some(1));
             Ok(())
         })
-        .expect("100 generated frankenctl runs must be byte-identical");
+        .expect("100 generated frankenctl runs must have stable execution semantics");
 }

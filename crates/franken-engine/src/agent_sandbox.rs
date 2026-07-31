@@ -45,11 +45,11 @@ use std::fmt;
 use serde::{Deserialize, Serialize};
 
 use crate::capability::RuntimeCapability;
-use crate::evidence_ledger::EvidenceEntry;
+use crate::evidence_ledger::{EvidenceEntry, EvidenceVerificationIdentity};
 use crate::execution_orchestrator::{ExtensionPackage, OrchestratorResult};
 
 pub const AGENT_SANDBOX_MANIFEST_SCHEMA_VERSION: &str = "franken-engine.agent-sandbox-manifest.v1";
-pub const AGENT_SANDBOX_REPORT_SCHEMA_VERSION: &str = "franken-engine.agent-sandbox-report.v1";
+pub const AGENT_SANDBOX_REPORT_SCHEMA_VERSION: &str = "franken-engine.agent-sandbox-report.v2";
 /// Trust level assigned to agent code when the manifest does not override it.
 /// `provisional` keeps the guardplane's instruction hooks armed.
 pub const DEFAULT_AGENT_TRUST_LEVEL: &str = "provisional";
@@ -447,6 +447,9 @@ pub struct AgentSandboxReport {
     pub agent_id: String,
     pub trace_id: String,
     pub decision_id: String,
+    /// Public evidence identity recorded by the composition root. Verifiers
+    /// still authenticate this report out of band before trusting it.
+    pub evidence_verification_identity: EvidenceVerificationIdentity,
     pub trust_level: String,
     /// Tool grants the run was executed under (echoed for audit).
     pub tool_grants: Vec<AgentToolGrant>,
@@ -519,6 +522,7 @@ impl AgentSandboxReport {
             agent_id: manifest.agent_id.clone(),
             trace_id: result.trace_id.clone(),
             decision_id: result.decision_id.clone(),
+            evidence_verification_identity: result.evidence_verification_identity.clone(),
             trust_level: manifest
                 .trust_level
                 .clone()

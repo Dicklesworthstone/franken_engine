@@ -38,7 +38,8 @@ use crate::entropy_evidence_compressor::{
 };
 use crate::evidence_ledger::{
     CandidateAction, ChosenAction, DecisionType, EvidenceEmitter, EvidenceEntry,
-    EvidenceEntryBuilder, InMemoryLedger, LedgerError, Witness,
+    EvidenceEntryBuilder, EvidenceSigningAuthority, EvidenceVerificationIdentity, InMemoryLedger,
+    LabEvidenceAuthority, LedgerError, RuntimeEvidenceAuthority, Witness,
 };
 use crate::execution_cell::{CellError, CellEvent, CellKind, ExecutionCell};
 use crate::expected_loss_selector::{
@@ -303,6 +304,12 @@ pub struct OrchestratorResult {
 
     // Evidence
     pub evidence_entries: Vec<EvidenceEntry>,
+    /// Public trust coordinates for every evidence entry emitted by this run.
+    ///
+    /// This value is recorded for replay and audit correlation. A verifier
+    /// must still authenticate it through the product trust registry rather
+    /// than treating the result that carries it as its own trust anchor.
+    pub evidence_verification_identity: EvidenceVerificationIdentity,
     pub evidence_compression_certificate: Option<CompressionCertificate>,
     pub evidence_compression_status: EvidenceCompressionStatus,
 
@@ -725,6 +732,7 @@ pub struct ExecutionOrchestrator {
     posterior_updater: BayesianPosteriorUpdater,
     loss_selector: ExpectedLossSelector,
     ledger: InMemoryLedger,
+    evidence_signing_authority: EvidenceSigningAuthority,
     saga_orchestrator: SagaOrchestrator,
     containment_executor: ContainmentExecutor,
     reserved_execution_context: Option<ReservedExecutionContext>,
@@ -764,18 +772,20 @@ pub struct ExecutionOrchestrator {
 }
 
 impl ExecutionOrchestrator {
-    /// Create a new orchestrator with the given configuration.
+    /// Create a test orchestrator with the deterministic fixture identity.
+    #[cfg(test)]
     pub fn new(config: OrchestratorConfig) -> Self {
-        Self::try_new(config).expect("orchestrator configuration must be valid")
+        Self::new_lab(config)
     }
 
-    /// Create a new orchestrator with the given configuration, returning a validation error
-    /// when the concurrency envelope is outside the supported range.
+    /// Fallible test constructor using the deterministic fixture identity.
+    #[cfg(test)]
     pub fn try_new(config: OrchestratorConfig) -> Result<Self, OrchestratorError> {
-        Self::try_new_with_runtime_config(config, RuntimeConfig::default())
+        Self::try_new_lab(config)
     }
 
-    /// Create a new orchestrator with both orchestrator and runtime configs.
+    /// Test constructor with both orchestrator and runtime configs.
+    #[cfg(test)]
     pub fn new_with_runtime_config(
         config: OrchestratorConfig,
         runtime_config: RuntimeConfig,
@@ -784,8 +794,8 @@ impl ExecutionOrchestrator {
             .expect("orchestrator configuration must be valid")
     }
 
-    /// Create a new orchestrator with both orchestrator and runtime configs, returning a
-    /// validation error when the concurrency envelope is outside the supported range.
+    /// Fallible test constructor with both runtime configs.
+    #[cfg(test)]
     pub fn try_new_with_runtime_config(
         config: OrchestratorConfig,
         runtime_config: RuntimeConfig,
@@ -797,8 +807,9 @@ impl ExecutionOrchestrator {
         )
     }
 
-    /// Create an orchestrator with both runtime configs and an explicit
-    /// lowering-time ambient-authority grant.
+    /// Test constructor with an explicit lowering-time ambient-authority
+    /// grant.
+    #[cfg(test)]
     pub fn new_with_runtime_config_and_ambient_authority_grant(
         config: OrchestratorConfig,
         runtime_config: RuntimeConfig,
@@ -812,16 +823,156 @@ impl ExecutionOrchestrator {
         .expect("orchestrator configuration must be valid")
     }
 
-    /// Fallible variant of
-    /// [`Self::new_with_runtime_config_and_ambient_authority_grant`]. Existing
-    /// constructors delegate here with deny-all, so compatibility authority is
-    /// impossible to acquire accidentally.
+    /// Fallible test constructor with an explicit lowering-time ambient grant.
+    #[cfg(test)]
     pub fn try_new_with_runtime_config_and_ambient_authority_grant(
         config: OrchestratorConfig,
         runtime_config: RuntimeConfig,
         ambient_authority_grant: AmbientAuthorityGrant,
     ) -> Result<Self, OrchestratorError> {
+        Self::try_new_lab_with_runtime_config_and_ambient_authority_grant(
+            config,
+            runtime_config,
+            ambient_authority_grant,
+        )
+    }
+
+    /// Construct with an explicit runtime evidence authority.
+    pub fn try_new_with_runtime_authority(
+        config: OrchestratorConfig,
+        evidence_authority: RuntimeEvidenceAuthority,
+    ) -> Result<Self, OrchestratorError> {
+        Self::try_new_with_runtime_config_and_authority(
+            config,
+            RuntimeConfig::default(),
+            AmbientAuthorityGrant::DenyAll,
+            evidence_authority,
+        )
+    }
+
+    /// Full production constructor. The product composition root owns the
+    /// runtime authority and must pass it explicitly.
+    pub fn try_new_with_runtime_config_and_authority(
+        config: OrchestratorConfig,
+        runtime_config: RuntimeConfig,
+        ambient_authority_grant: AmbientAuthorityGrant,
+        evidence_authority: RuntimeEvidenceAuthority,
+    ) -> Result<Self, OrchestratorError> {
+        Self::try_new_with_resolved_evidence_authority(
+            config,
+            runtime_config,
+            ambient_authority_grant,
+            EvidenceSigningAuthority::Runtime(evidence_authority),
+        )
+    }
+
+    /// Construct a deterministic, explicitly lab-scoped orchestrator.
+    pub fn new_lab(config: OrchestratorConfig) -> Self {
+        Self::try_new_lab(config).expect("lab orchestrator configuration must be valid")
+    }
+
+    /// Fallible deterministic lab constructor.
+    pub fn try_new_lab(config: OrchestratorConfig) -> Result<Self, OrchestratorError> {
+        Self::try_new_lab_with_runtime_config(config, RuntimeConfig::default())
+    }
+
+    /// Lab constructor with explicit runtime configuration.
+    pub fn new_lab_with_runtime_config(
+        config: OrchestratorConfig,
+        runtime_config: RuntimeConfig,
+    ) -> Self {
+        Self::try_new_lab_with_runtime_config(config, runtime_config)
+            .expect("lab orchestrator configuration must be valid")
+    }
+
+    /// Fallible lab constructor with explicit runtime configuration.
+    pub fn try_new_lab_with_runtime_config(
+        config: OrchestratorConfig,
+        runtime_config: RuntimeConfig,
+    ) -> Result<Self, OrchestratorError> {
+        Self::try_new_lab_with_runtime_config_and_ambient_authority_grant(
+            config,
+            runtime_config,
+            AmbientAuthorityGrant::DenyAll,
+        )
+    }
+
+    /// Lab constructor with an explicit lowering-time ambient grant.
+    pub fn new_lab_with_runtime_config_and_ambient_authority_grant(
+        config: OrchestratorConfig,
+        runtime_config: RuntimeConfig,
+        ambient_authority_grant: AmbientAuthorityGrant,
+    ) -> Self {
+        Self::try_new_lab_with_runtime_config_and_ambient_authority_grant(
+            config,
+            runtime_config,
+            ambient_authority_grant,
+        )
+        .expect("lab orchestrator configuration must be valid")
+    }
+
+    /// Fallible lab constructor with an explicit lowering-time ambient grant.
+    pub fn try_new_lab_with_runtime_config_and_ambient_authority_grant(
+        config: OrchestratorConfig,
+        runtime_config: RuntimeConfig,
+        ambient_authority_grant: AmbientAuthorityGrant,
+    ) -> Result<Self, OrchestratorError> {
+        let authority = LabEvidenceAuthority::deterministic_fixture(
+            "franken-engine.execution-orchestrator",
+            "public-lab-orchestrator-v2",
+            SecurityEpoch::GENESIS,
+        )?;
+        Self::try_new_lab_with_runtime_config_and_authority(
+            config,
+            runtime_config,
+            ambient_authority_grant,
+            authority,
+        )
+    }
+
+    /// Explicit lab constructor for deterministic, source-reproducible
+    /// evidence harnesses. The resulting entries are permanently marked as
+    /// lab authority and cannot be admitted to a production ledger.
+    pub fn try_new_lab_with_authority(
+        config: OrchestratorConfig,
+        evidence_authority: LabEvidenceAuthority,
+    ) -> Result<Self, OrchestratorError> {
+        Self::try_new_lab_with_runtime_config_and_authority(
+            config,
+            RuntimeConfig::default(),
+            AmbientAuthorityGrant::DenyAll,
+            evidence_authority,
+        )
+    }
+
+    /// Full lab constructor used by deterministic harnesses and tests.
+    pub fn try_new_lab_with_runtime_config_and_authority(
+        config: OrchestratorConfig,
+        runtime_config: RuntimeConfig,
+        ambient_authority_grant: AmbientAuthorityGrant,
+        evidence_authority: LabEvidenceAuthority,
+    ) -> Result<Self, OrchestratorError> {
+        Self::try_new_with_resolved_evidence_authority(
+            config,
+            runtime_config,
+            ambient_authority_grant,
+            EvidenceSigningAuthority::Lab(evidence_authority),
+        )
+    }
+
+    fn try_new_with_resolved_evidence_authority(
+        config: OrchestratorConfig,
+        runtime_config: RuntimeConfig,
+        ambient_authority_grant: AmbientAuthorityGrant,
+        evidence_signing_authority: EvidenceSigningAuthority,
+    ) -> Result<Self, OrchestratorError> {
         Self::validate_concurrency_envelope(config.max_concurrent_sagas)?;
+        let verification_identity = evidence_signing_authority.verification_identity();
+        let ledger = if evidence_signing_authority.is_lab() {
+            InMemoryLedger::for_lab_verification_identity(config.epoch, &verification_identity)?
+        } else {
+            InMemoryLedger::for_verification_identity(config.epoch, &verification_identity)?
+        };
         let loss_matrix = config.loss_matrix_preset.to_loss_matrix();
         let prior = Posterior::default_prior();
         let gamma = runtime_config.orchestrator.adaptive_router_gamma_millionths;
@@ -846,7 +997,8 @@ impl ExecutionOrchestrator {
             last_cumulative_llr_by_extension: BTreeMap::new(),
             posterior_updater: BayesianPosteriorUpdater::new(prior, "orchestrator"),
             loss_selector: ExpectedLossSelector::new(loss_matrix),
-            ledger: InMemoryLedger::new(),
+            ledger,
+            evidence_signing_authority,
             saga_orchestrator: SagaOrchestrator::new(config.epoch, config.max_concurrent_sagas),
             containment_executor: ContainmentExecutor::new(),
             reserved_execution_context: None,
@@ -889,7 +1041,8 @@ impl ExecutionOrchestrator {
         &self.data_contract_flow_events
     }
 
-    /// Create an orchestrator with default configuration.
+    /// Create a test orchestrator with default configuration.
+    #[cfg(test)]
     pub fn with_defaults() -> Self {
         Self::new(OrchestratorConfig::default())
     }
@@ -1011,6 +1164,12 @@ impl ExecutionOrchestrator {
     /// Access the evidence ledger.
     pub fn ledger(&self) -> &InMemoryLedger {
         &self.ledger
+    }
+
+    /// Trusted public identity recorded or registered by verifiers of this
+    /// orchestrator's evidence.
+    pub fn evidence_verification_identity(&self) -> EvidenceVerificationIdentity {
+        self.evidence_signing_authority.verification_identity()
     }
 
     /// Access the saga orchestrator.
@@ -1339,6 +1498,9 @@ impl ExecutionOrchestrator {
                 action_decision,
                 optimal_stopping_certificate,
                 evidence_entries,
+                evidence_verification_identity: self
+                    .evidence_signing_authority
+                    .verification_identity(),
                 evidence_compression_certificate,
                 evidence_compression_status,
                 containment_receipt,
@@ -2012,12 +2174,13 @@ impl ExecutionOrchestrator {
             capability_summary: _,
         } = input;
         let guardplane_summary = guardplane_report.map(|report| &report.summary);
-        let mut builder = EvidenceEntryBuilder::new(
+        let mut builder = EvidenceEntryBuilder::new_with_authority(
             trace_id,
             decision_id,
             &self.config.policy_id,
             self.config.epoch,
             DecisionType::SecurityAction,
+            &self.evidence_signing_authority,
         );
 
         builder = builder.timestamp_ns(0);
@@ -2269,6 +2432,7 @@ impl ExecutionOrchestrator {
                     index,
                     decision,
                     &self.config,
+                    &self.evidence_signing_authority,
                 )?;
                 entries.push(guardplane_entry);
             }
@@ -2285,13 +2449,15 @@ impl ExecutionOrchestrator {
         index: usize,
         record: &GuardplaneDecisionRecord,
         config: &OrchestratorConfig,
+        signing_authority: &EvidenceSigningAuthority,
     ) -> Result<EvidenceEntry, OrchestratorError> {
-        let mut builder = EvidenceEntryBuilder::new(
+        let mut builder = EvidenceEntryBuilder::new_with_authority(
             trace_id,
             format!("{decision_id}:guardplane:{index}"),
             &config.policy_id,
             config.epoch,
             DecisionType::SecurityAction,
+            signing_authority,
         )
         .timestamp_ns(0);
 
@@ -3182,6 +3348,89 @@ fn format_guardplane_hook_action(action: &crate::baseline_interpreter::HookActio
         crate::baseline_interpreter::HookAction::Quarantine(reason) => {
             format!("quarantine:{reason}")
         }
+    }
+}
+
+/// Deliberate opt-in for deterministic lab orchestrators in integration
+/// fixtures.
+///
+/// Production code must not import this trait; it must call a constructor that
+/// requires [`RuntimeEvidenceAuthority`]. Every constructor here delegates to
+/// an explicitly lab-scoped path whose evidence provenance is rejected by
+/// runtime ledgers.
+pub trait LabFixtureExecutionOrchestratorExt: Sized {
+    fn new(config: OrchestratorConfig) -> ExecutionOrchestrator;
+    fn try_new(config: OrchestratorConfig) -> Result<ExecutionOrchestrator, OrchestratorError>;
+    fn with_defaults() -> ExecutionOrchestrator;
+    fn new_with_runtime_config(
+        config: OrchestratorConfig,
+        runtime_config: RuntimeConfig,
+    ) -> ExecutionOrchestrator;
+    fn try_new_with_runtime_config(
+        config: OrchestratorConfig,
+        runtime_config: RuntimeConfig,
+    ) -> Result<ExecutionOrchestrator, OrchestratorError>;
+    fn new_with_runtime_config_and_ambient_authority_grant(
+        config: OrchestratorConfig,
+        runtime_config: RuntimeConfig,
+        ambient_authority_grant: AmbientAuthorityGrant,
+    ) -> ExecutionOrchestrator;
+    fn try_new_with_runtime_config_and_ambient_authority_grant(
+        config: OrchestratorConfig,
+        runtime_config: RuntimeConfig,
+        ambient_authority_grant: AmbientAuthorityGrant,
+    ) -> Result<ExecutionOrchestrator, OrchestratorError>;
+}
+
+impl LabFixtureExecutionOrchestratorExt for ExecutionOrchestrator {
+    fn new(config: OrchestratorConfig) -> ExecutionOrchestrator {
+        ExecutionOrchestrator::new_lab(config)
+    }
+
+    fn try_new(config: OrchestratorConfig) -> Result<ExecutionOrchestrator, OrchestratorError> {
+        ExecutionOrchestrator::try_new_lab(config)
+    }
+
+    fn with_defaults() -> ExecutionOrchestrator {
+        ExecutionOrchestrator::new_lab(OrchestratorConfig::default())
+    }
+
+    fn new_with_runtime_config(
+        config: OrchestratorConfig,
+        runtime_config: RuntimeConfig,
+    ) -> ExecutionOrchestrator {
+        ExecutionOrchestrator::new_lab_with_runtime_config(config, runtime_config)
+    }
+
+    fn try_new_with_runtime_config(
+        config: OrchestratorConfig,
+        runtime_config: RuntimeConfig,
+    ) -> Result<ExecutionOrchestrator, OrchestratorError> {
+        ExecutionOrchestrator::try_new_lab_with_runtime_config(config, runtime_config)
+    }
+
+    fn new_with_runtime_config_and_ambient_authority_grant(
+        config: OrchestratorConfig,
+        runtime_config: RuntimeConfig,
+        ambient_authority_grant: AmbientAuthorityGrant,
+    ) -> ExecutionOrchestrator {
+        ExecutionOrchestrator::new_lab_with_runtime_config_and_ambient_authority_grant(
+            config,
+            runtime_config,
+            ambient_authority_grant,
+        )
+    }
+
+    fn try_new_with_runtime_config_and_ambient_authority_grant(
+        config: OrchestratorConfig,
+        runtime_config: RuntimeConfig,
+        ambient_authority_grant: AmbientAuthorityGrant,
+    ) -> Result<ExecutionOrchestrator, OrchestratorError> {
+        ExecutionOrchestrator::try_new_lab_with_runtime_config_and_ambient_authority_grant(
+            config,
+            runtime_config,
+            ambient_authority_grant,
+        )
     }
 }
 
@@ -4159,6 +4408,74 @@ mod tests {
         assert_eq!(cfg.epoch, SecurityEpoch::from_raw(1));
         assert_eq!(cfg.trace_id_prefix, "orch");
         assert_eq!(cfg.policy_id, "default-policy");
+    }
+
+    #[test]
+    fn bd_90u6o_production_constructor_requires_concrete_runtime_authority() {
+        let constructor: fn(
+            OrchestratorConfig,
+            RuntimeEvidenceAuthority,
+        ) -> Result<ExecutionOrchestrator, OrchestratorError> =
+            ExecutionOrchestrator::try_new_with_runtime_authority;
+        let _ = constructor;
+    }
+
+    #[test]
+    fn bd_90u6o_explicit_identity_preserves_in_memory_replay_stability() {
+        let authority = RuntimeEvidenceAuthority::from_signing_key(
+            "runtime-recorded",
+            SigningKey::from_bytes([0x42; 32]).expect("non-zero recorded test key"),
+            SecurityEpoch::from_raw(1),
+            1,
+            None,
+        )
+        .expect("recorded identity");
+        let config = OrchestratorConfig::default();
+        let mut first = ExecutionOrchestrator::try_new_with_runtime_authority(
+            config.clone(),
+            authority.clone(),
+        )
+        .expect("first orchestrator");
+        let mut second = ExecutionOrchestrator::try_new_with_runtime_authority(config, authority)
+            .expect("second orchestrator");
+
+        let first_result = first.execute(&simple_package()).expect("first execution");
+        let second_result = second.execute(&simple_package()).expect("second execution");
+        assert_eq!(
+            first_result.evidence_entries, second_result.evidence_entries,
+            "an explicitly supplied key identity keeps matching in-memory runs byte-stable"
+        );
+    }
+
+    #[test]
+    fn bd_90u6o_runtime_authority_is_recorded_and_rejects_historical_public_key() {
+        let historical_public_key = SigningKey::from_bytes([0x7B; 32])
+            .expect("historical source-known key")
+            .verification_key();
+        let authority = RuntimeEvidenceAuthority::generate_runtime_owned(
+            "runtime-generated-test",
+            SecurityEpoch::from_raw(1),
+            1,
+            None,
+        )
+        .expect("runtime authority");
+        let expected_identity = authority.verification_identity();
+        let mut orchestrator = ExecutionOrchestrator::try_new_with_runtime_authority(
+            OrchestratorConfig::default(),
+            authority,
+        )
+        .expect("runtime orchestrator");
+        let result = orchestrator
+            .execute(&simple_package())
+            .expect("runtime execution");
+        assert_eq!(result.evidence_verification_identity, expected_identity);
+        assert!(
+            result
+                .evidence_entries
+                .iter()
+                .all(|entry| { entry.signed_envelope().verification_key != historical_public_key }),
+            "normal orchestrator evidence must never use the source-known historical key"
+        );
     }
 
     #[test]
@@ -5585,7 +5902,7 @@ mod tests {
                 .metadata
                 .contains_key("evidence_compression_certificate_hash")
         );
-        assert!(entry.signed_envelope.is_some());
+        assert!(!entry.signed_envelope().producer_id.is_empty());
         assert_eq!(
             orch.ledger().entries()[0].evidence_hash,
             entry.evidence_hash

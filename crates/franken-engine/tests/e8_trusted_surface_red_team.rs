@@ -32,6 +32,8 @@ use frankenengine_engine::data_contract::{
     DataContract, DataContractError, RequestedOutputClaim, SinkBinding,
 };
 use frankenengine_engine::e8_analyzed_subset::scan_source;
+use frankenengine_engine::evidence_ledger::{EvidenceVerificationIdentity, LabEvidenceAuthority};
+use frankenengine_engine::execution_orchestrator::LabFixtureExecutionOrchestratorExt as _;
 use frankenengine_engine::execution_orchestrator::{
     ExecutionOrchestrator, ExtensionPackage, OrchestratorConfig,
 };
@@ -39,7 +41,8 @@ use frankenengine_engine::hash_tiers::ContentHash;
 use frankenengine_engine::ifc_artifacts::{ClearanceClass, Label};
 use frankenengine_engine::non_use_certificate::{
     CertificateBundle, CertificateStatus, CertifierInputs, ClaimEvaluation,
-    NON_USE_CERTIFICATE_FILE, NonUseCertificate, emit_certificate_bundle,
+    E8_CERTIFIER_PRODUCER_ID, NON_USE_CERTIFICATE_FILE, NonUseCertificate,
+    emit_certificate_bundle_lab,
 };
 
 // ===========================================================================
@@ -48,6 +51,19 @@ use frankenengine_engine::non_use_certificate::{
 
 const EXTENSION_ID: &str = "ext-e8sec";
 const INPUT_PATH: &str = "fixtures/agent.js";
+
+struct TrustedCertificateBundle {
+    bundle: CertificateBundle,
+    trusted_identity: EvidenceVerificationIdentity,
+}
+
+impl std::ops::Deref for TrustedCertificateBundle {
+    type Target = CertificateBundle;
+
+    fn deref(&self) -> &Self::Target {
+        &self.bundle
+    }
+}
 
 fn base_contract(source: &str, claims: Vec<RequestedOutputClaim>) -> DataContract {
     DataContract {
@@ -85,7 +101,7 @@ fn base_contract(source: &str, claims: Vec<RequestedOutputClaim>) -> DataContrac
 /// Emit a signed certificate bundle for a real orchestrated run of `source`
 /// under `contract`, exactly as `frankenctl run --data-contract` does after
 /// bd-fqlfw.8.4.
-fn emit_bundle(contract: DataContract, source: &str) -> CertificateBundle {
+fn emit_bundle(contract: DataContract, source: &str) -> TrustedCertificateBundle {
     let binding = contract
         .bind_to_run(
             EXTENSION_ID,
@@ -140,10 +156,21 @@ fn emit_bundle(contract: DataContract, source: &str) -> CertificateBundle {
         execution_value: &result.execution_value,
         replay_trace_content_hash_hex: &replay_hash,
     };
-    emit_certificate_bundle(&inputs).expect("bundle emits")
+    let authority = LabEvidenceAuthority::deterministic_fixture(
+        E8_CERTIFIER_PRODUCER_ID,
+        "e8-red-team-certificate-v2",
+        frankenengine_engine::security_epoch::SecurityEpoch::GENESIS,
+    )
+    .expect("red-team lab certificate authority");
+    let trusted_identity = authority.verification_identity();
+    let bundle = emit_certificate_bundle_lab(&inputs, &authority).expect("bundle emits");
+    TrustedCertificateBundle {
+        bundle,
+        trusted_identity,
+    }
 }
 
-fn certifiable_bundle() -> CertificateBundle {
+fn certifiable_bundle() -> TrustedCertificateBundle {
     // A fully-analyzed source with a claim that holds ⇒ certifiable.
     emit_bundle(
         base_contract(
@@ -169,11 +196,11 @@ fn a_pristine_certificate_verifies() {
     let bundle = certifiable_bundle();
     bundle
         .non_use_certificate
-        .verify()
+        .verify_with_trusted_identity(&bundle.trusted_identity)
         .expect("pristine non-use certificate verifies");
     bundle
         .use_certificate
-        .verify()
+        .verify_with_trusted_identity(&bundle.trusted_identity)
         .expect("pristine use certificate verifies");
 }
 
@@ -190,7 +217,9 @@ fn a_status_upgrade_after_signing_fails_verification() {
         forged.certificate_status = CertificateStatus::Uncertified;
     }
     assert!(
-        forged.verify().is_err(),
+        forged
+            .verify_with_trusted_identity(&bundle.trusted_identity)
+            .is_err(),
         "a post-signing status change must invalidate the signature"
     );
 }
@@ -213,7 +242,9 @@ fn a_claim_verdict_forgery_fails_verification() {
     assert!(!forged.claims.is_empty());
     forged.claims[0].evaluation = ClaimEvaluation::HoldsWithinAnalyzedScope;
     assert!(
-        forged.verify().is_err(),
+        forged
+            .verify_with_trusted_identity(&bundle.trusted_identity)
+            .is_err(),
         "forging a claim verdict must invalidate the signature"
     );
 }
@@ -231,7 +262,11 @@ fn a_flow_event_tampering_fails_verification() {
     } else {
         forged.flow_events.pop();
     }
-    assert!(forged.verify().is_err());
+    assert!(
+        forged
+            .verify_with_trusted_identity(&bundle.trusted_identity)
+            .is_err()
+    );
 }
 
 /// Zeroing / swapping the signature bytes must fail verification (a signature
@@ -239,12 +274,14 @@ fn a_flow_event_tampering_fails_verification() {
 #[test]
 fn a_signature_substitution_fails_verification() {
     let bundle = certifiable_bundle();
-    let use_sig = bundle.use_certificate.signature.clone();
+    let use_sig = bundle.use_certificate.signature_envelope.signature.clone();
     let mut forged = bundle.non_use_certificate.clone();
     // Graft the use-certificate's (valid, but wrong-object) signature on.
-    forged.signature = use_sig;
+    forged.signature_envelope.signature = use_sig;
     assert!(
-        forged.verify().is_err(),
+        forged
+            .verify_with_trusted_identity(&bundle.trusted_identity)
+            .is_err(),
         "a signature from a different object must not verify here (domain + \
          schema separation)"
     );
@@ -259,7 +296,8 @@ fn a_signature_substitution_fails_verification() {
 fn a_certificate_cannot_be_reanchored_to_another_key() {
     use frankenengine_engine::signature_preimage::VerificationKey;
     let bundle = certifiable_bundle();
-    let mut key_bytes = *bundle.non_use_certificate.signed_by.as_bytes();
+    let trusted_identity = bundle.trusted_identity.clone();
+    let mut key_bytes = *trusted_identity.verification_key.as_bytes();
     let mut wrong_key = None;
     for bit in 0..8u8 {
         let mut candidate = key_bytes;
@@ -272,10 +310,12 @@ fn a_certificate_cannot_be_reanchored_to_another_key() {
     }
     let wrong_key = wrong_key.expect("a valid but different Ed25519 key exists nearby");
     let mut forged = bundle.non_use_certificate.clone();
-    forged.signed_by = wrong_key;
+    forged.signature_envelope.verification_key = wrong_key;
     assert!(
-        forged.verify().is_err(),
-        "a runtime-key signature must not verify under an attacker-substituted key"
+        forged
+            .verify_with_trusted_identity(&trusted_identity)
+            .is_err(),
+        "a claimant-embedded key must not replace the externally trusted runtime identity"
     );
 }
 
@@ -300,7 +340,9 @@ fn a_byte_edited_persisted_certificate_json_fails_verification() {
     let forged: NonUseCertificate =
         serde_json::from_str(&edited).expect("edited JSON still parses");
     assert!(
-        forged.verify().is_err(),
+        forged
+            .verify_with_trusted_identity(&bundle.trusted_identity)
+            .is_err(),
         "a byte-edited persisted certificate must fail verification"
     );
 }

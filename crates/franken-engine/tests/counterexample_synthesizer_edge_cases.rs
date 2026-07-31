@@ -16,9 +16,10 @@ use std::collections::{BTreeMap, BTreeSet};
 use frankenengine_engine::counterexample_synthesizer::{
     ConcreteScenario, ConflictDiagnostic, ControllerConfig, ControllerInterference,
     ControllerInterferenceEvent, CounterexampleSynthesizer, DEFAULT_BUDGET_NS,
-    DEFAULT_MAX_MINIMIZATION_ROUNDS, InterferenceKind, MinimalityEvidence, MutationKind,
-    PolicyMutation, RegressionCorpus, RegressionEntry, SynthesisConfig, SynthesisError,
-    SynthesisOutcome, SynthesisStrategy, SynthesizedCounterexample,
+    DEFAULT_MAX_MINIMIZATION_ROUNDS, InterferenceKind, LabFixtureCounterexampleSynthesizerExt as _,
+    MinimalityEvidence, MutationKind, PolicyMutation, RegressionCorpus, RegressionEntry,
+    SynthesisConfig, SynthesisError, SynthesisOutcome, SynthesisStrategy,
+    SynthesizedCounterexample,
 };
 use frankenengine_engine::engine_object_id::{self, EngineObjectId, ObjectDomain, SchemaId};
 use frankenengine_engine::hash_tiers::ContentHash;

@@ -21,7 +21,10 @@ use crate::causal_replay::{
     TraceRecorder,
 };
 use crate::engine_object_id::{self, EngineObjectId, ObjectDomain, SchemaId};
-use crate::evidence_ledger::{ChosenAction, DecisionType, EvidenceEntry, EvidenceEntryBuilder};
+use crate::evidence_ledger::{
+    ChosenAction, DecisionType, EvidenceEntry, EvidenceEntryBuilder, EvidenceSigningAuthority,
+    EvidenceVerificationIdentity, LabEvidenceAuthority, RuntimeEvidenceAuthority,
+};
 use crate::hash_tiers::ContentHash;
 use crate::policy_theorem_compiler::{
     AuthorityGrant, Capability, CompilationResult, Counterexample, FormalProperty, MergeOperator,
@@ -461,17 +464,97 @@ pub struct CounterexampleSynthesizer {
     corpus: RegressionCorpus,
     diagnostics: Vec<ConflictDiagnostic>,
     synthesis_count: u64,
+    #[serde(skip)]
+    evidence_signing_authority: Option<EvidenceSigningAuthority>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    evidence_verification_identity: Option<EvidenceVerificationIdentity>,
 }
 
 impl CounterexampleSynthesizer {
-    /// Create a new synthesizer with the given configuration.
-    pub fn new(config: SynthesisConfig) -> Self {
+    /// Create a synthesizer with an explicit runtime evidence authority.
+    pub fn try_new_with_runtime_authority(
+        config: SynthesisConfig,
+        evidence_authority: RuntimeEvidenceAuthority,
+    ) -> Result<Self, SynthesisError> {
+        if evidence_authority
+            .key_provenance()
+            .activation_epoch
+            .as_u64()
+            > config.epoch.as_u64()
+        {
+            return Err(SynthesisError::CompilerFailure(format!(
+                "counterexample evidence key activates at epoch {}, after synthesis epoch {}",
+                evidence_authority
+                    .key_provenance()
+                    .activation_epoch
+                    .as_u64(),
+                config.epoch.as_u64()
+            )));
+        }
+        let evidence_verification_identity = Some(evidence_authority.verification_identity());
+        Ok(Self {
+            config,
+            corpus: RegressionCorpus::new(),
+            diagnostics: Vec::new(),
+            synthesis_count: 0,
+            evidence_signing_authority: Some(EvidenceSigningAuthority::Runtime(evidence_authority)),
+            evidence_verification_identity,
+        })
+    }
+
+    /// Create an explicitly lab-scoped synthesizer.
+    pub fn new_lab(config: SynthesisConfig) -> Self {
+        let authority = LabEvidenceAuthority::deterministic_fixture(
+            "franken-engine.counterexample-synthesizer",
+            "counterexample-synthesizer-lab-v2",
+            SecurityEpoch::GENESIS,
+        )
+        .expect("built-in counterexample lab identity must be valid");
+        let evidence_verification_identity = Some(authority.verification_identity());
         Self {
             config,
             corpus: RegressionCorpus::new(),
             diagnostics: Vec::new(),
             synthesis_count: 0,
+            evidence_signing_authority: Some(EvidenceSigningAuthority::Lab(authority)),
+            evidence_verification_identity,
         }
+    }
+
+    #[cfg(test)]
+    pub fn new(config: SynthesisConfig) -> Self {
+        Self::new_lab(config)
+    }
+
+    /// Reattach the matching runtime authority after deserialization.
+    pub fn attach_runtime_authority(
+        &mut self,
+        evidence_authority: RuntimeEvidenceAuthority,
+    ) -> Result<(), SynthesisError> {
+        let supplied_identity = evidence_authority.verification_identity();
+        let recorded_identity = self
+            .evidence_verification_identity
+            .as_ref()
+            .ok_or_else(|| {
+                SynthesisError::CompilerFailure(
+                    "counterexample state has no recorded evidence identity".to_string(),
+                )
+            })?;
+        if recorded_identity != &supplied_identity {
+            return Err(SynthesisError::CompilerFailure(
+                "counterexample signer does not match recorded evidence identity".to_string(),
+            ));
+        }
+        if supplied_identity.key_provenance.activation_epoch.as_u64() > self.config.epoch.as_u64() {
+            return Err(SynthesisError::CompilerFailure(format!(
+                "counterexample evidence key activates at epoch {}, after synthesis epoch {}",
+                supplied_identity.key_provenance.activation_epoch.as_u64(),
+                self.config.epoch.as_u64()
+            )));
+        }
+        self.evidence_signing_authority =
+            Some(EvidenceSigningAuthority::Runtime(evidence_authority));
+        Ok(())
     }
 
     /// Synthesize counterexamples from a compilation result.
@@ -1018,7 +1101,13 @@ impl CounterexampleSynthesizer {
         scx: &SynthesizedCounterexample,
         timestamp_ns: u64,
     ) -> Result<EvidenceEntry, SynthesisError> {
-        EvidenceEntryBuilder::new(
+        let evidence_signing_authority =
+            self.evidence_signing_authority.as_ref().ok_or_else(|| {
+                SynthesisError::CompilerFailure(
+                    "counterexample evidence signer was not reattached after restore".to_string(),
+                )
+            })?;
+        EvidenceEntryBuilder::new_with_authority(
             format!("synth-{}", scx.conflict_id),
             format!("conflict-{}", scx.conflict_id),
             scx.policy_ids
@@ -1027,6 +1116,7 @@ impl CounterexampleSynthesizer {
                 .expect("operation should succeed for valid inputs"),
             scx.epoch,
             DecisionType::ContractEvaluation,
+            evidence_signing_authority,
         )
         .timestamp_ns(timestamp_ns)
         .chosen(ChosenAction {
@@ -1067,6 +1157,20 @@ impl CounterexampleSynthesizer {
     /// Configuration reference.
     pub fn config(&self) -> &SynthesisConfig {
         &self.config
+    }
+}
+
+/// Deliberate opt-in for legacy-shaped deterministic lab fixtures.
+///
+/// Production code must use
+/// [`CounterexampleSynthesizer::try_new_with_runtime_authority`].
+pub trait LabFixtureCounterexampleSynthesizerExt: Sized {
+    fn new(config: SynthesisConfig) -> CounterexampleSynthesizer;
+}
+
+impl LabFixtureCounterexampleSynthesizerExt for CounterexampleSynthesizer {
+    fn new(config: SynthesisConfig) -> CounterexampleSynthesizer {
+        CounterexampleSynthesizer::new_lab(config)
     }
 }
 

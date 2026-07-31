@@ -16,7 +16,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::evidence_ledger::{
     CandidateAction, ChosenAction, Constraint, DecisionType, EvidenceEntry, EvidenceEntryBuilder,
-    Witness,
+    EvidenceSigningAuthority, LabEvidenceAuthority, RuntimeEvidenceAuthority, Witness,
 };
 use crate::hash_tiers::ContentHash;
 use crate::security_epoch::SecurityEpoch;
@@ -331,6 +331,7 @@ pub struct StructuredLogEvent {
 #[derive(Debug)]
 pub struct CanonicalEvidenceEmitter {
     policy: EmissionPolicy,
+    evidence_signing_authority: EvidenceSigningAuthority,
     /// Emitted entries (append-only ledger).
     ledger: Vec<EvidenceEntry>,
     /// Entry IDs for deduplication.
@@ -344,10 +345,35 @@ pub struct CanonicalEvidenceEmitter {
 }
 
 impl CanonicalEvidenceEmitter {
-    /// Create a new emitter with the given policy.
-    pub fn new(policy: EmissionPolicy) -> Self {
+    /// Create an emitter with an explicit runtime evidence authority.
+    pub fn new_with_runtime_authority(
+        policy: EmissionPolicy,
+        evidence_authority: RuntimeEvidenceAuthority,
+    ) -> Self {
+        Self::new_with_authority(
+            policy,
+            EvidenceSigningAuthority::Runtime(evidence_authority),
+        )
+    }
+
+    /// Create an explicitly lab-scoped emitter.
+    pub fn new_lab(policy: EmissionPolicy) -> Self {
+        let authority = LabEvidenceAuthority::deterministic_fixture(
+            "franken-engine.canonical-evidence-emitter",
+            "canonical-emitter-lab-v2",
+            SecurityEpoch::GENESIS,
+        )
+        .expect("built-in canonical emitter lab identity must be valid");
+        Self::new_with_authority(policy, EvidenceSigningAuthority::Lab(authority))
+    }
+
+    fn new_with_authority(
+        policy: EmissionPolicy,
+        evidence_signing_authority: EvidenceSigningAuthority,
+    ) -> Self {
         Self {
             policy,
+            evidence_signing_authority,
             ledger: Vec::new(),
             entry_ids: Vec::new(),
             log_events: Vec::new(),
@@ -356,7 +382,14 @@ impl CanonicalEvidenceEmitter {
         }
     }
 
-    /// Create with default policy.
+    /// Create a test emitter with the deterministic fixture identity.
+    #[cfg(test)]
+    pub fn new(policy: EmissionPolicy) -> Self {
+        Self::new_lab(policy)
+    }
+
+    /// Create a test emitter with default policy.
+    #[cfg(test)]
     pub fn with_defaults() -> Self {
         Self::new(EmissionPolicy::default())
     }
@@ -414,12 +447,13 @@ impl CanonicalEvidenceEmitter {
             .collect();
 
         // 6. Build the evidence entry.
-        let mut builder = EvidenceEntryBuilder::new(
+        let mut builder = EvidenceEntryBuilder::new_with_authority(
             &context.trace_id,
             &context.decision_id,
             &context.policy_id,
             context.epoch,
             context.action.decision_type(),
+            &self.evidence_signing_authority,
         )
         .timestamp_ns(context.timestamp_ns);
 
@@ -585,6 +619,26 @@ impl CanonicalEvidenceEmitter {
             },
             error_code: error_code.map(|s| s.to_string()),
         });
+    }
+}
+
+/// Deliberate opt-in for legacy-shaped deterministic lab fixtures.
+///
+/// Production code must construct the emitter with
+/// [`RuntimeEvidenceAuthority`] through
+/// [`CanonicalEvidenceEmitter::new_with_runtime_authority`].
+pub trait LabFixtureCanonicalEvidenceEmitterExt: Sized {
+    fn new(policy: EmissionPolicy) -> CanonicalEvidenceEmitter;
+    fn with_defaults() -> CanonicalEvidenceEmitter;
+}
+
+impl LabFixtureCanonicalEvidenceEmitterExt for CanonicalEvidenceEmitter {
+    fn new(policy: EmissionPolicy) -> CanonicalEvidenceEmitter {
+        CanonicalEvidenceEmitter::new_lab(policy)
+    }
+
+    fn with_defaults() -> CanonicalEvidenceEmitter {
+        CanonicalEvidenceEmitter::new_lab(EmissionPolicy::default())
     }
 }
 

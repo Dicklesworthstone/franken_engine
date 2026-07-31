@@ -23,8 +23,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use frankenengine_engine::counterexample_synthesizer::{
     ConcreteScenario, ControllerInterference, ControllerInterferenceEvent,
     CounterexampleSynthesizer, DEFAULT_BUDGET_NS, DEFAULT_MAX_MINIMIZATION_ROUNDS,
-    InterferenceKind, MinimalityEvidence, RegressionCorpus, SynthesisConfig, SynthesisError,
-    SynthesisOutcome, SynthesisStrategy,
+    InterferenceKind, LabFixtureCounterexampleSynthesizerExt as _, MinimalityEvidence,
+    RegressionCorpus, SynthesisConfig, SynthesisError, SynthesisOutcome, SynthesisStrategy,
 };
 use frankenengine_engine::security_epoch::SecurityEpoch;
 

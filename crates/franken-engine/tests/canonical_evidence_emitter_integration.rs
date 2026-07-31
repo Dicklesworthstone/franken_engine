@@ -24,7 +24,7 @@ use std::collections::BTreeMap;
 
 use frankenengine_engine::canonical_evidence_emitter::{
     CanonicalEvidenceEmitter, EmissionContext, EmissionError, EmissionPolicy, EmissionReceipt,
-    HighImpactAction, StructuredLogEvent,
+    HighImpactAction, LabFixtureCanonicalEvidenceEmitterExt as _, StructuredLogEvent,
 };
 use frankenengine_engine::evidence_ledger::{
     CandidateAction, ChosenAction, Constraint, DecisionType, Witness,

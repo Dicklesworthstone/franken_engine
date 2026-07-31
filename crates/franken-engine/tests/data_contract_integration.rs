@@ -9,6 +9,7 @@ use frankenengine_engine::data_contract::{
     E8RefusalEvidenceRef, E8RefusalSourceRef, RequestedOutputClaim, RequiredDeclassificationRoute,
     SinkBinding,
 };
+use frankenengine_engine::execution_orchestrator::LabFixtureExecutionOrchestratorExt as _;
 use frankenengine_engine::hash_tiers::ContentHash;
 use frankenengine_engine::ifc_artifacts::{ClearanceClass, DeclassificationRoute, Label};
 

@@ -4,7 +4,7 @@ expression: scrubbed_actual
 ---
 {
   "schema_version": {
-    "major": 1,
+    "major": 2,
     "minor": 0,
     "patch": 0
   },
@@ -64,7 +64,19 @@ expression: scrubbed_actual
       "value": "policy_violations_3_restart_failures_2"
     }
   ],
-  "evidence_hash": "e73bacd5750fa8aceb3c9f878cb735d45d8d9a6f702e14fded[TIMESTAMP]eb",
+  "evidence_hash": "[HASH]",
+  "signed_envelope": {
+    "producer_id": "franken-engine.evidence-ledger.builder",
+    "key_provenance": {
+      "authority_class": "lab_fixture",
+      "key_id": "[KEY_ID]",
+      "activation_epoch": 0,
+      "rotation_sequence": 1
+    },
+    "signed_epoch": 75,
+    "verification_key": "[VERIFICATION_KEY]",
+    "signature": "[SIGNATURE]"
+  },
   "metadata": {
     "extension_id": "ext-untrusted-network",
     "termination_reason": "security_risk",

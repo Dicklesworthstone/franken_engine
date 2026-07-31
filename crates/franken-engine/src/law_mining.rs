@@ -19,7 +19,7 @@ use crate::counterexample_synthesizer::{
 use crate::engine_object_id::EngineObjectId;
 use crate::evidence_ledger::{
     CandidateAction, ChosenAction, Constraint, DecisionType, EvidenceEntry, EvidenceEntryBuilder,
-    Witness,
+    LabEvidenceAuthority, Witness,
 };
 use crate::hash_tiers::ContentHash;
 use crate::policy_theorem_compiler::{FormalProperty, PolicyId};
@@ -1322,12 +1322,19 @@ fn sample_evidence_entry_fixture(
     constraint_ids: &[&str],
     witness_types: &[&str],
 ) -> EvidenceEntry {
-    let builder = EvidenceEntryBuilder::new(
+    let signing_identity = LabEvidenceAuthority::deterministic_fixture(
+        "franken-engine.lab.law-mining",
+        "default-law-mining-fixture-v1",
+        SecurityEpoch::GENESIS,
+    )
+    .expect("law-mining lab identity must be derivable");
+    let builder = EvidenceEntryBuilder::new_with_lab_authority(
         trace_id,
         format!("decision-{trace_id}"),
         policy_id,
         SecurityEpoch::from_raw(12),
         decision_type,
+        &signing_identity,
     )
     .timestamp_ns(12_345)
     .candidate(CandidateAction::new("allow", 10))

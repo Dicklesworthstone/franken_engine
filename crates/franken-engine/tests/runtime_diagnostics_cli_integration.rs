@@ -30,7 +30,8 @@ use frankenengine_engine::capability::RuntimeCapability;
 use frankenengine_engine::containment_executor::{ContainmentReceipt, ContainmentState};
 use frankenengine_engine::evidence_ledger::{
     CandidateAction, ChosenAction, DecisionType, EvidenceEmitter, EvidenceEntryBuilder,
-    InMemoryLedger, Witness,
+    InMemoryLedger, LabFixtureEvidenceEntryBuilderExt as _, LabFixtureInMemoryLedgerExt as _,
+    Witness,
 };
 use frankenengine_engine::expected_loss_selector::ContainmentAction;
 use frankenengine_engine::hash_tiers::ContentHash;

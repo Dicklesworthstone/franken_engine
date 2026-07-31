@@ -927,7 +927,7 @@ mod tests {
     fn legacy_signed_evidence_entry_json_remains_per_entry_shape() {
         let entry = entry(7);
         assert!(
-            entry.signed_envelope.is_some(),
+            !entry.signed_envelope().producer_id.is_empty(),
             "legacy evidence entries carry the per-entry signature envelope"
         );
 

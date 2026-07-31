@@ -26,7 +26,8 @@ use frankenengine_engine::deterministic_sim_scheduler::{
 };
 use frankenengine_engine::engine_object_id::{EngineObjectId, ObjectDomain, derive_id};
 use frankenengine_engine::evidence_ledger::{
-    CandidateAction, ChosenAction, Constraint, DecisionType, EvidenceEntryBuilder, Witness,
+    CandidateAction, ChosenAction, Constraint, DecisionType, EvidenceEntryBuilder,
+    LabFixtureEvidenceEntryBuilderExt as _, Witness,
 };
 use frankenengine_engine::ir_contract::Ir0Module;
 use frankenengine_engine::iterator_protocol::{

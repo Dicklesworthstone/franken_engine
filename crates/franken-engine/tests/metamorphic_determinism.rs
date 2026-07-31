@@ -28,6 +28,7 @@
 use std::collections::BTreeMap;
 
 use frankenengine_engine::ast::ParseGoal;
+use frankenengine_engine::execution_orchestrator::LabFixtureExecutionOrchestratorExt as _;
 use frankenengine_engine::execution_orchestrator::{
     ExecutionOrchestrator, ExtensionPackage, LossMatrixPreset, OrchestratorConfig,
     OrchestratorResult,

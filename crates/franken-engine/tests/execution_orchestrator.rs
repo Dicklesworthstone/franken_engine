@@ -15,11 +15,14 @@
 
 use std::collections::BTreeMap;
 
+use frankenengine_engine::evidence_ledger::RuntimeEvidenceAuthority;
+use frankenengine_engine::execution_orchestrator::LabFixtureExecutionOrchestratorExt as _;
 use frankenengine_engine::execution_orchestrator::{
     ExecutionOrchestrator, ExtensionPackage, LossMatrixPreset, OrchestratorConfig,
     OrchestratorError,
 };
 use frankenengine_engine::security_epoch::SecurityEpoch;
+use frankenengine_engine::signature_preimage::SigningKey;
 
 fn simple_package(id: &str, source: &str) -> ExtensionPackage {
     ExtensionPackage {
@@ -144,6 +147,81 @@ fn evidence_entries_contain_required_fields() {
     assert!(!entry.chosen_action.action_name.is_empty());
     assert!(!entry.witnesses.is_empty());
     assert!(!entry.metadata.is_empty());
+}
+
+#[test]
+fn bd_90u6o_normal_orchestrator_e2e_uses_runtime_owned_signer() {
+    let historical_public_key = SigningKey::from_bytes([0x7B; 32])
+        .expect("historical source-known key")
+        .verification_key();
+    let authority = RuntimeEvidenceAuthority::generate_runtime_owned(
+        "bd-90u6o-normal-runtime",
+        SecurityEpoch::from_raw(1),
+        1,
+        None,
+    )
+    .expect("runtime authority");
+    let mut orchestrator = ExecutionOrchestrator::try_new_with_runtime_authority(
+        OrchestratorConfig::default(),
+        authority,
+    )
+    .expect("normal orchestrator");
+    let result = orchestrator
+        .execute(&simple_package("bd-90u6o-normal", "42"))
+        .expect("normal orchestrator execution");
+    let trusted_identity = orchestrator.evidence_verification_identity();
+
+    assert!(!result.evidence_entries.is_empty());
+    for entry in &result.evidence_entries {
+        let envelope = entry.signed_envelope();
+        assert_eq!(
+            envelope.producer_id, "bd-90u6o-normal-runtime",
+            "normal execution must use the orchestrator-owned identity"
+        );
+        assert_ne!(
+            envelope.verification_key, historical_public_key,
+            "the repository-known historical seed must not authenticate runtime evidence"
+        );
+        assert_eq!(envelope.signed_epoch, result.epoch);
+        assert_eq!(envelope.key_provenance.activation_epoch, result.epoch);
+        assert_eq!(envelope.key_provenance.rotation_sequence, 1);
+        assert!(envelope.key_provenance.previous_key_id.is_none());
+        assert_eq!(envelope.producer_id, trusted_identity.producer_id);
+        assert_eq!(envelope.key_provenance, trusted_identity.key_provenance);
+        assert_eq!(envelope.verification_key, trusted_identity.verification_key);
+    }
+}
+
+#[test]
+fn bd_90u6o_explicit_identity_preserves_in_memory_replay_stability() {
+    let identity = RuntimeEvidenceAuthority::from_signing_key(
+        "bd-90u6o-recorded-runtime",
+        SigningKey::from_bytes([0x42; 32]).expect("non-zero test key"),
+        SecurityEpoch::from_raw(1),
+        1,
+        None,
+    )
+    .expect("recorded test identity");
+    let config = OrchestratorConfig::default();
+    let mut first =
+        ExecutionOrchestrator::try_new_with_runtime_authority(config.clone(), identity.clone())
+            .expect("first orchestrator");
+    let mut replay = ExecutionOrchestrator::try_new_with_runtime_authority(config, identity)
+        .expect("replay orchestrator");
+    let package = simple_package("bd-90u6o-replay", "42");
+
+    let first_result = first.execute(&package).expect("first execution");
+    let replay_result = replay.execute(&package).expect("replay execution");
+    let recorded_public_identity = first.evidence_verification_identity();
+    let serialized_identity =
+        serde_json::to_vec(&recorded_public_identity).expect("serialize public replay identity");
+    let restored_public_identity =
+        serde_json::from_slice(&serialized_identity).expect("deserialize public replay identity");
+    assert_eq!(recorded_public_identity, restored_public_identity);
+    assert_eq!(
+        first_result.evidence_entries, replay_result.evidence_entries,
+        "the same explicitly supplied signing identity must reproduce byte-stable evidence"
+    );
 }
 
 #[test]

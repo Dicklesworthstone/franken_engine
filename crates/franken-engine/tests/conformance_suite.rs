@@ -30,7 +30,7 @@ use frankenengine_engine::engine_object_id::{
 };
 use frankenengine_engine::evidence_ledger::{
     ChosenAction, DecisionType, EvidenceEmitter, EvidenceEntryBuilder, InMemoryLedger,
-    SchemaVersionExt,
+    LabFixtureEvidenceEntryBuilderExt as _, LabFixtureInMemoryLedgerExt as _, SchemaVersionExt,
 };
 use frankenengine_engine::fork_detection::ForkDetector;
 use frankenengine_engine::hash_tiers::{AuthenticityHash, ContentHash, IntegrityHash};

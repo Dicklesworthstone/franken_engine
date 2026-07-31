@@ -1553,7 +1553,7 @@ fn authority_specs() -> Vec<AuthoritySpec> {
             start_anchor: "fn execute_run(args: RunArgs) -> Result<i32, String> {",
             end_anchor: "fn load_and_bind_data_contract(",
             required_markers: &[
-                "ExecutionOrchestrator::new",
+                "ExecutionOrchestrator::try_new_with_runtime_authority",
                 ".execute(&package)",
                 "console_output",
             ],

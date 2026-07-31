@@ -5,6 +5,7 @@ use std::sync::{Arc, Mutex};
 
 use frankenengine_engine::HybridRouter;
 use frankenengine_engine::ast::ParseGoal;
+use frankenengine_engine::execution_orchestrator::LabFixtureExecutionOrchestratorExt as _;
 use frankenengine_engine::execution_orchestrator::{
     ExecutionOrchestrator, ExtensionPackage, OrchestratorConfig,
 };

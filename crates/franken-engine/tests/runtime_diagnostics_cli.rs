@@ -20,7 +20,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use frankenengine_engine::compatibility_advisory::AdvisoryBuilder;
 use frankenengine_engine::containment_executor::{ContainmentReceipt, ContainmentState};
 use frankenengine_engine::evidence_ledger::{
-    CandidateAction, ChosenAction, DecisionType, EvidenceEntry, EvidenceEntryBuilder, Witness,
+    CandidateAction, ChosenAction, DecisionType, EvidenceEntry, EvidenceEntryBuilder,
+    LabFixtureEvidenceEntryBuilderExt as _, Witness,
 };
 use frankenengine_engine::expected_loss_selector::ContainmentAction;
 use frankenengine_engine::hash_tiers::ContentHash;

@@ -1,8 +1,8 @@
 //! Session-scale evidence-ledger signing benchmarks.
 //!
-//! The legacy path signs every evidence entry independently. The Merkle-batch
-//! path signs one root over the same unsigned entries and emits inclusion
-//! proofs, so this benchmark scales both paths over realistic batch sizes.
+//! Schema-v2 evidence entries are always authenticated individually. This
+//! benchmark measures mandatory entry construction/signing and the additional
+//! cost of wrapping those authenticated entries in a Merkle batch.
 
 #![forbid(unsafe_code)]
 
@@ -13,7 +13,8 @@ use std::hint::black_box;
 
 use criterion::{BatchSize, BenchmarkId, Criterion, criterion_group, criterion_main};
 use frankenengine_engine::evidence_ledger::{
-    CandidateAction, ChosenAction, DecisionType, EvidenceEntry, EvidenceEntryBuilder, Witness,
+    CandidateAction, ChosenAction, DecisionType, EvidenceEntry, EvidenceEntryBuilder,
+    LabEvidenceAuthority, Witness,
 };
 use frankenengine_engine::hash_tiers::ContentHash;
 use frankenengine_engine::security_epoch::SecurityEpoch;
@@ -28,13 +29,23 @@ fn signing_key() -> SigningKey {
     SigningKey::from_bytes([0x5a; 32]).expect("benchmark signing key must be valid")
 }
 
-fn entry_template(index: usize) -> EvidenceEntry {
-    let mut entry = EvidenceEntryBuilder::new(
+fn entry_authority() -> LabEvidenceAuthority {
+    LabEvidenceAuthority::deterministic_fixture(
+        PRODUCER_ID,
+        "evidence-ledger-batch-benchmark-v2",
+        SecurityEpoch::from_raw(91),
+    )
+    .expect("benchmark lab authority must be valid")
+}
+
+fn entry_template(index: usize, authority: &LabEvidenceAuthority) -> EvidenceEntry {
+    EvidenceEntryBuilder::new_with_lab_authority(
         format!("trace-evidence-batch-{index:04}"),
         format!("decision-evidence-batch-{index:04}"),
         "policy-evidence-batch",
         SecurityEpoch::from_raw(91),
         DecisionType::ContractEvaluation,
+        authority,
     )
     .timestamp_ns(TIMESTAMP_NS + index as u64)
     .candidate(CandidateAction::new("publish-entry", 10_000))
@@ -56,24 +67,13 @@ fn entry_template(index: usize) -> EvidenceEntry {
     .meta("bead", "bd-o4cbn.9.5")
     .meta("batch_size_source", "criterion_input")
     .build()
-    .expect("benchmark evidence entry should build");
-
-    entry.signed_envelope = None;
-    entry
+    .expect("benchmark evidence entry should build")
 }
 
-fn unsigned_entries(count: usize) -> Vec<EvidenceEntry> {
-    (0..count).map(entry_template).collect()
-}
-
-fn sign_entries_individually(entries: &[EvidenceEntry], key: &SigningKey) -> Vec<EvidenceEntry> {
-    let mut signed = entries.to_vec();
-    for entry in &mut signed {
-        entry
-            .sign_with(PRODUCER_ID, key)
-            .expect("per-entry benchmark signature should succeed");
-    }
-    signed
+fn authenticated_entries(count: usize, authority: &LabEvidenceAuthority) -> Vec<EvidenceEntry> {
+    (0..count)
+        .map(|index| entry_template(index, authority))
+        .collect()
 }
 
 fn sign_entries_as_merkle_batch(
@@ -98,23 +98,28 @@ fn sign_entries_as_merkle_batch(
 
 fn bench_evidence_ledger_batch_signing(c: &mut Criterion) {
     let key = signing_key();
+    let authority = entry_authority();
     let mut group = c.benchmark_group("evidence_ledger_per_entry");
 
     for count in BATCH_SIZES {
-        group.bench_with_input(BenchmarkId::new("per_entry_sig", count), &count, |b, _| {
-            b.iter_batched(
-                || unsigned_entries(count),
-                |entries| black_box(sign_entries_individually(&entries, &key)),
-                BatchSize::SmallInput,
-            );
-        });
-        group.bench_with_input(BenchmarkId::new("merkle_batch", count), &count, |b, _| {
-            b.iter_batched(
-                || unsigned_entries(count),
-                |entries| black_box(sign_entries_as_merkle_batch(&entries, &key, count)),
-                BatchSize::SmallInput,
-            );
-        });
+        group.bench_with_input(
+            BenchmarkId::new("mandatory_entry_auth", count),
+            &count,
+            |b, _| {
+                b.iter(|| black_box(authenticated_entries(count, &authority)));
+            },
+        );
+        group.bench_with_input(
+            BenchmarkId::new("additional_merkle_batch", count),
+            &count,
+            |b, _| {
+                b.iter_batched(
+                    || authenticated_entries(count, &authority),
+                    |entries| black_box(sign_entries_as_merkle_batch(&entries, &key, count)),
+                    BatchSize::SmallInput,
+                );
+            },
+        );
     }
 
     group.finish();

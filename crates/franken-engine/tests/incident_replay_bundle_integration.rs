@@ -23,7 +23,9 @@ use frankenengine_engine::causal_replay::{
     NondeterminismSource, RecorderConfig, RecordingMode, TraceRecord, TraceRecorder,
 };
 use frankenengine_engine::engine_object_id::{self, EngineObjectId, ObjectDomain, SchemaId};
-use frankenengine_engine::evidence_ledger::{ChosenAction, DecisionType, EvidenceEntryBuilder};
+use frankenengine_engine::evidence_ledger::{
+    ChosenAction, DecisionType, EvidenceEntryBuilder, LabFixtureEvidenceEntryBuilderExt as _,
+};
 use frankenengine_engine::fleet_immune_protocol::{
     ContainmentAction, MessageSignature, NodeId, ProtocolVersion, QuorumCheckpoint,
     ResolvedContainmentDecision,

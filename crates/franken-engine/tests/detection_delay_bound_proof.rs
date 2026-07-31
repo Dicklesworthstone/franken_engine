@@ -5,7 +5,9 @@
 
 #![forbid(unsafe_code)]
 
-use frankenengine_engine::change_point_detector::{ChangePointDetector, CompositeAlternative};
+use frankenengine_engine::change_point_detector::{
+    ChangePointDetector, CompositeAlternative, LabFixtureChangePointDetectorExt as _,
+};
 use frankenengine_engine::detection_delay_bound_proof::{
     ArlComputationStatus, AverageRunLengthAnalysis, DelayBoundConfiguration, DelayBoundError,
     DelayBoundMethod, ProofMethod, VerificationStatus, WorstCaseDelayBound,

@@ -27,9 +27,9 @@ use std::process::Command;
 use frankenengine_engine::evidence_ledger::{
     ArtifactRecord, CandidateAction, ChosenAction, Constraint, DecisionSemanticsAnnotations,
     DecisionType, EvidenceEmitter, EvidenceEntry, EvidenceEntryBuilder, EvidenceGraphEdgeKind,
-    EvidenceLedgerStitchingBundle, InMemoryLedger, LedgerError, SchemaVersionExt,
-    StitchingArtifactContext, Witness, current_schema_version, emit_default_stitching_bundle,
-    render_stitching_summary,
+    EvidenceLedgerStitchingBundle, InMemoryLedger, LabFixtureEvidenceEntryBuilderExt as _,
+    LabFixtureInMemoryLedgerExt as _, LedgerError, SchemaVersionExt, StitchingArtifactContext,
+    Witness, current_schema_version, emit_default_stitching_bundle, render_stitching_summary,
 };
 use frankenengine_engine::hindsight_boundary_capture::{
     BoundaryCaptureRecord, BoundaryCaptureSession, BoundaryContext,
@@ -366,11 +366,11 @@ fn chosen_action_serde_roundtrip() {
 // ===========================================================================
 
 #[test]
-fn current_schema_version_is_1_0_0() {
+fn current_schema_version_is_2_0_0() {
     let v = current_schema_version();
-    assert_eq!(v.major_val(), 1);
+    assert_eq!(v.major_val(), 2);
     assert_eq!(v.minor_val(), 0);
-    assert_eq!(v.to_string(), "1.0.0");
+    assert_eq!(v.to_string(), "2.0.0");
 }
 
 #[test]
@@ -731,12 +731,12 @@ fn ledger_error_schema_validation_failed_display() {
 #[test]
 fn ledger_error_incompatible_schema_display() {
     let err = LedgerError::IncompatibleSchema {
-        entry_version: frankenengine_engine::control_plane::SchemaVersion::new(2, 0, 0),
+        entry_version: frankenengine_engine::control_plane::SchemaVersion::new(3, 0, 0),
         reader_version: current_schema_version(),
     };
     assert_eq!(
         err.to_string(),
-        "incompatible schema: entry 2.0.0, reader 1.0.0"
+        "incompatible schema: entry 3.0.0, reader 2.0.0"
     );
 }
 
@@ -1227,7 +1227,7 @@ fn ledger_error_equality() {
 #[test]
 fn entry_schema_version_matches_current() {
     let entry = sample_entry();
-    assert_eq!(entry.schema_version.major, 1);
+    assert_eq!(entry.schema_version.major, 2);
     assert_eq!(entry.schema_version.minor, 0);
 }
 
@@ -1704,6 +1704,13 @@ static SCRUB_EVIDENCE_HASH: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r#""evidence_hash": "[0-9a-f]{64}""#).unwrap());
 static SCRUB_ENTRY_ID: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r#""entry_id": "[^"]+""#).unwrap());
+static SCRUB_EVIDENCE_KEY_ID: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r#""key_id": "[^"]+""#).unwrap());
+static SCRUB_EVIDENCE_VERIFICATION_KEY: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r#""verification_key": \{\s*"inner": \[[^\]]*\]\s*\}"#).unwrap());
+static SCRUB_EVIDENCE_SIGNATURE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#""signature": \{\s*"lower": \[[^\]]*\],\s*"upper": \[[^\]]*\]\s*\}"#).unwrap()
+});
 
 /// Assert evidence entry matches its insta snapshot with scrubbed dynamic values.
 fn assert_evidence_snapshot(test_name: &str, entry: &EvidenceEntry) {
@@ -1717,14 +1724,23 @@ fn assert_evidence_snapshot(test_name: &str, entry: &EvidenceEntry) {
 fn scrub_evidence_dynamic_fields(json: &str) -> String {
     let mut scrubbed = json.to_string();
     scrubbed = SCRUB_UUID.replace_all(&scrubbed, "[UUID]").into_owned();
-    scrubbed = SCRUB_TIMESTAMP
-        .replace_all(&scrubbed, "[TIMESTAMP]")
-        .into_owned();
     scrubbed = SCRUB_EVIDENCE_HASH
         .replace_all(&scrubbed, r#""evidence_hash": "[HASH]""#)
         .into_owned();
     scrubbed = SCRUB_ENTRY_ID
         .replace_all(&scrubbed, r#""entry_id": "[ENTRY_ID]""#)
+        .into_owned();
+    scrubbed = SCRUB_EVIDENCE_KEY_ID
+        .replace_all(&scrubbed, r#""key_id": "[KEY_ID]""#)
+        .into_owned();
+    scrubbed = SCRUB_EVIDENCE_VERIFICATION_KEY
+        .replace_all(&scrubbed, r#""verification_key": "[VERIFICATION_KEY]""#)
+        .into_owned();
+    scrubbed = SCRUB_EVIDENCE_SIGNATURE
+        .replace_all(&scrubbed, r#""signature": "[SIGNATURE]""#)
+        .into_owned();
+    scrubbed = SCRUB_TIMESTAMP
+        .replace_all(&scrubbed, "[TIMESTAMP]")
         .into_owned();
     scrubbed
 }

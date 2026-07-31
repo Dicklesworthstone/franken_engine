@@ -3359,7 +3359,7 @@ fn format_guardplane_hook_action(action: &crate::baseline_interpreter::HookActio
 /// an explicitly lab-scoped path whose evidence provenance is rejected by
 /// runtime ledgers.
 pub trait LabFixtureExecutionOrchestratorExt: Sized {
-    fn new(config: OrchestratorConfig) -> ExecutionOrchestrator;
+    fn new(config: OrchestratorConfig) -> Self;
     fn try_new(config: OrchestratorConfig) -> Result<ExecutionOrchestrator, OrchestratorError>;
     fn with_defaults() -> ExecutionOrchestrator;
     fn new_with_runtime_config(
@@ -3383,7 +3383,7 @@ pub trait LabFixtureExecutionOrchestratorExt: Sized {
 }
 
 impl LabFixtureExecutionOrchestratorExt for ExecutionOrchestrator {
-    fn new(config: OrchestratorConfig) -> ExecutionOrchestrator {
+    fn new(config: OrchestratorConfig) -> Self {
         ExecutionOrchestrator::new_lab(config)
     }
 

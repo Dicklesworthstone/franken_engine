@@ -628,12 +628,12 @@ impl CanonicalEvidenceEmitter {
 /// [`RuntimeEvidenceAuthority`] through
 /// [`CanonicalEvidenceEmitter::new_with_runtime_authority`].
 pub trait LabFixtureCanonicalEvidenceEmitterExt: Sized {
-    fn new(policy: EmissionPolicy) -> CanonicalEvidenceEmitter;
+    fn new(policy: EmissionPolicy) -> Self;
     fn with_defaults() -> CanonicalEvidenceEmitter;
 }
 
 impl LabFixtureCanonicalEvidenceEmitterExt for CanonicalEvidenceEmitter {
-    fn new(policy: EmissionPolicy) -> CanonicalEvidenceEmitter {
+    fn new(policy: EmissionPolicy) -> Self {
         CanonicalEvidenceEmitter::new_lab(policy)
     }
 

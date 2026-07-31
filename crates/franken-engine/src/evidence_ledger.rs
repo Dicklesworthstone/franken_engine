@@ -885,22 +885,6 @@ impl EvidenceEntry {
         &self.signed_envelope
     }
 
-    #[cfg(test)]
-    fn sign_with(
-        &mut self,
-        producer_id: impl Into<String>,
-        signing_key: &SigningKey,
-    ) -> Result<(), LedgerError> {
-        let identity = EvidenceSigningIdentity::from_signing_key(
-            producer_id,
-            signing_key.clone(),
-            SecurityEpoch::GENESIS,
-            1,
-            None,
-        )?;
-        self.sign_with_identity(&identity)
-    }
-
     /// Sign this entry while binding public key/epoch/rotation provenance into
     /// both content identifiers and the signature. This is private so a
     /// completed entry cannot have its authority replaced.
@@ -1175,7 +1159,7 @@ pub trait LabFixtureEvidenceEntryBuilderExt: Sized {
         policy_id: impl Into<String>,
         epoch_id: SecurityEpoch,
         decision_type: DecisionType,
-    ) -> EvidenceEntryBuilder;
+    ) -> Self;
 }
 
 impl LabFixtureEvidenceEntryBuilderExt for EvidenceEntryBuilder {
@@ -1185,7 +1169,7 @@ impl LabFixtureEvidenceEntryBuilderExt for EvidenceEntryBuilder {
         policy_id: impl Into<String>,
         epoch_id: SecurityEpoch,
         decision_type: DecisionType,
-    ) -> EvidenceEntryBuilder {
+    ) -> Self {
         EvidenceEntryBuilder::new_lab_fixture(
             trace_id,
             decision_id,
@@ -1787,12 +1771,12 @@ impl EvidenceEmitter for InMemoryLedger {
 /// Runtime code should construct a ledger from an externally trusted
 /// [`EvidenceVerificationIdentity`] or [`RuntimeEvidenceAuthority`].
 pub trait LabFixtureInMemoryLedgerExt: Sized {
-    fn new() -> InMemoryLedger;
+    fn new() -> Self;
     fn for_epoch(epoch: SecurityEpoch) -> InMemoryLedger;
 }
 
 impl LabFixtureInMemoryLedgerExt for InMemoryLedger {
-    fn new() -> InMemoryLedger {
+    fn new() -> Self {
         InMemoryLedger::new_lab()
     }
 

@@ -1165,11 +1165,11 @@ impl CounterexampleSynthesizer {
 /// Production code must use
 /// [`CounterexampleSynthesizer::try_new_with_runtime_authority`].
 pub trait LabFixtureCounterexampleSynthesizerExt: Sized {
-    fn new(config: SynthesisConfig) -> CounterexampleSynthesizer;
+    fn new(config: SynthesisConfig) -> Self;
 }
 
 impl LabFixtureCounterexampleSynthesizerExt for CounterexampleSynthesizer {
-    fn new(config: SynthesisConfig) -> CounterexampleSynthesizer {
+    fn new(config: SynthesisConfig) -> Self {
         CounterexampleSynthesizer::new_lab(config)
     }
 }

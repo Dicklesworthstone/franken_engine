@@ -351,6 +351,10 @@ pub struct BocpdCompatibleObservation {
 
 /// Verdict emitted by the change-point detector.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "preserve the public verdict field types and stable serde schema"
+)]
 pub enum ChangePointVerdict {
     /// No change detected yet; continue monitoring.
     Continue,
@@ -973,7 +977,7 @@ pub trait LabFixtureChangePointDetectorExt: Sized {
         alternative: CompositeAlternative,
         threshold_millionths: i64,
         epoch: SecurityEpoch,
-    ) -> ChangePointDetector;
+    ) -> Self;
 
     fn new_with_default_threshold(
         detector_id: impl Into<String>,
@@ -988,7 +992,7 @@ impl LabFixtureChangePointDetectorExt for ChangePointDetector {
         alternative: CompositeAlternative,
         threshold_millionths: i64,
         epoch: SecurityEpoch,
-    ) -> ChangePointDetector {
+    ) -> Self {
         ChangePointDetector::new_lab(detector_id, alternative, threshold_millionths, epoch)
     }
 

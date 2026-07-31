@@ -510,14 +510,14 @@ pub trait LabFixturePolicyControllerExt: Sized {
     fn new(
         config: ControllerConfig,
         loss_matrix: LossMatrix,
-    ) -> Result<PolicyController, PolicyControllerError>;
+    ) -> Result<Self, PolicyControllerError>;
 }
 
 impl LabFixturePolicyControllerExt for PolicyController {
     fn new(
         config: ControllerConfig,
         loss_matrix: LossMatrix,
-    ) -> Result<PolicyController, PolicyControllerError> {
+    ) -> Result<Self, PolicyControllerError> {
         PolicyController::new_lab(config, loss_matrix)
     }
 }

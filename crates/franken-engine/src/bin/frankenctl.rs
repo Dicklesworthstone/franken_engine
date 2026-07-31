@@ -50,7 +50,8 @@ use frankenengine_engine::differential_oracle_perf::{
 };
 use frankenengine_engine::e8_analyzed_subset::{E8AnalyzedSubsetScan, scan_source};
 use frankenengine_engine::evidence_ledger::{
-    EvidenceVerificationIdentity, RuntimeEvidenceAuthority,
+    EVIDENCE_CHAIN_RECEIPT_SCHEMA_VERSION, EvidenceChainArtifact, EvidenceVerificationIdentity,
+    RuntimeEvidenceAuthority,
 };
 use frankenengine_engine::execution_orchestrator::{
     ExecutionOrchestrator, ExtensionPackage, OrchestratorConfig, OrchestratorError,
@@ -949,6 +950,9 @@ struct RunCommandOutput {
     expected_loss_millionths: i64,
     instructions_executed: u64,
     evidence_entries: usize,
+    evidence_ledger_id: String,
+    evidence_chain_head: String,
+    evidence_chain_artifact: EvidenceChainArtifact,
     console_output: Vec<ConsoleEntry>,
     observability_mode: ObservabilityModeOutput,
 }
@@ -4278,6 +4282,20 @@ fn execute_run(args: RunArgs) -> Result<i32, String> {
         _ => None,
     };
 
+    let evidence_ledger_id = orchestrator.evidence_ledger_id().to_string();
+    let evidence_chain_artifact = EvidenceChainArtifact::new(
+        result.evidence_entries.clone(),
+        result.evidence_chain_receipt.clone(),
+    );
+    evidence_chain_artifact
+        .verify_genesis(
+            &result.evidence_verification_identity,
+            &evidence_ledger_id,
+            &result.trace_id,
+        )
+        .map_err(|error| {
+            format!("generated run evidence chain failed exact verification: {error}")
+        })?;
     let output = RunCommandOutput {
         schema_version: FRANKENCTL_SCHEMA_VERSION.to_string(),
         extension_id: result.extension_id.clone(),
@@ -4299,6 +4317,9 @@ fn execute_run(args: RunArgs) -> Result<i32, String> {
         expected_loss_millionths: result.expected_loss_millionths,
         instructions_executed: result.instructions_executed,
         evidence_entries: result.evidence_entries.len(),
+        evidence_ledger_id,
+        evidence_chain_head: result.evidence_chain_receipt.head_chain_hash.clone(),
+        evidence_chain_artifact,
         console_output: result.console_output.clone(),
         observability_mode: default_capture_observability_mode(),
     };
@@ -4853,6 +4874,44 @@ fn build_run_explain_bundle(
                 RuntimeExplainRelation::EmitsEvidence,
             ));
     }
+
+    let evidence_chain_ref = RuntimeArtifactRef::new(
+        "evidence-chain-receipt",
+        RuntimeArtifactKind::Other {
+            schema_id: EVIDENCE_CHAIN_RECEIPT_SCHEMA_VERSION.to_string(),
+        },
+        content_hash_for_json(&result.evidence_chain_receipt, "run evidence chain receipt")?,
+        StableArtifactRef::new(
+            "evidence_ledger",
+            result.evidence_chain_receipt.ledger_id.clone(),
+        )
+        .with_revision(result.evidence_chain_receipt.head_chain_hash.clone()),
+    )
+    .with_schema_id(EVIDENCE_CHAIN_RECEIPT_SCHEMA_VERSION)
+    .with_producer("evidence_ledger")
+    .with_role(RuntimeExplainRole::EvidenceEntry)
+    .with_logical_epoch(result.epoch.as_u64())
+    .with_metadata(
+        RUNTIME_EXPLAIN_ORIGIN_SURFACE_METADATA_KEY,
+        "evidence_ledger",
+    )
+    .with_metadata(
+        RUNTIME_EXPLAIN_ORIGIN_SCHEMA_METADATA_KEY,
+        EVIDENCE_CHAIN_RECEIPT_SCHEMA_VERSION,
+    )
+    .with_metadata(
+        RUNTIME_EXPLAIN_ORIGIN_ARTIFACT_METADATA_KEY,
+        "EvidenceChainReceipt",
+    );
+    builder = builder
+        .add_artifact(evidence_chain_ref)
+        .map_err(|error| error.to_string())?
+        .add_link(RuntimeExplainLink::new(
+            "action-to-evidence-chain-receipt",
+            "action-decision",
+            "evidence-chain-receipt",
+            RuntimeExplainRelation::EmitsEvidence,
+        ));
 
     if let Some(receipt) = &result.containment_receipt {
         let containment_ref = RuntimeArtifactRef::new(

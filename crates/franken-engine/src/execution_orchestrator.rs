@@ -37,7 +37,7 @@ use crate::entropy_evidence_compressor::{
     ArithmeticCoder, CompressionCertificate, EntropyError, EntropyEstimator,
 };
 use crate::evidence_ledger::{
-    CandidateAction, ChosenAction, DecisionType, EvidenceEmitter, EvidenceEntry,
+    CandidateAction, ChosenAction, DecisionType, EvidenceChainReceipt, EvidenceEntry,
     EvidenceEntryBuilder, EvidenceSigningAuthority, EvidenceVerificationIdentity, InMemoryLedger,
     LabEvidenceAuthority, LedgerError, RuntimeEvidenceAuthority, Witness,
 };
@@ -126,6 +126,8 @@ const DEFAULT_MAX_CONCURRENT_SAGAS: usize = 4;
 const SCALE_MILLION: i64 = 1_000_000;
 const EVIDENCE_COMPRESSION_SKETCH_SCHEMA: &str = "franken-engine.evidence-compression-sketch.v2";
 const EVIDENCE_COMPRESSION_SKETCH_MAX_BYTES: usize = 512;
+const ORCHESTRATOR_EVIDENCE_LEDGER_ID_DOMAIN: &str =
+    "franken-engine.execution-orchestrator.evidence-ledger-id.v1";
 
 // ---------------------------------------------------------------------------
 // LossMatrixPreset
@@ -304,6 +306,8 @@ pub struct OrchestratorResult {
 
     // Evidence
     pub evidence_entries: Vec<EvidenceEntry>,
+    /// Signed sequence/predecessor receipt sealing the exact entries above.
+    pub evidence_chain_receipt: EvidenceChainReceipt,
     /// Public trust coordinates for every evidence entry emitted by this run.
     ///
     /// This value is recorded for replay and audit correlation. A verifier
@@ -968,11 +972,13 @@ impl ExecutionOrchestrator {
     ) -> Result<Self, OrchestratorError> {
         Self::validate_concurrency_envelope(config.max_concurrent_sagas)?;
         let verification_identity = evidence_signing_authority.verification_identity();
-        let ledger = if evidence_signing_authority.is_lab() {
+        let evidence_ledger_id = Self::derive_evidence_ledger_id(&config, &verification_identity)?;
+        let mut ledger = if evidence_signing_authority.is_lab() {
             InMemoryLedger::for_lab_verification_identity(config.epoch, &verification_identity)?
         } else {
             InMemoryLedger::for_verification_identity(config.epoch, &verification_identity)?
         };
+        ledger.bind_evidence_chain(evidence_ledger_id)?;
         let loss_matrix = config.loss_matrix_preset.to_loss_matrix();
         let prior = Posterior::default_prior();
         let gamma = runtime_config.orchestrator.adaptive_router_gamma_millionths;
@@ -1122,6 +1128,26 @@ impl ExecutionOrchestrator {
         &self.runtime_config
     }
 
+    fn derive_evidence_ledger_id(
+        config: &OrchestratorConfig,
+        identity: &EvidenceVerificationIdentity,
+    ) -> Result<String, LedgerError> {
+        let payload = serde_json::to_vec(&(
+            ORCHESTRATOR_EVIDENCE_LEDGER_ID_DOMAIN,
+            &config.policy_id,
+            config.epoch.as_u64(),
+            &config.trace_id_prefix,
+            identity,
+        ))
+        .map_err(|error| LedgerError::SchemaValidationFailed {
+            reason: format!("orchestrator evidence ledger id serialization failed: {error}"),
+        })?;
+        Ok(format!(
+            "evidence-ledger-{}",
+            ContentHash::compute(&payload).to_hex()
+        ))
+    }
+
     fn validate_concurrency_envelope(max_concurrent_sagas: usize) -> Result<(), OrchestratorError> {
         if (1..=MAX_CONCURRENT_SAGAS_LIMIT).contains(&max_concurrent_sagas) {
             Ok(())
@@ -1170,6 +1196,13 @@ impl ExecutionOrchestrator {
     /// orchestrator's evidence.
     pub fn evidence_verification_identity(&self) -> EvidenceVerificationIdentity {
         self.evidence_signing_authority.verification_identity()
+    }
+
+    /// Stable identity of this orchestrator's authenticated evidence ledger.
+    pub fn evidence_ledger_id(&self) -> &str {
+        self.ledger
+            .evidence_chain_ledger_id()
+            .expect("execution orchestrator always binds its evidence chain")
     }
 
     /// Access the saga orchestrator.
@@ -1450,21 +1483,25 @@ impl ExecutionOrchestrator {
             };
 
             // Step 9: Record evidence.
-            let (entries, evidence_compression_certificate, evidence_compression_status) = self
-                .phase_record_evidence(EvidenceRecordInput {
-                    trace_id: &trace_id,
-                    decision_id: &decision_id,
-                    package,
-                    decision: &action_decision,
-                    effective_action: containment_action,
-                    exec: &exec_result,
-                    update: &update_result,
-                    ir3_schedule_cost,
-                    adaptive_router_summary: adaptive_router_summary.as_ref(),
-                    optimal_stopping_certificate: optimal_stopping_certificate.as_ref(),
-                    guardplane_report: guardplane_report.as_ref(),
-                    capability_summary: evidence_capability_summary,
-                })?;
+            let (
+                entries,
+                evidence_chain_receipt,
+                evidence_compression_certificate,
+                evidence_compression_status,
+            ) = self.phase_record_evidence(EvidenceRecordInput {
+                trace_id: &trace_id,
+                decision_id: &decision_id,
+                package,
+                decision: &action_decision,
+                effective_action: containment_action,
+                exec: &exec_result,
+                update: &update_result,
+                ir3_schedule_cost,
+                adaptive_router_summary: adaptive_router_summary.as_ref(),
+                optimal_stopping_certificate: optimal_stopping_certificate.as_ref(),
+                guardplane_report: guardplane_report.as_ref(),
+                capability_summary: evidence_capability_summary,
+            })?;
             let evidence_entries = entries;
 
             // Step 10: Execute any selected containment action and attach a saga
@@ -1498,6 +1535,7 @@ impl ExecutionOrchestrator {
                 action_decision,
                 optimal_stopping_certificate,
                 evidence_entries,
+                evidence_chain_receipt,
                 evidence_verification_identity: self
                     .evidence_signing_authority
                     .verification_identity(),
@@ -2143,6 +2181,7 @@ impl ExecutionOrchestrator {
     ) -> Result<
         (
             Vec<EvidenceEntry>,
+            EvidenceChainReceipt,
             Option<CompressionCertificate>,
             EvidenceCompressionStatus,
         ),
@@ -2438,8 +2477,24 @@ impl ExecutionOrchestrator {
             }
         }
 
-        self.ledger.emit_batch(entries.clone())?;
-        Ok((entries, compression_certificate, compression_status))
+        let ledger_id = self.evidence_ledger_id().to_string();
+        let first_sequence = self.ledger.evidence_chain_next_sequence();
+        let previous_chain_hash = self.ledger.evidence_chain_head().map(str::to_string);
+        let receipt = EvidenceChainReceipt::issue_with_authority(
+            ledger_id,
+            first_sequence,
+            previous_chain_hash.as_deref(),
+            &entries,
+            &self.evidence_signing_authority,
+        )?;
+        self.ledger
+            .emit_chained_batch(entries.clone(), receipt.clone())?;
+        Ok((
+            entries,
+            receipt,
+            compression_certificate,
+            compression_status,
+        ))
     }
 
     fn build_guardplane_decision_entry(
@@ -3707,9 +3762,17 @@ mod tests {
         let duplicate_id = duplicate_entry.entry_id.clone();
 
         let mut orchestrator = ExecutionOrchestrator::with_defaults();
+        let seed_receipt = EvidenceChainReceipt::issue_with_authority(
+            orchestrator.evidence_ledger_id().to_string(),
+            0,
+            None,
+            std::slice::from_ref(&duplicate_entry),
+            &orchestrator.evidence_signing_authority,
+        )
+        .expect("the seeded duplicate must receive a valid chain receipt");
         orchestrator
             .ledger
-            .emit(duplicate_entry)
+            .emit_chained_batch(vec![duplicate_entry], seed_receipt)
             .expect("the late-duplicate fixture must be admitted once");
         let before_ids = orchestrator
             .ledger()

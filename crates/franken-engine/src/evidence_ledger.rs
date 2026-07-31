@@ -59,6 +59,12 @@ pub fn current_schema_version() -> SchemaVersion {
 }
 
 const DETACHED_EVIDENCE_SIGNATURE_DOMAIN: &str = "franken-engine.detached-evidence-signature.v1";
+const EVIDENCE_CHAIN_LINK_DOMAIN: &str = "franken-engine.evidence-chain-link.v1";
+const EVIDENCE_CHAIN_RECEIPT_SIGNATURE_DOMAIN: &str =
+    "franken-engine.evidence-chain-receipt-signature.v1";
+
+/// Schema for the signed receipt that seals an exact ordered evidence batch.
+pub const EVIDENCE_CHAIN_RECEIPT_SCHEMA_VERSION: &str = "franken-engine.evidence-chain-receipt.v1";
 
 const TEST_EVIDENCE_PRODUCER_ID: &str = "franken-engine.evidence-ledger.builder";
 const TEST_EVIDENCE_FIXTURE_ID: &str = "default-evidence-entry-fixture-v2";
@@ -885,6 +891,76 @@ impl EvidenceEntry {
         &self.signed_envelope
     }
 
+    /// Verify this entry against an externally trusted producer identity.
+    ///
+    /// The identity must come from an authenticated registry or recorded-run
+    /// trust input. The claimant-controlled envelope embedded in this entry is
+    /// never accepted as its own trust anchor.
+    pub fn verify_with_trusted_identity(
+        &self,
+        trusted_identity: &EvidenceVerificationIdentity,
+    ) -> Result<(), LedgerError> {
+        trusted_identity.validate()?;
+        let reader_version = current_schema_version();
+        if !self.schema_version.is_compatible_with(&reader_version) {
+            return Err(LedgerError::IncompatibleSchema {
+                entry_version: self.schema_version,
+                reader_version,
+            });
+        }
+        let (expected_entry_id, expected_hash) = self.recomputed_content_ids()?;
+        if self.evidence_hash != expected_hash {
+            return Err(LedgerError::SchemaValidationFailed {
+                reason: format!("evidence hash mismatch for entry {}", self.entry_id),
+            });
+        }
+        if self.entry_id != expected_entry_id {
+            return Err(LedgerError::SchemaValidationFailed {
+                reason: format!(
+                    "entry id mismatch: expected {expected_entry_id}, actual {}",
+                    self.entry_id
+                ),
+            });
+        }
+
+        let envelope = self.signed_envelope();
+        envelope.validate_public_provenance()?;
+        if envelope.signed_epoch != self.epoch_id {
+            return Err(LedgerError::SchemaValidationFailed {
+                reason: format!(
+                    "evidence signature epoch mismatch: envelope {}, entry {}",
+                    envelope.signed_epoch.as_u64(),
+                    self.epoch_id.as_u64()
+                ),
+            });
+        }
+        let claimed_identity = EvidenceVerificationIdentity {
+            producer_id: envelope.producer_id.clone(),
+            key_provenance: envelope.key_provenance.clone(),
+            verification_key: envelope.verification_key.clone(),
+        };
+        if &claimed_identity != trusted_identity {
+            return Err(LedgerError::SchemaValidationFailed {
+                reason: format!(
+                    "evidence signer is not the trusted runtime identity: claimed {}/{}, trusted \
+                     {}/{}",
+                    claimed_identity.producer_id,
+                    claimed_identity.key_provenance.key_id,
+                    trusted_identity.producer_id,
+                    trusted_identity.key_provenance.key_id
+                ),
+            });
+        }
+        PreparedVerificationKey::prepare(trusted_identity.verification_key.clone())
+            .verify(&self.unsigned_signature_preimage()?, &envelope.signature)
+            .map_err(|_| LedgerError::SchemaValidationFailed {
+                reason: format!(
+                    "invalid evidence signature from producer: {}",
+                    envelope.producer_id
+                ),
+            })
+    }
+
     /// Sign this entry while binding public key/epoch/rotation provenance into
     /// both content identifiers and the signature. This is private so a
     /// completed entry cannot have its authority replaced.
@@ -901,6 +977,367 @@ impl EvidenceEntry {
         let preimage = self.unsigned_signature_preimage()?;
         self.signed_envelope.signature = identity.sign_preimage(&preimage);
         Ok(())
+    }
+}
+
+// ---------------------------------------------------------------------------
+// EvidenceChainReceipt — authenticated, lossless batch sealing
+// ---------------------------------------------------------------------------
+
+/// One position in the authenticated evidence-entry chain.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EvidenceChainLink {
+    /// Contiguous position in the ledger, starting at zero.
+    pub sequence: u64,
+    /// Chain hash immediately preceding this link, or `None` at genesis.
+    pub previous_chain_hash: Option<String>,
+    /// Exact content-addressed entry identifier at this position.
+    pub entry_id: String,
+    /// Exact evidence hash at this position.
+    pub evidence_hash: String,
+    /// Domain-separated hash of the ledger coordinates and exact entry.
+    pub chain_hash: String,
+}
+
+/// Signed receipt sealing an exact, ordered evidence-entry batch.
+///
+/// The receipt is deliberately separate from [`EvidenceEntry`]: it preserves
+/// the complete live entry schema while adding ledger identity, sequence, and
+/// predecessor/head commitments without projecting into a second, lossy
+/// evidence model.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EvidenceChainReceipt {
+    pub schema_version: String,
+    pub ledger_id: String,
+    /// Run identity shared by every exact entry in this batch.
+    pub run_id: String,
+    pub links: Vec<EvidenceChainLink>,
+    pub head_chain_hash: String,
+    signed_envelope: EvidenceSignatureEnvelope,
+}
+
+impl EvidenceChainReceipt {
+    fn validate_ledger_id(ledger_id: &str) -> Result<(), LedgerError> {
+        if ledger_id.trim().is_empty() {
+            return Err(LedgerError::SchemaValidationFailed {
+                reason: "evidence chain ledger id must not be empty".to_string(),
+            });
+        }
+        Ok(())
+    }
+
+    fn compute_link_hash(
+        ledger_id: &str,
+        run_id: &str,
+        sequence: u64,
+        previous_chain_hash: Option<&str>,
+        entry: &EvidenceEntry,
+    ) -> Result<String, LedgerError> {
+        let payload = serde_json::to_vec(&(
+            EVIDENCE_CHAIN_LINK_DOMAIN,
+            EVIDENCE_CHAIN_RECEIPT_SCHEMA_VERSION,
+            ledger_id,
+            run_id,
+            sequence,
+            previous_chain_hash,
+            &entry.entry_id,
+            &entry.evidence_hash,
+        ))
+        .map_err(|error| LedgerError::SchemaValidationFailed {
+            reason: format!("evidence chain link serialization failed: {error}"),
+        })?;
+        Ok(ContentHash::compute(&payload).to_hex())
+    }
+
+    fn signature_payload(&self) -> Result<Vec<u8>, LedgerError> {
+        serde_json::to_vec(&(
+            EVIDENCE_CHAIN_RECEIPT_SIGNATURE_DOMAIN,
+            &self.schema_version,
+            &self.ledger_id,
+            &self.run_id,
+            &self.links,
+            &self.head_chain_hash,
+        ))
+        .map_err(|error| LedgerError::SchemaValidationFailed {
+            reason: format!("evidence chain receipt serialization failed: {error}"),
+        })
+    }
+
+    pub(crate) fn issue_with_authority(
+        ledger_id: impl Into<String>,
+        first_sequence: u64,
+        previous_chain_hash: Option<&str>,
+        entries: &[EvidenceEntry],
+        authority: &EvidenceSigningAuthority,
+    ) -> Result<Self, LedgerError> {
+        let ledger_id = ledger_id.into();
+        Self::validate_ledger_id(&ledger_id)?;
+        let first_entry = entries
+            .first()
+            .ok_or_else(|| LedgerError::SchemaValidationFailed {
+                reason: "evidence chain receipt cannot seal an empty batch".to_string(),
+            })?;
+        let trusted_identity = authority.verification_identity();
+        let signed_epoch = first_entry.epoch_id;
+        let run_id = first_entry.trace_id.clone();
+        if run_id.trim().is_empty() {
+            return Err(LedgerError::SchemaValidationFailed {
+                reason: "evidence chain run id must not be empty".to_string(),
+            });
+        }
+        let mut links = Vec::with_capacity(entries.len());
+        let mut sequence = first_sequence;
+        let mut previous = previous_chain_hash.map(str::to_string);
+
+        for entry in entries {
+            if entry.trace_id != run_id {
+                return Err(LedgerError::SchemaValidationFailed {
+                    reason: format!(
+                        "evidence chain batch crosses runs: expected {run_id}, actual {}",
+                        entry.trace_id
+                    ),
+                });
+            }
+            if entry.epoch_id != signed_epoch {
+                return Err(LedgerError::SchemaValidationFailed {
+                    reason: format!(
+                        "evidence chain batch crosses epochs: expected {}, actual {}",
+                        signed_epoch.as_u64(),
+                        entry.epoch_id.as_u64()
+                    ),
+                });
+            }
+            entry.verify_with_trusted_identity(&trusted_identity)?;
+            let chain_hash =
+                Self::compute_link_hash(&ledger_id, &run_id, sequence, previous.as_deref(), entry)?;
+            links.push(EvidenceChainLink {
+                sequence,
+                previous_chain_hash: previous.clone(),
+                entry_id: entry.entry_id.clone(),
+                evidence_hash: entry.evidence_hash.clone(),
+                chain_hash: chain_hash.clone(),
+            });
+            previous = Some(chain_hash);
+            sequence =
+                sequence
+                    .checked_add(1)
+                    .ok_or_else(|| LedgerError::SchemaValidationFailed {
+                        reason: "evidence chain sequence overflow".to_string(),
+                    })?;
+        }
+
+        let head_chain_hash = previous.expect("non-empty batch always computes a chain head");
+        let mut receipt = Self {
+            schema_version: EVIDENCE_CHAIN_RECEIPT_SCHEMA_VERSION.to_string(),
+            ledger_id,
+            run_id,
+            links,
+            head_chain_hash,
+            signed_envelope: EvidenceSignatureEnvelope::unsigned_for(
+                authority.signing_identity(),
+                signed_epoch,
+            ),
+        };
+        receipt.signed_envelope =
+            authority.sign_detached(&receipt.signature_payload()?, signed_epoch)?;
+        Ok(receipt)
+    }
+
+    /// Verify this receipt against exact entries and externally supplied chain
+    /// context.
+    pub fn verify_exact_batch(
+        &self,
+        entries: &[EvidenceEntry],
+        trusted_identity: &EvidenceVerificationIdentity,
+        expected_ledger_id: &str,
+        expected_run_id: &str,
+        expected_first_sequence: u64,
+        expected_previous_chain_hash: Option<&str>,
+    ) -> Result<(), LedgerError> {
+        trusted_identity.validate()?;
+        Self::validate_ledger_id(expected_ledger_id)?;
+        if expected_run_id.trim().is_empty() {
+            return Err(LedgerError::SchemaValidationFailed {
+                reason: "expected evidence chain run id must not be empty".to_string(),
+            });
+        }
+        if self.schema_version != EVIDENCE_CHAIN_RECEIPT_SCHEMA_VERSION {
+            return Err(LedgerError::SchemaValidationFailed {
+                reason: format!(
+                    "unsupported evidence chain receipt schema: {}",
+                    self.schema_version
+                ),
+            });
+        }
+        if self.ledger_id != expected_ledger_id {
+            return Err(LedgerError::SchemaValidationFailed {
+                reason: format!(
+                    "evidence chain ledger id mismatch: expected {expected_ledger_id}, actual {}",
+                    self.ledger_id
+                ),
+            });
+        }
+        if self.run_id != expected_run_id {
+            return Err(LedgerError::SchemaValidationFailed {
+                reason: format!(
+                    "evidence chain run id mismatch: expected {expected_run_id}, actual {}",
+                    self.run_id
+                ),
+            });
+        }
+        if entries.is_empty() || self.links.is_empty() {
+            return Err(LedgerError::SchemaValidationFailed {
+                reason: "evidence chain receipt cannot seal an empty batch".to_string(),
+            });
+        }
+        if self.links.len() != entries.len() {
+            return Err(LedgerError::SchemaValidationFailed {
+                reason: format!(
+                    "evidence chain entry count mismatch: receipt {}, exact batch {}",
+                    self.links.len(),
+                    entries.len()
+                ),
+            });
+        }
+
+        self.signed_envelope
+            .verify_detached(&self.signature_payload()?, trusted_identity)?;
+        let signed_epoch = self.signed_envelope.signed_epoch;
+        let mut sequence = expected_first_sequence;
+        let mut previous = expected_previous_chain_hash.map(str::to_string);
+        for (entry, link) in entries.iter().zip(&self.links) {
+            entry.verify_with_trusted_identity(trusted_identity)?;
+            if entry.trace_id != self.run_id {
+                return Err(LedgerError::SchemaValidationFailed {
+                    reason: format!(
+                        "evidence chain exact entry belongs to run {}, not {}",
+                        entry.trace_id, self.run_id
+                    ),
+                });
+            }
+            if entry.epoch_id != signed_epoch {
+                return Err(LedgerError::SchemaValidationFailed {
+                    reason: format!(
+                        "evidence chain receipt epoch mismatch: receipt {}, entry {}",
+                        signed_epoch.as_u64(),
+                        entry.epoch_id.as_u64()
+                    ),
+                });
+            }
+            if link.sequence != sequence {
+                return Err(LedgerError::SchemaValidationFailed {
+                    reason: format!(
+                        "evidence chain sequence mismatch: expected {sequence}, actual {}",
+                        link.sequence
+                    ),
+                });
+            }
+            if link.previous_chain_hash != previous {
+                return Err(LedgerError::SchemaValidationFailed {
+                    reason: format!(
+                        "evidence chain predecessor mismatch at sequence {}",
+                        link.sequence
+                    ),
+                });
+            }
+            if link.entry_id != entry.entry_id || link.evidence_hash != entry.evidence_hash {
+                return Err(LedgerError::SchemaValidationFailed {
+                    reason: format!(
+                        "evidence chain exact-entry binding mismatch at sequence {}",
+                        link.sequence
+                    ),
+                });
+            }
+            let expected_hash = Self::compute_link_hash(
+                &self.ledger_id,
+                &self.run_id,
+                sequence,
+                previous.as_deref(),
+                entry,
+            )?;
+            if link.chain_hash != expected_hash {
+                return Err(LedgerError::SchemaValidationFailed {
+                    reason: format!("evidence chain hash mismatch at sequence {}", link.sequence),
+                });
+            }
+            previous = Some(link.chain_hash.clone());
+            sequence =
+                sequence
+                    .checked_add(1)
+                    .ok_or_else(|| LedgerError::SchemaValidationFailed {
+                        reason: "evidence chain sequence overflow".to_string(),
+                    })?;
+        }
+        if previous.as_deref() != Some(self.head_chain_hash.as_str()) {
+            return Err(LedgerError::SchemaValidationFailed {
+                reason: "evidence chain head does not match the final exact entry".to_string(),
+            });
+        }
+        Ok(())
+    }
+
+    pub fn signed_envelope(&self) -> &EvidenceSignatureEnvelope {
+        &self.signed_envelope
+    }
+
+    pub fn first_sequence(&self) -> u64 {
+        self.links.first().map_or(0, |link| link.sequence)
+    }
+
+    pub fn previous_chain_hash(&self) -> Option<&str> {
+        self.links
+            .first()
+            .and_then(|link| link.previous_chain_hash.as_deref())
+    }
+}
+
+/// Portable run artifact containing the exact entries and their signed chain
+/// receipt.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct EvidenceChainArtifact {
+    pub entries: Vec<EvidenceEntry>,
+    pub receipt: EvidenceChainReceipt,
+}
+
+impl EvidenceChainArtifact {
+    pub fn new(entries: Vec<EvidenceEntry>, receipt: EvidenceChainReceipt) -> Self {
+        Self { entries, receipt }
+    }
+
+    /// Verify the artifact against an externally authenticated trust root and
+    /// expected ledger position.
+    pub fn verify_with_context(
+        &self,
+        trusted_identity: &EvidenceVerificationIdentity,
+        expected_ledger_id: &str,
+        expected_run_id: &str,
+        expected_first_sequence: u64,
+        expected_previous_chain_hash: Option<&str>,
+    ) -> Result<(), LedgerError> {
+        self.receipt.verify_exact_batch(
+            &self.entries,
+            trusted_identity,
+            expected_ledger_id,
+            expected_run_id,
+            expected_first_sequence,
+            expected_previous_chain_hash,
+        )
+    }
+
+    /// Verify a complete one-batch ledger beginning at genesis.
+    pub fn verify_genesis(
+        &self,
+        trusted_identity: &EvidenceVerificationIdentity,
+        expected_ledger_id: &str,
+        expected_run_id: &str,
+    ) -> Result<(), LedgerError> {
+        self.verify_with_context(
+            trusted_identity,
+            expected_ledger_id,
+            expected_run_id,
+            0,
+            None,
+        )
     }
 }
 
@@ -1284,6 +1721,9 @@ pub struct InMemoryLedger {
     // registration instead of on every emit-time signature verification.
     authorized_producers: BTreeMap<(String, String), AuthorizedEvidenceProducer>,
     authorized_policy_ids: BTreeSet<String>,
+    evidence_chain_ledger_id: Option<String>,
+    evidence_chain_next_sequence: u64,
+    evidence_chain_head: Option<String>,
 }
 
 #[cfg(test)]
@@ -1302,6 +1742,9 @@ impl InMemoryLedger {
             allow_lab_authority,
             authorized_producers: BTreeMap::new(),
             authorized_policy_ids: BTreeSet::new(),
+            evidence_chain_ledger_id: None,
+            evidence_chain_next_sequence: 0,
+            evidence_chain_head: None,
         }
     }
 
@@ -1598,6 +2041,125 @@ impl InMemoryLedger {
         self.authorized_policy_ids.insert(policy_id.into());
     }
 
+    /// Bind this ledger to one authenticated evidence chain before its first
+    /// entry is emitted.
+    pub fn bind_evidence_chain(&mut self, ledger_id: impl Into<String>) -> Result<(), LedgerError> {
+        let ledger_id = ledger_id.into();
+        EvidenceChainReceipt::validate_ledger_id(&ledger_id)?;
+        if !self.entries.is_empty()
+            || self.evidence_chain_next_sequence != 0
+            || self.evidence_chain_head.is_some()
+        {
+            return Err(LedgerError::SchemaValidationFailed {
+                reason: "cannot bind an evidence chain after ledger emission has started"
+                    .to_string(),
+            });
+        }
+        if let Some(existing) = self.evidence_chain_ledger_id.as_deref() {
+            if existing == ledger_id {
+                return Ok(());
+            }
+            return Err(LedgerError::SchemaValidationFailed {
+                reason: format!(
+                    "evidence ledger is already bound to chain {existing}, not {ledger_id}"
+                ),
+            });
+        }
+        self.evidence_chain_ledger_id = Some(ledger_id);
+        Ok(())
+    }
+
+    pub fn evidence_chain_ledger_id(&self) -> Option<&str> {
+        self.evidence_chain_ledger_id.as_deref()
+    }
+
+    pub fn evidence_chain_next_sequence(&self) -> u64 {
+        self.evidence_chain_next_sequence
+    }
+
+    pub fn evidence_chain_head(&self) -> Option<&str> {
+        self.evidence_chain_head.as_deref()
+    }
+
+    fn trusted_identity_for_envelope(
+        &self,
+        envelope: &EvidenceSignatureEnvelope,
+    ) -> Result<EvidenceVerificationIdentity, LedgerError> {
+        let registered = self
+            .authorized_producers
+            .get(&(
+                envelope.producer_id.clone(),
+                envelope.key_provenance.key_id.clone(),
+            ))
+            .ok_or_else(|| LedgerError::SchemaValidationFailed {
+                reason: format!(
+                    "unauthorized evidence chain producer/key: {}/{}",
+                    envelope.producer_id, envelope.key_provenance.key_id
+                ),
+            })?;
+        Ok(EvidenceVerificationIdentity {
+            producer_id: envelope.producer_id.clone(),
+            key_provenance: registered.key_provenance.clone(),
+            verification_key: registered.verification_key.raw().clone(),
+        })
+    }
+
+    /// Atomically emit an exact batch whose signed chain receipt extends the
+    /// currently bound ledger tip.
+    pub fn emit_chained_batch(
+        &mut self,
+        entries: Vec<EvidenceEntry>,
+        receipt: EvidenceChainReceipt,
+    ) -> Result<(), LedgerError> {
+        let ledger_id = self.evidence_chain_ledger_id.as_deref().ok_or_else(|| {
+            LedgerError::SchemaValidationFailed {
+                reason: "evidence ledger must be bound before chained emission".to_string(),
+            }
+        })?;
+        let mut pending_ids = BTreeSet::new();
+        let expected_run_id = entries
+            .first()
+            .map(|entry| entry.trace_id.as_str())
+            .ok_or_else(|| LedgerError::SchemaValidationFailed {
+                reason: "evidence chain receipt cannot seal an empty batch".to_string(),
+            })?;
+        for entry in &entries {
+            if self.entry_ids.contains(&entry.entry_id)
+                || !pending_ids.insert(entry.entry_id.clone())
+            {
+                return Err(LedgerError::DuplicateEntryId {
+                    entry_id: entry.entry_id.clone(),
+                });
+            }
+            self.validate_entry(entry)?;
+        }
+        let trusted_identity = self.trusted_identity_for_envelope(receipt.signed_envelope())?;
+        receipt.verify_exact_batch(
+            &entries,
+            &trusted_identity,
+            ledger_id,
+            expected_run_id,
+            self.evidence_chain_next_sequence,
+            self.evidence_chain_head.as_deref(),
+        )?;
+        let batch_len =
+            u64::try_from(entries.len()).map_err(|_| LedgerError::SchemaValidationFailed {
+                reason: "evidence chain batch length exceeds u64".to_string(),
+            })?;
+        let next_sequence = self
+            .evidence_chain_next_sequence
+            .checked_add(batch_len)
+            .ok_or_else(|| LedgerError::SchemaValidationFailed {
+                reason: "evidence chain sequence overflow".to_string(),
+            })?;
+
+        self.entry_ids.extend(pending_ids);
+        self.entries.extend(entries);
+        self.evidence_chain_next_sequence = next_sequence;
+        self.evidence_chain_head = Some(receipt.head_chain_hash);
+        Ok(())
+    }
+
     /// Number of entries in the ledger.
     pub fn len(&self) -> usize {
         self.entries.len()
@@ -1748,6 +2310,11 @@ impl EvidenceEmitter for InMemoryLedger {
     }
 
     fn emit_batch(&mut self, entries: Vec<EvidenceEntry>) -> Result<(), LedgerError> {
+        if self.evidence_chain_ledger_id.is_some() {
+            return Err(LedgerError::SchemaValidationFailed {
+                reason: "bound evidence ledger requires an authenticated chain receipt".to_string(),
+            });
+        }
         let mut pending_ids = std::collections::BTreeSet::new();
         for entry in &entries {
             if self.entry_ids.contains(&entry.entry_id)
@@ -5492,6 +6059,176 @@ mod tests {
                 .verify_detached(payload, &trusted_identity)
                 .is_err(),
             "a claimant-supplied source-known key must not authenticate as the trusted runtime"
+        );
+    }
+
+    fn bd_8yhg4_chain_entry(
+        authority: &RuntimeEvidenceAuthority,
+        decision_id: &str,
+        timestamp_ns: u64,
+    ) -> EvidenceEntry {
+        EvidenceEntryBuilder::new_with_runtime_authority(
+            "trace-bd-8yhg4",
+            decision_id,
+            "policy-bd-8yhg4",
+            SecurityEpoch::from_raw(1),
+            DecisionType::ContractEvaluation,
+            authority,
+        )
+        .timestamp_ns(timestamp_ns)
+        .candidate(CandidateAction::new("record", 0))
+        .chosen(ChosenAction {
+            action_name: "record".to_string(),
+            expected_loss_millionths: 0,
+            rationale: "seal exact live evidence".to_string(),
+        })
+        .build()
+        .expect("chain entry")
+    }
+
+    #[test]
+    fn bd_8yhg4_signed_chain_rejects_missing_duplicate_reorder_tamper_and_splice() {
+        let authority = perf_runtime_authority();
+        let trusted_identity = authority.verification_identity();
+        let entries = vec![
+            bd_8yhg4_chain_entry(&authority, "decision-bd-8yhg4-1", 1),
+            bd_8yhg4_chain_entry(&authority, "decision-bd-8yhg4-2", 2),
+        ];
+        let signing_authority = EvidenceSigningAuthority::Runtime(authority.clone());
+        let receipt = EvidenceChainReceipt::issue_with_authority(
+            "ledger-bd-8yhg4",
+            0,
+            None,
+            &entries,
+            &signing_authority,
+        )
+        .expect("chain receipt");
+        let artifact = EvidenceChainArtifact::new(entries.clone(), receipt.clone());
+        artifact
+            .verify_genesis(&trusted_identity, "ledger-bd-8yhg4", "trace-bd-8yhg4")
+            .expect("exact artifact");
+
+        let mut missing = artifact.clone();
+        missing.entries.pop();
+        assert!(
+            missing
+                .verify_genesis(&trusted_identity, "ledger-bd-8yhg4", "trace-bd-8yhg4",)
+                .is_err()
+        );
+
+        let mut duplicate = artifact.clone();
+        duplicate.entries[1] = duplicate.entries[0].clone();
+        assert!(
+            duplicate
+                .verify_genesis(&trusted_identity, "ledger-bd-8yhg4", "trace-bd-8yhg4",)
+                .is_err()
+        );
+
+        let mut reordered = artifact.clone();
+        reordered.entries.swap(0, 1);
+        assert!(
+            reordered
+                .verify_genesis(&trusted_identity, "ledger-bd-8yhg4", "trace-bd-8yhg4",)
+                .is_err()
+        );
+
+        let mut tampered = artifact.clone();
+        tampered.receipt.links[0].sequence = 9;
+        assert!(
+            tampered
+                .verify_genesis(&trusted_identity, "ledger-bd-8yhg4", "trace-bd-8yhg4",)
+                .is_err()
+        );
+
+        assert!(
+            artifact
+                .verify_genesis(&trusted_identity, "other-ledger", "trace-bd-8yhg4")
+                .is_err(),
+            "a signed batch cannot be spliced into another ledger identity"
+        );
+    }
+
+    #[test]
+    fn bd_8yhg4_bound_ledger_requires_receipts_and_advances_atomically() {
+        let authority = perf_runtime_authority();
+        let signing_authority = EvidenceSigningAuthority::Runtime(authority.clone());
+        let mut ledger =
+            InMemoryLedger::for_runtime_authority(SecurityEpoch::from_raw(1), &authority)
+                .expect("runtime ledger");
+        ledger
+            .bind_evidence_chain("ledger-bd-8yhg4")
+            .expect("bind evidence chain");
+
+        let first_entries = vec![bd_8yhg4_chain_entry(
+            &authority,
+            "decision-bd-8yhg4-first",
+            1,
+        )];
+        assert!(
+            ledger.emit(first_entries[0].clone()).is_err(),
+            "a bound ledger must reject unreceipted evidence"
+        );
+        let first_receipt = EvidenceChainReceipt::issue_with_authority(
+            "ledger-bd-8yhg4",
+            ledger.evidence_chain_next_sequence(),
+            ledger.evidence_chain_head(),
+            &first_entries,
+            &signing_authority,
+        )
+        .expect("first receipt");
+        ledger
+            .emit_chained_batch(first_entries, first_receipt.clone())
+            .expect("first chained batch");
+        assert_eq!(ledger.evidence_chain_next_sequence(), 1);
+        assert_eq!(
+            ledger.evidence_chain_head(),
+            Some(first_receipt.head_chain_hash.as_str())
+        );
+
+        let second_entries = vec![bd_8yhg4_chain_entry(
+            &authority,
+            "decision-bd-8yhg4-second",
+            2,
+        )];
+        let splice_receipt = EvidenceChainReceipt::issue_with_authority(
+            "other-ledger",
+            ledger.evidence_chain_next_sequence(),
+            ledger.evidence_chain_head(),
+            &second_entries,
+            &signing_authority,
+        )
+        .expect("internally valid foreign receipt");
+        let previous_len = ledger.len();
+        let previous_head = ledger.evidence_chain_head().map(str::to_string);
+        assert!(
+            ledger
+                .emit_chained_batch(second_entries.clone(), splice_receipt)
+                .is_err()
+        );
+        assert_eq!(ledger.len(), previous_len);
+        assert_eq!(ledger.evidence_chain_head(), previous_head.as_deref());
+
+        let second_receipt = EvidenceChainReceipt::issue_with_authority(
+            "ledger-bd-8yhg4",
+            ledger.evidence_chain_next_sequence(),
+            ledger.evidence_chain_head(),
+            &second_entries,
+            &signing_authority,
+        )
+        .expect("second receipt");
+        assert_eq!(second_receipt.first_sequence(), 1);
+        assert_eq!(
+            second_receipt.previous_chain_hash(),
+            Some(first_receipt.head_chain_hash.as_str())
+        );
+        ledger
+            .emit_chained_batch(second_entries, second_receipt.clone())
+            .expect("second chained batch");
+        assert_eq!(ledger.len(), 2);
+        assert_eq!(ledger.evidence_chain_next_sequence(), 2);
+        assert_eq!(
+            ledger.evidence_chain_head(),
+            Some(second_receipt.head_chain_hash.as_str())
         );
     }
 }

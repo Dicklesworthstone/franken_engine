@@ -15,7 +15,9 @@
 
 use std::collections::BTreeMap;
 
-use frankenengine_engine::evidence_ledger::RuntimeEvidenceAuthority;
+use frankenengine_engine::evidence_ledger::{
+    EvidenceChainArtifact, EvidenceEmitter, InMemoryLedger, RuntimeEvidenceAuthority,
+};
 use frankenengine_engine::execution_orchestrator::LabFixtureExecutionOrchestratorExt as _;
 use frankenengine_engine::execution_orchestrator::{
     ExecutionOrchestrator, ExtensionPackage, LossMatrixPreset, OrchestratorConfig,
@@ -170,6 +172,7 @@ fn bd_90u6o_normal_orchestrator_e2e_uses_runtime_owned_signer() {
         .execute(&simple_package("bd-90u6o-normal", "42"))
         .expect("normal orchestrator execution");
     let trusted_identity = orchestrator.evidence_verification_identity();
+    let ledger_id = orchestrator.evidence_ledger_id().to_string();
 
     assert!(!result.evidence_entries.is_empty());
     for entry in &result.evidence_entries {
@@ -190,6 +193,24 @@ fn bd_90u6o_normal_orchestrator_e2e_uses_runtime_owned_signer() {
         assert_eq!(envelope.key_provenance, trusted_identity.key_provenance);
         assert_eq!(envelope.verification_key, trusted_identity.verification_key);
     }
+    let chain_artifact = EvidenceChainArtifact::new(
+        result.evidence_entries.clone(),
+        result.evidence_chain_receipt.clone(),
+    );
+    chain_artifact
+        .verify_genesis(&trusted_identity, &ledger_id, &result.trace_id)
+        .expect("normal runtime must seal its exact evidence batch");
+    assert_eq!(result.evidence_chain_receipt.first_sequence(), 0);
+    assert!(
+        result
+            .evidence_chain_receipt
+            .previous_chain_hash()
+            .is_none()
+    );
+    assert_eq!(
+        orchestrator.ledger().evidence_chain_head(),
+        Some(result.evidence_chain_receipt.head_chain_hash.as_str())
+    );
 }
 
 #[test]
@@ -221,6 +242,175 @@ fn bd_90u6o_explicit_identity_preserves_in_memory_replay_stability() {
     assert_eq!(
         first_result.evidence_entries, replay_result.evidence_entries,
         "the same explicitly supplied signing identity must reproduce byte-stable evidence"
+    );
+    assert_eq!(first.evidence_ledger_id(), replay.evidence_ledger_id());
+    assert_eq!(
+        first_result.evidence_chain_receipt, replay_result.evidence_chain_receipt,
+        "the same identity and configuration must reproduce the signed chain receipt"
+    );
+}
+
+#[test]
+fn bd_8yhg4_reused_orchestrator_extends_one_contiguous_evidence_chain() {
+    let authority = RuntimeEvidenceAuthority::from_signing_key(
+        "bd-8yhg4-recorded-runtime",
+        SigningKey::from_bytes([0x43; 32]).expect("non-zero test key"),
+        SecurityEpoch::from_raw(1),
+        1,
+        None,
+    )
+    .expect("recorded test identity");
+    let mut orchestrator = ExecutionOrchestrator::try_new_with_runtime_authority(
+        OrchestratorConfig::default(),
+        authority,
+    )
+    .expect("orchestrator");
+
+    let first = orchestrator
+        .execute(&simple_package("bd-8yhg4-first", "40 + 1"))
+        .expect("first execution");
+    let second = orchestrator
+        .execute(&simple_package("bd-8yhg4-second", "40 + 2"))
+        .expect("second execution");
+
+    assert_eq!(
+        second.evidence_chain_receipt.first_sequence(),
+        first.evidence_entries.len() as u64
+    );
+    assert_eq!(
+        second.evidence_chain_receipt.previous_chain_hash(),
+        Some(first.evidence_chain_receipt.head_chain_hash.as_str())
+    );
+    second
+        .evidence_chain_receipt
+        .verify_exact_batch(
+            &second.evidence_entries,
+            &second.evidence_verification_identity,
+            orchestrator.evidence_ledger_id(),
+            &second.trace_id,
+            first.evidence_entries.len() as u64,
+            Some(first.evidence_chain_receipt.head_chain_hash.as_str()),
+        )
+        .expect("second execution must extend the first exact batch");
+    assert_eq!(
+        orchestrator.ledger().evidence_chain_head(),
+        Some(second.evidence_chain_receipt.head_chain_hash.as_str())
+    );
+}
+
+#[test]
+fn bd_8yhg4_external_artifact_and_bound_ledger_reject_all_chain_mutations() {
+    let authority = RuntimeEvidenceAuthority::from_signing_key(
+        "bd-8yhg4-adversarial-runtime",
+        SigningKey::from_bytes([0x44; 32]).expect("non-zero test key"),
+        SecurityEpoch::from_raw(1),
+        1,
+        None,
+    )
+    .expect("recorded test identity");
+    let mut orchestrator = ExecutionOrchestrator::try_new_with_runtime_authority(
+        OrchestratorConfig::default(),
+        authority,
+    )
+    .expect("orchestrator");
+    let result = orchestrator
+        .execute(&package_with_metadata(
+            "bd-8yhg4-adversarial",
+            "const obj = { value: 42 }; obj.value;",
+            &[
+                ("guardplane.enable_instruction_hooks", "true"),
+                ("capability_witness.trust_level", "trusted"),
+                ("capability_witness.confidence_millionths", "990000"),
+                (
+                    "capability_witness.required_capabilities",
+                    "object.property,alloc.object",
+                ),
+            ],
+        ))
+        .expect("execution");
+    assert!(
+        result.evidence_entries.len() > 1,
+        "reorder fixture must emit a multi-entry guardplane batch"
+    );
+    let trusted_identity = result.evidence_verification_identity.clone();
+    let ledger_id = orchestrator.evidence_ledger_id().to_string();
+    let artifact = EvidenceChainArtifact::new(
+        result.evidence_entries.clone(),
+        result.evidence_chain_receipt.clone(),
+    );
+    artifact
+        .verify_genesis(&trusted_identity, &ledger_id, &result.trace_id)
+        .expect("untampered exact artifact");
+
+    let mut missing = artifact.clone();
+    missing.entries.pop();
+    assert!(
+        missing
+            .verify_genesis(&trusted_identity, &ledger_id, &result.trace_id)
+            .is_err()
+    );
+
+    let mut duplicate = artifact.clone();
+    duplicate.entries.push(duplicate.entries[0].clone());
+    assert!(
+        duplicate
+            .verify_genesis(&trusted_identity, &ledger_id, &result.trace_id)
+            .is_err()
+    );
+
+    let mut reordered = artifact.clone();
+    reordered.entries.reverse();
+    reordered.receipt.links.reverse();
+    assert!(
+        reordered
+            .verify_genesis(&trusted_identity, &ledger_id, &result.trace_id)
+            .is_err()
+    );
+
+    let mut tampered = artifact.clone();
+    tampered.receipt.links[0].sequence = 99;
+    assert!(
+        tampered
+            .verify_genesis(&trusted_identity, &ledger_id, &result.trace_id)
+            .is_err()
+    );
+    assert!(
+        artifact
+            .verify_genesis(&trusted_identity, "foreign-ledger", &result.trace_id)
+            .is_err()
+    );
+    assert!(
+        artifact
+            .verify_genesis(&trusted_identity, &ledger_id, "foreign-run")
+            .is_err()
+    );
+
+    let mut ledger =
+        InMemoryLedger::for_verification_identity(result.epoch, &trusted_identity).expect("ledger");
+    ledger
+        .bind_evidence_chain(&ledger_id)
+        .expect("bind expected chain");
+    assert!(
+        ledger.emit(result.evidence_entries[0].clone()).is_err(),
+        "bound ledgers must reject the legacy unreceipted API"
+    );
+    assert!(
+        ledger
+            .emit_chained_batch(tampered.entries.clone(), tampered.receipt.clone())
+            .is_err()
+    );
+    assert_eq!(ledger.len(), 0, "rejected receipt must not append entries");
+    assert!(
+        ledger.evidence_chain_head().is_none(),
+        "rejected receipt must not advance the head"
+    );
+    ledger
+        .emit_chained_batch(artifact.entries.clone(), artifact.receipt.clone())
+        .expect("valid exact batch");
+    assert_eq!(ledger.len(), result.evidence_entries.len());
+    assert_eq!(
+        ledger.evidence_chain_head(),
+        Some(artifact.receipt.head_chain_hash.as_str())
     );
 }
 

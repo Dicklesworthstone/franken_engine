@@ -23,6 +23,7 @@ use frankenengine_engine::attested_execution_cell::{
 use frankenengine_engine::containment_executor::ContainmentState;
 use frankenengine_engine::deterministic_replay::{NondeterminismSource, NondeterminismTrace};
 use frankenengine_engine::engine_object_id::EngineObjectId;
+use frankenengine_engine::evidence_ledger::{EvidenceChainArtifact, EvidenceVerificationIdentity};
 use frankenengine_engine::hash_tiers::{AuthenticityHash, ContentHash};
 use frankenengine_engine::mmr_proof::MerkleMountainRange;
 use frankenengine_engine::parser_oracle::{
@@ -1513,7 +1514,7 @@ fn frankenctl_compile_normalizes_typescript_input() {
 }
 
 #[test]
-fn frankenctl_run_writes_execution_report() {
+fn bd_8yhg4_frankenctl_run_writes_exact_evidence_chain_report() {
     let source_path = temp_path("frankenctl_run_source", "js");
     let report_path = temp_path("frankenctl_run_report", "json");
     write_source(&source_path, "let value = 2 + 3;\n");
@@ -1600,6 +1601,32 @@ fn frankenctl_run_writes_execution_report() {
     assert_eq!(
         report_json["observability_mode"]["mode_id"].as_str(),
         Some("default_capture")
+    );
+    let trusted_identity: EvidenceVerificationIdentity =
+        serde_json::from_value(report_json["evidence_verification_identity"].clone())
+            .expect("run report should carry a parseable evidence identity");
+    let chain_artifact: EvidenceChainArtifact =
+        serde_json::from_value(report_json["evidence_chain_artifact"].clone())
+            .expect("run report should carry the exact evidence chain artifact");
+    let ledger_id = report_json["evidence_ledger_id"]
+        .as_str()
+        .expect("run report should expose its evidence ledger id");
+    chain_artifact
+        .verify_genesis(
+            &trusted_identity,
+            ledger_id,
+            report_json["trace_id"]
+                .as_str()
+                .expect("run report should expose its trace id"),
+        )
+        .expect("run report should contain an internally valid exact chain artifact");
+    assert_eq!(
+        report_json["evidence_chain_head"].as_str(),
+        Some(chain_artifact.receipt.head_chain_hash.as_str())
+    );
+    assert_eq!(
+        report_json["evidence_entries"].as_u64(),
+        Some(chain_artifact.entries.len() as u64)
     );
 
     let _ = fs::remove_file(source_path);
@@ -1734,7 +1761,7 @@ fn frankenctl_run_normalizes_inline_typescript_input() {
 }
 
 #[test]
-fn frankenctl_run_explain_writes_bundle_and_explain_renders_it() {
+fn bd_8yhg4_frankenctl_run_explain_indexes_evidence_chain_receipt() {
     let source_path = temp_path("frankenctl_run_explain_source", "js");
     let report_path = temp_path("frankenctl_run_explain_report", "json");
     let bundle_path = temp_path("frankenctl_run_explain_bundle", "json");
@@ -1785,6 +1812,12 @@ fn frankenctl_run_explain_writes_bundle_and_explain_renders_it() {
     assert!(
         bundle_json["artifacts"].get("action-decision").is_some(),
         "action-decision artifact should be indexed"
+    );
+    assert!(
+        bundle_json["artifacts"]
+            .get("evidence-chain-receipt")
+            .is_some(),
+        "signed evidence-chain receipt should be indexed"
     );
     assert!(
         bundle_json["links"]

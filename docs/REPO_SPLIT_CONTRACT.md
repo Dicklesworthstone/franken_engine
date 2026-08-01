@@ -33,6 +33,33 @@ Forbidden:
 - direct production `franken_node` -> `franken_native_capsule` calls
 - Copy-paste forks of engine crates inside `franken_node`
 
+## Product-Provisioned Runtime Evidence Authority (`bd-fzpkz`)
+
+The engine owns the evidence authority types and signing semantics; the
+downstream product owns production key custody and provisioning. This boundary
+does not create a reverse dependency.
+
+| Surface | Owner | Contract |
+|---|---|---|
+| `RuntimeEvidenceAuthority`, `EvidenceVerificationIdentity`, key provenance, and signature verification | `franken_engine` | Define and validate the typed runtime signing boundary without knowing product persistence paths or product root keys. |
+| Production orchestrator construction | `franken_engine` API, invoked by `franken_node` | `ExecutionOrchestrator::try_new_with_runtime_config_and_authority` requires the caller to supply a typed runtime authority. Production construction cannot silently generate or substitute a seed. |
+| Persistent product root and per-session seed generation | `franken_node` parent | Keep the long-lived root and durable captures outside the guest project filesystem root, mask that state inside any containment unit that otherwise exposes the host root, generate a fresh short-lived session seed, and bind its complete engine verification identity into a product-root-signed capture. |
+| Session execution and result identity | `franken_engine` | Sign runtime evidence with the supplied authority and return the corresponding `EvidenceVerificationIdentity` so the product can reconcile the result against its independently persisted capture. |
+| Independent trust | product/operator verifier | Pin the product root outside the capture and use it to authenticate the captured engine identity. An embedded public key alone is not an external trust anchor. |
+
+Deterministic identities remain available only through explicitly lab-scoped
+constructors and fixture extension traits. Product code must not import those
+paths or use a hard-coded, process-global, producer-known, or child-generated
+seed. The product may transmit one short-lived authority into its supervised
+execution child, but the persistent product root is never serialized into that
+child and its storage path remains outside the guest filesystem provider's
+root.
+
+The downstream lifecycle and durable paths are specified by
+`/dp/franken_node/docs/ENGINE_SPLIT_CONTRACT.md`. Engine code must not copy that
+persistence implementation or depend on the product repository to discover a
+key.
+
 ## Native-Code Capsule Boundary (`NCC-ENGINE-SPLIT-0010-V1`)
 
 The native-code decision is

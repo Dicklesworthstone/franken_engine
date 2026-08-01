@@ -55,7 +55,7 @@ use frankenengine_engine::evidence_ledger::{
 };
 use frankenengine_engine::execution_orchestrator::{
     ExecutionOrchestrator, ExtensionPackage, OrchestratorConfig, OrchestratorError,
-    OrchestratorResult,
+    OrchestratorResult, UncommittedEvidenceChainEvidence,
 };
 use frankenengine_engine::fleet_trace_total_order::{
     FleetTraceNode, flatten_to_events, merge_fleet_traces, node_id_from_session,
@@ -138,8 +138,10 @@ use sha2::{Digest, Sha256};
 const FRANKENCTL_SCHEMA_VERSION: &str = "franken-engine.frankenctl.v1";
 const RUN_COMMAND_SCHEMA_VERSION: &str = "franken-engine.frankenctl.run.v2";
 const AGENT_SANDBOX_COMMAND_SCHEMA_VERSION: &str = "franken-engine.frankenctl.agent-sandbox.v2";
+const ORCHESTRATION_FAILURE_SCHEMA_VERSION: &str =
+    "franken-engine.frankenctl.orchestration-failure.v1";
 const COMPILE_ARTIFACT_SCHEMA_VERSION: &str = "franken-engine.frankenctl.compile-artifact.v1";
-const RUN_REPORT_SCHEMA_VERSION: &str = "franken-engine.frankenctl.run-report.v1";
+const RUN_REPORT_SCHEMA_VERSION: &str = RUN_COMMAND_SCHEMA_VERSION;
 const RUN_SOURCE_SCHEMA_VERSION: &str = "franken-engine.frankenctl.run-source.v1";
 const RUN_ACTION_DECISION_SCHEMA_VERSION: &str = "franken-engine.frankenctl.run-action-decision.v1";
 const RUN_POSTERIOR_SCHEMA_VERSION: &str = "franken-engine.frankenctl.run-posterior.v1";
@@ -365,6 +367,8 @@ struct RunArgs {
     /// Directory for the E8 certificate bundle (bd-fqlfw.8.3); requires
     /// `--data-contract`.
     certificate_out: Option<PathBuf>,
+    /// Override the execution-cell close budget for policy testing.
+    cell_close_budget_ms: Option<u64>,
 }
 
 /// `frankenctl agent-sandbox` (bd-fqlfw.8.5): run agent-generated code under
@@ -381,6 +385,8 @@ struct AgentSandboxArgs {
     purpose: Option<String>,
     /// Directory for the E8 certificate bundle; requires `--data-contract`.
     certificate_out: Option<PathBuf>,
+    /// Override the execution-cell close budget for policy testing.
+    cell_close_budget_ms: Option<u64>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -956,6 +962,29 @@ struct RunCommandOutput {
     evidence_chain_head: String,
     evidence_chain_artifact: EvidenceChainArtifact,
     console_output: Vec<ConsoleEntry>,
+    observability_mode: ObservabilityModeOutput,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct OrchestrationFailureOutput {
+    schema_version: String,
+    command: String,
+    input_path: String,
+    trace_id: String,
+    exit_code: i32,
+    error: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    classification: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    report_path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    report_write_error: Option<String>,
+    evidence_chain_instance_id: String,
+    evidence_ledger_id: String,
+    evidence_chain_next_sequence: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    evidence_chain_head: Option<String>,
+    uncommitted_evidence_chain: UncommittedEvidenceChainEvidence,
     observability_mode: ObservabilityModeOutput,
 }
 
@@ -2133,6 +2162,7 @@ fn parse_run_command(args: &[String]) -> Result<CommandSpec, String> {
     let mut data_contract: Option<PathBuf> = None;
     let mut data_contract_purpose = DEFAULT_DATA_CONTRACT_PURPOSE.to_string();
     let mut certificate_out: Option<PathBuf> = None;
+    let mut cell_close_budget_ms: Option<u64> = None;
 
     let mut index = 0usize;
     while index < args.len() {
@@ -2157,6 +2187,12 @@ fn parse_run_command(args: &[String]) -> Result<CommandSpec, String> {
                     &mut index,
                     "--certificate-out",
                 )?));
+            }
+            "--cell-close-budget-ms" => {
+                cell_close_budget_ms = Some(parse_positive_u64(
+                    &next_arg(args, &mut index, "--cell-close-budget-ms")?,
+                    "--cell-close-budget-ms",
+                )?);
             }
             "--explain" => {
                 explain = true;
@@ -2199,6 +2235,7 @@ fn parse_run_command(args: &[String]) -> Result<CommandSpec, String> {
         data_contract,
         data_contract_purpose,
         certificate_out,
+        cell_close_budget_ms,
     }))
 }
 
@@ -2214,6 +2251,7 @@ fn parse_agent_sandbox_command(args: &[String]) -> Result<CommandSpec, String> {
     let mut data_contract: Option<PathBuf> = None;
     let mut purpose: Option<String> = None;
     let mut certificate_out: Option<PathBuf> = None;
+    let mut cell_close_budget_ms: Option<u64> = None;
 
     let mut index = 0usize;
     while index < args.len() {
@@ -2239,6 +2277,12 @@ fn parse_agent_sandbox_command(args: &[String]) -> Result<CommandSpec, String> {
                     "--certificate-out",
                 )?));
             }
+            "--cell-close-budget-ms" => {
+                cell_close_budget_ms = Some(parse_positive_u64(
+                    &next_arg(args, &mut index, "--cell-close-budget-ms")?,
+                    "--cell-close-budget-ms",
+                )?);
+            }
             flag => return Err(format!("unknown agent-sandbox flag `{flag}`")),
         }
         index += 1;
@@ -2259,6 +2303,7 @@ fn parse_agent_sandbox_command(args: &[String]) -> Result<CommandSpec, String> {
         data_contract,
         purpose,
         certificate_out,
+        cell_close_budget_ms,
     }))
 }
 
@@ -4211,11 +4256,14 @@ fn execute_run(args: RunArgs) -> Result<i32, String> {
         metadata: BTreeMap::new(),
     };
     let policy_id = OrchestratorConfig::default().policy_id;
-    let orchestrator_config = OrchestratorConfig {
+    let mut orchestrator_config = OrchestratorConfig {
         parse_goal: args.parse_goal,
         trace_id_prefix: "frankenctl-run".to_string(),
         ..OrchestratorConfig::default()
     };
+    if let Some(cell_close_budget_ms) = args.cell_close_budget_ms {
+        orchestrator_config.cell_close_budget_ms = cell_close_budget_ms;
+    }
     let evidence_authority = RuntimeEvidenceAuthority::generate_runtime_owned(
         fresh_runtime_evidence_producer_id("frankenctl.run", &source_hash.to_hex())?,
         orchestrator_config.epoch,
@@ -4236,9 +4284,18 @@ fn execute_run(args: RunArgs) -> Result<i32, String> {
         })?;
         orchestrator.set_data_contract_ingress(ingress);
     }
-    let result = orchestrator
-        .execute(&package)
-        .map_err(|error| format_run_error(&args.input, &error))?;
+    let result = match orchestrator.execute(&package) {
+        Ok(result) => result,
+        Err(error) => {
+            return emit_orchestration_failure(
+                "run",
+                &args.input,
+                args.out.as_deref(),
+                &orchestrator,
+                &error,
+            );
+        }
+    };
     // Authenticate the exact emitted entries against the composition root's
     // in-memory trust anchor before any trace, certificate, explain bundle, or
     // report write becomes externally visible. The serialized report does not
@@ -4518,11 +4575,14 @@ fn execute_agent_sandbox(args: AgentSandboxArgs) -> Result<i32, String> {
         .map_err(|error| format!("agent-sandbox manifest rejected: {error}"))?;
 
     let policy_id = OrchestratorConfig::default().policy_id;
-    let orchestrator_config = OrchestratorConfig {
+    let mut orchestrator_config = OrchestratorConfig {
         parse_goal: args.parse_goal,
         trace_id_prefix: "frankenctl-agent-sandbox".to_string(),
         ..OrchestratorConfig::default()
     };
+    if let Some(cell_close_budget_ms) = args.cell_close_budget_ms {
+        orchestrator_config.cell_close_budget_ms = cell_close_budget_ms;
+    }
     let evidence_authority = RuntimeEvidenceAuthority::generate_runtime_owned(
         fresh_runtime_evidence_producer_id("frankenctl.agent-sandbox", &source_hash.to_hex())?,
         orchestrator_config.epoch,
@@ -4556,9 +4616,18 @@ fn execute_agent_sandbox(args: AgentSandboxArgs) -> Result<i32, String> {
         );
     }
 
-    let result = orchestrator
-        .execute(&package)
-        .map_err(|error| format_run_error(&args.input, &error))?;
+    let result = match orchestrator.execute(&package) {
+        Ok(result) => result,
+        Err(error) => {
+            return emit_orchestration_failure(
+                "agent-sandbox",
+                &args.input,
+                args.out.as_deref(),
+                &orchestrator,
+                &error,
+            );
+        }
+    };
     let trusted_runtime_identity = orchestrator.evidence_verification_identity();
     let evidence_chain_instance_id = orchestrator.evidence_chain_instance_id().to_string();
     let evidence_ledger_id = orchestrator.evidence_ledger_id().to_string();
@@ -6392,8 +6461,77 @@ fn derive_claim_explanation_receipt_id(output: &ClaimExplanationOutput) -> Strin
     format!("claim-explain-{}", ContentHash::compute(&encoded).to_hex())
 }
 
-fn format_run_error(input: &Path, error: &OrchestratorError) -> String {
-    let mut detail = format!("run failed for `{}`: {error}", input.display());
+fn emit_orchestration_failure(
+    command: &str,
+    input: &Path,
+    out: Option<&Path>,
+    orchestrator: &ExecutionOrchestrator,
+    error: &OrchestratorError,
+) -> Result<i32, String> {
+    let lifecycle = error
+        .post_cell_failure()
+        .ok_or_else(|| format_orchestration_error(command, input, error))?;
+    let uncommitted_evidence_chain = error
+        .uncommitted_evidence_chain()
+        .ok_or_else(|| format_orchestration_error(command, input, error))?;
+    let trusted_identity = orchestrator.evidence_verification_identity();
+    let evidence_chain_instance_id = orchestrator.evidence_chain_instance_id().to_string();
+    let evidence_ledger_id = orchestrator.evidence_ledger_id().to_string();
+    let evidence_chain_next_sequence = orchestrator.ledger().evidence_chain_next_sequence();
+    let evidence_chain_head = orchestrator
+        .ledger()
+        .evidence_chain_head()
+        .map(str::to_string);
+    uncommitted_evidence_chain
+        .verify_with_context(
+            &trusted_identity,
+            &evidence_chain_instance_id,
+            &evidence_ledger_id,
+            &lifecycle.cleanup.trace_id,
+            evidence_chain_next_sequence,
+            evidence_chain_head.as_deref(),
+        )
+        .map_err(|verification_error| {
+            format!(
+                "{}; refusing to emit unverified failure evidence: {verification_error}",
+                format_orchestration_error(command, input, error)
+            )
+        })?;
+
+    let error_message = format_orchestration_error(command, input, error);
+    let mut output = OrchestrationFailureOutput {
+        schema_version: ORCHESTRATION_FAILURE_SCHEMA_VERSION.to_string(),
+        command: command.to_string(),
+        input_path: input.display().to_string(),
+        trace_id: lifecycle.cleanup.trace_id.clone(),
+        exit_code: 2,
+        error: error_message.clone(),
+        classification: classify_run_error(error).map(str::to_string),
+        report_path: out.map(|path| path.display().to_string()),
+        report_write_error: None,
+        evidence_chain_instance_id,
+        evidence_ledger_id,
+        evidence_chain_next_sequence,
+        evidence_chain_head,
+        uncommitted_evidence_chain: uncommitted_evidence_chain.clone(),
+        observability_mode: default_capture_observability_mode(),
+    };
+    if let Some(path) = out {
+        if let Err(write_error) = write_json_file(path, &output) {
+            output.report_path = None;
+            output.report_write_error = Some(write_error);
+        }
+    }
+    print_json(&output)?;
+    eprintln!("{error_message}");
+    if let Some(write_error) = output.report_write_error.as_deref() {
+        eprintln!("failure report file was not written: {write_error}");
+    }
+    Ok(output.exit_code)
+}
+
+fn format_orchestration_error(command: &str, input: &Path, error: &OrchestratorError) -> String {
+    let mut detail = format!("{command} failed for `{}`: {error}", input.display());
     if let Some(classification) = classify_run_error(error) {
         detail.push_str(format!("\nclassification: {classification}").as_str());
     }
@@ -11208,6 +11346,14 @@ fn parse_u64(value: &str, flag: &str) -> Result<u64, String> {
         .map_err(|error| format!("invalid {flag} value `{value}`: {error}"))
 }
 
+fn parse_positive_u64(value: &str, flag: &str) -> Result<u64, String> {
+    let parsed = parse_u64(value, flag)?;
+    if parsed == 0 {
+        return Err(format!("{flag} must be at least 1"));
+    }
+    Ok(parsed)
+}
+
 fn parse_real_yyyy_mm_dd(value: &str, flag: &str) -> Result<String, String> {
     NaiveDate::parse_from_str(value, "%Y-%m-%d")
         .map(|_| value.to_string())
@@ -11757,7 +11903,7 @@ fn run_usage() -> String {
         "  frankenctl run --input <source.js> --extension-id <id> [--goal script|module] [--out <report.json>]",
         "      [--data-contract <contract.json>] [--purpose <purpose>] [--certificate-out <bundle-dir>]",
         "      [--explain [bundle.json]] [--explain-out <bundle.json>]",
-        "      [--emit-trace <trace.json>]",
+        "      [--emit-trace <trace.json>] [--cell-close-budget-ms <n>]",
         "",
         "  --emit-trace writes the run's recorded nondeterminism trace — the",
         "  exact input `frankenctl replay debug --trace` consumes, enabling",
@@ -11770,6 +11916,10 @@ fn run_usage() -> String {
         "  and audit.md. Negative claims are evaluated fail-closed within the",
         "  explicit-flow analyzed scope; the certificate status stays",
         "  `uncertified` while the E8 refusal ledger blocks certification.",
+        "",
+        "  A post-evidence lifecycle failure exits 2 and emits a structured",
+        "  orchestration-failure report containing the verified exact batch",
+        "  explicitly marked uncommitted. --out receives the same report.",
     ]
     .join("\n")
 }
@@ -11780,6 +11930,7 @@ fn agent_sandbox_usage() -> String {
         "  frankenctl agent-sandbox --manifest <agent_sandbox_manifest.json> --input <generated.js>",
         "      [--goal script|module] [--out <report.json>]",
         "      [--data-contract <contract.json>] [--purpose <purpose>] [--certificate-out <bundle-dir>]",
+        "      [--cell-close-budget-ms <n>]",
         "",
         "  Runs AI-agent-generated code under the tool authority the manifest",
         "  declares (franken-engine.agent-sandbox-manifest.v1): each tool grant",
@@ -11798,6 +11949,9 @@ fn agent_sandbox_usage() -> String {
         "  certificate bundle is written on exit with the agent's effective",
         "  tool authority as its runtime-granted capability set — this is the",
         "  tool-runner shim contract an agent framework consumes.",
+        "",
+        "  A post-evidence lifecycle failure exits 2 and emits the same",
+        "  structured, explicitly uncommitted exact-chain failure report as run.",
     ]
     .join("\n")
 }

@@ -38,9 +38,9 @@ use crate::entropy_evidence_compressor::{
     ArithmeticCoder, CompressionCertificate, EntropyError, EntropyEstimator,
 };
 use crate::evidence_ledger::{
-    CandidateAction, ChosenAction, DecisionType, EvidenceChainReceipt, EvidenceEntry,
-    EvidenceEntryBuilder, EvidenceSigningAuthority, EvidenceVerificationIdentity, InMemoryLedger,
-    LabEvidenceAuthority, LedgerError, RuntimeEvidenceAuthority, Witness,
+    CandidateAction, ChosenAction, DecisionType, EvidenceChainArtifact, EvidenceChainReceipt,
+    EvidenceEntry, EvidenceEntryBuilder, EvidenceSigningAuthority, EvidenceVerificationIdentity,
+    InMemoryLedger, LabEvidenceAuthority, LedgerError, RuntimeEvidenceAuthority, Witness,
 };
 use crate::execution_cell::{CellError, CellEvent, CellKind, ExecutionCell};
 use crate::expected_loss_selector::{
@@ -133,6 +133,8 @@ const LAB_EVIDENCE_CHAIN_INSTANCE_ID: &str =
     "franken-engine.execution-orchestrator.lab-chain-instance.v1";
 const RUNTIME_EVIDENCE_CHAIN_INSTANCE_DOMAIN: &str =
     "franken-engine.execution-orchestrator.runtime-chain-instance.v1";
+pub const UNCOMMITTED_EVIDENCE_CHAIN_EVIDENCE_SCHEMA_VERSION: &str =
+    "franken-engine.uncommitted-evidence-chain-evidence.v1";
 
 // ---------------------------------------------------------------------------
 // LossMatrixPreset
@@ -387,11 +389,160 @@ pub struct ContainmentSagaFailureEvidence {
     pub saga_error: SagaError,
 }
 
+/// Commit state for a signed evidence batch returned from a failed lifecycle.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EvidenceChainCommitState {
+    /// The batch was signed and validated but never appended to the ledger.
+    Uncommitted,
+}
+
+/// Portable signed evidence retained when the surrounding lifecycle fails.
+///
+/// The exact batch is valid for the recorded ledger position, but
+/// `commit_state` makes clear that it is not a ledger head. The embedded
+/// verification identity is a lookup coordinate only; callers must authenticate
+/// it through an external trust registry before verifying `artifact`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct UncommittedEvidenceChainEvidence {
+    pub schema_version: String,
+    pub commit_state: EvidenceChainCommitState,
+    pub chain_instance_id: String,
+    pub artifact: EvidenceChainArtifact,
+    pub evidence_verification_identity: EvidenceVerificationIdentity,
+    pub containment_receipt: Option<ContainmentReceipt>,
+    pub saga_id: Option<String>,
+}
+
+impl UncommittedEvidenceChainEvidence {
+    /// Validate this failure artifact against composition-root-owned context.
+    ///
+    /// This authenticates the exact evidence batch and checks the unsigned
+    /// lifecycle wrapper for internal consistency. It does not turn the
+    /// wrapper into a signed ledger observation.
+    #[allow(clippy::too_many_arguments)]
+    pub fn verify_with_context(
+        &self,
+        trusted_identity: &EvidenceVerificationIdentity,
+        expected_chain_instance_id: &str,
+        expected_ledger_id: &str,
+        expected_run_id: &str,
+        expected_first_sequence: u64,
+        expected_previous_chain_hash: Option<&str>,
+    ) -> Result<(), LedgerError> {
+        if self.schema_version != UNCOMMITTED_EVIDENCE_CHAIN_EVIDENCE_SCHEMA_VERSION {
+            return Err(LedgerError::SchemaValidationFailed {
+                reason: format!(
+                    "uncommitted evidence schema must be {}, got {}",
+                    UNCOMMITTED_EVIDENCE_CHAIN_EVIDENCE_SCHEMA_VERSION, self.schema_version
+                ),
+            });
+        }
+        if self.chain_instance_id != expected_chain_instance_id {
+            return Err(LedgerError::SchemaValidationFailed {
+                reason: format!(
+                    "uncommitted evidence chain instance mismatch: expected {}, got {}",
+                    expected_chain_instance_id, self.chain_instance_id
+                ),
+            });
+        }
+        if &self.evidence_verification_identity != trusted_identity {
+            return Err(LedgerError::SchemaValidationFailed {
+                reason: "uncommitted evidence identity is not the trusted runtime identity"
+                    .to_string(),
+            });
+        }
+        let primary_entry =
+            self.artifact
+                .entries
+                .first()
+                .ok_or_else(|| LedgerError::SchemaValidationFailed {
+                    reason: "uncommitted evidence batch must contain a primary entry".to_string(),
+                })?;
+        if self
+            .saga_id
+            .as_deref()
+            .is_some_and(|saga_id| saga_id.trim().is_empty())
+        {
+            return Err(LedgerError::SchemaValidationFailed {
+                reason: "saga id must not be empty".to_string(),
+            });
+        }
+        if let Some(receipt) = self.containment_receipt.as_ref() {
+            if !receipt.success || !receipt.verify_integrity() {
+                return Err(LedgerError::SchemaValidationFailed {
+                    reason: "uncommitted evidence carries an invalid containment receipt"
+                        .to_string(),
+                });
+            }
+            if !receipt
+                .evidence_refs
+                .iter()
+                .any(|reference| reference == expected_run_id)
+            {
+                return Err(LedgerError::SchemaValidationFailed {
+                    reason:
+                        "containment receipt does not reference the uncommitted evidence run id"
+                            .to_string(),
+                });
+            }
+            if primary_entry
+                .metadata
+                .get("extension_id")
+                .map(String::as_str)
+                != Some(receipt.target_extension_id.as_str())
+            {
+                return Err(LedgerError::SchemaValidationFailed {
+                    reason: "containment receipt target does not match the signed primary entry"
+                        .to_string(),
+                });
+            }
+            if primary_entry.chosen_action.action_name != receipt.action.to_string() {
+                return Err(LedgerError::SchemaValidationFailed {
+                    reason: "containment receipt action does not match the signed primary entry"
+                        .to_string(),
+                });
+            }
+            if primary_entry.epoch_id != receipt.epoch {
+                return Err(LedgerError::SchemaValidationFailed {
+                    reason: "containment receipt epoch does not match the signed primary entry"
+                        .to_string(),
+                });
+            }
+            let requires_saga = matches!(
+                receipt.action,
+                ContainmentAction::Suspend
+                    | ContainmentAction::Terminate
+                    | ContainmentAction::Quarantine
+            );
+            if requires_saga != self.saga_id.is_some() {
+                return Err(LedgerError::SchemaValidationFailed {
+                    reason: "containment receipt and saga id are inconsistent".to_string(),
+                });
+            }
+        } else if self.saga_id.is_some() {
+            return Err(LedgerError::SchemaValidationFailed {
+                reason: "saga id requires a successful containment receipt".to_string(),
+            });
+        }
+        self.artifact.verify_with_context(
+            trusted_identity,
+            expected_ledger_id,
+            expected_run_id,
+            expected_first_sequence,
+            expected_previous_chain_hash,
+        )
+    }
+}
+
 /// Ordered failure report for an orchestration attempt that reached cell
 /// creation.
 ///
 /// `primary_error` is always the first phase failure. Later failures, including
 /// recorder finalization and cell close, are retained in occurrence order.
+/// When a signed evidence batch was staged but not appended,
+/// `uncommitted_evidence_chain` preserves the exact batch and any successful
+/// containment side effect without presenting it as the ledger head.
 /// When containment committed before saga creation failed,
 /// `containment_saga_failure` preserves the successful action receipt and the
 /// rejected saga request.
@@ -399,6 +550,7 @@ pub struct ContainmentSagaFailureEvidence {
 pub struct PostCellFailure {
     pub primary_error: Box<OrchestratorError>,
     pub additional_errors: Vec<OrchestratorError>,
+    pub uncommitted_evidence_chain: Option<UncommittedEvidenceChainEvidence>,
     pub containment_saga_failure: Option<ContainmentSagaFailureEvidence>,
     pub cleanup: CellCleanupEvidence,
 }
@@ -474,6 +626,7 @@ struct PreparedLoweringOutput {
 struct PendingPostCellFailure {
     primary_error: Box<OrchestratorError>,
     additional_errors: Vec<OrchestratorError>,
+    uncommitted_evidence_chain: Option<Box<UncommittedEvidenceChainEvidence>>,
     containment_saga_failure: Option<Box<ContainmentSagaFailureEvidence>>,
 }
 
@@ -482,6 +635,7 @@ impl From<OrchestratorError> for PendingPostCellFailure {
         Self {
             primary_error: Box::new(primary_error),
             additional_errors: Vec::new(),
+            uncommitted_evidence_chain: None,
             containment_saga_failure: None,
         }
     }
@@ -506,6 +660,7 @@ impl From<ContainmentPhaseError> for PendingPostCellFailure {
             ContainmentPhaseError::SagaCreation(evidence) => Self {
                 primary_error: Box::new(OrchestratorError::Saga(evidence.saga_error.clone())),
                 additional_errors: Vec::new(),
+                uncommitted_evidence_chain: None,
                 containment_saga_failure: Some(evidence),
             },
         }
@@ -617,6 +772,13 @@ impl fmt::Display for OrchestratorError {
                         evidence.saga_id
                     )?;
                 }
+                if let Some(evidence) = &failure.uncommitted_evidence_chain {
+                    write!(
+                        f,
+                        "; signed evidence batch {} remains uncommitted",
+                        evidence.artifact.receipt.head_chain_hash
+                    )?;
+                }
                 for additional in &failure.additional_errors {
                     write!(f, "; additional failure: {additional}")?;
                 }
@@ -657,6 +819,15 @@ impl OrchestratorError {
     pub fn containment_saga_failure(&self) -> Option<&ContainmentSagaFailureEvidence> {
         match self {
             Self::PostCellFailure(failure) => failure.containment_saga_failure.as_ref(),
+            _ => None,
+        }
+    }
+
+    /// Signed exact batch that was staged but not committed before failure.
+    #[must_use]
+    pub fn uncommitted_evidence_chain(&self) -> Option<&UncommittedEvidenceChainEvidence> {
+        match self {
+            Self::PostCellFailure(failure) => failure.uncommitted_evidence_chain.as_ref(),
             _ => None,
         }
     }
@@ -779,6 +950,8 @@ pub struct ExecutionOrchestrator {
     guardplane_builder_failure_index_override: Option<usize>,
     #[cfg(test)]
     containment_action_override: Option<ContainmentAction>,
+    #[cfg(test)]
+    ledger_commit_failure_override: bool,
 }
 
 impl ExecutionOrchestrator {
@@ -1042,6 +1215,8 @@ impl ExecutionOrchestrator {
             guardplane_builder_failure_index_override: None,
             #[cfg(test)]
             containment_action_override: None,
+            #[cfg(test)]
+            ledger_commit_failure_override: false,
             ambient_authority_grant,
             config,
             runtime_config,
@@ -1420,6 +1595,7 @@ impl ExecutionOrchestrator {
                             Err(primary_error) => PendingPostCellFailure {
                                 primary_error: Box::new(primary_error),
                                 additional_errors: vec![finish_error],
+                                uncommitted_evidence_chain: None,
                                 containment_saga_failure: None,
                             },
                         });
@@ -1460,6 +1636,7 @@ impl ExecutionOrchestrator {
                             Err(primary_error) => PendingPostCellFailure {
                                 primary_error: Box::new(primary_error),
                                 additional_errors: vec![finish_error],
+                                uncommitted_evidence_chain: None,
                                 containment_saga_failure: None,
                             },
                         });
@@ -1560,12 +1737,33 @@ impl ExecutionOrchestrator {
 
             // Step 10: Execute any selected containment action and attach a saga
             // only for the actions that require follow-up orchestration.
-            let (containment_receipt, saga_id) = self.phase_execute_containment(
+            let (containment_receipt, saga_id) = match self.phase_execute_containment(
                 containment_action,
                 package,
                 &trace_id,
                 &decision_id,
-            )?;
+            ) {
+                Ok(outcome) => outcome,
+                Err(error) => {
+                    let (containment_receipt, saga_id) = match &error {
+                        ContainmentPhaseError::SagaCreation(evidence) => (
+                            Some(evidence.receipt.clone()),
+                            Some(evidence.saga_id.clone()),
+                        ),
+                        ContainmentPhaseError::Pipeline(_) => (None, None),
+                    };
+                    let uncommitted_evidence_chain = self
+                        .build_uncommitted_evidence_chain_evidence(
+                            evidence_entries.clone(),
+                            evidence_chain_receipt.clone(),
+                            containment_receipt,
+                            saga_id,
+                        );
+                    let mut failure = PendingPostCellFailure::from(error);
+                    failure.uncommitted_evidence_chain = Some(Box::new(uncommitted_evidence_chain));
+                    return Err(failure);
+                }
+            };
 
             Ok(OrchestratorResult {
                 extension_id: package.extension_id.clone(),
@@ -1618,10 +1816,17 @@ impl ExecutionOrchestrator {
 
         match (pipeline_result, close_result) {
             (Ok(mut result), Ok(finalize_result)) => {
-                if let Err(ledger_error) = self.ledger.emit_chained_batch(
+                if let Err(ledger_error) = self.commit_evidence_chain_batch(
                     result.evidence_entries.clone(),
                     result.evidence_chain_receipt.clone(),
                 ) {
+                    let uncommitted_evidence_chain = self
+                        .build_uncommitted_evidence_chain_evidence(
+                            result.evidence_entries.clone(),
+                            result.evidence_chain_receipt.clone(),
+                            result.containment_receipt.clone(),
+                            result.saga_id.clone(),
+                        );
                     let cleanup = CellCleanupEvidence {
                         cell_id,
                         trace_id,
@@ -1634,6 +1839,7 @@ impl ExecutionOrchestrator {
                         PostCellFailure {
                             primary_error: Box::new(OrchestratorError::Ledger(ledger_error)),
                             additional_errors: Vec::new(),
+                            uncommitted_evidence_chain: Some(uncommitted_evidence_chain),
                             containment_saga_failure: None,
                             cleanup,
                         },
@@ -1646,7 +1852,13 @@ impl ExecutionOrchestrator {
                 self.last_failed_trace_id = None;
                 Ok(result)
             }
-            (Ok(_), Err(close_error)) => {
+            (Ok(result), Err(close_error)) => {
+                let uncommitted_evidence_chain = self.build_uncommitted_evidence_chain_evidence(
+                    result.evidence_entries,
+                    result.evidence_chain_receipt,
+                    result.containment_receipt,
+                    result.saga_id,
+                );
                 let cleanup = CellCleanupEvidence {
                     cell_id,
                     trace_id,
@@ -1659,6 +1871,7 @@ impl ExecutionOrchestrator {
                     PostCellFailure {
                         primary_error: Box::new(OrchestratorError::Cell(close_error)),
                         additional_errors: Vec::new(),
+                        uncommitted_evidence_chain: Some(uncommitted_evidence_chain),
                         containment_saga_failure: None,
                         cleanup,
                     },
@@ -1686,6 +1899,9 @@ impl ExecutionOrchestrator {
                     PostCellFailure {
                         primary_error: failure.primary_error,
                         additional_errors: failure.additional_errors,
+                        uncommitted_evidence_chain: failure
+                            .uncommitted_evidence_chain
+                            .map(|evidence| *evidence),
                         containment_saga_failure: failure
                             .containment_saga_failure
                             .map(|evidence| *evidence),
@@ -1697,6 +1913,38 @@ impl ExecutionOrchestrator {
     }
 
     // -- Private helpers -----------------------------------------------------
+
+    fn commit_evidence_chain_batch(
+        &mut self,
+        entries: Vec<EvidenceEntry>,
+        receipt: EvidenceChainReceipt,
+    ) -> Result<(), LedgerError> {
+        #[cfg(test)]
+        if std::mem::take(&mut self.ledger_commit_failure_override) {
+            return Err(LedgerError::SchemaValidationFailed {
+                reason: "injected post-close evidence ledger commit failure".to_string(),
+            });
+        }
+        self.ledger.emit_chained_batch(entries, receipt)
+    }
+
+    fn build_uncommitted_evidence_chain_evidence(
+        &self,
+        entries: Vec<EvidenceEntry>,
+        receipt: EvidenceChainReceipt,
+        containment_receipt: Option<ContainmentReceipt>,
+        saga_id: Option<String>,
+    ) -> UncommittedEvidenceChainEvidence {
+        UncommittedEvidenceChainEvidence {
+            schema_version: UNCOMMITTED_EVIDENCE_CHAIN_EVIDENCE_SCHEMA_VERSION.to_string(),
+            commit_state: EvidenceChainCommitState::Uncommitted,
+            chain_instance_id: self.evidence_chain_instance_id.clone(),
+            artifact: EvidenceChainArtifact::new(entries, receipt),
+            evidence_verification_identity: self.evidence_signing_authority.verification_identity(),
+            containment_receipt,
+            saga_id,
+        }
+    }
 
     fn validate_package(package: &ExtensionPackage) -> Result<(), OrchestratorError> {
         if package.source.trim().is_empty() {
@@ -6362,12 +6610,13 @@ mod tests {
     }
 
     #[test]
-    fn execute_propagates_cell_close_budget_exhaustion() {
+    fn bd_8yhg4_close_failure_preserves_containment_and_uncommitted_chain() {
         let cfg = OrchestratorConfig {
             cell_close_budget_ms: 1,
             ..OrchestratorConfig::default()
         };
         let mut orch = ExecutionOrchestrator::new(cfg);
+        orch.containment_action_override = Some(ContainmentAction::Sandbox);
         let err = orch
             .execute(&simple_package())
             .expect_err("cell close should fail on insufficient canonical budget");
@@ -6392,6 +6641,102 @@ mod tests {
             failure.cleanup.close_error,
             Some(CellError::BudgetExhausted { .. })
         ));
+        let staged = err
+            .uncommitted_evidence_chain()
+            .expect("post-containment close failure must preserve the staged exact batch");
+        assert_eq!(staged.commit_state, EvidenceChainCommitState::Uncommitted);
+        assert_eq!(
+            staged
+                .containment_receipt
+                .as_ref()
+                .map(|receipt| receipt.action),
+            Some(ContainmentAction::Sandbox)
+        );
+        assert!(staged.saga_id.is_none());
+        staged
+            .artifact
+            .verify_genesis(
+                &orch.evidence_verification_identity(),
+                orch.evidence_ledger_id(),
+                &failure.cleanup.trace_id,
+            )
+            .expect("uncommitted evidence must remain independently verifiable");
+
+        let mut foreign_executor = ContainmentExecutor::new();
+        foreign_executor.register("bd-8yhg4-spliced-target");
+        let foreign_receipt = foreign_executor
+            .execute(
+                ContainmentAction::Sandbox,
+                "bd-8yhg4-spliced-target",
+                &ContainmentContext {
+                    decision_id: "bd-8yhg4-spliced-decision".to_string(),
+                    evidence_refs: vec![failure.cleanup.trace_id.clone()],
+                    epoch: staged.artifact.entries[0].epoch_id,
+                    ..ContainmentContext::default()
+                },
+            )
+            .expect("foreign containment receipt must be internally valid");
+        let mut spliced = staged.clone();
+        spliced.containment_receipt = Some(foreign_receipt);
+        assert!(
+            spliced
+                .verify_with_context(
+                    &orch.evidence_verification_identity(),
+                    orch.evidence_chain_instance_id(),
+                    orch.evidence_ledger_id(),
+                    &failure.cleanup.trace_id,
+                    0,
+                    None,
+                )
+                .is_err(),
+            "a valid containment receipt for another target must not splice into this batch"
+        );
+        assert!(orch.ledger().is_empty());
+    }
+
+    #[test]
+    fn bd_8yhg4_post_close_commit_failure_is_atomic_and_returns_staged_chain() {
+        let mut orch = ExecutionOrchestrator::with_defaults();
+        orch.containment_action_override = Some(ContainmentAction::Sandbox);
+        orch.ledger_commit_failure_override = true;
+
+        let error = orch
+            .execute(&simple_package())
+            .expect_err("injected post-close ledger commit must fail");
+        let failure = error
+            .post_cell_failure()
+            .expect("ledger commit failure must retain lifecycle evidence");
+        assert!(failure.cleanup.close_succeeded());
+        assert!(matches!(
+            failure.primary_error.as_ref(),
+            OrchestratorError::Ledger(LedgerError::SchemaValidationFailed { reason })
+                if reason == "injected post-close evidence ledger commit failure"
+        ));
+
+        let staged = error
+            .uncommitted_evidence_chain()
+            .expect("ledger commit failure must return the staged signed batch");
+        staged
+            .verify_with_context(
+                &orch.evidence_verification_identity(),
+                orch.evidence_chain_instance_id(),
+                orch.evidence_ledger_id(),
+                &failure.cleanup.trace_id,
+                0,
+                None,
+            )
+            .expect("staged failure evidence must verify at the unchanged genesis position");
+        assert_eq!(
+            staged
+                .containment_receipt
+                .as_ref()
+                .map(|receipt| receipt.action),
+            Some(ContainmentAction::Sandbox)
+        );
+        assert!(orch.ledger().is_empty());
+        assert_eq!(orch.ledger().evidence_chain_next_sequence(), 0);
+        assert!(orch.ledger().evidence_chain_head().is_none());
+        assert_eq!(orch.execution_count(), 0);
     }
 
     // -- Enrichment: evidence entries have trace_id --
@@ -6550,6 +6895,21 @@ mod tests {
             serde_json::from_slice(&encoded).expect("saga-failure evidence must round-trip");
         assert_eq!(&decoded, evidence);
 
+        let staged = error
+            .uncommitted_evidence_chain()
+            .expect("saga failure must retain the signed batch as uncommitted evidence");
+        assert_eq!(staged.commit_state, EvidenceChainCommitState::Uncommitted);
+        assert_eq!(staged.containment_receipt.as_ref(), Some(&evidence.receipt));
+        assert_eq!(staged.saga_id.as_deref(), Some(evidence.saga_id.as_str()));
+        staged
+            .artifact
+            .verify_genesis(
+                &orchestrator.evidence_verification_identity(),
+                orchestrator.evidence_ledger_id(),
+                &failure.cleanup.trace_id,
+            )
+            .expect("saga failure must retain a valid signed exact batch");
+        assert!(orchestrator.ledger().is_empty());
         assert_eq!(
             orchestrator
                 .containment_executor

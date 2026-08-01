@@ -24,6 +24,9 @@ use frankenengine_engine::containment_executor::ContainmentState;
 use frankenengine_engine::deterministic_replay::{NondeterminismSource, NondeterminismTrace};
 use frankenengine_engine::engine_object_id::EngineObjectId;
 use frankenengine_engine::evidence_ledger::EvidenceChainArtifact;
+use frankenengine_engine::execution_orchestrator::{
+    EvidenceChainCommitState, UncommittedEvidenceChainEvidence,
+};
 use frankenengine_engine::hash_tiers::{AuthenticityHash, ContentHash};
 use frankenengine_engine::mmr_proof::MerkleMountainRange;
 use frankenengine_engine::parser_oracle::{
@@ -1646,6 +1649,134 @@ fn bd_8yhg4_frankenctl_run_writes_exact_evidence_chain_report() {
 }
 
 #[test]
+fn bd_8yhg4_frankenctl_run_emits_exact_uncommitted_chain_on_close_failure() {
+    let source_path = temp_path("frankenctl_run_failure_chain_source", "js");
+    let report_path = temp_path("frankenctl_run_failure_chain_report", "json");
+    write_source(&source_path, "const answer = 40 + 2; answer;\n");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_frankenctl"))
+        .args([
+            "run",
+            "--input",
+            source_path
+                .to_str()
+                .expect("source path should be valid utf8"),
+            "--extension-id",
+            "bd-8yhg4-cli-close-failure",
+            "--cell-close-budget-ms",
+            "1",
+            "--out",
+            report_path
+                .to_str()
+                .expect("report path should be valid utf8"),
+        ])
+        .output()
+        .expect("run command should execute");
+
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "close failure must be nonzero; stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout_json = parse_stdout_json(&output);
+    assert_eq!(
+        stdout_json["schema_version"].as_str(),
+        Some("franken-engine.frankenctl.orchestration-failure.v1")
+    );
+    assert_eq!(stdout_json["command"].as_str(), Some("run"));
+    assert_eq!(stdout_json["exit_code"].as_i64(), Some(2));
+    assert_eq!(
+        stdout_json["evidence_chain_next_sequence"].as_u64(),
+        Some(0)
+    );
+    assert!(stdout_json["evidence_chain_head"].is_null());
+    assert!(
+        stdout_json["error"]
+            .as_str()
+            .is_some_and(|message| message.contains("remains uncommitted"))
+    );
+
+    let staged: UncommittedEvidenceChainEvidence =
+        serde_json::from_value(stdout_json["uncommitted_evidence_chain"].clone())
+            .expect("failure report must carry the exact staged evidence");
+    assert_eq!(staged.commit_state, EvidenceChainCommitState::Uncommitted);
+    assert_eq!(
+        staged.artifact.receipt.ledger_id,
+        stdout_json["evidence_ledger_id"]
+            .as_str()
+            .expect("failure report must expose its ledger id")
+    );
+    assert_eq!(
+        staged.artifact.receipt.run_id,
+        stdout_json["trace_id"]
+            .as_str()
+            .expect("failure report must expose its trace id")
+    );
+    assert!(!staged.artifact.entries.is_empty());
+
+    let file_json: serde_json::Value = serde_json::from_slice(
+        &fs::read(&report_path).expect("failure report should be written to --out"),
+    )
+    .expect("failure report file should parse");
+    assert_eq!(file_json, stdout_json);
+
+    let unwritable_report_path = source_path.join("failure-report.json");
+    let fallback_output = Command::new(env!("CARGO_BIN_EXE_frankenctl"))
+        .args([
+            "run",
+            "--input",
+            source_path
+                .to_str()
+                .expect("source path should be valid utf8"),
+            "--extension-id",
+            "bd-8yhg4-cli-close-failure-fallback",
+            "--cell-close-budget-ms",
+            "1",
+            "--out",
+            unwritable_report_path
+                .to_str()
+                .expect("report path should be valid utf8"),
+        ])
+        .output()
+        .expect("run command with unwritable --out should execute");
+    assert_eq!(fallback_output.status.code(), Some(2));
+    let fallback_json = parse_stdout_json(&fallback_output);
+    assert!(fallback_json["report_path"].is_null());
+    assert!(
+        fallback_json["report_write_error"]
+            .as_str()
+            .is_some_and(|message| message.contains("failed to create"))
+    );
+    assert!(
+        fallback_json["uncommitted_evidence_chain"]["artifact"]["entries"]
+            .as_array()
+            .is_some_and(|entries| !entries.is_empty()),
+        "stdout fallback must retain the exact artifact when --out cannot be written"
+    );
+
+    let zero_budget_output = Command::new(env!("CARGO_BIN_EXE_frankenctl"))
+        .args([
+            "run",
+            "--input",
+            source_path
+                .to_str()
+                .expect("source path should be valid utf8"),
+            "--extension-id",
+            "bd-8yhg4-cli-zero-close-budget",
+            "--cell-close-budget-ms",
+            "0",
+        ])
+        .output()
+        .expect("zero-budget command should execute");
+    assert_eq!(zero_budget_output.status.code(), Some(2));
+    assert!(
+        String::from_utf8_lossy(&zero_budget_output.stderr)
+            .contains("--cell-close-budget-ms must be at least 1")
+    );
+}
+
+#[test]
 fn bd_8yhg4_agent_sandbox_emits_the_verified_exact_chain_artifact() {
     let source_path = temp_path("frankenctl_agent_sandbox_chain_source", "js");
     let manifest_path = temp_path("frankenctl_agent_sandbox_chain_manifest", "json");
@@ -1710,6 +1841,71 @@ fn bd_8yhg4_agent_sandbox_emits_the_verified_exact_chain_artifact() {
             .is_some_and(|value| !value.is_empty())
     );
     assert!(!chain_artifact.entries.is_empty());
+}
+
+#[test]
+fn bd_8yhg4_agent_sandbox_emits_uncommitted_chain_on_close_failure() {
+    let source_path = temp_path("frankenctl_agent_sandbox_failure_source", "js");
+    let manifest_path = temp_path("frankenctl_agent_sandbox_failure_manifest", "json");
+    let report_path = temp_path("frankenctl_agent_sandbox_failure_report", "json");
+    write_source(&source_path, "const answer = 40 + 2; answer;\n");
+    let manifest = serde_json::json!({
+        "schema_version": "franken-engine.agent-sandbox-manifest.v1",
+        "agent_id": "bd-8yhg4-agent-failure",
+        "tool_grants": [],
+        "denied_capability_tags": [],
+        "acknowledge_unfiltered_network": false,
+        "metadata": {}
+    });
+    fs::write(
+        &manifest_path,
+        serde_json::to_vec_pretty(&manifest).expect("manifest serializes"),
+    )
+    .expect("manifest writes");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_frankenctl"))
+        .args([
+            "agent-sandbox",
+            "--manifest",
+            manifest_path
+                .to_str()
+                .expect("manifest path should be valid utf8"),
+            "--input",
+            source_path
+                .to_str()
+                .expect("source path should be valid utf8"),
+            "--cell-close-budget-ms",
+            "1",
+            "--out",
+            report_path
+                .to_str()
+                .expect("report path should be valid utf8"),
+        ])
+        .output()
+        .expect("agent-sandbox failure command should execute");
+
+    assert_eq!(output.status.code(), Some(2));
+    let output_json = parse_stdout_json(&output);
+    assert_eq!(output_json["command"].as_str(), Some("agent-sandbox"));
+    assert!(
+        output_json["error"]
+            .as_str()
+            .is_some_and(|message| message.starts_with("agent-sandbox failed for"))
+    );
+    assert_eq!(
+        output_json["uncommitted_evidence_chain"]["commit_state"].as_str(),
+        Some("uncommitted")
+    );
+    assert!(
+        output_json["uncommitted_evidence_chain"]["artifact"]["entries"]
+            .as_array()
+            .is_some_and(|entries| !entries.is_empty())
+    );
+    let file_json: serde_json::Value = serde_json::from_slice(
+        &fs::read(&report_path).expect("agent-sandbox failure report should be written"),
+    )
+    .expect("agent-sandbox failure report should parse");
+    assert_eq!(file_json, output_json);
 }
 
 #[test]
@@ -1887,6 +2083,14 @@ fn bd_8yhg4_frankenctl_run_explain_indexes_evidence_chain_receipt() {
     assert!(
         bundle_json["artifacts"].get("run-report").is_some(),
         "run-report artifact should be indexed"
+    );
+    assert_eq!(
+        bundle_json["artifacts"]["run-report"]["schema_id"].as_str(),
+        Some("franken-engine.frankenctl.run.v2")
+    );
+    assert_eq!(
+        bundle_json["artifacts"]["run-report"]["metadata"]["origin_schema"].as_str(),
+        Some("franken-engine.frankenctl.run.v2")
     );
     assert!(
         bundle_json["artifacts"].get("action-decision").is_some(),

@@ -20,8 +20,9 @@ use frankenengine_engine::evidence_ledger::{
 };
 use frankenengine_engine::execution_orchestrator::LabFixtureExecutionOrchestratorExt as _;
 use frankenengine_engine::execution_orchestrator::{
-    ExecutionOrchestrator, ExtensionPackage, LossMatrixPreset, OrchestratorConfig,
-    OrchestratorError,
+    EvidenceChainCommitState, ExecutionOrchestrator, ExtensionPackage, LossMatrixPreset,
+    OrchestratorConfig, OrchestratorError, UNCOMMITTED_EVIDENCE_CHAIN_EVIDENCE_SCHEMA_VERSION,
+    UncommittedEvidenceChainEvidence,
 };
 use frankenengine_engine::security_epoch::SecurityEpoch;
 use frankenengine_engine::signature_preimage::SigningKey;
@@ -345,6 +346,7 @@ fn bd_8yhg4_cell_close_failure_does_not_commit_the_staged_receipt() {
         None,
     )
     .expect("recorded test identity");
+    let trusted_identity = authority.verification_identity();
     let config = OrchestratorConfig {
         cell_close_budget_ms: 1,
         ..OrchestratorConfig::default()
@@ -356,6 +358,54 @@ fn bd_8yhg4_cell_close_failure_does_not_commit_the_staged_receipt() {
         .execute(&simple_package("bd-8yhg4-close", "42"))
         .expect_err("cell close must exhaust the one-millisecond budget");
     assert!(error.post_cell_failure().is_some());
+    let staged = error
+        .uncommitted_evidence_chain()
+        .expect("close failure must return the exact signed uncommitted batch");
+    assert_eq!(
+        staged.schema_version,
+        UNCOMMITTED_EVIDENCE_CHAIN_EVIDENCE_SCHEMA_VERSION
+    );
+    assert_eq!(staged.commit_state, EvidenceChainCommitState::Uncommitted);
+    assert_eq!(
+        staged.chain_instance_id,
+        orchestrator.evidence_chain_instance_id()
+    );
+    staged
+        .artifact
+        .verify_genesis(
+            &trusted_identity,
+            orchestrator.evidence_ledger_id(),
+            &staged.artifact.receipt.run_id,
+        )
+        .expect("staged failure artifact must retain its valid signature and chain position");
+    let encoded = serde_json::to_vec(staged).expect("uncommitted evidence must serialize");
+    let decoded: UncommittedEvidenceChainEvidence =
+        serde_json::from_slice(&encoded).expect("uncommitted evidence must round-trip");
+    decoded
+        .verify_with_context(
+            &trusted_identity,
+            orchestrator.evidence_chain_instance_id(),
+            orchestrator.evidence_ledger_id(),
+            &decoded.artifact.receipt.run_id,
+            0,
+            None,
+        )
+        .expect("round-tripped uncommitted evidence must validate");
+    let mut wrong_schema = decoded;
+    wrong_schema.schema_version = "franken-engine.uncommitted-evidence-chain-evidence.v999".into();
+    assert!(
+        wrong_schema
+            .verify_with_context(
+                &trusted_identity,
+                orchestrator.evidence_chain_instance_id(),
+                orchestrator.evidence_ledger_id(),
+                &wrong_schema.artifact.receipt.run_id,
+                0,
+                None,
+            )
+            .is_err(),
+        "unknown uncommitted-evidence schemas must fail closed"
+    );
     assert!(orchestrator.ledger().is_empty());
     assert_eq!(orchestrator.ledger().evidence_chain_next_sequence(), 0);
     assert!(orchestrator.ledger().evidence_chain_head().is_none());

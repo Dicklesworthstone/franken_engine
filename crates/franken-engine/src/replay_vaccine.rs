@@ -43,6 +43,7 @@ use crate::counterfactual_replay_engine::{
 };
 use crate::deterministic_serde::{CanonicalValue, SchemaHash};
 use crate::engine_object_id::{EngineObjectId, IdError, ObjectDomain, SchemaId, derive_id};
+use crate::evidence_ledger::EvidenceTrustRegistry;
 use crate::hash_tiers::ContentHash;
 use crate::security_epoch::SecurityEpoch;
 use crate::signature_preimage::{
@@ -854,11 +855,25 @@ pub struct VaccineFactory {
 }
 
 impl VaccineFactory {
-    /// Create a factory.
-    pub fn new(config: VaccineFactoryConfig) -> Self {
+    /// Create a factory with externally authenticated causal-trace trust.
+    pub fn new(
+        config: VaccineFactoryConfig,
+        trace_trust_registry: EvidenceTrustRegistry,
+    ) -> Result<Self, VaccineError> {
+        Ok(Self {
+            config,
+            engine: CounterfactualReplayEngine::new(
+                ReplayEngineConfig::default(),
+                trace_trust_registry,
+            )?,
+        })
+    }
+
+    /// Create an explicitly lab-scoped factory for deterministic fixtures.
+    pub fn new_lab(config: VaccineFactoryConfig) -> Self {
         Self {
             config,
-            engine: CounterfactualReplayEngine::new(ReplayEngineConfig::default()),
+            engine: CounterfactualReplayEngine::new_lab(ReplayEngineConfig::default()),
         }
     }
 
@@ -872,6 +887,7 @@ impl VaccineFactory {
     /// immediately preceding same-extension decision as context, capped at
     /// `max_motif_steps` closest to the harm.
     pub fn derive_motif(&self, trace: &TraceRecord) -> Result<BehaviorMotif, VaccineError> {
+        self.engine.verify_trace(trace)?;
         let incident_id = trace
             .incident_id
             .clone()
@@ -982,6 +998,9 @@ impl VaccineFactory {
         motif: &BehaviorMotif,
         intervention: &VaccineIntervention,
     ) -> Result<CollateralEstimate, VaccineError> {
+        for trace in clean_traces {
+            self.engine.verify_trace(trace)?;
+        }
         let clean_decisions: u64 = clean_traces.iter().map(|t| t.entries.len() as u64).sum();
         if clean_decisions < self.config.min_clean_decisions {
             return Err(VaccineError::InsufficientCleanEvidence {
@@ -1503,12 +1522,11 @@ mod tests {
         incident_id: Option<&str>,
         decisions: &[DecisionSnapshot],
     ) -> TraceRecord {
-        let mut recorder = TraceRecorder::new(RecorderConfig {
+        let mut recorder = TraceRecorder::new_lab(RecorderConfig {
             trace_id: trace_id.to_string(),
             recording_mode: RecordingMode::Full,
             epoch: SecurityEpoch::from_raw(3),
             start_tick: 100,
-            signing_key: vec![7u8; 32],
         });
         if let Some(id) = incident_id {
             recorder.set_incident_id(id.to_string());
@@ -1516,7 +1534,7 @@ mod tests {
         for decision in decisions {
             recorder.record_decision(decision.clone());
         }
-        recorder.finalize()
+        recorder.finalize().expect("lab trace should finalize")
     }
 
     /// Incident: ext-mal probes then leaks (two harmful allow decisions).
@@ -1549,7 +1567,7 @@ mod tests {
     }
 
     fn factory() -> VaccineFactory {
-        VaccineFactory::new(VaccineFactoryConfig::default())
+        VaccineFactory::new_lab(VaccineFactoryConfig::default())
     }
 
     // ── Motif derivation ─────────────────────────────────────────
@@ -1575,7 +1593,7 @@ mod tests {
             include_context_step: false,
             ..VaccineFactoryConfig::default()
         };
-        let motif = VaccineFactory::new(config)
+        let motif = VaccineFactory::new_lab(config)
             .derive_motif(&incident_trace("t1"))
             .unwrap();
         let indices: Vec<u64> = motif
@@ -1588,9 +1606,14 @@ mod tests {
 
     #[test]
     fn motif_requires_harmful_decision() {
-        let trace = clean_trace("t-clean", "ext-a");
-        let mut trace = trace;
-        trace.incident_id = Some("incident-x".to_string());
+        let trace = record_trace(
+            "t-clean",
+            Some("incident-x"),
+            &[
+                snapshot(0, "t-clean", "ext-a", "allow", 300_000),
+                snapshot(1, "t-clean", "ext-a", "sandbox", 250_000),
+            ],
+        );
         let err = factory().derive_motif(&trace).unwrap_err();
         assert!(matches!(err, VaccineError::NoHarmfulDecisions { .. }));
     }
@@ -1945,7 +1968,7 @@ mod tests {
             max_collateral_millionths: 100_000, // 10%
             ..VaccineFactoryConfig::default()
         };
-        let mut factory = VaccineFactory::new(config);
+        let mut factory = VaccineFactory::new_lab(config);
         let key = signing_key(11);
         let outcome = factory
             .build_best(

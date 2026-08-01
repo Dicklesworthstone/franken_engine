@@ -35,14 +35,6 @@ use frankenengine_engine::security_epoch::SecurityEpoch;
 // Helpers
 // ---------------------------------------------------------------------------
 
-fn test_signing_key() -> Vec<u8> {
-    let mut key = vec![0u8; 32];
-    for (i, b) in key.iter_mut().enumerate() {
-        *b = (i as u8).wrapping_mul(7).wrapping_add(13);
-    }
-    key
-}
-
 fn test_config() -> SynthesisConfig {
     SynthesisConfig {
         budget_ns: 1_000_000_000,
@@ -51,7 +43,6 @@ fn test_config() -> SynthesisConfig {
         detect_controller_interference: true,
         max_enumeration_candidates: 50,
         epoch: SecurityEpoch::from_raw(42),
-        signing_key_bytes: test_signing_key(),
     }
 }
 
@@ -214,7 +205,7 @@ fn synthesize_from_violating() -> (CounterexampleSynthesizer, Vec<SynthesizedCou
         !result.counterexamples.is_empty(),
         "violating policy must produce compiler counterexamples"
     );
-    let mut synth = CounterexampleSynthesizer::new(test_config());
+    let mut synth = CounterexampleSynthesizer::new_lab(test_config());
     let cxs = synth.synthesize(&result, 1000).unwrap();
     (synth, cxs)
 }
@@ -714,25 +705,29 @@ fn synthesis_config_default_values() {
     assert!(cfg.detect_controller_interference);
     assert_eq!(cfg.max_enumeration_candidates, 100);
     assert_eq!(cfg.epoch, SecurityEpoch::from_raw(1));
-    assert_eq!(cfg.signing_key_bytes, vec![0u8; 32]);
 }
 
 #[test]
 fn synthesis_config_serde_roundtrip() {
     let cfg = test_config();
-    let json = serde_json::to_string(&cfg).unwrap();
-    let restored: SynthesisConfig = serde_json::from_str(&json).unwrap();
+    let serialized = serde_json::to_value(&cfg).unwrap();
+    let fields = serialized.as_object().unwrap();
+    assert!(
+        fields.keys().all(|key| !key.contains("signing")),
+        "serialized SynthesisConfig must not contain signing authority material"
+    );
+    let restored: SynthesisConfig = serde_json::from_value(serialized).unwrap();
     assert_eq!(cfg, restored);
 }
 
 // ===========================================================================
-// 14. CounterexampleSynthesizer: new, initial state, config accessor
+// 14. CounterexampleSynthesizer: new_lab, initial state, config accessor
 // ===========================================================================
 
 #[test]
-fn synthesizer_new_initial_state() {
+fn synthesizer_new_lab_initial_state() {
     let cfg = test_config();
-    let synth = CounterexampleSynthesizer::new(cfg.clone());
+    let synth = CounterexampleSynthesizer::new_lab(cfg.clone());
     assert!(synth.corpus().is_empty());
     assert_eq!(synth.synthesis_count(), 0);
     assert!(synth.diagnostics().is_empty());
@@ -745,7 +740,7 @@ fn synthesizer_new_initial_state() {
 
 #[test]
 fn detect_interference_no_overlap_disjoint_controllers() {
-    let synth = CounterexampleSynthesizer::new(test_config());
+    let synth = CounterexampleSynthesizer::new_lab(test_config());
     let configs = vec![
         ControllerConfig {
             controller_id: "ctrl-a".to_string(),
@@ -770,7 +765,7 @@ fn detect_interference_no_overlap_disjoint_controllers() {
 
 #[test]
 fn detect_interference_shared_metrics_missing_timescale_statement() {
-    let synth = CounterexampleSynthesizer::new(test_config());
+    let synth = CounterexampleSynthesizer::new_lab(test_config());
     let configs = vec![
         ControllerConfig {
             controller_id: "writer-a".to_string(),
@@ -799,7 +794,7 @@ fn detect_interference_shared_metrics_missing_timescale_statement() {
 
 #[test]
 fn detect_interference_concurrent_writes_insufficient_separation() {
-    let synth = CounterexampleSynthesizer::new(test_config());
+    let synth = CounterexampleSynthesizer::new_lab(test_config());
     let configs = vec![
         ControllerConfig {
             controller_id: "fast-ctrl".to_string(),
@@ -828,7 +823,7 @@ fn detect_interference_concurrent_writes_insufficient_separation() {
 
 #[test]
 fn detect_interference_read_write_overlap() {
-    let synth = CounterexampleSynthesizer::new(test_config());
+    let synth = CounterexampleSynthesizer::new_lab(test_config());
     let configs = vec![
         ControllerConfig {
             controller_id: "writer".to_string(),
@@ -857,7 +852,7 @@ fn detect_interference_read_write_overlap() {
 
 #[test]
 fn detect_interference_read_only_no_conflict() {
-    let synth = CounterexampleSynthesizer::new(test_config());
+    let synth = CounterexampleSynthesizer::new_lab(test_config());
     let configs = vec![
         ControllerConfig {
             controller_id: "reader-a".to_string(),
@@ -886,7 +881,7 @@ fn detect_interference_read_only_no_conflict() {
 
 #[test]
 fn build_interference_events_timescale_conflict() {
-    let synth = CounterexampleSynthesizer::new(test_config());
+    let synth = CounterexampleSynthesizer::new_lab(test_config());
     let interferences = vec![ControllerInterference {
         kind: InterferenceKind::TimescaleConflict,
         controller_ids: vec!["a".to_string(), "b".to_string()],
@@ -909,7 +904,7 @@ fn build_interference_events_timescale_conflict() {
 
 #[test]
 fn build_interference_events_invariant_invalidation() {
-    let synth = CounterexampleSynthesizer::new(test_config());
+    let synth = CounterexampleSynthesizer::new_lab(test_config());
     let interferences = vec![ControllerInterference {
         kind: InterferenceKind::InvariantInvalidation,
         controller_ids: vec!["x".to_string(), "y".to_string()],
@@ -929,7 +924,7 @@ fn build_interference_events_invariant_invalidation() {
 
 #[test]
 fn build_interference_events_oscillation() {
-    let synth = CounterexampleSynthesizer::new(test_config());
+    let synth = CounterexampleSynthesizer::new_lab(test_config());
     let interferences = vec![ControllerInterference {
         kind: InterferenceKind::Oscillation,
         controller_ids: vec!["p".to_string(), "q".to_string()],
@@ -967,7 +962,7 @@ fn synthesize_from_violating_policy_produces_counterexamples() {
 #[test]
 fn synthesize_no_violations_returns_error() {
     let result = compile(&valid_policy());
-    let mut synth = CounterexampleSynthesizer::new(test_config());
+    let mut synth = CounterexampleSynthesizer::new_lab(test_config());
     let err = synth.synthesize(&result, 1000).unwrap_err();
     assert_eq!(err, SynthesisError::NoViolations);
 }
@@ -986,7 +981,7 @@ fn synthesize_updates_corpus_diagnostics_count() {
 
 #[test]
 fn enumerate_empty_policies_returns_error() {
-    let mut synth = CounterexampleSynthesizer::new(test_config());
+    let mut synth = CounterexampleSynthesizer::new_lab(test_config());
     let err = synth.synthesize_by_enumeration(&[], 1000).unwrap_err();
     assert_eq!(
         err,
@@ -999,7 +994,7 @@ fn enumerate_empty_policies_returns_error() {
 #[test]
 fn enumerate_valid_policies_returns_no_violations() {
     let policy = valid_policy();
-    let mut synth = CounterexampleSynthesizer::new(test_config());
+    let mut synth = CounterexampleSynthesizer::new_lab(test_config());
     let err = synth
         .synthesize_by_enumeration(&[&policy], 1000)
         .unwrap_err();
@@ -1009,7 +1004,7 @@ fn enumerate_valid_policies_returns_no_violations() {
 #[test]
 fn enumerate_finds_violations_in_bad_policy() {
     let bad = violating_policy();
-    let mut synth = CounterexampleSynthesizer::new(test_config());
+    let mut synth = CounterexampleSynthesizer::new_lab(test_config());
     let results = synth.synthesize_by_enumeration(&[&bad], 1000).unwrap();
     assert!(!results.is_empty());
 }
@@ -1027,7 +1022,7 @@ fn mutation_add_grant_outside_universe_creates_violation() {
         new_value: "admin-access".to_string(),
     }];
 
-    let mut synth = CounterexampleSynthesizer::new(test_config());
+    let mut synth = CounterexampleSynthesizer::new_lab(test_config());
     let result = synth.synthesize_by_mutation(&base, &mutations, 1000);
     // Adding an undefined capability should trigger an attenuation violation.
     if let Ok(cxs) = result {
@@ -1055,7 +1050,7 @@ fn mutation_duplicate_node() {
         target_node: "node-1".to_string(),
         new_value: String::new(),
     }];
-    let mut synth = CounterexampleSynthesizer::new(test_config());
+    let mut synth = CounterexampleSynthesizer::new_lab(test_config());
     // May or may not find violations; should not panic.
     let _ = synth.synthesize_by_mutation(&base, &mutations, 1000);
 }
@@ -1067,7 +1062,9 @@ fn mutation_duplicate_node() {
 #[test]
 fn to_replay_fixture_basic() {
     let (synth, cxs) = synthesize_from_violating();
-    let trace = synth.to_replay_fixture(&cxs[0], 5000);
+    let trace = synth
+        .to_replay_fixture(&cxs[0], 5000)
+        .expect("lab synthesizer should produce an authorized replay fixture");
     assert!(trace.trace_id.starts_with("synth-"));
     assert_eq!(trace.start_epoch, SecurityEpoch::from_raw(42));
     assert!(trace.incident_id.is_some());
@@ -1097,7 +1094,7 @@ fn full_lifecycle() {
     assert!(!result.counterexamples.is_empty());
 
     // Step 2: Synthesize counterexamples.
-    let mut synth = CounterexampleSynthesizer::new(test_config());
+    let mut synth = CounterexampleSynthesizer::new_lab(test_config());
     let cxs = synth.synthesize(&result, 1000).unwrap();
     assert!(!cxs.is_empty());
 
@@ -1114,7 +1111,9 @@ fn full_lifecycle() {
     assert!(diag.severity_millionths > 0);
 
     // Step 5: Generate replay fixture.
-    let trace = synth.to_replay_fixture(&cxs[0], 10_000);
+    let trace = synth
+        .to_replay_fixture(&cxs[0], 10_000)
+        .expect("lab synthesizer should produce an authorized replay fixture");
     assert!(trace.verify_chain_integrity().is_ok());
 
     // Step 6: Generate evidence entry.
@@ -1122,14 +1121,14 @@ fn full_lifecycle() {
     assert!(entry.chosen_action.rationale.contains("violation"));
 
     // Step 7: Verify deterministic IDs (second synthesizer, same inputs).
-    let mut synth2 = CounterexampleSynthesizer::new(test_config());
+    let mut synth2 = CounterexampleSynthesizer::new_lab(test_config());
     let cxs2 = synth2.synthesize(&result, 1000).unwrap();
     assert_eq!(cxs[0].conflict_id, cxs2[0].conflict_id);
     assert_eq!(cxs[0].content_hash, cxs2[0].content_hash);
 
     // Step 8: Serde roundtrip of an empty synthesizer (populated synthesizers
     // contain BTreeMap<EngineObjectId, _> which cannot JSON-serialize as keys).
-    let fresh = CounterexampleSynthesizer::new(test_config());
+    let fresh = CounterexampleSynthesizer::new_lab(test_config());
     let json = serde_json::to_string(&fresh).unwrap();
     let restored: CounterexampleSynthesizer = serde_json::from_str(&json).unwrap();
     assert_eq!(restored.synthesis_count(), 0);
@@ -1180,7 +1179,7 @@ fn synthesize_merge_nondeterminism_policy() {
         // Compiler may not flag this in current implementation; skip gracefully.
         return;
     }
-    let mut synth = CounterexampleSynthesizer::new(test_config());
+    let mut synth = CounterexampleSynthesizer::new_lab(test_config());
     let cxs = synth.synthesize(&result, 2000).unwrap();
     assert!(!cxs.is_empty());
 }

@@ -136,24 +136,6 @@ fn make_decision(index: u64, native_loss: i64, threshold: u64) -> DecisionSnapsh
     }
 }
 
-fn make_trace(decisions: Vec<DecisionSnapshot>) -> TraceRecord {
-    let trace_id = decisions
-        .first()
-        .map(|d| d.trace_id.clone())
-        .unwrap_or_else(|| "metamorphic-trace".to_string());
-    let mut recorder = TraceRecorder::new(RecorderConfig {
-        trace_id,
-        recording_mode: RecordingMode::Full,
-        epoch: epoch(),
-        start_tick: 100,
-        signing_key: b"metamorphic-key".to_vec(),
-    });
-    for d in decisions {
-        recorder.record_decision(d);
-    }
-    recorder.finalize()
-}
-
 /// Build a node trace whose decisions encode the model outcomes for the given
 /// per-decision `native_losses` under `threshold`.
 fn node_trace(node_id: &str, trace_id: &str, native_losses: &[i64], threshold: u64) -> TraceRecord {
@@ -167,11 +149,17 @@ fn node_trace(node_id: &str, trace_id: &str, native_losses: &[i64], threshold: u
             d
         })
         .collect();
-    let mut trace = make_trace(decisions);
-    trace
-        .metadata
-        .insert("node_id".to_string(), node_id.to_string());
-    trace
+    let mut recorder = TraceRecorder::new_lab(RecorderConfig {
+        trace_id: trace_id.to_string(),
+        recording_mode: RecordingMode::Full,
+        epoch: epoch(),
+        start_tick: 100,
+    });
+    recorder.set_metadata("node_id".to_string(), node_id.to_string());
+    for decision in decisions {
+        recorder.record_decision(decision);
+    }
+    recorder.finalize().expect("lab trace should finalize")
 }
 
 fn write_trace(root: &Path, relative: &str, trace: &TraceRecord) {
@@ -318,7 +306,7 @@ fn perturbing_policy_snapshot() -> SubstitutedPolicySnapshot {
 }
 
 fn engine() -> CounterfactualReplayEngine {
-    CounterfactualReplayEngine::new(ReplayEngineConfig::default())
+    CounterfactualReplayEngine::new_lab(ReplayEngineConfig::default())
 }
 
 // ---------------------------------------------------------------------------

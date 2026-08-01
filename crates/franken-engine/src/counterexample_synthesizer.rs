@@ -434,8 +434,6 @@ pub struct SynthesisConfig {
     pub max_enumeration_candidates: u32,
     /// Epoch for ID derivation.
     pub epoch: SecurityEpoch,
-    /// Signing key bytes for trace generation (32 bytes).
-    pub signing_key_bytes: Vec<u8>,
 }
 
 impl Default for SynthesisConfig {
@@ -447,7 +445,6 @@ impl Default for SynthesisConfig {
             detect_controller_interference: true,
             max_enumeration_candidates: 100,
             epoch: SecurityEpoch::from_raw(1),
-            signing_key_bytes: vec![0u8; 32],
         }
     }
 }
@@ -576,7 +573,7 @@ impl CounterexampleSynthesizer {
             self.corpus
                 .append(scx.clone(), self.config.epoch, timestamp_ns);
             self.diagnostics.push(self.build_diagnostic(&scx));
-            self.synthesis_count += 1;
+            self.synthesis_count = self.synthesis_count.saturating_add(1);
             synthesized.push(scx);
         }
 
@@ -656,24 +653,24 @@ impl CounterexampleSynthesizer {
         scenario: &ConcreteScenario,
         cx: &Counterexample,
     ) -> MinimalityEvidence {
-        let starting_size =
-            scenario.subjects.len() + scenario.capabilities.len() + scenario.conditions.len();
-        let starting_size = starting_size as u32;
+        let starting_size = scenario
+            .subjects
+            .len()
+            .saturating_add(scenario.capabilities.len())
+            .saturating_add(scenario.conditions.len());
+        let starting_size = u32::try_from(starting_size).unwrap_or(u32::MAX);
 
         // For CompilerExtraction, the compiler already gives minimal violating nodes.
         // We verify minimality by checking that removing any single element
         // breaks the violation pattern.
-        let mut rounds = 0u32;
-        let mut elements_removed = 0u32;
-
         // Attempt to remove each subject and check if the violation persists.
         let removable_subjects = scenario
             .subjects
             .iter()
             .filter(|s| !cx.violating_nodes.contains(s))
             .count();
-        elements_removed += removable_subjects as u32;
-        rounds += scenario.subjects.len() as u32;
+        let elements_removed = u32::try_from(removable_subjects).unwrap_or(u32::MAX);
+        let rounds = u32::try_from(scenario.subjects.len()).unwrap_or(u32::MAX);
 
         let is_fixed_point = rounds >= self.config.max_minimization_rounds || elements_removed == 0;
 
@@ -839,7 +836,7 @@ impl CounterexampleSynthesizer {
                     self.corpus
                         .append(scx.clone(), self.config.epoch, timestamp_ns);
                     self.diagnostics.push(self.build_diagnostic(&scx));
-                    self.synthesis_count += 1;
+                    self.synthesis_count = self.synthesis_count.saturating_add(1);
                     synthesized.push(scx);
                 }
             }
@@ -885,7 +882,7 @@ impl CounterexampleSynthesizer {
                 self.corpus
                     .append(scx.clone(), self.config.epoch, timestamp_ns);
                 self.diagnostics.push(self.build_diagnostic(&scx));
-                self.synthesis_count += 1;
+                self.synthesis_count = self.synthesis_count.saturating_add(1);
                 synthesized.push(scx);
             }
         }
@@ -1045,15 +1042,24 @@ impl CounterexampleSynthesizer {
         &self,
         scx: &SynthesizedCounterexample,
         tick_base: u64,
-    ) -> TraceRecord {
+    ) -> Result<TraceRecord, SynthesisError> {
         let config = RecorderConfig {
             trace_id: format!("synth-{}", scx.conflict_id),
             recording_mode: RecordingMode::Full,
             epoch: scx.epoch,
             start_tick: tick_base,
-            signing_key: self.config.signing_key_bytes.clone(),
         };
-        let mut recorder = TraceRecorder::new(config);
+        let signing_authority = self
+            .evidence_signing_authority
+            .as_ref()
+            .ok_or_else(|| {
+                SynthesisError::CompilerFailure(
+                    "counterexample evidence signer was not reattached after restore".to_string(),
+                )
+            })?
+            .clone();
+        let mut recorder = TraceRecorder::new_with_authority(config, signing_authority)
+            .map_err(|error| SynthesisError::CompilerFailure(format!("replay trace: {error}")))?;
 
         recorder.record_nondeterminism(
             NondeterminismSource::Timestamp,
@@ -1061,6 +1067,11 @@ impl CounterexampleSynthesizer {
             tick_base,
             None,
         );
+        let decision_tick = tick_base.checked_add(1).ok_or_else(|| {
+            SynthesisError::CompilerFailure(
+                "counterexample replay decision tick overflowed u64".to_string(),
+            )
+        })?;
 
         // Generate a decision snapshot from the counterexample scenario.
         let snapshot = DecisionSnapshot {
@@ -1074,7 +1085,7 @@ impl CounterexampleSynthesizer {
                 .expect("operation should succeed for valid inputs"),
             policy_version: 1,
             epoch: scx.epoch,
-            tick: tick_base + 1,
+            tick: decision_tick,
             threshold_millionths: 500_000,
             loss_matrix: BTreeMap::new(),
             evidence_hashes: Vec::new(),
@@ -1092,7 +1103,9 @@ impl CounterexampleSynthesizer {
         );
         recorder.set_metadata("strategy".to_string(), scx.strategy.to_string());
 
-        recorder.finalize()
+        recorder
+            .finalize()
+            .map_err(|error| SynthesisError::CompilerFailure(format!("replay trace: {error}")))
     }
 
     /// Generate an evidence entry for the audit trail.
@@ -1158,19 +1171,11 @@ impl CounterexampleSynthesizer {
     pub fn config(&self) -> &SynthesisConfig {
         &self.config
     }
-}
 
-/// Deliberate opt-in for legacy-shaped deterministic lab fixtures.
-///
-/// Production code must use
-/// [`CounterexampleSynthesizer::try_new_with_runtime_authority`].
-pub trait LabFixtureCounterexampleSynthesizerExt: Sized {
-    fn new(config: SynthesisConfig) -> Self;
-}
-
-impl LabFixtureCounterexampleSynthesizerExt for CounterexampleSynthesizer {
-    fn new(config: SynthesisConfig) -> Self {
-        CounterexampleSynthesizer::new_lab(config)
+    /// Public signer identity recorded for cross-process evidence and replay
+    /// verification. This value is provenance only, not a trust anchor.
+    pub fn evidence_verification_identity(&self) -> Option<&EvidenceVerificationIdentity> {
+        self.evidence_verification_identity.as_ref()
     }
 }
 
@@ -1334,14 +1339,6 @@ mod tests {
     // Test helpers
     // -----------------------------------------------------------------------
 
-    fn test_signing_key_bytes() -> Vec<u8> {
-        let mut key = vec![0u8; 32];
-        for (i, b) in key.iter_mut().enumerate() {
-            *b = (i as u8).wrapping_mul(7).wrapping_add(13);
-        }
-        key
-    }
-
     fn test_config() -> SynthesisConfig {
         SynthesisConfig {
             budget_ns: 1_000_000_000,
@@ -1350,7 +1347,6 @@ mod tests {
             detect_controller_interference: true,
             max_enumeration_candidates: 50,
             epoch: SecurityEpoch::from_raw(100),
-            signing_key_bytes: test_signing_key_bytes(),
         }
     }
 
@@ -2325,7 +2321,9 @@ mod tests {
             .synthesize(&result, 1000)
             .expect("operation should succeed for valid inputs");
 
-        let trace = synth.to_replay_fixture(&counterexamples[0], 5000);
+        let trace = synth
+            .to_replay_fixture(&counterexamples[0], 5000)
+            .expect("lab signer should produce replay fixture");
         assert!(trace.trace_id.starts_with("synth-"));
         assert_eq!(trace.start_epoch, SecurityEpoch::from_raw(100));
         assert!(trace.incident_id.is_some());
@@ -2345,10 +2343,37 @@ mod tests {
             .synthesize(&result, 1000)
             .expect("operation should succeed for valid inputs");
 
-        let trace = synth.to_replay_fixture(&counterexamples[0], 5000);
+        let trace = synth
+            .to_replay_fixture(&counterexamples[0], 5000)
+            .expect("lab signer should produce replay fixture");
 
         // The trace should have valid chain integrity.
         assert!(trace.verify_chain_integrity().is_ok());
+    }
+
+    #[test]
+    fn bd_mpu1z_replay_fixture_rejects_decision_tick_overflow() {
+        let compiler = PolicyTheoremCompiler::new();
+        let policy = make_monotonicity_violating_policy();
+        let result = compiler
+            .compile(&policy)
+            .expect("operation should succeed for valid inputs");
+        let mut synth = CounterexampleSynthesizer::new(test_config());
+        synth.synthesis_count = u64::MAX;
+        let counterexamples = synth
+            .synthesize(&result, 1000)
+            .expect("operation should succeed for valid inputs");
+        assert_eq!(
+            synth.synthesis_count(),
+            u64::MAX,
+            "restored saturated counters must not panic or wrap"
+        );
+
+        let error = synth
+            .to_replay_fixture(&counterexamples[0], u64::MAX)
+            .expect_err("decision tick overflow must be reported instead of panicking");
+        assert!(matches!(error, SynthesisError::CompilerFailure(_)));
+        assert!(error.to_string().contains("tick overflowed"));
     }
 
     // -----------------------------------------------------------------------
@@ -2820,7 +2845,8 @@ mod tests {
         assert!(cfg.detect_controller_interference);
         assert_eq!(cfg.max_enumeration_candidates, 100);
         assert_eq!(cfg.epoch, SecurityEpoch::from_raw(1));
-        assert_eq!(cfg.signing_key_bytes.len(), 32);
+        let serialized = serde_json::to_string(&cfg).expect("config should serialize");
+        assert!(!serialized.contains("signing_key"));
     }
 
     #[test]
@@ -2964,7 +2990,9 @@ mod tests {
             .synthesize(&result, 1000)
             .expect("operation should succeed for valid inputs");
 
-        let fixture = synth.to_replay_fixture(&scxs[0], 5000);
+        let fixture = synth
+            .to_replay_fixture(&scxs[0], 5000)
+            .expect("lab signer should produce replay fixture");
         // The fixture should have metadata set for property_violated and strategy.
         let metadata = &fixture.metadata;
         assert!(metadata.contains_key("property_violated"));

@@ -23,8 +23,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use frankenengine_engine::counterexample_synthesizer::{
     ConcreteScenario, ControllerInterference, ControllerInterferenceEvent,
     CounterexampleSynthesizer, DEFAULT_BUDGET_NS, DEFAULT_MAX_MINIMIZATION_ROUNDS,
-    InterferenceKind, LabFixtureCounterexampleSynthesizerExt as _, MinimalityEvidence,
-    RegressionCorpus, SynthesisConfig, SynthesisError, SynthesisOutcome, SynthesisStrategy,
+    InterferenceKind, MinimalityEvidence, RegressionCorpus, SynthesisConfig, SynthesisError,
+    SynthesisOutcome, SynthesisStrategy,
 };
 use frankenengine_engine::security_epoch::SecurityEpoch;
 
@@ -369,9 +369,13 @@ fn synthesis_config_default_epoch() {
 }
 
 #[test]
-fn synthesis_config_default_signing_key_bytes_len() {
-    let c = SynthesisConfig::default();
-    assert_eq!(c.signing_key_bytes.len(), 32);
+fn synthesis_config_serialization_omits_signing_authority_material() {
+    let serialized = serde_json::to_value(SynthesisConfig::default()).unwrap();
+    let fields = serialized.as_object().unwrap();
+    assert!(
+        fields.keys().all(|key| !key.contains("signing")),
+        "serialized SynthesisConfig must not contain signing authority material"
+    );
 }
 
 // ===========================================================================
@@ -402,13 +406,16 @@ fn json_fields_synthesis_config() {
         "detect_controller_interference",
         "max_enumeration_candidates",
         "epoch",
-        "signing_key_bytes",
     ] {
         assert!(
             obj.contains_key(key),
             "SynthesisConfig missing field: {key}"
         );
     }
+    assert!(
+        obj.keys().all(|key| !key.contains("signing")),
+        "serialized SynthesisConfig must not contain signing authority material"
+    );
 }
 
 // ===========================================================================
@@ -632,7 +639,7 @@ fn regression_corpus_default_is_empty() {
 
 #[test]
 fn synthesizer_initial_state() {
-    let synth = CounterexampleSynthesizer::new(SynthesisConfig::default());
+    let synth = CounterexampleSynthesizer::new_lab(SynthesisConfig::default());
     // Just verify it constructs without panic
     let _ = format!("{synth:?}");
 }
@@ -648,7 +655,7 @@ fn synthesis_config_json_fields_complete() {
     let obj = v.as_object().unwrap();
     assert_eq!(
         obj.len(),
-        7,
+        6,
         "SynthesisConfig has unexpected number of fields"
     );
 }

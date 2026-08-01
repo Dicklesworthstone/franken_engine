@@ -16,9 +16,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use frankenengine_engine::counterexample_synthesizer::{
     ConcreteScenario, ControllerConfig, ControllerInterference, ControllerInterferenceEvent,
     CounterexampleSynthesizer, DEFAULT_BUDGET_NS, DEFAULT_MAX_MINIMIZATION_ROUNDS,
-    InterferenceKind, LabFixtureCounterexampleSynthesizerExt as _, MinimalityEvidence,
-    MutationKind, PolicyMutation, SynthesisConfig, SynthesisError, SynthesisOutcome,
-    SynthesisStrategy,
+    InterferenceKind, MinimalityEvidence, MutationKind, PolicyMutation, SynthesisConfig,
+    SynthesisError, SynthesisOutcome, SynthesisStrategy,
 };
 
 fn set(values: &[&str]) -> BTreeSet<String> {
@@ -45,7 +44,7 @@ fn controller(
 }
 
 fn synth() -> CounterexampleSynthesizer {
-    CounterexampleSynthesizer::new(SynthesisConfig::default())
+    CounterexampleSynthesizer::new_lab(SynthesisConfig::default())
 }
 
 fn metric_value_stream(iterations: u64) -> Vec<i64> {
@@ -403,7 +402,7 @@ fn single_controller_produces_no_interference() {
 #[test]
 fn counterexample_synthesizer_construction_preserves_config() {
     let config = SynthesisConfig::default();
-    let synthesizer = CounterexampleSynthesizer::new(config.clone());
+    let synthesizer = CounterexampleSynthesizer::new_lab(config.clone());
     let json = serde_json::to_string(&synthesizer).unwrap();
     assert!(json.contains(&config.budget_ns.to_string()));
 }

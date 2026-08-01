@@ -26,12 +26,13 @@ use frankenengine_engine::causal_replay::{
     TraceRecord, TraceRecorder,
 };
 use frankenengine_engine::containment_executor::ContainmentState;
+use frankenengine_engine::evidence_ledger::{EvidenceTrustSnapshot, RuntimeEvidenceAuthority};
 use frankenengine_engine::incident_replay_bundle::{BundleBuilder, IncidentReplayBundle};
 use frankenengine_engine::quarantine_mesh_gate::{
     CriterionResult, FaultScenarioResult, FaultType, GateValidationResult,
 };
 use frankenengine_engine::security_epoch::SecurityEpoch;
-use frankenengine_engine::signature_preimage::SigningKey;
+use frankenengine_engine::signature_preimage::{SigningKey, sign_preimage};
 use frankenengine_engine::third_party_verifier::{
     BenchmarkClaimBundle, ClaimedBenchmarkOutcome, ContainmentClaimBundle, ReplayClaimBundle,
     ThirdPartyVerificationReport, VerificationAttestation, VerificationAttestationInput,
@@ -134,15 +135,54 @@ fn make_signing_key(seed: u8) -> SigningKey {
     SigningKey::from_bytes(key).unwrap()
 }
 
+fn trace_authority() -> RuntimeEvidenceAuthority {
+    RuntimeEvidenceAuthority::from_signing_key(
+        "third-party-verifier.test-trace",
+        make_signing_key(9),
+        SecurityEpoch::GENESIS,
+        1,
+        None,
+    )
+    .expect("runtime trace authority should be valid")
+}
+
+fn trace_trust_snapshot() -> EvidenceTrustSnapshot {
+    EvidenceTrustSnapshot::from_runtime_identities(
+        SecurityEpoch::from_raw(3),
+        [trace_authority().verification_identity()],
+    )
+    .expect("runtime trace trust snapshot should validate")
+}
+
+fn verify_replay_with_test_trust(bundle: &ReplayClaimBundle) -> ThirdPartyVerificationReport {
+    let snapshot = trace_trust_snapshot();
+    let digest = snapshot
+        .canonical_digest()
+        .expect("runtime trace trust snapshot should hash");
+    verify_replay_claim(bundle, &snapshot, &digest)
+}
+
+fn write_trace_trust_snapshot(prefix: &str) -> (PathBuf, String) {
+    let snapshot = trace_trust_snapshot();
+    let digest = snapshot
+        .canonical_digest()
+        .expect("runtime trace trust snapshot should hash")
+        .to_hex();
+    (write_json(prefix, &snapshot), digest)
+}
+
 fn make_trace(trace_id: &str) -> TraceRecord {
-    let signing_key = make_signing_key(9);
-    let mut recorder = TraceRecorder::new(RecorderConfig {
-        trace_id: trace_id.to_string(),
-        recording_mode: RecordingMode::Full,
-        epoch: SecurityEpoch::from_raw(3),
-        start_tick: 1000,
-        signing_key: signing_key.as_bytes().to_vec(),
-    });
+    let mut recorder = TraceRecorder::new(
+        RecorderConfig {
+            trace_id: trace_id.to_string(),
+            recording_mode: RecordingMode::Full,
+            epoch: SecurityEpoch::from_raw(3),
+            start_tick: 1000,
+        },
+        trace_authority(),
+    )
+    .expect("runtime trace recorder should initialize");
+    recorder.set_incident_id("incident-verify-001".to_string());
 
     recorder.record_nondeterminism(
         NondeterminismSource::Timestamp,
@@ -154,8 +194,8 @@ fn make_trace(trace_id: &str) -> TraceRecord {
     recorder.record_decision(DecisionSnapshot {
         decision_index: 0,
         trace_id: trace_id.to_string(),
-        decision_id: "decision-001".to_string(),
-        policy_id: "policy-001".to_string(),
+        decision_id: "decision-verify-001".to_string(),
+        policy_id: "policy-verify-001".to_string(),
         policy_version: 1,
         epoch: SecurityEpoch::from_raw(3),
         tick: 1001,
@@ -168,7 +208,7 @@ fn make_trace(trace_id: &str) -> TraceRecord {
         nondeterminism_range: (0, 0),
     });
 
-    recorder.finalize()
+    recorder.finalize().expect("runtime trace should finalize")
 }
 
 fn make_incident_bundle() -> (IncidentReplayBundle, String) {
@@ -345,9 +385,179 @@ fn benchmark_claim_detects_tampered_score() {
 #[test]
 fn replay_claim_verifies_integrity_and_fidelity() {
     let bundle = make_replay_claim_bundle();
-    let report = verify_replay_claim(&bundle);
+    let snapshot = trace_trust_snapshot();
+    let digest = snapshot.canonical_digest().expect("snapshot digest");
+    let report = verify_replay_claim(&bundle, &snapshot, &digest);
     assert_eq!(report.verdict, VerificationVerdict::Verified);
     assert_eq!(report.exit_code(), 0);
+    assert!(report.checks.iter().any(|check| {
+        check.name == "trace_trust_snapshot_bound"
+            && check.passed
+            && check
+                .detail
+                .contains(&format!("expected_pin=sha256:{}", digest.to_hex()))
+            && check
+                .detail
+                .contains(&format!("digest=sha256:{}", digest.to_hex()))
+            && check.detail.contains("current_epoch=3")
+            && check
+                .detail
+                .contains("@rotation:1@activation:0@previous:<root>@tip:true")
+    }));
+    assert!(report.checks.iter().any(|check| {
+        check.name == "trace_bundle_context_bound"
+            && check.passed
+            && check.detail.contains("bundle_id=")
+            && check.detail.contains("merkle_root=sha256:")
+            && check.detail.contains("manifest_preimage_hash=sha256:")
+            && check.detail.contains("trace_content_hash=sha256:")
+    }));
+}
+
+#[test]
+fn bd_mpu1z_replay_claim_rejects_unbound_incident_context() {
+    let mut missing_incident = make_replay_claim_bundle();
+    missing_incident
+        .bundle
+        .traces
+        .get_mut("trace-verify-001")
+        .expect("test trace")
+        .incident_id = None;
+
+    let report = verify_replay_with_test_trust(&missing_incident);
+    assert_eq!(report.verdict, VerificationVerdict::Failed);
+    assert!(report.checks.iter().any(|check| {
+        check.name == "trace_bundle_context_bound"
+            && !check.passed
+            && check.detail.contains("does not match bundle incident")
+    }));
+    assert!(
+        !report
+            .checks
+            .iter()
+            .any(|check| check.name.starts_with("fidelity:")),
+        "context failure must stop replay before interpreting trace decisions"
+    );
+
+    let mut wrong_incident = make_replay_claim_bundle();
+    wrong_incident
+        .bundle
+        .traces
+        .get_mut("trace-verify-001")
+        .expect("test trace")
+        .incident_id = Some("different-incident".to_string());
+    let wrong_report = verify_replay_with_test_trust(&wrong_incident);
+    assert_eq!(wrong_report.verdict, VerificationVerdict::Failed);
+
+    let input_digest_detail = |report: &ThirdPartyVerificationReport| {
+        report
+            .checks
+            .iter()
+            .find(|check| check.name == "replay_verification_input_bound")
+            .expect("every replay report must bind the complete verification input")
+            .detail
+            .clone()
+    };
+    assert_ne!(
+        input_digest_detail(&report),
+        input_digest_detail(&wrong_report),
+        "distinct malformed replay inputs must not produce interchangeable reports"
+    );
+}
+
+#[test]
+fn bd_mpu1z_replay_claim_rejects_unpinned_snapshot_at_library_boundary() {
+    let bundle = make_replay_claim_bundle();
+    let snapshot = trace_trust_snapshot();
+    let wrong_digest = frankenengine_engine::hash_tiers::ContentHash::from_bytes([0u8; 32]);
+
+    let report = verify_replay_claim(&bundle, &snapshot, &wrong_digest);
+    assert_eq!(report.verdict, VerificationVerdict::Failed);
+    assert!(report.checks.iter().any(|check| {
+        check.name == "trace_trust_snapshot_bound"
+            && !check.passed
+            && check.detail.contains("does not match")
+    }));
+    assert!(
+        !report
+            .checks
+            .iter()
+            .any(|check| check.name.starts_with("fidelity:")),
+        "pin mismatch must stop replay before interpreting trace decisions"
+    );
+}
+
+#[test]
+fn bd_mpu1z_replay_claim_binds_signed_decision_and_policy_context() {
+    type ReplayContextMutation = (&'static str, fn(&mut ReplayClaimBundle));
+    let cases: [ReplayContextMutation; 2] = [
+        ("decision", |bundle: &mut ReplayClaimBundle| {
+            bundle.decision_id = "unsigned-decision".to_string()
+        }),
+        ("policy", |bundle: &mut ReplayClaimBundle| {
+            bundle.policy_id = "unsigned-policy".to_string()
+        }),
+    ];
+    for (field, mutate) in cases {
+        let mut bundle = make_replay_claim_bundle();
+        mutate(&mut bundle);
+
+        let report = verify_replay_with_test_trust(&bundle);
+        assert_eq!(
+            report.verdict,
+            VerificationVerdict::Failed,
+            "{field} mismatch must fail"
+        );
+        assert!(
+            report
+                .checks
+                .iter()
+                .any(|check| { check.name == "trace_bundle_context_bound" && !check.passed })
+        );
+        assert!(
+            !report
+                .checks
+                .iter()
+                .any(|check| check.name.starts_with("fidelity:")),
+            "{field} mismatch must stop replay before interpreting trace decisions"
+        );
+    }
+}
+
+#[test]
+fn bd_mpu1z_replay_report_binds_full_signed_manifest_revision() {
+    let original = make_replay_claim_bundle();
+    let original_report = verify_replay_with_test_trust(&original);
+    assert_eq!(original_report.verdict, VerificationVerdict::Verified);
+
+    let mut revised = original.clone();
+    revised
+        .bundle
+        .manifest
+        .metadata
+        .insert("audited-revision".to_string(), "2".to_string());
+    let signing_bytes = revised.bundle.manifest.signing_bytes();
+    revised.bundle.manifest.signature = sign_preimage(&make_signing_key(11), &signing_bytes)
+        .expect("revised manifest should re-sign")
+        .to_bytes()
+        .to_vec();
+    let revised_report = verify_replay_with_test_trust(&revised);
+    assert_eq!(revised_report.verdict, VerificationVerdict::Verified);
+
+    let context_detail = |report: &ThirdPartyVerificationReport| {
+        report
+            .checks
+            .iter()
+            .find(|check| check.name == "trace_bundle_context_bound")
+            .expect("replay report must carry an artifact context binding")
+            .detail
+            .clone()
+    };
+    assert_ne!(
+        context_detail(&original_report),
+        context_detail(&revised_report),
+        "signed-manifest metadata revisions must change the report and attestation input"
+    );
 }
 
 #[test]
@@ -634,6 +844,8 @@ fn franken_verify_replay_command_supports_signature_and_counterfactual_files() {
     input.signature_verification_key_hex = None;
 
     let input_path = write_json("tpv_replay_input", &input);
+    let (trace_trust_snapshot_path, trace_trust_snapshot_digest) =
+        write_trace_trust_snapshot("tpv_replay_trace_trust_snapshot");
     let signature_key_path = write_text("tpv_replay_sig_key", &verification_key_hex);
     let counterfactual_path = write_json(
         "tpv_replay_counterfactual",
@@ -645,6 +857,10 @@ fn franken_verify_replay_command_supports_signature_and_counterfactual_files() {
             "replay",
             "--input",
             input_path.to_str().expect("utf8 path"),
+            "--trace-trust-snapshot-file",
+            trace_trust_snapshot_path.to_str().expect("utf8 path"),
+            "--trace-trust-snapshot-digest",
+            &trace_trust_snapshot_digest,
             "--signature-key-file",
             signature_key_path.to_str().expect("utf8 path"),
             "--counterfactual-config-file",
@@ -671,6 +887,7 @@ fn franken_verify_replay_command_supports_signature_and_counterfactual_files() {
     );
 
     let _ = fs::remove_file(input_path);
+    let _ = fs::remove_file(trace_trust_snapshot_path);
     let _ = fs::remove_file(signature_key_path);
     let _ = fs::remove_file(counterfactual_path);
 }
@@ -683,6 +900,8 @@ fn franken_verify_replay_command_supports_receipt_key_file_json_map() {
         .clone()
         .expect("replay bundle includes signature key");
     let input_path = write_json("tpv_replay_receipt_input", &input);
+    let (trace_trust_snapshot_path, trace_trust_snapshot_digest) =
+        write_trace_trust_snapshot("tpv_replay_receipt_trace_trust_snapshot");
 
     let receipt_keys: BTreeMap<String, String> =
         BTreeMap::from([(hex::encode([1u8; 32]), verification_key_hex)]);
@@ -693,6 +912,10 @@ fn franken_verify_replay_command_supports_receipt_key_file_json_map() {
             "replay",
             "--input",
             input_path.to_str().expect("utf8 path"),
+            "--trace-trust-snapshot-file",
+            trace_trust_snapshot_path.to_str().expect("utf8 path"),
+            "--trace-trust-snapshot-digest",
+            &trace_trust_snapshot_digest,
             "--receipt-key-file",
             receipt_key_path.to_str().expect("utf8 path"),
         ])
@@ -713,6 +936,7 @@ fn franken_verify_replay_command_supports_receipt_key_file_json_map() {
     }));
 
     let _ = fs::remove_file(input_path);
+    let _ = fs::remove_file(trace_trust_snapshot_path);
     let _ = fs::remove_file(receipt_key_path);
 }
 
@@ -737,6 +961,42 @@ fn franken_verify_replay_command_rejects_invalid_receipt_key_pair_flag() {
     assert!(stderr.contains("--receipt-key expects"));
 
     let _ = fs::remove_file(input_path);
+}
+
+#[test]
+fn bd_mpu1z_franken_verify_replay_rejects_unpinned_trust_snapshot() {
+    let input_path = write_json(
+        "tpv_replay_unpinned_snapshot_input",
+        &make_replay_claim_bundle(),
+    );
+    let (snapshot_path, _) = write_trace_trust_snapshot("tpv_replay_unpinned_trace_trust_snapshot");
+    let wrong_digest = "00".repeat(32);
+
+    let output = Command::new(env!("CARGO_BIN_EXE_franken-verify"))
+        .args([
+            "replay",
+            "--input",
+            input_path.to_str().expect("utf8 path"),
+            "--trace-trust-snapshot-file",
+            snapshot_path.to_str().expect("utf8 path"),
+            "--trace-trust-snapshot-digest",
+            &wrong_digest,
+        ])
+        .output()
+        .expect("replay command should execute");
+
+    assert_eq!(output.status.code(), Some(25));
+    let report: ThirdPartyVerificationReport =
+        serde_json::from_slice(&output.stdout).expect("replay report json");
+    assert_eq!(report.verdict, VerificationVerdict::Failed);
+    assert!(report.checks.iter().any(|check| {
+        check.name == "trace_trust_snapshot_bound"
+            && !check.passed
+            && check.detail.contains("does not match")
+    }));
+
+    let _ = fs::remove_file(input_path);
+    let _ = fs::remove_file(snapshot_path);
 }
 
 #[test]
@@ -963,7 +1223,7 @@ fn replay_claim_with_counterfactual_config_still_verifies() {
     bundle
         .counterfactual_configs
         .push(make_counterfactual_config("cf-branch-1"));
-    let report = verify_replay_claim(&bundle);
+    let report = verify_replay_with_test_trust(&bundle);
     assert_eq!(report.verdict, VerificationVerdict::Verified);
     assert!(
         report
@@ -1114,7 +1374,7 @@ fn containment_claim_fails_when_passed_exceeds_total() {
 fn replay_claim_without_signature_key_verifies_integrity_and_fidelity_scope() {
     let mut bundle = make_replay_claim_bundle();
     bundle.signature_verification_key_hex = None;
-    let report = verify_replay_claim(&bundle);
+    let report = verify_replay_with_test_trust(&bundle);
     assert_eq!(report.verdict, VerificationVerdict::Verified);
     assert!(report.scope_limitations.is_empty());
 }
@@ -1144,7 +1404,7 @@ fn containment_report_checks_have_unique_names() {
 #[test]
 fn replay_report_checks_have_unique_names() {
     let bundle = make_replay_claim_bundle();
-    let report = verify_replay_claim(&bundle);
+    let report = verify_replay_with_test_trust(&bundle);
     let mut names: Vec<&str> = report.checks.iter().map(|c| c.name.as_str()).collect();
     let before = names.len();
     names.sort();
@@ -1182,7 +1442,7 @@ fn multiple_counterfactual_configs_all_verified() {
     bundle
         .counterfactual_configs
         .push(make_counterfactual_config("cf-c"));
-    let report = verify_replay_claim(&bundle);
+    let report = verify_replay_with_test_trust(&bundle);
     assert_eq!(report.verdict, VerificationVerdict::Verified);
     let cf_checks: Vec<_> = report
         .checks
@@ -1213,6 +1473,6 @@ fn containment_claim_report_has_correct_claim_type() {
 #[test]
 fn replay_claim_report_has_correct_claim_type() {
     let bundle = make_replay_claim_bundle();
-    let report = verify_replay_claim(&bundle);
+    let report = verify_replay_with_test_trust(&bundle);
     assert_eq!(report.claim_type, "replay");
 }

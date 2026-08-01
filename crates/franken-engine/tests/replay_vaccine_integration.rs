@@ -67,12 +67,11 @@ fn record_trace(
     incident_id: Option<&str>,
     decisions: &[DecisionSnapshot],
 ) -> TraceRecord {
-    let mut recorder = TraceRecorder::new(RecorderConfig {
+    let mut recorder = TraceRecorder::new_lab(RecorderConfig {
         trace_id: trace_id.to_string(),
         recording_mode: RecordingMode::Full,
         epoch: SecurityEpoch::from_raw(3),
         start_tick: 100,
-        signing_key: vec![7u8; 32],
     });
     if let Some(id) = incident_id {
         recorder.set_incident_id(id.to_string());
@@ -80,7 +79,7 @@ fn record_trace(
     for decision in decisions {
         recorder.record_decision(decision.clone());
     }
-    recorder.finalize()
+    recorder.finalize().expect("lab trace should finalize")
 }
 
 /// An exfiltration-shaped incident: the extension probes twice then leaks.
@@ -131,7 +130,7 @@ fn full_vaccine_lifecycle_end_to_end() {
     // 1. Derive + propose + prove + estimate + package, via the factory's
     //    candidate loop. The threshold-only candidate must be rejected as
     //    not stopping the incident; force-sandbox must win first.
-    let mut factory = VaccineFactory::new(VaccineFactoryConfig::default());
+    let mut factory = VaccineFactory::new_lab(VaccineFactoryConfig::default());
     let motif = factory.derive_motif(&incident).expect("motif derives");
     assert_eq!(motif.incident_id, "incident-exfil-9");
     assert_eq!(motif.harmful_source_indices(), vec![2, 3]);
@@ -236,7 +235,7 @@ fn tamper_and_impostor_drills_fail_closed() {
     let incident = incident_trace();
     let clean = clean_traces();
 
-    let mut factory = VaccineFactory::new(VaccineFactoryConfig::default());
+    let mut factory = VaccineFactory::new_lab(VaccineFactoryConfig::default());
     let outcome = factory
         .build_best(
             &incident,
@@ -303,8 +302,8 @@ fn vaccine_id_is_stable_across_equivalent_builds() {
             .vaccine
             .expect("vaccine present")
     };
-    let mut f1 = VaccineFactory::new(VaccineFactoryConfig::default());
-    let mut f2 = VaccineFactory::new(VaccineFactoryConfig::default());
+    let mut f1 = VaccineFactory::new_lab(VaccineFactoryConfig::default());
+    let mut f2 = VaccineFactory::new_lab(VaccineFactoryConfig::default());
     let v1 = build(&mut f1);
     let v2 = build(&mut f2);
     assert_eq!(v1.vaccine_id_hex, v2.vaccine_id_hex);

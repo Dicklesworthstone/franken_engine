@@ -192,6 +192,10 @@ pub struct Witness {
 
 const EVIDENCE_KEY_ID_DOMAIN: &[u8] = b"franken-engine.evidence-signing-key.v1";
 const LAB_EVIDENCE_KEY_DOMAIN: &[u8] = b"franken-engine.lab-evidence-key.v1";
+const EVIDENCE_TRUST_SNAPSHOT_DIGEST_DOMAIN: &[u8] = b"franken-engine.evidence-trust-snapshot.v1";
+
+/// Current external trust-snapshot schema.
+pub const EVIDENCE_TRUST_SNAPSHOT_FORMAT_VERSION: u32 = 1;
 
 fn evidence_key_id(verification_key: &VerificationKey) -> String {
     let mut preimage =
@@ -692,6 +696,192 @@ impl EvidenceVerificationIdentity {
         }
         Ok(())
     }
+}
+
+/// Externally authenticated, complete runtime evidence trust snapshot.
+///
+/// The snapshot contains public verification material only. Its digest is
+/// intended to be pinned through an auditor-controlled channel separate from
+/// the claimant artifact. `producer_lineage_tips` makes the completeness
+/// assertion explicit: omitting a known successor changes both the declared
+/// tip and the canonical digest.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EvidenceTrustSnapshot {
+    pub format_version: u32,
+    pub current_epoch: SecurityEpoch,
+    pub identities: Vec<EvidenceVerificationIdentity>,
+    pub producer_lineage_tips: BTreeMap<String, String>,
+}
+
+impl EvidenceTrustSnapshot {
+    /// Construct a canonical runtime snapshot from externally trusted public
+    /// identities.
+    pub fn from_runtime_identities(
+        current_epoch: SecurityEpoch,
+        identities: impl IntoIterator<Item = EvidenceVerificationIdentity>,
+    ) -> Result<Self, LedgerError> {
+        let mut identities: Vec<_> = identities.into_iter().collect();
+        sort_verification_identities(&mut identities);
+        let producer_lineage_tips = derive_producer_lineage_tips(&identities)?;
+        let snapshot = Self {
+            format_version: EVIDENCE_TRUST_SNAPSHOT_FORMAT_VERSION,
+            current_epoch,
+            identities,
+            producer_lineage_tips,
+        };
+        snapshot.validate_runtime()?;
+        Ok(snapshot)
+    }
+
+    /// Validate schema, runtime authority class, complete lineages, and each
+    /// externally asserted producer tip.
+    pub fn validate_runtime(&self) -> Result<(), LedgerError> {
+        if self.format_version != EVIDENCE_TRUST_SNAPSHOT_FORMAT_VERSION {
+            return Err(LedgerError::SchemaValidationFailed {
+                reason: format!(
+                    "unsupported evidence trust snapshot format version {}; expected {}",
+                    self.format_version, EVIDENCE_TRUST_SNAPSHOT_FORMAT_VERSION
+                ),
+            });
+        }
+        if self.identities.is_empty() {
+            return Err(LedgerError::SchemaValidationFailed {
+                reason: "runtime evidence trust snapshot must contain at least one identity"
+                    .to_string(),
+            });
+        }
+
+        let mut canonical_identities = self.identities.clone();
+        sort_verification_identities(&mut canonical_identities);
+        let mut seen_keys = BTreeSet::new();
+        for identity in &canonical_identities {
+            identity.validate_runtime_authority()?;
+            let coordinate = (
+                identity.producer_id.clone(),
+                identity.key_provenance.key_id.clone(),
+            );
+            if !seen_keys.insert(coordinate) {
+                return Err(LedgerError::SchemaValidationFailed {
+                    reason: format!(
+                        "duplicate runtime evidence identity in trust snapshot: {}/{}",
+                        identity.producer_id, identity.key_provenance.key_id
+                    ),
+                });
+            }
+        }
+
+        // Registration replays the complete predecessor/sequence/activation
+        // invariants over the canonical order.
+        EvidenceTrustRegistry::from_runtime_identities(
+            self.current_epoch,
+            canonical_identities.clone(),
+        )?;
+
+        let expected_tips = derive_producer_lineage_tips(&canonical_identities)?;
+        if self.producer_lineage_tips != expected_tips {
+            return Err(LedgerError::SchemaValidationFailed {
+                reason: format!(
+                    "runtime evidence trust snapshot lineage tips are incomplete or inconsistent: \
+                     declared {:?}, derived {:?}",
+                    self.producer_lineage_tips, expected_tips
+                ),
+            });
+        }
+        Ok(())
+    }
+
+    /// Deterministic SHA-256 digest over the validated semantic snapshot.
+    pub fn canonical_digest(&self) -> Result<ContentHash, LedgerError> {
+        self.validate_runtime()?;
+        let mut canonical = self.clone();
+        sort_verification_identities(&mut canonical.identities);
+        let encoded = serde_json::to_vec(&canonical).map_err(|error| {
+            LedgerError::SchemaValidationFailed {
+                reason: format!("evidence trust snapshot serialization failed: {error}"),
+            }
+        })?;
+        let mut preimage =
+            Vec::with_capacity(EVIDENCE_TRUST_SNAPSHOT_DIGEST_DOMAIN.len() + 8 + encoded.len());
+        preimage.extend_from_slice(EVIDENCE_TRUST_SNAPSHOT_DIGEST_DOMAIN);
+        preimage.extend_from_slice(&(encoded.len() as u64).to_be_bytes());
+        preimage.extend_from_slice(&encoded);
+        Ok(ContentHash::compute(&preimage))
+    }
+
+    /// Materialize the public-key registry used by runtime replay.
+    pub fn to_runtime_registry(&self) -> Result<EvidenceTrustRegistry, LedgerError> {
+        self.validate_runtime()?;
+        EvidenceTrustRegistry::from_runtime_identities(self.current_epoch, self.identities.clone())
+    }
+
+    /// Stable public lineage coordinates for verification reports.
+    pub fn lineage_coordinates(&self) -> Vec<String> {
+        let mut identities = self.identities.clone();
+        sort_verification_identities(&mut identities);
+        identities
+            .into_iter()
+            .map(|identity| {
+                let provenance = identity.key_provenance;
+                let previous = provenance.previous_key_id.as_deref().unwrap_or("<root>");
+                let is_tip = self
+                    .producer_lineage_tips
+                    .get(&identity.producer_id)
+                    .is_some_and(|tip| tip == &provenance.key_id);
+                format!(
+                    "{}/{}@rotation:{}@activation:{}@previous:{}@tip:{}",
+                    identity.producer_id,
+                    provenance.key_id,
+                    provenance.rotation_sequence,
+                    provenance.activation_epoch.as_u64(),
+                    previous,
+                    is_tip
+                )
+            })
+            .collect()
+    }
+}
+
+fn sort_verification_identities(identities: &mut [EvidenceVerificationIdentity]) {
+    identities.sort_by(|left, right| {
+        left.producer_id
+            .cmp(&right.producer_id)
+            .then_with(|| {
+                left.key_provenance
+                    .rotation_sequence
+                    .cmp(&right.key_provenance.rotation_sequence)
+            })
+            .then_with(|| left.key_provenance.key_id.cmp(&right.key_provenance.key_id))
+    });
+}
+
+fn derive_producer_lineage_tips(
+    identities: &[EvidenceVerificationIdentity],
+) -> Result<BTreeMap<String, String>, LedgerError> {
+    let mut tips: BTreeMap<String, (u64, String)> = BTreeMap::new();
+    for identity in identities {
+        let candidate = (
+            identity.key_provenance.rotation_sequence,
+            identity.key_provenance.key_id.clone(),
+        );
+        match tips.get(&identity.producer_id) {
+            Some((sequence, key_id)) if *sequence == candidate.0 && key_id != &candidate.1 => {
+                return Err(LedgerError::SchemaValidationFailed {
+                    reason: format!(
+                        "runtime evidence producer {} has multiple keys at rotation sequence {}",
+                        identity.producer_id, sequence
+                    ),
+                });
+            }
+            Some((sequence, _)) if *sequence > candidate.0 => {}
+            _ => {
+                tips.insert(identity.producer_id.clone(), candidate);
+            }
+        }
+    }
+    Ok(tips
+        .into_iter()
+        .map(|(producer_id, (_, key_id))| (producer_id, key_id))
+        .collect())
 }
 
 /// Signature proving which registered producer emitted an evidence entry.
@@ -1717,13 +1907,13 @@ pub trait EvidenceEmitter: fmt::Debug {
 /// In-memory evidence ledger for testing and lab mode.
 ///
 /// Stores entries in insertion order, rejects duplicates by entry_id.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct AuthorizedEvidenceProducer {
     key_provenance: EvidenceKeyProvenance,
     verification_key: PreparedVerificationKey,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct InMemoryLedger {
     entries: Vec<EvidenceEntry>,
     entry_ids: std::collections::BTreeSet<String>,
@@ -1736,6 +1926,18 @@ pub struct InMemoryLedger {
     evidence_chain_ledger_id: Option<String>,
     evidence_chain_next_sequence: u64,
     evidence_chain_head: Option<String>,
+}
+
+/// Public-key trust registry for detached runtime evidence.
+///
+/// This is the authentication-only projection of [`InMemoryLedger`]. It
+/// intentionally stores no private key material and no evidence entries. The
+/// registry preserves the ledger's producer, key-lineage, activation-epoch,
+/// and retirement checks so detached artifacts such as causal replay traces
+/// cannot accidentally use a weaker trust model.
+#[derive(Debug, Clone)]
+pub struct EvidenceTrustRegistry {
+    registry: InMemoryLedger,
 }
 
 #[cfg(test)]
@@ -2097,6 +2299,19 @@ impl InMemoryLedger {
         &self,
         envelope: &EvidenceSignatureEnvelope,
     ) -> Result<EvidenceVerificationIdentity, LedgerError> {
+        let registered = self.authorized_producer_for_envelope(envelope)?;
+        Ok(EvidenceVerificationIdentity {
+            producer_id: envelope.producer_id.clone(),
+            key_provenance: registered.key_provenance.clone(),
+            verification_key: registered.verification_key.raw().clone(),
+        })
+    }
+
+    fn authorized_producer_for_envelope(
+        &self,
+        envelope: &EvidenceSignatureEnvelope,
+    ) -> Result<&AuthorizedEvidenceProducer, LedgerError> {
+        envelope.validate_public_provenance()?;
         let registered = self
             .authorized_producers
             .get(&(
@@ -2105,15 +2320,76 @@ impl InMemoryLedger {
             ))
             .ok_or_else(|| LedgerError::SchemaValidationFailed {
                 reason: format!(
-                    "unauthorized evidence chain producer/key: {}/{}",
+                    "unauthorized evidence producer/key: {}/{}",
                     envelope.producer_id, envelope.key_provenance.key_id
                 ),
             })?;
-        Ok(EvidenceVerificationIdentity {
-            producer_id: envelope.producer_id.clone(),
-            key_provenance: registered.key_provenance.clone(),
-            verification_key: registered.verification_key.raw().clone(),
-        })
+        if registered.key_provenance != envelope.key_provenance {
+            return Err(LedgerError::SchemaValidationFailed {
+                reason: format!(
+                    "producer key provenance mismatch: {}/{}",
+                    envelope.producer_id, envelope.key_provenance.key_id
+                ),
+            });
+        }
+        if let Some(current_epoch) = self.current_epoch
+            && envelope.signed_epoch > current_epoch
+        {
+            return Err(LedgerError::SchemaValidationFailed {
+                reason: format!(
+                    "evidence signature epoch {} is after registry epoch {}",
+                    envelope.signed_epoch.as_u64(),
+                    current_epoch.as_u64()
+                ),
+            });
+        }
+        if let Some(successor) =
+            self.authorized_producers
+                .iter()
+                .find_map(|((registered_producer, _), candidate)| {
+                    (registered_producer == &envelope.producer_id
+                        && candidate.key_provenance.previous_key_id.as_deref()
+                            == Some(envelope.key_provenance.key_id.as_str()))
+                    .then_some(&candidate.key_provenance)
+                })
+            && envelope.signed_epoch >= successor.activation_epoch
+        {
+            return Err(LedgerError::SchemaValidationFailed {
+                reason: format!(
+                    "evidence key {} retired at successor activation epoch {}",
+                    envelope.key_provenance.key_id,
+                    successor.activation_epoch.as_u64()
+                ),
+            });
+        }
+        if registered.verification_key.raw() != &envelope.verification_key {
+            return Err(LedgerError::SchemaValidationFailed {
+                reason: format!(
+                    "producer verification key mismatch: {}",
+                    envelope.producer_id
+                ),
+            });
+        }
+        Ok(registered)
+    }
+
+    fn verify_registered_detached(
+        &self,
+        envelope: &EvidenceSignatureEnvelope,
+        payload: &[u8],
+        expected_signed_epoch: SecurityEpoch,
+    ) -> Result<(), LedgerError> {
+        if envelope.signed_epoch != expected_signed_epoch {
+            return Err(LedgerError::SchemaValidationFailed {
+                reason: format!(
+                    "detached evidence signature epoch mismatch: envelope {}, artifact {}",
+                    envelope.signed_epoch.as_u64(),
+                    expected_signed_epoch.as_u64()
+                ),
+            });
+        }
+        let trusted_identity = self.trusted_identity_for_envelope(envelope)?;
+        envelope.verify_detached(payload, &trusted_identity)
     }
 
     /// Atomically emit an exact batch whose signed chain receipt extends the
@@ -2282,53 +2558,7 @@ impl InMemoryLedger {
                 ),
             });
         }
-        let registered = self
-            .authorized_producers
-            .get(&(
-                envelope.producer_id.clone(),
-                envelope.key_provenance.key_id.clone(),
-            ))
-            .ok_or_else(|| LedgerError::SchemaValidationFailed {
-                reason: format!(
-                    "unauthorized evidence producer/key: {}/{}",
-                    envelope.producer_id, envelope.key_provenance.key_id
-                ),
-            })?;
-        if registered.key_provenance != envelope.key_provenance {
-            return Err(LedgerError::SchemaValidationFailed {
-                reason: format!(
-                    "producer key provenance mismatch: {}/{}",
-                    envelope.producer_id, envelope.key_provenance.key_id
-                ),
-            });
-        }
-        if let Some(successor) =
-            self.authorized_producers
-                .iter()
-                .find_map(|((registered_producer, _), candidate)| {
-                    (registered_producer == &envelope.producer_id
-                        && candidate.key_provenance.previous_key_id.as_deref()
-                            == Some(envelope.key_provenance.key_id.as_str()))
-                    .then_some(&candidate.key_provenance)
-                })
-            && envelope.signed_epoch >= successor.activation_epoch
-        {
-            return Err(LedgerError::SchemaValidationFailed {
-                reason: format!(
-                    "evidence key {} retired at successor activation epoch {}",
-                    envelope.key_provenance.key_id,
-                    successor.activation_epoch.as_u64()
-                ),
-            });
-        }
-        if registered.verification_key.raw() != &envelope.verification_key {
-            return Err(LedgerError::SchemaValidationFailed {
-                reason: format!(
-                    "producer verification key mismatch: {}",
-                    envelope.producer_id
-                ),
-            });
-        }
+        let registered = self.authorized_producer_for_envelope(envelope)?;
         registered
             .verification_key
             .verify(&entry.unsigned_signature_preimage()?, &envelope.signature)
@@ -2339,6 +2569,100 @@ impl InMemoryLedger {
                 ),
             })?;
         Ok(())
+    }
+}
+
+impl EvidenceTrustRegistry {
+    /// Create an empty runtime registry at the verifier's current epoch.
+    ///
+    /// An empty registry is useful for fail-closed parsing and reporting:
+    /// verification attempts fail as unauthorized until identities are added.
+    pub fn new_runtime(current_epoch: SecurityEpoch) -> Self {
+        Self {
+            registry: InMemoryLedger::empty_for_epoch(Some(current_epoch), false),
+        }
+    }
+
+    /// Create an explicitly lab-scoped registry.
+    pub fn new_lab(current_epoch: SecurityEpoch) -> Self {
+        Self {
+            registry: InMemoryLedger::empty_for_epoch(Some(current_epoch), true),
+        }
+    }
+
+    pub(crate) fn ensure_runtime_scope(&self) -> Result<(), LedgerError> {
+        if self.registry.allow_lab_authority {
+            return Err(LedgerError::SchemaValidationFailed {
+                reason: "lab evidence trust registry cannot authorize a production runtime"
+                    .to_string(),
+            });
+        }
+        Ok(())
+    }
+
+    pub(crate) fn ensure_lab_scope(&self) -> Result<(), LedgerError> {
+        if !self.registry.allow_lab_authority {
+            return Err(LedgerError::SchemaValidationFailed {
+                reason: "runtime evidence trust registry cannot be presented as a lab fixture"
+                    .to_string(),
+            });
+        }
+        Ok(())
+    }
+
+    /// Build a runtime registry from externally authenticated public
+    /// identities. Identities are ordered by producer and rotation sequence
+    /// before registration, so serialized registries need not preserve lineage
+    /// insertion order.
+    pub fn from_runtime_identities(
+        current_epoch: SecurityEpoch,
+        identities: impl IntoIterator<Item = EvidenceVerificationIdentity>,
+    ) -> Result<Self, LedgerError> {
+        let mut registry = Self::new_runtime(current_epoch);
+        registry.authorize_identities(identities)?;
+        Ok(registry)
+    }
+
+    /// Build an explicitly lab-scoped registry from public fixture identities.
+    pub fn from_lab_identities(
+        current_epoch: SecurityEpoch,
+        identities: impl IntoIterator<Item = EvidenceVerificationIdentity>,
+    ) -> Result<Self, LedgerError> {
+        let mut registry = Self::new_lab(current_epoch);
+        registry.authorize_identities(identities)?;
+        Ok(registry)
+    }
+
+    fn authorize_identities(
+        &mut self,
+        identities: impl IntoIterator<Item = EvidenceVerificationIdentity>,
+    ) -> Result<(), LedgerError> {
+        let mut identities: Vec<_> = identities.into_iter().collect();
+        sort_verification_identities(&mut identities);
+        for identity in identities {
+            self.authorize_verification_identity(&identity)?;
+        }
+        Ok(())
+    }
+
+    /// Add one externally authenticated public identity.
+    pub fn authorize_verification_identity(
+        &mut self,
+        identity: &EvidenceVerificationIdentity,
+    ) -> Result<(), LedgerError> {
+        self.registry.authorize_verification_identity(identity)
+    }
+
+    /// Verify a detached artifact through the registered producer and key
+    /// lifecycle, including activation, rotation, and retirement.
+    pub fn verify_detached(
+        &self,
+        envelope: &EvidenceSignatureEnvelope,
+        payload: &[u8],
+        expected_signed_epoch: SecurityEpoch,
+    ) -> Result<(), LedgerError> {
+        self.registry
+            .verify_registered_detached(envelope, payload, expected_signed_epoch)
     }
 }
 
@@ -6097,6 +6421,91 @@ mod tests {
                 .verify_detached(payload, &trusted_identity)
                 .is_err(),
             "a claimant-supplied source-known key must not authenticate as the trusted runtime"
+        );
+    }
+
+    #[test]
+    fn bd_mpu1z_runtime_trust_snapshot_binds_complete_rotation_lineage() {
+        let first = RuntimeEvidenceAuthority::from_signing_key(
+            "runtime-snapshot",
+            SigningKey::from_bytes([0x41; 32]).expect("non-zero first key"),
+            SecurityEpoch::from_raw(1),
+            1,
+            None,
+        )
+        .expect("first runtime identity");
+        let second = RuntimeEvidenceAuthority::from_signing_key(
+            "runtime-snapshot",
+            SigningKey::from_bytes([0x42; 32]).expect("non-zero second key"),
+            SecurityEpoch::from_raw(10),
+            2,
+            Some(first.key_provenance().key_id.clone()),
+        )
+        .expect("rotated runtime identity");
+        let snapshot = EvidenceTrustSnapshot::from_runtime_identities(
+            SecurityEpoch::from_raw(20),
+            [
+                second.verification_identity(),
+                first.verification_identity(),
+            ],
+        )
+        .expect("complete runtime snapshot");
+        let digest = snapshot.canonical_digest().expect("snapshot digest");
+
+        let mut reordered = snapshot.clone();
+        reordered.identities.reverse();
+        assert_eq!(
+            reordered.canonical_digest().expect("reordered digest"),
+            digest,
+            "semantic snapshot digest must not depend on JSON identity order"
+        );
+
+        let first_only = EvidenceTrustSnapshot::from_runtime_identities(
+            SecurityEpoch::from_raw(20),
+            [first.verification_identity()],
+        )
+        .expect("independently asserted earlier snapshot");
+        assert_ne!(
+            first_only.canonical_digest().expect("earlier digest"),
+            digest,
+            "omitting the successor must change the externally pinned snapshot digest"
+        );
+
+        let mut false_tip = snapshot.clone();
+        false_tip.producer_lineage_tips.insert(
+            "runtime-snapshot".to_string(),
+            first.key_provenance().key_id.clone(),
+        );
+        assert!(
+            false_tip.validate_runtime().is_err(),
+            "declared lineage tip must identify the complete registered lineage"
+        );
+
+        let payload = b"retired predecessor payload";
+        let retired_envelope = first
+            .sign_detached(payload, SecurityEpoch::from_raw(10))
+            .expect("predecessor can produce a cryptographic signature");
+        assert!(
+            snapshot
+                .to_runtime_registry()
+                .expect("validated registry")
+                .verify_detached(&retired_envelope, payload, SecurityEpoch::from_raw(10))
+                .is_err(),
+            "complete snapshot must retire the predecessor at successor activation"
+        );
+        assert_eq!(
+            snapshot.lineage_coordinates(),
+            vec![
+                format!(
+                    "runtime-snapshot/{}@rotation:1@activation:1@previous:<root>@tip:false",
+                    first.key_provenance().key_id
+                ),
+                format!(
+                    "runtime-snapshot/{}@rotation:2@activation:10@previous:{}@tip:true",
+                    second.key_provenance().key_id,
+                    first.key_provenance().key_id
+                ),
+            ]
         );
     }
 

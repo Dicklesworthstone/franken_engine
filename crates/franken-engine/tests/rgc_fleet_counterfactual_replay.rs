@@ -78,24 +78,6 @@ fn make_decision(index: u64, action: &str, outcome: i64) -> DecisionSnapshot {
     }
 }
 
-fn make_trace(decisions: Vec<DecisionSnapshot>) -> TraceRecord {
-    let trace_id = decisions
-        .first()
-        .map(|d| d.trace_id.clone())
-        .unwrap_or_else(|| "rgc-trace".to_string());
-    let mut recorder = TraceRecorder::new(RecorderConfig {
-        trace_id,
-        recording_mode: RecordingMode::Full,
-        epoch: epoch(),
-        start_tick: 100,
-        signing_key: b"rgc-key".to_vec(),
-    });
-    for d in decisions {
-        recorder.record_decision(d);
-    }
-    recorder.finalize()
-}
-
 fn node_trace(node_id: &str, trace_id: &str, outcomes: &[i64]) -> TraceRecord {
     let decisions: Vec<DecisionSnapshot> = outcomes
         .iter()
@@ -107,11 +89,17 @@ fn node_trace(node_id: &str, trace_id: &str, outcomes: &[i64]) -> TraceRecord {
             d
         })
         .collect();
-    let mut trace = make_trace(decisions);
-    trace
-        .metadata
-        .insert("node_id".to_string(), node_id.to_string());
-    trace
+    let mut recorder = TraceRecorder::new_lab(RecorderConfig {
+        trace_id: trace_id.to_string(),
+        recording_mode: RecordingMode::Full,
+        epoch: epoch(),
+        start_tick: 100,
+    });
+    recorder.set_metadata("node_id".to_string(), node_id.to_string());
+    for decision in decisions {
+        recorder.record_decision(decision);
+    }
+    recorder.finalize().expect("lab trace should finalize")
 }
 
 fn write_trace(root: &Path, relative: &str, trace: &TraceRecord) {
@@ -174,7 +162,7 @@ fn candidate_policy(name: &str, version: u32, threshold: Option<u64>) -> Substit
 }
 
 fn engine() -> CounterfactualReplayEngine {
-    CounterfactualReplayEngine::new(ReplayEngineConfig::default())
+    CounterfactualReplayEngine::new_lab(ReplayEngineConfig::default())
 }
 
 // ---------------------------------------------------------------------------

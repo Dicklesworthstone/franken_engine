@@ -25,7 +25,7 @@ use frankenengine_engine::causal_replay::{
     DecisionDelta, DecisionSnapshot, NondeterminismEntry, NondeterminismLog, NondeterminismSource,
     OriginalDecider, RecorderConfig, RecordingMode, ReplayDecisionOutcome, ReplayError,
     ReplayVerdict, TraceEntry, TraceIndex, TraceQuery, TraceRecord, TraceRecorder,
-    TraceRetentionPolicy,
+    TraceRetentionPolicy, causal_replay_lab_trust_registry,
 };
 use frankenengine_engine::hash_tiers::ContentHash;
 use frankenengine_engine::security_epoch::SecurityEpoch;
@@ -36,10 +36,6 @@ use frankenengine_engine::security_epoch::SecurityEpoch;
 
 fn test_epoch() -> SecurityEpoch {
     SecurityEpoch::from_raw(10)
-}
-
-fn signing_key() -> Vec<u8> {
-    b"test-signing-key-causal-replay".to_vec()
 }
 
 fn make_decision_snapshot(index: u64, action: &str, outcome: i64) -> DecisionSnapshot {
@@ -57,7 +53,7 @@ fn make_decision_snapshot(index: u64, action: &str, outcome: i64) -> DecisionSna
         chosen_action: action.into(),
         outcome_millionths: outcome,
         extension_id: "ext-1".into(),
-        nondeterminism_range: (index * 2, index * 2 + 1),
+        nondeterminism_range: (0, 0),
     }
 }
 
@@ -67,12 +63,11 @@ fn make_recorder_config() -> RecorderConfig {
         recording_mode: RecordingMode::Full,
         epoch: test_epoch(),
         start_tick: 100,
-        signing_key: signing_key(),
     }
 }
 
 fn record_simple_trace() -> TraceRecord {
-    let mut recorder = TraceRecorder::new(make_recorder_config());
+    let mut recorder = TraceRecorder::new_lab(make_recorder_config());
     recorder.record_nondeterminism(
         NondeterminismSource::RandomValue,
         vec![42],
@@ -89,7 +84,7 @@ fn record_simple_trace() -> TraceRecord {
     );
     recorder.record_nondeterminism(NondeterminismSource::IoResult, vec![1, 2, 3], 130, None);
     recorder.record_decision(make_decision_snapshot(1, "deny", -100_000));
-    recorder.finalize()
+    recorder.finalize().expect("lab trace should finalize")
 }
 
 // ===========================================================================
@@ -268,14 +263,14 @@ fn decision_snapshot_serde_round_trip() {
 
 #[test]
 fn recorder_starts_empty() {
-    let recorder = TraceRecorder::new(make_recorder_config());
+    let recorder = TraceRecorder::new_lab(make_recorder_config());
     assert_eq!(recorder.entry_count(), 0);
     assert_eq!(recorder.nondeterminism_count(), 0);
 }
 
 #[test]
 fn recorder_tracks_counts() {
-    let mut recorder = TraceRecorder::new(make_recorder_config());
+    let mut recorder = TraceRecorder::new_lab(make_recorder_config());
     recorder.record_nondeterminism(NondeterminismSource::RandomValue, vec![1], 100, None);
     assert_eq!(recorder.nondeterminism_count(), 1);
     assert_eq!(recorder.entry_count(), 0);
@@ -286,12 +281,12 @@ fn recorder_tracks_counts() {
 
 #[test]
 fn recorder_metadata_and_incident() {
-    let mut recorder = TraceRecorder::new(make_recorder_config());
+    let mut recorder = TraceRecorder::new_lab(make_recorder_config());
     recorder.set_incident_id("INC-001".into());
     recorder.set_metadata("env".into(), "production".into());
     recorder.record_decision(make_decision_snapshot(0, "allow", 100_000));
 
-    let trace = recorder.finalize();
+    let trace = recorder.finalize().expect("lab trace should finalize");
     assert_eq!(trace.incident_id.as_deref(), Some("INC-001"));
     assert_eq!(
         trace.metadata.get("env").map(String::as_str),
@@ -322,8 +317,11 @@ fn trace_record_chain_integrity_valid() {
 #[test]
 fn trace_record_signature_verification() {
     let trace = record_simple_trace();
-    assert!(trace.verify_signature(&signing_key()));
-    assert!(!trace.verify_signature(b"wrong-key"));
+    let registry = causal_replay_lab_trust_registry();
+    assert!(trace.verify_authenticity(&registry).is_ok());
+    let mut tampered = trace;
+    tampered.signature.producer_id = "wrong-producer".into();
+    assert!(tampered.verify_authenticity(&registry).is_err());
 }
 
 #[test]
@@ -441,6 +439,9 @@ fn replay_error_serde_round_trip() {
             expected_sequence: 5,
             actual_sequence: 7,
         },
+        ReplayError::NondeterminismIntegrity {
+            detail: "digest mismatch".into(),
+        },
         ReplayError::BranchDepthExceeded {
             requested: 10,
             max: 5,
@@ -449,7 +450,9 @@ fn replay_error_serde_round_trip() {
         ReplayError::TraceNotFound {
             trace_id: "missing".into(),
         },
-        ReplayError::SignatureInvalid,
+        ReplayError::SignatureInvalid {
+            detail: "wrong trust root".into(),
+        },
     ];
     for err in &errors {
         let json = serde_json::to_string(err).unwrap();
@@ -465,7 +468,7 @@ fn replay_error_serde_round_trip() {
 #[test]
 fn replay_identical_trace() {
     let trace = record_simple_trace();
-    let engine = CausalReplayEngine::new();
+    let engine = CausalReplayEngine::new_lab();
     let verdict = engine.replay(&trace).unwrap();
     match verdict {
         ReplayVerdict::Identical { decisions_replayed } => {
@@ -478,7 +481,7 @@ fn replay_identical_trace() {
 #[test]
 fn replay_with_original_decider() {
     let trace = record_simple_trace();
-    let engine = CausalReplayEngine::new();
+    let engine = CausalReplayEngine::new_lab();
     let decider = OriginalDecider;
     let verdict = engine.replay_with_decider(&trace, &decider).unwrap();
     match verdict {
@@ -492,9 +495,11 @@ fn replay_with_original_decider() {
 #[test]
 fn replay_verify_trace_signature() {
     let trace = record_simple_trace();
-    let engine = CausalReplayEngine::new();
-    assert!(engine.verify_trace_signature(&trace, &signing_key()));
-    assert!(!engine.verify_trace_signature(&trace, b"wrong-key"));
+    let engine = CausalReplayEngine::new_lab();
+    assert!(engine.verify_trace_authenticity(&trace).is_ok());
+    let mut tampered = trace;
+    tampered.signature.producer_id = "wrong-producer".into();
+    assert!(engine.verify_trace_authenticity(&tampered).is_err());
 }
 
 // ===========================================================================
@@ -504,7 +509,7 @@ fn replay_verify_trace_signature() {
 #[test]
 fn counterfactual_branch_basic() {
     let trace = record_simple_trace();
-    let engine = CausalReplayEngine::new();
+    let engine = CausalReplayEngine::new_lab();
     let config = CounterfactualConfig {
         branch_id: "branch-1".into(),
         threshold_override_millionths: Some(900_000),
@@ -537,7 +542,7 @@ fn counterfactual_config_serde_round_trip() {
 #[test]
 fn multi_branch_comparison() {
     let trace = record_simple_trace();
-    let engine = CausalReplayEngine::new();
+    let engine = CausalReplayEngine::new_lab();
 
     let configs = vec![
         CounterfactualConfig {
@@ -567,7 +572,7 @@ fn multi_branch_comparison() {
 #[test]
 fn multi_branch_depth_exceeded() {
     let trace = record_simple_trace();
-    let engine = CausalReplayEngine::new().with_max_branch_depth(2);
+    let engine = CausalReplayEngine::new_lab().with_max_branch_depth(2);
 
     // Create 3 configs, exceeding depth limit of 2
     let configs: Vec<CounterfactualConfig> = (0..3)
@@ -756,14 +761,14 @@ fn trace_retention_policy_serde_round_trip() {
 
 #[test]
 fn trace_index_empty() {
-    let index = TraceIndex::new(TraceRetentionPolicy::default());
+    let index = TraceIndex::new_lab(TraceRetentionPolicy::default());
     assert!(index.is_empty());
     assert_eq!(index.len(), 0);
 }
 
 #[test]
 fn trace_index_insert_and_get() {
-    let mut index = TraceIndex::new(TraceRetentionPolicy::default());
+    let mut index = TraceIndex::new_lab(TraceRetentionPolicy::default());
     let trace = record_simple_trace();
     index.insert(trace.clone()).unwrap();
     assert_eq!(index.len(), 1);
@@ -775,7 +780,7 @@ fn trace_index_insert_and_get() {
 
 #[test]
 fn trace_index_query_by_trace_id() {
-    let mut index = TraceIndex::new(TraceRetentionPolicy::default());
+    let mut index = TraceIndex::new_lab(TraceRetentionPolicy::default());
     index.insert(record_simple_trace()).unwrap();
 
     let query = TraceQuery {
@@ -793,7 +798,7 @@ fn trace_index_query_by_trace_id() {
 
 #[test]
 fn trace_index_query_no_match() {
-    let mut index = TraceIndex::new(TraceRetentionPolicy::default());
+    let mut index = TraceIndex::new_lab(TraceRetentionPolicy::default());
     index.insert(record_simple_trace()).unwrap();
 
     let query = TraceQuery {
@@ -818,7 +823,7 @@ fn trace_index_gc_removes_expired() {
         max_traces: 1000,
         max_storage_bytes: 100_000_000,
     };
-    let mut index = TraceIndex::new(retention);
+    let mut index = TraceIndex::new_lab(retention);
     index.insert(record_simple_trace()).unwrap();
     assert_eq!(index.len(), 1);
 
@@ -829,7 +834,7 @@ fn trace_index_gc_removes_expired() {
 
 #[test]
 fn trace_index_storage_estimate() {
-    let mut index = TraceIndex::new(TraceRetentionPolicy::default());
+    let mut index = TraceIndex::new_lab(TraceRetentionPolicy::default());
     let empty_estimate = index.storage_estimate();
     index.insert(record_simple_trace()).unwrap();
     let after_estimate = index.storage_estimate();
@@ -863,7 +868,7 @@ fn trace_query_serde_round_trip() {
 #[test]
 fn counterfactual_decider_with_threshold_override() {
     let trace = record_simple_trace();
-    let engine = CausalReplayEngine::new();
+    let engine = CausalReplayEngine::new_lab();
     let config = CounterfactualConfig {
         branch_id: "threshold-override".into(),
         threshold_override_millionths: Some(100_000),
@@ -889,12 +894,11 @@ fn counterfactual_decider_with_threshold_override() {
 #[test]
 fn full_lifecycle_record_replay_branch() {
     // 1. Record a trace
-    let mut recorder = TraceRecorder::new(RecorderConfig {
+    let mut recorder = TraceRecorder::new_lab(RecorderConfig {
         trace_id: "lifecycle-trace".into(),
         recording_mode: RecordingMode::Full,
         epoch: test_epoch(),
         start_tick: 0,
-        signing_key: signing_key(),
     });
 
     for i in 0..5 {
@@ -926,15 +930,19 @@ fn full_lifecycle_record_replay_branch() {
     }
 
     recorder.set_metadata("env".into(), "test".into());
-    let trace = recorder.finalize();
+    let trace = recorder.finalize().expect("lab trace should finalize");
 
     // 2. Verify integrity
     assert!(trace.verify_chain_integrity().is_ok());
-    assert!(trace.verify_signature(&signing_key()));
+    assert!(
+        trace
+            .verify_authenticity(&causal_replay_lab_trust_registry())
+            .is_ok()
+    );
     assert_eq!(trace.entries.len(), 5);
 
     // 3. Replay
-    let engine = CausalReplayEngine::new();
+    let engine = CausalReplayEngine::new_lab();
     let verdict = engine.replay(&trace).unwrap();
     match verdict {
         ReplayVerdict::Identical { decisions_replayed } => {
@@ -957,7 +965,7 @@ fn full_lifecycle_record_replay_branch() {
     assert!(report.decisions_evaluated > 0);
 
     // 5. Index
-    let mut index = TraceIndex::new(TraceRetentionPolicy::default());
+    let mut index = TraceIndex::new_lab(TraceRetentionPolicy::default());
     index.insert(trace).unwrap();
     assert_eq!(index.len(), 1);
 

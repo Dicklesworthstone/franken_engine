@@ -26,7 +26,7 @@ use frankenengine_engine::causal_replay::{
     ActionDeltaReport, CausalReplayEngine, CounterfactualConfig, DecisionDelta, DecisionSnapshot,
     NondeterminismEntry, NondeterminismLog, NondeterminismSource, RecorderConfig, RecordingMode,
     ReplayDecisionOutcome, ReplayError, ReplayVerdict, TraceIndex, TraceQuery, TraceRecorder,
-    TraceRetentionPolicy,
+    TraceRetentionPolicy, causal_replay_lab_trust_registry,
 };
 use frankenengine_engine::hash_tiers::ContentHash;
 use frankenengine_engine::security_epoch::SecurityEpoch;
@@ -87,6 +87,10 @@ fn replay_error_display_all_unique() {
             actual_sequence: 2,
         }
         .to_string(),
+        ReplayError::NondeterminismIntegrity {
+            detail: "bad nondeterminism digest".into(),
+        }
+        .to_string(),
         ReplayError::BranchDepthExceeded {
             requested: 20,
             max: 16,
@@ -97,7 +101,10 @@ fn replay_error_display_all_unique() {
             trace_id: "t1".into(),
         }
         .to_string(),
-        ReplayError::SignatureInvalid.to_string(),
+        ReplayError::SignatureInvalid {
+            detail: "untrusted signer".into(),
+        }
+        .to_string(),
     ];
     let unique: BTreeSet<_> = variants.iter().collect();
     assert_eq!(unique.len(), variants.len());
@@ -167,6 +174,9 @@ fn serde_roundtrip_replay_error_all() {
             expected_sequence: 1,
             actual_sequence: 2,
         },
+        ReplayError::NondeterminismIntegrity {
+            detail: "bad nondeterminism digest".into(),
+        },
         ReplayError::BranchDepthExceeded {
             requested: 20,
             max: 16,
@@ -175,7 +185,9 @@ fn serde_roundtrip_replay_error_all() {
         ReplayError::TraceNotFound {
             trace_id: "t1".into(),
         },
-        ReplayError::SignatureInvalid,
+        ReplayError::SignatureInvalid {
+            detail: "untrusted signer".into(),
+        },
     ];
     for v in &variants {
         let json = serde_json::to_string(v).unwrap();
@@ -574,17 +586,18 @@ fn replay_verdict_tampered_not_identical() {
 
 #[test]
 fn trace_recorder_finalize_empty() {
-    let recorder = TraceRecorder::new(RecorderConfig {
+    let recorder = TraceRecorder::new_lab(RecorderConfig {
         trace_id: "trace-1".into(),
         recording_mode: RecordingMode::Full,
         epoch: SecurityEpoch::from_raw(1),
         start_tick: 0,
-        signing_key: vec![0xAA; 32],
     });
     assert_eq!(recorder.entry_count(), 0);
     assert_eq!(recorder.nondeterminism_count(), 0);
 
-    let trace = recorder.finalize();
+    let trace = recorder
+        .finalize()
+        .expect("empty lab trace should finalize");
     assert_eq!(trace.trace_id, "trace-1");
     assert!(trace.entries.is_empty());
     assert_eq!(trace.recording_mode, RecordingMode::Full);
@@ -593,12 +606,11 @@ fn trace_recorder_finalize_empty() {
 
 #[test]
 fn trace_recorder_record_nondeterminism() {
-    let mut recorder = TraceRecorder::new(RecorderConfig {
+    let mut recorder = TraceRecorder::new_lab(RecorderConfig {
         trace_id: "trace-2".into(),
         recording_mode: RecordingMode::SecurityCritical,
         epoch: SecurityEpoch::from_raw(1),
         start_tick: 0,
-        signing_key: vec![0xBB; 32],
     });
     let seq = recorder.record_nondeterminism(NondeterminismSource::Timestamp, vec![1, 2], 50, None);
     assert_eq!(seq, 0);
@@ -611,12 +623,12 @@ fn trace_recorder_record_nondeterminism() {
 
 #[test]
 fn causal_replay_engine_new() {
-    let _engine = CausalReplayEngine::new();
+    let _engine = CausalReplayEngine::new_lab();
 }
 
 #[test]
 fn causal_replay_engine_with_branch_depth() {
-    let _engine = CausalReplayEngine::new().with_max_branch_depth(32);
+    let _engine = CausalReplayEngine::new_lab().with_max_branch_depth(32);
 }
 
 // ===========================================================================
@@ -625,22 +637,23 @@ fn causal_replay_engine_with_branch_depth() {
 
 #[test]
 fn trace_index_new_empty() {
-    let index = TraceIndex::new(TraceRetentionPolicy::default());
+    let index = TraceIndex::new_lab(TraceRetentionPolicy::default());
     assert!(index.is_empty());
     assert_eq!(index.len(), 0);
 }
 
 #[test]
 fn trace_index_insert_and_get() {
-    let mut index = TraceIndex::new(TraceRetentionPolicy::default());
-    let recorder = TraceRecorder::new(RecorderConfig {
+    let mut index = TraceIndex::new_lab(TraceRetentionPolicy::default());
+    let recorder = TraceRecorder::new_lab(RecorderConfig {
         trace_id: "trace-idx-1".into(),
         recording_mode: RecordingMode::Full,
         epoch: SecurityEpoch::from_raw(1),
         start_tick: 0,
-        signing_key: vec![0xCC; 32],
     });
-    let trace = recorder.finalize();
+    let trace = recorder
+        .finalize()
+        .expect("indexed lab trace should finalize");
     index.insert(trace).unwrap();
     assert_eq!(index.len(), 1);
     assert!(!index.is_empty());
@@ -649,7 +662,7 @@ fn trace_index_insert_and_get() {
 
 #[test]
 fn trace_index_query_empty() {
-    let index = TraceIndex::new(TraceRetentionPolicy::default());
+    let index = TraceIndex::new_lab(TraceRetentionPolicy::default());
     let results = index.query(&TraceQuery::default());
     assert!(results.is_empty());
 }
@@ -717,12 +730,8 @@ fn action_delta_report_improvement() {
 }
 
 // ===========================================================================
-// 14) Helper: build a signed trace with decisions (integration-level)
+// 14) Helper: build an authenticated lab trace with decisions (integration-level)
 // ===========================================================================
-
-fn test_key() -> Vec<u8> {
-    vec![42u8; 32]
-}
 
 fn make_snapshot(index: u64, action: &str, outcome: i64) -> DecisionSnapshot {
     DecisionSnapshot {
@@ -745,8 +754,19 @@ fn make_snapshot(index: u64, action: &str, outcome: i64) -> DecisionSnapshot {
         chosen_action: action.into(),
         outcome_millionths: outcome,
         extension_id: "ext-abc".into(),
-        nondeterminism_range: (index * 2, index * 2 + 1),
+        nondeterminism_range: (0, 0),
     }
+}
+
+fn make_snapshot_for_trace(
+    trace_id: &str,
+    index: u64,
+    action: &str,
+    outcome: i64,
+) -> DecisionSnapshot {
+    let mut snapshot = make_snapshot(index, action, outcome);
+    snapshot.trace_id = trace_id.into();
+    snapshot
 }
 
 fn make_trace(decisions: &[(&str, i64)]) -> frankenengine_engine::causal_replay::TraceRecord {
@@ -755,9 +775,8 @@ fn make_trace(decisions: &[(&str, i64)]) -> frankenengine_engine::causal_replay:
         recording_mode: RecordingMode::Full,
         epoch: SecurityEpoch::from_raw(5),
         start_tick: 1000,
-        signing_key: test_key(),
     };
-    let mut recorder = TraceRecorder::new(config);
+    let mut recorder = TraceRecorder::new_lab(config);
 
     for i in 0..decisions.len() as u64 {
         recorder.record_nondeterminism(
@@ -778,7 +797,9 @@ fn make_trace(decisions: &[(&str, i64)]) -> frankenengine_engine::causal_replay:
         recorder.record_decision(make_snapshot(i as u64, action, *outcome));
     }
 
-    recorder.finalize()
+    recorder
+        .finalize()
+        .expect("integration lab trace should finalize")
 }
 
 fn make_trace_with_id(
@@ -790,9 +811,8 @@ fn make_trace_with_id(
         recording_mode: RecordingMode::Full,
         epoch: SecurityEpoch::from_raw(5),
         start_tick: 1000,
-        signing_key: test_key(),
     };
-    let mut recorder = TraceRecorder::new(config);
+    let mut recorder = TraceRecorder::new_lab(config);
 
     for i in 0..decisions.len() as u64 {
         recorder.record_nondeterminism(
@@ -809,7 +829,9 @@ fn make_trace_with_id(
         recorder.record_decision(snap);
     }
 
-    recorder.finalize()
+    recorder
+        .finalize()
+        .expect("named integration lab trace should finalize")
 }
 
 // ===========================================================================
@@ -823,14 +845,20 @@ fn trace_recorder_record_decision_chain_valid() {
         recording_mode: RecordingMode::Full,
         epoch: SecurityEpoch::from_raw(1),
         start_tick: 0,
-        signing_key: test_key(),
     };
-    let mut recorder = TraceRecorder::new(config);
-    recorder.record_decision(make_snapshot(0, "allow", 0));
-    recorder.record_decision(make_snapshot(1, "sandbox", 200_000));
-    recorder.record_decision(make_snapshot(2, "terminate", 800_000));
+    let mut recorder = TraceRecorder::new_lab(config);
+    recorder.record_decision(make_snapshot_for_trace("chain-test", 0, "allow", 0));
+    recorder.record_decision(make_snapshot_for_trace("chain-test", 1, "sandbox", 200_000));
+    recorder.record_decision(make_snapshot_for_trace(
+        "chain-test",
+        2,
+        "terminate",
+        800_000,
+    ));
 
-    let trace = recorder.finalize();
+    let trace = recorder
+        .finalize()
+        .expect("multi-decision lab trace should finalize");
     assert_eq!(trace.entries.len(), 3);
     trace
         .verify_chain_integrity()
@@ -844,19 +872,20 @@ fn trace_recorder_tracks_extensions() {
         recording_mode: RecordingMode::Full,
         epoch: SecurityEpoch::from_raw(1),
         start_tick: 0,
-        signing_key: test_key(),
     };
-    let mut recorder = TraceRecorder::new(config);
+    let mut recorder = TraceRecorder::new_lab(config);
 
-    let mut snap1 = make_snapshot(0, "allow", 0);
+    let mut snap1 = make_snapshot_for_trace("ext-track", 0, "allow", 0);
     snap1.extension_id = "ext-alpha".into();
     recorder.record_decision(snap1);
 
-    let mut snap2 = make_snapshot(1, "sandbox", 200_000);
+    let mut snap2 = make_snapshot_for_trace("ext-track", 1, "sandbox", 200_000);
     snap2.extension_id = "ext-beta".into();
     recorder.record_decision(snap2);
 
-    let trace = recorder.finalize();
+    let trace = recorder
+        .finalize()
+        .expect("extension-tracking lab trace should finalize");
     assert!(trace.extensions.contains("ext-alpha"));
     assert!(trace.extensions.contains("ext-beta"));
 }
@@ -868,16 +897,17 @@ fn trace_recorder_tracks_policy_versions() {
         recording_mode: RecordingMode::Full,
         epoch: SecurityEpoch::from_raw(1),
         start_tick: 0,
-        signing_key: test_key(),
     };
-    let mut recorder = TraceRecorder::new(config);
+    let mut recorder = TraceRecorder::new_lab(config);
 
-    let mut snap = make_snapshot(0, "allow", 0);
+    let mut snap = make_snapshot_for_trace("pol-track", 0, "allow", 0);
     snap.policy_id = "pol-abc".into();
     snap.policy_version = 7;
     recorder.record_decision(snap);
 
-    let trace = recorder.finalize();
+    let trace = recorder
+        .finalize()
+        .expect("policy-tracking lab trace should finalize");
     assert_eq!(trace.policy_versions.get("pol-abc"), Some(&7));
 }
 
@@ -888,11 +918,12 @@ fn trace_recorder_set_incident_id() {
         recording_mode: RecordingMode::Full,
         epoch: SecurityEpoch::from_raw(1),
         start_tick: 0,
-        signing_key: test_key(),
     };
-    let mut recorder = TraceRecorder::new(config);
+    let mut recorder = TraceRecorder::new_lab(config);
     recorder.set_incident_id("INC-123".into());
-    let trace = recorder.finalize();
+    let trace = recorder
+        .finalize()
+        .expect("incident-linked lab trace should finalize");
     assert_eq!(trace.incident_id, Some("INC-123".into()));
 }
 
@@ -903,12 +934,13 @@ fn trace_recorder_set_metadata() {
         recording_mode: RecordingMode::Full,
         epoch: SecurityEpoch::from_raw(1),
         start_tick: 0,
-        signing_key: test_key(),
     };
-    let mut recorder = TraceRecorder::new(config);
+    let mut recorder = TraceRecorder::new_lab(config);
     recorder.set_metadata("region".into(), "us-west-2".into());
     recorder.set_metadata("cluster".into(), "prod-1".into());
-    let trace = recorder.finalize();
+    let trace = recorder
+        .finalize()
+        .expect("metadata lab trace should finalize");
     assert_eq!(trace.metadata.get("region"), Some(&"us-west-2".into()));
     assert_eq!(trace.metadata.get("cluster"), Some(&"prod-1".into()));
 }
@@ -927,10 +959,11 @@ fn trace_recorder_finalize_preserves_recording_mode() {
             recording_mode: mode,
             epoch: SecurityEpoch::from_raw(1),
             start_tick: 0,
-            signing_key: test_key(),
         };
-        let recorder = TraceRecorder::new(config);
-        let trace = recorder.finalize();
+        let recorder = TraceRecorder::new_lab(config);
+        let trace = recorder
+            .finalize()
+            .expect("recording-mode lab trace should finalize");
         assert_eq!(trace.recording_mode, mode);
     }
 }
@@ -954,9 +987,10 @@ fn trace_record_empty_chain_integrity() {
         recording_mode: RecordingMode::Full,
         epoch: SecurityEpoch::from_raw(1),
         start_tick: 0,
-        signing_key: test_key(),
     };
-    let trace = TraceRecorder::new(config).finalize();
+    let trace = TraceRecorder::new_lab(config)
+        .finalize()
+        .expect("empty-chain lab trace should finalize");
     trace
         .verify_chain_integrity()
         .expect("empty trace chain is valid");
@@ -1018,9 +1052,10 @@ fn trace_record_empty_wrong_chain_hash_detected() {
         recording_mode: RecordingMode::Full,
         epoch: SecurityEpoch::from_raw(1),
         start_tick: 0,
-        signing_key: test_key(),
     };
-    let mut trace = TraceRecorder::new(config).finalize();
+    let mut trace = TraceRecorder::new_lab(config)
+        .finalize()
+        .expect("empty lab trace should finalize before tampering");
     trace.chain_hash = ContentHash::compute(b"definitely-wrong");
     let err = trace.verify_chain_integrity().unwrap_err();
     assert!(matches!(err, ReplayError::ChainIntegrity { .. }));
@@ -1035,33 +1070,48 @@ fn trace_record_non_monotonic_index_detected() {
 }
 
 // ===========================================================================
-// 17) TraceRecord — verify_signature
+// 17) TraceRecord — verify_authenticity
 // ===========================================================================
 
 #[test]
-fn trace_record_verify_signature_correct_key() {
+fn trace_record_verify_authenticity_with_lab_registry() {
     let trace = make_trace(&[("sandbox", 200_000)]);
-    assert!(trace.verify_signature(&test_key()));
+    trace
+        .verify_authenticity(&causal_replay_lab_trust_registry())
+        .expect("matching lab provenance should authenticate");
 }
 
 #[test]
-fn trace_record_verify_signature_wrong_key() {
-    let trace = make_trace(&[("sandbox", 200_000)]);
-    assert!(!trace.verify_signature(&[99u8; 32]));
+fn trace_record_verify_authenticity_rejects_tampered_key_provenance() {
+    let mut trace = make_trace(&[("sandbox", 200_000)]);
+    trace.signature.key_provenance.key_id.push_str("-tampered");
+    assert!(matches!(
+        trace.verify_authenticity(&causal_replay_lab_trust_registry()),
+        Err(ReplayError::SignatureInvalid { .. })
+    ));
 }
 
 #[test]
-fn trace_record_verify_signature_empty_trace() {
+fn trace_record_verify_authenticity_empty_trace() {
     let config = RecorderConfig {
         trace_id: "empty-sig".into(),
         recording_mode: RecordingMode::Full,
         epoch: SecurityEpoch::from_raw(1),
         start_tick: 0,
-        signing_key: test_key(),
     };
-    let trace = TraceRecorder::new(config).finalize();
-    assert!(trace.verify_signature(&test_key()));
-    assert!(!trace.verify_signature(&[0u8; 32]));
+    let trace = TraceRecorder::new_lab(config)
+        .finalize()
+        .expect("empty authenticity fixture should finalize");
+    trace
+        .verify_authenticity(&causal_replay_lab_trust_registry())
+        .expect("empty lab trace should authenticate");
+
+    let mut tampered = trace;
+    tampered.signature.producer_id = "tampered-producer".into();
+    assert!(matches!(
+        tampered.verify_authenticity(&causal_replay_lab_trust_registry()),
+        Err(ReplayError::SignatureInvalid { .. })
+    ));
 }
 
 // ===========================================================================
@@ -1106,7 +1156,7 @@ fn trace_record_object_id_differs_by_zone() {
 #[test]
 fn replay_identical_single_decision() {
     let trace = make_trace(&[("sandbox", 200_000)]);
-    let engine = CausalReplayEngine::new();
+    let engine = CausalReplayEngine::new_lab();
     let verdict = engine.replay(&trace).expect("replay should succeed");
     assert!(verdict.is_identical());
     if let ReplayVerdict::Identical { decisions_replayed } = verdict {
@@ -1117,7 +1167,7 @@ fn replay_identical_single_decision() {
 #[test]
 fn replay_identical_multiple_decisions() {
     let trace = make_trace(&[("sandbox", 200_000), ("allow", 0), ("terminate", 800_000)]);
-    let engine = CausalReplayEngine::new();
+    let engine = CausalReplayEngine::new_lab();
     let verdict = engine.replay(&trace).expect("replay should succeed");
     assert!(verdict.is_identical());
     if let ReplayVerdict::Identical { decisions_replayed } = verdict {
@@ -1132,10 +1182,11 @@ fn replay_identical_empty_trace() {
         recording_mode: RecordingMode::Full,
         epoch: SecurityEpoch::from_raw(1),
         start_tick: 0,
-        signing_key: test_key(),
     };
-    let trace = TraceRecorder::new(config).finalize();
-    let engine = CausalReplayEngine::new();
+    let trace = TraceRecorder::new_lab(config)
+        .finalize()
+        .expect("empty replay fixture should finalize");
+    let engine = CausalReplayEngine::new_lab();
     let verdict = engine.replay(&trace).expect("replay should succeed");
     assert!(verdict.is_identical());
     if let ReplayVerdict::Identical { decisions_replayed } = verdict {
@@ -1148,19 +1199,26 @@ fn replay_identical_empty_trace() {
 // ===========================================================================
 
 #[test]
-fn replay_detects_nondeterminism_hash_tampering() {
+fn replay_detects_nondeterminism_log_tampering() {
     let mut trace = make_trace(&[("sandbox", 200_000)]);
-    trace.nondeterminism_hash = ContentHash::compute(b"tampered-nd-hash");
-    let engine = CausalReplayEngine::new();
-    let verdict = engine.replay(&trace).expect("should produce verdict");
-    assert!(matches!(verdict, ReplayVerdict::Tampered { .. }));
+    trace.nondeterminism_log.append(
+        NondeterminismSource::IoResult,
+        b"tampered-value".to_vec(),
+        9_999,
+        None,
+    );
+    let engine = CausalReplayEngine::new_lab();
+    assert!(matches!(
+        engine.replay(&trace),
+        Err(ReplayError::NondeterminismIntegrity { .. })
+    ));
 }
 
 #[test]
 fn replay_detects_chain_integrity_violation() {
     let mut trace = make_trace(&[("sandbox", 200_000), ("allow", 0)]);
     trace.entries[1].entry_hash = ContentHash::compute(b"tampered");
-    let engine = CausalReplayEngine::new();
+    let engine = CausalReplayEngine::new_lab();
     let err = engine.replay(&trace).unwrap_err();
     assert!(matches!(err, ReplayError::ChainIntegrity { .. }));
 }
@@ -1173,7 +1231,7 @@ fn replay_detects_chain_integrity_violation() {
 fn replay_with_decider_identical_using_original_decider() {
     use frankenengine_engine::causal_replay::OriginalDecider;
     let trace = make_trace(&[("sandbox", 200_000), ("allow", 0)]);
-    let engine = CausalReplayEngine::new();
+    let engine = CausalReplayEngine::new_lab();
     let verdict = engine
         .replay_with_decider(&trace, &OriginalDecider)
         .expect("replay should succeed");
@@ -1197,7 +1255,7 @@ fn replay_with_custom_decider_diverges() {
     }
 
     let trace = make_trace(&[("sandbox", 200_000), ("allow", 0)]);
-    let engine = CausalReplayEngine::new();
+    let engine = CausalReplayEngine::new_lab();
     let verdict = engine
         .replay_with_decider(&trace, &AlwaysTerminate)
         .expect("replay should succeed");
@@ -1206,21 +1264,27 @@ fn replay_with_custom_decider_diverges() {
 }
 
 // ===========================================================================
-// 22) CausalReplayEngine — verify_trace_signature
+// 22) CausalReplayEngine — verify_trace_authenticity
 // ===========================================================================
 
 #[test]
-fn engine_verify_trace_signature_correct_key() {
+fn engine_verify_trace_authenticity_with_lab_registry() {
     let trace = make_trace(&[("sandbox", 200_000)]);
-    let engine = CausalReplayEngine::new();
-    assert!(engine.verify_trace_signature(&trace, &test_key()));
+    let engine = CausalReplayEngine::new_lab();
+    engine
+        .verify_trace_authenticity(&trace)
+        .expect("engine should trust matching lab provenance");
 }
 
 #[test]
-fn engine_verify_trace_signature_wrong_key() {
-    let trace = make_trace(&[("sandbox", 200_000)]);
-    let engine = CausalReplayEngine::new();
-    assert!(!engine.verify_trace_signature(&trace, &[0u8; 32]));
+fn engine_verify_trace_authenticity_rejects_tampered_producer() {
+    let mut trace = make_trace(&[("sandbox", 200_000)]);
+    trace.signature.producer_id = "tampered-producer".into();
+    let engine = CausalReplayEngine::new_lab();
+    assert!(matches!(
+        engine.verify_trace_authenticity(&trace),
+        Err(ReplayError::SignatureInvalid { .. })
+    ));
 }
 
 // ===========================================================================
@@ -1348,7 +1412,7 @@ fn counterfactual_branch_no_changes_no_divergence() {
         evidence_weight_overrides: BTreeMap::new(),
         branch_from_index: 0,
     };
-    let engine = CausalReplayEngine::new();
+    let engine = CausalReplayEngine::new_lab();
     let report = engine
         .counterfactual_branch(&trace, config)
         .expect("should succeed");
@@ -1369,7 +1433,7 @@ fn counterfactual_branch_lower_threshold_changes_decision() {
         evidence_weight_overrides: BTreeMap::new(),
         branch_from_index: 0,
     };
-    let engine = CausalReplayEngine::new();
+    let engine = CausalReplayEngine::new_lab();
     let report = engine
         .counterfactual_branch(&trace, config)
         .expect("should succeed");
@@ -1389,7 +1453,7 @@ fn counterfactual_branch_from_index_preserves_prefix() {
         evidence_weight_overrides: BTreeMap::new(),
         branch_from_index: 2,
     };
-    let engine = CausalReplayEngine::new();
+    let engine = CausalReplayEngine::new_lab();
     let report = engine
         .counterfactual_branch(&trace, config)
         .expect("should succeed");
@@ -1410,7 +1474,7 @@ fn counterfactual_branch_harm_delta_positive_is_improvement() {
         evidence_weight_overrides: BTreeMap::new(),
         branch_from_index: 0,
     };
-    let engine = CausalReplayEngine::new();
+    let engine = CausalReplayEngine::new_lab();
     let report = engine
         .counterfactual_branch(&trace, config)
         .expect("should succeed");
@@ -1431,7 +1495,7 @@ fn counterfactual_branch_affected_extensions_populated() {
         evidence_weight_overrides: BTreeMap::new(),
         branch_from_index: 0,
     };
-    let engine = CausalReplayEngine::new();
+    let engine = CausalReplayEngine::new_lab();
     let report = engine
         .counterfactual_branch(&trace, config)
         .expect("should succeed");
@@ -1450,7 +1514,7 @@ fn counterfactual_branch_reports_correct_decisions_evaluated() {
         evidence_weight_overrides: BTreeMap::new(),
         branch_from_index: 0,
     };
-    let engine = CausalReplayEngine::new();
+    let engine = CausalReplayEngine::new_lab();
     let report = engine
         .counterfactual_branch(&trace, config)
         .expect("should succeed");
@@ -1475,7 +1539,7 @@ fn multi_branch_comparison_runs_all() {
             branch_from_index: 0,
         })
         .collect();
-    let engine = CausalReplayEngine::new();
+    let engine = CausalReplayEngine::new_lab();
     let reports = engine
         .multi_branch_comparison(&trace, configs)
         .expect("should succeed");
@@ -1488,7 +1552,7 @@ fn multi_branch_comparison_runs_all() {
 #[test]
 fn multi_branch_comparison_empty_configs() {
     let trace = make_trace(&[("sandbox", 200_000)]);
-    let engine = CausalReplayEngine::new();
+    let engine = CausalReplayEngine::new_lab();
     let reports = engine
         .multi_branch_comparison(&trace, vec![])
         .expect("empty configs should succeed");
@@ -1498,7 +1562,7 @@ fn multi_branch_comparison_empty_configs() {
 #[test]
 fn multi_branch_comparison_exceeds_depth() {
     let trace = make_trace(&[("sandbox", 200_000)]);
-    let engine = CausalReplayEngine::new().with_max_branch_depth(2);
+    let engine = CausalReplayEngine::new_lab().with_max_branch_depth(2);
     let configs: Vec<CounterfactualConfig> = (0..5)
         .map(|i| CounterfactualConfig {
             branch_id: format!("b-{i}"),
@@ -1523,7 +1587,7 @@ fn multi_branch_comparison_exceeds_depth() {
 #[test]
 fn multi_branch_at_exact_depth_limit_succeeds() {
     let trace = make_trace(&[("sandbox", 200_000)]);
-    let engine = CausalReplayEngine::new().with_max_branch_depth(3);
+    let engine = CausalReplayEngine::new_lab().with_max_branch_depth(3);
     let configs: Vec<CounterfactualConfig> = (0..3)
         .map(|i| CounterfactualConfig {
             branch_id: format!("b-{i}"),
@@ -1547,7 +1611,7 @@ fn multi_branch_at_exact_depth_limit_succeeds() {
 
 #[test]
 fn trace_index_query_by_extension_id() {
-    let mut index = TraceIndex::new(TraceRetentionPolicy::default());
+    let mut index = TraceIndex::new_lab(TraceRetentionPolicy::default());
     let trace = make_trace(&[("sandbox", 200_000)]);
     index.insert(trace).unwrap();
 
@@ -1566,7 +1630,7 @@ fn trace_index_query_by_extension_id() {
 
 #[test]
 fn trace_index_query_by_policy_version() {
-    let mut index = TraceIndex::new(TraceRetentionPolicy::default());
+    let mut index = TraceIndex::new_lab(TraceRetentionPolicy::default());
     let trace = make_trace(&[("sandbox", 200_000)]);
     index.insert(trace).unwrap();
 
@@ -1585,7 +1649,7 @@ fn trace_index_query_by_policy_version() {
 
 #[test]
 fn trace_index_query_by_epoch_range() {
-    let mut index = TraceIndex::new(TraceRetentionPolicy::default());
+    let mut index = TraceIndex::new_lab(TraceRetentionPolicy::default());
     let trace = make_trace(&[("sandbox", 200_000)]);
     index.insert(trace).unwrap();
 
@@ -1604,7 +1668,7 @@ fn trace_index_query_by_epoch_range() {
 
 #[test]
 fn trace_index_query_by_tick_range() {
-    let mut index = TraceIndex::new(TraceRetentionPolicy::default());
+    let mut index = TraceIndex::new_lab(TraceRetentionPolicy::default());
     let trace = make_trace(&[("sandbox", 200_000)]);
     index.insert(trace).unwrap();
 
@@ -1623,18 +1687,28 @@ fn trace_index_query_by_tick_range() {
 
 #[test]
 fn trace_index_query_by_incident_id() {
-    let mut index = TraceIndex::new(TraceRetentionPolicy::default());
+    let mut index = TraceIndex::new_lab(TraceRetentionPolicy::default());
     let config = RecorderConfig {
         trace_id: "inc-query".into(),
         recording_mode: RecordingMode::Full,
         epoch: SecurityEpoch::from_raw(1),
         start_tick: 0,
-        signing_key: test_key(),
     };
-    let mut recorder = TraceRecorder::new(config);
+    let mut recorder = TraceRecorder::new_lab(config);
     recorder.set_incident_id("INC-555".into());
-    recorder.record_decision(make_snapshot(0, "terminate", 800_000));
-    index.insert(recorder.finalize()).unwrap();
+    recorder.record_decision(make_snapshot_for_trace(
+        "inc-query",
+        0,
+        "terminate",
+        800_000,
+    ));
+    index
+        .insert(
+            recorder
+                .finalize()
+                .expect("incident-query lab trace should finalize"),
+        )
+        .unwrap();
 
     let found = index.query(&TraceQuery {
         incident_id: Some("INC-555".into()),
@@ -1651,18 +1725,23 @@ fn trace_index_query_by_incident_id() {
 
 #[test]
 fn trace_index_query_default_returns_all() {
-    let mut index = TraceIndex::new(TraceRetentionPolicy::default());
+    let mut index = TraceIndex::new_lab(TraceRetentionPolicy::default());
     for i in 0..5 {
+        let trace_id = format!("t-{i}");
         let config = RecorderConfig {
-            trace_id: format!("t-{i}"),
+            trace_id: trace_id.clone(),
             recording_mode: RecordingMode::Full,
             epoch: SecurityEpoch::from_raw(1),
             start_tick: i * 100,
-            signing_key: test_key(),
         };
-        let mut rec = TraceRecorder::new(config);
-        rec.record_decision(make_snapshot(0, "allow", 0));
-        index.insert(rec.finalize()).unwrap();
+        let mut rec = TraceRecorder::new_lab(config);
+        rec.record_decision(make_snapshot_for_trace(&trace_id, 0, "allow", 0));
+        index
+            .insert(
+                rec.finalize()
+                    .expect("default-query lab trace should finalize"),
+            )
+            .unwrap();
     }
     let all = index.query(&TraceQuery::default());
     assert_eq!(all.len(), 5);
@@ -1678,17 +1757,21 @@ fn trace_index_gc_removes_expired_normal_trace() {
         default_ttl_ticks: 1000,
         ..Default::default()
     };
-    let mut index = TraceIndex::new(retention);
+    let mut index = TraceIndex::new_lab(retention);
     let config = RecorderConfig {
         trace_id: "old".into(),
         recording_mode: RecordingMode::Full,
         epoch: SecurityEpoch::from_raw(1),
         start_tick: 100,
-        signing_key: test_key(),
     };
-    let mut rec = TraceRecorder::new(config);
-    rec.record_decision(make_snapshot(0, "allow", 0));
-    index.insert(rec.finalize()).unwrap();
+    let mut rec = TraceRecorder::new_lab(config);
+    rec.record_decision(make_snapshot_for_trace("old", 0, "allow", 0));
+    index
+        .insert(
+            rec.finalize()
+                .expect("expired-normal lab trace should finalize"),
+        )
+        .unwrap();
     assert_eq!(index.len(), 1);
     index.gc(5000);
     assert_eq!(index.len(), 0);
@@ -1701,7 +1784,7 @@ fn trace_index_gc_preserves_incident_linked_trace() {
         incident_ttl_ticks: 10_000,
         ..Default::default()
     };
-    let mut index = TraceIndex::new(retention);
+    let mut index = TraceIndex::new_lab(retention);
 
     // Normal trace
     let config1 = RecorderConfig {
@@ -1709,10 +1792,13 @@ fn trace_index_gc_preserves_incident_linked_trace() {
         recording_mode: RecordingMode::Full,
         epoch: SecurityEpoch::from_raw(1),
         start_tick: 100,
-        signing_key: test_key(),
     };
     index
-        .insert(TraceRecorder::new(config1).finalize())
+        .insert(
+            TraceRecorder::new_lab(config1)
+                .finalize()
+                .expect("normal-gc lab trace should finalize"),
+        )
         .unwrap();
 
     // Incident trace
@@ -1721,11 +1807,15 @@ fn trace_index_gc_preserves_incident_linked_trace() {
         recording_mode: RecordingMode::Full,
         epoch: SecurityEpoch::from_raw(1),
         start_tick: 100,
-        signing_key: test_key(),
     };
-    let mut rec = TraceRecorder::new(config2);
+    let mut rec = TraceRecorder::new_lab(config2);
     rec.set_incident_id("INC-GC".into());
-    index.insert(rec.finalize()).unwrap();
+    index
+        .insert(
+            rec.finalize()
+                .expect("incident-gc lab trace should finalize"),
+        )
+        .unwrap();
 
     assert_eq!(index.len(), 2);
     index.gc(500);
@@ -1740,15 +1830,20 @@ fn trace_index_gc_preserves_security_critical_trace() {
         security_critical_ttl_ticks: 5000,
         ..Default::default()
     };
-    let mut index = TraceIndex::new(retention);
+    let mut index = TraceIndex::new_lab(retention);
     let config = RecorderConfig {
         trace_id: "sec-crit-gc".into(),
         recording_mode: RecordingMode::SecurityCritical,
         epoch: SecurityEpoch::from_raw(1),
         start_tick: 100,
-        signing_key: test_key(),
     };
-    index.insert(TraceRecorder::new(config).finalize()).unwrap();
+    index
+        .insert(
+            TraceRecorder::new_lab(config)
+                .finalize()
+                .expect("security-critical lab trace should finalize"),
+        )
+        .unwrap();
 
     index.gc(500);
     assert_eq!(index.len(), 1); // Preserved within security_critical TTL
@@ -1758,7 +1853,7 @@ fn trace_index_gc_preserves_security_critical_trace() {
 
 #[test]
 fn trace_index_gc_on_empty_index() {
-    let mut index = TraceIndex::new(TraceRetentionPolicy::default());
+    let mut index = TraceIndex::new_lab(TraceRetentionPolicy::default());
     index.gc(999_999);
     assert!(index.is_empty());
 }
@@ -1773,18 +1868,23 @@ fn trace_index_eviction_enforces_max_traces() {
         max_traces: 3,
         ..Default::default()
     };
-    let mut index = TraceIndex::new(retention);
+    let mut index = TraceIndex::new_lab(retention);
     for i in 0..5 {
+        let trace_id = format!("evict-{i}");
         let config = RecorderConfig {
-            trace_id: format!("evict-{i}"),
+            trace_id: trace_id.clone(),
             recording_mode: RecordingMode::Full,
             epoch: SecurityEpoch::from_raw(1),
             start_tick: i * 100,
-            signing_key: test_key(),
         };
-        let mut rec = TraceRecorder::new(config);
-        rec.record_decision(make_snapshot(0, "allow", 0));
-        index.insert(rec.finalize()).unwrap();
+        let mut rec = TraceRecorder::new_lab(config);
+        rec.record_decision(make_snapshot_for_trace(&trace_id, 0, "allow", 0));
+        index
+            .insert(
+                rec.finalize()
+                    .expect("eviction-candidate lab trace should finalize"),
+            )
+            .unwrap();
     }
     assert!(index.len() <= 3);
 }
@@ -1795,7 +1895,7 @@ fn trace_index_eviction_prefers_normal_over_incident() {
         max_traces: 2,
         ..Default::default()
     };
-    let mut index = TraceIndex::new(retention);
+    let mut index = TraceIndex::new_lab(retention);
 
     // Insert incident-linked
     let config1 = RecorderConfig {
@@ -1803,11 +1903,15 @@ fn trace_index_eviction_prefers_normal_over_incident() {
         recording_mode: RecordingMode::Full,
         epoch: SecurityEpoch::from_raw(1),
         start_tick: 100,
-        signing_key: test_key(),
     };
-    let mut rec1 = TraceRecorder::new(config1);
+    let mut rec1 = TraceRecorder::new_lab(config1);
     rec1.set_incident_id("INC-EVICT".into());
-    index.insert(rec1.finalize()).unwrap();
+    index
+        .insert(
+            rec1.finalize()
+                .expect("incident-eviction lab trace should finalize"),
+        )
+        .unwrap();
 
     // Insert normal
     let config2 = RecorderConfig {
@@ -1815,10 +1919,13 @@ fn trace_index_eviction_prefers_normal_over_incident() {
         recording_mode: RecordingMode::Full,
         epoch: SecurityEpoch::from_raw(1),
         start_tick: 200,
-        signing_key: test_key(),
     };
     index
-        .insert(TraceRecorder::new(config2).finalize())
+        .insert(
+            TraceRecorder::new_lab(config2)
+                .finalize()
+                .expect("normal-eviction lab trace should finalize"),
+        )
         .unwrap();
 
     // Insert another — should evict "normal-evict"
@@ -1827,10 +1934,13 @@ fn trace_index_eviction_prefers_normal_over_incident() {
         recording_mode: RecordingMode::Full,
         epoch: SecurityEpoch::from_raw(1),
         start_tick: 300,
-        signing_key: test_key(),
     };
     index
-        .insert(TraceRecorder::new(config3).finalize())
+        .insert(
+            TraceRecorder::new_lab(config3)
+                .finalize()
+                .expect("new-eviction lab trace should finalize"),
+        )
         .unwrap();
 
     assert!(index.len() <= 2);
@@ -1843,7 +1953,7 @@ fn trace_index_eviction_prefers_normal_over_incident() {
 
 #[test]
 fn trace_index_storage_estimate_increases_on_insert() {
-    let mut index = TraceIndex::new(TraceRetentionPolicy::default());
+    let mut index = TraceIndex::new_lab(TraceRetentionPolicy::default());
     assert_eq!(index.storage_estimate(), 0);
     let trace = make_trace(&[("sandbox", 200_000)]);
     index.insert(trace).unwrap();
@@ -1856,7 +1966,7 @@ fn trace_index_storage_estimate_decreases_on_gc() {
         default_ttl_ticks: 100,
         ..Default::default()
     };
-    let mut index = TraceIndex::new(retention);
+    let mut index = TraceIndex::new_lab(retention);
     let trace = make_trace(&[("sandbox", 200_000)]);
     index.insert(trace).unwrap();
     let before = index.storage_estimate();
@@ -2054,9 +2164,12 @@ fn serde_roundtrip_recorder_config() {
         },
         epoch: SecurityEpoch::from_raw(99),
         start_tick: 42,
-        signing_key: vec![0xDD; 32],
     };
     let json = serde_json::to_string(&config).unwrap();
+    assert!(
+        !json.contains("signing_key"),
+        "serialized recorder configuration must not contain private key material"
+    );
     let deser: RecorderConfig = serde_json::from_str(&json).unwrap();
     assert_eq!(config, deser);
 }
@@ -2154,19 +2267,16 @@ fn json_fields_recorder_config() {
         recording_mode: RecordingMode::Full,
         epoch: SecurityEpoch::from_raw(1),
         start_tick: 0,
-        signing_key: vec![0u8; 32],
     };
     let v: serde_json::Value = serde_json::to_value(&config).unwrap();
     let obj = v.as_object().unwrap();
-    for key in [
-        "trace_id",
-        "recording_mode",
-        "epoch",
-        "start_tick",
-        "signing_key",
-    ] {
+    for key in ["trace_id", "recording_mode", "epoch", "start_tick"] {
         assert!(obj.contains_key(key), "RecorderConfig missing field: {key}");
     }
+    assert!(
+        !obj.contains_key("signing_key"),
+        "RecorderConfig must not serialize private key material"
+    );
 }
 
 // ===========================================================================
@@ -2215,20 +2325,24 @@ fn replay_error_storage_exhausted_display() {
 
 #[test]
 fn replay_error_signature_invalid_display() {
-    let e = ReplayError::SignatureInvalid;
+    let e = ReplayError::SignatureInvalid {
+        detail: "untrusted producer provenance".into(),
+    };
     let s = e.to_string();
-    assert!(!s.is_empty());
+    assert!(s.contains("untrusted producer provenance"));
 }
 
 // ===========================================================================
-// 36) CausalReplayEngine — default trait
+// 36) CausalReplayEngine — explicit lab constructor
 // ===========================================================================
 
 #[test]
-fn causal_replay_engine_default_trait() {
-    let engine = CausalReplayEngine::default();
+fn causal_replay_engine_explicit_lab_constructor() {
+    let engine = CausalReplayEngine::new_lab();
     let trace = make_trace(&[("allow", 0)]);
-    let verdict = engine.replay(&trace).expect("default engine should work");
+    let verdict = engine
+        .replay(&trace)
+        .expect("explicit lab engine should work");
     assert!(verdict.is_identical());
 }
 
@@ -2253,7 +2367,7 @@ fn replay_large_trace_50_decisions() {
     let trace = make_trace(&decisions);
     assert_eq!(trace.entries.len(), 50);
     trace.verify_chain_integrity().expect("chain valid");
-    let engine = CausalReplayEngine::new();
+    let engine = CausalReplayEngine::new_lab();
     let verdict = engine.replay(&trace).expect("replay");
     assert!(verdict.is_identical());
 }
@@ -2303,7 +2417,7 @@ fn nondeterminism_log_get_nonexistent_sequence() {
 
 #[test]
 fn trace_index_multiple_traces_query_by_id() {
-    let mut index = TraceIndex::new(TraceRetentionPolicy::default());
+    let mut index = TraceIndex::new_lab(TraceRetentionPolicy::default());
     for i in 0..3 {
         let trace = make_trace_with_id(&format!("multi-{i}"), &[("allow", 0)]);
         index.insert(trace).unwrap();
@@ -2479,16 +2593,17 @@ fn trace_recorder_tracks_end_epoch_and_tick() {
         recording_mode: RecordingMode::Full,
         epoch: SecurityEpoch::from_raw(1),
         start_tick: 0,
-        signing_key: test_key(),
     };
-    let mut recorder = TraceRecorder::new(config);
+    let mut recorder = TraceRecorder::new_lab(config);
 
-    let mut snap = make_snapshot(0, "allow", 0);
+    let mut snap = make_snapshot_for_trace("epoch-tick", 0, "allow", 0);
     snap.epoch = SecurityEpoch::from_raw(7);
     snap.tick = 5000;
     recorder.record_decision(snap);
 
-    let trace = recorder.finalize();
+    let trace = recorder
+        .finalize()
+        .expect("epoch-tracking lab trace should finalize");
     assert_eq!(trace.start_epoch, SecurityEpoch::from_raw(1));
     assert_eq!(trace.end_epoch, SecurityEpoch::from_raw(7));
     assert_eq!(trace.start_tick, 0);
@@ -2534,7 +2649,7 @@ fn counterfactual_branch_negative_harm_delta() {
         evidence_weight_overrides: BTreeMap::new(),
         branch_from_index: 0,
     };
-    let engine = CausalReplayEngine::new();
+    let engine = CausalReplayEngine::new_lab();
     let report = engine
         .counterfactual_branch(&trace, config)
         .expect("should succeed");
@@ -2553,13 +2668,17 @@ fn counterfactual_branch_negative_harm_delta() {
 fn trace_index_storage_budget_eviction() {
     let retention = TraceRetentionPolicy {
         max_traces: 1000,
-        max_storage_bytes: 1, // 1 byte: forces eviction
+        max_storage_bytes: 1,
         ..Default::default()
     };
-    let mut index = TraceIndex::new(retention);
+    let mut index = TraceIndex::new_lab(retention);
     let trace = make_trace(&[("allow", 0)]);
-    index.insert(trace).unwrap();
-    assert!(index.len() <= 1);
+    assert!(matches!(
+        index.insert(trace),
+        Err(ReplayError::StorageExhausted)
+    ));
+    assert!(index.is_empty());
+    assert_eq!(index.storage_estimate(), 0);
 }
 
 // ===========================================================================
@@ -2573,15 +2692,21 @@ fn serde_roundtrip_trace_record_with_incident_and_metadata() {
         recording_mode: RecordingMode::SecurityCritical,
         epoch: SecurityEpoch::from_raw(3),
         start_tick: 500,
-        signing_key: test_key(),
     };
-    let mut recorder = TraceRecorder::new(config);
+    let mut recorder = TraceRecorder::new_lab(config);
     recorder.set_incident_id("INC-SERDE".into());
     recorder.set_metadata("env".into(), "production".into());
     recorder.record_nondeterminism(NondeterminismSource::IoResult, vec![9, 8, 7], 600, None);
-    recorder.record_decision(make_snapshot(0, "terminate", 800_000));
+    recorder.record_decision(make_snapshot_for_trace(
+        "inc-meta-serde",
+        0,
+        "terminate",
+        800_000,
+    ));
 
-    let trace = recorder.finalize();
+    let trace = recorder
+        .finalize()
+        .expect("incident metadata lab trace should finalize");
     let json = serde_json::to_string(&trace).unwrap();
     let deser: frankenengine_engine::causal_replay::TraceRecord =
         serde_json::from_str(&json).unwrap();
@@ -2592,5 +2717,7 @@ fn serde_roundtrip_trace_record_with_incident_and_metadata() {
     deser
         .verify_chain_integrity()
         .expect("valid after round-trip");
-    assert!(deser.verify_signature(&test_key()));
+    deser
+        .verify_authenticity(&causal_replay_lab_trust_registry())
+        .expect("round-tripped lab trace should authenticate");
 }

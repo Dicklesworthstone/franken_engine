@@ -81,7 +81,7 @@ impl ProcessSpawnProvider for RecordingProcessSpawn {
                     stderr,
                 }),
             ) => Ok(ProcessSpawnResponse::Waited {
-                exit: exit.clone(),
+                exit: *exit,
                 stdout: stdout.clone(),
                 stderr: stderr.clone(),
             }),

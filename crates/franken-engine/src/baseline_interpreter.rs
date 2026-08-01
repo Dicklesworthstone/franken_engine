@@ -82315,7 +82315,7 @@ mod async_runtime_tests_current {
         let operation = |core: &mut InterpreterCore, readable| {
             core.readable_push(Value::Object(readable), RegRange { start: 0, count: 1 })
         };
-        let exact_ceiling = calibrate_readable_memory_ceiling(&fixture, &operation);
+        let exact_ceiling = calibrate_readable_memory_ceiling(fixture, operation);
 
         let (mut refused, readable) = fixture();
         let before_state = refused.readable_from_streams[&readable].clone();
@@ -82400,7 +82400,7 @@ mod async_runtime_tests_current {
         let operation = |core: &mut InterpreterCore, readable| {
             core.readable_read(Value::Object(readable), RegRange { start: 2, count: 1 })
         };
-        let exact_ceiling = calibrate_readable_memory_ceiling(&fixture, &operation);
+        let exact_ceiling = calibrate_readable_memory_ceiling(fixture, operation);
 
         let (mut refused, readable) = fixture();
         let before_state = refused.readable_from_streams[&readable].clone();
@@ -82520,7 +82520,7 @@ mod async_runtime_tests_current {
         let operation = |core: &mut InterpreterCore, readable| {
             core.drive_readable_from_pump(readable, Some(&module))
         };
-        let exact_ceiling = calibrate_readable_memory_ceiling(&fixture, &operation);
+        let exact_ceiling = calibrate_readable_memory_ceiling(fixture, operation);
 
         let (mut refused, readable) = fixture();
         let before_state = refused.readable_from_streams[&readable].clone();
@@ -82606,7 +82606,7 @@ mod async_runtime_tests_current {
         let operation = |core: &mut InterpreterCore, readable| {
             core.readable_set_encoding(Value::Object(readable), RegRange { start: 0, count: 1 })
         };
-        let exact_ceiling = calibrate_readable_memory_ceiling(&fixture, &operation);
+        let exact_ceiling = calibrate_readable_memory_ceiling(fixture, operation);
 
         let (mut refused, readable) = fixture();
         let before_state = refused.readable_from_streams[&readable].clone();
@@ -83287,7 +83287,7 @@ mod async_runtime_tests_current {
         };
         let operation =
             |core: &mut InterpreterCore, readable| core.readable_to_array(Value::Object(readable));
-        let exact_ceiling = calibrate_readable_memory_ceiling(&fixture, &operation);
+        let exact_ceiling = calibrate_readable_memory_ceiling(fixture, operation);
 
         let (mut refused, readable) = fixture();
         let before_state = refused.readable_from_streams[&readable].clone();

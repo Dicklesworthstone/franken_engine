@@ -6516,11 +6516,11 @@ fn emit_orchestration_failure(
         uncommitted_evidence_chain: uncommitted_evidence_chain.clone(),
         observability_mode: default_capture_observability_mode(),
     };
-    if let Some(path) = out {
-        if let Err(write_error) = write_json_file(path, &output) {
-            output.report_path = None;
-            output.report_write_error = Some(write_error);
-        }
+    if let Some(path) = out
+        && let Err(write_error) = write_json_file(path, &output)
+    {
+        output.report_path = None;
+        output.report_write_error = Some(write_error);
     }
     print_json(&output)?;
     eprintln!("{error_message}");

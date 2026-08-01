@@ -370,7 +370,7 @@ fn unresolved_declassification_obligation_surfaces_operator_detail_on_execute_pa
         OrchestratorError::IfcRuntimeGuardBlocked { detail } => {
             assert!(detail.contains("unresolved IFC runtime obligations"));
             assert!(detail.contains("pending declassifications=1"));
-            assert_required_declassification_summary_in_detail(&detail, obligation);
+            assert_required_declassification_summary_in_detail(detail, obligation);
         }
         other => panic!("unexpected error: {other:?}"),
     }
@@ -419,7 +419,7 @@ fn staged_receipt_with_route_mismatch_fails_closed_after_preflight() {
         OrchestratorError::IfcRuntimeGuardBlocked { detail } => {
             assert!(detail.contains("receipt-linked declassification failed"));
             assert!(detail.contains("route"));
-            assert_required_declassification_summary_in_detail(&detail, obligation);
+            assert_required_declassification_summary_in_detail(detail, obligation);
         }
         other => panic!("unexpected error: {other:?}"),
     }
@@ -468,7 +468,7 @@ fn failed_staged_receipt_with_decision_contract_mismatch_allows_clean_retry() {
         OrchestratorError::IfcRuntimeGuardBlocked { detail } => {
             assert!(detail.contains("receipt-linked declassification failed"));
             assert!(detail.contains("decision contract"));
-            assert_required_declassification_summary_in_detail(&detail, first_obligation);
+            assert_required_declassification_summary_in_detail(detail, first_obligation);
         }
         other => panic!("unexpected error: {other:?}"),
     }
@@ -543,7 +543,7 @@ fn failed_staged_receipt_with_source_label_mismatch_allows_clean_retry() {
         OrchestratorError::IfcRuntimeGuardBlocked { detail } => {
             assert!(detail.contains("receipt-linked declassification failed"));
             assert!(detail.contains("source label does not match"));
-            assert_required_declassification_summary_in_detail(&detail, first_obligation);
+            assert_required_declassification_summary_in_detail(detail, first_obligation);
         }
         other => panic!("unexpected error: {other:?}"),
     }
@@ -618,7 +618,7 @@ fn failed_staged_receipt_with_sink_clearance_mismatch_allows_clean_retry() {
         OrchestratorError::IfcRuntimeGuardBlocked { detail } => {
             assert!(detail.contains("receipt-linked declassification failed"));
             assert!(detail.contains("sink clearance internal cannot flow"));
-            assert_required_declassification_summary_in_detail(&detail, first_obligation);
+            assert_required_declassification_summary_in_detail(detail, first_obligation);
         }
         other => panic!("unexpected error: {other:?}"),
     }
@@ -692,7 +692,7 @@ fn failed_staged_receipt_allows_clean_retry_via_fresh_preflight_and_receipt() {
         OrchestratorError::IfcRuntimeGuardBlocked { detail } => {
             assert!(detail.contains("receipt-linked declassification failed"));
             assert!(detail.contains("replay linkage does not match trace"));
-            assert_required_declassification_summary_in_detail(&detail, first_obligation);
+            assert_required_declassification_summary_in_detail(detail, first_obligation);
         }
         other => panic!("unexpected error: {other:?}"),
     }

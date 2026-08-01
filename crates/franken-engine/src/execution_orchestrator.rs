@@ -497,6 +497,14 @@ impl UncommittedEvidenceChainEvidence {
                         .to_string(),
                 });
             }
+            if receipt.metadata.get("decision_id").map(String::as_str)
+                != Some(primary_entry.decision_id.as_str())
+            {
+                return Err(LedgerError::SchemaValidationFailed {
+                    reason: "containment receipt decision does not match the signed primary entry"
+                        .to_string(),
+                });
+            }
             if primary_entry.chosen_action.action_name != receipt.action.to_string() {
                 return Err(LedgerError::SchemaValidationFailed {
                     reason: "containment receipt action does not match the signed primary entry"
@@ -515,9 +523,15 @@ impl UncommittedEvidenceChainEvidence {
                     | ContainmentAction::Terminate
                     | ContainmentAction::Quarantine
             );
-            if requires_saga != self.saga_id.is_some() {
+            let expected_saga_id = format!("{expected_run_id}:saga");
+            if requires_saga && self.saga_id.as_deref() != Some(expected_saga_id.as_str()) {
                 return Err(LedgerError::SchemaValidationFailed {
-                    reason: "containment receipt and saga id are inconsistent".to_string(),
+                    reason: "saga id does not match the signed evidence run".to_string(),
+                });
+            }
+            if !requires_saga && self.saga_id.is_some() {
+                return Err(LedgerError::SchemaValidationFailed {
+                    reason: "containment receipt action does not require a saga".to_string(),
                 });
             }
         } else if self.saga_id.is_some() {
@@ -6691,6 +6705,41 @@ mod tests {
                 .is_err(),
             "a valid containment receipt for another target must not splice into this batch"
         );
+
+        let primary_entry = &staged.artifact.entries[0];
+        let target = primary_entry
+            .metadata
+            .get("extension_id")
+            .expect("primary evidence must bind the extension target");
+        let mut foreign_decision_executor = ContainmentExecutor::new();
+        foreign_decision_executor.register(target);
+        let foreign_decision_receipt = foreign_decision_executor
+            .execute(
+                ContainmentAction::Sandbox,
+                target,
+                &ContainmentContext {
+                    decision_id: "bd-8yhg4-spliced-decision".to_string(),
+                    evidence_refs: vec![failure.cleanup.trace_id.clone()],
+                    epoch: primary_entry.epoch_id,
+                    ..ContainmentContext::default()
+                },
+            )
+            .expect("foreign-decision containment receipt must be internally valid");
+        let mut decision_spliced = staged.clone();
+        decision_spliced.containment_receipt = Some(foreign_decision_receipt);
+        assert!(
+            decision_spliced
+                .verify_with_context(
+                    &orch.evidence_verification_identity(),
+                    orch.evidence_chain_instance_id(),
+                    orch.evidence_ledger_id(),
+                    &failure.cleanup.trace_id,
+                    0,
+                    None,
+                )
+                .is_err(),
+            "a valid containment receipt for another decision must not splice into this batch"
+        );
         assert!(orch.ledger().is_empty());
     }
 
@@ -6909,6 +6958,31 @@ mod tests {
                 &failure.cleanup.trace_id,
             )
             .expect("saga failure must retain a valid signed exact batch");
+        staged
+            .verify_with_context(
+                &orchestrator.evidence_verification_identity(),
+                orchestrator.evidence_chain_instance_id(),
+                orchestrator.evidence_ledger_id(),
+                &failure.cleanup.trace_id,
+                0,
+                None,
+            )
+            .expect("saga failure wrapper must bind its receipt and saga to the signed batch");
+        let mut saga_spliced = staged.clone();
+        saga_spliced.saga_id = Some(format!("{}:foreign-saga", failure.cleanup.trace_id));
+        assert!(
+            saga_spliced
+                .verify_with_context(
+                    &orchestrator.evidence_verification_identity(),
+                    orchestrator.evidence_chain_instance_id(),
+                    orchestrator.evidence_ledger_id(),
+                    &failure.cleanup.trace_id,
+                    0,
+                    None,
+                )
+                .is_err(),
+            "a foreign saga id must not splice into the uncommitted signed batch"
+        );
         assert!(orchestrator.ledger().is_empty());
         assert_eq!(
             orchestrator
@@ -6926,7 +7000,7 @@ mod tests {
     }
 
     #[test]
-    fn containment_saga_failure_preserves_suspend_receipt_and_closes_cell_bd_ov8qr() {
+    fn bd_8yhg4_containment_saga_failure_preserves_suspend_receipt_and_closes_cell_bd_ov8qr() {
         assert_containment_saga_failure_preserves_receipt_and_closes_cell(
             ContainmentAction::Suspend,
             SagaType::Revocation,

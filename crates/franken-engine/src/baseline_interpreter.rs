@@ -188,11 +188,23 @@ const DEFAULT_QUICKJS_BUDGET: u64 = 100_000;
 /// Default instruction budget for the throughput profile.
 const DEFAULT_V8_BUDGET: u64 = 1_000_000;
 
-/// Upper bound on retained `Function`-constructor audit entries (bd-8enww.3.4).
-/// The shared instruction budget already bounds how many generated functions
-/// adversarial code can construct or invoke; this is a secondary memory guard
-/// so the audit trail itself stays bounded even under a pathological budget.
+/// Upper bound on retained `Function`-constructor audit/event pairs
+/// (bd-8enww.3.4 / bd-fw7zd.8.2). The shared instruction and total-memory
+/// budgets already constrain generated-code activity; this count cap is a
+/// secondary guard against pathological ceilings.
 const MAX_GENERATED_CODE_AUDIT_ENTRIES: usize = 65_536;
+
+/// Fixed parser/lowering workspace reserved before a generated `Function`
+/// source is materialized. This covers the empty AST/IR scaffolding and the
+/// lowering pipeline's fixed bookkeeping.
+const GENERATED_FUNCTION_COMPILATION_FIXED_SCRATCH_BYTES: u64 = 64 * 1024;
+/// Conservative combined source/AST/IR0/IR3 workspace per possible generated
+/// source byte. Parser and lowering nodes are token-backed (there cannot be
+/// more nodes than source units), and one KiB per unit covers their simultaneous
+/// records plus text copies. The reservation is charged before argument
+/// stringification and transitions atomically into retained-artifact ownership
+/// after lowering.
+const GENERATED_FUNCTION_COMPILATION_SCRATCH_BYTES_PER_SOURCE_BYTE: u64 = 1024;
 
 /// Default register file size for the deterministic profile.
 const DEFAULT_QUICKJS_MAX_REGISTERS: u32 = 256;
@@ -8439,11 +8451,20 @@ pub struct InterpreterCore {
     /// (bd-8enww.3.4). Like `events`, this is observability that survives the
     /// re-entrant snapshot/restore of a generated-function call and is drained
     /// into [`ExecutionResult`] at the end of execution. Bounded by
-    /// [`MAX_GENERATED_CODE_AUDIT_ENTRIES`] so adversarial code that constructs
-    /// or invokes generated functions in a tight loop cannot grow it without
-    /// bound (the shared instruction budget is the primary bound; this is a
-    /// secondary memory guard).
+    /// [`MAX_GENERATED_CODE_AUDIT_ENTRIES`] and charged together with its
+    /// mirrored structured event, so adversarial construction/invocation
+    /// cannot accumulate either surface outside `max_total_memory_bytes`.
     generated_code_audit: Vec<GeneratedCodeAuditEntry>,
+    /// Exact logical ownership charged for generated-code audit entries and
+    /// their paired standard structured events. General interpreter events are
+    /// deliberately excluded so a future general-event budget can account for
+    /// them without double-charging these generated-code pairs.
+    generated_code_observability_bytes: u64,
+    /// Pending worst-case audit/event ownership reserved across a generated
+    /// function invocation. This is explicit state (rather than a raw addition
+    /// to `estimated_memory_bytes`) so generator/async paths that perform an
+    /// eager recomputation cannot erase the reservation while guest code runs.
+    generated_code_observability_reservation_bytes: u64,
     /// Witness sequence counter.
     witness_seq: u64,
     /// Trace ID for logging.
@@ -9059,6 +9080,8 @@ impl InterpreterCore {
             telemetry_recorder: TelemetryRecorder::new(RecorderConfig::default()),
             events: Vec::new(),
             generated_code_audit: Vec::new(),
+            generated_code_observability_bytes: 0,
+            generated_code_observability_reservation_bytes: 0,
             witness_seq: 0,
             trace_id,
             register_base: 0,
@@ -25575,6 +25598,15 @@ impl InterpreterCore {
         // and `ReplayEngine` both require a finalised trace.
         self.nondeterminism_trace
             .finalise(self.instructions_executed);
+        debug_assert_eq!(
+            self.generated_code_observability_bytes,
+            self.generated_code_observability_memory_bytes()
+        );
+        debug_assert_eq!(self.generated_code_observability_reservation_bytes, 0);
+        self.estimated_memory_bytes = self
+            .estimated_memory_bytes
+            .saturating_sub(self.generated_code_observability_bytes);
+        self.generated_code_observability_bytes = 0;
         ExecutionResult {
             value,
             instructions_executed: self.instructions_executed,
@@ -26054,6 +26086,124 @@ impl InterpreterCore {
                     .map(Self::estimate_string_bytes)
                     .unwrap_or(0),
             )
+    }
+
+    fn generated_code_event_fields(kind: GeneratedCodeEventKind) -> (&'static str, &'static str) {
+        match kind {
+            GeneratedCodeEventKind::Constructed => ("generated_code.constructed", "ok"),
+            GeneratedCodeEventKind::Invoked => ("generated_code.invoked", "ok"),
+            GeneratedCodeEventKind::Faulted => ("generated_code.faulted", "fail"),
+        }
+    }
+
+    fn decimal_digits(value: u64) -> u64 {
+        if value == 0 {
+            return 1;
+        }
+        value.ilog10() as u64 + 1
+    }
+
+    fn generated_code_event_error_code_len(entry: &GeneratedCodeAuditEntry) -> u64 {
+        u64::try_from(entry.source_id.len())
+            .unwrap_or(u64::MAX)
+            .saturating_add(" consumed=".len() as u64)
+            .saturating_add(Self::decimal_digits(entry.instructions_consumed))
+            .saturating_add(" outcome=".len() as u64)
+            .saturating_add(u64::try_from(entry.outcome.len()).unwrap_or(u64::MAX))
+    }
+
+    fn estimate_interpreter_event_bytes(event: &InterpreterEvent) -> u64 {
+        (std::mem::size_of::<InterpreterEvent>() as u64)
+            .saturating_add(Self::estimate_string_bytes(&event.trace_id))
+            .saturating_add(Self::estimate_string_bytes(&event.component))
+            .saturating_add(Self::estimate_string_bytes(&event.event))
+            .saturating_add(Self::estimate_string_bytes(&event.outcome))
+            .saturating_add(
+                event
+                    .error_code
+                    .as_deref()
+                    .map(Self::estimate_string_bytes)
+                    .unwrap_or(0),
+            )
+    }
+
+    fn estimate_generated_code_event_bytes(&self, entry: &GeneratedCodeAuditEntry) -> u64 {
+        let (event_name, event_outcome) = Self::generated_code_event_fields(entry.kind);
+        (std::mem::size_of::<InterpreterEvent>() as u64)
+            .saturating_add(Self::estimate_string_bytes(&self.trace_id))
+            .saturating_add(Self::estimate_string_bytes(COMPONENT))
+            .saturating_add(Self::estimate_string_bytes(event_name))
+            .saturating_add(Self::estimate_string_bytes(event_outcome))
+            .saturating_add(
+                MEMORY_ESTIMATE_STRING_BASE_BYTES
+                    .saturating_add(Self::generated_code_event_error_code_len(entry)),
+            )
+    }
+
+    fn estimate_generated_code_audit_entry_bytes(entry: &GeneratedCodeAuditEntry) -> u64 {
+        let capability_slots = u64::try_from(entry.granted_capabilities.len())
+            .unwrap_or(u64::MAX)
+            .saturating_mul(std::mem::size_of::<String>() as u64);
+        (std::mem::size_of::<GeneratedCodeAuditEntry>() as u64)
+            .saturating_add(Self::estimate_string_bytes(&entry.source_id))
+            .saturating_add(Self::estimate_string_bytes(&entry.source_hash))
+            .saturating_add(Self::estimate_string_bytes(&entry.parameter_hash))
+            .saturating_add(Self::estimate_string_bytes(&entry.construction_site))
+            .saturating_add(capability_slots)
+            .saturating_add(Self::saturating_sum(
+                entry
+                    .granted_capabilities
+                    .iter()
+                    .map(|capability| Self::estimate_string_bytes(capability)),
+            ))
+            .saturating_add(Self::estimate_string_bytes(&entry.outcome))
+    }
+
+    fn estimate_generated_code_observability_pair_bytes(
+        &self,
+        entry: &GeneratedCodeAuditEntry,
+    ) -> u64 {
+        self.estimate_generated_code_event_bytes(entry)
+            .saturating_add(Self::estimate_generated_code_audit_entry_bytes(entry))
+    }
+
+    fn is_generated_code_interpreter_event(event: &InterpreterEvent) -> bool {
+        event.component == COMPONENT
+            && matches!(
+                event.event.as_str(),
+                "generated_code.constructed" | "generated_code.invoked" | "generated_code.faulted"
+            )
+    }
+
+    fn generated_code_observability_memory_bytes(&self) -> u64 {
+        Self::saturating_sum(
+            self.generated_code_audit
+                .iter()
+                .map(Self::estimate_generated_code_audit_entry_bytes),
+        )
+        .saturating_add(Self::saturating_sum(
+            self.events
+                .iter()
+                .filter(|event| Self::is_generated_code_interpreter_event(event))
+                .map(Self::estimate_interpreter_event_bytes),
+        ))
+    }
+
+    fn generated_code_interpreter_event(
+        &self,
+        entry: &GeneratedCodeAuditEntry,
+    ) -> InterpreterEvent {
+        let (event_name, event_outcome) = Self::generated_code_event_fields(entry.kind);
+        InterpreterEvent {
+            trace_id: self.trace_id.clone(),
+            component: COMPONENT.to_string(),
+            event: event_name.to_string(),
+            outcome: event_outcome.to_string(),
+            error_code: Some(format!(
+                "{} consumed={} outcome={}",
+                entry.source_id, entry.instructions_consumed, entry.outcome
+            )),
+        }
     }
 
     fn estimate_generated_function_provenance_bytes(
@@ -27346,6 +27496,7 @@ impl InterpreterCore {
         ContentHash::compute(&preimage)
     }
 
+    #[cfg(test)]
     fn retain_generated_function_artifact(
         &mut self,
         owner_program_id: ContentHash,
@@ -27354,6 +27505,30 @@ impl InterpreterCore {
         provenance: GeneratedFunctionProvenance,
         compiled_module: Ir3Module,
         function_index: u32,
+    ) -> Result<BuiltinFunction, InterpreterError> {
+        self.retain_generated_function_artifact_transaction(
+            owner_program_id,
+            owner_specifier,
+            owner_program,
+            provenance,
+            compiled_module,
+            function_index,
+            0,
+            None,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn retain_generated_function_artifact_transaction(
+        &mut self,
+        owner_program_id: ContentHash,
+        owner_specifier: String,
+        owner_program: Arc<Ir3Module>,
+        provenance: GeneratedFunctionProvenance,
+        compiled_module: Ir3Module,
+        function_index: u32,
+        compilation_scratch_bytes: u64,
+        audit_entry: Option<GeneratedCodeAuditEntry>,
     ) -> Result<BuiltinFunction, InterpreterError> {
         if owner_program.header.source_label != owner_specifier {
             return Err(InterpreterError::ModuleEvaluationFailed {
@@ -27395,10 +27570,12 @@ impl InterpreterCore {
                         owner_program_id.to_hex()
                     ),
                 })?;
-        self.check_temporary_memory_budget(Self::retained_module_program_bytes(
-            &compiled_module,
-            "",
-        ))?;
+        if compilation_scratch_bytes == 0 {
+            self.check_temporary_memory_budget(Self::retained_module_program_bytes(
+                &compiled_module,
+                "",
+            ))?;
+        }
         let compiled_program_id = compiled_module.content_hash();
         let artifact_id = Self::derive_generated_function_artifact_id(
             owner_program_id,
@@ -27442,12 +27619,32 @@ impl InterpreterCore {
             } else {
                 0
             });
-        self.check_temporary_memory_budget(
-            additional_bytes.saturating_add(Self::generated_function_handle_peak_bytes()),
-        )?;
-        let previous_bytes = self.module_state.retained_generated_function_bytes;
-        let next_bytes = previous_bytes.saturating_add(additional_bytes);
-        self.apply_memory_component_delta(previous_bytes, next_bytes)?;
+        let record_audit = audit_entry.is_some()
+            && self.generated_code_audit.len() < MAX_GENERATED_CODE_AUDIT_ENTRIES;
+        let observability_bytes = audit_entry
+            .as_ref()
+            .filter(|_| record_audit)
+            .map(|entry| self.estimate_generated_code_observability_pair_bytes(entry))
+            .unwrap_or(0);
+        let previous_retained_bytes = self.module_state.retained_generated_function_bytes;
+        let next_retained_bytes = previous_retained_bytes.saturating_add(additional_bytes);
+        let previous_transition_bytes =
+            previous_retained_bytes.saturating_add(compilation_scratch_bytes);
+        let next_transition_bytes = next_retained_bytes.saturating_add(observability_bytes);
+        let requested_peak_bytes = self
+            .estimated_memory_bytes
+            .saturating_sub(previous_transition_bytes)
+            .saturating_add(next_transition_bytes)
+            .saturating_add(Self::generated_function_handle_peak_bytes());
+        if Self::memory_request_exceeds_budget(
+            requested_peak_bytes,
+            self.config.max_total_memory_bytes,
+        ) {
+            return Err(
+                self.memory_budget_error(requested_peak_bytes, self.heap_object_count_u32())
+            );
+        }
+        self.apply_memory_component_delta(previous_transition_bytes, next_transition_bytes)?;
 
         if create_store {
             self.module_state.generated_function_stores.insert(
@@ -27469,16 +27666,135 @@ impl InterpreterCore {
         store.next_construction_ordinal = next_construction_ordinal;
         let replaced = store.artifacts.insert(artifact_id, artifact);
         debug_assert!(replaced.is_none());
-        self.module_state.retained_generated_function_bytes = next_bytes;
+        self.module_state.retained_generated_function_bytes = next_retained_bytes;
         debug_assert_eq!(
             self.module_state.retained_generated_function_bytes,
             self.generated_function_stores_memory_bytes()
         );
+        if let Some(audit_entry) = audit_entry.filter(|_| record_audit) {
+            self.append_generated_code_event_precharged(audit_entry, observability_bytes);
+        }
 
         Ok(BuiltinFunction::generated_function(
             owner_program_id,
             artifact_id,
         ))
+    }
+
+    fn primitive_string_upper_bound_bytes(value: &Value) -> u64 {
+        match value {
+            Value::Str(text) => u64::try_from(text.as_utf8_projection().len()).unwrap_or(u64::MAX),
+            Value::BigInt(digits) => u64::try_from(digits.len()).unwrap_or(u64::MAX),
+            _ => 64,
+        }
+    }
+
+    fn generated_function_argument_string_upper_bound_bytes(&self, value: &Value) -> u64 {
+        match value {
+            Value::Str(text) => u64::try_from(text.as_utf8_projection().len()).unwrap_or(u64::MAX),
+            Value::BigInt(digits) => u64::try_from(digits.len()).unwrap_or(u64::MAX),
+            Value::Object(id) => self
+                .heap
+                .get(id.0 as usize)
+                .map(|object| {
+                    let buffer_bytes = object
+                        .typed_array
+                        .as_ref()
+                        .filter(|view| view.is_buffer)
+                        .map(|view| {
+                            u64::try_from(view.byte_length)
+                                .unwrap_or(u64::MAX)
+                                .saturating_mul(3)
+                        })
+                        .unwrap_or(0);
+                    let name_bytes = object
+                        .properties
+                        .get("name")
+                        .map(Self::primitive_string_upper_bound_bytes)
+                        .unwrap_or("Error".len() as u64);
+                    let message_bytes = object
+                        .properties
+                        .get("message")
+                        .map(Self::primitive_string_upper_bound_bytes)
+                        .unwrap_or(0);
+                    buffer_bytes.max(name_bytes.saturating_add(message_bytes).saturating_add(2))
+                })
+                .unwrap_or(64)
+                .max(64),
+            Value::BuiltinFunction(builtin) => {
+                u64::try_from("[Function: builtin ]".len() + builtin.display_name().len())
+                    .unwrap_or(u64::MAX)
+            }
+            Value::Symbol(symbol) => {
+                let description_bytes = well_known_symbol_description(*symbol)
+                    .map(|description| description.len() as u64)
+                    .or_else(|| {
+                        self.symbol_state.description(*symbol).map(|description| {
+                            u64::try_from(description.as_utf8_projection().len())
+                                .unwrap_or(u64::MAX)
+                        })
+                    })
+                    .unwrap_or(0);
+                ("Symbol(".len() as u64)
+                    .saturating_add(description_bytes)
+                    .saturating_add(1)
+            }
+            _ => 64,
+        }
+    }
+
+    fn generated_function_source_upper_bound_bytes(
+        &self,
+        args: RegRange,
+    ) -> Result<u64, InterpreterError> {
+        let mut rendered_argument_bytes = 0u64;
+        for index in 0..args.count {
+            let reg =
+                args.start
+                    .checked_add(index)
+                    .ok_or(InterpreterError::RegisterOutOfBounds {
+                        register: args.start,
+                        max: self.config.max_registers,
+                    })?;
+            if reg >= self.config.max_registers {
+                return Err(InterpreterError::RegisterOutOfBounds {
+                    register: reg,
+                    max: self.config.max_registers,
+                });
+            }
+            let actual_reg = self.register_base.checked_add(reg as usize).ok_or(
+                InterpreterError::RegisterOutOfBounds {
+                    register: reg,
+                    max: self.config.max_registers,
+                },
+            )?;
+            rendered_argument_bytes = rendered_argument_bytes.saturating_add(
+                self.registers
+                    .get(actual_reg)
+                    .map(|value| self.generated_function_argument_string_upper_bound_bytes(value))
+                    .unwrap_or("undefined".len() as u64),
+            );
+        }
+        Ok(rendered_argument_bytes
+            .saturating_add(u64::from(args.count))
+            .saturating_add("function anonymous() {\n\n}".len() as u64))
+    }
+
+    fn generated_function_compilation_scratch_bytes(
+        &self,
+        args: RegRange,
+    ) -> Result<u64, InterpreterError> {
+        let source_bytes = self.generated_function_source_upper_bound_bytes(args)?;
+        let argument_slots = u64::from(args.count).saturating_mul(
+            (std::mem::size_of::<String>() as u64)
+                .saturating_add(MEMORY_ESTIMATE_STRING_BASE_BYTES),
+        );
+        Ok(GENERATED_FUNCTION_COMPILATION_FIXED_SCRATCH_BYTES
+            .saturating_add(argument_slots)
+            .saturating_add(
+                source_bytes
+                    .saturating_mul(GENERATED_FUNCTION_COMPILATION_SCRATCH_BYTES_PER_SOURCE_BYTE),
+            ))
     }
 
     fn construct_generated_function(
@@ -27488,85 +27804,112 @@ impl InterpreterCore {
     ) -> Result<Value, InterpreterError> {
         let (owner_program_id, owner_specifier, owner_program) =
             self.generated_function_owner(module)?;
-        let mut parts = Vec::with_capacity(args.count as usize);
-        for index in 0..args.count {
-            let value = self.builtin_arg(args, index)?.unwrap_or(Value::Undefined);
-            parts.push(self.value_to_string(&value));
-        }
-
-        let body_source = parts.pop().unwrap_or_default();
-        let parameter_source = parts.join(",");
-        let generated_source = Self::function_constructor_source(&parameter_source, &body_source);
-        self.run_pre_allocation_hook(module, AllocKind::Function, generated_source.len())?;
-
-        let parser_source = ParserSource {
-            label: "<function-constructor>".to_string(),
-            text: generated_source,
-        };
-        let syntax_tree = CanonicalEs2020Parser
-            .parse_with_options(parser_source, ParseGoal::Script, &ParserOptions::default())
-            .map_err(|error| InterpreterError::ModuleParseFailed {
-                specifier: "<function-constructor>".to_string(),
-                error: error.to_string(),
-            })?;
-        let ir0 = Ir0Module::from_syntax_tree(syntax_tree, "<function-constructor>");
-        let lowering_ctx = LoweringContext::new(
-            &self.trace_id,
-            "function-constructor",
-            "baseline_interpreter",
-        );
-        let lowering_output = lower_ir0_to_ir3(&ir0, &lowering_ctx).map_err(|error| {
-            InterpreterError::ModuleLoweringFailed {
-                specifier: "<function-constructor>".to_string(),
-                error: error.to_string(),
+        // Reserve the complete source/parse/lowering workspace before cloning
+        // even the first argument string. The closure keeps every transient
+        // owner scoped together so only the returned IR3/provenance survive to
+        // the atomic scratch -> retained-artifact transition below.
+        let compilation_scratch_bytes = self.generated_function_compilation_scratch_bytes(args)?;
+        let record_construction_audit =
+            self.generated_code_audit.len() < MAX_GENERATED_CODE_AUDIT_ENTRIES;
+        self.apply_memory_component_delta(0, compilation_scratch_bytes)?;
+        let compilation = (|| {
+            let mut parts = Vec::new();
+            parts
+                .try_reserve_exact(args.count as usize)
+                .map_err(|_| self.memory_budget_error(u64::MAX, self.heap_object_count_u32()))?;
+            for index in 0..args.count {
+                let value = self.builtin_arg(args, index)?.unwrap_or(Value::Undefined);
+                parts.push(self.value_to_string(&value));
             }
-        })?;
-        let function_index = lowering_output
-            .ir3
-            .function_table
-            .iter()
-            .position(|desc| desc.name.as_deref() == Some("anonymous"))
-            .ok_or_else(|| InterpreterError::ModuleLoweringFailed {
-                specifier: "<function-constructor>".to_string(),
-                error: "generated function descriptor missing".to_string(),
-            })?;
-        let function_index =
-            u32::try_from(function_index).map_err(|_| InterpreterError::TypeError {
-                expected: "u32-bounded generated function descriptor".to_string(),
-                got: format!("function index {function_index}"),
-            })?;
 
-        // bd-8enww.3.4: stamp the artifact with content-addressed provenance and
-        // emit a `Constructed` audit event so the construction of adversarial
-        // dynamic code is observable, not silent. The construction site is the
-        // module specifier currently executing.
-        let provenance = Self::derive_generated_function_provenance(
-            &owner_specifier,
-            &parameter_source,
-            &body_source,
-        );
-        let audit_entry = GeneratedCodeAuditEntry {
-            source_id: provenance.source_id.clone(),
-            source_hash: provenance.source_hash.clone(),
-            parameter_hash: provenance.parameter_hash.clone(),
-            construction_site: provenance.construction_site.clone(),
-            kind: GeneratedCodeEventKind::Constructed,
-            instructions_consumed: 0,
-            caller_call_depth: 0,
-            granted_capabilities: Vec::new(),
-            outcome: "constructed".to_string(),
+            let body_source = parts.pop().unwrap_or_default();
+            let parameter_source = parts.join(",");
+            let provenance = Self::derive_generated_function_provenance(
+                &owner_specifier,
+                &parameter_source,
+                &body_source,
+            );
+            let audit_entry = record_construction_audit.then(|| GeneratedCodeAuditEntry {
+                source_id: provenance.source_id.clone(),
+                source_hash: provenance.source_hash.clone(),
+                parameter_hash: provenance.parameter_hash.clone(),
+                construction_site: provenance.construction_site.clone(),
+                kind: GeneratedCodeEventKind::Constructed,
+                instructions_consumed: 0,
+                caller_call_depth: 0,
+                granted_capabilities: Vec::new(),
+                outcome: "constructed".to_string(),
+            });
+            let generated_source =
+                Self::function_constructor_source(&parameter_source, &body_source);
+            self.run_pre_allocation_hook(module, AllocKind::Function, generated_source.len())?;
+
+            let parser_source = ParserSource {
+                label: "<function-constructor>".to_string(),
+                text: generated_source,
+            };
+            let syntax_tree = CanonicalEs2020Parser
+                .parse_with_options(parser_source, ParseGoal::Script, &ParserOptions::default())
+                .map_err(|error| InterpreterError::ModuleParseFailed {
+                    specifier: "<function-constructor>".to_string(),
+                    error: error.to_string(),
+                })?;
+            let ir0 = Ir0Module::from_syntax_tree(syntax_tree, "<function-constructor>");
+            let lowering_ctx = LoweringContext::new(
+                &self.trace_id,
+                "function-constructor",
+                "baseline_interpreter",
+            );
+            let lowering_output = lower_ir0_to_ir3(&ir0, &lowering_ctx).map_err(|error| {
+                InterpreterError::ModuleLoweringFailed {
+                    specifier: "<function-constructor>".to_string(),
+                    error: error.to_string(),
+                }
+            })?;
+            let function_index = lowering_output
+                .ir3
+                .function_table
+                .iter()
+                .position(|desc| desc.name.as_deref() == Some("anonymous"))
+                .ok_or_else(|| InterpreterError::ModuleLoweringFailed {
+                    specifier: "<function-constructor>".to_string(),
+                    error: "generated function descriptor missing".to_string(),
+                })?;
+            let function_index =
+                u32::try_from(function_index).map_err(|_| InterpreterError::TypeError {
+                    expected: "u32-bounded generated function descriptor".to_string(),
+                    got: format!("function index {function_index}"),
+                })?;
+            Ok((lowering_output.ir3, function_index, provenance, audit_entry))
+        })();
+        let (compiled_module, function_index, provenance, audit_entry) = match compilation {
+            Ok(compilation) => compilation,
+            Err(error) => {
+                self.estimated_memory_bytes = self
+                    .estimated_memory_bytes
+                    .saturating_sub(compilation_scratch_bytes);
+                return Err(error);
+            }
         };
-        let builtin = self.retain_generated_function_artifact(
+        let retained = self.retain_generated_function_artifact_transaction(
             owner_program_id,
             owner_specifier,
             owner_program,
             provenance,
-            lowering_output.ir3,
+            compiled_module,
             function_index,
-        )?;
-        self.record_generated_code_event(audit_entry);
-
-        Ok(Value::BuiltinFunction(builtin))
+            compilation_scratch_bytes,
+            audit_entry,
+        );
+        match retained {
+            Ok(builtin) => Ok(Value::BuiltinFunction(builtin)),
+            Err(error) => {
+                self.estimated_memory_bytes = self
+                    .estimated_memory_bytes
+                    .saturating_sub(compilation_scratch_bytes);
+                Err(error)
+            }
+        }
     }
 
     fn function_constructor_source(parameter_source: &str, body_source: &str) -> String {
@@ -27629,33 +27972,149 @@ impl InterpreterCore {
             .collect()
     }
 
-    /// Append a generated-code audit entry (bd-8enww.3.4) and mirror a compact
-    /// summary into the standard structured-event log. Bounded by
-    /// [`MAX_GENERATED_CODE_AUDIT_ENTRIES`]; once the cap is reached, further
-    /// entries are dropped deterministically (the shared instruction budget is
-    /// the primary bound, so this cap is only ever hit under a pathological
-    /// budget).
-    fn record_generated_code_event(&mut self, entry: GeneratedCodeAuditEntry) {
-        let event_name = match entry.kind {
-            GeneratedCodeEventKind::Constructed => "generated_code.constructed",
-            GeneratedCodeEventKind::Invoked => "generated_code.invoked",
-            GeneratedCodeEventKind::Faulted => "generated_code.faulted",
-        };
-        let event_outcome = match entry.kind {
-            GeneratedCodeEventKind::Faulted => "fail",
-            _ => "ok",
-        };
-        self.push_event(
-            event_name,
-            event_outcome,
-            Some(&format!(
-                "{} consumed={} outcome={}",
-                entry.source_id, entry.instructions_consumed, entry.outcome
-            )),
-        );
-        if self.generated_code_audit.len() < MAX_GENERATED_CODE_AUDIT_ENTRIES {
-            self.generated_code_audit.push(entry);
+    fn contained_codegen_capability_name(capability: RuntimeCapability) -> &'static str {
+        match capability {
+            RuntimeCapability::Builtin => "builtin",
+            RuntimeCapability::Console => "console",
+            RuntimeCapability::Timer => "timer",
+            _ => "uncontained",
         }
+    }
+
+    fn estimate_generated_code_invocation_reservation_bytes(
+        &self,
+        provenance: &GeneratedFunctionProvenance,
+        granted_capabilities: &[RuntimeCapability],
+    ) -> u64 {
+        const MAX_INVOCATION_OUTCOME: &str = "faulted:memory_budget_exceeded";
+        const MAX_INVOCATION_EVENT_NAME: &str = "generated_code.faulted";
+
+        let capability_slots = u64::try_from(granted_capabilities.len())
+            .unwrap_or(u64::MAX)
+            .saturating_mul(std::mem::size_of::<String>() as u64);
+        let capability_bytes =
+            Self::saturating_sum(granted_capabilities.iter().map(|capability| {
+                Self::estimate_string_bytes(Self::contained_codegen_capability_name(*capability))
+            }));
+        let audit_bytes = (std::mem::size_of::<GeneratedCodeAuditEntry>() as u64)
+            .saturating_add(Self::estimate_string_bytes(&provenance.source_id))
+            .saturating_add(Self::estimate_string_bytes(&provenance.source_hash))
+            .saturating_add(Self::estimate_string_bytes(&provenance.parameter_hash))
+            .saturating_add(Self::estimate_string_bytes(&provenance.construction_site))
+            .saturating_add(capability_slots)
+            .saturating_add(capability_bytes)
+            .saturating_add(Self::estimate_string_bytes(MAX_INVOCATION_OUTCOME));
+        let error_code_len = u64::try_from(provenance.source_id.len())
+            .unwrap_or(u64::MAX)
+            .saturating_add(" consumed=".len() as u64)
+            .saturating_add(Self::decimal_digits(u64::MAX))
+            .saturating_add(" outcome=".len() as u64)
+            .saturating_add(MAX_INVOCATION_OUTCOME.len() as u64);
+        let event_bytes = (std::mem::size_of::<InterpreterEvent>() as u64)
+            .saturating_add(Self::estimate_string_bytes(&self.trace_id))
+            .saturating_add(Self::estimate_string_bytes(COMPONENT))
+            .saturating_add(Self::estimate_string_bytes(MAX_INVOCATION_EVENT_NAME))
+            .saturating_add(Self::estimate_string_bytes("fail"))
+            .saturating_add(MEMORY_ESTIMATE_STRING_BASE_BYTES.saturating_add(error_code_len));
+        audit_bytes.saturating_add(event_bytes)
+    }
+
+    fn reserve_generated_code_invocation_event(
+        &mut self,
+        provenance: &GeneratedFunctionProvenance,
+        granted_capabilities: &[RuntimeCapability],
+    ) -> Result<u64, InterpreterError> {
+        if self.generated_code_audit.len() >= MAX_GENERATED_CODE_AUDIT_ENTRIES {
+            return Ok(0);
+        }
+        let reservation_bytes = self
+            .estimate_generated_code_invocation_reservation_bytes(provenance, granted_capabilities);
+        self.apply_memory_component_delta(0, reservation_bytes)?;
+        self.generated_code_observability_reservation_bytes = self
+            .generated_code_observability_reservation_bytes
+            .saturating_add(reservation_bytes);
+        Ok(reservation_bytes)
+    }
+
+    fn release_generated_code_observability_reservation(&mut self, reservation_bytes: u64) {
+        self.generated_code_observability_reservation_bytes = self
+            .generated_code_observability_reservation_bytes
+            .saturating_sub(reservation_bytes);
+        self.estimated_memory_bytes = self
+            .estimated_memory_bytes
+            .saturating_sub(reservation_bytes);
+    }
+
+    fn append_generated_code_event_precharged(
+        &mut self,
+        entry: GeneratedCodeAuditEntry,
+        charged_bytes: u64,
+    ) {
+        debug_assert!(self.generated_code_audit.len() < MAX_GENERATED_CODE_AUDIT_ENTRIES);
+        debug_assert_eq!(
+            charged_bytes,
+            self.estimate_generated_code_observability_pair_bytes(&entry)
+        );
+        let event = self.generated_code_interpreter_event(&entry);
+        debug_assert_eq!(
+            self.estimate_generated_code_event_bytes(&entry),
+            Self::estimate_interpreter_event_bytes(&event)
+        );
+        self.events.push(event);
+        self.generated_code_audit.push(entry);
+        self.generated_code_observability_bytes = self
+            .generated_code_observability_bytes
+            .saturating_add(charged_bytes);
+    }
+
+    fn commit_reserved_generated_code_event(
+        &mut self,
+        entry: GeneratedCodeAuditEntry,
+        reservation_bytes: u64,
+    ) -> Result<(), InterpreterError> {
+        if reservation_bytes == 0 {
+            debug_assert!(self.generated_code_audit.len() >= MAX_GENERATED_CODE_AUDIT_ENTRIES);
+            return Ok(());
+        }
+        if self.generated_code_audit.len() >= MAX_GENERATED_CODE_AUDIT_ENTRIES {
+            drop(entry);
+            self.release_generated_code_observability_reservation(reservation_bytes);
+            return Ok(());
+        }
+        let actual_bytes = self.estimate_generated_code_observability_pair_bytes(&entry);
+        if actual_bytes > reservation_bytes {
+            drop(entry);
+            self.release_generated_code_observability_reservation(reservation_bytes);
+            return Err(InterpreterError::InternalError {
+                details: format!(
+                    "generated-code observability reservation underflow: reserved {reservation_bytes} bytes, requires {actual_bytes}"
+                ),
+            });
+        }
+        self.apply_memory_component_delta(reservation_bytes, actual_bytes)?;
+        self.generated_code_observability_reservation_bytes = self
+            .generated_code_observability_reservation_bytes
+            .saturating_sub(reservation_bytes);
+        self.append_generated_code_event_precharged(entry, actual_bytes);
+        Ok(())
+    }
+
+    /// Append a generated-code audit entry (bd-8enww.3.4 / bd-fw7zd.8.2) and
+    /// its paired standard structured event as one budget transaction. Once
+    /// the cap is reached, both surfaces drop the pair deterministically; the
+    /// standard event can therefore no longer outgrow the bounded audit trail.
+    #[cfg(test)]
+    fn record_generated_code_event(
+        &mut self,
+        entry: GeneratedCodeAuditEntry,
+    ) -> Result<(), InterpreterError> {
+        if self.generated_code_audit.len() >= MAX_GENERATED_CODE_AUDIT_ENTRIES {
+            return Ok(());
+        }
+        let charged_bytes = self.estimate_generated_code_observability_pair_bytes(&entry);
+        self.apply_memory_component_delta(0, charged_bytes)?;
+        self.append_generated_code_event_precharged(entry, charged_bytes);
+        Ok(())
     }
 
     fn parse_generated_function_handle(
@@ -27966,6 +28425,17 @@ impl InterpreterCore {
         let generated_capabilities =
             Self::contained_codegen_capability_grant(&wrapper.required_capabilities);
         let previous_granted_capabilities = self.config.granted_capabilities.clone();
+        let observability_reservation_bytes = match self
+            .reserve_generated_code_invocation_event(&provenance, &generated_capabilities)
+        {
+            Ok(reservation_bytes) => reservation_bytes,
+            Err(error) => {
+                self.estimated_memory_bytes = self
+                    .estimated_memory_bytes
+                    .saturating_sub(transient_execution_bytes);
+                return Err(error);
+            }
+        };
 
         // bd-8enww.3.4: capture the caller's JS call-stack depth and the shared
         // instruction-budget reading BEFORE the re-entrant run, so the audit
@@ -27979,6 +28449,9 @@ impl InterpreterCore {
                 self.estimated_memory_bytes = self
                     .estimated_memory_bytes
                     .saturating_sub(transient_execution_bytes);
+                self.release_generated_code_observability_reservation(
+                    observability_reservation_bytes,
+                );
                 return Err(error);
             }
         };
@@ -28080,39 +28553,44 @@ impl InterpreterCore {
         self.restore_module_execution(snapshot, wrapper_memory_committed);
         self.active_cjs_context = saved_active_cjs_context;
         self.config.granted_capabilities = previous_granted_capabilities;
-        if let Some((value, label)) = thrown_value {
-            self.replace_pending_abrupt_slots(Some((value, label)), None)?;
-        }
 
         // bd-8enww.3.4: record the invocation in the audit trail with the exact
         // instruction budget the generated body consumed. The shared counter is
         // NOT rolled back by `restore_module_execution`, so this delta is the
         // real spend — adversarial generated code cannot hide its cost.
-        let instructions_consumed = self
-            .instructions_executed
-            .saturating_sub(instructions_before);
-        let (kind, outcome) = match &result {
-            Ok(_) => (GeneratedCodeEventKind::Invoked, "completed".to_string()),
-            Err(error) => (
-                GeneratedCodeEventKind::Faulted,
-                format!("faulted:{}", generated_code_fault_code(error)),
-            ),
-        };
-        let granted_capabilities = generated_capabilities
-            .iter()
-            .map(RuntimeCapability::to_string)
-            .collect();
-        self.record_generated_code_event(GeneratedCodeAuditEntry {
-            source_id: provenance.source_id,
-            source_hash: provenance.source_hash,
-            parameter_hash: provenance.parameter_hash,
-            construction_site: provenance.construction_site,
-            kind,
-            instructions_consumed,
-            caller_call_depth,
-            granted_capabilities,
-            outcome,
-        });
+        if observability_reservation_bytes != 0 {
+            let instructions_consumed = self
+                .instructions_executed
+                .saturating_sub(instructions_before);
+            let (kind, outcome) = match &result {
+                Ok(_) => (GeneratedCodeEventKind::Invoked, "completed".to_string()),
+                Err(error) => (
+                    GeneratedCodeEventKind::Faulted,
+                    format!("faulted:{}", generated_code_fault_code(error)),
+                ),
+            };
+            let granted_capabilities = generated_capabilities
+                .iter()
+                .map(|capability| Self::contained_codegen_capability_name(*capability).to_string())
+                .collect();
+            self.commit_reserved_generated_code_event(
+                GeneratedCodeAuditEntry {
+                    source_id: provenance.source_id,
+                    source_hash: provenance.source_hash,
+                    parameter_hash: provenance.parameter_hash,
+                    construction_site: provenance.construction_site,
+                    kind,
+                    instructions_consumed,
+                    caller_call_depth,
+                    granted_capabilities,
+                    outcome,
+                },
+                observability_reservation_bytes,
+            )?;
+        }
+        if let Some((value, label)) = thrown_value {
+            self.replace_pending_abrupt_slots(Some((value, label)), None)?;
+        }
 
         let result_label = result_label?;
         result.map(|value| (value, result_label))
@@ -64575,6 +65053,8 @@ impl InterpreterCore {
             .saturating_add(self.writable_in_flight_callback_bytes)
             .saturating_add(self.module_state.retained_program_bytes)
             .saturating_add(self.module_state.retained_generated_function_bytes)
+            .saturating_add(self.generated_code_observability_memory_bytes())
+            .saturating_add(self.generated_code_observability_reservation_bytes)
             .saturating_add(self.module_exports_memory_bytes())
             .saturating_add(self.state_capture_memory_bytes())
             .saturating_add(self.module_snapshot_in_flight_bytes)
@@ -89426,6 +89906,399 @@ mod function_prototype_call_apply_tests_current {
         assert_eq!(
             core.estimated_memory_bytes(),
             core.recompute_estimated_memory_bytes()
+        );
+    }
+
+    #[test]
+    fn generated_code_observability_is_budget_atomic_and_recomputed_bd_fw7zd_8_2() {
+        fn entry(
+            kind: GeneratedCodeEventKind,
+            instructions_consumed: u64,
+            outcome: &str,
+        ) -> GeneratedCodeAuditEntry {
+            GeneratedCodeAuditEntry {
+                source_id: "genfn:0123456789abcdef".to_string(),
+                source_hash: "a".repeat(64),
+                parameter_hash: "b".repeat(64),
+                construction_site: "generated-observability-owner.mjs".to_string(),
+                kind,
+                instructions_consumed,
+                caller_call_depth: usize::from(kind != GeneratedCodeEventKind::Constructed),
+                granted_capabilities: match kind {
+                    GeneratedCodeEventKind::Constructed => Vec::new(),
+                    _ => vec!["builtin".to_string(), "console".to_string()],
+                },
+                outcome: outcome.to_string(),
+            }
+        }
+
+        let fixture = || {
+            let mut core = test_interpreter();
+            core.sync_estimated_memory_bytes()
+                .expect("generated observability fixture baseline");
+            core
+        };
+        let constructed = entry(GeneratedCodeEventKind::Constructed, 0, "constructed");
+
+        let mut probe = fixture();
+        let baseline = probe.estimated_memory_bytes();
+        let pair_bytes = probe.estimate_generated_code_observability_pair_bytes(&constructed);
+        assert!(pair_bytes > 0);
+        probe
+            .record_generated_code_event(constructed.clone())
+            .expect("unbounded generated observability pair");
+        assert_eq!(
+            probe.estimated_memory_bytes(),
+            baseline.saturating_add(pair_bytes)
+        );
+        assert_eq!(probe.generated_code_observability_bytes, pair_bytes);
+        assert_eq!(
+            probe.generated_code_observability_bytes,
+            probe.generated_code_observability_memory_bytes()
+        );
+        assert_eq!(
+            probe.estimated_memory_bytes(),
+            probe.recompute_estimated_memory_bytes()
+        );
+
+        let mut one_short = fixture();
+        let one_short_baseline = one_short.estimated_memory_bytes();
+        one_short.config.max_total_memory_bytes = one_short_baseline
+            .saturating_add(pair_bytes)
+            .saturating_sub(1);
+        assert!(matches!(
+            one_short.record_generated_code_event(constructed.clone()),
+            Err(InterpreterError::MemoryBudgetExceeded { .. })
+        ));
+        assert!(one_short.generated_code_audit.is_empty());
+        assert!(one_short.events.is_empty());
+        assert_eq!(one_short.generated_code_observability_bytes, 0);
+        assert_eq!(
+            one_short.estimated_memory_bytes(),
+            one_short_baseline,
+            "one-byte-short refusal must not publish either half of the pair"
+        );
+        assert_eq!(
+            one_short.estimated_memory_bytes(),
+            one_short.recompute_estimated_memory_bytes()
+        );
+
+        let mut exact = fixture();
+        let exact_baseline = exact.estimated_memory_bytes();
+        exact.config.max_total_memory_bytes = exact_baseline.saturating_add(pair_bytes);
+        exact
+            .record_generated_code_event(constructed)
+            .expect("generated observability pair at exact ceiling");
+        assert_eq!(exact.generated_code_audit.len(), 1);
+        assert_eq!(exact.events.len(), 1);
+        assert_eq!(
+            exact.estimated_memory_bytes(),
+            exact.recompute_estimated_memory_bytes()
+        );
+    }
+
+    #[test]
+    fn generated_code_invocation_reservation_and_lifecycle_pairs_are_exact_bd_fw7zd_8_2() {
+        let provenance = InterpreterCore::derive_generated_function_provenance(
+            "generated-reservation-owner.mjs",
+            "value",
+            "return value;",
+        );
+        let capabilities = vec![
+            RuntimeCapability::Builtin,
+            RuntimeCapability::Console,
+            RuntimeCapability::Timer,
+        ];
+        let fixture = || {
+            let mut core = test_interpreter();
+            core.sync_estimated_memory_bytes()
+                .expect("generated reservation fixture baseline");
+            core
+        };
+
+        let mut one_short = fixture();
+        let one_short_baseline = one_short.estimated_memory_bytes();
+        let reservation_bytes = one_short
+            .estimate_generated_code_invocation_reservation_bytes(&provenance, &capabilities);
+        one_short.config.max_total_memory_bytes = one_short_baseline
+            .saturating_add(reservation_bytes)
+            .saturating_sub(1);
+        assert!(matches!(
+            one_short.reserve_generated_code_invocation_event(&provenance, &capabilities),
+            Err(InterpreterError::MemoryBudgetExceeded { .. })
+        ));
+        assert_eq!(one_short.generated_code_observability_reservation_bytes, 0);
+        assert_eq!(one_short.estimated_memory_bytes(), one_short_baseline);
+
+        let mut exact = fixture();
+        let exact_baseline = exact.estimated_memory_bytes();
+        exact.config.max_total_memory_bytes = exact_baseline.saturating_add(reservation_bytes);
+        let reserved = exact
+            .reserve_generated_code_invocation_event(&provenance, &capabilities)
+            .expect("generated invocation reservation at exact ceiling");
+        assert_eq!(reserved, reservation_bytes);
+        assert_eq!(
+            exact.generated_code_observability_reservation_bytes,
+            reservation_bytes
+        );
+        assert_eq!(
+            exact.estimated_memory_bytes(),
+            exact.recompute_estimated_memory_bytes()
+        );
+        exact
+            .sync_estimated_memory_bytes()
+            .expect("eager recompute must preserve generated invocation reservation");
+        assert_eq!(
+            exact.generated_code_observability_reservation_bytes,
+            reservation_bytes
+        );
+        exact
+            .commit_reserved_generated_code_event(
+                GeneratedCodeAuditEntry {
+                    source_id: provenance.source_id.clone(),
+                    source_hash: provenance.source_hash.clone(),
+                    parameter_hash: provenance.parameter_hash.clone(),
+                    construction_site: provenance.construction_site.clone(),
+                    kind: GeneratedCodeEventKind::Faulted,
+                    instructions_consumed: u64::MAX,
+                    caller_call_depth: 3,
+                    granted_capabilities: capabilities
+                        .iter()
+                        .map(|capability| {
+                            InterpreterCore::contained_codegen_capability_name(*capability)
+                                .to_string()
+                        })
+                        .collect(),
+                    outcome: "faulted:memory_budget_exceeded".to_string(),
+                },
+                reserved,
+            )
+            .expect("worst-case generated invocation audit fits its reservation");
+        assert_eq!(exact.generated_code_observability_reservation_bytes, 0);
+        assert_eq!(exact.generated_code_observability_bytes, reservation_bytes);
+        assert_eq!(
+            exact.estimated_memory_bytes(),
+            exact.recompute_estimated_memory_bytes()
+        );
+
+        exact.config.max_total_memory_bytes = DEFAULT_QUICKJS_MAX_TOTAL_MEMORY_BYTES;
+        for _ in 0..2 {
+            for (kind, instructions, outcome) in [
+                (GeneratedCodeEventKind::Constructed, 0, "constructed"),
+                (GeneratedCodeEventKind::Invoked, 11, "completed"),
+                (
+                    GeneratedCodeEventKind::Faulted,
+                    13,
+                    "faulted:uncaught_exception",
+                ),
+            ] {
+                let entry = GeneratedCodeAuditEntry {
+                    source_id: provenance.source_id.clone(),
+                    source_hash: provenance.source_hash.clone(),
+                    parameter_hash: provenance.parameter_hash.clone(),
+                    construction_site: provenance.construction_site.clone(),
+                    kind,
+                    instructions_consumed: instructions,
+                    caller_call_depth: usize::from(kind != GeneratedCodeEventKind::Constructed),
+                    granted_capabilities: match kind {
+                        GeneratedCodeEventKind::Constructed => Vec::new(),
+                        _ => vec!["builtin".to_string()],
+                    },
+                    outcome: outcome.to_string(),
+                };
+                exact
+                    .record_generated_code_event(entry)
+                    .expect("repeated generated lifecycle pair");
+            }
+        }
+        assert_eq!(exact.generated_code_audit.len(), 7);
+        assert_eq!(exact.events.len(), 7);
+        assert_eq!(
+            exact.generated_code_observability_bytes,
+            exact.generated_code_observability_memory_bytes()
+        );
+        assert_eq!(
+            exact.estimated_memory_bytes(),
+            exact.recompute_estimated_memory_bytes()
+        );
+
+        let result = exact.take_execution_result(Value::Undefined, None);
+        assert_eq!(result.generated_code_audit.len(), 7);
+        assert_eq!(result.events.len(), 7);
+        assert_eq!(exact.generated_code_observability_bytes, 0);
+        assert_eq!(
+            exact.estimated_memory_bytes(),
+            exact.recompute_estimated_memory_bytes(),
+            "draining execution observability must release its complete charge"
+        );
+    }
+
+    #[test]
+    fn generated_code_actual_construct_invoke_and_fault_paths_are_paired_bd_fw7zd_8_2() {
+        let mut owner = test_module_with_functions(Vec::new(), Vec::new());
+        owner.header.source_label = "generated-lifecycle-owner.mjs".to_string();
+        let mut core = test_interpreter();
+        core.ensure_module_record(&owner, &owner.header.source_label)
+            .expect("retain generated lifecycle owner");
+
+        for (body, expected) in [("return 7;", Value::Int(7)), ("return 8;", Value::Int(8))] {
+            core.write_reg(0, Value::str(body))
+                .expect("seed generated success source");
+            let Value::BuiltinFunction(generated) = core
+                .construct_generated_function(&owner, RegRange { start: 0, count: 1 })
+                .expect("construct generated success function")
+            else {
+                panic!("Function constructor must return a builtin handle");
+            };
+            assert_eq!(
+                core.dispatch_builtin_function(
+                    &owner,
+                    &generated,
+                    RegRange { start: 1, count: 0 },
+                    None,
+                    None,
+                )
+                .expect("invoke generated success function"),
+                expected
+            );
+        }
+
+        core.write_reg(0, Value::str("throw 'boom';"))
+            .expect("seed generated fault source");
+        let Value::BuiltinFunction(faulting) = core
+            .construct_generated_function(&owner, RegRange { start: 0, count: 1 })
+            .expect("construct generated fault function")
+        else {
+            panic!("Function constructor must return a builtin handle");
+        };
+        assert!(matches!(
+            core.dispatch_builtin_function(
+                &owner,
+                &faulting,
+                RegRange { start: 1, count: 0 },
+                None,
+                None,
+            ),
+            Err(InterpreterError::UncaughtException { .. })
+        ));
+
+        assert_eq!(
+            core.generated_code_audit
+                .iter()
+                .map(|entry| entry.kind)
+                .collect::<Vec<_>>(),
+            vec![
+                GeneratedCodeEventKind::Constructed,
+                GeneratedCodeEventKind::Invoked,
+                GeneratedCodeEventKind::Constructed,
+                GeneratedCodeEventKind::Invoked,
+                GeneratedCodeEventKind::Constructed,
+                GeneratedCodeEventKind::Faulted,
+            ]
+        );
+        assert_eq!(core.events.len(), core.generated_code_audit.len());
+        assert_eq!(
+            core.generated_code_observability_bytes,
+            core.generated_code_observability_memory_bytes()
+        );
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+    }
+
+    #[test]
+    fn generated_function_compilation_scratch_preflights_and_releases_bd_fw7zd_8_2() {
+        let mut owner = test_module_with_functions(Vec::new(), Vec::new());
+        owner.header.source_label = "generated-compilation-owner.mjs".to_string();
+        let oversized_body = " ".repeat(16 * 1024);
+        let fixture = || {
+            let mut core = test_interpreter();
+            core.ensure_module_record(&owner, &owner.header.source_label)
+                .expect("retain generated compilation owner");
+            core.write_reg(0, Value::str(oversized_body.clone()))
+                .expect("seed generated compilation body");
+            core.sync_estimated_memory_bytes()
+                .expect("generated compilation fixture baseline");
+            core
+        };
+        let args = RegRange { start: 0, count: 1 };
+
+        let mut one_short = fixture();
+        let one_short_baseline = one_short.estimated_memory_bytes();
+        let scratch_bytes = one_short
+            .generated_function_compilation_scratch_bytes(args)
+            .expect("deterministic generated compilation scratch");
+        one_short.config.max_total_memory_bytes = one_short_baseline
+            .saturating_add(scratch_bytes)
+            .saturating_sub(1);
+        assert!(matches!(
+            one_short.construct_generated_function(&owner, args),
+            Err(InterpreterError::MemoryBudgetExceeded { .. })
+        ));
+        assert!(one_short.module_state.generated_function_stores.is_empty());
+        assert!(one_short.generated_code_audit.is_empty());
+        assert!(one_short.events.is_empty());
+        assert_eq!(one_short.generated_code_observability_bytes, 0);
+        assert_eq!(one_short.estimated_memory_bytes(), one_short_baseline);
+        assert_eq!(
+            one_short.estimated_memory_bytes(),
+            one_short.recompute_estimated_memory_bytes()
+        );
+
+        let mut exact = fixture();
+        let exact_baseline = exact.estimated_memory_bytes();
+        let exact_scratch = exact
+            .generated_function_compilation_scratch_bytes(args)
+            .expect("exact generated compilation scratch");
+        assert_eq!(exact_scratch, scratch_bytes);
+        exact.config.max_total_memory_bytes = exact_baseline.saturating_add(exact_scratch);
+        assert!(matches!(
+            exact
+                .construct_generated_function(&owner, args)
+                .expect("generated compilation at exact scratch ceiling"),
+            Value::BuiltinFunction(_)
+        ));
+        assert_eq!(exact.generated_code_audit.len(), 1);
+        assert_eq!(exact.events.len(), 1);
+        assert_eq!(
+            exact.generated_code_audit[0].kind,
+            GeneratedCodeEventKind::Constructed
+        );
+        assert_eq!(
+            exact.estimated_memory_bytes(),
+            exact.recompute_estimated_memory_bytes()
+        );
+
+        let mut parse_failure = test_interpreter();
+        parse_failure
+            .ensure_module_record(&owner, &owner.header.source_label)
+            .expect("retain generated parse-failure owner");
+        parse_failure
+            .write_reg(0, Value::str("return )"))
+            .expect("seed invalid generated source");
+        parse_failure
+            .sync_estimated_memory_bytes()
+            .expect("generated parse-failure baseline");
+        let parse_failure_baseline = parse_failure.estimated_memory_bytes();
+        assert!(matches!(
+            parse_failure.construct_generated_function(&owner, args),
+            Err(InterpreterError::ModuleParseFailed { .. })
+        ));
+        assert!(
+            parse_failure
+                .module_state
+                .generated_function_stores
+                .is_empty()
+        );
+        assert!(parse_failure.generated_code_audit.is_empty());
+        assert_eq!(
+            parse_failure.estimated_memory_bytes(),
+            parse_failure_baseline
+        );
+        assert_eq!(
+            parse_failure.estimated_memory_bytes(),
+            parse_failure.recompute_estimated_memory_bytes()
         );
     }
 

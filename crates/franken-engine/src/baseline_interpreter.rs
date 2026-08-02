@@ -7434,7 +7434,7 @@ pub enum ExecutionSeed {
     Materialized {
         registers: Vec<Value>,
         heap: Vec<HeapObject>,
-        function_prototypes: BTreeMap<u32, ObjectId>,
+        function_prototypes: BTreeMap<(ContentHash, u32), ObjectId>,
         builtin_prototypes: BTreeMap<String, ObjectId>,
         symbol_state: RuntimeSymbolState,
     },
@@ -8347,8 +8347,10 @@ pub struct InterpreterCore {
     iterators: Vec<RuntimeIteratorState>,
     /// Replay-visible iterator protocol traces keyed by runtime iterator state.
     iteration_traces: Vec<IterationTrace>,
-    /// Lazily allocated prototype objects for constructor functions. SEED-SURFACE.
-    function_prototypes: SeedTrackedField<BTreeMap<u32, ObjectId>>,
+    /// Lazily allocated prototype objects for constructor functions, keyed by
+    /// immutable owner-module identity plus the module-local function index.
+    /// SEED-SURFACE.
+    function_prototypes: SeedTrackedField<BTreeMap<(ContentHash, u32), ObjectId>>,
     /// Lazily allocated prototype objects for modeled builtin constructors. SEED-SURFACE.
     builtin_prototypes: SeedTrackedField<BTreeMap<String, ObjectId>>,
     /// Current seed epoch for lazy materialization.
@@ -24529,7 +24531,7 @@ impl InterpreterCore {
 
     pub(crate) fn mutate_function_prototypes<R>(
         &mut self,
-        f: impl FnOnce(&mut BTreeMap<u32, ObjectId>) -> R,
+        f: impl FnOnce(&mut BTreeMap<(ContentHash, u32), ObjectId>) -> R,
     ) -> R {
         self.before_seed_surface_write();
         f(&mut self.function_prototypes.value)
@@ -31878,6 +31880,15 @@ impl InterpreterCore {
                 ),
             }
         })?;
+        if compiled_module.header.source_label != origin {
+            return Err(InterpreterError::ModuleEvaluationFailed {
+                specifier: origin.to_string(),
+                reason: format!(
+                    "closure#{closure_id} owner mismatch: registry key `{origin}` retained program `{}`",
+                    compiled_module.header.source_label
+                ),
+            });
+        }
         Ok(Arc::clone(compiled_module))
     }
 
@@ -35113,14 +35124,20 @@ impl InterpreterCore {
                         Value::Closure(closure_id) => {
                             if let Some(key) = property_key.as_str() {
                                 let func_idx = self.closure_function_index(closure_id)?;
-                                self.function_property_value(func_idx, key)?
+                                let owner_module = self
+                                    .foreign_closure_module(&Value::Closure(closure_id), module)?;
+                                self.function_property_value(
+                                    owner_module.as_deref().unwrap_or(module),
+                                    func_idx,
+                                    key,
+                                )?
                             } else {
                                 Value::Undefined
                             }
                         }
                         Value::Function(idx) => {
                             if let Some(key) = property_key.as_str() {
-                                self.function_property_value(idx, key)?
+                                self.function_property_value(module, idx, key)?
                             } else {
                                 Value::Undefined
                             }
@@ -35730,7 +35747,7 @@ impl InterpreterCore {
                 }
                 Ir3Instruction::InstanceOf { dst, lhs, rhs } => {
                     let result_label = self.binary_operation_label(lhs, rhs)?;
-                    let result = self.eval_instanceof(lhs, rhs)?;
+                    let result = self.eval_instanceof(module, lhs, rhs)?;
                     self.write_reg_with_label(dst, result, result_label)?;
                     self.ip += 1;
                 }
@@ -35791,15 +35808,25 @@ impl InterpreterCore {
                         continue;
                     }
 
-                    if let Some(_origin_module) =
-                        self.foreign_closure_module(&callee_val, module)?
-                    {
-                        return Err(InterpreterError::ModuleEvaluationFailed {
-                            specifier: module.header.source_label.clone(),
-                            reason:
-                                "cross-module construction requires owner-keyed prototype support"
-                                    .to_string(),
-                        });
+                    if self.foreign_closure_module(&callee_val, module)?.is_some() {
+                        let call_labels =
+                            self.clone_isolated_call_labels_from_registers(Some(callee), args)?;
+                        let arguments = self.call_arguments(args)?;
+                        let (result, result_label) = match self.invoke_inline_construct_with_labels(
+                            Some(module),
+                            callee_val.clone(),
+                            arguments,
+                            Some(call_labels),
+                        ) {
+                            Ok(value) => value,
+                            Err(err) => match self.route_isolated_explicit_throw(module, err)? {
+                                None => continue,
+                                Some(err) => return Err(err),
+                            },
+                        };
+                        self.write_reg_with_label(dst, result, result_label)?;
+                        self.ip += 1;
+                        continue;
                     }
 
                     // Resolve function index and optional captured environment.
@@ -35844,7 +35871,7 @@ impl InterpreterCore {
                             }
 
                             // Allocate the `this` object for the constructor.
-                            let prototype = self.ensure_function_prototype(func_idx)?;
+                            let prototype = self.ensure_function_prototype(module, func_idx)?;
                             let builtin_parent = self.builtin_subclass_ancestor_name(prototype)?;
                             let this_id = if builtin_parent.as_deref() == Some("Array") {
                                 self.alloc_array_with_prototype(Some(prototype))?
@@ -37227,11 +37254,16 @@ impl InterpreterCore {
         Ok(Value::Int(result))
     }
 
-    fn eval_instanceof(&mut self, lhs: u32, rhs: u32) -> Result<Value, InterpreterError> {
+    fn eval_instanceof(
+        &mut self,
+        module: &Ir3Module,
+        lhs: u32,
+        rhs: u32,
+    ) -> Result<Value, InterpreterError> {
         let candidate = self.read_reg(lhs)?;
         let constructor = self.read_reg(rhs)?;
-        let func_idx = match constructor {
-            Value::Function(func_idx) => func_idx,
+        let (func_idx, owner_module) = match constructor {
+            Value::Function(func_idx) => (func_idx, None),
             Value::Closure(closure_id) => {
                 let closure = self.closures.get(closure_id as usize).ok_or_else(|| {
                     InterpreterError::TypeError {
@@ -37239,7 +37271,10 @@ impl InterpreterCore {
                         got: format!("closure#{closure_id} not found"),
                     }
                 })?;
-                closure.function_index
+                let function_index = closure.function_index;
+                let owner_module =
+                    self.foreign_closure_module(&Value::Closure(closure_id), module)?;
+                (function_index, owner_module)
             }
             other => {
                 return Err(InterpreterError::TypeError {
@@ -37253,7 +37288,8 @@ impl InterpreterCore {
             return Ok(Value::Bool(false));
         };
 
-        let prototype = self.ensure_function_prototype(func_idx)?;
+        let prototype =
+            self.ensure_function_prototype(owner_module.as_deref().unwrap_or(module), func_idx)?;
         Ok(Value::Bool(
             self.prototype_chain_contains(object_id, prototype)?,
         ))
@@ -47818,17 +47854,17 @@ impl InterpreterCore {
         arguments: Vec<Value>,
         call_labels: Option<IsolatedCallLabels>,
     ) -> Result<(Value, Label), InterpreterError> {
-        let module = module.ok_or_else(|| InterpreterError::TypeError {
+        let caller_module = module.ok_or_else(|| InterpreterError::TypeError {
             expected: "module-backed Reflect.construct dispatch".to_string(),
             got: "missing module context".to_string(),
         })?;
-        if self.foreign_closure_module(&constructor, module)?.is_some() {
-            return Err(InterpreterError::ModuleEvaluationFailed {
-                specifier: module.header.source_label.clone(),
-                reason: "cross-module construction requires owner-keyed prototype support"
-                    .to_string(),
-            });
+        let foreign_module = self.foreign_closure_module(&constructor, caller_module)?;
+        let is_foreign_construct = foreign_module.is_some();
+        if is_foreign_construct {
+            self.check_module_reentrant_call_depth()?;
         }
+        let foreign_hidden_call_depth = self.effective_call_depth();
+        let module = foreign_module.as_deref().unwrap_or(caller_module);
         let arg_count =
             u32::try_from(arguments.len()).map_err(|_| InterpreterError::TypeError {
                 expected: "u32-bounded Reflect.construct argument count".to_string(),
@@ -47951,7 +47987,19 @@ impl InterpreterCore {
                 &mut remaining_label_transport_bytes,
                 "Reflect.construct argument register",
             )?;
-            self.run_loop(&wrapper)
+            if is_foreign_construct {
+                let previous_reentrant_depth = self.module_reentrant_call_depth;
+                let previous_foreign_call_depth = self.active_foreign_module_call_depth;
+                self.module_reentrant_call_depth = foreign_hidden_call_depth;
+                self.active_foreign_module_call_depth =
+                    previous_foreign_call_depth.saturating_add(1);
+                let result = self.run_loop(&wrapper);
+                self.module_reentrant_call_depth = previous_reentrant_depth;
+                self.active_foreign_module_call_depth = previous_foreign_call_depth;
+                result
+            } else {
+                self.run_loop(&wrapper)
+            }
         })();
         let result_label = if result.is_ok() {
             self.clone_register_label_with_temporary_budget(0)
@@ -65447,12 +65495,40 @@ impl InterpreterCore {
         Ok(true)
     }
 
-    fn ensure_function_prototype(&mut self, func_idx: u32) -> Result<ObjectId, InterpreterError> {
-        if let Some(existing) = self.function_prototypes.get(&func_idx) {
+    fn function_prototype_owner_id(module: &Ir3Module) -> ContentHash {
+        let mut digest = Sha256::new();
+        digest.update(b"FrankenEngine.FunctionPrototypeOwner.v1");
+        digest.update(module.header.schema_version.major.to_le_bytes());
+        digest.update(module.header.schema_version.minor.to_le_bytes());
+        digest.update(module.header.schema_version.patch.to_le_bytes());
+        digest.update(module.header.level.as_str().as_bytes());
+        match module.header.source_hash {
+            Some(source_hash) => {
+                digest.update([1]);
+                digest.update(source_hash.as_bytes());
+            }
+            None => digest.update([0]),
+        }
+        digest.update(
+            u64::try_from(module.header.source_label.len())
+                .unwrap_or(u64::MAX)
+                .to_le_bytes(),
+        );
+        digest.update(module.header.source_label.as_bytes());
+        ContentHash::from_bytes(digest.finalize().into())
+    }
+
+    fn ensure_function_prototype(
+        &mut self,
+        module: &Ir3Module,
+        func_idx: u32,
+    ) -> Result<ObjectId, InterpreterError> {
+        let key = (Self::function_prototype_owner_id(module), func_idx);
+        if let Some(existing) = self.function_prototypes.get(&key) {
             Ok(*existing)
         } else {
             let prototype = self.alloc_object_with_prototype(None)?;
-            self.mutate_function_prototypes(|fp| fp.insert(func_idx, prototype));
+            self.mutate_function_prototypes(|fp| fp.insert(key, prototype));
             Ok(prototype)
         }
     }
@@ -65683,11 +65759,14 @@ impl InterpreterCore {
     /// `undefined`.
     fn function_property_value(
         &mut self,
+        module: &Ir3Module,
         func_idx: u32,
         key: &str,
     ) -> Result<Value, InterpreterError> {
         if key == "prototype" {
-            Ok(Value::Object(self.ensure_function_prototype(func_idx)?))
+            Ok(Value::Object(
+                self.ensure_function_prototype(module, func_idx)?,
+            ))
         } else {
             Ok(Value::Undefined)
         }
@@ -87262,6 +87341,235 @@ mod function_prototype_call_apply_tests_current {
     }
 
     #[test]
+    fn foreign_direct_constructor_uses_owner_key_and_preserves_exact_ifc_bd_fw7zd_7() {
+        let mut owner = test_module_with_functions(
+            vec![
+                Ir3Instruction::LoadStr {
+                    dst: 1,
+                    pool_index: 0,
+                },
+                Ir3Instruction::LoadInt { dst: 2, value: 1 },
+                Ir3Instruction::SetProperty {
+                    obj: 0,
+                    key: 1,
+                    val: 2,
+                },
+                Ir3Instruction::Return { value: 0 },
+            ],
+            vec![Ir3FunctionDesc {
+                entry: 0,
+                arity: 1,
+                frame_size: 3,
+                name: Some("foreign_constructor".to_string()),
+                is_generator: false,
+                rest_param_index: None,
+            }],
+        );
+        owner.constant_pool.push("mark".into());
+        owner.header.source_label = "constructor-owner.mjs".to_string();
+        let mut caller = test_module_with_functions(
+            vec![
+                Ir3Instruction::Construct {
+                    callee: 0,
+                    args: RegRange { start: 1, count: 1 },
+                    dst: 2,
+                },
+                Ir3Instruction::Return { value: 2 },
+            ],
+            vec![Ir3FunctionDesc {
+                entry: 0,
+                arity: 0,
+                frame_size: 3,
+                name: Some("colliding_importer_function".to_string()),
+                is_generator: false,
+                rest_param_index: None,
+            }],
+        );
+        caller.header.source_label = "constructor-caller.mjs".to_string();
+
+        let mut core = test_interpreter();
+        core.ensure_module_record(&owner, "constructor-owner.mjs")
+            .expect("foreign constructor owner program should be retained");
+        core.closures.push(ClosureValue {
+            function_index: 0,
+            captured_env: core.scope_chain.snapshot(),
+        });
+        core.closure_module_origins
+            .insert(0, "constructor-owner.mjs".to_string());
+
+        let caller_prototype = core
+            .ensure_function_prototype(&caller, 0)
+            .expect("colliding caller prototype");
+        let argument = seed_object(&mut core, &[]);
+        core.write_reg(0, Value::Closure(0))
+            .expect("foreign constructor register");
+        core.write_reg_with_label(1, Value::Object(argument), Label::Secret)
+            .expect("foreign constructor argument");
+        core.write_reg_with_label(7, Value::str("caller"), Label::Internal)
+            .expect("unrelated caller register");
+        core.sync_estimated_memory_bytes()
+            .expect("directly seeded foreign-constructor fixture accounting");
+
+        assert_eq!(
+            core.run_loop(&caller)
+                .expect("foreign direct construction should execute"),
+            Value::Object(argument),
+            "an explicit object return must win over the allocated instance"
+        );
+        assert_eq!(
+            core.get_register_label(2)
+                .expect("foreign constructor result label"),
+            &Label::Secret
+        );
+        assert_eq!(
+            core.object_mutation_labels.get(&argument),
+            Some(&Label::Secret),
+            "the exact argument label must reach constructor side effects"
+        );
+        let owner_key = (InterpreterCore::function_prototype_owner_id(&owner), 0);
+        let owner_prototype = core.function_prototypes[&owner_key];
+        assert_ne!(
+            owner_prototype, caller_prototype,
+            "equal module-local function indices must not alias prototypes"
+        );
+        assert_eq!(core.function_prototypes.len(), 2);
+        assert_eq!(
+            core.get_register_label(7)
+                .expect("restored unrelated caller label"),
+            &Label::Internal
+        );
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+    }
+
+    #[test]
+    fn foreign_reflect_construct_preserves_result_and_side_effect_ifc_bd_fw7zd_7() {
+        let mut owner = test_module_with_functions(
+            vec![
+                Ir3Instruction::LoadStr {
+                    dst: 1,
+                    pool_index: 0,
+                },
+                Ir3Instruction::LoadInt { dst: 2, value: 1 },
+                Ir3Instruction::SetProperty {
+                    obj: 0,
+                    key: 1,
+                    val: 2,
+                },
+                Ir3Instruction::Return { value: 0 },
+            ],
+            vec![Ir3FunctionDesc {
+                entry: 0,
+                arity: 1,
+                frame_size: 3,
+                name: Some("foreign_reflect_constructor".to_string()),
+                is_generator: false,
+                rest_param_index: None,
+            }],
+        );
+        owner.constant_pool.push("mark".into());
+        owner.header.source_label = "reflect-constructor-owner.mjs".to_string();
+        let mut caller = test_module_with_functions(Vec::new(), Vec::new());
+        caller.header.source_label = "reflect-constructor-caller.mjs".to_string();
+
+        let mut core = test_interpreter();
+        core.ensure_module_record(&owner, "reflect-constructor-owner.mjs")
+            .expect("foreign Reflect.construct owner program should be retained");
+        core.closures.push(ClosureValue {
+            function_index: 0,
+            captured_env: core.scope_chain.snapshot(),
+        });
+        core.closure_module_origins
+            .insert(0, "reflect-constructor-owner.mjs".to_string());
+
+        let argument = seed_object(&mut core, &[]);
+        let argument_list = seed_array_like(&mut core, &[Value::Object(argument)]);
+        core.write_reg(0, Value::Closure(0))
+            .expect("foreign Reflect.construct target");
+        core.write_reg_with_label(1, Value::Object(argument_list), Label::Secret)
+            .expect("foreign Reflect.construct argument list");
+        core.sync_estimated_memory_bytes()
+            .expect("directly seeded foreign Reflect.construct fixture accounting");
+
+        assert_eq!(
+            core.dispatch_builtin_hostcall(
+                "builtin:ReflectConstruct",
+                RegRange { start: 0, count: 2 },
+                Some(&caller),
+            )
+            .expect("foreign Reflect.construct should execute"),
+            Value::Object(argument)
+        );
+        assert_eq!(
+            core.take_pending_hostcall_result_label(),
+            Some(Label::Secret)
+        );
+        assert_eq!(
+            core.object_mutation_labels.get(&argument),
+            Some(&Label::Secret)
+        );
+        assert_eq!(
+            core.get_register_label(1)
+                .expect("restored Reflect.construct carrier label"),
+            &Label::Secret
+        );
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+    }
+
+    #[test]
+    fn foreign_constructor_rejects_mismatched_retained_owner_bd_fw7zd_7() {
+        let mut mismatched_owner = test_module_with_functions(
+            vec![Ir3Instruction::Return { value: 0 }],
+            vec![Ir3FunctionDesc {
+                entry: 0,
+                arity: 0,
+                frame_size: 1,
+                name: Some("mismatched_constructor".to_string()),
+                is_generator: false,
+                rest_param_index: None,
+            }],
+        );
+        mismatched_owner.header.source_label = "actual-owner.mjs".to_string();
+        let mut caller = test_module_with_functions(Vec::new(), Vec::new());
+        caller.header.source_label = "constructor-caller.mjs".to_string();
+
+        let mut core = test_interpreter();
+        core.ensure_module_record(&mismatched_owner, "claimed-owner.mjs")
+            .expect("placeholder owner record");
+        core.retain_module_program("claimed-owner.mjs", &mismatched_owner)
+            .expect("install deliberately mismatched retained program");
+        core.closures.push(ClosureValue {
+            function_index: 0,
+            captured_env: core.scope_chain.snapshot(),
+        });
+        core.closure_module_origins
+            .insert(0, "claimed-owner.mjs".to_string());
+
+        let error = core
+            .invoke_inline_construct(Some(&caller), Value::Closure(0), Vec::new())
+            .expect_err("mismatched retained constructor owner must fail closed");
+        assert!(
+            matches!(
+                error,
+                InterpreterError::ModuleEvaluationFailed { ref specifier, ref reason }
+                    if specifier == "claimed-owner.mjs"
+                        && reason.contains("owner mismatch")
+                        && reason.contains("actual-owner.mjs")
+            ),
+            "unexpected mismatched-owner error: {error:?}"
+        );
+        assert!(
+            core.function_prototypes.is_empty(),
+            "owner mismatch must be rejected before prototype allocation"
+        );
+    }
+
+    #[test]
     fn deferred_foreign_async_resume_retains_owner_activation_bd_fw7zd_6() {
         let mut owner = test_module_with_functions(
             vec![
@@ -104272,7 +104580,10 @@ mod lazy_seed_tests {
         let pre_epoch = core.seed_epoch;
         // Force a function_prototypes write.
         core.mutate_function_prototypes(|fp| {
-            fp.insert(42, ObjectId(123));
+            fp.insert(
+                (ContentHash::compute(b"lazy-seed-owner"), 42),
+                ObjectId(123),
+            );
         });
         // Seed must now be Materialized.
         match &*seed.borrow() {

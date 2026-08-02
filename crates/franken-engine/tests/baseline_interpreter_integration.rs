@@ -2321,6 +2321,183 @@ fn imported_closure_calls_use_the_exporting_module_function_table() {
     assert_eq!(result.value, Value::Int(85));
 }
 
+fn write_constructor_owner_module(root: &std::path::Path) {
+    fs::write(
+        root.join("constructor_owner.mjs"),
+        "export function Widget(value) {\n\
+           this.value = value;\n\
+           this.targetMatches = new.target === Widget;\n\
+         }\n\
+         Widget.prototype.score = function() {\n\
+           return this.targetMatches && this instanceof Widget ? this.value : -1;\n\
+         };",
+    )
+    .expect("write imported constructor dependency");
+}
+
+fn colliding_constructor_importer(
+    instructions: Vec<Ir3Instruction>,
+    root: &std::path::Path,
+) -> Ir3Module {
+    let mut module = test_module_with_pool(
+        instructions,
+        vec![
+            "./constructor_owner.mjs".to_string(),
+            "Widget".to_string(),
+            "score".to_string(),
+        ],
+    );
+    module.function_table = vec![
+        Ir3FunctionDesc {
+            name: Some("main".to_string()),
+            entry: u32::try_from(module.instructions.len()).expect("test instruction count"),
+            arity: 0,
+            frame_size: 12,
+            is_generator: false,
+            rest_param_index: None,
+        },
+        Ir3FunctionDesc {
+            name: Some("wrong_importer_constructor".to_string()),
+            entry: u32::try_from(module.instructions.len()).expect("test instruction count"),
+            arity: 1,
+            frame_size: 12,
+            is_generator: false,
+            rest_param_index: None,
+        },
+    ];
+    module.header.source_label = root.join("main.mjs").display().to_string();
+    module
+}
+
+#[test]
+fn imported_direct_constructor_uses_owner_prototype_and_new_target_bd_fw7zd_7() {
+    let root = temp_module_dir("module_import_direct_constructor_owner");
+    fs::create_dir_all(&root).expect("create module root");
+    write_constructor_owner_module(&root);
+
+    let module = colliding_constructor_importer(
+        vec![
+            Ir3Instruction::LoadStr {
+                dst: 0,
+                pool_index: 0,
+            },
+            Ir3Instruction::ImportModule {
+                specifier: 0,
+                dst: 1,
+            },
+            Ir3Instruction::LoadStr {
+                dst: 2,
+                pool_index: 1,
+            },
+            Ir3Instruction::GetProperty {
+                obj: 1,
+                key: 2,
+                dst: 3,
+            },
+            Ir3Instruction::LoadInt { dst: 4, value: 42 },
+            Ir3Instruction::Construct {
+                callee: 3,
+                args: RegRange { start: 4, count: 1 },
+                dst: 5,
+            },
+            Ir3Instruction::LoadStr {
+                dst: 6,
+                pool_index: 2,
+            },
+            Ir3Instruction::GetProperty {
+                obj: 5,
+                key: 6,
+                dst: 7,
+            },
+            Ir3Instruction::CallMethod {
+                receiver: 5,
+                callee: 7,
+                args: RegRange { start: 8, count: 0 },
+                dst: 9,
+            },
+            Ir3Instruction::Return { value: 9 },
+        ],
+        &root,
+    );
+
+    let mut config = InterpreterConfig::quickjs_defaults();
+    config.module_root = Some(root.display().to_string());
+    config.granted_capabilities = capabilities_with([RuntimeCapability::ModuleLoad]);
+    let result = QuickJsLane::with_config(config)
+        .execute(&module, "module-import-direct-constructor-owner-trace")
+        .expect("execute imported direct constructor");
+    assert_eq!(result.value, Value::Int(42));
+}
+
+#[test]
+fn imported_reflect_construct_uses_owner_prototype_and_new_target_bd_fw7zd_7() {
+    let root = temp_module_dir("module_import_reflect_constructor_owner");
+    fs::create_dir_all(&root).expect("create module root");
+    write_constructor_owner_module(&root);
+
+    let module = colliding_constructor_importer(
+        vec![
+            Ir3Instruction::LoadStr {
+                dst: 0,
+                pool_index: 0,
+            },
+            Ir3Instruction::ImportModule {
+                specifier: 0,
+                dst: 1,
+            },
+            Ir3Instruction::LoadStr {
+                dst: 2,
+                pool_index: 1,
+            },
+            Ir3Instruction::GetProperty {
+                obj: 1,
+                key: 2,
+                dst: 3,
+            },
+            Ir3Instruction::NewArray { dst: 4 },
+            Ir3Instruction::LoadInt { dst: 5, value: 43 },
+            Ir3Instruction::ArrayPush {
+                array: 4,
+                element: 5,
+            },
+            Ir3Instruction::HostCall {
+                capability: CapabilityTag("builtin:ReflectConstruct".to_string()),
+                args: RegRange { start: 3, count: 2 },
+                dst: 6,
+            },
+            Ir3Instruction::LoadStr {
+                dst: 7,
+                pool_index: 2,
+            },
+            Ir3Instruction::GetProperty {
+                obj: 6,
+                key: 7,
+                dst: 8,
+            },
+            Ir3Instruction::CallMethod {
+                receiver: 6,
+                callee: 8,
+                args: RegRange {
+                    start: 10,
+                    count: 0,
+                },
+                dst: 9,
+            },
+            Ir3Instruction::Return { value: 9 },
+        ],
+        &root,
+    );
+
+    let mut config = InterpreterConfig::quickjs_defaults();
+    config.module_root = Some(root.display().to_string());
+    config.granted_capabilities =
+        capabilities_with([RuntimeCapability::ModuleLoad, RuntimeCapability::Builtin]);
+    let result = QuickJsLane::with_config(config)
+        .execute(&module, "module-import-reflect-constructor-owner-trace")
+        .expect("execute imported Reflect.construct");
+    assert_eq!(result.value, Value::Int(43));
+}
+
 #[test]
 fn imported_generators_resume_against_the_exporting_module_function_table_bd_fw7zd_6() {
     let root = temp_module_dir("module_import_generator_origin");

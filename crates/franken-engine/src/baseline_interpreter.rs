@@ -90106,6 +90106,179 @@ mod function_prototype_call_apply_tests_current {
     }
 
     #[test]
+    fn generated_async_resume_retains_artifact_for_post_await_closure_bd_fw7zd_8_1() {
+        let mut owner = test_module_with_functions(
+            vec![
+                Ir3Instruction::LoadInt { dst: 0, value: 999 },
+                Ir3Instruction::Return { value: 0 },
+            ],
+            vec![
+                Ir3FunctionDesc {
+                    entry: 0,
+                    arity: 0,
+                    frame_size: 1,
+                    name: Some("ordinary_zero".to_string()),
+                    is_generator: false,
+                    rest_param_index: None,
+                },
+                Ir3FunctionDesc {
+                    entry: 0,
+                    arity: 1,
+                    frame_size: 1,
+                    name: Some("wrong_same_numbered_owner_async".to_string()),
+                    is_generator: false,
+                    rest_param_index: None,
+                },
+                Ir3FunctionDesc {
+                    entry: 0,
+                    arity: 0,
+                    frame_size: 1,
+                    name: Some("wrong_same_numbered_owner_nested".to_string()),
+                    is_generator: false,
+                    rest_param_index: None,
+                },
+            ],
+        );
+        owner.header.source_label = "generated-async-resume-owner.mjs".to_string();
+
+        let generated = test_module_with_functions(
+            vec![
+                Ir3Instruction::CreateAsyncFunction {
+                    dst: 0,
+                    function_index: 1,
+                    capture_count: 0,
+                },
+                Ir3Instruction::Return { value: 0 },
+                Ir3Instruction::AwaitValue { promise_reg: 0 },
+                Ir3Instruction::CreateClosure {
+                    dst: 0,
+                    function_index: 2,
+                    capture_count: 0,
+                },
+                Ir3Instruction::AsyncReturn { value_reg: 0 },
+                Ir3Instruction::LoadInt { dst: 0, value: 77 },
+                Ir3Instruction::Return { value: 0 },
+            ],
+            vec![
+                Ir3FunctionDesc {
+                    entry: 0,
+                    arity: 0,
+                    frame_size: 1,
+                    name: Some("async_outer".to_string()),
+                    is_generator: false,
+                    rest_param_index: None,
+                },
+                Ir3FunctionDesc {
+                    entry: 2,
+                    arity: 1,
+                    frame_size: 1,
+                    name: Some("generated_pending_async".to_string()),
+                    is_generator: false,
+                    rest_param_index: None,
+                },
+                Ir3FunctionDesc {
+                    entry: 5,
+                    arity: 0,
+                    frame_size: 1,
+                    name: Some("generated_post_await_nested".to_string()),
+                    is_generator: false,
+                    rest_param_index: None,
+                },
+            ],
+        );
+
+        let mut core = test_interpreter();
+        core.ensure_module_record(&owner, &owner.header.source_label)
+            .expect("retain generated async-resume owner");
+        let (builtin, handle, artifact_program) =
+            retain_generated_test_artifact(&mut core, &owner, generated, 0, "pending async");
+        let (async_function, _) = core
+            .call_generated_function_artifact(&builtin, RegRange { start: 0, count: 0 }, None, None)
+            .expect("generated outer should return an async function");
+        let Value::AsyncFunction(async_closure_id) = async_function.clone() else {
+            panic!("expected generated AsyncFunction, got {async_function:?}");
+        };
+        assert_eq!(
+            core.closure_generated_function_artifacts
+                .get(&async_closure_id),
+            Some(&handle)
+        );
+
+        let awaited = core.promise_store.create();
+        core.sync_estimated_memory_bytes()
+            .expect("generated pending-async fixture accounting");
+        let closures_before_resume = core.closures.len();
+        let async_result = core
+            .invoke_inline_method_call(
+                Some(&owner),
+                async_function,
+                Value::Undefined,
+                vec![Value::Promise(awaited.0)],
+            )
+            .expect("generated async function should suspend on its pending argument");
+        let Value::Promise(async_result_promise) = async_result else {
+            panic!("expected generated async Promise, got {async_result:?}");
+        };
+        assert_eq!(core.closures.len(), closures_before_resume);
+
+        let suspended = core
+            .async_functions
+            .last()
+            .expect("generated pending async object");
+        assert_eq!(suspended.phase, AsyncFunctionPhase::SuspendedAwait);
+        assert!(Arc::ptr_eq(&suspended.owner_module, &artifact_program));
+        let execution = suspended
+            .isolated_execution
+            .as_ref()
+            .expect("generated pending async activation");
+        assert_eq!(
+            execution.current_module_specifier.as_deref(),
+            Some(owner.header.source_label.as_str())
+        );
+        assert_eq!(execution.active_generated_function_artifact, Some(handle));
+
+        core.fulfill_promise(awaited, crate::object_model::JsValue::Int(2), Label::Secret)
+            .expect("generated async awaited Promise should be fulfillable");
+        core.drain_microtasks(Some(&owner))
+            .expect("generated async resumption should use its artifact activation");
+
+        assert_eq!(core.closures.len(), closures_before_resume + 1);
+        let nested_closure_id =
+            u32::try_from(closures_before_resume).expect("generated nested closure id");
+        assert_eq!(
+            core.promise_store
+                .get(crate::promise_model::PromiseHandle(async_result_promise))
+                .expect("generated async result Promise")
+                .state,
+            crate::promise_model::PromiseState::Fulfilled(crate::object_model::JsValue::Str(
+                Value::Closure(nested_closure_id).to_string()
+            ))
+        );
+        assert_eq!(
+            core.closure_module_origins.get(&nested_closure_id),
+            Some(&owner.header.source_label)
+        );
+        assert_eq!(
+            core.closure_generated_function_artifacts
+                .get(&nested_closure_id),
+            Some(&handle)
+        );
+        let nested_result = core
+            .invoke_inline_method_call(
+                Some(&owner),
+                Value::Closure(nested_closure_id),
+                Value::Undefined,
+                Vec::new(),
+            )
+            .expect("post-await nested closure should execute its artifact program");
+        assert_eq!(nested_result, Value::Int(77));
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+    }
+
+    #[test]
     fn generated_closure_provenance_memory_is_exact_and_budget_atomic_bd_fw7zd_8_1() {
         let module = test_module_with_functions(
             vec![

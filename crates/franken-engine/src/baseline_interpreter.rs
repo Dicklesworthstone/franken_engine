@@ -2955,10 +2955,14 @@ impl BuiltinFunction {
         }
     }
 
-    fn generated_function(artifact_id: u32) -> Self {
+    fn generated_function(owner_program_id: ContentHash, artifact_id: ContentHash) -> Self {
         Self {
             kind: BuiltinFunctionKind::GeneratedFunction,
-            module_specifier: Arc::from(artifact_id.to_string()),
+            module_specifier: Arc::from(format!(
+                "genfn:v1:{}:{}",
+                owner_program_id.to_hex(),
+                artifact_id.to_hex()
+            )),
             iterator_handle: None,
             bound_object: None,
         }
@@ -5253,6 +5257,19 @@ struct ModuleRuntimeRecord {
     compiled_module: Option<Arc<Ir3Module>>,
 }
 
+/// Realm-persistent dynamic-code artifacts owned by one immutable module
+/// program. The owner key in [`ModuleState::generated_function_stores`] is the
+/// canonical IR3 content hash of that program; keeping the same identity here
+/// makes corruption and stale-handle checks fail closed at dispatch.
+#[derive(Debug, Clone)]
+struct GeneratedFunctionStore {
+    owner_program_id: ContentHash,
+    owner_specifier: String,
+    owner_program: Arc<Ir3Module>,
+    next_construction_ordinal: u64,
+    artifacts: BTreeMap<ContentHash, GeneratedFunctionArtifact>,
+}
+
 #[derive(Debug, Clone, Default)]
 struct ModuleState {
     modules: BTreeMap<String, ModuleRuntimeRecord>,
@@ -5260,6 +5277,12 @@ struct ModuleState {
     /// The heap-resident namespace objects and exported values are accounted
     /// by their ordinary heap/register owners.
     retained_program_bytes: u64,
+    /// Dynamic `Function` artifacts are realm-owned executable programs, not
+    /// activation-local scratch. This owner-scoped registry survives module,
+    /// callback, generator, and async execution snapshots.
+    generated_function_stores: BTreeMap<ContentHash, GeneratedFunctionStore>,
+    /// Cached logical charge for `generated_function_stores`.
+    retained_generated_function_bytes: u64,
 }
 
 impl ModuleState {
@@ -5267,6 +5290,8 @@ impl ModuleState {
         Self {
             modules: BTreeMap::new(),
             retained_program_bytes: 0,
+            generated_function_stores: BTreeMap::new(),
+            retained_generated_function_bytes: 0,
         }
     }
 }
@@ -5302,6 +5327,13 @@ struct GeneratedFunctionProvenance {
 
 #[derive(Debug, Clone)]
 struct GeneratedFunctionArtifact {
+    /// Canonical identity of the immutable module program that constructed
+    /// this artifact.
+    owner_program_id: ContentHash,
+    /// Diagnostic/source provenance for the owning program.
+    owner_specifier: String,
+    /// Content-addressed identity of this construction occurrence.
+    artifact_id: ContentHash,
     /// Content-addressed provenance recorded at construction (bd-8enww.3.4).
     provenance: GeneratedFunctionProvenance,
     compiled_module: Ir3Module,
@@ -5390,7 +5422,6 @@ struct GeneratorExecutionSnapshot {
     pending_finally_entry: Option<PendingFinallyEntry>,
     scope_chain: ScopeChain,
     pending_captures: Vec<u32>,
-    generated_functions: Vec<GeneratedFunctionArtifact>,
     current_module_specifier: Option<String>,
 }
 
@@ -6277,11 +6308,7 @@ impl EvidenceLog {
                 Value::AsyncGeneratorFunction(id) => 14 + (*id as u64),
                 Value::AsyncGeneratorObject(id) => 15 + (*id as u64),
                 Value::Promise(id) => 16 + (*id as u64),
-                Value::BuiltinFunction(bf) => {
-                    17 + (bf.kind as u64)
-                        + bf.iterator_handle.map(u64::from).unwrap_or(0)
-                        + bf.bound_object.map(u64::from).unwrap_or(0)
-                }
+                Value::BuiltinFunction(bf) => Self::hash_builtin_function_seed(bf),
                 Value::Accessor { get, set } => {
                     let get_hash = get
                         .as_deref()
@@ -6327,11 +6354,7 @@ impl EvidenceLog {
             Value::AsyncGeneratorFunction(id) => 14 + (*id as u64),
             Value::AsyncGeneratorObject(id) => 15 + (*id as u64),
             Value::Promise(id) => 16 + (*id as u64),
-            Value::BuiltinFunction(bf) => {
-                17 + (bf.kind as u64)
-                    + bf.iterator_handle.map(u64::from).unwrap_or(0)
-                    + bf.bound_object.map(u64::from).unwrap_or(0)
-            }
+            Value::BuiltinFunction(bf) => Self::hash_builtin_function_seed(bf),
             Value::Accessor { get, set } => {
                 let get_hash = get
                     .as_deref()
@@ -6347,6 +6370,21 @@ impl EvidenceLog {
             }
             Value::Symbol(symbol) => 20 + u64::from(symbol.0),
         }
+    }
+
+    fn hash_builtin_function_seed(builtin: &BuiltinFunction) -> u64 {
+        let module_hash = if builtin.module_specifier.is_empty() {
+            0
+        } else {
+            builtin.module_specifier.bytes().fold(23u64, |state, byte| {
+                state.wrapping_mul(31).wrapping_add(u64::from(byte))
+            })
+        };
+        17u64
+            .wrapping_add(builtin.kind as u64)
+            .wrapping_add(builtin.iterator_handle.map(u64::from).unwrap_or(0))
+            .wrapping_add(builtin.bound_object.map(u64::from).unwrap_or(0))
+            .wrapping_add(module_hash)
     }
 }
 
@@ -7156,7 +7194,6 @@ struct ModuleExecutionSnapshot {
     pending_finally_entry: Option<PendingFinallyEntry>,
     scope_chain: ScopeChain,
     pending_captures: Vec<u32>,
-    generated_functions: Vec<GeneratedFunctionArtifact>,
     current_module_specifier: Option<String>,
 }
 
@@ -8456,12 +8493,8 @@ pub struct InterpreterCore {
     /// boundary and recurse through Rust frames without containment.
     module_reentrant_call_depth: usize,
     /// Non-zero only while an imported ordinary closure is executing in its
-    /// retained owner program. Dynamic `Function` artifacts are currently
-    /// snapshot-local, so construction in this lane fails closed instead of
-    /// returning or scheduling an artifact id that restore would invalidate.
+    /// retained owner program.
     active_foreign_module_call_depth: usize,
-    /// Function-constructor artifacts compiled from runtime strings.
-    generated_functions: Vec<GeneratedFunctionArtifact>,
     /// Pending capture names for the next `CreateClosure` instruction.
     pending_captures: Vec<u32>,
     /// Generator object store.
@@ -9019,7 +9052,6 @@ impl InterpreterCore {
             closure_module_origins: BTreeMap::new(),
             module_reentrant_call_depth: 0,
             active_foreign_module_call_depth: 0,
-            generated_functions: Vec::new(),
             pending_captures: Vec::new(),
             generators: Vec::new(),
             generator_yielded: false,
@@ -25987,16 +26019,6 @@ impl InterpreterCore {
                     .saturating_mul(std::mem::size_of::<u32>() as u64),
             )
             .saturating_add(
-                u64::try_from(self.generated_functions.len())
-                    .unwrap_or(u64::MAX)
-                    .saturating_mul(std::mem::size_of::<GeneratedFunctionArtifact>() as u64),
-            )
-            .saturating_add(Self::saturating_sum(
-                self.generated_functions
-                    .iter()
-                    .map(Self::estimate_generated_function_artifact_clone_bytes),
-            ))
-            .saturating_add(
                 self.current_module_specifier
                     .as_deref()
                     .map(Self::estimate_string_bytes)
@@ -26004,19 +26026,73 @@ impl InterpreterCore {
             )
     }
 
-    fn estimate_generated_function_artifact_clone_bytes(
-        artifact: &GeneratedFunctionArtifact,
+    fn estimate_generated_function_provenance_bytes(
+        provenance: &GeneratedFunctionProvenance,
     ) -> u64 {
-        let provenance = &artifact.provenance;
         Self::estimate_string_bytes(&provenance.source_id)
             .saturating_add(Self::estimate_string_bytes(&provenance.source_hash))
             .saturating_add(Self::estimate_string_bytes(&provenance.parameter_hash))
             .saturating_add(Self::estimate_string_bytes(&provenance.construction_site))
+    }
+
+    fn estimate_generated_function_artifact_dynamic_bytes(
+        artifact: &GeneratedFunctionArtifact,
+    ) -> u64 {
+        Self::estimate_string_bytes(&artifact.owner_specifier)
+            .saturating_add(Self::estimate_generated_function_provenance_bytes(
+                &artifact.provenance,
+            ))
             .saturating_add(
                 Self::retained_module_program_bytes(&artifact.compiled_module, "")
                     .saturating_sub(std::mem::size_of::<Ir3Module>() as u64)
                     .saturating_sub(Self::estimate_string_bytes("")),
             )
+    }
+
+    fn estimate_generated_function_artifact_entry_bytes(
+        artifact: &GeneratedFunctionArtifact,
+    ) -> u64 {
+        MEMORY_ESTIMATE_MAP_ENTRY_BYTES
+            .saturating_add(std::mem::size_of::<ContentHash>() as u64)
+            .saturating_add(std::mem::size_of::<GeneratedFunctionArtifact>() as u64)
+            .saturating_add(Self::estimate_generated_function_artifact_dynamic_bytes(
+                artifact,
+            ))
+    }
+
+    fn estimate_generated_function_store_base_bytes(store: &GeneratedFunctionStore) -> u64 {
+        MEMORY_ESTIMATE_MAP_ENTRY_BYTES
+            .saturating_add(std::mem::size_of::<ContentHash>() as u64)
+            .saturating_add(std::mem::size_of::<GeneratedFunctionStore>() as u64)
+            .saturating_add(Self::estimate_string_bytes(&store.owner_specifier))
+    }
+
+    fn generated_function_stores_memory_bytes(&self) -> u64 {
+        Self::saturating_sum(
+            self.module_state
+                .generated_function_stores
+                .values()
+                .map(|store| {
+                    Self::estimate_generated_function_store_base_bytes(store).saturating_add(
+                        Self::saturating_sum(
+                            store
+                                .artifacts
+                                .values()
+                                .map(Self::estimate_generated_function_artifact_entry_bytes),
+                        ),
+                    )
+                }),
+        )
+    }
+
+    fn generated_function_handle_peak_bytes() -> u64 {
+        // `to_hex()` allocates two 64-byte strings, `format!` allocates the
+        // 138-byte composite, and converting that String into `Arc<str>` may
+        // briefly retain both composite buffers. Four final-sized strings are
+        // a conservative upper bound for that short construction peak.
+        MEMORY_ESTIMATE_STRING_BASE_BYTES
+            .saturating_add(138)
+            .saturating_mul(4)
     }
 
     fn active_module_execution_memory_bytes(&self) -> u64 {
@@ -26050,7 +26126,6 @@ impl InterpreterCore {
             pending_finally_entry: self.pending_finally_entry.clone(),
             scope_chain: self.scope_chain.clone(),
             pending_captures: self.pending_captures.clone(),
-            generated_functions: self.generated_functions.clone(),
             current_module_specifier: self.current_module_specifier.clone(),
         })
     }
@@ -26082,7 +26157,6 @@ impl InterpreterCore {
         self.pending_finally_entry = snapshot.pending_finally_entry;
         self.scope_chain = snapshot.scope_chain;
         self.pending_captures = snapshot.pending_captures;
-        self.generated_functions = snapshot.generated_functions;
         self.current_module_specifier = snapshot.current_module_specifier;
         let restored_state_bytes = if displaced_state_was_accounted {
             self.active_module_execution_memory_bytes()
@@ -26136,7 +26210,6 @@ impl InterpreterCore {
         self.pending_finally_entry = None;
         self.scope_chain = ScopeChain::new();
         self.pending_captures.clear();
-        self.generated_functions.clear();
         self.current_module_specifier = Some(module_specifier.to_string());
         self.apply_register_context_scope_call_stack_memory_delta(
             previous_register_bytes,
@@ -27177,21 +27250,212 @@ impl InterpreterCore {
         Ok(default_value)
     }
 
+    fn generated_function_owner(
+        &self,
+        executing_module: &Ir3Module,
+    ) -> Result<(ContentHash, String, Arc<Ir3Module>), InterpreterError> {
+        let owner_specifier = self
+            .current_module_specifier
+            .as_deref()
+            .unwrap_or(&executing_module.header.source_label);
+        let record = self
+            .module_state
+            .modules
+            .get(owner_specifier)
+            .ok_or_else(|| InterpreterError::ModuleEvaluationFailed {
+                specifier: owner_specifier.to_string(),
+                reason: "dynamic Function owner module record is not retained".to_string(),
+            })?;
+        let owner_program = record.compiled_module.as_ref().ok_or_else(|| {
+            InterpreterError::ModuleEvaluationFailed {
+                specifier: owner_specifier.to_string(),
+                reason: "dynamic Function owner module has no retained program".to_string(),
+            }
+        })?;
+        if owner_program.header.source_label != owner_specifier {
+            return Err(InterpreterError::ModuleEvaluationFailed {
+                specifier: owner_specifier.to_string(),
+                reason: format!(
+                    "dynamic Function owner mismatch: registry key `{owner_specifier}` retained program `{}`",
+                    owner_program.header.source_label
+                ),
+            });
+        }
+        self.check_temporary_memory_budget(Self::retained_module_program_bytes(owner_program, ""))?;
+        Ok((
+            owner_program.content_hash(),
+            owner_specifier.to_string(),
+            Arc::clone(owner_program),
+        ))
+    }
+
+    fn derive_generated_function_artifact_id(
+        owner_program_id: ContentHash,
+        construction_ordinal: u64,
+        provenance: &GeneratedFunctionProvenance,
+        compiled_program_id: ContentHash,
+        function_index: u32,
+    ) -> ContentHash {
+        fn mix(buf: &mut Vec<u8>, field: &[u8]) {
+            buf.extend_from_slice(&(field.len() as u64).to_le_bytes());
+            buf.extend_from_slice(field);
+        }
+
+        let mut preimage = Vec::new();
+        preimage.extend_from_slice(b"franken-engine.generated-function-artifact.v1\n");
+        preimage.extend_from_slice(owner_program_id.as_bytes());
+        preimage.extend_from_slice(&construction_ordinal.to_le_bytes());
+        preimage.extend_from_slice(compiled_program_id.as_bytes());
+        preimage.extend_from_slice(&function_index.to_le_bytes());
+        mix(&mut preimage, provenance.source_id.as_bytes());
+        mix(&mut preimage, provenance.source_hash.as_bytes());
+        mix(&mut preimage, provenance.parameter_hash.as_bytes());
+        mix(&mut preimage, provenance.construction_site.as_bytes());
+        ContentHash::compute(&preimage)
+    }
+
+    fn retain_generated_function_artifact(
+        &mut self,
+        owner_program_id: ContentHash,
+        owner_specifier: String,
+        owner_program: Arc<Ir3Module>,
+        provenance: GeneratedFunctionProvenance,
+        compiled_module: Ir3Module,
+        function_index: u32,
+    ) -> Result<BuiltinFunction, InterpreterError> {
+        if owner_program.header.source_label != owner_specifier {
+            return Err(InterpreterError::ModuleEvaluationFailed {
+                specifier: owner_specifier,
+                reason: format!(
+                    "generated Function retention owner mismatch: retained program `{}`",
+                    owner_program.header.source_label
+                ),
+            });
+        }
+        let (construction_ordinal, create_store) = match self
+            .module_state
+            .generated_function_stores
+            .get(&owner_program_id)
+        {
+            Some(store) => {
+                if store.owner_program_id != owner_program_id
+                    || store.owner_specifier != owner_specifier
+                    || !Arc::ptr_eq(&store.owner_program, &owner_program)
+                {
+                    return Err(InterpreterError::InternalError {
+                        details: format!(
+                            "generated Function owner store mismatch for {}",
+                            owner_program_id.to_hex()
+                        ),
+                    });
+                }
+                (store.next_construction_ordinal, false)
+            }
+            None => (0, true),
+        };
+        let next_construction_ordinal =
+            construction_ordinal
+                .checked_add(1)
+                .ok_or_else(|| InterpreterError::TypeError {
+                    expected: "generated Function construction ordinal capacity".to_string(),
+                    got: format!(
+                        "owner {} exhausted u64 construction ordinals",
+                        owner_program_id.to_hex()
+                    ),
+                })?;
+        self.check_temporary_memory_budget(Self::retained_module_program_bytes(
+            &compiled_module,
+            "",
+        ))?;
+        let compiled_program_id = compiled_module.content_hash();
+        let artifact_id = Self::derive_generated_function_artifact_id(
+            owner_program_id,
+            construction_ordinal,
+            &provenance,
+            compiled_program_id,
+            function_index,
+        );
+        if self
+            .module_state
+            .generated_function_stores
+            .get(&owner_program_id)
+            .is_some_and(|store| store.artifacts.contains_key(&artifact_id))
+        {
+            return Err(InterpreterError::InternalError {
+                details: format!(
+                    "generated Function artifact identity collision for {}",
+                    artifact_id.to_hex()
+                ),
+            });
+        }
+
+        let artifact = GeneratedFunctionArtifact {
+            owner_program_id,
+            owner_specifier: owner_specifier.clone(),
+            artifact_id,
+            provenance,
+            compiled_module,
+            function_index,
+        };
+        let additional_bytes = Self::estimate_generated_function_artifact_entry_bytes(&artifact)
+            .saturating_add(if create_store {
+                let empty_store = GeneratedFunctionStore {
+                    owner_program_id,
+                    owner_specifier: owner_specifier.clone(),
+                    owner_program: Arc::clone(&owner_program),
+                    next_construction_ordinal: 0,
+                    artifacts: BTreeMap::new(),
+                };
+                Self::estimate_generated_function_store_base_bytes(&empty_store)
+            } else {
+                0
+            });
+        self.check_temporary_memory_budget(
+            additional_bytes.saturating_add(Self::generated_function_handle_peak_bytes()),
+        )?;
+        let previous_bytes = self.module_state.retained_generated_function_bytes;
+        let next_bytes = previous_bytes.saturating_add(additional_bytes);
+        self.apply_memory_component_delta(previous_bytes, next_bytes)?;
+
+        if create_store {
+            self.module_state.generated_function_stores.insert(
+                owner_program_id,
+                GeneratedFunctionStore {
+                    owner_program_id,
+                    owner_specifier,
+                    owner_program,
+                    next_construction_ordinal: 0,
+                    artifacts: BTreeMap::new(),
+                },
+            );
+        }
+        let store = self
+            .module_state
+            .generated_function_stores
+            .get_mut(&owner_program_id)
+            .expect("generated Function owner store was validated or inserted");
+        store.next_construction_ordinal = next_construction_ordinal;
+        let replaced = store.artifacts.insert(artifact_id, artifact);
+        debug_assert!(replaced.is_none());
+        self.module_state.retained_generated_function_bytes = next_bytes;
+        debug_assert_eq!(
+            self.module_state.retained_generated_function_bytes,
+            self.generated_function_stores_memory_bytes()
+        );
+
+        Ok(BuiltinFunction::generated_function(
+            owner_program_id,
+            artifact_id,
+        ))
+    }
+
     fn construct_generated_function(
         &mut self,
         module: &Ir3Module,
         args: RegRange,
     ) -> Result<Value, InterpreterError> {
-        if self.active_foreign_module_call_depth > 0 {
-            return Err(InterpreterError::ModuleEvaluationFailed {
-                specifier: self
-                    .current_module_specifier
-                    .clone()
-                    .unwrap_or_else(|| module.header.source_label.clone()),
-                reason: "dynamic Function construction from a cross-module closure requires persistent generated-artifact ownership"
-                    .to_string(),
-            });
-        }
+        let (owner_program_id, owner_specifier, owner_program) =
+            self.generated_function_owner(module)?;
         let mut parts = Vec::with_capacity(args.count as usize);
         for index in 0..args.count {
             let value = self.builtin_arg(args, index)?.unwrap_or(Value::Undefined);
@@ -27234,27 +27498,22 @@ impl InterpreterCore {
                 specifier: "<function-constructor>".to_string(),
                 error: "generated function descriptor missing".to_string(),
             })?;
-        let artifact_id = u32::try_from(self.generated_functions.len()).map_err(|_| {
-            InterpreterError::TypeError {
-                expected: "generated function artifact capacity".to_string(),
-                got: format!("exceeded u32::MAX ({})", self.generated_functions.len()),
-            }
-        })?;
+        let function_index =
+            u32::try_from(function_index).map_err(|_| InterpreterError::TypeError {
+                expected: "u32-bounded generated function descriptor".to_string(),
+                got: format!("function index {function_index}"),
+            })?;
 
         // bd-8enww.3.4: stamp the artifact with content-addressed provenance and
         // emit a `Constructed` audit event so the construction of adversarial
         // dynamic code is observable, not silent. The construction site is the
         // module specifier currently executing.
-        let construction_site = self
-            .current_module_specifier
-            .clone()
-            .unwrap_or_else(|| "<unknown>".to_string());
         let provenance = Self::derive_generated_function_provenance(
-            &construction_site,
+            &owner_specifier,
             &parameter_source,
             &body_source,
         );
-        self.record_generated_code_event(GeneratedCodeAuditEntry {
+        let audit_entry = GeneratedCodeAuditEntry {
             source_id: provenance.source_id.clone(),
             source_hash: provenance.source_hash.clone(),
             parameter_hash: provenance.parameter_hash.clone(),
@@ -27264,17 +27523,18 @@ impl InterpreterCore {
             caller_call_depth: 0,
             granted_capabilities: Vec::new(),
             outcome: "constructed".to_string(),
-        });
-
-        self.generated_functions.push(GeneratedFunctionArtifact {
+        };
+        let builtin = self.retain_generated_function_artifact(
+            owner_program_id,
+            owner_specifier,
+            owner_program,
             provenance,
-            compiled_module: lowering_output.ir3,
-            function_index: function_index as u32,
-        });
+            lowering_output.ir3,
+            function_index,
+        )?;
+        self.record_generated_code_event(audit_entry);
 
-        Ok(Value::BuiltinFunction(BuiltinFunction::generated_function(
-            artifact_id,
-        )))
+        Ok(Value::BuiltinFunction(builtin))
     }
 
     fn function_constructor_source(parameter_source: &str, body_source: &str) -> String {
@@ -27366,6 +27626,135 @@ impl InterpreterCore {
         }
     }
 
+    fn parse_generated_function_handle(
+        builtin: &BuiltinFunction,
+    ) -> Result<(ContentHash, ContentHash), InterpreterError> {
+        fn decode_hash(field: &str) -> Option<ContentHash> {
+            if field.len() != 64
+                || !field
+                    .bytes()
+                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+            {
+                return None;
+            }
+            let mut bytes = [0u8; 32];
+            hex::decode_to_slice(field, &mut bytes).ok()?;
+            Some(ContentHash::from_bytes(bytes))
+        }
+
+        let mut fields = builtin.module_specifier.split(':');
+        let (Some(domain), Some(version), Some(owner), Some(artifact), None) = (
+            fields.next(),
+            fields.next(),
+            fields.next(),
+            fields.next(),
+            fields.next(),
+        ) else {
+            return Err(InterpreterError::TypeError {
+                expected: "owner-scoped generated Function handle".to_string(),
+                got: builtin.module_specifier.to_string(),
+            });
+        };
+        if domain != "genfn" || version != "v1" {
+            return Err(InterpreterError::TypeError {
+                expected: "generated Function handle version genfn:v1".to_string(),
+                got: builtin.module_specifier.to_string(),
+            });
+        }
+        let owner_program_id = decode_hash(owner).ok_or_else(|| InterpreterError::TypeError {
+            expected: "64-hex generated Function owner identity".to_string(),
+            got: owner.to_string(),
+        })?;
+        let artifact_id = decode_hash(artifact).ok_or_else(|| InterpreterError::TypeError {
+            expected: "64-hex generated Function artifact identity".to_string(),
+            got: artifact.to_string(),
+        })?;
+        Ok((owner_program_id, artifact_id))
+    }
+
+    fn resolve_generated_function_artifact(
+        &self,
+        owner_program_id: ContentHash,
+        artifact_id: ContentHash,
+    ) -> Result<&GeneratedFunctionArtifact, InterpreterError> {
+        let store = self
+            .module_state
+            .generated_function_stores
+            .get(&owner_program_id)
+            .ok_or_else(|| InterpreterError::ModuleEvaluationFailed {
+                specifier: owner_program_id.to_hex(),
+                reason: "generated Function owner store is not retained".to_string(),
+            })?;
+        if store.owner_program_id != owner_program_id {
+            return Err(InterpreterError::InternalError {
+                details: format!(
+                    "generated Function store key/owner mismatch for {}",
+                    owner_program_id.to_hex()
+                ),
+            });
+        }
+        let artifact = store.artifacts.get(&artifact_id).ok_or_else(|| {
+            InterpreterError::ModuleEvaluationFailed {
+                specifier: store.owner_specifier.clone(),
+                reason: format!(
+                    "generated Function artifact {} is not retained by its owner",
+                    artifact_id.to_hex()
+                ),
+            }
+        })?;
+        if artifact.owner_program_id != owner_program_id
+            || artifact.artifact_id != artifact_id
+            || artifact.owner_specifier != store.owner_specifier
+        {
+            return Err(InterpreterError::InternalError {
+                details: format!(
+                    "generated Function artifact provenance mismatch for {}",
+                    artifact_id.to_hex()
+                ),
+            });
+        }
+
+        let record = self
+            .module_state
+            .modules
+            .get(&artifact.owner_specifier)
+            .ok_or_else(|| InterpreterError::ModuleEvaluationFailed {
+                specifier: artifact.owner_specifier.clone(),
+                reason: "generated Function owner module record was evicted".to_string(),
+            })?;
+        if let ModuleRuntimeStatus::Failed(reason) = &record.status {
+            return Err(InterpreterError::ModuleEvaluationFailed {
+                specifier: artifact.owner_specifier.clone(),
+                reason: format!("generated Function owner module failed: {reason}"),
+            });
+        }
+        let retained_program = record.compiled_module.as_ref().ok_or_else(|| {
+            InterpreterError::ModuleEvaluationFailed {
+                specifier: artifact.owner_specifier.clone(),
+                reason: "generated Function owner program was evicted".to_string(),
+            }
+        })?;
+        if retained_program.header.source_label != artifact.owner_specifier {
+            return Err(InterpreterError::ModuleEvaluationFailed {
+                specifier: artifact.owner_specifier.clone(),
+                reason: format!(
+                    "generated Function owner mismatch: registry retained program `{}`",
+                    retained_program.header.source_label
+                ),
+            });
+        }
+        if !Arc::ptr_eq(retained_program, &store.owner_program) {
+            return Err(InterpreterError::ModuleEvaluationFailed {
+                specifier: artifact.owner_specifier.clone(),
+                reason: format!(
+                    "generated Function owner program identity changed from {}",
+                    owner_program_id.to_hex()
+                ),
+            });
+        }
+        Ok(artifact)
+    }
+
     /// Invoke a function produced by the `Function` constructor (bd-8enww.3.3).
     ///
     /// The generated function's executable program lives in its own
@@ -27389,48 +27778,15 @@ impl InterpreterCore {
         receiver: Option<Value>,
         receiver_register: Option<u32>,
     ) -> Result<(Value, Label), InterpreterError> {
-        let artifact_id =
-            builtin
-                .module_specifier
-                .parse::<usize>()
-                .map_err(|_| InterpreterError::TypeError {
-                    expected: "generated function artifact id".to_string(),
-                    got: builtin.module_specifier.to_string(),
-                })?;
-
-        // Read the call arguments out of the caller's registers BEFORE any
-        // execution-state reset (the `RegRange` is relative to the caller's
-        // current register base).
-        let mut arguments = Vec::with_capacity(args.count as usize);
-        for index in 0..args.count {
-            let value = self.builtin_arg(args, index)?.unwrap_or(Value::Undefined);
-            arguments.push(value);
-        }
-        let call_labels =
-            self.clone_isolated_call_labels_from_registers(receiver_register, args)?;
-
-        // Clone the artifact's compiled program (and its provenance, for the
-        // bd-8enww.3.4 audit entry) out of `self` so the `&self` borrow is
-        // released before the `&mut self` execution below.
-        let (mut wrapper, function_index, provenance) = {
-            let artifact = self.generated_functions.get(artifact_id).ok_or_else(|| {
-                InterpreterError::TypeError {
-                    expected: "generated function artifact".to_string(),
-                    got: format!("missing artifact#{artifact_id}"),
-                }
-            })?;
-            (
-                artifact.compiled_module.clone(),
-                artifact.function_index,
-                artifact.provenance.clone(),
-            )
-        };
-
-        let arg_count =
-            u32::try_from(arguments.len()).map_err(|_| InterpreterError::TypeError {
-                expected: "u32-bounded generated-function argument count".to_string(),
-                got: format!("{} arguments", arguments.len()),
-            })?;
+        let (owner_program_id, artifact_id) = Self::parse_generated_function_handle(builtin)?;
+        let artifact = self.resolve_generated_function_artifact(owner_program_id, artifact_id)?;
+        let function_index = artifact.function_index;
+        let transient_artifact_bytes =
+            Self::transient_module_wrapper_bytes(&artifact.compiled_module).saturating_add(
+                Self::estimate_generated_function_provenance_bytes(&artifact.provenance),
+            );
+        let owner_specifier_bytes = Self::estimate_string_bytes(&artifact.owner_specifier);
+        let arg_count = args.count;
         // A method-form call reserves r0 for the receiver and r1 for the
         // generated callee; a plain call needs only the callee in r0.
         let metadata_registers: u32 = if receiver.is_some() { 2 } else { 1 };
@@ -27451,7 +27807,75 @@ impl InterpreterCore {
                 ),
             });
         }
+        let caller_call_depth = self.effective_call_depth();
+        self.check_module_reentrant_call_depth()?;
+        let generated_hidden_call_depth = caller_call_depth;
+        let instructions_before = self.instructions_executed;
 
+        let global_scope_depth = self
+            .call_stack
+            .first()
+            .map(|frame| frame.saved_scope_depth)
+            .unwrap_or(self.scope_chain.frames.len())
+            .clamp(1, self.scope_chain.frames.len().max(1));
+        let projected_global_scope_clone_bytes = self
+            .scope_chain
+            .frames
+            .get(..global_scope_depth)
+            .map(Self::estimate_scope_chain_shallow_clone_bytes)
+            .unwrap_or_else(|| {
+                Self::estimate_scope_chain_shallow_clone_bytes(&self.scope_chain.frames)
+            });
+        let projected_argument_transport_bytes =
+            u64::from(arg_count).saturating_mul(std::mem::size_of::<Value>() as u64);
+        let projected_label_transport_bytes =
+            self.isolated_call_label_transport_bytes_from_registers(receiver_register, args)?;
+        self.check_temporary_memory_budget(
+            transient_artifact_bytes
+                .saturating_add(owner_specifier_bytes)
+                .saturating_add(projected_argument_transport_bytes)
+                .saturating_add(projected_label_transport_bytes)
+                .saturating_add(projected_global_scope_clone_bytes)
+                .saturating_add(self.module_execution_snapshot_memory_bytes()),
+        )?;
+
+        // Read call values and labels only after the complete wrapper +
+        // transport + snapshot peak is known to fit. `RegRange` is relative to
+        // the caller's current register base.
+        let owner_specifier = artifact.owner_specifier.clone();
+        let mut arguments = Vec::with_capacity(args.count as usize);
+        for index in 0..args.count {
+            let value = self.builtin_arg(args, index)?.unwrap_or(Value::Undefined);
+            arguments.push(value);
+        }
+        let argument_transport_bytes = u64::try_from(arguments.capacity())
+            .unwrap_or(u64::MAX)
+            .saturating_mul(std::mem::size_of::<Value>() as u64);
+        let call_labels =
+            self.clone_isolated_call_labels_from_registers(receiver_register, args)?;
+        let mut remaining_label_transport_bytes =
+            Self::isolated_call_label_transport_bytes(&call_labels, arguments.len());
+        let transient_execution_bytes = transient_artifact_bytes
+            .saturating_add(owner_specifier_bytes)
+            .saturating_add(argument_transport_bytes)
+            .saturating_add(remaining_label_transport_bytes);
+        self.apply_memory_component_delta(0, transient_execution_bytes)?;
+        // Re-resolve after the mutable precharge so the artifact borrow cannot
+        // overlap interpreter mutation. No guest code runs between these two
+        // reads; any mismatch is still treated as a contained stale handle.
+        let (mut wrapper, provenance) =
+            match self.resolve_generated_function_artifact(owner_program_id, artifact_id) {
+                Ok(artifact) => (
+                    artifact.compiled_module.clone(),
+                    artifact.provenance.clone(),
+                ),
+                Err(error) => {
+                    self.estimated_memory_bytes = self
+                        .estimated_memory_bytes
+                        .saturating_sub(transient_execution_bytes);
+                    return Err(error);
+                }
+            };
         let wrapper_start = wrapper.instructions.len();
         if receiver.is_some() {
             wrapper.instructions.push(Ir3Instruction::CallMethod {
@@ -27486,12 +27910,6 @@ impl InterpreterCore {
         // frames preserves globals (injected runtime globals + top-level
         // declarations) while dropping all construction-site/call-site locals,
         // which would be both nonstandard and a containment leak.
-        let global_scope_depth = self
-            .call_stack
-            .first()
-            .map(|frame| frame.saved_scope_depth)
-            .unwrap_or(self.scope_chain.frames.len())
-            .clamp(1, self.scope_chain.frames.len().max(1));
         let global_scope_frames = self
             .scope_chain
             .frames
@@ -27519,20 +27937,12 @@ impl InterpreterCore {
         // generated function. The instruction counter is deliberately NOT part
         // of `snapshot_module_execution`, so the post-call delta reflects the
         // generated body's real spend against the one shared budget.
-        let caller_call_depth = self.effective_call_depth();
-        self.check_module_reentrant_call_depth()?;
-        let generated_hidden_call_depth = caller_call_depth;
-        let instructions_before = self.instructions_executed;
-
-        let mut remaining_label_transport_bytes =
-            Self::isolated_call_label_transport_bytes(&call_labels, arguments.len());
-        self.apply_memory_component_delta(0, remaining_label_transport_bytes)?;
         let snapshot = match self.snapshot_module_execution() {
             Ok(snapshot) => snapshot,
             Err(error) => {
                 self.estimated_memory_bytes = self
                     .estimated_memory_bytes
-                    .saturating_sub(remaining_label_transport_bytes);
+                    .saturating_sub(transient_execution_bytes);
                 return Err(error);
             }
         };
@@ -27562,7 +27972,7 @@ impl InterpreterCore {
             self.suspended_abrupt_completions.clear();
             self.finally_frames.clear();
             self.pending_finally_entry = None;
-            self.current_module_specifier = Some(wrapper.header.source_label.clone());
+            self.current_module_specifier = Some(owner_specifier);
             // Global-only scope: keep just the realm global environment captured
             // above so the body sees globals but no caller locals.
             self.scope_chain.frames = global_scope_frames;
@@ -27623,9 +28033,13 @@ impl InterpreterCore {
                 .map(|v| (v, self.pending_exception_label.clone())),
             _ => None,
         };
-        self.estimated_memory_bytes = self
-            .estimated_memory_bytes
-            .saturating_sub(remaining_label_transport_bytes);
+        drop(wrapper);
+        self.estimated_memory_bytes = self.estimated_memory_bytes.saturating_sub(
+            transient_artifact_bytes
+                .saturating_add(owner_specifier_bytes)
+                .saturating_add(argument_transport_bytes)
+                .saturating_add(remaining_label_transport_bytes),
+        );
         self.restore_module_execution(snapshot, wrapper_memory_committed);
         self.active_cjs_context = saved_active_cjs_context;
         self.config.granted_capabilities = previous_granted_capabilities;
@@ -31971,11 +32385,11 @@ impl InterpreterCore {
     /// Clone receiver and argument labels only after preflighting the complete
     /// transport carrier. The returned ownership is charged by the isolated
     /// wrapper before it clones any module or caller snapshot.
-    fn clone_isolated_call_labels_from_registers(
+    fn isolated_call_label_transport_bytes_from_registers(
         &self,
         receiver_register: Option<u32>,
         args: RegRange,
-    ) -> Result<IsolatedCallLabels, InterpreterError> {
+    ) -> Result<u64, InterpreterError> {
         let receiver_label = receiver_register
             .map(|register| self.get_register_label(register))
             .transpose()?;
@@ -31997,8 +32411,21 @@ impl InterpreterCore {
                 self.get_register_label(register)?,
             ));
         }
+        Ok(transport_bytes)
+    }
+
+    fn clone_isolated_call_labels_from_registers(
+        &self,
+        receiver_register: Option<u32>,
+        args: RegRange,
+    ) -> Result<IsolatedCallLabels, InterpreterError> {
+        let transport_bytes =
+            self.isolated_call_label_transport_bytes_from_registers(receiver_register, args)?;
         self.check_temporary_memory_budget(transport_bytes)?;
 
+        let receiver_label = receiver_register
+            .map(|register| self.get_register_label(register))
+            .transpose()?;
         let mut argument_labels = Vec::with_capacity(args.count as usize);
         for offset in 0..args.count {
             let register =
@@ -32601,7 +33028,6 @@ impl InterpreterCore {
             pending_finally_entry: None,
             scope_chain,
             pending_captures: Vec::new(),
-            generated_functions: Vec::new(),
             current_module_specifier: self.current_module_specifier.clone(),
         };
         self.check_temporary_memory_budget(Self::estimate_generator_execution_bytes(&execution))?;
@@ -32630,7 +33056,6 @@ impl InterpreterCore {
             pending_finally_entry: self.pending_finally_entry.take(),
             scope_chain: std::mem::replace(&mut self.scope_chain, ScopeChain::new()),
             pending_captures: std::mem::take(&mut self.pending_captures),
-            generated_functions: std::mem::take(&mut self.generated_functions),
             current_module_specifier: self.current_module_specifier.take(),
         }
     }
@@ -32966,7 +33391,6 @@ impl InterpreterCore {
         self.pending_finally_entry = execution.pending_finally_entry;
         self.scope_chain = execution.scope_chain;
         self.pending_captures = execution.pending_captures;
-        self.generated_functions = execution.generated_functions;
         self.current_module_specifier = execution.current_module_specifier;
     }
 
@@ -63586,17 +64010,6 @@ impl InterpreterCore {
                     .saturating_mul(std::mem::size_of::<u32>() as u64),
             )
             .saturating_add(
-                u64::try_from(execution.generated_functions.len())
-                    .unwrap_or(u64::MAX)
-                    .saturating_mul(std::mem::size_of::<GeneratedFunctionArtifact>() as u64),
-            )
-            .saturating_add(Self::saturating_sum(
-                execution
-                    .generated_functions
-                    .iter()
-                    .map(Self::estimate_generated_function_artifact_clone_bytes),
-            ))
-            .saturating_add(
                 execution
                     .current_module_specifier
                     .as_deref()
@@ -64003,6 +64416,7 @@ impl InterpreterCore {
             .saturating_add(self.writable_terminal_states_memory_bytes())
             .saturating_add(self.writable_in_flight_callback_bytes)
             .saturating_add(self.module_state.retained_program_bytes)
+            .saturating_add(self.module_state.retained_generated_function_bytes)
             .saturating_add(self.module_exports_memory_bytes())
             .saturating_add(self.state_capture_memory_bytes())
             .saturating_add(self.module_snapshot_in_flight_bytes)
@@ -88701,27 +89115,47 @@ mod function_prototype_call_apply_tests_current {
                 rest_param_index: None,
             }],
         );
-        let caller = test_module_with_functions(Vec::new(), Vec::new());
+        let mut caller = test_module_with_functions(Vec::new(), Vec::new());
+        caller.header.source_label = "generated-label-owner.mjs".to_string();
 
         let mut core = test_interpreter();
-        core.generated_functions.push(GeneratedFunctionArtifact {
-            provenance: InterpreterCore::derive_generated_function_provenance(
-                "generated-label-test",
-                "value",
-                "this.mark = value; return value;",
-            ),
-            compiled_module: generated,
-            function_index: 0,
-        });
-        core.generated_functions.push(GeneratedFunctionArtifact {
-            provenance: InterpreterCore::derive_generated_function_provenance(
-                "generated-label-test",
-                "value",
-                "throw value;",
-            ),
-            compiled_module: throwing_generated,
-            function_index: 0,
-        });
+        core.ensure_module_record(&caller, &caller.header.source_label)
+            .expect("retain generated-function owner program");
+        let owner_program_id = caller.content_hash();
+        let owner_program = Arc::clone(
+            core.module_state.modules[&caller.header.source_label]
+                .compiled_module
+                .as_ref()
+                .expect("generated-function owner program"),
+        );
+        let mutator = core
+            .retain_generated_function_artifact(
+                owner_program_id,
+                caller.header.source_label.clone(),
+                Arc::clone(&owner_program),
+                InterpreterCore::derive_generated_function_provenance(
+                    "generated-label-owner.mjs",
+                    "value",
+                    "this.mark = value; return value;",
+                ),
+                generated,
+                0,
+            )
+            .expect("retain generated mutator");
+        let thrower = core
+            .retain_generated_function_artifact(
+                owner_program_id,
+                caller.header.source_label.clone(),
+                owner_program,
+                InterpreterCore::derive_generated_function_provenance(
+                    "generated-label-owner.mjs",
+                    "value",
+                    "throw value;",
+                ),
+                throwing_generated,
+                0,
+            )
+            .expect("retain generated thrower");
 
         let receiver = seed_object(&mut core, &[]);
         core.write_reg_with_label(0, Value::Object(receiver), Label::Internal)
@@ -88733,7 +89167,7 @@ mod function_prototype_call_apply_tests_current {
         let result = core
             .dispatch_builtin_function(
                 &caller,
-                &BuiltinFunction::generated_function(0),
+                &mutator,
                 RegRange { start: 1, count: 1 },
                 Some(Value::Object(receiver)),
                 Some(0),
@@ -88766,7 +89200,7 @@ mod function_prototype_call_apply_tests_current {
         let error = core
             .dispatch_builtin_function(
                 &caller,
-                &BuiltinFunction::generated_function(1),
+                &thrower,
                 RegRange { start: 1, count: 1 },
                 Some(Value::Object(receiver)),
                 Some(0),
@@ -88788,6 +89222,268 @@ mod function_prototype_call_apply_tests_current {
             core.estimated_memory_bytes(),
             core.recompute_estimated_memory_bytes()
         );
+    }
+
+    #[test]
+    fn generated_function_store_retention_is_budget_atomic_bd_fw7zd_8() {
+        let fixture = || {
+            let mut owner = test_module_with_functions(Vec::new(), Vec::new());
+            owner.header.source_label = "generated-budget-owner.mjs".to_string();
+            let generated = test_module_with_functions(
+                vec![
+                    Ir3Instruction::LoadInt { dst: 0, value: 7 },
+                    Ir3Instruction::Return { value: 0 },
+                ],
+                vec![Ir3FunctionDesc {
+                    entry: 0,
+                    arity: 0,
+                    frame_size: 1,
+                    name: Some("generated_budget_body".to_string()),
+                    is_generator: false,
+                    rest_param_index: None,
+                }],
+            );
+            let provenance = InterpreterCore::derive_generated_function_provenance(
+                &owner.header.source_label,
+                "",
+                &"return 7;".repeat(17),
+            );
+            let mut core = test_interpreter();
+            core.ensure_module_record(&owner, &owner.header.source_label)
+                .expect("retain generated budget owner");
+            core.sync_estimated_memory_bytes()
+                .expect("generated budget fixture baseline");
+            (core, owner, generated, provenance)
+        };
+
+        let (mut probe, owner, generated, provenance) = fixture();
+        let baseline = probe.estimated_memory_bytes();
+        let repeated_generated = generated.clone();
+        let repeated_provenance = provenance.clone();
+        let owner_program = Arc::clone(
+            probe.module_state.modules[&owner.header.source_label]
+                .compiled_module
+                .as_ref()
+                .expect("generated budget owner program"),
+        );
+        let builtin = probe
+            .retain_generated_function_artifact(
+                owner.content_hash(),
+                owner.header.source_label.clone(),
+                owner_program,
+                provenance,
+                generated,
+                0,
+            )
+            .expect("unbounded generated artifact retention");
+        let retained_delta = probe.estimated_memory_bytes().saturating_sub(baseline);
+        assert!(retained_delta > 0);
+        assert_eq!(
+            probe.module_state.retained_generated_function_bytes,
+            probe.generated_function_stores_memory_bytes()
+        );
+        assert_eq!(
+            probe.estimated_memory_bytes(),
+            probe.recompute_estimated_memory_bytes()
+        );
+        let (handle_owner, handle_artifact) =
+            InterpreterCore::parse_generated_function_handle(&builtin)
+                .expect("parse retained generated handle");
+        assert_eq!(handle_owner, owner.content_hash());
+        assert!(
+            probe.module_state.generated_function_stores[&handle_owner]
+                .artifacts
+                .contains_key(&handle_artifact)
+        );
+        let repeated_owner_program = Arc::clone(
+            probe.module_state.modules[&owner.header.source_label]
+                .compiled_module
+                .as_ref()
+                .expect("repeated generated owner program"),
+        );
+        let repeated = probe
+            .retain_generated_function_artifact(
+                owner.content_hash(),
+                owner.header.source_label.clone(),
+                repeated_owner_program,
+                repeated_provenance,
+                repeated_generated,
+                0,
+            )
+            .expect("retain repeated generated source as a distinct occurrence");
+        assert_ne!(builtin, repeated);
+        assert_ne!(
+            EvidenceLog::hash_register_value_seed(&Value::BuiltinFunction(builtin)),
+            EvidenceLog::hash_register_value_seed(&Value::BuiltinFunction(repeated)),
+            "register evidence hashes must bind the full owner/artifact handle"
+        );
+
+        let (mut one_short, owner, generated, provenance) = fixture();
+        let one_short_baseline = one_short.estimated_memory_bytes();
+        one_short.config.max_total_memory_bytes = one_short_baseline
+            .saturating_add(retained_delta)
+            .saturating_add(InterpreterCore::generated_function_handle_peak_bytes())
+            .saturating_sub(1);
+        let owner_program = Arc::clone(
+            one_short.module_state.modules[&owner.header.source_label]
+                .compiled_module
+                .as_ref()
+                .expect("one-short generated owner program"),
+        );
+        assert!(matches!(
+            one_short.retain_generated_function_artifact(
+                owner.content_hash(),
+                owner.header.source_label.clone(),
+                owner_program,
+                provenance,
+                generated,
+                0,
+            ),
+            Err(InterpreterError::MemoryBudgetExceeded { .. })
+        ));
+        assert!(one_short.module_state.generated_function_stores.is_empty());
+        assert_eq!(one_short.module_state.retained_generated_function_bytes, 0);
+        assert_eq!(one_short.estimated_memory_bytes(), one_short_baseline);
+
+        let (mut exact, owner, generated, provenance) = fixture();
+        let exact_baseline = exact.estimated_memory_bytes();
+        exact.config.max_total_memory_bytes = exact_baseline
+            .saturating_add(retained_delta)
+            .saturating_add(InterpreterCore::generated_function_handle_peak_bytes());
+        let owner_program = Arc::clone(
+            exact.module_state.modules[&owner.header.source_label]
+                .compiled_module
+                .as_ref()
+                .expect("exact generated owner program"),
+        );
+        exact
+            .retain_generated_function_artifact(
+                owner.content_hash(),
+                owner.header.source_label.clone(),
+                owner_program,
+                provenance,
+                generated,
+                0,
+            )
+            .expect("generated artifact fits exact retained-plus-handle peak");
+        assert_eq!(
+            exact.estimated_memory_bytes(),
+            exact.recompute_estimated_memory_bytes()
+        );
+    }
+
+    #[test]
+    fn generated_function_handle_fails_closed_after_owner_eviction_or_replacement_bd_fw7zd_8() {
+        let mut owner = test_module_with_functions(Vec::new(), Vec::new());
+        owner.header.source_label = "generated-stale-owner.mjs".to_string();
+        let generated = test_module_with_functions(
+            vec![
+                Ir3Instruction::LoadInt { dst: 0, value: 7 },
+                Ir3Instruction::Return { value: 0 },
+            ],
+            vec![Ir3FunctionDesc {
+                entry: 0,
+                arity: 0,
+                frame_size: 1,
+                name: Some("generated_stale_body".to_string()),
+                is_generator: false,
+                rest_param_index: None,
+            }],
+        );
+        let mut core = test_interpreter();
+        core.ensure_module_record(&owner, &owner.header.source_label)
+            .expect("retain stale-handle owner");
+        let owner_program = Arc::clone(
+            core.module_state.modules[&owner.header.source_label]
+                .compiled_module
+                .as_ref()
+                .expect("stale-handle owner program"),
+        );
+        let builtin = core
+            .retain_generated_function_artifact(
+                owner.content_hash(),
+                owner.header.source_label.clone(),
+                owner_program,
+                InterpreterCore::derive_generated_function_provenance(
+                    &owner.header.source_label,
+                    "",
+                    "return 7;",
+                ),
+                generated,
+                0,
+            )
+            .expect("retain stale-handle artifact");
+
+        let (owner_program_id, artifact_id) =
+            InterpreterCore::parse_generated_function_handle(&builtin)
+                .expect("parse generated transient handle");
+        let transient_artifact_bytes = {
+            let artifact = core
+                .resolve_generated_function_artifact(owner_program_id, artifact_id)
+                .expect("resolve retained generated artifact");
+            InterpreterCore::transient_module_wrapper_bytes(&artifact.compiled_module)
+                .saturating_add(
+                    InterpreterCore::estimate_generated_function_provenance_bytes(
+                        &artifact.provenance,
+                    ),
+                )
+        };
+        let retained_baseline = core.estimated_memory_bytes();
+        let original_ceiling = core.config.max_total_memory_bytes;
+        core.config.max_total_memory_bytes = retained_baseline
+            .saturating_add(transient_artifact_bytes)
+            .saturating_sub(1);
+        assert!(matches!(
+            core.call_generated_function_artifact(
+                &builtin,
+                RegRange { start: 0, count: 0 },
+                None,
+                None,
+            ),
+            Err(InterpreterError::MemoryBudgetExceeded { .. })
+        ));
+        assert_eq!(core.estimated_memory_bytes(), retained_baseline);
+        assert!(
+            core.resolve_generated_function_artifact(owner_program_id, artifact_id)
+                .is_ok(),
+            "transient refusal must not evict the retained artifact"
+        );
+        core.config.max_total_memory_bytes = original_ceiling;
+
+        let (value, _) = core
+            .call_generated_function_artifact(&builtin, RegRange { start: 0, count: 0 }, None, None)
+            .expect("live owner executes generated artifact");
+        assert_eq!(value, Value::Int(7));
+
+        core.module_state
+            .modules
+            .get_mut(&owner.header.source_label)
+            .expect("owner record")
+            .compiled_module = None;
+        let evicted = core
+            .call_generated_function_artifact(&builtin, RegRange { start: 0, count: 0 }, None, None)
+            .expect_err("stale handle must not execute without retained owner code");
+        assert!(matches!(
+            evicted,
+            InterpreterError::ModuleEvaluationFailed { ref reason, .. }
+                if reason.contains("owner program was evicted")
+        ));
+
+        let mut replacement = owner.clone();
+        replacement.instructions.push(Ir3Instruction::Halt);
+        core.module_state
+            .modules
+            .get_mut(&owner.header.source_label)
+            .expect("owner record")
+            .compiled_module = Some(Arc::new(replacement));
+        let replaced = core
+            .call_generated_function_artifact(&builtin, RegRange { start: 0, count: 0 }, None, None)
+            .expect_err("stale handle must not alias replacement owner code");
+        assert!(matches!(
+            replaced,
+            InterpreterError::ModuleEvaluationFailed { ref reason, .. }
+                if reason.contains("owner program identity changed")
+        ));
     }
 
     #[test]

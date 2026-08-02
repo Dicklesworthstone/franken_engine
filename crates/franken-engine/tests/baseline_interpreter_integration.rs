@@ -26,8 +26,8 @@ use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use frankenengine_engine::baseline_interpreter::{
-    ConsoleLevel, ExecutionResult, HeapObject, InterpreterConfig, InterpreterCore,
-    InterpreterError, InterpreterEvent, LaneChoice, LaneReason, LaneRouter,
+    ConsoleLevel, ExecutionResult, GeneratedCodeEventKind, HeapObject, InterpreterConfig,
+    InterpreterCore, InterpreterError, InterpreterEvent, LaneChoice, LaneReason, LaneRouter,
     ModuleResolutionFailureReason, ObjectId, QuickJsLane, V8Lane, Value,
 };
 use frankenengine_engine::capability::RuntimeCapability;
@@ -2725,14 +2725,28 @@ fn imported_async_functions_use_the_exporting_module_for_direct_and_method_calls
 }
 
 #[test]
-fn imported_closure_dynamic_function_construction_fails_closed() {
+fn imported_dynamic_function_artifacts_keep_owner_across_call_forms_bd_fw7zd_8() {
     let root = temp_module_dir("module_import_generated_callable");
     fs::create_dir_all(&root).expect("create module root");
     fs::write(
         root.join("dep.mjs"),
-        "export function make() { return Function('return 7;'); }",
+        "export function makeAdder() {\n\
+           return Function('value', 'return value + 35;');\n\
+         }\n\
+         export function makeMethod() {\n\
+           return Function('value', 'return this.base + value;');\n\
+         }\n\
+         export function makeDeferred() {\n\
+           const generated = Function('value', 'return value + 40;');\n\
+           return function later() { return generated(2); };\n\
+         }",
     )
     .expect("write generated-callable dependency");
+    fs::write(
+        root.join("other.mjs"),
+        "export function makeOther() { return Function('return 4;'); }",
+    )
+    .expect("write second generated-callable dependency");
 
     let mut module = test_module_with_pool(
         vec![
@@ -2758,14 +2772,134 @@ fn imported_closure_dynamic_function_construction_fails_closed() {
                 args: RegRange { start: 4, count: 0 },
                 dst: 4,
             },
+            Ir3Instruction::LoadInt { dst: 5, value: 7 },
+            Ir3Instruction::Call {
+                callee: 4,
+                args: RegRange { start: 5, count: 1 },
+                dst: 6,
+            },
+            Ir3Instruction::LoadStr {
+                dst: 2,
+                pool_index: 2,
+            },
+            Ir3Instruction::GetProperty {
+                obj: 1,
+                key: 2,
+                dst: 3,
+            },
+            Ir3Instruction::Call {
+                callee: 3,
+                args: RegRange { start: 4, count: 0 },
+                dst: 4,
+            },
+            Ir3Instruction::NewObject { dst: 7 },
+            Ir3Instruction::LoadStr {
+                dst: 8,
+                pool_index: 3,
+            },
+            Ir3Instruction::LoadInt { dst: 9, value: 40 },
+            Ir3Instruction::SetProperty {
+                obj: 7,
+                key: 8,
+                val: 9,
+            },
+            Ir3Instruction::LoadStr {
+                dst: 8,
+                pool_index: 4,
+            },
+            Ir3Instruction::SetProperty {
+                obj: 7,
+                key: 8,
+                val: 4,
+            },
+            Ir3Instruction::GetProperty {
+                obj: 7,
+                key: 8,
+                dst: 10,
+            },
+            Ir3Instruction::LoadInt { dst: 11, value: 2 },
+            Ir3Instruction::CallMethod {
+                receiver: 7,
+                callee: 10,
+                args: RegRange {
+                    start: 11,
+                    count: 1,
+                },
+                dst: 12,
+            },
+            Ir3Instruction::LoadStr {
+                dst: 2,
+                pool_index: 5,
+            },
+            Ir3Instruction::GetProperty {
+                obj: 1,
+                key: 2,
+                dst: 3,
+            },
+            Ir3Instruction::Call {
+                callee: 3,
+                args: RegRange { start: 4, count: 0 },
+                dst: 4,
+            },
             Ir3Instruction::Call {
                 callee: 4,
                 args: RegRange { start: 5, count: 0 },
-                dst: 5,
+                dst: 13,
             },
-            Ir3Instruction::Return { value: 5 },
+            Ir3Instruction::LoadStr {
+                dst: 0,
+                pool_index: 6,
+            },
+            Ir3Instruction::ImportModule {
+                specifier: 0,
+                dst: 14,
+            },
+            Ir3Instruction::LoadStr {
+                dst: 2,
+                pool_index: 7,
+            },
+            Ir3Instruction::GetProperty {
+                obj: 14,
+                key: 2,
+                dst: 3,
+            },
+            Ir3Instruction::Call {
+                callee: 3,
+                args: RegRange { start: 4, count: 0 },
+                dst: 4,
+            },
+            Ir3Instruction::Call {
+                callee: 4,
+                args: RegRange { start: 5, count: 0 },
+                dst: 14,
+            },
+            Ir3Instruction::Add {
+                dst: 15,
+                lhs: 6,
+                rhs: 12,
+            },
+            Ir3Instruction::Add {
+                dst: 15,
+                lhs: 15,
+                rhs: 13,
+            },
+            Ir3Instruction::Add {
+                dst: 15,
+                lhs: 15,
+                rhs: 14,
+            },
+            Ir3Instruction::Return { value: 15 },
         ],
-        vec!["./dep.mjs".to_string(), "make".to_string()],
+        vec![
+            "./dep.mjs".to_string(),
+            "makeAdder".to_string(),
+            "makeMethod".to_string(),
+            "base".to_string(),
+            "fn".to_string(),
+            "makeDeferred".to_string(),
+            "./other.mjs".to_string(),
+            "makeOther".to_string(),
+        ],
     );
     module.header.source_label = root.join("main.mjs").display().to_string();
 
@@ -2773,16 +2907,33 @@ fn imported_closure_dynamic_function_construction_fails_closed() {
     config.module_root = Some(root.display().to_string());
     config.granted_capabilities =
         capabilities_with([RuntimeCapability::ModuleLoad, RuntimeCapability::Builtin]);
-    let error = QuickJsLane::with_config(config)
+    let result = QuickJsLane::with_config(config)
         .execute(&module, "module-import-generated-callable-trace")
-        .expect_err("cross-module dynamic Function artifacts need durable owner state");
+        .expect("execute owner-scoped generated artifacts after foreign wrappers unwind");
+    assert_eq!(result.value, Value::Int(130));
+    assert_eq!(
+        result
+            .generated_code_audit
+            .iter()
+            .filter(|entry| entry.kind == GeneratedCodeEventKind::Constructed)
+            .count(),
+        4
+    );
+    assert_eq!(
+        result
+            .generated_code_audit
+            .iter()
+            .filter(|entry| entry.kind == GeneratedCodeEventKind::Invoked)
+            .count(),
+        4
+    );
     assert!(
-        matches!(
-            error,
-            InterpreterError::ModuleEvaluationFailed { ref reason, .. }
-                if reason.contains("persistent generated-artifact ownership")
-        ),
-        "unexpected generated-artifact containment error: {error:?}"
+        result.generated_code_audit.iter().all(|entry| {
+            entry.construction_site == root.join("dep.mjs").display().to_string()
+                || entry.construction_site == root.join("other.mjs").display().to_string()
+        }),
+        "every generated artifact must retain its defining module provenance: {:?}",
+        result.generated_code_audit
     );
 }
 

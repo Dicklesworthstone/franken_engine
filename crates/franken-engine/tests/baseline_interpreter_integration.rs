@@ -2938,6 +2938,92 @@ fn imported_dynamic_function_artifacts_keep_owner_across_call_forms_bd_fw7zd_8()
 }
 
 #[test]
+fn generated_nested_closure_keeps_artifact_program_after_wrapper_unwinds_bd_fw7zd_8_1() {
+    let root = temp_module_dir("module_import_generated_nested_closure");
+    fs::create_dir_all(&root).expect("create module root");
+    fs::write(
+        root.join("dep.mjs"),
+        "export function wrong0() { return 900; }\n\
+         export function wrong1() { return 901; }\n\
+         export function wrong2() { return 902; }\n\
+         export function makeNested() {\n\
+           return Function('return function nested() { return 73; };')();\n\
+         }",
+    )
+    .expect("write generated nested-closure dependency");
+
+    let mut module = test_module_with_pool(
+        vec![
+            Ir3Instruction::LoadStr {
+                dst: 0,
+                pool_index: 0,
+            },
+            Ir3Instruction::ImportModule {
+                specifier: 0,
+                dst: 1,
+            },
+            Ir3Instruction::LoadStr {
+                dst: 2,
+                pool_index: 1,
+            },
+            Ir3Instruction::GetProperty {
+                obj: 1,
+                key: 2,
+                dst: 3,
+            },
+            Ir3Instruction::Call {
+                callee: 3,
+                args: RegRange { start: 4, count: 0 },
+                dst: 4,
+            },
+            Ir3Instruction::Call {
+                callee: 4,
+                args: RegRange { start: 5, count: 0 },
+                dst: 5,
+            },
+            Ir3Instruction::Return { value: 5 },
+        ],
+        vec!["./dep.mjs".to_string(), "makeNested".to_string()],
+    );
+    module.header.source_label = root.join("main.mjs").display().to_string();
+
+    let mut config = InterpreterConfig::quickjs_defaults();
+    config.module_root = Some(root.display().to_string());
+    config.granted_capabilities =
+        capabilities_with([RuntimeCapability::ModuleLoad, RuntimeCapability::Builtin]);
+    let result = QuickJsLane::with_config(config)
+        .execute(&module, "module-import-generated-nested-closure-trace")
+        .expect("returned nested closure must execute the generated artifact program");
+    assert_eq!(
+        result.value,
+        Value::Int(73),
+        "the nested generated function index must not resolve against dep.mjs's ordinary table"
+    );
+    assert_eq!(
+        result
+            .generated_code_audit
+            .iter()
+            .filter(|entry| entry.kind == GeneratedCodeEventKind::Constructed)
+            .count(),
+        1
+    );
+    assert_eq!(
+        result
+            .generated_code_audit
+            .iter()
+            .filter(|entry| entry.kind == GeneratedCodeEventKind::Invoked)
+            .count(),
+        1
+    );
+    assert!(
+        result
+            .generated_code_audit
+            .iter()
+            .all(|entry| { entry.construction_site == root.join("dep.mjs").display().to_string() })
+    );
+}
+
+#[test]
 fn alternating_cross_module_recursion_preserves_effective_depth_limit() {
     let root = temp_module_dir("module_import_cross_recursion_depth");
     fs::create_dir_all(&root).expect("create module root");

@@ -27981,6 +27981,23 @@ impl InterpreterCore {
         }
     }
 
+    fn generated_code_invocation_outcome(
+        result: &Result<Value, InterpreterError>,
+        result_label: &Result<Label, InterpreterError>,
+    ) -> (GeneratedCodeEventKind, String) {
+        match result
+            .as_ref()
+            .err()
+            .or_else(|| result_label.as_ref().err())
+        {
+            Some(error) => (
+                GeneratedCodeEventKind::Faulted,
+                format!("faulted:{}", generated_code_fault_code(error)),
+            ),
+            None => (GeneratedCodeEventKind::Invoked, "completed".to_string()),
+        }
+    }
+
     fn estimate_generated_code_invocation_reservation_bytes(
         &self,
         provenance: &GeneratedFunctionProvenance,
@@ -28562,13 +28579,7 @@ impl InterpreterCore {
             let instructions_consumed = self
                 .instructions_executed
                 .saturating_sub(instructions_before);
-            let (kind, outcome) = match &result {
-                Ok(_) => (GeneratedCodeEventKind::Invoked, "completed".to_string()),
-                Err(error) => (
-                    GeneratedCodeEventKind::Faulted,
-                    format!("faulted:{}", generated_code_fault_code(error)),
-                ),
-            };
+            let (kind, outcome) = Self::generated_code_invocation_outcome(&result, &result_label);
             let granted_capabilities = generated_capabilities
                 .iter()
                 .map(|capability| Self::contained_codegen_capability_name(*capability).to_string())
@@ -89987,13 +89998,36 @@ mod function_prototype_call_apply_tests_current {
         let exact_baseline = exact.estimated_memory_bytes();
         exact.config.max_total_memory_bytes = exact_baseline.saturating_add(pair_bytes);
         exact
-            .record_generated_code_event(constructed)
+            .record_generated_code_event(constructed.clone())
             .expect("generated observability pair at exact ceiling");
         assert_eq!(exact.generated_code_audit.len(), 1);
         assert_eq!(exact.events.len(), 1);
         assert_eq!(
             exact.estimated_memory_bytes(),
             exact.recompute_estimated_memory_bytes()
+        );
+
+        let mut capped = fixture();
+        capped.config.max_total_memory_bytes = u64::MAX;
+        for _ in 0..MAX_GENERATED_CODE_AUDIT_ENTRIES {
+            capped
+                .record_generated_code_event(constructed.clone())
+                .expect("generated observability pair below retention cap");
+        }
+        let capped_bytes = capped.generated_code_observability_bytes;
+        capped
+            .record_generated_code_event(constructed)
+            .expect("generated observability pair at retention cap is dropped");
+        assert_eq!(
+            capped.generated_code_audit.len(),
+            MAX_GENERATED_CODE_AUDIT_ENTRIES
+        );
+        assert_eq!(capped.events.len(), MAX_GENERATED_CODE_AUDIT_ENTRIES);
+        assert_eq!(capped.generated_code_observability_bytes, capped_bytes);
+        assert_eq!(
+            capped.estimated_memory_bytes(),
+            capped.recompute_estimated_memory_bytes(),
+            "the audit and standard-event halves must stop at the same cap"
         );
     }
 
@@ -90130,6 +90164,32 @@ mod function_prototype_call_apply_tests_current {
             exact.estimated_memory_bytes(),
             exact.recompute_estimated_memory_bytes(),
             "draining execution observability must release its complete charge"
+        );
+    }
+
+    #[test]
+    fn generated_code_result_label_failure_is_a_fault_bd_fw7zd_8_2() {
+        let completed_body: Result<Value, InterpreterError> = Ok(Value::Int(7));
+        let public_label: Result<Label, InterpreterError> = Ok(Label::Public);
+        assert_eq!(
+            InterpreterCore::generated_code_invocation_outcome(&completed_body, &public_label),
+            (GeneratedCodeEventKind::Invoked, "completed".to_string())
+        );
+
+        let refused_label: Result<Label, InterpreterError> =
+            Err(InterpreterError::MemoryBudgetExceeded {
+                requested_bytes: 4096,
+                max_bytes: 2048,
+                requested_heap_objects: 1,
+                max_heap_objects: 1,
+            });
+        assert_eq!(
+            InterpreterCore::generated_code_invocation_outcome(&completed_body, &refused_label),
+            (
+                GeneratedCodeEventKind::Faulted,
+                "faulted:memory_budget_exceeded".to_string()
+            ),
+            "a generated call that cannot materialize its result label did not complete"
         );
     }
 

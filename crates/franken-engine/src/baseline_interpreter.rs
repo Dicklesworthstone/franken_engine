@@ -90335,7 +90335,7 @@ mod function_prototype_call_apply_tests_current {
             .ensure_module_record(&owner, &owner.header.source_label)
             .expect("retain generated parse-failure owner");
         parse_failure
-            .write_reg(0, Value::str("return )"))
+            .write_reg(0, Value::str("const x;"))
             .expect("seed invalid generated source");
         parse_failure
             .sync_estimated_memory_bytes()

@@ -5367,6 +5367,24 @@ struct GeneratedFunctionArtifactHandle {
     artifact_id: ContentHash,
 }
 
+/// Fixed-size representation of the only authority set that generated code
+/// may retain across a closure or continuation boundary.
+///
+/// Keeping the validated capabilities inline is deliberate: suspended
+/// generators and async functions must never retain a clone of the caller's
+/// potentially dangerous grant set.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ContainedCodegenGrant {
+    capabilities: [RuntimeCapability; 5],
+    len: u8,
+}
+
+impl ContainedCodegenGrant {
+    fn as_slice(&self) -> &[RuntimeCapability] {
+        &self.capabilities[..usize::from(self.len)]
+    }
+}
+
 // ---------------------------------------------------------------------------
 // GeneratorObject — suspended generator state
 // ---------------------------------------------------------------------------
@@ -5455,6 +5473,9 @@ struct GeneratorExecutionSnapshot {
     pending_captures: Vec<u32>,
     current_module_specifier: Option<String>,
     active_generated_function_artifact: Option<GeneratedFunctionArtifactHandle>,
+    /// Validated contained-codegen authority to reinstall whenever this
+    /// generated activation resumes. `None` for ordinary continuations.
+    contained_codegen_grant: Option<ContainedCodegenGrant>,
 }
 
 /// Execution phases for async function objects.
@@ -7095,8 +7116,11 @@ pub struct InterpreterEvent {
 /// What a [`GeneratedCodeAuditEntry`] records about `Function`-constructor code.
 ///
 /// BotGuard-style dynamically generated code is intentionally adversarial and
-/// heavy, so construction *and* invocation of every generated function are
-/// surfaced as auditable events rather than running unobserved.
+/// heavy, so construction and each direct invocation of a `Function` artifact
+/// are surfaced as auditable events rather than running unobserved. Nested
+/// closures and continuations retain the artifact's authority/provenance but
+/// do not append additional lifecycle rows; their hostcalls remain visible on
+/// the ordinary decision and witness surfaces.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum GeneratedCodeEventKind {
     /// `new Function(...)` produced a callable artifact (compile-time event).
@@ -7196,9 +7220,11 @@ pub struct ExecutionResult {
     /// capture order so callers can replay or cross-validate the run.
     pub nondeterminism_trace: NondeterminismTrace,
     /// Auditable lifecycle events for `Function`-constructor-generated code
-    /// (bd-8enww.3.4 / YTBG-C4): one entry per construction and per invocation,
-    /// carrying content-addressed source identity and the instruction budget the
-    /// generated body consumed. Empty when no dynamic code was generated.
+    /// (bd-8enww.3.4 / YTBG-C4): one entry per construction and direct artifact
+    /// invocation, carrying content-addressed source identity and the
+    /// instruction budget that direct invocation consumed. Nested closure,
+    /// generator, and async entries do not add rows. Empty when no dynamic code
+    /// was generated.
     pub generated_code_audit: Vec<GeneratedCodeAuditEntry>,
 }
 
@@ -28386,6 +28412,83 @@ impl InterpreterCore {
         Ok(granted.into_iter().collect())
     }
 
+    fn validate_contained_codegen_grant(
+        capabilities: &[RuntimeCapability],
+    ) -> Result<ContainedCodegenGrant, InterpreterError> {
+        let unique = capabilities.iter().copied().collect::<BTreeSet<_>>();
+        let safe = unique.iter().all(|capability| {
+            matches!(
+                capability,
+                RuntimeCapability::VmDispatch
+                    | RuntimeCapability::HeapAllocate
+                    | RuntimeCapability::Builtin
+                    | RuntimeCapability::Console
+                    | RuntimeCapability::Timer
+            )
+        });
+        if unique.len() != capabilities.len()
+            || !safe
+            || !unique.contains(&RuntimeCapability::VmDispatch)
+            || !unique.contains(&RuntimeCapability::HeapAllocate)
+        {
+            return Err(InterpreterError::InternalError {
+                details: "generated-code authority escaped its validated contained envelope"
+                    .to_string(),
+            });
+        }
+
+        let mut stored = [RuntimeCapability::VmDispatch; 5];
+        let mut len = 0usize;
+        for capability in [
+            RuntimeCapability::VmDispatch,
+            RuntimeCapability::HeapAllocate,
+            RuntimeCapability::Console,
+            RuntimeCapability::Timer,
+            RuntimeCapability::Builtin,
+        ] {
+            if unique.contains(&capability) {
+                stored[len] = capability;
+                len += 1;
+            }
+        }
+        Ok(ContainedCodegenGrant {
+            capabilities: stored,
+            len: u8::try_from(len).expect("contained-codegen grant has at most five entries"),
+        })
+    }
+
+    fn contained_codegen_grant_for_artifact(
+        &self,
+        handle: GeneratedFunctionArtifactHandle,
+    ) -> Result<ContainedCodegenGrant, InterpreterError> {
+        let artifact =
+            self.resolve_generated_function_artifact(handle.owner_program_id, handle.artifact_id)?;
+        let generated_scope_frame = self.generated_function_realm_scope_frame()?;
+        let capabilities = self.contained_codegen_effective_capability_grant(
+            artifact.compiled_module.as_ref(),
+            &generated_scope_frame,
+        )?;
+        Self::validate_contained_codegen_grant(&capabilities)
+    }
+
+    fn replace_with_contained_codegen_grant(
+        &mut self,
+        grant: Option<ContainedCodegenGrant>,
+    ) -> Option<BTreeSet<RuntimeCapability>> {
+        grant.map(|grant| {
+            std::mem::replace(
+                &mut self.config.granted_capabilities,
+                grant.as_slice().iter().copied().collect(),
+            )
+        })
+    }
+
+    fn restore_replaced_codegen_grants(&mut self, previous: Option<BTreeSet<RuntimeCapability>>) {
+        if let Some(previous) = previous {
+            self.config.granted_capabilities = previous;
+        }
+    }
+
     fn contained_codegen_capability_name(capability: RuntimeCapability) -> &'static str {
         match capability {
             RuntimeCapability::VmDispatch => "vm_dispatch",
@@ -28773,6 +28876,8 @@ impl InterpreterCore {
             artifact.compiled_module.as_ref(),
             &generated_scope_frame,
         )?;
+        let effective_generated_grant =
+            Self::validate_contained_codegen_grant(&effective_generated_capabilities)?;
 
         // Read call values and labels only after the complete wrapper +
         // transport + snapshot peak is known to fit. `RegRange` is relative to
@@ -28845,9 +28950,10 @@ impl InterpreterCore {
         // remain live across this boundary. The exact prior set is restored
         // after every regular return, fault, budget refusal, or cancellation
         // path below.
-        let observability_reservation_bytes = match self
-            .reserve_generated_code_invocation_event(&provenance, &effective_generated_capabilities)
-        {
+        let observability_reservation_bytes = match self.reserve_generated_code_invocation_event(
+            &provenance,
+            effective_generated_grant.as_slice(),
+        ) {
             Ok(reservation_bytes) => reservation_bytes,
             Err(error) => {
                 self.estimated_memory_bytes = self
@@ -28889,12 +28995,8 @@ impl InterpreterCore {
         let setup_previous_scope_bytes = self.scope_chain_memory_bytes();
         let setup_previous_call_stack_bytes = self.call_stack_memory_bytes();
         let mut wrapper_memory_committed = false;
-        let generated_grant_set = effective_generated_capabilities
-            .iter()
-            .copied()
-            .collect::<BTreeSet<_>>();
         let previous_granted_capabilities =
-            std::mem::replace(&mut self.config.granted_capabilities, generated_grant_set);
+            self.replace_with_contained_codegen_grant(Some(effective_generated_grant));
         let result = (|| -> Result<Value, InterpreterError> {
             self.registers =
                 SeedTrackedField::new(vec![Value::Undefined; self.config.max_registers as usize]);
@@ -28979,7 +29081,7 @@ impl InterpreterCore {
         );
         self.restore_module_execution(snapshot, wrapper_memory_committed);
         self.active_cjs_context = saved_active_cjs_context;
-        self.config.granted_capabilities = previous_granted_capabilities;
+        self.restore_replaced_codegen_grants(previous_granted_capabilities);
 
         // A native JS fault raised inside the isolated generated run (for
         // example, an unresolved name in the canonical realm) has no inner
@@ -29013,7 +29115,8 @@ impl InterpreterCore {
                 .instructions_executed
                 .saturating_sub(instructions_before);
             let (kind, outcome) = Self::generated_code_invocation_outcome(&result, &result_label);
-            let granted_capabilities = effective_generated_capabilities
+            let granted_capabilities = effective_generated_grant
+                .as_slice()
                 .iter()
                 .map(|capability| Self::contained_codegen_capability_name(*capability).to_string())
                 .collect();
@@ -32679,6 +32782,7 @@ impl InterpreterCore {
             .isolated_execution
             .take()
             .expect("isolated async execution was checked");
+        let contained_codegen_grant = activation.contained_codegen_grant;
         let owner_is_foreign = fallback_module
             .is_some_and(|module| module.header.source_label != owner_module.header.source_label);
 
@@ -32687,6 +32791,8 @@ impl InterpreterCore {
         let caller_generator_result_label =
             std::mem::replace(&mut self.generator_result_label, Label::Public);
         let caller_execution = self.take_generator_execution();
+        let previous_granted_capabilities =
+            self.replace_with_contained_codegen_grant(contained_codegen_grant);
         let caller_execution_bytes = Self::estimate_generator_execution_bytes(&caller_execution);
         let previous_suspended_bytes = self.temporarily_suspended_execution_bytes;
         let previous_reentrant_depth = self.module_reentrant_call_depth;
@@ -32705,7 +32811,9 @@ impl InterpreterCore {
             self.resume_async_function_after_await(resumption_context, settled, settlement_label)
                 .and_then(|()| self.continue_resumed_async_function(Some(owner_module.as_ref())))
         });
-        let mut continuation = Some(self.take_generator_execution());
+        let mut continuation_execution = self.take_generator_execution();
+        continuation_execution.contained_codegen_grant = contained_codegen_grant;
+        let mut continuation = Some(continuation_execution);
         let mut active_async_ids = initial_async_ids;
         Self::extend_unique_async_function_ids(
             &mut active_async_ids,
@@ -32750,6 +32858,7 @@ impl InterpreterCore {
         self.temporarily_suspended_execution_bytes = previous_suspended_bytes;
         self.module_reentrant_call_depth = previous_reentrant_depth;
         self.active_foreign_module_call_depth = previous_foreign_call_depth;
+        self.restore_replaced_codegen_grants(previous_granted_capabilities);
         self.install_generator_execution(caller_execution);
         self.generator_yielded = caller_generator_yielded;
         self.generator_resume_dst = caller_generator_resume_dst;
@@ -34016,6 +34125,10 @@ impl InterpreterCore {
                 index: invocation.function_index,
                 table_size: module.function_table.len() as u32,
             })?;
+        let contained_codegen_grant = invocation
+            .generated_function_artifact
+            .map(|handle| self.contained_codegen_grant_for_artifact(handle))
+            .transpose()?;
         let (arguments, argument_labels) = self.materialize_generator_arguments(
             &func,
             invocation.arguments,
@@ -34093,6 +34206,7 @@ impl InterpreterCore {
             pending_captures: Vec::new(),
             current_module_specifier: invocation.module_specifier,
             active_generated_function_artifact: invocation.generated_function_artifact,
+            contained_codegen_grant,
         };
         self.check_temporary_memory_budget(Self::estimate_generator_execution_bytes(&execution))?;
         Ok(execution)
@@ -34122,6 +34236,7 @@ impl InterpreterCore {
             pending_captures: std::mem::take(&mut self.pending_captures),
             current_module_specifier: self.current_module_specifier.take(),
             active_generated_function_artifact: self.active_generated_function_artifact.take(),
+            contained_codegen_grant: None,
         }
     }
 
@@ -34399,6 +34514,7 @@ impl InterpreterCore {
     fn retain_isolated_async_execution(
         &mut self,
         published_async_index: usize,
+        contained_codegen_grant: Option<ContainedCodegenGrant>,
     ) -> Result<Option<(u32, Label, u32)>, InterpreterError> {
         let published_promise = self
             .async_functions
@@ -34426,6 +34542,7 @@ impl InterpreterCore {
         }
 
         let mut execution = self.take_generator_execution();
+        execution.contained_codegen_grant = contained_codegen_grant;
         // The synthetic caller's destination is absolute register zero. Move
         // its label out instead of cloning an attacker-sized Custom label; the
         // resumed wrapper's Return value is internal and discarded.
@@ -34566,6 +34683,7 @@ impl InterpreterCore {
                 ),
             });
         }
+        let contained_codegen_grant = activation.contained_codegen_grant;
 
         {
             let generator = &mut self.generators[generator_index];
@@ -34577,6 +34695,8 @@ impl InterpreterCore {
         let caller_generator_result_label =
             std::mem::replace(&mut self.generator_result_label, Label::Public);
         let caller_execution = self.take_generator_execution();
+        let previous_granted_capabilities =
+            self.replace_with_contained_codegen_grant(contained_codegen_grant);
         let caller_execution_bytes = Self::estimate_generator_execution_bytes(&caller_execution);
         let previous_suspended_bytes = self.temporarily_suspended_execution_bytes;
         let previous_reentrant_depth = self.module_reentrant_call_depth;
@@ -34596,9 +34716,11 @@ impl InterpreterCore {
             Ok(())
         })();
         if let Err(error) = setup_result {
-            let activation = self.take_generator_execution();
+            let mut activation = self.take_generator_execution();
+            activation.contained_codegen_grant = contained_codegen_grant;
             self.temporarily_suspended_execution_bytes = previous_suspended_bytes;
             self.module_reentrant_call_depth = previous_reentrant_depth;
+            self.restore_replaced_codegen_grants(previous_granted_capabilities);
             self.install_generator_execution(caller_execution);
             self.generator_yielded = caller_generator_yielded;
             self.generator_resume_dst = caller_generator_resume_dst;
@@ -34634,6 +34756,7 @@ impl InterpreterCore {
             .cloned()
             .unwrap_or(Label::Public);
         let mut activation = self.take_generator_execution();
+        activation.contained_codegen_grant = contained_codegen_grant;
         let escaped_exception =
             if matches!(&result, Err(InterpreterError::UncaughtException { .. })) {
                 activation.pending_exception.take().map(|value| {
@@ -34647,6 +34770,7 @@ impl InterpreterCore {
 
         self.temporarily_suspended_execution_bytes = previous_suspended_bytes;
         self.module_reentrant_call_depth = previous_reentrant_depth;
+        self.restore_replaced_codegen_grants(previous_granted_capabilities);
         self.install_generator_execution(caller_execution);
         self.generator_yielded = caller_generator_yielded;
         self.generator_resume_dst = caller_generator_resume_dst;
@@ -49055,6 +49179,9 @@ impl InterpreterCore {
         })?;
         let (callee_module_specifier, callee_generated_artifact) =
             self.closure_execution_provenance(&callee, caller_module)?;
+        let contained_codegen_grant = callee_generated_artifact
+            .map(|handle| self.contained_codegen_grant_for_artifact(handle))
+            .transpose()?;
         // Deferred callbacks (timers, EventEmitter, streams, Promise jobs) are
         // commonly invoked while the entry module is active. Select the
         // closure's retained owner program here as well as in direct Call/
@@ -49164,6 +49291,8 @@ impl InterpreterCore {
         let setup_previous_scope_bytes = self.scope_chain_memory_bytes();
         let setup_previous_call_stack_bytes = self.call_stack_memory_bytes();
         let mut wrapper_memory_committed = false;
+        let previous_granted_capabilities =
+            self.replace_with_contained_codegen_grant(contained_codegen_grant);
         let mut result = (|| -> Result<Value, InterpreterError> {
             self.registers =
                 SeedTrackedField::new(vec![Value::Undefined; self.config.max_registers as usize]);
@@ -49227,7 +49356,7 @@ impl InterpreterCore {
                 // A pending `await` exits with the async callee's register base
                 // still active. The synthetic caller's destination is absolute
                 // register zero, not `read_reg(0)` in that callee frame.
-                match self.retain_isolated_async_execution(async_index) {
+                match self.retain_isolated_async_execution(async_index, contained_codegen_grant) {
                     Ok(Some((result_promise, result_label, suspended_async_id))) => {
                         isolated_async_result_label = Some(result_label);
                         isolated_async_execution_rehomed = true;
@@ -49282,6 +49411,7 @@ impl InterpreterCore {
             wrapper_memory_committed && !isolated_async_execution_rehomed,
         );
         self.active_cjs_context = saved_active_cjs_context;
+        self.restore_replaced_codegen_grants(previous_granted_capabilities);
         if result.is_err() && !abandoned_async_ids.is_empty() {
             self.terminally_reject_abandoned_async_functions(
                 &abandoned_async_ids,
@@ -49345,6 +49475,9 @@ impl InterpreterCore {
         })?;
         let (constructor_module_specifier, constructor_generated_artifact) =
             self.closure_execution_provenance(&constructor, caller_module)?;
+        let contained_codegen_grant = constructor_generated_artifact
+            .map(|handle| self.contained_codegen_grant_for_artifact(handle))
+            .transpose()?;
         let foreign_module = self.foreign_closure_module(&constructor, caller_module)?;
         let is_foreign_construct = foreign_module.is_some();
         if is_foreign_construct {
@@ -49438,6 +49571,8 @@ impl InterpreterCore {
         let setup_previous_scope_bytes = self.scope_chain_memory_bytes();
         let setup_previous_call_stack_bytes = self.call_stack_memory_bytes();
         let mut wrapper_memory_committed = false;
+        let previous_granted_capabilities =
+            self.replace_with_contained_codegen_grant(contained_codegen_grant);
         let result = (|| -> Result<Value, InterpreterError> {
             self.registers =
                 SeedTrackedField::new(vec![Value::Undefined; self.config.max_registers as usize]);
@@ -49507,6 +49642,7 @@ impl InterpreterCore {
         );
         self.restore_module_execution(snapshot, wrapper_memory_committed);
         self.active_cjs_context = saved_active_cjs_context;
+        self.restore_replaced_codegen_grants(previous_granted_capabilities);
         if let Some((value, label)) = thrown_value {
             self.replace_pending_abrupt_slots(Some((value, label)), None)?;
         }
@@ -65085,6 +65221,12 @@ impl InterpreterCore {
                     .current_module_specifier
                     .as_deref()
                     .map(Self::estimate_string_bytes)
+                    .unwrap_or(0),
+            )
+            .saturating_add(
+                execution
+                    .contained_codegen_grant
+                    .map(|_| std::mem::size_of::<ContainedCodegenGrant>() as u64)
                     .unwrap_or(0),
             )
     }
@@ -91225,6 +91367,455 @@ mod function_prototype_call_apply_tests_current {
             ["vm_dispatch", "heap_allocate"]
         );
         cancellation_token.reset();
+    }
+
+    #[test]
+    fn generated_nested_closure_restores_full_caller_grants_on_all_outcomes_bd_fw7zd_8_5() {
+        fn fixture(
+            case: &str,
+            nested_body: Vec<Ir3Instruction>,
+        ) -> (
+            InterpreterCore,
+            Ir3Module,
+            Value,
+            BTreeSet<RuntimeCapability>,
+        ) {
+            let mut owner = test_module_with_functions(Vec::new(), Vec::new());
+            owner.header.source_label = format!("generated-nested-authority-{case}-owner.mjs");
+            let mut instructions = vec![
+                Ir3Instruction::CreateClosure {
+                    dst: 0,
+                    function_index: 1,
+                    capture_count: 0,
+                },
+                Ir3Instruction::Return { value: 0 },
+            ];
+            instructions.extend(nested_body);
+            let mut generated = test_module_with_functions(
+                instructions,
+                vec![
+                    Ir3FunctionDesc {
+                        entry: 0,
+                        arity: 0,
+                        frame_size: 1,
+                        name: Some(format!("generated_nested_{case}_outer")),
+                        is_generator: false,
+                        rest_param_index: None,
+                    },
+                    Ir3FunctionDesc {
+                        entry: 2,
+                        arity: 0,
+                        frame_size: 1,
+                        name: Some(format!("generated_nested_{case}")),
+                        is_generator: false,
+                        rest_param_index: None,
+                    },
+                ],
+            );
+            generated.required_capabilities = vec![CapabilityTag("fs:read".to_string())];
+
+            let mut config = InterpreterConfig::quickjs_defaults();
+            config.granted_capabilities = RuntimeCapability::ALL.into_iter().collect();
+            let caller_grants = config.granted_capabilities.clone();
+            let mut core = InterpreterCore::new(config, format!("generated-nested-{case}"));
+            core.ensure_module_record(&owner, &owner.header.source_label)
+                .expect("retain generated nested-authority owner");
+            let (builtin, _, _) = retain_generated_test_artifact(
+                &mut core,
+                &owner,
+                generated,
+                0,
+                &format!("nested authority {case}"),
+            );
+            let (nested, _) = core
+                .call_generated_function_artifact(
+                    &builtin,
+                    RegRange { start: 0, count: 0 },
+                    None,
+                    None,
+                )
+                .expect("generated outer should return its nested closure");
+            assert!(matches!(nested, Value::Closure(_)));
+            assert_eq!(core.config.granted_capabilities, caller_grants);
+            (core, owner, nested, caller_grants)
+        }
+
+        let (mut success, success_owner, success_nested, success_grants) = fixture(
+            "success",
+            vec![
+                Ir3Instruction::LoadInt { dst: 0, value: 7 },
+                Ir3Instruction::Return { value: 0 },
+            ],
+        );
+        let success_audit_rows = success.generated_code_audit.len();
+        assert_eq!(
+            success
+                .invoke_inline_method_call(
+                    Some(&success_owner),
+                    success_nested,
+                    Value::Undefined,
+                    Vec::new(),
+                )
+                .expect("contained nested closure should complete"),
+            Value::Int(7)
+        );
+        assert_eq!(success.config.granted_capabilities, success_grants);
+        assert_eq!(success.generated_code_audit.len(), success_audit_rows);
+
+        let denied_body = vec![
+            Ir3Instruction::HostCall {
+                capability: CapabilityTag("fs:read".to_string()),
+                args: RegRange { start: 0, count: 0 },
+                dst: 0,
+            },
+            Ir3Instruction::Return { value: 0 },
+        ];
+        let (mut fault, fault_owner, fault_nested, fault_grants) =
+            fixture("fault", denied_body.clone());
+        let fault_audit_rows = fault.generated_code_audit.len();
+        assert!(matches!(
+            fault.invoke_inline_method_call(
+                Some(&fault_owner),
+                fault_nested.clone(),
+                Value::Undefined,
+                Vec::new(),
+            ),
+            Err(InterpreterError::CapabilityDenied { capability }) if capability == "fs:read"
+        ));
+        assert_eq!(fault.config.granted_capabilities, fault_grants);
+        assert_eq!(fault.generated_code_audit.len(), fault_audit_rows);
+        assert!(matches!(
+            fault.invoke_inline_construct(Some(&fault_owner), fault_nested, Vec::new()),
+            Err(InterpreterError::CapabilityDenied { capability }) if capability == "fs:read"
+        ));
+        assert_eq!(fault.config.granted_capabilities, fault_grants);
+        assert_eq!(fault.generated_code_audit.len(), fault_audit_rows);
+
+        let (mut cancelled, cancelled_owner, cancelled_nested, cancelled_grants) = fixture(
+            "cancelled",
+            vec![
+                Ir3Instruction::LoadInt { dst: 0, value: 9 },
+                Ir3Instruction::Return { value: 0 },
+            ],
+        );
+        let cancellation_token = CancellationToken::new();
+        cancellation_token.cancel();
+        cancelled.config.cancellation_token = Some(cancellation_token.clone());
+        cancelled.config.checkpoint_density = 1;
+        let cancelled_audit_rows = cancelled.generated_code_audit.len();
+        assert_eq!(
+            cancelled.invoke_inline_method_call(
+                Some(&cancelled_owner),
+                cancelled_nested,
+                Value::Undefined,
+                Vec::new(),
+            ),
+            Err(InterpreterError::Cancelled)
+        );
+        assert_eq!(cancelled.config.granted_capabilities, cancelled_grants);
+        assert_eq!(cancelled.generated_code_audit.len(), cancelled_audit_rows);
+        cancellation_token.reset();
+
+        for core in [&success, &fault, &cancelled] {
+            assert_eq!(
+                core.estimated_memory_bytes(),
+                core.recompute_estimated_memory_bytes()
+            );
+        }
+    }
+
+    #[test]
+    fn generated_generator_initial_and_resumed_entries_keep_contained_grants_bd_fw7zd_8_5() {
+        fn fixture(
+            case: &str,
+            generator_body: Vec<Ir3Instruction>,
+        ) -> (
+            InterpreterCore,
+            Ir3Module,
+            u32,
+            BTreeSet<RuntimeCapability>,
+            usize,
+        ) {
+            let mut owner = test_module_with_functions(Vec::new(), Vec::new());
+            owner.header.source_label = format!("generated-generator-authority-{case}-owner.mjs");
+            let mut instructions = vec![
+                Ir3Instruction::CreateGenerator {
+                    dst: 0,
+                    function_index: 1,
+                    capture_count: 0,
+                },
+                Ir3Instruction::Return { value: 0 },
+            ];
+            instructions.extend(generator_body);
+            let mut generated = test_module_with_functions(
+                instructions,
+                vec![
+                    Ir3FunctionDesc {
+                        entry: 0,
+                        arity: 0,
+                        frame_size: 1,
+                        name: Some(format!("generated_generator_{case}_outer")),
+                        is_generator: false,
+                        rest_param_index: None,
+                    },
+                    Ir3FunctionDesc {
+                        entry: 2,
+                        arity: 0,
+                        frame_size: 2,
+                        name: Some(format!("generated_generator_{case}")),
+                        is_generator: true,
+                        rest_param_index: None,
+                    },
+                ],
+            );
+            generated.required_capabilities = vec![CapabilityTag("fs:read".to_string())];
+
+            let mut config = InterpreterConfig::quickjs_defaults();
+            config.granted_capabilities = RuntimeCapability::ALL.into_iter().collect();
+            let caller_grants = config.granted_capabilities.clone();
+            let mut core = InterpreterCore::new(config, format!("generated-generator-{case}"));
+            core.ensure_module_record(&owner, &owner.header.source_label)
+                .expect("retain generated generator-authority owner");
+            let (builtin, _, _) = retain_generated_test_artifact(
+                &mut core,
+                &owner,
+                generated,
+                0,
+                &format!("generator authority {case}"),
+            );
+            let (generator_function, _) = core
+                .call_generated_function_artifact(
+                    &builtin,
+                    RegRange { start: 0, count: 0 },
+                    None,
+                    None,
+                )
+                .expect("generated outer should return a generator function");
+            let generator = core
+                .invoke_inline_method_call(
+                    Some(&owner),
+                    generator_function,
+                    Value::Undefined,
+                    Vec::new(),
+                )
+                .expect("generated generator function should create an object");
+            let Value::Generator(generator_id) = generator else {
+                panic!("expected generated Generator object, got {generator:?}");
+            };
+            assert_eq!(core.config.granted_capabilities, caller_grants);
+            let audit_rows = core.generated_code_audit.len();
+            (core, owner, generator_id, caller_grants, audit_rows)
+        }
+
+        let denied_body = vec![
+            Ir3Instruction::HostCall {
+                capability: CapabilityTag("fs:read".to_string()),
+                args: RegRange { start: 0, count: 0 },
+                dst: 0,
+            },
+            Ir3Instruction::Return { value: 0 },
+        ];
+        let (mut initial, initial_owner, initial_id, initial_grants, initial_audit_rows) =
+            fixture("initial", denied_body.clone());
+        assert!(matches!(
+            initial.generator_next(&initial_owner, initial_id, Value::Undefined, Label::Public),
+            Err(InterpreterError::CapabilityDenied { capability }) if capability == "fs:read"
+        ));
+        assert_eq!(initial.config.granted_capabilities, initial_grants);
+        assert_eq!(initial.generated_code_audit.len(), initial_audit_rows);
+
+        let mut resume_body = vec![
+            Ir3Instruction::LoadInt { dst: 0, value: 41 },
+            Ir3Instruction::Yield {
+                value: 0,
+                delegate: false,
+                resume_dst: 1,
+            },
+        ];
+        resume_body.extend(denied_body);
+        let (mut resumed, resumed_owner, resumed_id, resumed_grants, resumed_audit_rows) =
+            fixture("resume", resume_body);
+        resumed
+            .generator_next(&resumed_owner, resumed_id, Value::Undefined, Label::Public)
+            .expect("generated generator should reach its first yield");
+        assert_eq!(resumed.config.granted_capabilities, resumed_grants);
+        let suspended_grant = resumed.generators[resumed_id as usize]
+            .execution
+            .as_ref()
+            .and_then(|execution| execution.contained_codegen_grant)
+            .expect("generated generator must persist its contained grant");
+        assert_eq!(
+            suspended_grant.as_slice(),
+            [
+                RuntimeCapability::VmDispatch,
+                RuntimeCapability::HeapAllocate
+            ]
+        );
+        assert!(matches!(
+            resumed.generator_next(&resumed_owner, resumed_id, Value::Undefined, Label::Public),
+            Err(InterpreterError::CapabilityDenied { capability }) if capability == "fs:read"
+        ));
+        assert_eq!(resumed.config.granted_capabilities, resumed_grants);
+        assert_eq!(resumed.generated_code_audit.len(), resumed_audit_rows);
+
+        for core in [&initial, &resumed] {
+            assert_eq!(
+                core.estimated_memory_bytes(),
+                core.recompute_estimated_memory_bytes()
+            );
+        }
+    }
+
+    #[test]
+    fn generated_async_pre_and_post_await_entries_keep_contained_grants_bd_fw7zd_8_5() {
+        fn fixture(
+            case: &str,
+            async_body: Vec<Ir3Instruction>,
+            async_arity: u32,
+        ) -> (
+            InterpreterCore,
+            Ir3Module,
+            Value,
+            BTreeSet<RuntimeCapability>,
+            usize,
+        ) {
+            let mut owner = test_module_with_functions(Vec::new(), Vec::new());
+            owner.header.source_label = format!("generated-async-authority-{case}-owner.mjs");
+            let mut instructions = vec![
+                Ir3Instruction::CreateAsyncFunction {
+                    dst: 0,
+                    function_index: 1,
+                    capture_count: 0,
+                },
+                Ir3Instruction::Return { value: 0 },
+            ];
+            instructions.extend(async_body);
+            let mut generated = test_module_with_functions(
+                instructions,
+                vec![
+                    Ir3FunctionDesc {
+                        entry: 0,
+                        arity: 0,
+                        frame_size: 1,
+                        name: Some(format!("generated_async_{case}_outer")),
+                        is_generator: false,
+                        rest_param_index: None,
+                    },
+                    Ir3FunctionDesc {
+                        entry: 2,
+                        arity: async_arity,
+                        frame_size: 1,
+                        name: Some(format!("generated_async_{case}")),
+                        is_generator: false,
+                        rest_param_index: None,
+                    },
+                ],
+            );
+            generated.required_capabilities = vec![CapabilityTag("fs:read".to_string())];
+
+            let mut config = InterpreterConfig::quickjs_defaults();
+            config.granted_capabilities = RuntimeCapability::ALL.into_iter().collect();
+            let caller_grants = config.granted_capabilities.clone();
+            let mut core = InterpreterCore::new(config, format!("generated-async-{case}"));
+            core.ensure_module_record(&owner, &owner.header.source_label)
+                .expect("retain generated async-authority owner");
+            let (builtin, _, _) = retain_generated_test_artifact(
+                &mut core,
+                &owner,
+                generated,
+                0,
+                &format!("async authority {case}"),
+            );
+            let (async_function, _) = core
+                .call_generated_function_artifact(
+                    &builtin,
+                    RegRange { start: 0, count: 0 },
+                    None,
+                    None,
+                )
+                .expect("generated outer should return an async function");
+            assert!(matches!(async_function, Value::AsyncFunction(_)));
+            assert_eq!(core.config.granted_capabilities, caller_grants);
+            let audit_rows = core.generated_code_audit.len();
+            (core, owner, async_function, caller_grants, audit_rows)
+        }
+
+        let denied_body = vec![
+            Ir3Instruction::HostCall {
+                capability: CapabilityTag("fs:read".to_string()),
+                args: RegRange { start: 0, count: 0 },
+                dst: 0,
+            },
+            Ir3Instruction::AsyncReturn { value_reg: 0 },
+        ];
+        let (mut initial, initial_owner, initial_async, initial_grants, initial_audit_rows) =
+            fixture("initial", denied_body.clone(), 0);
+        assert!(matches!(
+            initial.invoke_inline_method_call(
+                Some(&initial_owner),
+                initial_async,
+                Value::Undefined,
+                Vec::new(),
+            ),
+            Err(InterpreterError::CapabilityDenied { capability }) if capability == "fs:read"
+        ));
+        assert_eq!(initial.config.granted_capabilities, initial_grants);
+        assert_eq!(initial.generated_code_audit.len(), initial_audit_rows);
+
+        let mut resumed_body = vec![Ir3Instruction::AwaitValue { promise_reg: 0 }];
+        resumed_body.extend(denied_body);
+        let (mut resumed, resumed_owner, resumed_async, resumed_grants, resumed_audit_rows) =
+            fixture("resume", resumed_body, 1);
+        let awaited = resumed.promise_store.create();
+        resumed
+            .sync_estimated_memory_bytes()
+            .expect("generated async authority fixture accounting");
+        let async_result = resumed
+            .invoke_inline_method_call(
+                Some(&resumed_owner),
+                resumed_async,
+                Value::Undefined,
+                vec![Value::Promise(awaited.0)],
+            )
+            .expect("generated async function should suspend at its pending await");
+        let Value::Promise(result_promise) = async_result else {
+            panic!("expected generated async result Promise, got {async_result:?}");
+        };
+        assert_eq!(resumed.config.granted_capabilities, resumed_grants);
+        let suspended = resumed
+            .async_functions
+            .last()
+            .expect("generated async object should be retained");
+        assert_eq!(suspended.result_promise, result_promise);
+        let suspended_grant = suspended
+            .isolated_execution
+            .as_ref()
+            .and_then(|execution| execution.contained_codegen_grant)
+            .expect("generated async continuation must persist its contained grant");
+        assert_eq!(
+            suspended_grant.as_slice(),
+            [
+                RuntimeCapability::VmDispatch,
+                RuntimeCapability::HeapAllocate
+            ]
+        );
+
+        resumed
+            .fulfill_promise(awaited, crate::object_model::JsValue::Int(2), Label::Public)
+            .expect("awaited Promise should be fulfillable");
+        assert!(matches!(
+            resumed.drain_microtasks(Some(&resumed_owner)),
+            Err(InterpreterError::CapabilityDenied { capability }) if capability == "fs:read"
+        ));
+        assert_eq!(resumed.config.granted_capabilities, resumed_grants);
+        assert_eq!(resumed.generated_code_audit.len(), resumed_audit_rows);
+
+        for core in [&initial, &resumed] {
+            assert_eq!(
+                core.estimated_memory_bytes(),
+                core.recompute_estimated_memory_bytes()
+            );
+        }
     }
 
     #[test]

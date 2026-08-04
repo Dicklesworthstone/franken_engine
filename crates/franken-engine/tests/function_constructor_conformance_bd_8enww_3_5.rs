@@ -551,6 +551,49 @@ fn ac2_generated_code_never_granted_dangerous_authority() {
     }
 }
 
+#[test]
+fn ac2_generated_sloppy_global_alias_is_not_reauthorized_as_builtin() {
+    let entries = audit(
+        r#"
+        new Function("bdFw7zd84RealmAlias = Math;")();
+        new Function("return bdFw7zd84RealmAlias.max(10, 42);")();
+        "#,
+    );
+    let invoked: Vec<_> = entries
+        .iter()
+        .filter(|entry| entry.kind == GeneratedCodeEventKind::Invoked)
+        .collect();
+    assert_eq!(invoked.len(), 2, "expected both generated invocations");
+    assert!(
+        invoked[0]
+            .granted_capabilities
+            .iter()
+            .any(|c| c == "builtin"),
+        "loading canonical Math must be observable as builtin authority"
+    );
+    assert_eq!(invoked[1].outcome, "completed");
+    assert!(
+        !invoked[1]
+            .granted_capabilities
+            .iter()
+            .any(|capability| capability == "builtin"),
+        "a generated sloppy-global alias must not infer builtin authority: {:?}",
+        invoked[1].granted_capabilities
+    );
+    assert!(
+        ["vm_dispatch", "heap_allocate"]
+            .into_iter()
+            .all(|expected| {
+                invoked[1]
+                    .granted_capabilities
+                    .iter()
+                    .any(|capability| capability == expected)
+            }),
+        "the contained execution baseline must remain observable: {:?}",
+        invoked[1].granted_capabilities
+    );
+}
+
 // --- AC#4: typed-array interaction, isolated for emphasis --------------------
 
 #[test]

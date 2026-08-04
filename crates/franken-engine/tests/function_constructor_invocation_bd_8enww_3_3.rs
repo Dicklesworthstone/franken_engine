@@ -9,12 +9,13 @@
 //! and a plain-call `this` of `undefined`. `new f(...)` on a generated function
 //! is deliberately refused in v1 (AC#4).
 //!
-//! Containment note: generated code runs under the parent's capability envelope
-//! plus exactly the safe (`Builtin`/`Console`/`Timer`) capabilities its own
-//! compiled module declares. Bare references to identifiers that are neither a
-//! recognized builtin nor present in the live global environment fail closed
-//! with a `ReferenceError` rather than silently resolving — the conservative
-//! posture for adversary-authored dynamic code.
+//! Containment note: generated code replaces the caller's capability envelope
+//! with the engine-local `VmDispatch`/`HeapAllocate` baseline plus exactly the
+//! safe (`Builtin`/`Console`/`Timer`) capabilities validated from its own
+//! compiled module and canonical realm builtin references. Bare references to
+//! identifiers that are neither a recognized builtin nor present in the live
+//! global environment fail closed with a `ReferenceError` rather than silently
+//! resolving — the conservative posture for adversary-authored dynamic code.
 //!
 //! The driving vector is BotGuard's G-2: `var f=new Function("x","return x*2");
 //! f(21)` must return `42` through `HybridRouter::eval`.

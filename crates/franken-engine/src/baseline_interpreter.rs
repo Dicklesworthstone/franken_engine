@@ -7130,10 +7130,12 @@ pub struct GeneratedCodeAuditEntry {
     /// JS call-stack depth of the caller at invocation entry. `0` for a
     /// `Constructed` event.
     pub caller_call_depth: usize,
-    /// Safe capabilities (`builtin`/`console`/`timer`) granted to the generated
-    /// body for this invocation, as canonical tag strings. Empty for a
-    /// `Constructed` event. Dangerous capabilities are never present here — the
-    /// contained-codegen envelope filters them out (see
+    /// Effective contained capabilities granted to the generated body for this
+    /// invocation, as canonical tag strings: the engine-local
+    /// `vm_dispatch`/`heap_allocate` baseline plus any validated
+    /// `builtin`/`console`/`timer` authority. Empty for a `Constructed` event.
+    /// Dangerous capabilities are never present here — the contained-codegen
+    /// envelope filters them out (see
     /// [`InterpreterCore::contained_codegen_capability_grant`]).
     pub granted_capabilities: Vec<String>,
     /// Outcome label: `"constructed"`, `"completed"`, or `"faulted:<code>"`.
@@ -28247,8 +28249,147 @@ impl InterpreterCore {
             .collect()
     }
 
+    /// Classify the first-class callables that the generated-function realm
+    /// installs behind its writable canonical globals. This deliberately does
+    /// not classify arbitrary builtins: runtime inference may restore only the
+    /// three capabilities admitted by the contained-codegen ceiling.
+    fn contained_codegen_realm_builtin_capability(
+        kind: BuiltinFunctionKind,
+    ) -> Option<RuntimeCapability> {
+        match kind {
+            BuiltinFunctionKind::ConsoleLog
+            | BuiltinFunctionKind::ConsoleError
+            | BuiltinFunctionKind::ConsoleWarn
+            | BuiltinFunctionKind::ConsoleInfo => Some(RuntimeCapability::Console),
+            BuiltinFunctionKind::SetTimeout
+            | BuiltinFunctionKind::ClearTimeout
+            | BuiltinFunctionKind::SetInterval
+            | BuiltinFunctionKind::ClearInterval
+            | BuiltinFunctionKind::SetImmediate
+            | BuiltinFunctionKind::ClearImmediate
+            | BuiltinFunctionKind::QueueMicrotask => Some(RuntimeCapability::Timer),
+            BuiltinFunctionKind::PerformanceNow
+            | BuiltinFunctionKind::PromiseResolve
+            | BuiltinFunctionKind::PromiseReject
+            | BuiltinFunctionKind::PromiseAll
+            | BuiltinFunctionKind::PromiseRace
+            | BuiltinFunctionKind::PromiseAllSettled
+            | BuiltinFunctionKind::PromiseAny
+            | BuiltinFunctionKind::DateConstructor
+            | BuiltinFunctionKind::DateNow
+            | BuiltinFunctionKind::MathAbs
+            | BuiltinFunctionKind::MathCeil
+            | BuiltinFunctionKind::MathFloor
+            | BuiltinFunctionKind::MathRound
+            | BuiltinFunctionKind::MathMax
+            | BuiltinFunctionKind::MathMin
+            | BuiltinFunctionKind::MathRandom
+            | BuiltinFunctionKind::MathPow
+            | BuiltinFunctionKind::MathSqrt
+            | BuiltinFunctionKind::MathSin
+            | BuiltinFunctionKind::MathCos
+            | BuiltinFunctionKind::MathLog
+            | BuiltinFunctionKind::MathExp
+            | BuiltinFunctionKind::MathTan
+            | BuiltinFunctionKind::MathTrunc
+            | BuiltinFunctionKind::MathSign
+            | BuiltinFunctionKind::MathAtan2
+            | BuiltinFunctionKind::MathAsin
+            | BuiltinFunctionKind::MathAcos
+            | BuiltinFunctionKind::MathHypot
+            | BuiltinFunctionKind::MathImul
+            | BuiltinFunctionKind::MathAtan
+            | BuiltinFunctionKind::MathLog10
+            | BuiltinFunctionKind::MathLog2
+            | BuiltinFunctionKind::MathCbrt
+            | BuiltinFunctionKind::MathClz32
+            | BuiltinFunctionKind::MathFround
+            | BuiltinFunctionKind::MathAcosh
+            | BuiltinFunctionKind::MathAsinh
+            | BuiltinFunctionKind::MathAtanh => Some(RuntimeCapability::Builtin),
+            _ => None,
+        }
+    }
+
+    fn contained_codegen_runtime_name_capability(
+        &self,
+        name: &str,
+        generated_scope_frame: &ScopeFrame,
+    ) -> Result<Option<RuntimeCapability>, InterpreterError> {
+        let expected = match name {
+            "console" => RuntimeCapability::Console,
+            "setTimeout" | "clearTimeout" | "setInterval" | "clearInterval" | "setImmediate"
+            | "clearImmediate" | "queueMicrotask" => RuntimeCapability::Timer,
+            "performance" | "Promise" | "Math" | "Date" => RuntimeCapability::Builtin,
+            // Generated sloppy globals are intentionally excluded even when
+            // their current value aliases a canonical realm object. Authority
+            // is inferred only for the engine-seeded canonical names.
+            _ => return Ok(None),
+        };
+        let Some(binding) = generated_scope_frame.bindings.get(name) else {
+            return Ok(None);
+        };
+        let state = binding.state()?;
+        if !state.initialized {
+            return Ok(None);
+        }
+        let exposes_expected_capability = match &state.value {
+            Value::BuiltinFunction(builtin) => {
+                Self::contained_codegen_realm_builtin_capability(builtin.kind) == Some(expected)
+            }
+            Value::Object(object_id) => self.heap.get(object_id.0 as usize).is_some_and(|object| {
+                object.properties.values().any(|value| {
+                    matches!(
+                        value,
+                        Value::BuiltinFunction(builtin)
+                            if Self::contained_codegen_realm_builtin_capability(builtin.kind)
+                                == Some(expected)
+                    )
+                })
+            }),
+            _ => false,
+        };
+        Ok(exposes_expected_capability.then_some(expected))
+    }
+
+    /// Build the invocation-local effective grant set. Static HostCalls remain
+    /// authoritative, while `LoadName` references can recover a safe grant only
+    /// when they resolve to an engine-seeded canonical realm builtin at call
+    /// entry. This covers writable `Math`/`Promise`/timer globals without
+    /// treating arbitrary generated sloppy globals as authority declarations.
+    fn contained_codegen_effective_capability_grant(
+        &self,
+        module: &Ir3Module,
+        generated_scope_frame: &ScopeFrame,
+    ) -> Result<Vec<RuntimeCapability>, InterpreterError> {
+        let mut granted = BTreeSet::from([
+            RuntimeCapability::VmDispatch,
+            RuntimeCapability::HeapAllocate,
+        ]);
+        granted.extend(Self::contained_codegen_capability_grant(
+            &module.required_capabilities,
+        ));
+        for instruction in &module.instructions {
+            let Ir3Instruction::LoadName {
+                name_pool_index, ..
+            } = instruction
+            else {
+                continue;
+            };
+            let name = Self::scoped_constant_name(module, *name_pool_index);
+            if let Some(capability) = self
+                .contained_codegen_runtime_name_capability(name.as_ref(), generated_scope_frame)?
+            {
+                granted.insert(capability);
+            }
+        }
+        Ok(granted.into_iter().collect())
+    }
+
     fn contained_codegen_capability_name(capability: RuntimeCapability) -> &'static str {
         match capability {
+            RuntimeCapability::VmDispatch => "vm_dispatch",
+            RuntimeCapability::HeapAllocate => "heap_allocate",
             RuntimeCapability::Builtin => "builtin",
             RuntimeCapability::Console => "console",
             RuntimeCapability::Timer => "timer",
@@ -28628,6 +28769,10 @@ impl InterpreterCore {
                 .saturating_add(self.module_execution_snapshot_memory_bytes()),
         )?;
         let generated_scope_frame = self.generated_function_realm_scope_frame()?;
+        let effective_generated_capabilities = self.contained_codegen_effective_capability_grant(
+            artifact.compiled_module.as_ref(),
+            &generated_scope_frame,
+        )?;
 
         // Read call values and labels only after the complete wrapper +
         // transport + snapshot peak is known to fit. `RegRange` is relative to
@@ -28691,21 +28836,17 @@ impl InterpreterCore {
             .instructions
             .push(Ir3Instruction::Return { value: 0 });
 
-        // Contained-codegen capability envelope: grant the generated function
-        // exactly the capabilities its OWN compiled module statically declares,
-        // filtered to the safe set (`Builtin` / `Console` / `Timer`). The
-        // parent's grants were derived from the parent source, which never saw
-        // the generated body — so without this, builtin calls (and even the
-        // `builtin:ReferenceError` raised for an unbound reference) inside
-        // generated code fail closed with `CapabilityDenied`. The filter never
-        // widens beyond the safe set, so dynamically constructed code can never
-        // acquire fs/net/process authority — the security-accounting heart of
-        // bd-8enww.3.4 AC#4. Restored after the call.
-        let generated_capabilities =
-            Self::contained_codegen_capability_grant(&wrapper.required_capabilities);
-        let previous_granted_capabilities = self.config.granted_capabilities.clone();
+        // Contained-codegen capability envelope: replace (never extend) the
+        // caller's live grants with the generated function's validated safe
+        // set. The engine-local VmDispatch / HeapAllocate baseline keeps normal
+        // bytecode and object allocation live; static declarations and
+        // runtime-resolved canonical realm builtins can contribute only Builtin
+        // / Console / Timer. Caller fs/net/process authority therefore cannot
+        // remain live across this boundary. The exact prior set is restored
+        // after every regular return, fault, budget refusal, or cancellation
+        // path below.
         let observability_reservation_bytes = match self
-            .reserve_generated_code_invocation_event(&provenance, &generated_capabilities)
+            .reserve_generated_code_invocation_event(&provenance, &effective_generated_capabilities)
         {
             Ok(reservation_bytes) => reservation_bytes,
             Err(error) => {
@@ -28748,6 +28889,12 @@ impl InterpreterCore {
         let setup_previous_scope_bytes = self.scope_chain_memory_bytes();
         let setup_previous_call_stack_bytes = self.call_stack_memory_bytes();
         let mut wrapper_memory_committed = false;
+        let generated_grant_set = effective_generated_capabilities
+            .iter()
+            .copied()
+            .collect::<BTreeSet<_>>();
+        let previous_granted_capabilities =
+            std::mem::replace(&mut self.config.granted_capabilities, generated_grant_set);
         let result = (|| -> Result<Value, InterpreterError> {
             self.registers =
                 SeedTrackedField::new(vec![Value::Undefined; self.config.max_registers as usize]);
@@ -28769,9 +28916,6 @@ impl InterpreterCore {
             // no structural or binding-cell edge to either caller or owner
             // module frames.
             self.scope_chain.frames = vec![generated_scope_frame];
-            for capability in &generated_capabilities {
-                self.config.granted_capabilities.insert(*capability);
-            }
             self.apply_register_context_scope_call_stack_memory_delta(
                 setup_previous_register_bytes,
                 setup_previous_register_context_label_bytes,
@@ -28869,7 +29013,7 @@ impl InterpreterCore {
                 .instructions_executed
                 .saturating_sub(instructions_before);
             let (kind, outcome) = Self::generated_code_invocation_outcome(&result, &result_label);
-            let granted_capabilities = generated_capabilities
+            let granted_capabilities = effective_generated_capabilities
                 .iter()
                 .map(|capability| Self::contained_codegen_capability_name(*capability).to_string())
                 .collect();
@@ -70245,6 +70389,97 @@ mod active_builtin_regressions {
     }
 
     #[test]
+    fn contained_codegen_runtime_inference_is_canonical_name_bound_bd_fw7zd_8_4() {
+        fn load_name_module(name: &str) -> Ir3Module {
+            let mut module = halted_test_module();
+            module.instructions = vec![
+                Ir3Instruction::LoadName {
+                    dst: 0,
+                    name_pool_index: 0,
+                    allow_missing: false,
+                },
+                Ir3Instruction::Halt,
+            ];
+            module.constant_pool = vec![name.into()];
+            module
+        }
+
+        let mut core = test_core();
+        core.ensure_generated_function_realm_globals()
+            .expect("initialize canonical generated realm");
+        let canonical_frame = core
+            .generated_function_realm_scope_frame()
+            .expect("clone canonical generated realm frame");
+
+        for (name, expected) in [
+            ("console", RuntimeCapability::Console),
+            ("setTimeout", RuntimeCapability::Timer),
+            ("Math", RuntimeCapability::Builtin),
+        ] {
+            assert_eq!(
+                core.contained_codegen_effective_capability_grant(
+                    &load_name_module(name),
+                    &canonical_frame,
+                )
+                .expect("derive canonical runtime-name authority")
+                .into_iter()
+                .collect::<BTreeSet<_>>(),
+                BTreeSet::from([
+                    RuntimeCapability::VmDispatch,
+                    RuntimeCapability::HeapAllocate,
+                    expected,
+                ]),
+                "canonical generated-realm name {name}"
+            );
+        }
+
+        let math_value = canonical_frame.bindings["Math"]
+            .state()
+            .expect("read canonical Math binding")
+            .value
+            .clone();
+        let mut alias_frame = canonical_frame.clone();
+        alias_frame.bindings.insert(
+            "userMathAlias".to_string(),
+            ScopeBinding::with_state(BindingKind::Var, math_value, true),
+        );
+        assert_eq!(
+            core.contained_codegen_effective_capability_grant(
+                &load_name_module("userMathAlias"),
+                &alias_frame,
+            )
+            .expect("derive user-alias authority")
+            .into_iter()
+            .collect::<BTreeSet<_>>(),
+            BTreeSet::from([
+                RuntimeCapability::VmDispatch,
+                RuntimeCapability::HeapAllocate,
+            ]),
+            "a generated sloppy-global alias is not a capability declaration"
+        );
+
+        let mut overwritten_frame = canonical_frame;
+        overwritten_frame.bindings.insert(
+            "Math".to_string(),
+            ScopeBinding::with_state(BindingKind::Var, Value::Int(7), true),
+        );
+        assert_eq!(
+            core.contained_codegen_effective_capability_grant(
+                &load_name_module("Math"),
+                &overwritten_frame,
+            )
+            .expect("derive overwritten canonical-name authority")
+            .into_iter()
+            .collect::<BTreeSet<_>>(),
+            BTreeSet::from([
+                RuntimeCapability::VmDispatch,
+                RuntimeCapability::HeapAllocate,
+            ]),
+            "a writable canonical name whose value is no longer an intrinsic must not infer a grant"
+        );
+    }
+
+    #[test]
     fn generated_code_fault_codes_are_stable_classifications() {
         // The audit `outcome` for a faulting invocation is a stable, payload-free
         // classification — never the raw (possibly adversarial) error text.
@@ -90850,6 +91085,146 @@ mod function_prototype_call_apply_tests_current {
             refused.estimated_memory_bytes(),
             refused.recompute_estimated_memory_bytes()
         );
+    }
+
+    #[test]
+    fn generated_authority_envelope_replaces_and_restores_full_caller_grants_bd_fw7zd_8_4() {
+        fn fixture(
+            case: &str,
+            instructions: Vec<Ir3Instruction>,
+            required_capabilities: Vec<CapabilityTag>,
+            cancellation_token: Option<CancellationToken>,
+        ) -> (
+            InterpreterCore,
+            BuiltinFunction,
+            BTreeSet<RuntimeCapability>,
+        ) {
+            let mut owner = test_module_with_functions(Vec::new(), Vec::new());
+            owner.header.source_label = format!("generated-authority-{case}-owner.mjs");
+            let mut generated = test_module_with_functions(
+                instructions,
+                vec![Ir3FunctionDesc {
+                    entry: 0,
+                    arity: 0,
+                    frame_size: 1,
+                    name: Some(format!("generated_authority_{case}")),
+                    is_generator: false,
+                    rest_param_index: None,
+                }],
+            );
+            generated.required_capabilities = required_capabilities;
+
+            let mut config = InterpreterConfig::quickjs_defaults();
+            config.granted_capabilities = RuntimeCapability::ALL.into_iter().collect();
+            if let Some(token) = cancellation_token {
+                config.cancellation_token = Some(token);
+                // The wrapper Call executes at count one; cancellation fires
+                // at count two before the generated body executes.
+                config.checkpoint_density = 2;
+            }
+            let original_grants = config.granted_capabilities.clone();
+            let mut core = InterpreterCore::new(config, format!("generated-authority-{case}"));
+            core.ensure_module_record(&owner, &owner.header.source_label)
+                .expect("retain generated authority owner");
+            let (builtin, _, _) = retain_generated_test_artifact(
+                &mut core,
+                &owner,
+                generated,
+                0,
+                &format!("authority {case}"),
+            );
+            (core, builtin, original_grants)
+        }
+
+        let (mut success, success_builtin, success_grants) = fixture(
+            "success",
+            vec![
+                Ir3Instruction::LoadInt { dst: 0, value: 7 },
+                Ir3Instruction::Return { value: 0 },
+            ],
+            Vec::new(),
+            None,
+        );
+        assert_eq!(
+            success
+                .call_generated_function_artifact(
+                    &success_builtin,
+                    RegRange { start: 0, count: 0 },
+                    None,
+                    None,
+                )
+                .expect("contained generated success")
+                .0,
+            Value::Int(7)
+        );
+        assert_eq!(success.config.granted_capabilities, success_grants);
+        assert_eq!(
+            success.generated_code_audit[0].granted_capabilities,
+            ["vm_dispatch", "heap_allocate"]
+        );
+
+        let (mut fault, fault_builtin, fault_grants) = fixture(
+            "fault",
+            vec![
+                Ir3Instruction::HostCall {
+                    capability: CapabilityTag("fs:read".to_string()),
+                    args: RegRange { start: 0, count: 0 },
+                    dst: 0,
+                },
+                Ir3Instruction::Return { value: 0 },
+            ],
+            vec![CapabilityTag("fs:read".to_string())],
+            None,
+        );
+        assert!(matches!(
+            fault.call_generated_function_artifact(
+                &fault_builtin,
+                RegRange { start: 0, count: 0 },
+                None,
+                None,
+            ),
+            Err(InterpreterError::CapabilityDenied { capability }) if capability == "fs:read"
+        ));
+        assert_eq!(fault.config.granted_capabilities, fault_grants);
+        assert_eq!(
+            fault.generated_code_audit[0].kind,
+            GeneratedCodeEventKind::Faulted
+        );
+        assert_eq!(
+            fault.generated_code_audit[0].granted_capabilities,
+            ["vm_dispatch", "heap_allocate"]
+        );
+
+        let cancellation_token = CancellationToken::new();
+        cancellation_token.cancel();
+        let (mut cancelled, cancelled_builtin, cancelled_grants) = fixture(
+            "cancelled",
+            vec![
+                Ir3Instruction::LoadInt { dst: 0, value: 9 },
+                Ir3Instruction::Return { value: 0 },
+            ],
+            Vec::new(),
+            Some(cancellation_token.clone()),
+        );
+        assert_eq!(
+            cancelled.call_generated_function_artifact(
+                &cancelled_builtin,
+                RegRange { start: 0, count: 0 },
+                None,
+                None,
+            ),
+            Err(InterpreterError::Cancelled)
+        );
+        assert_eq!(cancelled.config.granted_capabilities, cancelled_grants);
+        assert_eq!(
+            cancelled.generated_code_audit[0].kind,
+            GeneratedCodeEventKind::Faulted
+        );
+        assert_eq!(
+            cancelled.generated_code_audit[0].granted_capabilities,
+            ["vm_dispatch", "heap_allocate"]
+        );
+        cancellation_token.reset();
     }
 
     #[test]

@@ -26787,6 +26787,8 @@ impl InterpreterCore {
 
         let previous_heap_len = self.heap.len();
         let previous_estimated_memory_bytes = self.estimated_memory_bytes;
+        #[cfg(debug_assertions)]
+        let previous_recomputed_memory_bytes = self.recompute_estimated_memory_bytes();
         let result = (|| -> Result<(), InterpreterError> {
             let console = self.alloc_console_global()?;
             let performance = self.alloc_performance_global()?;
@@ -26838,10 +26840,16 @@ impl InterpreterCore {
             return Err(error);
         }
 
-        debug_assert_eq!(
-            self.estimated_memory_bytes,
-            self.recompute_estimated_memory_bytes()
-        );
+        #[cfg(debug_assertions)]
+        {
+            let recomputed_memory_bytes = self.recompute_estimated_memory_bytes();
+            debug_assert!(self.estimated_memory_bytes >= previous_estimated_memory_bytes);
+            debug_assert!(recomputed_memory_bytes >= previous_recomputed_memory_bytes);
+            debug_assert_eq!(
+                self.estimated_memory_bytes - previous_estimated_memory_bytes,
+                recomputed_memory_bytes - previous_recomputed_memory_bytes
+            );
+        }
         Ok(())
     }
 
@@ -28828,6 +28836,29 @@ impl InterpreterCore {
         self.restore_module_execution(snapshot, wrapper_memory_committed);
         self.active_cjs_context = saved_active_cjs_context;
         self.config.granted_capabilities = previous_granted_capabilities;
+
+        // A native JS fault raised inside the isolated generated run (for
+        // example, an unresolved name in the canonical realm) has no inner
+        // catch frame left to materialize it as a thrown JS Error. Preserve
+        // the native variant when the restored caller can still catch/reject
+        // it through `run_loop`; otherwise surface the same uncaught-exception
+        // boundary diagnostic as an explicit throw. This keeps containment
+        // failures distinguishable from parse-time failures without turning
+        // engine/resource faults into catchable guest exceptions.
+        let result = match result {
+            Err(error)
+                if !self.has_active_catch_frame() && self.nearest_async_call_depth().is_none() =>
+            {
+                if let Some(error_name) = Self::js_catchable_error_name(&error) {
+                    Err(InterpreterError::UncaughtException {
+                        value: format!("{error_name}: {error}"),
+                    })
+                } else {
+                    Err(error)
+                }
+            }
+            other => other,
+        };
 
         // bd-8enww.3.4: record the invocation in the audit trail with the exact
         // instruction budget the generated body consumed. The shared counter is
@@ -90687,6 +90718,32 @@ mod function_prototype_call_apply_tests_current {
         assert_eq!(
             exact.estimated_memory_bytes(),
             exact.recompute_estimated_memory_bytes()
+        );
+
+        // Re-entrant module calls can construct a generated function while an
+        // outer wrapper has a temporary, deliberately non-resident precharge.
+        // Realm initialization must preserve that accounting offset while
+        // proving its own retained delta exactly.
+        let mut nested = fixture();
+        let outer_wrapper_precharge = 12_298;
+        nested
+            .apply_memory_component_delta(0, outer_wrapper_precharge)
+            .expect("reserve outer wrapper memory");
+        nested
+            .ensure_generated_function_realm_globals()
+            .expect("initialize generated realm under an outer precharge");
+        assert_eq!(
+            nested
+                .estimated_memory_bytes()
+                .saturating_sub(nested.recompute_estimated_memory_bytes()),
+            outer_wrapper_precharge
+        );
+        nested
+            .apply_memory_component_delta(outer_wrapper_precharge, 0)
+            .expect("release outer wrapper memory");
+        assert_eq!(
+            nested.estimated_memory_bytes(),
+            nested.recompute_estimated_memory_bytes()
         );
     }
 

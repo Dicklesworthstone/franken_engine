@@ -10899,7 +10899,7 @@ fn lower_expression_to_ir1(
         _ => None,
     };
     let op_start = ops.len();
-    if !try_lower_net_expression_to_ir1(
+    let lowered_by_stack_bounded_helper = try_lower_net_expression_to_ir1(
         expression,
         ops,
         bindings,
@@ -10908,7 +10908,17 @@ fn lower_expression_to_ir1(
         root_scope_id,
         label_counter,
         span_table,
-    )? {
+    )? || try_lower_logical_expression_to_ir1(
+        expression,
+        ops,
+        bindings,
+        binding_lookup,
+        binding_index,
+        root_scope_id,
+        label_counter,
+        span_table,
+    )?;
+    if !lowered_by_stack_bounded_helper {
         lower_expression_to_ir1_inner(
             expression,
             ops,
@@ -11009,6 +11019,111 @@ fn try_lower_net_expression_to_ir1(
     ops.push(Ir1Op::HostCall {
         capability: capability.to_string(),
         arg_count: arg_count as u32,
+    });
+    Ok(true)
+}
+
+/// Keep recursively nested short-circuit expressions out of
+/// [`lower_expression_to_ir1_inner`]'s large debug-build stack frame.
+///
+/// A generated-function containment predicate with eight ordinary `&&`
+/// operands exhausted Rust's fixed 2 MiB test-thread stack while the same AST
+/// lowered successfully with a larger stack. Routing logical nodes through
+/// this smaller frame preserves the existing IR exactly and bounds each
+/// recursive step to the state actually needed for short-circuit lowering.
+#[inline(never)]
+#[allow(clippy::too_many_arguments)]
+fn try_lower_logical_expression_to_ir1(
+    expression: &Expression,
+    ops: &mut Vec<Ir1Op>,
+    bindings: &mut Vec<ResolvedBinding>,
+    binding_lookup: &mut BTreeMap<String, BindingId>,
+    binding_index: &mut BindingId,
+    root_scope_id: ScopeId,
+    label_counter: &mut u32,
+    span_table: &mut Vec<Ir1OpSpanEntry>,
+) -> Result<bool, LoweringPipelineError> {
+    let Expression::Binary {
+        operator,
+        left,
+        right,
+    } = expression
+    else {
+        return Ok(false);
+    };
+    if !matches!(
+        operator,
+        BinaryOperator::LogicalAnd | BinaryOperator::LogicalOr | BinaryOperator::NullishCoalescing
+    ) {
+        return Ok(false);
+    }
+
+    let temp_binding = alloc_internal_binding(
+        bindings,
+        binding_lookup,
+        binding_index,
+        root_scope_id,
+        "short_circuit",
+    )?;
+    let eval_rhs_label = alloc_label(label_counter);
+    let end_label = alloc_label(label_counter);
+
+    lower_expression_to_ir1(
+        left,
+        ops,
+        bindings,
+        binding_lookup,
+        binding_index,
+        root_scope_id,
+        label_counter,
+        span_table,
+    )?;
+    ops.push(Ir1Op::StoreBinding {
+        binding_id: temp_binding,
+    });
+    ops.push(Ir1Op::Pop);
+    ops.push(Ir1Op::LoadBinding {
+        binding_id: temp_binding,
+    });
+
+    match operator {
+        BinaryOperator::LogicalAnd => ops.push(Ir1Op::JumpIfTruthy {
+            label_id: eval_rhs_label,
+        }),
+        BinaryOperator::LogicalOr => ops.push(Ir1Op::JumpIfFalsyConsume {
+            label_id: eval_rhs_label,
+        }),
+        BinaryOperator::NullishCoalescing => ops.push(Ir1Op::JumpIfNullish {
+            label_id: eval_rhs_label,
+        }),
+        _ => {
+            return Err(LoweringPipelineError::InvariantViolation {
+                detail: "unexpected operator in logical expression helper",
+            });
+        }
+    }
+
+    ops.push(Ir1Op::Jump {
+        label_id: end_label,
+    });
+    ops.push(Ir1Op::Label { id: eval_rhs_label });
+    lower_expression_to_ir1(
+        right,
+        ops,
+        bindings,
+        binding_lookup,
+        binding_index,
+        root_scope_id,
+        label_counter,
+        span_table,
+    )?;
+    ops.push(Ir1Op::StoreBinding {
+        binding_id: temp_binding,
+    });
+    ops.push(Ir1Op::Pop);
+    ops.push(Ir1Op::Label { id: end_label });
+    ops.push(Ir1Op::LoadBinding {
+        binding_id: temp_binding,
     });
     Ok(true)
 }
@@ -11174,82 +11289,6 @@ fn lower_expression_to_ir1_inner(
             left,
             right,
         } => {
-            if matches!(
-                operator,
-                BinaryOperator::LogicalAnd
-                    | BinaryOperator::LogicalOr
-                    | BinaryOperator::NullishCoalescing
-            ) {
-                let temp_binding = alloc_internal_binding(
-                    bindings,
-                    binding_lookup,
-                    binding_index,
-                    root_scope_id,
-                    "short_circuit",
-                )?;
-                let eval_rhs_label = alloc_label(label_counter);
-                let end_label = alloc_label(label_counter);
-
-                lower_expression_to_ir1(
-                    left,
-                    ops,
-                    bindings,
-                    binding_lookup,
-                    binding_index,
-                    root_scope_id,
-                    label_counter,
-                    span_table,
-                )?;
-                ops.push(Ir1Op::StoreBinding {
-                    binding_id: temp_binding,
-                });
-                ops.push(Ir1Op::Pop);
-                ops.push(Ir1Op::LoadBinding {
-                    binding_id: temp_binding,
-                });
-
-                match operator {
-                    BinaryOperator::LogicalAnd => ops.push(Ir1Op::JumpIfTruthy {
-                        label_id: eval_rhs_label,
-                    }),
-                    BinaryOperator::LogicalOr => ops.push(Ir1Op::JumpIfFalsyConsume {
-                        label_id: eval_rhs_label,
-                    }),
-                    BinaryOperator::NullishCoalescing => ops.push(Ir1Op::JumpIfNullish {
-                        label_id: eval_rhs_label,
-                    }),
-                    _ => {
-                        return Err(LoweringPipelineError::InvariantViolation {
-                            detail: "unexpected operator in logical assignment",
-                        });
-                    }
-                }
-
-                ops.push(Ir1Op::Jump {
-                    label_id: end_label,
-                });
-                ops.push(Ir1Op::Label { id: eval_rhs_label });
-                lower_expression_to_ir1(
-                    right,
-                    ops,
-                    bindings,
-                    binding_lookup,
-                    binding_index,
-                    root_scope_id,
-                    label_counter,
-                    span_table,
-                )?;
-                ops.push(Ir1Op::StoreBinding {
-                    binding_id: temp_binding,
-                });
-                ops.push(Ir1Op::Pop);
-                ops.push(Ir1Op::Label { id: end_label });
-                ops.push(Ir1Op::LoadBinding {
-                    binding_id: temp_binding,
-                });
-                return Ok(());
-            }
-
             if *operator == BinaryOperator::Instanceof
                 && matches!(right.as_ref(), Expression::Identifier(name) if name == "Array")
                 && !is_lexically_shadowed(binding_lookup, "Array")

@@ -7,8 +7,9 @@
 use std::collections::BTreeSet;
 
 use frankenengine_engine::entropy_evidence_compressor::{
-    ArithmeticCoder, CompressedEvidence, CompressionCertificate, ENTROPY_SCHEMA_VERSION,
-    EntropyError, EntropyEstimator, SufficientStatistic,
+    ArithmeticCoder, COMPRESSION_CERTIFICATE_SCHEMA_VERSION, CompressedEvidence,
+    CompressionCertificate, ENTROPY_SCHEMA_VERSION, EntropyError, EntropyEstimator,
+    SufficientStatistic,
 };
 use frankenengine_engine::hash_tiers::ContentHash;
 
@@ -557,10 +558,9 @@ fn enrichment_compressed_evidence_bytes_positive() {
         compressed.compressed_bytes,
         compressed.compressed_data.len()
     );
-    assert_eq!(
-        compressed.compressed_bits,
-        compressed.compressed_bytes as i64 * 8
-    );
+    assert!(compressed.compressed_bits > 0);
+    assert!(compressed.compressed_bits <= compressed.compressed_bytes as i64 * 8);
+    assert!(compressed.compressed_bits > (compressed.compressed_bytes as i64 - 1) * 8);
 }
 
 // -----------------------------------------------------------------------
@@ -574,7 +574,7 @@ fn enrichment_certificate_schema_version() {
     let compressed = coder.encode(&[0, 1]).unwrap();
     let kraft = coder.verify_kraft_inequality().unwrap();
     let cert = CompressionCertificate::build(&est, &compressed, kraft);
-    assert_eq!(cert.schema, ENTROPY_SCHEMA_VERSION);
+    assert_eq!(cert.schema, COMPRESSION_CERTIFICATE_SCHEMA_VERSION);
 }
 
 #[test]
@@ -601,12 +601,11 @@ fn enrichment_certificate_entropy_positive() {
 fn enrichment_certificate_is_within_factor() {
     let est = uniform_two_estimator();
     let coder = ArithmeticCoder::from_estimator(&est).unwrap();
-    let symbols: Vec<u32> = (0..200).map(|i| i % 2).collect();
+    let symbols: Vec<u32> = (0..est.total_count).map(|i| (i % 2) as u32).collect();
     let compressed = coder.encode(&symbols).unwrap();
-    let kraft = coder.verify_kraft_inequality().unwrap();
-    let cert = CompressionCertificate::build(&est, &compressed, kraft);
+    let cert = CompressionCertificate::build_verified(&est, &coder, &compressed).unwrap();
     // Within 10x of Shannon optimal (very generous)
-    assert!(cert.is_within_factor(10_000_000));
+    assert!(cert.is_within_factor(&coder, &compressed, 10_000_000));
 }
 
 #[test]

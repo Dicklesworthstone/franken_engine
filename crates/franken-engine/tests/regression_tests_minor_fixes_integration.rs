@@ -24,9 +24,52 @@ fn test_console_operations_integration_regression() {
 
 #[test]
 fn test_process_global_minimal_shape_regression() {
+    // bd-846vj: `typeof` inspects a reference's type without exercising ambient
+    // authority (spec: `typeof <unresolved>` is "undefined", never a throw), so
+    // `typeof process` / `typeof process.env` resolve the minimal injected
+    // `process` global to "object" without an `env.read` capability.
     assert_eq!(eval_value("typeof process"), "object");
     assert_eq!(eval_value("typeof process.env"), "object");
+
+    // bd-xewby: a direct engine `eval` is a TRUSTED top-level eval context, so
+    // benign static `process`-SHAPE reads are granted (`ProcessShapeRead`).
+    // `process.argv` resolves to the injected empty argv array, while `process.pid`
+    // is a fixed engine-contained value rather than the host process id.
+    // (Untrusted extension lowering — via `lower_ir0_to_ir1` / the orchestrator —
+    // still rejects the SAME read; see `ambient_authority_lowering_rejection_integration`.)
     assert_eq!(eval_value("process.argv.length"), "0");
+    assert_eq!(eval_value("process.pid"), "1");
+
+    // The grant is member-scoped: it never hands guest code the ambient object
+    // itself, which would make aliases and computed property access possible.
+    let mut engine = QuickJsInspiredNativeEngine;
+    assert!(
+        engine.eval("process").is_err(),
+        "a bare process object load must stay denied"
+    );
+
+    // The trusted grant is NARROW: it confers only `ProcessShapeRead`, never
+    // `EnvRead`. An environment VARIABLE VALUE read (`process.env.X`) stays denied
+    // at lowering even in a trusted eval — the SAME gate the red-team `process.env`
+    // scenarios rely on — so `process.env.PATH` is rejected rather than returning a
+    // value.
+    let mut engine = QuickJsInspiredNativeEngine;
+    match engine.eval("process.env.PATH") {
+        Ok(outcome) => panic!(
+            "expected `process.env.PATH` (an env VALUE read) to stay denied by the \
+             ambient-authority gate even in trusted eval, got value {:?}",
+            outcome.value
+        ),
+        Err(error) => {
+            let rendered = format!("{error:?}").to_lowercase();
+            assert!(
+                rendered.contains("ambient")
+                    || rendered.contains("env.read")
+                    || rendered.contains("env_read"),
+                "expected an ambient-authority denial for `process.env.PATH`, got: {error:?}"
+            );
+        }
+    }
 }
 
 #[test]

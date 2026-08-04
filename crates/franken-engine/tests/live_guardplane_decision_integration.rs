@@ -11,7 +11,9 @@ use std::path::PathBuf;
 include!("../../../examples/live_guardplane_decision_example.rs");
 
 fn temp_output_dir(test_name: &str) -> PathBuf {
-    std::env::temp_dir().join(format!("guardplane_test_{}", test_name))
+    // Relative path: `ProofArtifactPaths::standard` rejects absolute run
+    // directories (bundle paths must be portable), and `tmp/` is gitignored.
+    PathBuf::from(format!("tmp/guardplane_test_{}", test_name))
 }
 
 fn cleanup_temp_dir(dir: &PathBuf) {

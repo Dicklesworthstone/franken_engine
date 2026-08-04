@@ -85,3 +85,120 @@ fn function_declaration_whole_object_pattern_default_applies_before_destructurin
 fn arrow_whole_array_pattern_default_applies_before_destructuring() {
     assert_eq!(eval_value("let f = ([a = 7] = []) => a; f();"), "7");
 }
+
+#[test]
+fn parameter_defaults_capture_outer_binding_before_body_shadow_bd_4thqe() {
+    let cases = [
+        (
+            "function declaration",
+            "const x = 42; function f(a = x) { let x = 7; return a; } f();",
+        ),
+        (
+            "arrow function",
+            "const x = 42; let f = (a = x) => { let x = 7; return a; }; f();",
+        ),
+        (
+            "function expression",
+            "const x = 42; let f = function (a = x) { let x = 7; return a; }; f();",
+        ),
+    ];
+
+    for (form, source) in cases {
+        assert_eq!(eval_value(source), "42", "{form}");
+    }
+}
+
+#[test]
+fn parameter_defaults_honor_outer_static_global_shadows_bd_4thqe() {
+    let cases = [
+        "const Math = { abs: n => n + 40 }; function f(v = Math.abs(2)) { return v; } f();",
+        "const Math = { abs: n => n + 40 }; let f = (v = Math.abs(2)) => v; f();",
+        "const Math = { abs: n => n + 40 }; let f = function (v = Math.abs(2)) { return v; }; f();",
+    ];
+
+    for source in cases {
+        assert_eq!(eval_value(source), "42");
+    }
+}
+
+#[test]
+fn parameter_environment_keeps_body_bindings_out_of_defaults_bd_4thqe() {
+    assert_eq!(
+        eval_value("function f(v = Math.abs(-5)) { let Math = { abs: () => 99 }; return v; } f();"),
+        "5"
+    );
+    assert_eq!(
+        eval_value(
+            "const x = 42; function f({ value = x } = {}) { let x = 7; return value; } f();"
+        ),
+        "42"
+    );
+    assert_eq!(
+        eval_value("const a = 99; function f(a = 3, b = a) { return b; } f();"),
+        "3"
+    );
+    assert_eq!(
+        eval_value("const x = 42; function f(a = x) { if (true) { var x = 7; } return a; } f();"),
+        "42"
+    );
+}
+
+#[test]
+fn parameter_default_capture_crosses_an_intermediate_function_bd_4thqe() {
+    assert_eq!(
+        eval_value(
+            "const x = 42;\
+             function outer() {\
+                 return function inner(a = x) { let x = 7; return a; };\
+             }\
+             outer()();"
+        ),
+        "42"
+    );
+}
+
+#[test]
+fn parameter_runtime_globals_survive_same_named_body_bindings_bd_4thqe() {
+    assert_eq!(
+        eval_value(
+            "function f(a = typeof performance, b = typeof console, c = typeof Function) {\
+                 let performance = 0; let console = 0; let Function = 0;\
+                 return a + ':' + b + ':' + c;\
+             } f();"
+        ),
+        "object:object:function"
+    );
+}
+
+#[test]
+fn parameter_default_closure_retains_earlier_parameter_capture_bd_4thqe() {
+    assert_eq!(
+        eval_value("function f(a = 3, g = () => a) { return g; } let g = f(); g();"),
+        "3"
+    );
+}
+
+#[test]
+fn missing_parameter_default_is_not_hidden_by_body_binding_bd_4thqe() {
+    assert_eq!(
+        eval_value(
+            "try {\
+                 function f(a = missing) { let missing = 1; return a; }\
+                 f();\
+             } catch (error) { error.name; }"
+        ),
+        "ReferenceError"
+    );
+}
+
+#[test]
+fn named_function_expression_self_is_visible_to_its_default_bd_4thqe() {
+    assert_eq!(
+        eval_value(
+            "let Inner = 7;\
+             let F = function Inner(v = Inner) { let Inner = 9; return v; };\
+             let G = F; F = 0; G() === G && Inner === 7;"
+        ),
+        "true"
+    );
+}

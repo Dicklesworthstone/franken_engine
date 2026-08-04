@@ -20,6 +20,9 @@
 //!   only for this subprocess/CLI methodology, not as broad VM throughput.
 
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
+use frankenengine_engine::runtime_lockstep_helpers::{
+    RuntimeId, RuntimeLockstepConfig, create_benchmark_trace_from_output,
+};
 use serde_json::Value;
 use std::env;
 use std::ffi::OsString;
@@ -50,20 +53,39 @@ struct Workload {
     expected_stdout: &'static str,
 }
 
+// Loop bounds are sized to complete within frankenctl's default containment
+// instruction budget (the lockstep oracle's job is cross-runtime differential
+// correctness, not throughput magnitude). `frankenctl run` enforces the security
+// containment budget by design; benchmark workloads run under that real default
+// rather than an artificially raised ceiling.
 const WORKLOADS: &[Workload] = &[
     Workload {
         id: "numeric_loop",
         source: r#"
 var i = 0;
 var sum = 0;
-while (i < 10000) {
+while (i < 5000) {
   sum = sum + i;
   i = i + 1;
 }
 console.log(sum);
 sum;
 "#,
-        expected_stdout: "49995000",
+        expected_stdout: "12497500",
+    },
+    Workload {
+        id: "basic_arithmetic",
+        source: r#"
+var i = 0;
+var acc = 1;
+while (i < 3000) {
+  acc = (acc * 17 + i) % 1000003;
+  i = i + 1;
+}
+console.log(acc);
+acc;
+"#,
+        expected_stdout: "994493",
     },
     Workload {
         id: "json_roundtrip",
@@ -241,6 +263,10 @@ fn bench_comparative_bun(c: &mut Criterion) {
     let fixtures = materialize_workloads();
 
     for (workload, path) in WORKLOADS.iter().zip(fixtures.iter()) {
+        if !workload_selected(workload.id) {
+            continue;
+        }
+
         verify_equivalent_output(&frankenctl, &bun, workload, path);
 
         let mut group = c.benchmark_group(format!("comparative_bun/{}", workload.id));
@@ -336,24 +362,118 @@ fn materialize_workloads() -> Vec<PathBuf> {
 }
 
 fn verify_equivalent_output(frankenctl: &Path, bun: &Path, workload: &Workload, path: &Path) {
-    let bun_output = run_bun(bun, path);
-    let bun_stdout = stdout_trimmed(&bun_output);
+    let bun_measurement = run_bun_measured(bun, path);
+    let bun_stdout = stdout_trimmed(&bun_measurement.output);
     assert_eq!(
         bun_stdout, workload.expected_stdout,
         "Bun output for {} drifted from the pinned workload expectation",
         workload.id
     );
 
+    let franken_started = Instant::now();
     let franken_output = run_frankenctl(frankenctl, workload.id, path);
+    let franken_wall_time_ns = franken_started
+        .elapsed()
+        .as_nanos()
+        .min(u128::from(u64::MAX)) as u64;
     let franken_json: Value =
         serde_json::from_slice(&franken_output.stdout).expect("frankenctl run should emit JSON");
-    assert!(
-        franken_json_contains_value(&franken_json, workload.expected_stdout),
-        "FrankenEngine output for {} did not match Bun stdout {}; frankenctl JSON was {}",
-        workload.id,
-        workload.expected_stdout,
-        franken_json
+    let franken_stdout = franken_observed_stdout(&franken_json, workload.expected_stdout);
+    assert_eq!(
+        franken_stdout, workload.expected_stdout,
+        "FrankenEngine output for {} did not match Bun stdout; frankenctl JSON was {}",
+        workload.id, franken_json
     );
+
+    emit_lockstep_traces(
+        workload.id,
+        &bun_measurement.output,
+        bun_measurement.wall_time_ns,
+        bun_measurement.peak_rss_bytes,
+        &franken_output,
+        franken_wall_time_ns,
+        franken_stdout,
+    );
+}
+
+fn workload_selected(workload_id: &str) -> bool {
+    env::var("RUNTIME_LOCKSTEP_WORKLOAD_FILTER")
+        .ok()
+        .map(|filter| {
+            filter.trim().is_empty() || filter.split(',').any(|item| item.trim() == workload_id)
+        })
+        .unwrap_or(true)
+}
+
+fn runtime_lockstep_config() -> Option<RuntimeLockstepConfig> {
+    if env::var("RUNTIME_LOCKSTEP_ENABLED").ok().as_deref() != Some("1") {
+        return None;
+    }
+
+    Some(RuntimeLockstepConfig {
+        traces_base_dir: env::var_os("RUNTIME_LOCKSTEP_TRACES_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| env::temp_dir().join("franken_engine_lockstep_traces")),
+        run_oracle: false,
+        cleanup_traces: false,
+    })
+}
+
+fn emit_lockstep_traces(
+    workload_id: &str,
+    bun_output: &Output,
+    bun_wall_time_ns: u64,
+    bun_peak_rss_bytes: u64,
+    franken_output: &Output,
+    franken_wall_time_ns: u64,
+    franken_stdout: String,
+) {
+    let Some(config) = runtime_lockstep_config() else {
+        return;
+    };
+
+    create_benchmark_trace_from_output(
+        workload_id,
+        RuntimeId::Bun,
+        bun_output,
+        Duration::from_nanos(bun_wall_time_ns),
+        Some(bun_peak_rss_bytes),
+        &config,
+    )
+    .unwrap_or_else(|err| panic!("failed to write Bun lockstep trace for {workload_id}: {err}"));
+
+    let franken_trace_output = Output {
+        status: franken_output.status,
+        stdout: franken_stdout.into_bytes(),
+        stderr: franken_output.stderr.clone(),
+    };
+    create_benchmark_trace_from_output(
+        workload_id,
+        RuntimeId::FrankenEngine,
+        &franken_trace_output,
+        Duration::from_nanos(franken_wall_time_ns),
+        Some(0),
+        &config,
+    )
+    .unwrap_or_else(|err| {
+        panic!("failed to write FrankenEngine lockstep trace for {workload_id}: {err}")
+    });
+}
+
+fn franken_observed_stdout(value: &Value, expected: &str) -> String {
+    let entries = value
+        .get("console_output")
+        .and_then(Value::as_array)
+        .unwrap_or_else(|| panic!("frankenctl JSON is missing observed console_output: {value}"));
+
+    entries
+        .iter()
+        .filter_map(|entry| entry.get("message").and_then(Value::as_str))
+        .find(|message| message.trim() == expected)
+        .map(|message| message.trim().to_string())
+        .unwrap_or_else(|| {
+            panic!("frankenctl JSON did not contain observed console message {expected:?}: {value}")
+        })
 }
 
 fn run_frankenctl(frankenctl: &Path, workload_id: &str, path: &Path) -> Output {
@@ -366,21 +486,6 @@ fn run_frankenctl(frankenctl: &Path, workload_id: &str, path: &Path) -> Output {
         OsString::from(extension_id),
     ];
     run_checked(frankenctl, &args)
-}
-
-fn run_bun(bun: &Path, path: &Path) -> Output {
-    match measurement_mode() {
-        #[cfg(target_os = "linux")]
-        MeasurementMode::DirectLinuxWait4 => match run_bun_with_measurement(bun, path) {
-            Ok(measurement) => measurement.output,
-            Err(e) => panic!("Bun measurement failed: {e}"),
-        },
-        #[cfg(not(target_os = "linux"))]
-        MeasurementMode::DirectLinuxWait4 => {
-            unreachable!("Direct Linux measurement mode selected on non-Linux platform")
-        }
-        MeasurementMode::SimpleCommand => run_checked(bun, &[path.as_os_str().to_os_string()]),
-    }
 }
 
 fn run_bun_measured(bun: &Path, path: &Path) -> BunMeasurement {
@@ -424,33 +529,6 @@ fn run_checked(program: &Path, args: &[OsString]) -> Output {
 
 fn stdout_trimmed(output: &Output) -> String {
     String::from_utf8_lossy(&output.stdout).trim().to_string()
-}
-
-fn franken_json_contains_value(value: &Value, expected: &str) -> bool {
-    value
-        .get("console_output")
-        .and_then(Value::as_array)
-        .map(|entries| {
-            entries.iter().any(|entry| {
-                entry
-                    .get("message")
-                    .and_then(Value::as_str)
-                    .is_some_and(|message| message.trim() == expected)
-            })
-        })
-        .unwrap_or(false)
-        || value_matches_expected(value.get("execution_value"), expected)
-}
-
-fn value_matches_expected(value: Option<&Value>, expected: &str) -> bool {
-    match value {
-        Some(Value::String(actual)) => actual.trim() == expected,
-        Some(Value::Number(actual)) => actual.to_string() == expected,
-        Some(Value::Object(object)) => object
-            .get("value")
-            .is_some_and(|inner| value_matches_expected(Some(inner), expected)),
-        _ => false,
-    }
 }
 
 criterion_group! {

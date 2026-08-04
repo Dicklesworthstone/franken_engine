@@ -30,13 +30,14 @@ use frankenengine_engine::capability::RuntimeCapability;
 use frankenengine_engine::containment_executor::{ContainmentReceipt, ContainmentState};
 use frankenengine_engine::evidence_ledger::{
     CandidateAction, ChosenAction, DecisionType, EvidenceEmitter, EvidenceEntryBuilder,
-    InMemoryLedger, Witness,
+    InMemoryLedger, LabFixtureEvidenceEntryBuilderExt as _, LabFixtureInMemoryLedgerExt as _,
+    Witness,
 };
 use frankenengine_engine::expected_loss_selector::ContainmentAction;
 use frankenengine_engine::hash_tiers::ContentHash;
 use frankenengine_engine::hostcall_telemetry::{
     FlowLabel, HostcallResult, HostcallType, RecordInput, RecorderConfig, ResourceDelta,
-    TelemetryRecorder,
+    TelemetryDropCounts, TelemetryRecorder,
 };
 use frankenengine_engine::runtime_diagnostics_cli::*;
 use frankenengine_engine::security_epoch::SecurityEpoch;
@@ -317,6 +318,7 @@ fn make_cli_input() -> RuntimeDiagnosticsCliInput {
         runtime_state: make_runtime_state(),
         evidence_entries: make_evidence_entries(),
         hostcall_records: make_hostcall_envelopes(),
+        telemetry_drop_counts: Default::default(),
         containment_receipts: make_containment_receipts(),
         replay_artifacts: make_replay_artifacts(),
     }
@@ -662,6 +664,7 @@ fn evidence_export_summary_serde_roundtrip() {
         total_records: 4,
         counts_by_kind,
         counts_by_severity,
+        telemetry_drop_counts: Default::default(),
     };
     let json = serde_json::to_string(&summary).unwrap();
     let back: EvidenceExportSummary = serde_json::from_str(&json).unwrap();
@@ -996,6 +999,49 @@ fn export_summary_counts_match_records() {
 }
 
 #[test]
+fn export_summary_preserves_and_surfaces_telemetry_drop_counts() {
+    let mut input = make_cli_input();
+    input.telemetry_drop_counts.channel_full = 2;
+    input.telemetry_drop_counts.monotonicity_violation = 1;
+
+    let output = export_evidence_bundle(&input, EvidenceExportFilter::default());
+    assert_eq!(
+        output.summary.telemetry_drop_counts,
+        input.telemetry_drop_counts
+    );
+    assert!(output.logs.iter().any(|event| {
+        event.event == "evidence_export"
+            && event.outcome == "incomplete"
+            && event.error_code.as_deref() == Some("FE-RUNTIME-DIAGNOSTICS-TELEMETRY-0001")
+    }));
+    let rendered = render_evidence_summary(&output);
+    assert!(rendered.contains("telemetry_drop_counts: total=3"));
+    assert!(rendered.contains("channel_full=2"));
+
+    let encoded = serde_json::to_vec(&output).unwrap();
+    let decoded: EvidenceExportOutput = serde_json::from_slice(&encoded).unwrap();
+    assert_eq!(
+        decoded.summary.telemetry_drop_counts,
+        input.telemetry_drop_counts
+    );
+}
+
+#[test]
+fn diagnostics_snapshot_preserves_and_surfaces_telemetry_drop_counts() {
+    let mut input = make_cli_input();
+    input.telemetry_drop_counts.channel_full = 2;
+
+    let output = collect_runtime_diagnostics_for_input(&input);
+    assert_eq!(output.telemetry_drop_counts, input.telemetry_drop_counts);
+    assert!(output.logs.iter().any(|event| {
+        event.event == "runtime_diagnostics_snapshot"
+            && event.outcome == "incomplete"
+            && event.error_code.as_deref() == Some("FE-RUNTIME-DIAGNOSTICS-TELEMETRY-0001")
+    }));
+    assert!(render_diagnostics_summary(&output).contains("telemetry_drop_counts: total=2"));
+}
+
+#[test]
 fn export_filter_by_trace_id() {
     let input = make_cli_input();
     let output = export_evidence_bundle(
@@ -1301,6 +1347,18 @@ fn cli_input_serde_roundtrip() {
     assert_eq!(input, back);
 }
 
+#[test]
+fn cli_input_legacy_json_defaults_telemetry_drop_counts() {
+    let input = make_cli_input();
+    let mut json = serde_json::to_value(&input).unwrap();
+    json.as_object_mut()
+        .expect("CLI input should serialize as an object")
+        .remove("telemetry_drop_counts");
+
+    let back: RuntimeDiagnosticsCliInput = serde_json::from_value(json).unwrap();
+    assert_eq!(back.telemetry_drop_counts, TelemetryDropCounts::default());
+}
+
 // ===================================================================
 // Section 15: GcPressureDiagnostics / SchedulerLaneDiagnostics serde
 // ===================================================================
@@ -1513,6 +1571,43 @@ fn preflight_doctor_green_for_clean_signals() {
             .any(|event| event.event == "preflight_doctor" && event.outcome == "pass"),
         "doctor log event should be present with pass outcome"
     );
+}
+
+#[test]
+fn preflight_doctor_rejects_incomplete_hostcall_telemetry() {
+    let mut input = make_cli_input();
+    input.evidence_entries.clear();
+    input.containment_receipts.clear();
+    input
+        .hostcall_records
+        .retain(|record| matches!(record.record.result_status, HostcallResult::Success));
+    for sample in &mut input.runtime_state.gc_pressure {
+        sample.used_bytes = sample.used_bytes.min(sample.budget_bytes);
+    }
+    for lane in &mut input.runtime_state.scheduler_lanes {
+        lane.tasks_timed_out = 0;
+        lane.queue_depth = 0;
+    }
+    input.telemetry_drop_counts.empty_extension_id = 1;
+
+    let output = run_preflight_doctor(
+        &input,
+        EvidenceExportFilter::default(),
+        SupportBundleRedactionPolicy::default(),
+    );
+    assert_eq!(output.verdict, PreflightVerdict::Red);
+    assert!(output.blockers.iter().any(|blocker| {
+        blocker.blocker_id == "incomplete_hostcall_telemetry"
+            && blocker.severity == EvidenceSeverity::Critical
+    }));
+    assert_eq!(
+        output.support_bundle.index.telemetry_drop_counts,
+        input.telemetry_drop_counts
+    );
+    assert!(output.support_bundle.files.iter().any(|file| {
+        file.path == "support_bundle/evidence_summary.json"
+            && file.content.contains("empty_extension_id")
+    }));
 }
 
 #[test]

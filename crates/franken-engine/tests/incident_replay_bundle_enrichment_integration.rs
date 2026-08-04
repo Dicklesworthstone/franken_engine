@@ -476,7 +476,7 @@ fn json_fields_bundle_artifact_kind_all_distinct() {
 
 #[test]
 fn bundle_format_version_constant() {
-    assert_eq!(BUNDLE_FORMAT_VERSION.major, 1);
+    assert_eq!(BUNDLE_FORMAT_VERSION.major, 2);
     assert_eq!(BUNDLE_FORMAT_VERSION.minor, 0);
 }
 
@@ -621,8 +621,11 @@ use std::collections::BTreeMap;
 use frankenengine_engine::causal_replay::{
     ActionDeltaReport, CounterfactualConfig, DecisionSnapshot, NondeterminismLog,
     NondeterminismSource, RecorderConfig, RecordingMode, TraceRecord, TraceRecorder,
+    causal_replay_lab_trust_registry,
 };
-use frankenengine_engine::evidence_ledger::{ChosenAction, DecisionType, EvidenceEntryBuilder};
+use frankenengine_engine::evidence_ledger::{
+    ChosenAction, DecisionType, EvidenceEntryBuilder, LabFixtureEvidenceEntryBuilderExt as _,
+};
 use frankenengine_engine::incident_replay_bundle::{
     ArtifactEntry, BundleBuilder, BundleInspection, BundleManifest, CounterfactualResult,
     IncidentReplayBundle, PolicySnapshot, VerificationReport,
@@ -643,15 +646,13 @@ fn enr_signing_key() -> SigningKey {
 }
 
 fn enr_make_trace(trace_id: &str, num_decisions: usize) -> TraceRecord {
-    let key = enr_signing_key();
     let config = RecorderConfig {
         trace_id: trace_id.to_string(),
         recording_mode: RecordingMode::Full,
         epoch: SecurityEpoch::from_raw(100),
         start_tick: 1000,
-        signing_key: key.as_bytes().to_vec(),
     };
-    let mut recorder = TraceRecorder::new(config);
+    let mut recorder = TraceRecorder::new_lab(config);
     recorder.record_nondeterminism(
         NondeterminismSource::Timestamp,
         vec![0, 0, 0, 0, 0, 0, 3, 232],
@@ -677,7 +678,7 @@ fn enr_make_trace(trace_id: &str, num_decisions: usize) -> TraceRecord {
         };
         recorder.record_decision(snapshot);
     }
-    recorder.finalize()
+    recorder.finalize().expect("lab trace should finalize")
 }
 
 fn enr_make_evidence_entry() -> frankenengine_engine::evidence_ledger::EvidenceEntry {
@@ -1745,7 +1746,7 @@ fn enrichment_verifier_integrity_report_has_artifact_hash_checks() {
 fn enrichment_verifier_replay_passes_for_valid_traces() {
     let bundle = enr_build_test_bundle();
     let verifier = BundleVerifier::new();
-    let report = verifier.verify_replay(&bundle, 6000);
+    let report = verifier.verify_replay_lab(&bundle, &causal_replay_lab_trust_registry(), 6000);
     assert!(report.passed);
 }
 
@@ -1764,7 +1765,7 @@ fn enrichment_verifier_replay_skips_when_no_traces() {
     .unwrap();
 
     let verifier = BundleVerifier::new();
-    let report = verifier.verify_replay(&bundle, 6000);
+    let report = verifier.verify_replay_lab(&bundle, &causal_replay_lab_trust_registry(), 6000);
     assert!(report.passed);
     let skipped: Vec<_> = report
         .checks
@@ -1778,7 +1779,7 @@ fn enrichment_verifier_replay_skips_when_no_traces() {
 fn enrichment_verifier_replay_check_names_contain_trace_id() {
     let bundle = enr_build_test_bundle();
     let verifier = BundleVerifier::new();
-    let report = verifier.verify_replay(&bundle, 6000);
+    let report = verifier.verify_replay_lab(&bundle, &causal_replay_lab_trust_registry(), 6000);
     let replay_checks: Vec<_> = report
         .checks
         .iter()
@@ -1824,9 +1825,11 @@ fn enrichment_verifier_receipts_skips_when_no_receipts() {
 fn enrichment_verifier_counterfactual_empty_configs_is_pass() {
     let bundle = enr_build_test_bundle();
     let verifier = BundleVerifier::new();
-    let report = verifier.verify_counterfactual(&bundle, &[], 6000);
+    let report =
+        verifier.verify_counterfactual_lab(&bundle, &[], &causal_replay_lab_trust_registry(), 6000);
     assert!(report.passed);
-    assert_eq!(report.checks.len(), 0);
+    assert_eq!(report.checks.len(), 1);
+    assert_eq!(report.checks[0].name, "trace-trust-lab-fixture-scope");
 }
 
 // ===========================================================================
@@ -2409,8 +2412,8 @@ fn enrichment_check_outcome_skipped_json_contains_reason() {
 // ===========================================================================
 
 #[test]
-fn enrichment_bundle_format_version_v1_display() {
-    assert_eq!(BUNDLE_FORMAT_VERSION.to_string(), "1.0");
+fn enrichment_bundle_format_version_v2_display() {
+    assert_eq!(BUNDLE_FORMAT_VERSION.to_string(), "2.0");
 }
 
 #[test]

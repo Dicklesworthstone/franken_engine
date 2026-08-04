@@ -1,0 +1,79 @@
+---
+source: tests/deterministic_serde_golden.rs
+expression: actual
+---
+{
+  "value": {
+    "Map": {
+      "confidence": {
+        "I64": 950000
+      },
+      "digest": {
+        "Bytes": [
+          0,
+          1,
+          2,
+          3,
+          4,
+          5,
+          6,
+          7,
+          8,
+          9,
+          10,
+          11,
+          12,
+          13,
+          14,
+          15,
+          16,
+          17,
+          18,
+          19,
+          20,
+          21,
+          22,
+          23,
+          24,
+          25,
+          26,
+          27,
+          28,
+          29,
+          30,
+          31
+        ]
+      },
+      "epoch": {
+        "U64": 7
+      },
+      "schema": {
+        "String": "evidence.v1"
+      },
+      "tags": {
+        "Map": {
+          "lane": {
+            "String": "baseline"
+          },
+          "origin": {
+            "String": "hostcall"
+          }
+        }
+      },
+      "trace": {
+        "Array": [
+          {
+            "U64": 1
+          },
+          {
+            "U64": 2
+          }
+        ]
+      },
+      "verdict": {
+        "String": "approved"
+      }
+    }
+  },
+  "expected_sha256_hex": "8a60ba22fa235f5d1925d0704b87960fe7fab070f60b8085913def971a32da2a"
+}

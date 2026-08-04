@@ -59,8 +59,9 @@ scripts/validation_hygiene_wrapper.sh \
   --bead-id <bd-id> \
   --case-id closeout \
   -- \
-  rch exec -- env CARGO_TARGET_DIR=/data/tmp/franken_engine-validation \
-    CARGO_INCREMENTAL=0 RUSTFLAGS='-C linker=cc' \
+  env -u CARGO_ENCODED_RUSTFLAGS rch exec -- env -u CARGO_ENCODED_RUSTFLAGS \
+    CARGO_TARGET_DIR=/data/tmp/franken_engine-validation CARGO_INCREMENTAL=0 \
+    RUSTFLAGS='-C linker=cc -Clinker-features=-lld' \
     cargo test -p frankenengine-engine <focused-target>
 ```
 
@@ -72,8 +73,9 @@ scripts/validation_hygiene_wrapper.sh \
   --bead-id <bd-id> \
   --case-id cargo-check-all-targets \
   -- \
-  rch exec -- env CARGO_TARGET_DIR=/data/tmp/franken_engine-validation \
-    CARGO_INCREMENTAL=0 RUSTFLAGS='-C linker=cc' \
+  env -u CARGO_ENCODED_RUSTFLAGS rch exec -- env -u CARGO_ENCODED_RUSTFLAGS \
+    CARGO_TARGET_DIR=/data/tmp/franken_engine-validation CARGO_INCREMENTAL=0 \
+    RUSTFLAGS='-C linker=cc -Clinker-features=-lld' \
     cargo check --all-targets
 ```
 
@@ -163,7 +165,7 @@ RCH infrastructure failure:
 Scoped validation: NOT PROVEN by this run.
 Package/workspace validation: BLOCKED by environment.
 First blocker: external_environment_blocker - <first hard failure line>.
-Original command preserved: <rch exec -- env ... cargo ...>.
+Original command preserved: <env -u CARGO_ENCODED_RUSTFLAGS rch exec -- env -u CARGO_ENCODED_RUSTFLAGS ... cargo ...>.
 No deletion, revert, unrelated formatting, or unrelated staging was performed.
 ```
 
@@ -184,8 +186,9 @@ Closeout: block or rerun with better transcript; do not claim green.
 3. Announce start in Agent Mail using the bead id as `thread_id`.
 4. Implement only scoped files.
 5. Run preflight and relevant scoped validation.
-6. Run wrapped heavy Cargo validation through `rch exec -- env ... cargo ...`
-   when Rust/package/workspace proof is required.
+6. Run wrapped heavy Cargo validation through `env -u CARGO_ENCODED_RUSTFLAGS
+   rch exec -- env -u CARGO_ENCODED_RUSTFLAGS ... cargo ...` when
+   Rust/package/workspace proof is required.
 7. Classify blockers; keep unrelated package/workspace blockers visible.
 8. Close or block the bead with exact validation evidence.
 9. Run `br sync --flush-only --json`.

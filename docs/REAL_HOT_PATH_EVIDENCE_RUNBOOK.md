@@ -47,7 +47,7 @@ RCH_TEST_TIMEOUT_SEC=1800 \
 CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_real_hot_path_evidence_drill \
 CARGO_INCREMENTAL=0 \
 CARGO_BUILD_JOBS=4 \
-RUSTFLAGS=-Cdebuginfo=0 \
+RUSTFLAGS="-Cdebuginfo=0 -Clinker-features=-lld" \
 scripts/e2e/real_hot_path_evidence_drill.sh smoke
 ```
 
@@ -65,7 +65,7 @@ RCH_TEST_TIMEOUT_SEC=1800 \
 CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_real_hot_path_proof \
 CARGO_INCREMENTAL=0 \
 CARGO_BUILD_JOBS=4 \
-RUSTFLAGS=-Cdebuginfo=0 \
+RUSTFLAGS="-Cdebuginfo=0 -Clinker-features=-lld" \
 scripts/run_real_hot_path_proof.sh smoke
 ```
 
@@ -78,6 +78,14 @@ cargo bench -p frankenengine-engine --no-default-features --bench hot_paths -- -
 Do not run that Cargo command directly. The wrapper records the exact `rch exec`
 command in `commands.txt` and fails closed on local fallback, missing remote
 exit markers, nonzero remote exits, or wrapper failure.
+
+The wrapper's canonical default is
+`RUSTFLAGS="-Cdebuginfo=0 -Clinker-features=-lld"`. An operator-supplied
+`RUSTFLAGS` value is preserved and composed with `-Clinker-features=-lld`
+before execution and evidence emission, because an explicit `RUSTFLAGS`
+otherwise replaces the target-configured linker policy. The wrapper clears an
+inherited `CARGO_ENCODED_RUSTFLAGS` value before invoking `rch`; encoded flags
+have higher precedence and are not part of this proof contract.
 
 ## Contract Gate
 

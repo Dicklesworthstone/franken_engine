@@ -1,0 +1,31 @@
+[package]
+name = "franken-intl-surface-contract-tool"
+version = "0.1.0"
+edition = "2024"
+publish = false
+autobins = false
+autotests = false
+
+# The inventory must remain inspectable when unrelated runtime path
+# dependencies fail to resolve or compile.
+[workspace]
+
+[lib]
+name = "frankenengine_engine"
+path = "src/lib.rs"
+
+[[bin]]
+name = "franken_intl_surface_contract"
+path = "../../crates/franken-engine/src/bin/franken_intl_surface_contract.rs"
+
+[[test]]
+name = "intl_surface_contract_integration"
+path = "../../crates/franken-engine/tests/intl_surface_contract_integration.rs"
+
+[dependencies]
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+sha2 = "0.10"
+
+[dev-dependencies]
+tempfile = "3.0"

@@ -48,6 +48,30 @@ pub const COMPONENT: &str = "law_promotion_pack";
 const MILLION: u64 = 1_000_000;
 
 // ---------------------------------------------------------------------------
+// Content-hash preimage helpers
+// ---------------------------------------------------------------------------
+//
+// The `recompute_hash` functions below must be *injective*: distinct logical
+// inputs must never share a preimage. Bare-concatenating adjacent free-form
+// `String`s, looping over a collection with no count marker, or joining fields
+// with a `:` they can themselves contain, all break that — `("ab","c")`
+// collides with `("a","bc")`. These helpers append self-delimiting fields.
+// Fixed-width fields (`ContentHash`, numerics) need no length prefix, but a
+// fixed-width *collection* still needs a count prefix so a 1-byte shift in a
+// neighbouring variable field cannot realign it.
+
+/// Append `bytes` with a fixed-width `u64` little-endian length prefix.
+fn push_len_prefixed(data: &mut Vec<u8>, bytes: &[u8]) {
+    data.extend_from_slice(&(bytes.len() as u64).to_le_bytes());
+    data.extend_from_slice(bytes);
+}
+
+/// Append a `u64` little-endian count prefix for a collection.
+fn push_count(data: &mut Vec<u8>, count: usize) {
+    data.extend_from_slice(&(count as u64).to_le_bytes());
+}
+
+// ---------------------------------------------------------------------------
 // PromotionTarget
 // ---------------------------------------------------------------------------
 
@@ -254,25 +278,25 @@ impl AcceptedLaw {
     /// Recompute the content hash.
     fn recompute_hash(&mut self) {
         let mut data = Vec::new();
-        data.extend_from_slice(self.law_id.as_bytes());
-        data.extend_from_slice(self.candidate_id.as_bytes());
-        data.extend_from_slice(self.statement.as_bytes());
-        data.extend_from_slice(
-            serde_json::to_string(&self.strength)
-                .expect("serialization should succeed")
-                .as_bytes(),
-        );
+        push_len_prefixed(&mut data, self.law_id.as_bytes());
+        push_len_prefixed(&mut data, self.candidate_id.as_bytes());
+        push_len_prefixed(&mut data, self.statement.as_bytes());
+        let strength_json =
+            serde_json::to_string(&self.strength).expect("serialization should succeed");
+        push_len_prefixed(&mut data, strength_json.as_bytes());
         let mut sorted_tags = self.scope_tags.clone();
         sorted_tags.sort();
+        push_count(&mut data, sorted_tags.len());
         for tag in &sorted_tags {
-            data.extend_from_slice(tag.as_bytes());
+            push_len_prefixed(&mut data, tag.as_bytes());
         }
         data.extend_from_slice(&self.mining_rank_millionths.to_le_bytes());
         data.extend_from_slice(&self.accepted_epoch.as_u64().to_le_bytes());
         let mut sorted_eids = self.evidence_ids.clone();
         sorted_eids.sort();
+        push_count(&mut data, sorted_eids.len());
         for eid in &sorted_eids {
-            data.extend_from_slice(eid.as_bytes());
+            push_len_prefixed(&mut data, eid.as_bytes());
         }
         self.law_hash = ContentHash::compute(&data);
     }
@@ -342,17 +366,19 @@ impl RewriteRule {
 
     /// Recompute the content hash.
     fn recompute_hash(&mut self) {
-        let canonical = format!(
-            "rewrite:{}:{}:{}:{}:{}:{}:{}",
-            self.rule_id,
-            self.source_law_id,
-            self.match_pattern,
-            self.replacement,
-            self.guard,
-            self.speedup_estimate_millionths,
-            self.semantics_preserving,
-        );
-        self.rule_hash = ContentHash::compute(canonical.as_bytes());
+        // Length-prefixed preimage: the match_pattern/replacement/guard are
+        // rewrite patterns that can themselves contain ':', so a delimiter join
+        // would be non-injective.
+        let mut data = Vec::new();
+        data.extend_from_slice(b"rewrite");
+        push_len_prefixed(&mut data, self.rule_id.as_bytes());
+        push_len_prefixed(&mut data, self.source_law_id.as_bytes());
+        push_len_prefixed(&mut data, self.match_pattern.as_bytes());
+        push_len_prefixed(&mut data, self.replacement.as_bytes());
+        push_len_prefixed(&mut data, self.guard.as_bytes());
+        data.extend_from_slice(&self.speedup_estimate_millionths.to_le_bytes());
+        data.push(u8::from(self.semantics_preserving));
+        self.rule_hash = ContentHash::compute(&data);
     }
 }
 
@@ -413,9 +439,10 @@ impl RewritePack {
     /// Recompute the content hash.
     fn recompute_hash(&mut self) {
         let mut data = Vec::new();
-        data.extend_from_slice(self.pack_id.as_bytes());
+        push_len_prefixed(&mut data, self.pack_id.as_bytes());
         data.extend_from_slice(&self.assembled_epoch.as_u64().to_le_bytes());
-        data.extend_from_slice(self.schema_version.as_bytes());
+        push_len_prefixed(&mut data, self.schema_version.as_bytes());
+        push_count(&mut data, self.rules.len());
         for rule in &self.rules {
             data.extend_from_slice(rule.rule_hash.as_bytes());
         }
@@ -484,13 +511,14 @@ impl SynthesisSeed {
     /// Recompute the content hash.
     fn recompute_hash(&mut self) {
         let mut data = Vec::new();
-        data.extend_from_slice(self.seed_id.as_bytes());
-        data.extend_from_slice(self.source_law_id.as_bytes());
-        data.extend_from_slice(self.template.as_bytes());
+        push_len_prefixed(&mut data, self.seed_id.as_bytes());
+        push_len_prefixed(&mut data, self.source_law_id.as_bytes());
+        push_len_prefixed(&mut data, self.template.as_bytes());
+        push_count(&mut data, self.parameters.len());
         for param in &self.parameters {
-            data.extend_from_slice(param.as_bytes());
+            push_len_prefixed(&mut data, param.as_bytes());
         }
-        data.extend_from_slice(self.expected_pattern.as_bytes());
+        push_len_prefixed(&mut data, self.expected_pattern.as_bytes());
         data.extend_from_slice(&self.priority_millionths.to_le_bytes());
         self.seed_hash = ContentHash::compute(&data);
     }
@@ -553,9 +581,10 @@ impl SynthesisLane {
     /// Recompute the content hash.
     fn recompute_hash(&mut self) {
         let mut data = Vec::new();
-        data.extend_from_slice(self.lane_id.as_bytes());
+        push_len_prefixed(&mut data, self.lane_id.as_bytes());
         data.extend_from_slice(&self.assembled_epoch.as_u64().to_le_bytes());
-        data.extend_from_slice(self.schema_version.as_bytes());
+        push_len_prefixed(&mut data, self.schema_version.as_bytes());
+        push_count(&mut data, self.seeds.len());
         for seed in &self.seeds {
             data.extend_from_slice(seed.seed_hash.as_bytes());
         }
@@ -628,14 +657,15 @@ impl SupportAtlasEntry {
     /// Recompute the content hash.
     fn recompute_hash(&mut self) {
         let mut data = Vec::new();
-        data.extend_from_slice(self.entry_id.as_bytes());
-        data.extend_from_slice(self.source_law_id.as_bytes());
-        data.extend_from_slice(self.domain.as_bytes());
+        push_len_prefixed(&mut data, self.entry_id.as_bytes());
+        push_len_prefixed(&mut data, self.source_law_id.as_bytes());
+        push_len_prefixed(&mut data, self.domain.as_bytes());
         data.extend_from_slice(&self.coverage_depth_millionths.to_le_bytes());
         let mut sorted_tags = self.scope_tags.clone();
         sorted_tags.sort();
+        push_count(&mut data, sorted_tags.len());
         for tag in &sorted_tags {
-            data.extend_from_slice(tag.as_bytes());
+            push_len_prefixed(&mut data, tag.as_bytes());
         }
         data.push(u8::from(self.workload_validated));
         self.entry_hash = ContentHash::compute(&data);
@@ -704,9 +734,10 @@ impl SupportAtlas {
     /// Recompute the content hash.
     fn recompute_hash(&mut self) {
         let mut data = Vec::new();
-        data.extend_from_slice(self.atlas_id.as_bytes());
+        push_len_prefixed(&mut data, self.atlas_id.as_bytes());
         data.extend_from_slice(&self.assembled_epoch.as_u64().to_le_bytes());
-        data.extend_from_slice(self.schema_version.as_bytes());
+        push_len_prefixed(&mut data, self.schema_version.as_bytes());
+        push_count(&mut data, self.entries.len());
         for entry in &self.entries {
             data.extend_from_slice(entry.entry_hash.as_bytes());
         }
@@ -781,9 +812,9 @@ impl FrontierEntry {
     /// Recompute the content hash.
     fn recompute_hash(&mut self) {
         let mut data = Vec::new();
-        data.extend_from_slice(self.entry_id.as_bytes());
-        data.extend_from_slice(self.source_law_id.as_bytes());
-        data.extend_from_slice(self.frontier_region.as_bytes());
+        push_len_prefixed(&mut data, self.entry_id.as_bytes());
+        push_len_prefixed(&mut data, self.source_law_id.as_bytes());
+        push_len_prefixed(&mut data, self.frontier_region.as_bytes());
         data.extend_from_slice(&self.priority_millionths.to_le_bytes());
         data.extend_from_slice(&self.expected_gain_millionths.to_le_bytes());
         data.push(u8::from(self.explored));
@@ -853,9 +884,10 @@ impl FrontierLedger {
     /// Recompute the content hash.
     fn recompute_hash(&mut self) {
         let mut data = Vec::new();
-        data.extend_from_slice(self.ledger_id.as_bytes());
+        push_len_prefixed(&mut data, self.ledger_id.as_bytes());
         data.extend_from_slice(&self.assembled_epoch.as_u64().to_le_bytes());
-        data.extend_from_slice(self.schema_version.as_bytes());
+        push_len_prefixed(&mut data, self.schema_version.as_bytes());
+        push_count(&mut data, self.entries.len());
         for entry in &self.entries {
             data.extend_from_slice(entry.entry_hash.as_bytes());
         }
@@ -941,16 +973,17 @@ impl PromotionReceipt {
 
     /// Recompute the content hash.
     fn recompute_hash(&mut self) {
-        let canonical = format!(
-            "promotion:{}:{}:{}:{}:{}:{}",
-            self.receipt_id,
-            self.law_id,
-            self.target,
-            self.asset_id,
-            self.promotion_epoch.as_u64(),
-            self.status,
-        );
-        self.receipt_hash = ContentHash::compute(canonical.as_bytes());
+        // Length-prefixed preimage: receipt_id/law_id/target/asset_id are
+        // free-form and could contain the ':' a delimiter join would rely on.
+        let mut data = Vec::new();
+        data.extend_from_slice(b"promotion");
+        push_len_prefixed(&mut data, self.receipt_id.as_bytes());
+        push_len_prefixed(&mut data, self.law_id.as_bytes());
+        push_len_prefixed(&mut data, self.target.to_string().as_bytes());
+        push_len_prefixed(&mut data, self.asset_id.as_bytes());
+        data.extend_from_slice(&self.promotion_epoch.as_u64().to_le_bytes());
+        push_len_prefixed(&mut data, self.status.to_string().as_bytes());
+        self.receipt_hash = ContentHash::compute(&data);
     }
 }
 
@@ -1148,12 +1181,13 @@ impl PromotionPipeline {
     /// Recompute the content hash.
     fn recompute_hash(&mut self) {
         let mut data = Vec::new();
-        data.extend_from_slice(self.schema_version.as_bytes());
+        push_len_prefixed(&mut data, self.schema_version.as_bytes());
         data.extend_from_slice(&self.pipeline_epoch.as_u64().to_le_bytes());
         data.extend_from_slice(self.rewrite_pack.pack_hash.as_bytes());
         data.extend_from_slice(self.synthesis_lane.lane_hash.as_bytes());
         data.extend_from_slice(self.support_atlas.atlas_hash.as_bytes());
         data.extend_from_slice(self.frontier_ledger.ledger_hash.as_bytes());
+        push_count(&mut data, self.receipts.len());
         for receipt in &self.receipts {
             data.extend_from_slice(receipt.receipt_hash.as_bytes());
         }
@@ -1229,6 +1263,29 @@ mod tests {
 
     fn test_epoch() -> SecurityEpoch {
         SecurityEpoch::from_raw(100)
+    }
+
+    #[test]
+    fn preimage_helpers_are_injective_bd_evaam() {
+        // Regression (bd-evaam): the recompute_hash family bare-concatenated
+        // adjacent free Strings and looped collections with no count/length
+        // prefix, so ("ab","c") aliased ("a","bc") and a fixed-width loop could
+        // be realigned by a 1-byte shift in a neighbouring variable field.
+        let mut a = Vec::new();
+        push_len_prefixed(&mut a, b"ab");
+        push_len_prefixed(&mut a, b"c");
+        let mut b = Vec::new();
+        push_len_prefixed(&mut b, b"a");
+        push_len_prefixed(&mut b, b"bc");
+        assert_ne!(a, b);
+
+        // Count prefix distinguishes a 1-item run from a 2-item run with the
+        // same total bytes (fixed-width elements included).
+        let mut one = Vec::new();
+        push_count(&mut one, 1);
+        let mut two = Vec::new();
+        push_count(&mut two, 2);
+        assert_ne!(one, two);
     }
 
     fn test_law() -> AcceptedLaw {

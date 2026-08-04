@@ -9,7 +9,7 @@ use frankenengine_engine::differential_privacy_posterior::{
     PrivatePosteriorDelta,
 };
 use frankenengine_engine::federated_posterior_aggregation::{
-    AggregatedPosteriorUpdate, LocalPosteriorProvider, PosteriorDelta,
+    LocalPosteriorProvider, PosteriorDelta,
 };
 use frankenengine_engine::fleet_immune_protocol::NodeId;
 use frankenengine_engine::hash_tiers::ContentHash;
@@ -25,7 +25,7 @@ pub enum RiskLevel {
 }
 
 #[derive(Debug, Clone)]
-pub struct Timestamp(u64);
+pub struct Timestamp(#[allow(dead_code)] u64);
 
 impl Timestamp {
     pub fn from_millis(millis: u64) -> Self {
@@ -39,14 +39,14 @@ impl Timestamp {
 fn differential_privacy_protects_individual_contributions() {
     let epoch = SecurityEpoch::from_raw(1000);
     let privacy_params = PrivacyParameters::new(1_000_000, 10).unwrap(); // 1.0ε, 1e-5δ in millionths
-    let mut privacy_budget = PrivacyBudget::new(10_000_000, 100, epoch).unwrap(); // 10.0ε, 1e-4δ in millionths
-    let mut aggregator = PrivacyPreservingAggregator::new(privacy_params.clone(), epoch);
+    let privacy_budget = PrivacyBudget::new(10_000_000, 100, epoch).unwrap(); // 10.0ε, 1e-4δ in millionths
+    let mut aggregator = PrivacyPreservingAggregator::new(privacy_params, epoch);
 
     // Create multiple local posterior providers simulating fleet nodes
     let node1 = NodeId::new("node_1".to_string());
     let node2 = NodeId::new("node_2".to_string());
     let node3 = NodeId::new("node_3".to_string());
-    let timestamp = Timestamp::from_millis(1640995200000);
+    let _timestamp = Timestamp::from_millis(1640995200000);
 
     // Node 1: High confidence in malicious classification
     let mut posterior1 = BTreeMap::new();
@@ -63,7 +63,7 @@ fn differential_privacy_protects_individual_contributions() {
         delta_unknown_millionths: 50_000,    // 5%
         confidence_weight_millionths: 950_000,
         evidence_hash: ContentHash::compute(b"delta1_evidence"),
-        epoch: epoch,
+        epoch,
     };
 
     // Node 2: Moderate confidence in anomalous classification
@@ -81,7 +81,7 @@ fn differential_privacy_protects_individual_contributions() {
         delta_unknown_millionths: 50_000,    // 5%
         confidence_weight_millionths: 750_000,
         evidence_hash: ContentHash::compute(b"delta2_evidence"),
-        epoch: epoch,
+        epoch,
     };
 
     // Node 3: High confidence in benign classification
@@ -99,7 +99,7 @@ fn differential_privacy_protects_individual_contributions() {
         delta_unknown_millionths: 30_000,    // 3%
         confidence_weight_millionths: 900_000,
         evidence_hash: ContentHash::compute(b"delta3_evidence"),
-        epoch: epoch,
+        epoch,
     };
 
     // Apply differential privacy to individual contributions
@@ -131,9 +131,9 @@ fn differential_privacy_protects_individual_contributions() {
         + aggregated.aggregate_delta_anomalous_millionths
         + aggregated.aggregate_delta_malicious_millionths
         + aggregated.aggregate_delta_unknown_millionths)
-        .abs() as u64;
+        .unsigned_abs();
     assert!(
-        total_probability >= 950_000 && total_probability <= 1_050_000,
+        (950_000..=1_050_000).contains(&total_probability),
         "Total probability should be close to 1.0 with noise: {}",
         total_probability
     );
@@ -157,10 +157,10 @@ fn differential_privacy_protects_individual_contributions() {
 fn privacy_budget_enforcement_prevents_excessive_consumption() {
     let epoch = SecurityEpoch::from_raw(1000);
     let privacy_params = PrivacyParameters::new(2_000_000, 10).unwrap(); // 2.0ε, 1e-5δ in millionths
-    let mut privacy_budget = PrivacyBudget::new(3_000_000, 100, epoch).unwrap(); // 3.0ε, 1e-4δ in millionths
+    let _privacy_budget = PrivacyBudget::new(3_000_000, 100, epoch).unwrap(); // 3.0ε, 1e-4δ in millionths
 
-    let node = NodeId::new("test_node".to_string());
-    let timestamp = Timestamp::from_millis(1640995200000);
+    let _node = NodeId::new("test_node".to_string());
+    let _timestamp = Timestamp::from_millis(1640995200000);
 
     let mut posterior = BTreeMap::new();
     posterior.insert(RiskLevel::Benign, 500_000);
@@ -174,14 +174,14 @@ fn privacy_budget_enforcement_prevents_excessive_consumption() {
         delta_unknown_millionths: 0,         // 0%
         confidence_weight_millionths: 800_000,
         evidence_hash: ContentHash::compute(b"delta_budget_evidence"),
-        epoch: epoch,
+        epoch,
     };
 
     // Apply differential privacy to the delta
     let mut noise_gen1 = DeterministicTestNoiseGenerator::new();
     let _result1 = PrivatePosteriorDelta::from_delta(
         delta.clone(),
-        privacy_params.clone(),
+        privacy_params,
         "budget_test_1".to_string(),
         &mut noise_gen1,
     );
@@ -190,7 +190,7 @@ fn privacy_budget_enforcement_prevents_excessive_consumption() {
     let mut noise_gen2 = DeterministicTestNoiseGenerator::new();
     let _result2 = PrivatePosteriorDelta::from_delta(
         delta.clone(),
-        privacy_params.clone(),
+        privacy_params,
         "budget_test_2".to_string(),
         &mut noise_gen2,
     );
@@ -203,10 +203,10 @@ fn privacy_budget_enforcement_prevents_excessive_consumption() {
 fn noise_injection_maintains_differential_privacy() {
     let epoch = SecurityEpoch::from_raw(1000);
     let privacy_params = PrivacyParameters::new(1_000_000, 10).unwrap(); // 1.0ε, 1e-5δ in millionths
-    let mut privacy_budget = PrivacyBudget::new(10_000_000, 100, epoch).unwrap(); // 10.0ε, 1e-4δ in millionths
+    let _privacy_budget = PrivacyBudget::new(10_000_000, 100, epoch).unwrap(); // 10.0ε, 1e-4δ in millionths
 
     let node = NodeId::new("test_node".to_string());
-    let timestamp = Timestamp::from_millis(1640995200000);
+    let _timestamp = Timestamp::from_millis(1640995200000);
 
     // Create a deterministic posterior
     let mut original_posterior = BTreeMap::new();
@@ -230,7 +230,7 @@ fn noise_injection_maintains_differential_privacy() {
     let mut noise_generator1 = DeterministicTestNoiseGenerator::new();
     let private_delta1 = PrivatePosteriorDelta::from_delta(
         delta.clone(),
-        privacy_params.clone(),
+        privacy_params,
         "test_round_1".to_string(),
         &mut noise_generator1,
     );
@@ -238,7 +238,7 @@ fn noise_injection_maintains_differential_privacy() {
     let mut noise_generator2 = DeterministicTestNoiseGenerator::new();
     let private_delta2 = PrivatePosteriorDelta::from_delta(
         delta.clone(),
-        privacy_params.clone(),
+        privacy_params,
         "test_round_2".to_string(),
         &mut noise_generator2,
     );
@@ -257,7 +257,7 @@ fn noise_injection_maintains_differential_privacy() {
     );
 
     // Two noisy versions should likely differ from each other
-    let noise_difference = (benign1 as i64 - benign2 as i64).abs();
+    let noise_difference = (benign1 - benign2).abs();
     // With Gaussian noise, difference is very likely to be non-zero
     // but we allow for rare case where noise cancels out
     if noise_difference == 0 {
@@ -269,20 +269,20 @@ fn noise_injection_maintains_differential_privacy() {
         + private_delta1.base_delta.delta_anomalous_millionths
         + private_delta1.base_delta.delta_malicious_millionths
         + private_delta1.base_delta.delta_unknown_millionths)
-        .abs() as u64;
+        .unsigned_abs();
     let total2: u64 = (private_delta2.base_delta.delta_benign_millionths
         + private_delta2.base_delta.delta_anomalous_millionths
         + private_delta2.base_delta.delta_malicious_millionths
         + private_delta2.base_delta.delta_unknown_millionths)
-        .abs() as u64;
+        .unsigned_abs();
 
     assert!(
-        total1 >= 950_000 && total1 <= 1_050_000,
+        (950_000..=1_050_000).contains(&total1),
         "Noisy posterior should normalize close to 1.0: {}",
         total1
     );
     assert!(
-        total2 >= 950_000 && total2 <= 1_050_000,
+        (950_000..=1_050_000).contains(&total2),
         "Noisy posterior should normalize close to 1.0: {}",
         total2
     );
@@ -293,15 +293,17 @@ fn noise_injection_maintains_differential_privacy() {
 fn integration_with_federated_aggregation_pipeline() {
     let epoch = SecurityEpoch::from_raw(2000);
     let privacy_params = PrivacyParameters::new(500_000, 1).unwrap(); // 0.5ε, 1e-6δ in millionths
-    let mut privacy_budget = PrivacyBudget::new(5_000_000, 10, epoch).unwrap(); // 5.0ε, 1e-5δ in millionths
-    let mut aggregator = PrivacyPreservingAggregator::new(privacy_params.clone(), epoch);
+    let _privacy_budget = PrivacyBudget::new(5_000_000, 10, epoch).unwrap(); // 5.0ε, 1e-5δ in millionths
+    let aggregator = PrivacyPreservingAggregator::new(privacy_params, epoch);
 
     // Create local providers for different fleet zones
-    let provider_us_east = LocalPosteriorProvider::new(NodeId::new("us-east-1".to_string()), epoch);
-    let provider_us_west = LocalPosteriorProvider::new(NodeId::new("us-west-2".to_string()), epoch);
-    let provider_eu_central =
+    let _provider_us_east =
+        LocalPosteriorProvider::new(NodeId::new("us-east-1".to_string()), epoch);
+    let _provider_us_west =
+        LocalPosteriorProvider::new(NodeId::new("us-west-2".to_string()), epoch);
+    let _provider_eu_central =
         LocalPosteriorProvider::new(NodeId::new("eu-central-1".to_string()), epoch);
-    let timestamp = Timestamp::from_millis(1640995300000);
+    let _timestamp = Timestamp::from_millis(1640995300000);
 
     // Each provider generates local posterior deltas
     let mut posterior_us_east = BTreeMap::new();
@@ -369,19 +371,19 @@ fn integration_with_federated_aggregation_pipeline() {
     let private_deltas = vec![
         PrivatePosteriorDelta::from_delta(
             delta_us_east,
-            privacy_params.clone(),
+            privacy_params,
             "multi_node_east".to_string(),
             &mut noise_gen_east,
         ),
         PrivatePosteriorDelta::from_delta(
             delta_us_west,
-            privacy_params.clone(),
+            privacy_params,
             "multi_node_west".to_string(),
             &mut noise_gen_west,
         ),
         PrivatePosteriorDelta::from_delta(
             delta_eu_central,
-            privacy_params.clone(),
+            privacy_params,
             "multi_node_central".to_string(),
             &mut noise_gen_central,
         ),
@@ -409,9 +411,9 @@ fn integration_with_federated_aggregation_pipeline() {
         + final_aggregate.aggregate_delta_anomalous_millionths
         + final_aggregate.aggregate_delta_malicious_millionths
         + final_aggregate.aggregate_delta_unknown_millionths)
-        .abs() as u64;
+        .unsigned_abs();
     assert!(
-        total_probability >= 950_000 && total_probability <= 1_050_000,
+        (950_000..=1_050_000).contains(&total_probability),
         "Total aggregated probability should normalize properly: {}",
         total_probability
     );
@@ -459,7 +461,7 @@ fn privacy_parameter_validation_and_error_handling() {
     assert!(PrivacyParameters::new(1_000_000, 990_000).is_ok()); // 1.0ε, 0.99δ
 
     // Test budget initialization with invalid total budget
-    let valid_params = PrivacyParameters::new(1_000_000, 10).unwrap();
+    let _valid_params = PrivacyParameters::new(1_000_000, 10).unwrap();
 
     // Invalid total epsilon (0)
     assert!(PrivacyBudget::new(0, 100, epoch).is_err());
@@ -478,8 +480,8 @@ fn privacy_parameter_validation_and_error_handling() {
 fn noise_preserves_differential_privacy_across_rounds() {
     let base_epoch = SecurityEpoch::from_raw(3000);
     let privacy_params = PrivacyParameters::new(1_000_000, 10).unwrap(); // 1.0ε, 1e-5δ in millionths
-    let mut privacy_budget = PrivacyBudget::new(20_000_000, 1000, base_epoch).unwrap(); // 20.0ε, 1e-3δ in millionths
-    let aggregator = PrivacyPreservingAggregator::new(privacy_params.clone(), base_epoch);
+    let privacy_budget = PrivacyBudget::new(20_000_000, 1000, base_epoch).unwrap(); // 20.0ε, 1e-3δ in millionths
+    let aggregator = PrivacyPreservingAggregator::new(privacy_params, base_epoch);
 
     let node1 = NodeId::new("consistent_node".to_string());
     let node2 = NodeId::new("varying_node".to_string());
@@ -487,7 +489,7 @@ fn noise_preserves_differential_privacy_across_rounds() {
     // Simulate multiple security epochs with similar but slightly varying data
     for round in 0..5 {
         let epoch = SecurityEpoch::from_raw(3000 + round as u64);
-        let timestamp = Timestamp::from_millis(1640995400000 + round as u64 * 60000);
+        let _timestamp = Timestamp::from_millis(1640995400000 + round as u64 * 60000);
 
         // Node1: consistent posterior across rounds
         let mut posterior1 = BTreeMap::new();
@@ -527,13 +529,13 @@ fn noise_preserves_differential_privacy_across_rounds() {
         let private_deltas = vec![
             PrivatePosteriorDelta::from_delta(
                 delta1,
-                privacy_params.clone(),
+                privacy_params,
                 format!("round_{}_delta1", round),
                 &mut noise_gen1,
             ),
             PrivatePosteriorDelta::from_delta(
                 delta2,
-                privacy_params.clone(),
+                privacy_params,
                 format!("round_{}_delta2", round),
                 &mut noise_gen2,
             ),
@@ -551,9 +553,9 @@ fn noise_preserves_differential_privacy_across_rounds() {
             + aggregated.aggregate_delta_anomalous_millionths
             + aggregated.aggregate_delta_malicious_millionths
             + aggregated.aggregate_delta_unknown_millionths)
-            .abs() as u64;
+            .unsigned_abs();
         assert!(
-            total_prob >= 950_000 && total_prob <= 1_050_000,
+            (950_000..=1_050_000).contains(&total_prob),
             "Round {} probability normalization failed: {}",
             round,
             total_prob

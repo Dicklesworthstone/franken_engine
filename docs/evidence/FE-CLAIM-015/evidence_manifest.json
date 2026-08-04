@@ -1,0 +1,60 @@
+{
+  "allowed_state": "observed",
+  "bundle_dir": "docs/evidence/FE-CLAIM-015",
+  "bundle_files": [
+    {
+      "git_tracked": true,
+      "path": "docs/evidence/FE-CLAIM-015/env.json",
+      "role": "bundle_file",
+      "sha256": "04c6b61f1efabd31c9bca604b3edf7c267efdb8ce19c9e4aabc16f8edb70c460",
+      "size_bytes": 1024,
+      "source": "worktree"
+    },
+    {
+      "git_tracked": true,
+      "path": "docs/evidence/FE-CLAIM-015/manifest.json",
+      "role": "bundle_file",
+      "sha256": "5a9c56f7a6fced442ad99717e0ac29c75510fb85f370e4d4b903129554aa0a6a",
+      "size_bytes": 1819,
+      "source": "worktree"
+    },
+    {
+      "git_tracked": true,
+      "path": "docs/evidence/FE-CLAIM-015/repro.lock",
+      "role": "repro_lock",
+      "sha256": "471f00c6329c4b6a6bccd1bbb1ebc5dca0b5298d9cfb20e71c655f02e021fb2e",
+      "size_bytes": 1614,
+      "source": "worktree"
+    }
+  ],
+  "claim_id": "FE-CLAIM-015",
+  "generated_at_utc": "2026-06-20T05:37:04.234749+00:00",
+  "hash_algorithm": "sha256",
+  "owning_bead": "bd-dpfvh",
+  "receipt": {
+    "backfilled": false,
+    "generated_by": "reemit_evidence_receipts.py (live gate run)",
+    "receipt_sha256": "77cba4f61e6d60adef679c600d247c3607e97936a62ae26702cdc38324d148bf",
+    "verification_result": "passed"
+  },
+  "repro_lock": {
+    "git_tracked": true,
+    "path": "docs/evidence/FE-CLAIM-015/repro.lock",
+    "role": "repro_lock",
+    "sha256": "471f00c6329c4b6a6bccd1bbb1ebc5dca0b5298d9cfb20e71c655f02e021fb2e",
+    "size_bytes": 1614,
+    "source": "worktree"
+  },
+  "schema_version": "franken-engine.evidence-manifest.v1",
+  "source_commit": "fac696b8a864c5281afb4b0252649024ef366938",
+  "verifiable_inputs": [
+    {
+      "git_tracked": true,
+      "path": "scripts/e2e/live_ifc_declassification_smoke.sh",
+      "role": "primary_artifact",
+      "sha256": "37f44d93d3f983e3be5d001294ebf668e8c55fd9eee87b0b05c0248d64205551",
+      "size_bytes": 11796,
+      "source": "head_blob"
+    }
+  ]
+}

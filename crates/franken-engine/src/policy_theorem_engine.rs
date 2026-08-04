@@ -9,15 +9,15 @@
 //! - **Non-interference**: High-security inputs cannot affect low-security outputs
 //! - **Attenuation**: Capability delegation only reduces privileges, never increases
 //!
-//! SMT backend: when [`SmtSolver::Z3`] is selected (and the `z3` CLI is on `PATH`)
+//! SMT backend: by default [`SmtSolver::Z3`] is selected and the `z3` CLI on `PATH`
 //! [`PolicyTheoremEngine::verify_single_theorem`] invokes the real Z3 solver on
 //! each proof obligation as `(assert (not <obligation>)) (check-sat)`; `unsat`
 //! is recorded as `Proven`, `sat` as `Disproven` (with the SMT counterexample
 //! captured in [`VerificationResult::counterexample`]), and `unknown`/timeout
-//! as [`VerificationStatus::Unknown`]. For [`SmtSolver::Internal`] (the
-//! default) and unsupported back-ends the structural string-shape check is
-//! retained as a non-fail-closed prefilter (it never on its own promotes a
-//! theorem to `Proven` when the Z3 path is also configured).
+//! as [`VerificationStatus::Unknown`]. For explicitly selected
+//! [`SmtSolver::Internal`] and unsupported back-ends the structural string-shape
+//! check is retained as a non-fail-closed prefilter (it never on its own
+//! promotes a theorem to a proof bundle).
 //!
 //! Track-G claim coverage: this wiring closes the simulated-SMT half of
 //! `bd-cixqu.7.17` for `FE-CLAIM-018` (formal policy semantics) and
@@ -35,8 +35,6 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 use serde::{Deserialize, Serialize};
-
-use crate::ir_contract::{Ir1Op, Ir2Op, Ir3Instruction};
 
 /// Policy property types supported by the theorem engine.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -144,6 +142,7 @@ pub enum SmtSolver {
 
 /// SMT-LIB logic for policy verification.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[allow(non_camel_case_types)]
 pub enum SmtLogic {
     /// Quantifier-free linear integer arithmetic
     QF_LIA,
@@ -415,20 +414,15 @@ impl PolicyTheoremEngine {
         let verification_results = verification_results?;
 
         // Then apply the results
-        for (theorem, verification_result) in self
-            .theorems
-            .iter_mut()
-            .zip(verification_results.into_iter())
-        {
+        for (theorem, verification_result) in self.theorems.iter_mut().zip(verification_results) {
             let status = verification_result.verification_status.clone();
 
             match status {
                 VerificationStatus::Proven => {
                     theorem.verification_status = VerificationStatus::Proven;
                     theorem.proof_carrier = Some(format!(
-                        "SMT proof for {} via {}",
-                        theorem.theorem_id,
-                        format!("{:?}", self.smt_context.solver_backend)
+                        "SMT proof for {} via {:?}",
+                        theorem.theorem_id, self.smt_context.solver_backend
                     ));
                     verified_count += 1;
                 }
@@ -491,8 +485,9 @@ impl PolicyTheoremEngine {
     /// A theorem is `Proven` iff every obligation is `Proven`; any `sat`
     /// short-circuits to `Disproven`; otherwise `Unknown`.
     ///
-    /// When the backend is not Z3 (e.g. [`SmtSolver::Internal`] default,
-    /// or [`SmtSolver::CVC5`] / [`SmtSolver::Yices`] which are not yet
+    /// When the backend is not Z3 (e.g. explicitly selected
+    /// [`SmtSolver::Internal`], or [`SmtSolver::CVC5`] /
+    /// [`SmtSolver::Yices`] which are not yet
     /// wired) the call falls back to the legacy structural prefilter that
     /// inspects the theorem's `proof_obligations` for the canonical
     /// quantifier shape. The prefilter never promotes to Proven on its
@@ -521,7 +516,21 @@ impl PolicyTheoremEngine {
 
         let (verification_status, smt_model, counterexample) = match self.smt_context.solver_backend
         {
-            SmtSolver::Z3 => self.verify_with_z3(theorem, &mut metadata),
+            SmtSolver::Z3 => {
+                metadata.insert("solver_tool".to_string(), "z3".to_string());
+                metadata.insert(
+                    "solver_version".to_string(),
+                    z3_tool_version().unwrap_or_else(|err| format!("unavailable: {err}")),
+                );
+                metadata.insert(
+                    "timeout_policy".to_string(),
+                    format!(
+                        "per-obligation z3 -t:{}ms",
+                        (self.smt_context.timeout_seconds as u64).saturating_mul(1_000)
+                    ),
+                );
+                self.verify_with_z3(theorem, &mut metadata)
+            }
             SmtSolver::Internal | SmtSolver::CVC5 | SmtSolver::Yices => {
                 metadata.insert(
                     "backend_status".to_string(),
@@ -681,7 +690,7 @@ impl PolicyTheoremEngine {
 
         let mut by_claim: BTreeMap<&'static str, Vec<&PolicyTheorem>> = BTreeMap::new();
         for theorem in &self.theorems {
-            if theorem.verification_status != VerificationStatus::Proven {
+            if !self.has_z3_proven_cache(theorem) {
                 continue;
             }
             if let Some(claim_id) = claim_id_for_property(&theorem.property) {
@@ -691,10 +700,43 @@ impl PolicyTheoremEngine {
 
         let mut emitted = Vec::new();
         for (claim_id, theorems) in by_claim {
-            let bundle = build_proof_bundle_body(claim_id, &theorems);
+            let bundle = self.build_proof_bundle_body(claim_id, &theorems);
             emitted.push(write_proof_bundle(&bundle, bundle_dir)?);
         }
         Ok(emitted)
+    }
+
+    fn has_z3_proven_cache(&self, theorem: &PolicyTheorem) -> bool {
+        if theorem.verification_status != VerificationStatus::Proven {
+            return false;
+        }
+
+        self.verification_cache
+            .get(&theorem.theorem_id)
+            .is_some_and(|result| {
+                result.verification_status == VerificationStatus::Proven
+                    && result
+                        .verification_metadata
+                        .get("solver")
+                        .is_some_and(|solver| solver == "Z3")
+                    && result
+                        .verification_metadata
+                        .keys()
+                        .any(|key| key.starts_with("z3_obligation_"))
+            })
+    }
+
+    fn build_proof_bundle_body(
+        &self,
+        claim_id: &str,
+        theorems: &[&PolicyTheorem],
+    ) -> ProofBundleBody {
+        build_proof_bundle_body(
+            claim_id,
+            theorems,
+            &self.smt_context,
+            &self.verification_cache,
+        )
     }
 
     /// Generate SMT-LIB format declarations for the verification context.
@@ -883,9 +925,9 @@ fn default_engine_axioms() -> Vec<String> {
 impl Default for SmtContext {
     fn default() -> Self {
         Self {
-            solver_backend: SmtSolver::Internal,
+            solver_backend: SmtSolver::Z3,
             timeout_seconds: 30,
-            logic: SmtLogic::QF_UF,
+            logic: SmtLogic::ALL,
             declared_sorts: BTreeSet::new(),
             declared_functions: BTreeMap::new(),
             axioms: Vec::new(),
@@ -999,6 +1041,30 @@ pub fn invoke_z3(smt_input: &str, timeout_seconds: u32) -> Result<Z3Outcome, Str
     }
 }
 
+pub fn z3_tool_version() -> Result<String, String> {
+    let output = Command::new("z3")
+        .arg("--version")
+        .output()
+        .map_err(|e| format!("failed to query z3 version: {e}"))?;
+    if !output.status.success() {
+        return Err(format!(
+            "z3 --version exited with status {}",
+            output
+                .status
+                .code()
+                .map(|c| c.to_string())
+                .unwrap_or_else(|| "<no-exit>".to_string())
+        ));
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    if stdout.is_empty() {
+        Ok(stderr)
+    } else {
+        Ok(stdout)
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Proof bundle emission (bd-cixqu.7.17)
 // ---------------------------------------------------------------------------
@@ -1083,10 +1149,20 @@ pub struct ProofBundleBody {
     pub verdict: String,
     pub generated_utc: String,
     pub source_module: String,
+    pub producer_tool: String,
+    pub producer_version: String,
+    pub timeout_policy: String,
+    pub timeout_seconds: u32,
+    pub theorem_count: usize,
     pub theorem_ids: Vec<String>,
 }
 
-fn build_proof_bundle_body(claim_id: &str, theorems: &[&PolicyTheorem]) -> ProofBundleBody {
+fn build_proof_bundle_body(
+    claim_id: &str,
+    theorems: &[&PolicyTheorem],
+    smt_context: &SmtContext,
+    verification_cache: &BTreeMap<String, VerificationResult>,
+) -> ProofBundleBody {
     use std::time::{SystemTime, UNIX_EPOCH};
     // Render generated_utc deterministically — the gate's freshness check is
     // <=30 days, so wall-clock seconds are fine; we just need a valid RFC3339-
@@ -1101,6 +1177,24 @@ fn build_proof_bundle_body(claim_id: &str, theorems: &[&PolicyTheorem]) -> Proof
     ids.sort();
     ids.dedup();
 
+    let mut solver_versions: Vec<String> = ids
+        .iter()
+        .filter_map(|id| verification_cache.get(id))
+        .filter_map(|result| result.verification_metadata.get("solver_version"))
+        .cloned()
+        .collect();
+    solver_versions.sort();
+    solver_versions.dedup();
+    let solver_version = if solver_versions.is_empty() {
+        "unknown".to_string()
+    } else {
+        solver_versions.join("; ")
+    };
+    let timeout_policy = format!(
+        "per-obligation z3 -t:{}ms",
+        (smt_context.timeout_seconds as u64).saturating_mul(1_000)
+    );
+
     ProofBundleBody {
         schema_version: "franken-engine.theorem-backed-compiler.proof.v1".to_string(),
         claim_id: claim_id.to_string(),
@@ -1111,6 +1205,11 @@ fn build_proof_bundle_body(claim_id: &str, theorems: &[&PolicyTheorem]) -> Proof
         // The gate rejects fixture markers: "", "selftest-fixture", "fixture",
         // "placeholder". Use the live module path so the gate accepts.
         source_module: "frankenengine_engine::policy_theorem_engine".to_string(),
+        producer_tool: "z3".to_string(),
+        producer_version: solver_version,
+        timeout_policy,
+        timeout_seconds: smt_context.timeout_seconds,
+        theorem_count: ids.len(),
         theorem_ids: ids,
     }
 }
@@ -1263,7 +1362,7 @@ fn sha256_digest(input: &[u8]) -> [u8; 32] {
     }
     padded.extend_from_slice(&bit_len.to_be_bytes());
 
-    for chunk in padded.chunks_exact(64) {
+    for chunk in padded.as_chunks::<64>().0 {
         let mut w = [0u32; 64];
         for i in 0..16 {
             w[i] = u32::from_be_bytes([
@@ -1439,7 +1538,8 @@ mod tests {
         assert!(engine.security_lattice.is_empty());
         assert!(engine.policy_rules.is_empty());
         assert!(engine.theorems.is_empty());
-        assert_eq!(engine.smt_context.solver_backend, SmtSolver::Internal);
+        assert_eq!(engine.smt_context.solver_backend, SmtSolver::Z3);
+        assert_eq!(engine.smt_context.logic, SmtLogic::ALL);
     }
 
     #[test]
@@ -1614,6 +1714,35 @@ mod tests {
             .output()
             .map(|o| o.status.success())
             .unwrap_or(false)
+    }
+
+    fn insert_z3_proven_cache(engine: &mut PolicyTheoremEngine, theorem_id: &str) {
+        let metadata: BTreeMap<String, String> = [
+            ("solver", "Z3"),
+            ("logic", "ALL"),
+            ("timeout", "30"),
+            ("obligations", "1"),
+            ("solver_tool", "z3"),
+            ("solver_version", "Z3 4.13.0"),
+            ("timeout_policy", "per-obligation z3 -t:30000ms"),
+            ("z3_obligation_0", "unsat"),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect();
+
+        engine.verification_cache.insert(
+            theorem_id.to_string(),
+            VerificationResult {
+                theorem_id: theorem_id.to_string(),
+                verification_status: VerificationStatus::Proven,
+                proof_time_ms: 1,
+                smt_model: None,
+                counterexample: None,
+                proof_steps: Vec::new(),
+                verification_metadata: metadata,
+            },
+        );
     }
 
     #[test]
@@ -1793,10 +1922,10 @@ mod tests {
 
     #[test]
     fn structural_prefilter_runs_for_non_z3_backends() {
-        let engine = PolicyTheoremEngine::new();
-        // Default backend is Internal → goes through structural prefilter,
-        // preserving the legacy behaviour for callers that haven't opted into
-        // a real solver.
+        let mut engine = PolicyTheoremEngine::new();
+        engine.smt_context.solver_backend = SmtSolver::Internal;
+        // Explicit Internal backend goes through the structural prefilter,
+        // preserving the legacy behaviour for callers that opt out of Z3.
         assert_eq!(engine.smt_context.solver_backend, SmtSolver::Internal);
         let theorem = PolicyTheorem {
             theorem_id: "prefilter_probe".to_string(),
@@ -1827,7 +1956,7 @@ mod tests {
     }
 
     #[test]
-    fn emit_proof_bundles_skips_unproven_theorems() {
+    fn emit_proof_bundles_skips_unproven_or_uncached_theorems() {
         let tmp =
             std::env::temp_dir().join(format!("fe-claim-018-emit-skip-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&tmp);
@@ -1842,9 +1971,21 @@ mod tests {
             verification_status: VerificationStatus::Unknown,
             proof_carrier: None,
         });
+        engine.theorems.push(PolicyTheorem {
+            theorem_id: "manually_marked_proven_without_solver_cache".to_string(),
+            property: PolicyProperty::Monotonicity,
+            hypothesis: "h".to_string(),
+            conclusion: "c".to_string(),
+            proof_obligations: Vec::new(),
+            verification_status: VerificationStatus::Proven,
+            proof_carrier: Some("manual-proof".to_string()),
+        });
 
         let emitted = engine.emit_proof_bundles(&tmp).unwrap();
-        assert!(emitted.is_empty(), "no Proven theorems → no bundle");
+        assert!(
+            emitted.is_empty(),
+            "only cached Z3 Proven theorems may emit bundles"
+        );
         // Directory is created even if no bundles were written.
         assert!(tmp.is_dir());
 
@@ -1866,6 +2007,7 @@ mod tests {
             verification_status: VerificationStatus::Proven,
             proof_carrier: Some("test-proof".to_string()),
         });
+        insert_z3_proven_cache(&mut engine, "monotonicity_proven");
         engine.theorems.push(PolicyTheorem {
             theorem_id: "noninterference_proven".to_string(),
             property: PolicyProperty::NonInterference,
@@ -1875,6 +2017,7 @@ mod tests {
             verification_status: VerificationStatus::Proven,
             proof_carrier: Some("test-proof".to_string()),
         });
+        insert_z3_proven_cache(&mut engine, "noninterference_proven");
 
         let emitted = engine.emit_proof_bundles(&tmp).unwrap();
         assert_eq!(emitted.len(), 2, "monotonicity → 018, NI → 021");
@@ -1897,6 +2040,15 @@ mod tests {
                 "franken-engine.theorem-backed-compiler.proof.v1"
             );
             assert_eq!(parsed["verdict"], "proven");
+            assert_eq!(parsed["proof_kind"], "smt-z3");
+            assert_eq!(parsed["producer_tool"], "z3");
+            assert_eq!(parsed["producer_version"], "Z3 4.13.0");
+            assert_eq!(parsed["timeout_policy"], "per-obligation z3 -t:30000ms");
+            assert_eq!(parsed["timeout_seconds"], 30);
+            assert_eq!(
+                parsed["theorem_count"].as_u64().unwrap(),
+                bundle.theorem_count as u64
+            );
             let src = parsed["source_module"].as_str().unwrap();
             assert!(
                 !matches!(src, "" | "selftest-fixture" | "fixture" | "placeholder"),

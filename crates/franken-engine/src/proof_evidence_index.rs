@@ -1486,10 +1486,15 @@ fn document_sha256(document: &Value) -> StorageResult<String> {
 }
 
 fn hash_with_salt(base_hash: &str, parts: &[&str]) -> String {
+    // Length-prefix each field rather than NUL-delimiting: a part is allowed to
+    // contain a NUL byte (e.g. `required_string` only checks non-empty), so a
+    // `\0`-delimiter would let `["x\0y","z"]` collide with `["x","y\0z"]`.
     let mut hasher = Sha256::new();
+    hasher.update((base_hash.len() as u64).to_le_bytes());
     hasher.update(base_hash.as_bytes());
+    hasher.update((parts.len() as u64).to_le_bytes());
     for part in parts {
-        hasher.update([0]);
+        hasher.update((part.len() as u64).to_le_bytes());
         hasher.update(part.as_bytes());
     }
     hex::encode(hasher.finalize())

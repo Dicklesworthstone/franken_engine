@@ -36,5 +36,9 @@ from PLAN section 3.2 to the shipped example directories in this repository.
 - `04_bench_vs_node` - Performance benchmarking
 - `11_cli_workflow_smoke` - CLI workflow demonstration
 - `12_frankenctl_react_demo` - Fail-closed React compile contract demo
+- `23_differential_oracle` - Cross-runtime differential oracle: `./examples/23_differential_oracle/demo.sh`
+- `24_conformance_frontier` - Ranked conformance coverage gaps: `./examples/24_conformance_frontier/demo.sh`
+- `25_flight_recorder` - Evidence flight recorder + time-travel debugger: `./examples/25_flight_recorder/demo.sh`
+- `26_non_exfiltration_certificate` - Signed E8 non-use/non-exfiltration certificate for an agent run: `./examples/26_non_exfiltration_certificate/demo.sh`
 
 Each example directory contains its own README plus the command listed above.

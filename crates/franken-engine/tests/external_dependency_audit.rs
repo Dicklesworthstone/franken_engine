@@ -117,7 +117,7 @@ fn dependency_audit_script_emits_manifest_in_skip_remote_mode() {
 }
 
 #[test]
-fn dependency_isolation_contract_documents_the_asupersync_tripod() {
+fn dependency_isolation_contract_documents_registry_backed_surface() {
     let doc = read_repo_text("docs/CROSS_REPO_DEPENDENCY_ISOLATION_V1.md");
     for section in [
         "# Cross-Repo Dependency Isolation (`bd-6a61n.6`)",
@@ -144,29 +144,51 @@ fn dependency_isolation_contract_documents_the_asupersync_tripod() {
     let feature_gates = contract["feature_gates"]
         .as_array()
         .expect("feature_gates should be an array");
-    assert!(
-        feature_gates.iter().any(|gate| {
-            gate["feature"] == "asupersync-integration" && gate["default_enabled"] == true
-        }),
-        "contract should document the default asupersync feature gate"
-    );
+    for feature in [
+        "asupersync-integration",
+        "sibling-persistence",
+        "sibling-service-api",
+        "sibling-dataframes",
+    ] {
+        assert!(
+            feature_gates
+                .iter()
+                .any(|gate| gate["feature"] == feature && gate["default_enabled"] == true),
+            "contract should document default-enabled feature {feature}"
+        );
+    }
 
     let dependencies = contract["dependencies"]
         .as_array()
         .expect("dependencies should be an array");
-    assert_eq!(dependencies.len(), 3, "expected the asupersync tripod only");
+    let expected_dependencies = [
+        ("franken-kernel", "asupersync-integration", "0.3.4"),
+        ("franken-decision", "asupersync-integration", "0.3.4"),
+        ("franken-evidence", "asupersync-integration", "0.3.4"),
+        ("sqlmodel", "sibling-persistence", "0.3.1"),
+        ("sqlmodel-core", "sibling-persistence", "0.3.1"),
+        ("sqlmodel-frankensqlite", "sibling-persistence", "0.3.1"),
+        ("fastapi-core", "sibling-service-api", "0.3.1"),
+        ("fp-io", "sibling-dataframes", "0.2.0"),
+        ("fp-frame", "sibling-dataframes", "0.2.0"),
+        ("fp-columnar", "sibling-dataframes", "0.2.0"),
+        ("fp-index", "sibling-dataframes", "0.2.0"),
+        ("fp-types", "sibling-dataframes", "0.2.0"),
+    ];
+    assert_eq!(
+        dependencies.len(),
+        expected_dependencies.len(),
+        "contract should inventory every direct optional cross-repo dependency"
+    );
 
-    for dependency_key in ["franken-kernel", "franken-decision", "franken-evidence"] {
+    for (dependency_key, feature_gate, version) in expected_dependencies {
         let dependency = dependencies
             .iter()
             .find(|entry| entry["dependency_key"] == dependency_key)
             .unwrap_or_else(|| panic!("missing dependency {dependency_key}"));
-        assert_eq!(
-            dependency["feature_gate"].as_str(),
-            Some("asupersync-integration")
-        );
+        assert_eq!(dependency["feature_gate"].as_str(), Some(feature_gate));
         assert_eq!(dependency["source_kind"].as_str(), Some("crates.io"));
-        assert_eq!(dependency["version_requirement"].as_str(), Some("0.3.1"));
+        assert_eq!(dependency["version_requirement"].as_str(), Some(version));
     }
 
     assert_eq!(
@@ -227,49 +249,107 @@ fn dependency_isolation_contract_documents_the_asupersync_tripod() {
 }
 
 #[test]
-fn dependency_isolation_contract_matches_workspace_feature_gate() {
+fn dependency_isolation_contract_matches_workspace_feature_gates() {
     let cargo_toml = engine_cargo_toml();
-    assert!(
-        cargo_toml.contains("default = [\"asupersync-integration\"]"),
-        "engine Cargo.toml should default-enable the asupersync integration gate"
-    );
-    assert!(
-        cargo_toml.contains("asupersync-integration = ["),
-        "engine Cargo.toml should define the asupersync feature gate"
-    );
-
+    let manifest: toml::Value =
+        toml::from_str(&cargo_toml).expect("engine Cargo.toml should parse");
+    let manifest_features = manifest["features"]
+        .as_table()
+        .expect("manifest features should be a table");
+    let default_features = manifest_features["default"]
+        .as_array()
+        .expect("default features should be an array");
+    let manifest_dependencies = manifest["dependencies"]
+        .as_table()
+        .expect("manifest dependencies should be a table");
     let contract = load_dependency_isolation_contract();
-    let feature_gate = contract["feature_gates"]
+    let feature_gates = contract["feature_gates"]
         .as_array()
-        .expect("feature_gates should be an array")
-        .iter()
-        .find(|gate| gate["feature"] == "asupersync-integration")
-        .expect("contract should declare the asupersync feature gate");
+        .expect("feature_gates should be an array");
+    let expected_gates: &[(&str, &[(&str, &str)])] = &[
+        (
+            "asupersync-integration",
+            &[
+                ("franken-kernel", "0.3.4"),
+                ("franken-decision", "0.3.4"),
+                ("franken-evidence", "0.3.4"),
+            ],
+        ),
+        (
+            "sibling-persistence",
+            &[
+                ("sqlmodel", "0.3.1"),
+                ("sqlmodel-core", "0.3.1"),
+                ("sqlmodel-frankensqlite", "0.3.1"),
+            ],
+        ),
+        ("sibling-service-api", &[("fastapi-core", "0.3.1")]),
+        (
+            "sibling-dataframes",
+            &[
+                ("fp-io", "0.2.0"),
+                ("fp-frame", "0.2.0"),
+                ("fp-columnar", "0.2.0"),
+                ("fp-index", "0.2.0"),
+                ("fp-types", "0.2.0"),
+            ],
+        ),
+    ];
 
-    let enabled_dependencies = feature_gate["enables_dependencies"]
-        .as_array()
-        .expect("enables_dependencies should be an array");
-
-    for dependency_key in ["franken-kernel", "franken-decision", "franken-evidence"] {
+    for &(feature, dependencies) in expected_gates {
         assert!(
-            cargo_toml.contains(&format!("\"dep:{dependency_key}\"")),
-            "engine Cargo.toml should route {dependency_key} through the feature gate"
-        );
-        assert!(
-            cargo_toml.contains(&format!(
-                "{dependency_key} = {{ version = \"0.3.1\", optional = true }}"
-            )),
-            "engine Cargo.toml should keep {dependency_key} as an optional versioned crate"
-        );
-        assert!(
-            !cargo_toml.contains(&format!("{dependency_key} = {{ path = \"/dp/asupersync/")),
-            "engine Cargo.toml should not reintroduce hard /dp path dependencies for {dependency_key}"
-        );
-        assert!(
-            enabled_dependencies
+            default_features
                 .iter()
-                .any(|value| value.as_str() == Some(dependency_key)),
-            "contract should list {dependency_key} in the feature gate surface"
+                .any(|value| value.as_str() == Some(feature)),
+            "engine Cargo.toml should default-enable feature {feature}"
         );
+        let manifest_feature_dependencies = manifest_features[feature]
+            .as_array()
+            .unwrap_or_else(|| panic!("manifest feature {feature} should be an array"));
+        let feature_gate = feature_gates
+            .iter()
+            .find(|gate| gate["feature"] == feature)
+            .unwrap_or_else(|| panic!("contract should declare feature gate {feature}"));
+        let enabled_dependencies = feature_gate["enables_dependencies"]
+            .as_array()
+            .expect("enables_dependencies should be an array");
+
+        for &(dependency_key, version) in dependencies {
+            let feature_dependency = format!("dep:{dependency_key}");
+            assert!(
+                manifest_feature_dependencies
+                    .iter()
+                    .any(|value| value.as_str() == Some(feature_dependency.as_str())),
+                "engine Cargo.toml should route {dependency_key} through {feature}"
+            );
+            let manifest_dependency = manifest_dependencies
+                .get(dependency_key)
+                .and_then(toml::Value::as_table)
+                .unwrap_or_else(|| panic!("missing manifest dependency {dependency_key}"));
+            assert_eq!(
+                manifest_dependency
+                    .get("version")
+                    .and_then(toml::Value::as_str),
+                Some(version),
+                "registry version for {dependency_key}"
+            );
+            assert_eq!(
+                manifest_dependency
+                    .get("optional")
+                    .and_then(toml::Value::as_bool),
+                Some(true),
+                "optional flag for {dependency_key}"
+            );
+            assert!(
+                !manifest_dependency.contains_key("path"),
+                "{dependency_key} must not regain a path source"
+            );
+            assert!(
+                enabled_dependencies
+                    .iter()
+                    .any(|value| value.as_str() == Some(dependency_key)),
+                "contract should list {dependency_key} in feature gate {feature}"
+            );
+        }
     }
 }

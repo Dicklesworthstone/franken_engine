@@ -126,19 +126,18 @@ fn make_trace(decisions: Vec<DecisionSnapshot>) -> TraceRecord {
         .first()
         .map(|decision| decision.trace_id.clone())
         .unwrap_or_else(|| "test-trace".to_string());
-    let mut recorder = TraceRecorder::new(RecorderConfig {
+    let mut recorder = TraceRecorder::new_lab(RecorderConfig {
         trace_id,
         recording_mode: RecordingMode::Full,
         epoch: test_epoch(),
         start_tick: 100,
-        signing_key: b"test-key".to_vec(),
     });
 
     for d in decisions {
         recorder.record_decision(d);
     }
 
-    recorder.finalize()
+    recorder.finalize().expect("lab trace should finalize")
 }
 
 fn make_alternate_policy(id: &str, desc: &str) -> AlternatePolicy {
@@ -180,7 +179,7 @@ fn default_scope() -> ReplayScope {
 }
 
 fn default_engine() -> CounterfactualReplayEngine {
-    CounterfactualReplayEngine::new(ReplayEngineConfig::default())
+    CounterfactualReplayEngine::new_lab(ReplayEngineConfig::default())
 }
 
 /// The (chosen-action, native-loss) spec for the decisions in `simple_trace`.
@@ -218,11 +217,17 @@ fn make_node_trace(node_id: &str, trace_id: &str, native_losses: &[i64]) -> Trac
             decision
         })
         .collect();
-    let mut trace = make_trace(decisions);
-    trace
-        .metadata
-        .insert("node_id".to_string(), node_id.to_string());
-    trace
+    let mut recorder = TraceRecorder::new_lab(RecorderConfig {
+        trace_id: trace_id.to_string(),
+        recording_mode: RecordingMode::Full,
+        epoch: test_epoch(),
+        start_tick: 100,
+    });
+    recorder.set_metadata("node_id".to_string(), node_id.to_string());
+    for decision in decisions {
+        recorder.record_decision(decision);
+    }
+    recorder.finalize().expect("lab trace should finalize")
 }
 
 fn write_trace(root: &Path, relative_path: &str, trace: &TraceRecord) -> PathBuf {
@@ -447,8 +452,10 @@ fn fleet_trace_dir_report_is_serde_roundtrip_stable() {
 fn fleet_trace_dir_uses_trace_id_when_node_metadata_absent() {
     let root = unique_fleet_dir("fallback-node");
     fs::create_dir_all(&root).unwrap();
-    let mut trace = make_node_trace("node-unused", "trace-fallback", &[700_000]);
-    trace.metadata.clear();
+    let mut decision = make_decision(0, "native", 700_000);
+    decision.trace_id = "trace-fallback".to_string();
+    decision.decision_id = "trace-fallback-decision-0".to_string();
+    let trace = make_trace(vec![decision]);
     write_trace(&root, "trace-fallback.json", &trace);
 
     let snapshot = substituted_policy_snapshot(default_scope());
@@ -631,7 +638,8 @@ fn config_default() {
     assert_eq!(config.estimator, EstimatorKind::DoublyRobust);
     assert!(config.regime_breakdown);
     assert!(config.record_divergences);
-    assert!(config.verify_integrity);
+    let serialized = serde_json::to_string(&config).unwrap();
+    assert!(!serialized.contains("verify_integrity"));
 }
 
 #[test]
@@ -1248,7 +1256,6 @@ fn config_non_default_settings() {
         regime_breakdown: false,
         record_divergences: false,
         max_divergences_per_policy: 10,
-        verify_integrity: false,
     };
     let json = serde_json::to_string(&config).unwrap();
     let back: ReplayEngineConfig = serde_json::from_str(&json).unwrap();

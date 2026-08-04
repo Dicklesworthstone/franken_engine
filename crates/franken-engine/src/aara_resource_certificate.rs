@@ -32,6 +32,17 @@ use sha2::{Digest, Sha256};
 use crate::hash_tiers::ContentHash;
 use crate::security_epoch::SecurityEpoch;
 
+/// Feed `bytes` into `hasher` with a fixed-width `u64` length prefix.
+///
+/// Content hashes that mix adjacent variable-length fields MUST length-prefix
+/// each one; otherwise two distinct field decompositions of the same
+/// concatenated byte stream hash identically (e.g. `certificate_id="ab",
+/// region_id="c"` would collide with `"a", "bc"`).
+fn hash_len_prefixed(hasher: &mut Sha256, bytes: &[u8]) {
+    hasher.update((bytes.len() as u64).to_le_bytes());
+    hasher.update(bytes);
+}
+
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
@@ -262,17 +273,19 @@ impl EffectSummary {
         abstentions: &[AbstentionPoint],
     ) -> ContentHash {
         let mut hasher = Sha256::new();
-        hasher.update(region_id.as_bytes());
+        hash_len_prefixed(&mut hasher, region_id.as_bytes());
+        hasher.update((entries.len() as u64).to_le_bytes());
         for entry in entries {
-            hasher.update(format!("{}", entry.kind).as_bytes());
-            hasher.update(entry.program_point.as_bytes());
+            hash_len_prefixed(&mut hasher, format!("{}", entry.kind).as_bytes());
+            hash_len_prefixed(&mut hasher, entry.program_point.as_bytes());
             hasher.update(entry.worst_case_count_millionths.to_le_bytes());
             hasher.update([u8::from(entry.is_exact)]);
         }
+        hasher.update((abstentions.len() as u64).to_le_bytes());
         for abs in abstentions {
-            hasher.update(abs.program_point.as_bytes());
-            hasher.update(format!("{}", abs.reason).as_bytes());
-            hasher.update(abs.detail.as_bytes());
+            hash_len_prefixed(&mut hasher, abs.program_point.as_bytes());
+            hash_len_prefixed(&mut hasher, format!("{}", abs.reason).as_bytes());
+            hash_len_prefixed(&mut hasher, abs.detail.as_bytes());
         }
         ContentHash::compute(&hasher.finalize())
     }
@@ -748,10 +761,15 @@ impl ResourceCertificate {
             potentials,
         } = input;
         let mut hasher = Sha256::new();
-        hasher.update(certificate_id.as_bytes());
-        hasher.update(region_id.as_bytes());
+        // Variable-length fields are length-prefixed and every loop carries an
+        // explicit element count, so the preimage is an injective encoding of
+        // the certificate (no field-boundary collisions across adjacent
+        // strings or between successive list elements).
+        hash_len_prefixed(&mut hasher, certificate_id.as_bytes());
+        hash_len_prefixed(&mut hasher, region_id.as_bytes());
         hasher.update(epoch.as_u64().to_le_bytes());
         hasher.update([verdict as u8]);
+        hasher.update((bounds.len() as u64).to_le_bytes());
         for bound in bounds {
             hasher.update([bound.dimension as u8]);
             hasher.update(bound.upper_bound_millionths.to_le_bytes());
@@ -759,17 +777,20 @@ impl ResourceCertificate {
             hasher.update(bound.confidence_millionths.to_le_bytes());
         }
         hasher.update(effect_summary.content_hash.as_bytes());
+        hasher.update((assumptions.len() as u64).to_le_bytes());
         for assumption in assumptions {
-            hasher.update(assumption.key.as_bytes());
-            hasher.update(format!("{}", assumption.kind).as_bytes());
-            hasher.update(assumption.description.as_bytes());
+            hash_len_prefixed(&mut hasher, assumption.key.as_bytes());
+            hash_len_prefixed(&mut hasher, format!("{}", assumption.kind).as_bytes());
+            hash_len_prefixed(&mut hasher, assumption.description.as_bytes());
             hasher.update([u8::from(assumption.is_critical)]);
         }
+        hasher.update((abstention_points.len() as u64).to_le_bytes());
         for abstention in abstention_points {
-            hasher.update(abstention.program_point.as_bytes());
-            hasher.update(format!("{}", abstention.reason).as_bytes());
-            hasher.update(abstention.detail.as_bytes());
+            hash_len_prefixed(&mut hasher, abstention.program_point.as_bytes());
+            hash_len_prefixed(&mut hasher, format!("{}", abstention.reason).as_bytes());
+            hash_len_prefixed(&mut hasher, abstention.detail.as_bytes());
         }
+        hasher.update((potentials.len() as u64).to_le_bytes());
         for potential in potentials {
             hasher.update(potential.content_hash.as_bytes());
         }
@@ -1533,6 +1554,19 @@ mod tests {
             vec![],
         );
         assert_eq!(c1.content_hash, c2.content_hash);
+    }
+
+    #[test]
+    fn certificate_hash_is_injective_across_field_boundaries() {
+        // Two certificates that share the concatenation of their id/region
+        // strings but split it differently must NOT share a content hash.
+        // ("ab","c") vs ("a","bc") collided before the fields were
+        // length-prefixed.
+        let s1 = EffectSummary::build("fn:x", vec![], vec![]);
+        let s2 = EffectSummary::build("fn:x", vec![], vec![]);
+        let c1 = make_cert("ab", "c", vec![], s1, vec![], vec![], vec![]);
+        let c2 = make_cert("a", "bc", vec![], s2, vec![], vec![], vec![]);
+        assert_ne!(c1.content_hash, c2.content_hash);
     }
 
     // --- CertificateBundle ---

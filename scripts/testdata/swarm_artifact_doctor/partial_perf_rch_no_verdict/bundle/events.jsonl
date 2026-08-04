@@ -1,0 +1,1 @@
+{"schema_version":"franken-engine.perf-rch-closeout-event.v1","event":"remote_progress_stale","outcome":"no_verdict","worker_id":"fixture-worker-02","build_id":"fixture-build-partial","progress_age_secs":374,"detector_progress_stale":true}

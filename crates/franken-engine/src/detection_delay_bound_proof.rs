@@ -21,14 +21,12 @@
 
 #![forbid(unsafe_code)]
 
-use std::collections::BTreeMap;
 use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
-use crate::change_point_detector::{ChangePointDetector, CompositeAlternative};
+use crate::change_point_detector::CompositeAlternative;
 use crate::proof_obligations::{ObligationCategory, ObligationId, ObligationSeverity};
-use crate::security_epoch::SecurityEpoch;
 
 // ---------------------------------------------------------------------------
 // Constants and Configuration
@@ -39,9 +37,6 @@ const MILLION: i64 = 1_000_000;
 
 /// Default confidence level for probabilistic bounds (95%).
 const DEFAULT_CONFIDENCE_MILLIONTHS: i64 = 950_000;
-
-/// Maximum iterations for numerical ARL computation.
-const MAX_ARL_ITERATIONS: u32 = 10_000;
 
 /// Convergence tolerance for iterative computations (0.001).
 const CONVERGENCE_TOLERANCE_MILLIONTHS: i64 = 1_000;
@@ -450,9 +445,8 @@ impl WorstCaseDelayBound {
             id: ObligationId("false_alarm_control".to_string()),
             category: ObligationCategory::Safety,
             severity: ObligationSeverity::Warning,
-            statement: format!(
-                "False alarm rate must not exceed threshold implied by ARL analysis"
-            ),
+            statement: "False alarm rate must not exceed threshold implied by ARL analysis"
+                .to_string(),
             formal_constraint: DelayBoundConstraint::FalseAlarmRate {
                 max_rate_millionths: MILLION / config.threshold_millionths.max(1),
             },
@@ -653,7 +647,6 @@ impl CompositeAlternative {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::security_epoch::SecurityEpoch;
 
     #[test]
     fn test_arl_computation_normal_mean_shift() {

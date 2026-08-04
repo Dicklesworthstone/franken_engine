@@ -21,16 +21,19 @@ Build the `frankenctl` binary into a shared target directory, then run the
 focused Cargo bench wrappers for subprocess timing:
 
 ```bash
-rch exec -- env CARGO_TARGET_DIR=/data/tmp/franken_engine_runtime_comparison_target \
-  CARGO_INCREMENTAL=0 RUSTFLAGS='-C linker=cc' \
+env -u CARGO_ENCODED_RUSTFLAGS rch exec -- env -u CARGO_ENCODED_RUSTFLAGS \
+  CARGO_TARGET_DIR=/data/tmp/franken_engine_runtime_comparison_target \
+  CARGO_INCREMENTAL=0 RUSTFLAGS='-C linker=cc -Clinker-features=-lld' \
   cargo build -p frankenengine-engine --bin frankenctl --release
 
-rch exec -- env CARGO_TARGET_DIR=/data/tmp/franken_engine_runtime_comparison_target \
-  CARGO_INCREMENTAL=0 RUSTFLAGS='-C linker=cc' \
+env -u CARGO_ENCODED_RUSTFLAGS rch exec -- env -u CARGO_ENCODED_RUSTFLAGS \
+  CARGO_TARGET_DIR=/data/tmp/franken_engine_runtime_comparison_target \
+  CARGO_INCREMENTAL=0 RUSTFLAGS='-C linker=cc -Clinker-features=-lld' \
   cargo bench -p frankenengine-engine --bench comparative_node -- --noplot
 
-rch exec -- env CARGO_TARGET_DIR=/data/tmp/franken_engine_runtime_comparison_target \
-  CARGO_INCREMENTAL=0 RUSTFLAGS='-C linker=cc' \
+env -u CARGO_ENCODED_RUSTFLAGS rch exec -- env -u CARGO_ENCODED_RUSTFLAGS \
+  CARGO_TARGET_DIR=/data/tmp/franken_engine_runtime_comparison_target \
+  CARGO_INCREMENTAL=0 RUSTFLAGS='-C linker=cc -Clinker-features=-lld' \
   cargo bench -p frankenengine-engine --bench comparative_bun -- --noplot
 ```
 

@@ -23,7 +23,7 @@ use crate::expected_loss_selector::{
     ActionDecision, ContainmentAction, ExpectedLossSelector, LossMatrix,
 };
 use crate::hash_tiers::ContentHash;
-use crate::hostcall_telemetry::HostcallTelemetryRecord;
+use crate::hostcall_telemetry::{HostcallTelemetryRecord, TelemetryDropCounts, TelemetryRecorder};
 use crate::security_epoch::SecurityEpoch;
 
 // ---------------------------------------------------------------------------
@@ -72,6 +72,14 @@ pub struct IncidentTrace {
     pub metadata: IncidentMetadata,
     /// Ordered telemetry records from the incident.
     pub telemetry_log: Vec<HostcallTelemetryRecord>,
+    /// Per-reason records refused by the source telemetry recorder.
+    ///
+    /// Zero proves that every record submitted by an instrumented dispatch
+    /// site was retained; dispatch-site coverage is a separate invariant. The
+    /// default preserves decoding of incident traces serialized before drop
+    /// evidence was added.
+    #[serde(default)]
+    pub telemetry_drop_counts: TelemetryDropCounts,
     /// Posterior history: (step_index, posterior_after_update).
     pub posterior_history: Vec<(u64, Posterior)>,
     /// Decision log: each decision made during the incident.
@@ -116,6 +124,19 @@ impl IncidentTrace {
                 buf.extend_from_slice(&bytes);
             }
         }
+        // Preserve historical hashes for complete traces while ensuring an
+        // incomplete retained prefix cannot validate under the clean hash.
+        if self.telemetry_drop_counts.any() {
+            buf.extend_from_slice(b"telemetry-drop-counts-v1");
+            buf.extend_from_slice(&self.telemetry_drop_counts.channel_full.to_le_bytes());
+            buf.extend_from_slice(
+                &self
+                    .telemetry_drop_counts
+                    .monotonicity_violation
+                    .to_le_bytes(),
+            );
+            buf.extend_from_slice(&self.telemetry_drop_counts.empty_extension_id.to_le_bytes());
+        }
         buf.extend_from_slice(&(self.evidence_log.len() as u64).to_le_bytes());
         for entry in &self.evidence_log {
             if let Ok(bytes) = serde_json::to_vec(entry) {
@@ -144,19 +165,19 @@ impl IncidentTrace {
         ContentHash::compute(&buf)
     }
 
-    /// Return a clone of this trace whose `telemetry_log` is replaced with
-    /// the supplied records.
+    /// Return a clone of this trace whose telemetry evidence is replaced with
+    /// a completeness-aware snapshot of the supplied recorder.
     ///
     /// This is the recommended bridge between
     /// [`crate::baseline_interpreter::InterpreterCore::hostcall_telemetry`]
     /// and a recorded incident trace (bd-qi3hs): callers seed an
     /// [`IncidentTrace`] from posterior/decision/evidence history and then
-    /// feed it the runtime's hostcall records so the Probabilistic Guardplane
-    /// can replay against the real evidence stream rather than the empty
-    /// placeholder that lived here before the recorder was wired in.
+    /// feed it the runtime's recorder so the Probabilistic Guardplane can
+    /// replay against the real evidence stream and reject any dropped tail.
     #[must_use]
-    pub fn with_telemetry_log(mut self, telemetry_log: Vec<HostcallTelemetryRecord>) -> Self {
-        self.telemetry_log = telemetry_log;
+    pub fn with_telemetry_recorder(mut self, recorder: &TelemetryRecorder) -> Self {
+        self.telemetry_log = recorder.records().to_vec();
+        self.telemetry_drop_counts = recorder.drop_counts();
         self
     }
 }
@@ -182,6 +203,9 @@ pub enum TraceValidationError {
     EvidenceCountMismatch { evidence: usize, posteriors: usize },
     /// Empty trace (no evidence to replay).
     EmptyTrace,
+    /// The source recorder refused one or more telemetry records, so the
+    /// retained stream is incomplete and cannot support a clean replay.
+    IncompleteTelemetry { drop_counts: TelemetryDropCounts },
     /// Telemetry record fails integrity check.
     TelemetryIntegrityFailure { record_id: u64 },
     /// Containment receipt fails integrity check.
@@ -223,6 +247,14 @@ impl fmt::Display for TraceValidationError {
                 )
             }
             Self::EmptyTrace => write!(f, "empty trace"),
+            Self::IncompleteTelemetry { drop_counts } => write!(
+                f,
+                "incomplete telemetry: {} dropped record(s) (channel_full={}, monotonicity_violation={}, empty_extension_id={})",
+                drop_counts.total(),
+                drop_counts.channel_full,
+                drop_counts.monotonicity_violation,
+                drop_counts.empty_extension_id
+            ),
             Self::TelemetryIntegrityFailure { record_id } => {
                 write!(f, "telemetry integrity failure: record {record_id}")
             }
@@ -477,6 +509,12 @@ impl fmt::Display for ReplayError {
 pub fn validate_trace(trace: &IncidentTrace) -> Vec<TraceValidationError> {
     let mut errors = Vec::new();
 
+    if trace.telemetry_drop_counts.any() {
+        errors.push(TraceValidationError::IncompleteTelemetry {
+            drop_counts: trace.telemetry_drop_counts,
+        });
+    }
+
     // Empty trace check.
     if trace.evidence_log.is_empty() {
         errors.push(TraceValidationError::EmptyTrace);
@@ -646,6 +684,7 @@ impl ForensicReplayer {
                 matches!(
                     e,
                     TraceValidationError::EmptyTrace
+                        | TraceValidationError::IncompleteTelemetry { .. }
                         | TraceValidationError::NonMonotonicTimestamp { .. }
                         | TraceValidationError::InvalidPosterior { .. }
                 )
@@ -978,7 +1017,12 @@ fn determine_final_state(steps: &[ReplayStep]) -> ContainmentState {
 mod tests {
     use super::*;
     use crate::bayesian_posterior::LikelihoodModel;
+    use crate::capability::RuntimeCapability;
     use crate::expected_loss_selector::LossMatrix;
+    use crate::hostcall_telemetry::{
+        FlowLabel, HostcallResult, HostcallType, RecordInput, RecorderConfig, ResourceDelta,
+        TelemetryError,
+    };
 
     // -----------------------------------------------------------------------
     // Test helpers
@@ -1043,6 +1087,7 @@ mod tests {
                 annotations: BTreeMap::new(),
             },
             telemetry_log: Vec::new(),
+            telemetry_drop_counts: TelemetryDropCounts::default(),
             posterior_history,
             decision_log,
             evidence_log: evidence,
@@ -1074,6 +1119,7 @@ mod tests {
                 annotations: BTreeMap::new(),
             },
             telemetry_log: Vec::new(),
+            telemetry_drop_counts: TelemetryDropCounts::default(),
             posterior_history: Vec::new(),
             decision_log: Vec::new(),
             evidence_log: Vec::new(),
@@ -1091,6 +1137,102 @@ mod tests {
         let trace = build_trace(vec![benign_evidence(), benign_evidence()]);
         let errors = validate_trace(&trace);
         assert!(errors.is_empty(), "expected no errors, got: {errors:?}");
+    }
+
+    #[test]
+    fn completeness_aware_recorder_bridge_rejects_dropped_tail() {
+        let input = || RecordInput {
+            extension_id: "ext-001".to_string(),
+            hostcall_type: HostcallType::FsRead,
+            capability_used: RuntimeCapability::FsRead,
+            arguments_hash: ContentHash::compute(b"bd-0332s-telemetry-args"),
+            result_status: HostcallResult::Success,
+            duration_ns: 1,
+            resource_delta: ResourceDelta::default(),
+            flow_label: FlowLabel::new("public", "public"),
+            decision_id: Some("decision-001".to_string()),
+        };
+        let mut complete_recorder = TelemetryRecorder::new(RecorderConfig {
+            channel_capacity: 1,
+            ..RecorderConfig::default()
+        });
+        complete_recorder
+            .record(1, input())
+            .expect("first telemetry record fits");
+        let base_trace = build_trace(vec![benign_evidence()]);
+        let complete_trace = base_trace
+            .clone()
+            .with_telemetry_recorder(&complete_recorder);
+        assert_eq!(
+            complete_trace.telemetry_drop_counts,
+            TelemetryDropCounts::default()
+        );
+        assert!(validate_trace(&complete_trace).is_empty());
+
+        let mut legacy_json = serde_json::to_value(&complete_trace).expect("serialize clean trace");
+        legacy_json
+            .as_object_mut()
+            .expect("trace serializes as an object")
+            .remove("telemetry_drop_counts");
+        let legacy_trace: IncidentTrace =
+            serde_json::from_value(legacy_json).expect("decode legacy clean trace");
+        assert_eq!(legacy_trace, complete_trace);
+        assert_eq!(legacy_trace.content_hash(), complete_trace.content_hash());
+
+        let mut incomplete_recorder = complete_recorder.clone();
+        assert!(matches!(
+            incomplete_recorder.record(2, input()),
+            Err(TelemetryError::ChannelFull)
+        ));
+        let incomplete_trace = base_trace.with_telemetry_recorder(&incomplete_recorder);
+        assert_ne!(incomplete_trace, complete_trace);
+        assert_ne!(
+            incomplete_trace.content_hash(),
+            complete_trace.content_hash()
+        );
+        assert_eq!(incomplete_trace.telemetry_drop_counts.channel_full, 1);
+
+        let encoded = serde_json::to_vec(&incomplete_trace).expect("serialize incomplete trace");
+        let decoded: IncidentTrace =
+            serde_json::from_slice(&encoded).expect("deserialize incomplete trace");
+        assert_eq!(
+            decoded.telemetry_drop_counts,
+            incomplete_trace.telemetry_drop_counts
+        );
+        assert!(validate_trace(&decoded).iter().any(|error| matches!(
+            error,
+            TraceValidationError::IncompleteTelemetry { drop_counts }
+                if drop_counts.channel_full == 1
+        )));
+
+        let mut replayer = ForensicReplayer::new();
+        let replay_error = replayer
+            .replay(&decoded, &ReplayConfig::default())
+            .expect_err("incomplete telemetry must fail closed");
+        assert!(matches!(
+            replay_error,
+            ReplayError::ValidationFailed { errors }
+                if errors.iter().any(|error| matches!(
+                    error,
+                    TraceValidationError::IncompleteTelemetry { .. }
+                ))
+        ));
+
+        let counterfactual_error = replayer
+            .counterfactual(
+                &decoded,
+                &ReplayConfig::default(),
+                &CounterfactualSpec::identity(),
+            )
+            .expect_err("counterfactual replay must not bypass incomplete telemetry");
+        assert!(matches!(
+            counterfactual_error,
+            ReplayError::ValidationFailed { errors }
+                if errors.iter().any(|error| matches!(
+                    error,
+                    TraceValidationError::IncompleteTelemetry { .. }
+                ))
+        ));
     }
 
     #[test]
@@ -1524,6 +1666,7 @@ mod tests {
                 annotations: BTreeMap::new(),
             },
             telemetry_log: Vec::new(),
+            telemetry_drop_counts: TelemetryDropCounts::default(),
             posterior_history: Vec::new(),
             decision_log: Vec::new(),
             evidence_log: Vec::new(),
@@ -2060,6 +2203,12 @@ mod tests {
                 posteriors: 7,
             },
             TraceValidationError::EmptyTrace,
+            TraceValidationError::IncompleteTelemetry {
+                drop_counts: TelemetryDropCounts {
+                    channel_full: 1,
+                    ..TelemetryDropCounts::default()
+                },
+            },
             TraceValidationError::TelemetryIntegrityFailure { record_id: 42 },
             TraceValidationError::ReceiptIntegrityFailure {
                 receipt_id: "r-1".to_string(),
@@ -2071,7 +2220,7 @@ mod tests {
                 serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*e, restored);
         }
-        assert_eq!(errors.len(), 7);
+        assert_eq!(errors.len(), 8);
     }
 
     #[test]
@@ -2140,6 +2289,12 @@ mod tests {
                 posteriors: 4,
             },
             TraceValidationError::EmptyTrace,
+            TraceValidationError::IncompleteTelemetry {
+                drop_counts: TelemetryDropCounts {
+                    channel_full: 1,
+                    ..TelemetryDropCounts::default()
+                },
+            },
             TraceValidationError::TelemetryIntegrityFailure { record_id: 10 },
             TraceValidationError::ReceiptIntegrityFailure {
                 receipt_id: "r-1".to_string(),
@@ -2153,8 +2308,8 @@ mod tests {
         }
         assert_eq!(
             displays.len(),
-            7,
-            "all 7 TraceValidationError variants produce distinct Display strings"
+            8,
+            "all 8 TraceValidationError variants produce distinct Display strings"
         );
     }
 

@@ -11,8 +11,32 @@ target_kind="${SOURCE_LOCAL_RCH_PROOF_TARGET_KIND:-lib}"
 test_filter="${SOURCE_LOCAL_RCH_PROOF_TEST_FILTER:-shadow_decision_composer::tests::output_dir_file_lock_blocks_second_writer_until_release}"
 covered_path="${SOURCE_LOCAL_RCH_PROOF_COVERED_PATH:-crates/franken-engine/src/shadow_decision_composer.rs}"
 target_dir="${SOURCE_LOCAL_RCH_PROOF_TARGET_DIR:-/tmp/rch_target_franken_engine_source_local_bd_lnks9}"
-rustflags="${RUSTFLAGS:--Clinker=cc}"
+linker_policy_rustflag="-Clinker-features=-lld"
+rustflags="${RUSTFLAGS:-}"
+encoded_rustflags="${CARGO_ENCODED_RUSTFLAGS:-}"
 timeout_seconds="${SOURCE_LOCAL_RCH_PROOF_TIMEOUT_SECONDS:-1800}"
+
+linker_policy_is_effective() {
+  local rustflags_value="${1-}"
+  local -a tokens=()
+  local index
+  local effective_state="unset"
+
+  read -r -a tokens <<<"$rustflags_value"
+  for index in "${!tokens[@]}"; do
+    case "${tokens[$index]}" in
+      "$linker_policy_rustflag") effective_state="disabled" ;;
+      -Clinker-features=*) effective_state="other" ;;
+      -C)
+        case "${tokens[$((index + 1))]:-}" in
+          linker-features=-lld) effective_state="disabled" ;;
+          linker-features=*) effective_state="other" ;;
+        esac
+        ;;
+    esac
+  done
+  [[ "$effective_state" == "disabled" ]]
+}
 
 request_json="${run_dir}/request.json"
 proof_admission_json="${run_dir}/proof_admission.json"
@@ -49,6 +73,14 @@ case "${1:-run}" in
     exit 64
     ;;
 esac
+
+if [[ -n "$encoded_rustflags" ]]; then
+  printf 'CARGO_ENCODED_RUSTFLAGS is not supported by this deterministic proof wrapper; use RUSTFLAGS so the linker policy can be recorded\n' >&2
+  exit 64
+fi
+if ! linker_policy_is_effective "$rustflags"; then
+  rustflags="${rustflags:+${rustflags} }${linker_policy_rustflag}"
+fi
 
 if ! command -v jq >/dev/null 2>&1; then
   printf 'jq is required for source-local rch no-mock proof\n' >&2
@@ -88,7 +120,7 @@ source_hash="$(sha256sum "${repo_root}/${covered_path}" | awk '{print $1}')"
 cargo_lock_hash="$(sha256sum "${repo_root}/Cargo.lock" | awk '{print $1}')"
 dependency_root_hash="$(printf '%s\n%s\n%s\n%s\n' "$source_hash" "$cargo_lock_hash" "$package" "$target_kind" | sha256sum | awk '{print $1}')"
 cargo_command="cargo test -p ${package} --${target_kind} ${test_filter} -- --exact --nocapture"
-rch_command="rch exec -- env CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 CARGO_TARGET_DIR=${target_dir} RUSTFLAGS=$(printf '%q' "$rustflags") ${cargo_command}"
+rch_command="env -u CARGO_ENCODED_RUSTFLAGS rch exec -- env -u CARGO_ENCODED_RUSTFLAGS CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 CARGO_TARGET_DIR=${target_dir} RUSTFLAGS=$(printf '%q' "$rustflags") ${cargo_command}"
 command_fingerprint="$(printf '%s\n%s\n%s\n%s\n%s\n%s\n' "$source_revision" "$cargo_lock_hash" "$dependency_root_hash" "$target_dir" "$rustflags" "$cargo_command" | sha256sum | awk '{print $1}')"
 
 jq -n \
@@ -216,7 +248,8 @@ write_event "admission.completed" "$admission_decision" "$admission_json"
 printf '%s\n' "$rch_command" >>"$commands_txt"
 set +e
 timeout "$timeout_seconds" \
-  rch exec -- env \
+  env -u CARGO_ENCODED_RUSTFLAGS \
+  rch exec -- env -u CARGO_ENCODED_RUSTFLAGS \
     CARGO_INCREMENTAL=0 \
     CARGO_BUILD_JOBS=1 \
     "CARGO_TARGET_DIR=${target_dir}" \

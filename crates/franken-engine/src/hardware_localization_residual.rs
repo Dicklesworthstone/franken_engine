@@ -1077,6 +1077,19 @@ impl LocalizationReport {
         append_str(&mut buf, &self.optimization_id);
         append_u64(&mut buf, self.epoch.as_u64());
         append_str(&mut buf, self.verdict.as_str());
+        // Commit to the rejection reasons too: two reports can share the same
+        // verdict/entries/gains but differ in WHY they were rejected (a different
+        // policy threshold violated), and a tamper-evident seal must bind those
+        // audit reasons. RejectionDetail derives Serialize with no maps, so its
+        // JSON is deterministic; count- + length-prefix keeps the list injective.
+        append_u64(&mut buf, self.rejection_details.len() as u64);
+        for detail in &self.rejection_details {
+            append_str(
+                &mut buf,
+                &serde_json::to_string(detail)
+                    .expect("RejectionDetail serializes (derived, no maps)"),
+            );
+        }
         append_u64(&mut buf, self.entries.len() as u64);
         for entry in &self.entries {
             buf.extend_from_slice(entry.entry_hash.as_bytes());
@@ -1152,6 +1165,35 @@ mod tests {
 
     fn epoch() -> SecurityEpoch {
         SecurityEpoch::from_raw(900)
+    }
+
+    #[test]
+    fn localization_report_seal_commits_to_rejection_details() {
+        // bd-xv915: rejection_details was omitted from the seal, so two reports
+        // with the same verdict/entries/gains but different rejection reasons
+        // shared a tamper-evident hash. Sealing over them pins them apart.
+        let mk = |details: Vec<RejectionDetail>| {
+            LocalizationReport::new(
+                "opt-1".to_string(),
+                epoch(),
+                PromotionVerdict::Rejected,
+                details,
+                Vec::new(),
+                Vec::new(),
+                500_000,
+                600_000,
+            )
+            .content_hash
+        };
+        let a = mk(vec![RejectionDetail::AlgorithmicGainTooLow {
+            observed_millionths: 500_000,
+            threshold_millionths: 600_000,
+        }]);
+        let b = mk(vec![RejectionDetail::HardwareAttributableTooHigh {
+            observed_millionths: 600_000,
+            threshold_millionths: 500_000,
+        }]);
+        assert_ne!(a, b, "seal must commit to rejection_details");
     }
 
     /// Build an entry with the standard residual breakdown.

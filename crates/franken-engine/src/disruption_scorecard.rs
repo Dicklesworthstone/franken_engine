@@ -26,6 +26,25 @@ use serde::{Deserialize, Serialize};
 use crate::hash_tiers::ContentHash;
 use crate::security_epoch::SecurityEpoch;
 
+/// Append a variable-length field to a content-hash preimage with a fixed-width
+/// `u64` length prefix.
+///
+/// `compute_hash` commits to the identity of a scorecard, so its preimage must
+/// be injective: distinct field tuples must never share a preimage. Joining
+/// variable-length fields with a byte delimiter (`|`/`:`) is not injective when
+/// a field can legally contain the delimiter — a free-form dimension key or
+/// `environment_fingerprint` containing `|` lets two distinct inputs collide
+/// (e.g. dimensions `{"x":S,"y":S}` and `{"x:<fields>|y":S}` serialize
+/// identically under the old `parts.join("|")`). Length-prefixing each
+/// variable-length field and count-prefixing every collection removes the
+/// ambiguity; fixed-width fields (`u64` via `to_le_bytes`, single-byte bools,
+/// the 32-byte evidence hash) are already self-delimiting. Cf. the same fix
+/// crate-wide in commits 7f500570 / 1d3e0542.
+fn hash_field(preimage: &mut Vec<u8>, bytes: &[u8]) {
+    preimage.extend_from_slice(&(bytes.len() as u64).to_le_bytes());
+    preimage.extend_from_slice(bytes);
+}
+
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
@@ -312,26 +331,23 @@ pub struct ScorecardResult {
 impl ScorecardResult {
     /// Compute the content hash for this result.
     pub fn compute_hash(&self) -> ContentHash {
-        let mut parts = Vec::new();
-        parts.push(self.schema_version.clone());
+        let mut preimage: Vec<u8> = Vec::new();
+        hash_field(&mut preimage, self.schema_version.as_bytes());
+        preimage.extend_from_slice(&(self.dimension_scores.len() as u64).to_le_bytes());
         for (key, score) in &self.dimension_scores {
-            parts.push(format!(
-                "{}:{}:{}:{}:{}:{}",
-                key,
-                score.raw_score_millionths,
-                score.meets_floor,
-                score.floor_millionths,
-                score.target_millionths,
-                score.meets_target,
-            ));
+            hash_field(&mut preimage, key.as_bytes());
+            preimage.extend_from_slice(&score.raw_score_millionths.to_le_bytes());
+            preimage.push(u8::from(score.meets_floor));
+            preimage.extend_from_slice(&score.floor_millionths.to_le_bytes());
+            preimage.extend_from_slice(&score.target_millionths.to_le_bytes());
+            preimage.push(u8::from(score.meets_target));
         }
-        parts.push(format!("outcome:{}", self.outcome));
-        parts.push(format!("targets_met:{}", self.targets_met));
-        parts.push(format!("epoch:{}", self.epoch.as_u64()));
-        parts.push(self.evidence_bundle_hash.to_string());
-        parts.push(self.environment_fingerprint.clone());
-        let canonical = parts.join("|");
-        ContentHash::compute(canonical.as_bytes())
+        hash_field(&mut preimage, format!("{}", self.outcome).as_bytes());
+        preimage.extend_from_slice(&self.targets_met.to_le_bytes());
+        preimage.extend_from_slice(&self.epoch.as_u64().to_le_bytes());
+        preimage.extend_from_slice(self.evidence_bundle_hash.as_bytes());
+        hash_field(&mut preimage, self.environment_fingerprint.as_bytes());
+        ContentHash::compute(&preimage)
     }
 }
 
@@ -2376,6 +2392,52 @@ mod tests {
         let h1 = result.compute_hash();
         let h2 = result.compute_hash();
         assert_eq!(h1, h2);
+    }
+
+    #[test]
+    fn compute_hash_is_injective_across_dimension_and_field_boundaries() {
+        // bd-v6gvj: the old `parts.join("|")` preimage was non-injective. Two
+        // dimensions {"x":S,"y":S} and a single dimension whose key embeds the
+        // inter-entry "|" ("x:<fields>|y":S) serialized to the SAME canonical
+        // string. Count- + length-prefixing pins them to distinct hashes.
+        let base = compute_scorecard(
+            &default_schema(),
+            &passing_evidence(),
+            SecurityEpoch::from_raw(1),
+            "env".to_string(),
+        )
+        .expect("operation should succeed for valid inputs");
+        let sample = base
+            .dimension_scores
+            .values()
+            .next()
+            .expect("scorecard has at least one dimension")
+            .clone();
+        // The old per-entry serialization was "<key>:<raw>:<mf>:<fl>:<tg>:<mt>".
+        let entry_fields = format!(
+            "{}:{}:{}:{}:{}",
+            sample.raw_score_millionths,
+            sample.meets_floor,
+            sample.floor_millionths,
+            sample.target_millionths,
+            sample.meets_target,
+        );
+
+        let mut two = base.clone();
+        two.dimension_scores = std::collections::BTreeMap::new();
+        two.dimension_scores.insert("x".to_string(), sample.clone());
+        two.dimension_scores.insert("y".to_string(), sample.clone());
+
+        let mut one = base.clone();
+        one.dimension_scores = std::collections::BTreeMap::new();
+        one.dimension_scores
+            .insert(format!("x:{entry_fields}|y"), sample.clone());
+
+        assert_ne!(
+            one.compute_hash(),
+            two.compute_hash(),
+            "dimension_scores count + key boundary must not collide"
+        );
     }
 
     #[test]

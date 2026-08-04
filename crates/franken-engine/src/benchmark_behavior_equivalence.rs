@@ -9,7 +9,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::{Command, Output};
 
 use serde::{Deserialize, Serialize};
@@ -902,12 +902,12 @@ impl EquivalenceChecker {
             .map_err(|e| format!("Failed to parse frankenctl JSON output: {e}"))?;
 
         // Try to extract from console_output first
-        if let Some(console_output) = json.get("console_output") {
-            if let Some(entries) = console_output.as_array() {
-                for entry in entries {
-                    if let Some(message) = entry.get("message").and_then(Value::as_str) {
-                        return Ok(message.trim().to_string());
-                    }
+        if let Some(console_output) = json.get("console_output")
+            && let Some(entries) = console_output.as_array()
+        {
+            for entry in entries {
+                if let Some(message) = entry.get("message").and_then(Value::as_str) {
+                    return Ok(message.trim().to_string());
                 }
             }
         }
@@ -920,14 +920,14 @@ impl EquivalenceChecker {
             if let Some(value_num) = exec_value.as_number() {
                 return Ok(value_num.to_string());
             }
-            if let Some(value_obj) = exec_value.as_object() {
-                if let Some(inner) = value_obj.get("value") {
-                    if let Some(inner_str) = inner.as_str() {
-                        return Ok(inner_str.trim().to_string());
-                    }
-                    if let Some(inner_num) = inner.as_number() {
-                        return Ok(inner_num.to_string());
-                    }
+            if let Some(value_obj) = exec_value.as_object()
+                && let Some(inner) = value_obj.get("value")
+            {
+                if let Some(inner_str) = inner.as_str() {
+                    return Ok(inner_str.trim().to_string());
+                }
+                if let Some(inner_num) = inner.as_number() {
+                    return Ok(inner_num.to_string());
                 }
             }
         }

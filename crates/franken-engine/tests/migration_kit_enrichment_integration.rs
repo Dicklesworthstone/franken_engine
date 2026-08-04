@@ -571,6 +571,26 @@ fn lookup_api_path_join() {
 }
 
 #[test]
+fn lookup_api_url_metadata_matches_partial_whatwg_surface() {
+    let url = lookup_api("url", "URL").unwrap();
+    assert_eq!(url.support_level, ApiSupportLevel::PartiallySupported);
+    assert_eq!(
+        url.notes,
+        "partial WHATWG global: getters plus pathname/hash setters; legacy require('url') helpers tracked by bd-4awsz"
+    );
+
+    let search_params = lookup_api("url", "URLSearchParams").unwrap();
+    assert_eq!(
+        search_params.support_level,
+        ApiSupportLevel::PartiallySupported
+    );
+    assert_eq!(
+        search_params.notes,
+        "partial WHATWG global: get/has/getAll/append/sort/delete/set/toString; legacy require('url') helpers tracked by bd-4awsz"
+    );
+}
+
+#[test]
 fn lookup_api_http_create_server() {
     let api = lookup_api("http", "createServer").unwrap();
     assert_eq!(api.support_level, ApiSupportLevel::PartiallySupported);

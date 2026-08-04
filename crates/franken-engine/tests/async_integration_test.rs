@@ -77,7 +77,7 @@ fn test_module_with_pool_and_functions(
     Ir3Module {
         header: make_header(),
         instructions,
-        constant_pool: pool,
+        constant_pool: pool.into_iter().map(Into::into).collect(),
         function_table: functions,
         specialization: None,
         required_capabilities: Vec::new(),

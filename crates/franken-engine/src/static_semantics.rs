@@ -572,15 +572,17 @@ fn analyze_statement(
                     }
                 }
                 ExportKind::NamedClause(clause) => {
-                    // Extract individual specifier names from the clause string.
-                    // The clause is canonicalized from the parser as `{ a, b as c }`.
-                    let specifier_names = extract_export_specifier_names(clause);
+                    // Export-name checks consume only the canonical binding
+                    // head; exact re-export source metadata is a loader key,
+                    // not part of the exported-name namespace.
+                    let canonical_head = clause.canonical_head();
+                    let specifier_names = extract_export_specifier_names(canonical_head);
                     if specifier_names.is_empty() {
                         // Entire clause as single name (legacy or single-specifier).
-                        if !state.export_names.insert(clause.clone()) {
+                        if !state.export_names.insert(canonical_head.to_string()) {
                             state.push_error(
                                 StaticErrorKind::DuplicateExport,
-                                format!("duplicate export name '{}'", clause),
+                                format!("duplicate export name '{canonical_head}'"),
                                 export.span,
                             );
                         }
@@ -1036,8 +1038,15 @@ fn analyze_statement(
             for bound_name in for_in_stmt.binding.binding_names() {
                 check_reserved(state, bound_name, &for_in_stmt.span);
             }
-            // Check for duplicate names within destructuring
-            check_destructuring_duplicates(state, &for_in_stmt.binding, &for_in_stmt.span);
+            // Lexical declaration patterns reject duplicate bound names. Bare
+            // assignment and `var` patterns may repeat a target and update it
+            // from left to right.
+            if matches!(
+                for_in_stmt.binding_kind,
+                Some(VariableDeclarationKind::Let | VariableDeclarationKind::Const)
+            ) {
+                check_destructuring_duplicates(state, &for_in_stmt.binding, &for_in_stmt.span);
+            }
             // Create scope for for-in binding if let/const
             let for_in_scope_id = state.alloc_scope_id(scope_id.depth + 1);
             let mut for_in_bindings: Vec<ResolvedBinding> = Vec::new();
@@ -1049,7 +1058,12 @@ fn analyze_statement(
                     VariableDeclarationKind::Let => BindingKind::Let,
                     VariableDeclarationKind::Const => BindingKind::Const,
                 };
+                let mut declared_var_names = BTreeSet::new();
                 for bound_name in for_in_stmt.binding.binding_names() {
+                    if bk == BindingKind::Var && !declared_var_names.insert(bound_name.to_string())
+                    {
+                        continue;
+                    }
                     let bid = state.alloc_binding_id();
                     for_in_bindings.push(ResolvedBinding {
                         name: bound_name.to_string(),
@@ -1086,8 +1100,15 @@ fn analyze_statement(
             for bound_name in for_of_stmt.binding.binding_names() {
                 check_reserved(state, bound_name, &for_of_stmt.span);
             }
-            // Check for duplicate names within destructuring
-            check_destructuring_duplicates(state, &for_of_stmt.binding, &for_of_stmt.span);
+            // Lexical declaration patterns reject duplicate bound names. Bare
+            // assignment and `var` patterns may repeat a target and update it
+            // from left to right.
+            if matches!(
+                for_of_stmt.binding_kind,
+                Some(VariableDeclarationKind::Let | VariableDeclarationKind::Const)
+            ) {
+                check_destructuring_duplicates(state, &for_of_stmt.binding, &for_of_stmt.span);
+            }
             // Create scope for for-of binding if let/const
             let for_of_scope_id = state.alloc_scope_id(scope_id.depth + 1);
             let mut for_of_bindings: Vec<ResolvedBinding> = Vec::new();
@@ -1099,7 +1120,12 @@ fn analyze_statement(
                     VariableDeclarationKind::Let => BindingKind::Let,
                     VariableDeclarationKind::Const => BindingKind::Const,
                 };
+                let mut declared_var_names = BTreeSet::new();
                 for bound_name in for_of_stmt.binding.binding_names() {
+                    if bk == BindingKind::Var && !declared_var_names.insert(bound_name.to_string())
+                    {
+                        continue;
+                    }
                     let bid = state.alloc_binding_id();
                     for_of_bindings.push(ResolvedBinding {
                         name: bound_name.to_string(),
@@ -1419,7 +1445,9 @@ fn walk_expression(state: &mut AnalyzerState, expr: &Expression, span: &SourceSp
             walk_expression(state, object, span);
             walk_expression(state, property, span);
         }
-        Expression::OptionalCall { callee, arguments } => {
+        Expression::OptionalCall {
+            callee, arguments, ..
+        } => {
             walk_expression(state, callee, span);
             for arg in arguments {
                 walk_expression(state, arg, span);
@@ -1549,6 +1577,8 @@ fn walk_expression(state: &mut AnalyzerState, expr: &Expression, span: &SourceSp
         | Expression::NullLiteral
         | Expression::UndefinedLiteral
         | Expression::This
+        | Expression::NewTarget
+        | Expression::ImportMeta
         | Expression::Super
         | Expression::Raw(_)
         | Expression::RegExpLiteral { .. }
@@ -1597,8 +1627,12 @@ fn initializer_self_reference(expr: &Expression, targets: &BTreeSet<&str>) -> Op
         } => initializer_self_reference(test, targets)
             .or_else(|| initializer_self_reference(consequent, targets))
             .or_else(|| initializer_self_reference(alternate, targets)),
-        Expression::Call { callee, arguments }
-        | Expression::OptionalCall { callee, arguments }
+        Expression::Call {
+            callee, arguments, ..
+        }
+        | Expression::OptionalCall {
+            callee, arguments, ..
+        }
         | Expression::New { callee, arguments } => initializer_self_reference(callee, targets)
             .or_else(|| {
                 arguments
@@ -1609,11 +1643,13 @@ fn initializer_self_reference(expr: &Expression, targets: &BTreeSet<&str>) -> Op
             object,
             property,
             computed,
+            ..
         }
         | Expression::OptionalMember {
             object,
             property,
             computed,
+            ..
         } => initializer_self_reference(object, targets).or_else(|| {
             // Only a computed member (`obj[x]`) references the variable `x`;
             // a static member (`obj.x`) names a property, not a binding.
@@ -1687,7 +1723,9 @@ fn collect_identifier_refs(expr: &Expression, out: &mut Vec<String>) {
             collect_identifier_refs(object, out);
             collect_identifier_refs(property, out);
         }
-        Expression::OptionalCall { callee, arguments } => {
+        Expression::OptionalCall {
+            callee, arguments, ..
+        } => {
             collect_identifier_refs(callee, out);
             for arg in arguments {
                 collect_identifier_refs(arg, out);
@@ -1749,6 +1787,8 @@ fn collect_identifier_refs(expr: &Expression, out: &mut Vec<String>) {
         | Expression::NullLiteral
         | Expression::UndefinedLiteral
         | Expression::This
+        | Expression::NewTarget
+        | Expression::ImportMeta
         | Expression::Super
         | Expression::Raw(_)
         | Expression::RegExpLiteral { .. }
@@ -1874,9 +1914,9 @@ impl StaticSemanticsEvent {
 mod tests {
     use super::*;
     use crate::ast::{
-        BindingPattern, ExportDeclaration, ExportKind, ExpressionStatement, ImportClause,
-        ImportDeclaration, ParseGoal, SourceSpan, Statement, SyntaxTree, VariableDeclaration,
-        VariableDeclarationKind, VariableDeclarator,
+        AssignmentStrictness, BindingPattern, ExportDeclaration, ExportKind, ExpressionStatement,
+        ImportClause, ImportDeclaration, ParseGoal, SourceSpan, Statement, SyntaxTree,
+        VariableDeclaration, VariableDeclarationKind, VariableDeclarator,
     };
 
     fn span(line: u64) -> SourceSpan {
@@ -1917,7 +1957,7 @@ mod tests {
                 None => ImportClause::SideEffect,
             },
             binding: binding.map(ToString::to_string),
-            source: source.to_string(),
+            source: source.into(),
             span: span(line),
         })
     }
@@ -1931,7 +1971,7 @@ mod tests {
 
     fn export_named(name: &str, line: u64) -> Statement {
         Statement::Export(ExportDeclaration {
-            kind: ExportKind::NamedClause(name.to_string()),
+            kind: ExportKind::NamedClause(name.into()),
             span: span(line),
         })
     }
@@ -1992,7 +2032,7 @@ mod tests {
             vec![var_decl(
                 VariableDeclarationKind::Let,
                 "y",
-                Some(Expression::StringLiteral("hello".to_string())),
+                Some(Expression::StringLiteral("hello".to_string().into())),
                 1,
             )],
         );
@@ -2512,6 +2552,7 @@ mod tests {
             operator: crate::ast::AssignmentOperator::Assign,
             left: Box::new(Expression::Identifier(name.to_string())),
             right: Box::new(value),
+            assignment_strictness: AssignmentStrictness::Sloppy,
         }
     }
 
@@ -3279,6 +3320,7 @@ mod tests {
                         operator: crate::ast::AssignmentOperator::Assign,
                         left: Box::new(Expression::Identifier("x".to_string())),
                         right: Box::new(Expression::NumericLiteral(2)),
+                        assignment_strictness: AssignmentStrictness::Sloppy,
                     },
                     2,
                 ),
@@ -3310,6 +3352,7 @@ mod tests {
                         operator: crate::ast::AssignmentOperator::Assign,
                         left: Box::new(Expression::Identifier("x".to_string())),
                         right: Box::new(Expression::NumericLiteral(2)),
+                        assignment_strictness: AssignmentStrictness::Sloppy,
                     },
                     2,
                 ),
@@ -3340,6 +3383,7 @@ mod tests {
                         operator: crate::ast::AssignmentOperator::AddAssign,
                         left: Box::new(Expression::Identifier("x".to_string())),
                         right: Box::new(Expression::NumericLiteral(5)),
+                        assignment_strictness: AssignmentStrictness::Sloppy,
                     },
                     2,
                 ),
@@ -3660,6 +3704,7 @@ mod tests {
                         object: Box::new(Expression::Identifier("obj".to_string())),
                         property: Box::new(Expression::Identifier("prop".to_string())),
                         computed: false,
+                        span: None,
                     }),
                 },
                 1,
@@ -3823,6 +3868,7 @@ mod tests {
                     arguments: vec![Expression::Await(Box::new(Expression::Identifier(
                         "p".to_string(),
                     )))],
+                    span: None,
                 },
                 1,
             )],
@@ -3882,15 +3928,16 @@ mod tests {
 
     #[test]
     fn await_in_object_literal_detected() {
-        use crate::ast::ObjectProperty;
+        use crate::ast::{ObjectProperty, ObjectPropertyKind};
         let tree = make_tree(
             ParseGoal::Script,
             vec![expr_stmt(
                 Expression::ObjectLiteral(vec![ObjectProperty {
-                    key: Expression::StringLiteral("k".to_string()),
+                    key: Expression::StringLiteral("k".to_string().into()),
                     value: Expression::Await(Box::new(Expression::Identifier("p".to_string()))),
                     computed: false,
                     shorthand: false,
+                    kind: ObjectPropertyKind::Data,
                 }]),
                 1,
             )],
@@ -3947,6 +3994,7 @@ mod tests {
                     Expression::Call {
                         callee: Box::new(Expression::Identifier("foo".to_string())),
                         arguments: vec![Expression::Identifier("x".to_string())],
+                        span: None,
                     },
                     1,
                 ),
@@ -4152,6 +4200,7 @@ mod tests {
                 Expression::Identifier("x".to_string()),
                 Expression::NumericLiteral(1),
             ],
+            span: None,
         };
         let mut refs = Vec::new();
         collect_identifier_refs(&expr, &mut refs);
@@ -4196,12 +4245,13 @@ mod tests {
 
     #[test]
     fn collect_refs_from_object_literal() {
-        use crate::ast::ObjectProperty;
+        use crate::ast::{ObjectProperty, ObjectPropertyKind};
         let expr = Expression::ObjectLiteral(vec![ObjectProperty {
-            key: Expression::StringLiteral("k".to_string()),
+            key: Expression::StringLiteral("k".to_string().into()),
             value: Expression::Identifier("v".to_string()),
             computed: false,
             shorthand: false,
+            kind: ObjectPropertyKind::Data,
         }]);
         let mut refs = Vec::new();
         collect_identifier_refs(&expr, &mut refs);
@@ -4236,6 +4286,7 @@ mod tests {
                                     operator: crate::ast::AssignmentOperator::Assign,
                                     left: Box::new(Expression::Identifier("x".to_string())),
                                     right: Box::new(Expression::NumericLiteral(2)),
+                                    assignment_strictness: AssignmentStrictness::Sloppy,
                                 },
                                 3,
                             ),
@@ -4307,6 +4358,7 @@ mod tests {
                     object: Box::new(Expression::Identifier("obj".to_string())),
                     property: Box::new(Expression::Identifier("prop".to_string())),
                     computed: false,
+                    span: None,
                 },
                 1,
             )],
@@ -4338,6 +4390,7 @@ mod tests {
             vec![Statement::ForIn(ForInStatement {
                 binding: BindingPattern::Identifier("k".to_string()),
                 binding_kind: Some(VariableDeclarationKind::Let),
+                assignment_strictness: AssignmentStrictness::Sloppy,
                 object: Expression::Identifier("obj".to_string()),
                 body: Box::new(Statement::Break(BreakStatement {
                     label: None,
@@ -4365,6 +4418,7 @@ mod tests {
             vec![Statement::ForOf(ForOfStatement {
                 binding: BindingPattern::Identifier("v".to_string()),
                 binding_kind: Some(VariableDeclarationKind::Const),
+                assignment_strictness: AssignmentStrictness::Sloppy,
                 iterable: Expression::Identifier("arr".to_string()),
                 body: Box::new(Statement::Continue(ContinueStatement {
                     label: None,
@@ -4390,6 +4444,7 @@ mod tests {
             vec![Statement::ForIn(ForInStatement {
                 binding: BindingPattern::Identifier("k".to_string()),
                 binding_kind: None,
+                assignment_strictness: AssignmentStrictness::Sloppy,
                 object: Expression::Identifier("obj".to_string()),
                 body: Box::new(expr_stmt(Expression::Identifier("k".to_string()), 2)),
                 span: span(1),
@@ -4896,6 +4951,7 @@ mod tests {
             operator: crate::ast::AssignmentOperator::Assign,
             left: Box::new(Expression::Identifier("a".to_string())),
             right: Box::new(Expression::Identifier("b".to_string())),
+            assignment_strictness: AssignmentStrictness::Sloppy,
         };
         let mut refs = Vec::new();
         collect_identifier_refs(&expr, &mut refs);
@@ -4952,6 +5008,7 @@ mod tests {
             object: Box::new(Expression::Identifier("obj".to_string())),
             property: Box::new(Expression::Identifier("prop".to_string())),
             computed: false,
+            span: None,
         };
         let mut refs = Vec::new();
         collect_identifier_refs(&expr, &mut refs);
@@ -5019,6 +5076,7 @@ mod tests {
                     )))),
                     property: Box::new(Expression::Identifier("then".to_string())),
                     computed: false,
+                    span: None,
                 },
                 1,
             )],
@@ -5043,6 +5101,7 @@ mod tests {
                     right: Box::new(Expression::Await(Box::new(Expression::Identifier(
                         "p".to_string(),
                     )))),
+                    assignment_strictness: AssignmentStrictness::Sloppy,
                 },
                 1,
             )],
@@ -5162,6 +5221,7 @@ mod tests {
                         object: Box::new(Expression::Identifier("x".to_string())),
                         property: Box::new(Expression::Identifier("prop".to_string())),
                         computed: false,
+                        span: None,
                     },
                     1,
                 ),
@@ -5447,6 +5507,7 @@ mod tests {
                                     operator: crate::ast::AssignmentOperator::Assign,
                                     left: Box::new(Expression::Identifier("x".to_string())),
                                     right: Box::new(Expression::NumericLiteral(2)),
+                                    assignment_strictness: AssignmentStrictness::Sloppy,
                                 },
                                 3,
                             ),
@@ -5591,6 +5652,7 @@ mod tests {
             vec![Statement::ForIn(ForInStatement {
                 binding: BindingPattern::Identifier("key".to_string()),
                 binding_kind: Some(VariableDeclarationKind::Let),
+                assignment_strictness: AssignmentStrictness::Sloppy,
                 object: Expression::Identifier("obj".to_string()),
                 body: Box::new(expr_stmt(Expression::Identifier("key".to_string()), 2)),
                 span: span(1),
@@ -5617,6 +5679,7 @@ mod tests {
             vec![Statement::ForOf(ForOfStatement {
                 binding: BindingPattern::Identifier("item".to_string()),
                 binding_kind: Some(VariableDeclarationKind::Const),
+                assignment_strictness: AssignmentStrictness::Sloppy,
                 iterable: Expression::Identifier("arr".to_string()),
                 body: Box::new(expr_stmt(Expression::Identifier("item".to_string()), 2)),
                 span: span(1),
@@ -5638,6 +5701,7 @@ mod tests {
             vec![Statement::ForIn(ForInStatement {
                 binding: BindingPattern::Identifier("eval".to_string()),
                 binding_kind: Some(VariableDeclarationKind::Let),
+                assignment_strictness: AssignmentStrictness::Sloppy,
                 object: Expression::Identifier("obj".to_string()),
                 body: Box::new(expr_stmt(Expression::NumericLiteral(1), 2)),
                 span: span(1),
@@ -5664,6 +5728,7 @@ mod tests {
                     Some(BindingPattern::Identifier("x".to_string())),
                 ]),
                 binding_kind: Some(VariableDeclarationKind::Let),
+                assignment_strictness: AssignmentStrictness::Sloppy,
                 iterable: Expression::Identifier("pairs".to_string()),
                 body: Box::new(expr_stmt(Expression::NumericLiteral(1), 2)),
                 span: span(1),
@@ -5677,6 +5742,86 @@ mod tests {
                 .any(|e| e.kind == StaticErrorKind::DuplicateDestructuringBinding),
             "duplicate x in for-of destructuring should be flagged"
         );
+    }
+
+    #[test]
+    fn for_of_nonlexical_duplicate_targets_pass_bd_5p1dp() {
+        use crate::ast::{BindingPattern, ForOfStatement};
+        for binding_kind in [None, Some(VariableDeclarationKind::Var)] {
+            let tree = make_tree(
+                ParseGoal::Script,
+                vec![Statement::ForOf(ForOfStatement {
+                    binding: BindingPattern::ArrayPattern(vec![
+                        Some(BindingPattern::Identifier("value".to_string())),
+                        Some(BindingPattern::Identifier("value".to_string())),
+                    ]),
+                    binding_kind,
+                    assignment_strictness: AssignmentStrictness::Sloppy,
+                    iterable: Expression::Identifier("pairs".to_string()),
+                    body: Box::new(expr_stmt(Expression::Identifier("value".to_string()), 2)),
+                    span: span(1),
+                })],
+            );
+            let result = analyze(&tree);
+            assert!(
+                !result
+                    .errors
+                    .iter()
+                    .any(|error| error.kind == StaticErrorKind::DuplicateDestructuringBinding),
+                "assignment and var patterns may repeat a target; kind={binding_kind:?}"
+            );
+            if binding_kind == Some(VariableDeclarationKind::Var) {
+                assert_eq!(
+                    result
+                        .bindings
+                        .iter()
+                        .filter(|binding| binding.name == "value")
+                        .count(),
+                    1,
+                    "repeated var targets must retain one binding identity"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn for_in_nonlexical_duplicate_targets_pass_bd_5p1dp() {
+        use crate::ast::{BindingPattern, ForInStatement};
+        for binding_kind in [None, Some(VariableDeclarationKind::Var)] {
+            let tree = make_tree(
+                ParseGoal::Script,
+                vec![Statement::ForIn(ForInStatement {
+                    binding: BindingPattern::ArrayPattern(vec![
+                        Some(BindingPattern::Identifier("key".to_string())),
+                        Some(BindingPattern::Identifier("key".to_string())),
+                    ]),
+                    binding_kind,
+                    assignment_strictness: AssignmentStrictness::Sloppy,
+                    object: Expression::Identifier("object".to_string()),
+                    body: Box::new(expr_stmt(Expression::Identifier("key".to_string()), 2)),
+                    span: span(1),
+                })],
+            );
+            let result = analyze(&tree);
+            assert!(
+                !result
+                    .errors
+                    .iter()
+                    .any(|error| error.kind == StaticErrorKind::DuplicateDestructuringBinding),
+                "assignment and var patterns may repeat a target; kind={binding_kind:?}"
+            );
+            if binding_kind == Some(VariableDeclarationKind::Var) {
+                assert_eq!(
+                    result
+                        .bindings
+                        .iter()
+                        .filter(|binding| binding.name == "key")
+                        .count(),
+                    1,
+                    "repeated var targets must retain one binding identity"
+                );
+            }
+        }
     }
 
     // -----------------------------------------------------------------------
@@ -5812,6 +5957,7 @@ mod tests {
                         body: vec![Statement::ForIn(ForInStatement {
                             binding: BindingPattern::Identifier("k".to_string()),
                             binding_kind: Some(VariableDeclarationKind::Const),
+                            assignment_strictness: AssignmentStrictness::Sloppy,
                             object: Expression::Identifier("obj".to_string()),
                             body: Box::new(Statement::Continue(ContinueStatement {
                                 label: None,
@@ -5883,11 +6029,11 @@ mod tests {
             ParseGoal::Module,
             vec![
                 Statement::Export(ExportDeclaration {
-                    kind: ExportKind::NamedClause("{ a }".to_string()),
+                    kind: ExportKind::NamedClause("{ a }".into()),
                     span: span(1),
                 }),
                 Statement::Export(ExportDeclaration {
-                    kind: ExportKind::NamedClause("{ a }".to_string()),
+                    kind: ExportKind::NamedClause("{ a }".into()),
                     span: span(2),
                 }),
             ],
@@ -5910,7 +6056,7 @@ mod tests {
             vec![
                 export_default(Expression::NumericLiteral(42), 1),
                 Statement::Export(ExportDeclaration {
-                    kind: ExportKind::NamedClause("{ x as default }".to_string()),
+                    kind: ExportKind::NamedClause("{ x as default }".into()),
                     span: span(2),
                 }),
             ],
@@ -5931,11 +6077,11 @@ mod tests {
             ParseGoal::Module,
             vec![
                 Statement::Export(ExportDeclaration {
-                    kind: ExportKind::NamedClause("{ a, b }".to_string()),
+                    kind: ExportKind::NamedClause("{ a, b }".into()),
                     span: span(1),
                 }),
                 Statement::Export(ExportDeclaration {
-                    kind: ExportKind::NamedClause("{ c }".to_string()),
+                    kind: ExportKind::NamedClause("{ c }".into()),
                     span: span(2),
                 }),
             ],
@@ -6075,6 +6221,7 @@ mod tests {
             vec![Statement::ForOf(ForOfStatement {
                 binding: BindingPattern::Identifier("item".to_string()),
                 binding_kind: Some(VariableDeclarationKind::Const),
+                assignment_strictness: AssignmentStrictness::Sloppy,
                 iterable: Expression::Identifier("items".to_string()),
                 body: Box::new(Statement::Block(BlockStatement {
                     body: vec![],
@@ -6100,6 +6247,7 @@ mod tests {
             vec![Statement::ForIn(ForInStatement {
                 binding: BindingPattern::Identifier("package".to_string()),
                 binding_kind: Some(VariableDeclarationKind::Let),
+                assignment_strictness: AssignmentStrictness::Sloppy,
                 object: Expression::Identifier("obj".to_string()),
                 body: Box::new(Statement::Block(BlockStatement {
                     body: vec![],
@@ -6139,6 +6287,7 @@ mod tests {
                     },
                 ]),
                 binding_kind: Some(VariableDeclarationKind::Const),
+                assignment_strictness: AssignmentStrictness::Sloppy,
                 iterable: Expression::Identifier("arr".to_string()),
                 body: Box::new(Statement::Block(BlockStatement {
                     body: vec![],

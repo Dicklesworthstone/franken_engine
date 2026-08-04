@@ -29,6 +29,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::capability::RuntimeCapability;
 use crate::security_epoch::SecurityEpoch;
+use frankenengine_extension_host::process_spawn::{ProcessSpawnRequest, ProcessSpawnResponse};
 
 // ---------------------------------------------------------------------------
 // Effect trait and operation signatures
@@ -294,8 +295,14 @@ pub enum EffectError {
     CapabilityDenied { required: EffectCapabilities },
     /// Type mismatch in result conversion.
     TypeMismatch { expected: String, got: String },
-    /// Handler-specific error.
-    HandlerError { handler: String, message: String },
+    /// Handler-specific error. `code` carries a stable guest-visible domain
+    /// code when the handler can provide one (for example Node-style
+    /// filesystem `ENOENT`) without string-parsing the human message.
+    HandlerError {
+        handler: String,
+        message: String,
+        code: Option<String>,
+    },
     /// Effect parameters are invalid.
     InvalidParameters { effect_name: String, reason: String },
     /// Stack overflow in handler composition.
@@ -316,7 +323,9 @@ impl fmt::Display for EffectError {
             Self::TypeMismatch { expected, got } => {
                 write!(f, "Type mismatch: expected {}, got {}", expected, got)
             }
-            Self::HandlerError { handler, message } => {
+            Self::HandlerError {
+                handler, message, ..
+            } => {
                 write!(f, "Handler error in {}: {}", handler, message)
             }
             Self::InvalidParameters {
@@ -818,46 +827,33 @@ impl Effect for NetConnectEffect {
     }
 }
 
-/// Process spawn effect.
-#[derive(Debug, Clone)]
+/// Typed process operation crossing the algebraic-effects boundary.
+///
+/// The request is already canonicalized into the extension-host protocol; no
+/// command, environment, cwd, lifecycle handle, or resource limit is lost in a
+/// legacy string tuple before policy and replay evaluate it.
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProcSpawnEffect {
-    /// Command to execute.
-    pub command: String,
-    /// Command arguments.
-    pub args: Vec<String>,
-    /// Environment variables.
-    pub env: BTreeMap<String, String>,
-    /// Working directory.
-    pub cwd: Option<String>,
+    pub request: ProcessSpawnRequest,
 }
 
 impl Effect for ProcSpawnEffect {
-    type Output = u32; // process handle
+    type Output = ProcessSpawnResponse;
 
     fn effect_name(&self) -> &'static str {
         "proc:spawn"
     }
 
     fn required_capabilities(&self) -> EffectCapabilities {
-        EffectCapabilities::custom(vec!["proc:spawn".to_string()])
+        EffectCapabilities::runtime([RuntimeCapability::ProcessSpawn])
     }
 
     fn parameters(&self) -> Box<dyn Any + Send + Sync> {
-        Box::new((
-            self.command.clone(),
-            self.args.clone(),
-            self.env.clone(),
-            self.cwd.clone(),
-        ))
+        Box::new(self.request.clone())
     }
 
     fn parameter_type_id(&self) -> TypeId {
-        TypeId::of::<(
-            String,
-            Vec<String>,
-            BTreeMap<String, String>,
-            Option<String>,
-        )>()
+        TypeId::of::<ProcessSpawnRequest>()
     }
 }
 
@@ -1291,6 +1287,7 @@ impl Handler for MockFsHandler {
                         Err(EffectError::HandlerError {
                             handler: "MockFsHandler".to_string(),
                             message: format!("File not found: {}", path),
+                            code: None,
                         })
                     }
                 } else {
@@ -1420,7 +1417,7 @@ impl HostcallMigrationAdapter {
         // Process capabilities
         capability_mapping.insert(
             "proc:spawn".to_string(),
-            EffectCapabilities::custom(vec!["proc:spawn".to_string()]),
+            EffectCapabilities::runtime([RuntimeCapability::ProcessSpawn]),
         );
 
         // Policy capabilities
@@ -1807,6 +1804,8 @@ mod tests {
             }
         }
 
+        // Retained for builder API symmetry with with_priority.
+        #[allow(dead_code)]
         fn with_capabilities(mut self, caps: EffectCapabilities) -> Self {
             self.capabilities = caps;
             self

@@ -47,7 +47,11 @@ SCRIPT_NAME="$(basename "$0")"
 # ---------------------------------------------------------------------------
 if [[ "${1:-}" == "selftest" ]]; then
     TMP="$(mktemp -d)"
-    trap 'rm -rf "$TMP"' EXIT
+    if [[ "${HONEST_GATE_SELFTEST_KEEP_TMP:-0}" == "1" ]]; then
+        echo "[honest-gate] selftest artifacts retained at $TMP"
+    else
+        trap 'rm -rf "$TMP"' EXIT
+    fi
     mkdir -p "$TMP/baseline" "$TMP/post" "$TMP/out"
 
     # Frozen baseline: a scenario doc + one criterion estimate.
@@ -59,12 +63,18 @@ EOF
 {"mean":{"point_estimate":1000.0,"confidence_interval":{"lower_bound":990.0,"upper_bound":1010.0}},
  "median":{"point_estimate":1000.0},"std_dev":{"point_estimate":30.0}}
 EOF
+    cat > "$TMP/baseline/fingerprint.json" <<'EOF'
+{"captured_at_utc":"2026-05-25T00:00:00Z","git_sha":"cafebabecafebabecafebabecafebabecafebabe",
+ "git_dirty":false,"baseline_ref":"selftest-baseline",
+ "toolchain":{"rustc":"rustc 1.97.0-nightly"},
+ "build_flags":{"RUSTFLAGS":"-C force-frame-pointers=yes -C linker=cc -Clinker-features=-lld","CARGO_ENCODED_RUSTFLAGS":null,"CARGO_INCREMENTAL":"0"}}
+EOF
     # Post run: fingerprint + estimates + summary with a published regression.
     cat > "$TMP/post/fingerprint.json" <<'EOF'
 {"captured_at_utc":"2026-05-26T00:00:00Z","git_sha":"deadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
  "git_dirty":false,"baseline_ref":"baseline",
  "toolchain":{"rustc":"rustc 1.97.0-nightly"},
- "build_flags":{"RUSTFLAGS":"-C force-frame-pointers=yes -C linker=cc","CARGO_INCREMENTAL":"0"}}
+ "build_flags":{"RUSTFLAGS":"-C force-frame-pointers=yes -C linker=cc -Clinker-features=-lld","CARGO_ENCODED_RUSTFLAGS":null,"CARGO_INCREMENTAL":"0"}}
 EOF
     mkdir -p "$TMP/post/criterion/selftest_hot_path/post"
     cat > "$TMP/post/criterion/selftest_hot_path/post/estimates.json" <<'EOF'
@@ -124,8 +134,142 @@ try:
     print("SELFTEST FAIL: tampered body still verified", file=sys.stderr); sys.exit(1)
 except InvalidSignature:
     pass
-print(f"SELFTEST PASS: schema+14 tuples+signature OK; score {att['score_total']}/14 verdict {att['verdict']}")
+print(f"SELFTEST POSITIVE PASS: schema+14 tuples+signature OK; score {att['score_total']}/14 verdict {att['verdict']}")
 PYVERIFY
+
+    # Exact-identity regression: an ambient flag prepended to the otherwise
+    # canonical RUSTFLAGS must fail Q2 instead of receiving substring credit.
+    python3 - "$TMP/post/fingerprint.json" <<'PYMUTATE'
+import json, sys
+
+path = sys.argv[1]
+with open(path, encoding="utf-8") as fh:
+    fingerprint = json.load(fh)
+fingerprint["build_flags"]["RUSTFLAGS"] = (
+    "-C debuginfo=0 -C force-frame-pointers=yes -C linker=cc -Clinker-features=-lld"
+)
+with open(path, "w", encoding="utf-8") as fh:
+    json.dump(fingerprint, fh)
+PYMUTATE
+    mkdir -p "$TMP/out_noncanonical_rustflags"
+    if "$0" --bead PERF-SELFTEST-NONCANONICAL-RUSTFLAGS \
+            --baseline "$TMP/baseline" --post "$TMP/post" \
+            --out "$TMP/out_noncanonical_rustflags" \
+            --sub-bench selftest_hot_path \
+            --non-interactive "$TMP/answers" >/dev/null 2>&1; then
+        echo "SELFTEST FAIL: extra ambient RUSTFLAGS received canonical credit" >&2
+        exit 1
+    fi
+    python3 - "$TMP/out_noncanonical_rustflags/attestation_v1.json" <<'PYREJECT'
+import json, sys
+
+with open(sys.argv[1], encoding="utf-8") as fh:
+    attestation = json.load(fh)
+q2 = next(q for q in attestation["questions"] if q["id"] == "2_same_build_profile")
+assert q2["answer"] == "fail", q2
+PYREJECT
+
+    # Cargo encoded flags outrank RUSTFLAGS. A non-canonical encoded payload
+    # must therefore fail even when RUSTFLAGS still looks canonical.
+    python3 - "$TMP/post/fingerprint.json" <<'PYMUTATE'
+import json, sys
+
+path = sys.argv[1]
+with open(path, encoding="utf-8") as fh:
+    fingerprint = json.load(fh)
+fingerprint["build_flags"]["RUSTFLAGS"] = (
+    "-C force-frame-pointers=yes -C linker=cc -Clinker-features=-lld"
+)
+fingerprint["build_flags"]["CARGO_ENCODED_RUSTFLAGS"] = "\x1f".join((
+    "-Cdebuginfo=0",
+    "-Cforce-frame-pointers=yes",
+    "-Clinker=cc",
+    "-Clinker-features=-lld",
+))
+with open(path, "w", encoding="utf-8") as fh:
+    json.dump(fingerprint, fh)
+PYMUTATE
+    mkdir -p "$TMP/out_noncanonical_encoded_rustflags"
+    if "$0" --bead PERF-SELFTEST-NONCANONICAL-ENCODED-RUSTFLAGS \
+            --baseline "$TMP/baseline" --post "$TMP/post" \
+            --out "$TMP/out_noncanonical_encoded_rustflags" \
+            --sub-bench selftest_hot_path \
+            --non-interactive "$TMP/answers" >/dev/null 2>&1; then
+        echo "SELFTEST FAIL: extra encoded RUSTFLAGS received canonical credit" >&2
+        exit 1
+    fi
+    python3 - "$TMP/out_noncanonical_encoded_rustflags/attestation_v1.json" <<'PYREJECT'
+import json, sys
+
+with open(sys.argv[1], encoding="utf-8") as fh:
+    attestation = json.load(fh)
+q2 = next(q for q in attestation["questions"] if q["id"] == "2_same_build_profile")
+assert q2["answer"] == "fail", q2
+print("SELFTEST PASS: exact RUSTFLAGS and encoded-RUSTFLAGS identity enforced")
+PYREJECT
+
+    # The same effective rustc argv is valid when represented by the encoded
+    # channel, but the shadowed RUSTFLAGS channel must be recorded as unset.
+    python3 - "$TMP/post/fingerprint.json" <<'PYMUTATE'
+import json, sys
+
+path = sys.argv[1]
+with open(path, encoding="utf-8") as fh:
+    fingerprint = json.load(fh)
+fingerprint["build_flags"]["RUSTFLAGS"] = None
+fingerprint["build_flags"]["CARGO_ENCODED_RUSTFLAGS"] = "\x1f".join((
+    "-Cforce-frame-pointers=yes",
+    "-Clinker=cc",
+    "-Clinker-features=-lld",
+))
+with open(path, "w", encoding="utf-8") as fh:
+    json.dump(fingerprint, fh)
+PYMUTATE
+    mkdir -p "$TMP/out_encoded_equivalent"
+    "$0" --bead PERF-SELFTEST-ENCODED-EQUIVALENT \
+        --baseline "$TMP/baseline" --post "$TMP/post" \
+        --out "$TMP/out_encoded_equivalent" \
+        --sub-bench selftest_hot_path \
+        --non-interactive "$TMP/answers" >/dev/null
+    python3 - "$TMP/out_encoded_equivalent/attestation_v1.json" <<'PYACCEPT'
+import json, sys
+
+with open(sys.argv[1], encoding="utf-8") as fh:
+    attestation = json.load(fh)
+q2 = next(q for q in attestation["questions"] if q["id"] == "2_same_build_profile")
+assert q2["answer"] == "pass", q2
+PYACCEPT
+
+    # Missing is not a synonym for cleared. Removing the baseline's encoded
+    # key makes the comparison unbound and must deterministically fail Q2.
+    python3 - "$TMP/baseline/fingerprint.json" <<'PYMUTATE'
+import json, sys
+
+path = sys.argv[1]
+with open(path, encoding="utf-8") as fh:
+    fingerprint = json.load(fh)
+del fingerprint["build_flags"]["CARGO_ENCODED_RUSTFLAGS"]
+with open(path, "w", encoding="utf-8") as fh:
+    json.dump(fingerprint, fh)
+PYMUTATE
+    mkdir -p "$TMP/out_missing_baseline_key"
+    if "$0" --bead PERF-SELFTEST-MISSING-BASELINE-KEY \
+            --baseline "$TMP/baseline" --post "$TMP/post" \
+            --out "$TMP/out_missing_baseline_key" \
+            --sub-bench selftest_hot_path \
+            --non-interactive "$TMP/answers" >/dev/null 2>&1; then
+        echo "SELFTEST FAIL: missing baseline encoded-RUSTFLAGS key received symmetric-profile credit" >&2
+        exit 1
+    fi
+    python3 - "$TMP/out_missing_baseline_key/attestation_v1.json" <<'PYREJECT'
+import json, sys
+
+with open(sys.argv[1], encoding="utf-8") as fh:
+    attestation = json.load(fh)
+q2 = next(q for q in attestation["questions"] if q["id"] == "2_same_build_profile")
+assert q2["answer"] == "fail", q2
+print("SELFTEST PASS: baseline and post profiles are both required and missing is not cleared")
+PYREJECT
     exit $?
 fi
 
@@ -159,7 +303,7 @@ mkdir -p "$OUT"
 # signal fall through to the answers file / interactive prompt.
 QUESTIONS=(
   "1_written_scenario:Scenario doc names the metric and the claim being made?"
-  "2_same_build_profile:Pre and post built with the canonical symmetric flags (RUSTFLAGS linker=cc, CARGO_INCREMENTAL=0)?"
+  "2_same_build_profile:Do baseline and post fingerprints explicitly bind the same effective Cargo rustflags and CARGO_INCREMENTAL setting?"
   "3_api_matched:Same Criterion bench id exists on both the baseline and post sides?"
   "4_knobs_identical:Criterion config (sample_size / warm_up / measurement_time) recorded and >= defaults?"
   "5_realistic_workload:Workload is a realistic slice or a labelled microbench isolating one mechanism?"
@@ -180,7 +324,7 @@ QUESTIONS=(
 # ---------------------------------------------------------------------------
 AUTO_TSV="$OUT/.auto_answers.tsv"
 python3 - "$BASELINE" "$POST" "$SUB_BENCH" > "$AUTO_TSV" <<'PYAUTO'
-import json, os, re, sys, glob
+import glob, json, os, re, shlex, sys
 
 baseline, post, sub_bench = sys.argv[1:4]
 
@@ -196,6 +340,7 @@ def emit(qid, ans, src):
 def needs(qid):
     print(f"{qid}\tNEEDS_INPUT\t")
 
+base_fp = load_json(os.path.join(baseline, "fingerprint.json")) or {}
 fp = load_json(os.path.join(post, "fingerprint.json")) or {}
 summary = ""
 sp = os.path.join(post, "summary.md")
@@ -252,16 +397,96 @@ elif metric_in_summary:
 else:
     needs("1_written_scenario")
 
-# Q2: canonical symmetric build flags in fingerprint.
-flags = (fp.get("build_flags") or {})
-rf = flags.get("RUSTFLAGS", "")
-inc = str(flags.get("CARGO_INCREMENTAL", ""))
-if "linker=cc" in rf and inc == "0":
-    emit("2_same_build_profile", "pass", f"RUSTFLAGS={rf!r} CARGO_INCREMENTAL={inc}")
-elif flags:
-    emit("2_same_build_profile", "fail", f"non-canonical build_flags: {flags}")
+# Q2: both sides must explicitly bind every Cargo rustflags channel. Cargo
+# gives CARGO_ENCODED_RUSTFLAGS precedence over RUSTFLAGS, so compare the
+# normalized effective rustc argv rather than crediting two simultaneously
+# populated fields. Missing keys are unknown provenance, never an inferred
+# clear.
+def normalize_codegen_args(args):
+    normalized = []
+    i = 0
+    while i < len(args):
+        arg = args[i]
+        if arg == "-C":
+            if i + 1 >= len(args):
+                raise ValueError("trailing -C")
+            normalized.append(f"-C{args[i + 1]}")
+            i += 2
+            continue
+        normalized.append(arg)
+        i += 1
+    return normalized
+
+def effective_build_profile(label, fingerprint):
+    flags = fingerprint.get("build_flags")
+    if not isinstance(flags, dict):
+        return None, f"{label} fingerprint has no build_flags object"
+    required = {"RUSTFLAGS", "CARGO_ENCODED_RUSTFLAGS", "CARGO_INCREMENTAL"}
+    missing = sorted(required - flags.keys())
+    if missing:
+        return None, f"{label} build_flags missing explicit keys: {missing}"
+
+    rustflags = flags["RUSTFLAGS"]
+    encoded = flags["CARGO_ENCODED_RUSTFLAGS"]
+    incremental = str(flags["CARGO_INCREMENTAL"])
+    if rustflags is not None and not isinstance(rustflags, str):
+        return None, f"{label} RUSTFLAGS is neither string nor null"
+    if encoded is not None and not isinstance(encoded, str):
+        return None, f"{label} CARGO_ENCODED_RUSTFLAGS is neither string nor null"
+    if incremental not in {"0", "1"}:
+        return None, f"{label} CARGO_INCREMENTAL is not explicitly 0 or 1"
+
+    try:
+        if encoded is not None:
+            if not encoded:
+                return None, f"{label} CARGO_ENCODED_RUSTFLAGS is empty, not cleared"
+            if rustflags not in (None, ""):
+                return None, (
+                    f"{label} records shadowed RUSTFLAGS alongside "
+                    "CARGO_ENCODED_RUSTFLAGS"
+                )
+            argv = encoded.split("\x1f")
+            channel = "CARGO_ENCODED_RUSTFLAGS"
+        else:
+            if not rustflags:
+                return None, f"{label} has no effective rustflags payload"
+            argv = shlex.split(rustflags)
+            channel = "RUSTFLAGS"
+        effective = normalize_codegen_args(argv)
+    except ValueError as exc:
+        return None, f"{label} rustflags are malformed: {exc}"
+
+    return {
+        "effective_rustflags": effective,
+        "cargo_incremental": incremental,
+        "channel": channel,
+    }, None
+
+base_profile, base_error = effective_build_profile("baseline", base_fp)
+post_profile, post_error = effective_build_profile("post", fp)
+if base_error or post_error:
+    emit("2_same_build_profile", "fail", "; ".join(
+        error for error in (base_error, post_error) if error
+    ))
+elif base_profile == post_profile:
+    emit("2_same_build_profile", "pass", (
+        "baseline/post effective build profiles match: "
+        f"{base_profile['effective_rustflags']!r}; "
+        f"CARGO_INCREMENTAL={base_profile['cargo_incremental']}; "
+        f"channels={base_profile['channel']}/{post_profile['channel']}"
+    ))
+elif (base_profile["effective_rustflags"] == post_profile["effective_rustflags"]
+      and base_profile["cargo_incremental"] == post_profile["cargo_incremental"]):
+    emit("2_same_build_profile", "pass", (
+        "baseline/post effective build profiles match across Cargo channels: "
+        f"{base_profile['effective_rustflags']!r}; "
+        f"CARGO_INCREMENTAL={base_profile['cargo_incremental']}; "
+        f"channels={base_profile['channel']}/{post_profile['channel']}"
+    ))
 else:
-    needs("2_same_build_profile")
+    emit("2_same_build_profile", "fail", (
+        f"build profile mismatch: baseline={base_profile!r}; post={post_profile!r}"
+    ))
 
 # Q3: same bench id present on both sides.
 if base_est_path and post_est_path:
@@ -508,10 +733,11 @@ with open(out_path, "w") as f:
     f.write("\n")
 
 # Clean up scratch TSVs.
-for scratch in (".auto_answers.tsv", ".merged_answers.tsv"):
-    p = os.path.join(out, scratch)
-    if os.path.exists(p):
-        os.remove(p)
+if os.environ.get("HONEST_GATE_KEEP_SCRATCH") != "1":
+    for scratch in (".auto_answers.tsv", ".merged_answers.tsv"):
+        p = os.path.join(out, scratch)
+        if os.path.exists(p):
+            os.remove(p)
 
 print(f"[honest-gate] {bead}: score {score_total}/{score_max}  verdict={verdict}  "
       f"({fails} fail)")

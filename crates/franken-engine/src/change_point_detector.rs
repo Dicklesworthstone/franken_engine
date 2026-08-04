@@ -23,6 +23,10 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
+use crate::evidence_ledger::{
+    EvidenceSignatureEnvelope, EvidenceSigningAuthority, EvidenceVerificationIdentity,
+    LabEvidenceAuthority, RuntimeEvidenceAuthority,
+};
 use crate::hash_tiers::ContentHash;
 use crate::martingale_decision_ledger::{MartingaleLedger, StoppingThreshold};
 use crate::security_epoch::SecurityEpoch;
@@ -231,11 +235,9 @@ impl CompositeAlternative {
 
         // Log-likelihood ratio
         let pre_log_lik = if is_success {
-            (pre_prob * MILLION / MILLION).max(1).min(MILLION - 1)
+            (pre_prob * MILLION / MILLION).clamp(1, MILLION - 1)
         } else {
-            ((MILLION - pre_prob) * MILLION / MILLION)
-                .max(1)
-                .min(MILLION - 1)
+            ((MILLION - pre_prob) * MILLION / MILLION).clamp(1, MILLION - 1)
         };
         let post_log_lik = if is_success {
             mle_prob
@@ -349,11 +351,18 @@ pub struct BocpdCompatibleObservation {
 
 /// Verdict emitted by the change-point detector.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "preserve the public verdict field types and stable serde schema"
+)]
 pub enum ChangePointVerdict {
     /// No change detected yet; continue monitoring.
     Continue,
     /// Change point detected at the specified time.
     ChangeDetected {
+        /// Stable identity of the detector whose state produced this verdict.
+        #[serde(default)]
+        detector_id: String,
         /// Sequence number where change was detected.
         detection_time: u64,
         /// Estimated sequence number where change actually occurred.
@@ -366,16 +375,21 @@ pub enum ChangePointVerdict {
         cusum_statistic_millionths: i64,
         /// Content hash of the evidence atom for this detection.
         evidence_hash: ContentHash,
-        /// Detached signature over `evidence_hash`, authenticating this
+        /// Detached Ed25519 signature over `evidence_hash`, authenticating this
         /// detection as an auditable decision artifact.
         ///
-        /// FIXME (bd-1lw7r.4): always `None` today — no evidence-signing
-        /// facility (key management + sign API) is wired into this detector
-        /// yet, so emitted change-point evidence carries a content hash but is
-        /// UNAUTHENTICATED. See [`ChangePointVerdict::evidence_signing_wired`];
-        /// wiring likely shares infrastructure with the `tee_attestation` /
-        /// `signature_preimage` modules.
+        /// Populated (bd-k2bz7): every emitted
+        /// [`ChangePointVerdict::ChangeDetected`] carries a signature produced
+        /// by the runtime-owned evidence identity. The field stays an `Option`
+        /// only for forward/backward wire compatibility with records serialized
+        /// before the signer was wired; new records are never `None`. See
+        /// [`ChangePointVerdict::evidence_signing_wired`] (returns `true`).
         signed_evidence: Option<Vec<u8>>,
+        /// Signed producer/key/epoch/rotation provenance for
+        /// `signed_evidence`. Older records omit this field; current emitters
+        /// always populate it.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        evidence_signature_envelope: Option<EvidenceSignatureEnvelope>,
     },
 }
 
@@ -385,12 +399,67 @@ impl ChangePointVerdict {
     ///
     /// Returns `true` (bd-k2bz7): [`ChangePointVerdict::ChangeDetected`]
     /// populates `signed_evidence` with an Ed25519 signature over its
-    /// `evidence_hash`, produced by the engine's default evidence signer
-    /// (`evidence_ledger::sign_evidence_preimage`). Emitted detections are
-    /// therefore authenticated, auditable decision artifacts verifiable with
-    /// `evidence_ledger::shared_evidence_verification_key()`.
+    /// `evidence_hash` and records the runtime producer/key/epoch/rotation
+    /// identity in `evidence_signature_envelope`.
     pub const fn evidence_signing_wired() -> bool {
         true
+    }
+
+    /// Verify every authenticated field on a detected verdict.
+    ///
+    /// Legacy records that contain only raw signature bytes fail closed: they
+    /// do not carry the runtime producer/key/epoch/rotation provenance needed
+    /// to establish which runtime emitted the detection.
+    pub fn verify_evidence_signature(
+        &self,
+        trusted_identity: &EvidenceVerificationIdentity,
+    ) -> Result<(), ChangePointError> {
+        let Self::ChangeDetected {
+            detector_id,
+            detection_time,
+            estimated_change_point,
+            pre_change_parameters,
+            post_change_parameters,
+            cusum_statistic_millionths,
+            evidence_hash,
+            signed_evidence,
+            evidence_signature_envelope,
+        } = self
+        else {
+            return Ok(());
+        };
+        let recomputed_hash = change_point_evidence_hash(
+            detector_id,
+            *detection_time,
+            *estimated_change_point,
+            pre_change_parameters,
+            post_change_parameters,
+            *cusum_statistic_millionths,
+        )?;
+        if &recomputed_hash != evidence_hash {
+            return Err(ChangePointError::EvidenceSigning(
+                "change-point verdict fields do not match its evidence hash".to_string(),
+            ));
+        }
+        let signed_evidence = signed_evidence.as_ref().ok_or_else(|| {
+            ChangePointError::EvidenceSigning(
+                "change-point detection is missing signature bytes".to_string(),
+            )
+        })?;
+        let envelope = evidence_signature_envelope.as_ref().ok_or_else(|| {
+            ChangePointError::EvidenceSigning(
+                "change-point detection is missing signer provenance".to_string(),
+            )
+        })?;
+        let envelope_signature = envelope.signature.to_bytes();
+        if signed_evidence.as_slice() != envelope_signature.as_slice() {
+            return Err(ChangePointError::EvidenceSigning(
+                "change-point signature bytes do not match the provenance envelope".to_string(),
+            ));
+        }
+        envelope
+            .verify_detached(evidence_hash.as_bytes(), trusted_identity)
+            .map_err(|error| ChangePointError::EvidenceSigning(error.to_string()))
     }
 
     /// Whether this verdict indicates a change was detected.
@@ -407,6 +476,41 @@ impl ChangePointVerdict {
     }
 }
 
+#[derive(Serialize)]
+struct ChangePointEvidencePayload<'a> {
+    detector_id: &'a str,
+    detection_time: u64,
+    estimated_change_point: u64,
+    pre_change_parameters: &'a BTreeMap<String, i64>,
+    post_change_parameters: &'a BTreeMap<String, i64>,
+    cusum_statistic_millionths: i64,
+}
+
+fn change_point_evidence_hash(
+    detector_id: &str,
+    detection_time: u64,
+    estimated_change_point: u64,
+    pre_change_parameters: &BTreeMap<String, i64>,
+    post_change_parameters: &BTreeMap<String, i64>,
+    cusum_statistic_millionths: i64,
+) -> Result<ContentHash, ChangePointError> {
+    let payload = ChangePointEvidencePayload {
+        detector_id,
+        detection_time,
+        estimated_change_point,
+        pre_change_parameters,
+        post_change_parameters,
+        cusum_statistic_millionths,
+    };
+    serde_json::to_vec(&payload)
+        .map(|bytes| ContentHash::compute(&bytes))
+        .map_err(|error| {
+            ChangePointError::EvidenceSigning(format!(
+                "change-point evidence serialization failed: {error}"
+            ))
+        })
+}
+
 // ---------------------------------------------------------------------------
 // ChangePointDetector - CUSUM-based sequential detector
 // ---------------------------------------------------------------------------
@@ -416,7 +520,7 @@ impl ChangePointVerdict {
 /// Implements the Page rule with composite alternatives as described in
 /// Lai (1995) and Tartakovsky (2014). Integrates with `MartingaleLedger`
 /// for anytime-valid stopping properties.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChangePointDetector {
     /// Identifier for this detector instance.
     pub detector_id: String,
@@ -434,16 +538,109 @@ pub struct ChangePointDetector {
     change_detected: bool,
     /// Integrated martingale ledger for anytime-valid stopping.
     martingale_ledger: Option<MartingaleLedger>,
+    /// Private runtime signer. Deliberately omitted from serialized detector
+    /// state; a resumed detector must explicitly reattach the matching key.
+    #[serde(skip)]
+    evidence_signing_authority: Option<EvidenceSigningAuthority>,
+    /// Public signer identity recorded with serialized detector state.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    evidence_verification_identity: Option<EvidenceVerificationIdentity>,
 }
 
+impl PartialEq for ChangePointDetector {
+    fn eq(&self, other: &Self) -> bool {
+        self.detector_id == other.detector_id
+            && self.alternative == other.alternative
+            && self.threshold_millionths == other.threshold_millionths
+            && self.epoch == other.epoch
+            && self.cusum_statistic_millionths == other.cusum_statistic_millionths
+            && self.observations == other.observations
+            && self.change_detected == other.change_detected
+            && self.martingale_ledger == other.martingale_ledger
+            && self.evidence_verification_identity == other.evidence_verification_identity
+    }
+}
+
+impl Eq for ChangePointDetector {}
+
 impl ChangePointDetector {
-    /// Create a new change-point detector.
+    /// Create a change-point detector with the deterministic test identity.
+    ///
+    /// This constructor is absent from normal production builds.
+    #[cfg(test)]
     pub fn new(
         detector_id: impl Into<String>,
         alternative: CompositeAlternative,
         threshold_millionths: i64,
         epoch: SecurityEpoch,
     ) -> Self {
+        Self::new_lab(detector_id, alternative, threshold_millionths, epoch)
+    }
+
+    /// Create a detector with an explicitly supplied runtime authority.
+    pub fn try_new_with_runtime_authority(
+        detector_id: impl Into<String>,
+        alternative: CompositeAlternative,
+        threshold_millionths: i64,
+        epoch: SecurityEpoch,
+        evidence_authority: RuntimeEvidenceAuthority,
+    ) -> Result<Self, ChangePointError> {
+        if evidence_authority
+            .key_provenance()
+            .activation_epoch
+            .as_u64()
+            > epoch.as_u64()
+        {
+            return Err(ChangePointError::EvidenceSigning(format!(
+                "change-point evidence key activates at epoch {}, after detector epoch {}",
+                evidence_authority
+                    .key_provenance()
+                    .activation_epoch
+                    .as_u64(),
+                epoch.as_u64()
+            )));
+        }
+        Ok(Self::new_with_optional_evidence_authority(
+            detector_id,
+            alternative,
+            threshold_millionths,
+            epoch,
+            Some(EvidenceSigningAuthority::Runtime(evidence_authority)),
+        ))
+    }
+
+    /// Create a deterministic, explicitly lab-scoped detector.
+    pub fn new_lab(
+        detector_id: impl Into<String>,
+        alternative: CompositeAlternative,
+        threshold_millionths: i64,
+        epoch: SecurityEpoch,
+    ) -> Self {
+        let authority = LabEvidenceAuthority::deterministic_fixture(
+            "franken-engine.change-point-detector",
+            "change-point-detector-lab-v2",
+            SecurityEpoch::GENESIS,
+        )
+        .expect("built-in change-point lab identity must be valid");
+        Self::new_with_optional_evidence_authority(
+            detector_id,
+            alternative,
+            threshold_millionths,
+            epoch,
+            Some(EvidenceSigningAuthority::Lab(authority)),
+        )
+    }
+
+    fn new_with_optional_evidence_authority(
+        detector_id: impl Into<String>,
+        alternative: CompositeAlternative,
+        threshold_millionths: i64,
+        epoch: SecurityEpoch,
+        evidence_signing_authority: Option<EvidenceSigningAuthority>,
+    ) -> Self {
+        let evidence_verification_identity = evidence_signing_authority
+            .as_ref()
+            .map(EvidenceSigningAuthority::verification_identity);
         Self {
             detector_id: detector_id.into(),
             alternative,
@@ -453,10 +650,13 @@ impl ChangePointDetector {
             observations: Vec::new(),
             change_detected: false,
             martingale_ledger: None,
+            evidence_signing_authority,
+            evidence_verification_identity,
         }
     }
 
-    /// Create detector with default threshold.
+    /// Create a test detector with default threshold.
+    #[cfg(test)]
     pub fn new_with_default_threshold(
         detector_id: impl Into<String>,
         alternative: CompositeAlternative,
@@ -476,6 +676,47 @@ impl ChangePointDetector {
         self
     }
 
+    /// Reattach the private key for a deserialized detector, requiring an exact
+    /// match with the public identity recorded in its serialized state.
+    pub fn attach_runtime_authority(
+        &mut self,
+        evidence_authority: RuntimeEvidenceAuthority,
+    ) -> Result<(), ChangePointError> {
+        let supplied_identity = evidence_authority.verification_identity();
+        let recorded_identity = self
+            .evidence_verification_identity
+            .as_ref()
+            .ok_or_else(|| {
+                ChangePointError::EvidenceSigning(
+                    "change-point state has no recorded verification identity; normal replay \
+                     attachment fails closed"
+                        .to_string(),
+                )
+            })?;
+        if recorded_identity != &supplied_identity {
+            return Err(ChangePointError::EvidenceSigning(
+                "reattached change-point signer does not match recorded runtime identity"
+                    .to_string(),
+            ));
+        }
+        if supplied_identity.key_provenance.activation_epoch.as_u64() > self.epoch.as_u64() {
+            return Err(ChangePointError::EvidenceSigning(format!(
+                "change-point evidence key activates at epoch {}, after detector epoch {}",
+                supplied_identity.key_provenance.activation_epoch.as_u64(),
+                self.epoch.as_u64()
+            )));
+        }
+        self.evidence_verification_identity = Some(supplied_identity);
+        self.evidence_signing_authority =
+            Some(EvidenceSigningAuthority::Runtime(evidence_authority));
+        Ok(())
+    }
+
+    /// Public signer coordinates persisted with detector state.
+    pub fn evidence_verification_identity(&self) -> Option<&EvidenceVerificationIdentity> {
+        self.evidence_verification_identity.as_ref()
+    }
+
     /// Process a new observation and return the detection verdict.
     pub fn process_observation(
         &mut self,
@@ -484,6 +725,28 @@ impl ChangePointDetector {
     ) -> Result<ChangePointVerdict, ChangePointError> {
         if self.change_detected {
             return Err(ChangePointError::AlreadyDetected);
+        }
+        // Resolve the fallible runtime signer before consuming any observation.
+        // If OS entropy or key preparation is unavailable, the detector fails
+        // closed without partially advancing CUSUM or martingale state.
+        let evidence_signing_authority =
+            self.evidence_signing_authority.clone().ok_or_else(|| {
+                ChangePointError::EvidenceSigning(
+                    "change-point detector has no attached runtime signing identity".to_string(),
+                )
+            })?;
+        let recorded_identity = self
+            .evidence_verification_identity
+            .as_ref()
+            .ok_or_else(|| {
+                ChangePointError::EvidenceSigning(
+                    "change-point detector has no recorded verification identity".to_string(),
+                )
+            })?;
+        if &evidence_signing_authority.verification_identity() != recorded_identity {
+            return Err(ChangePointError::EvidenceSigning(
+                "attached change-point signer does not match recorded runtime identity".to_string(),
+            ));
         }
 
         // Append observation to history
@@ -502,17 +765,16 @@ impl ChangePointDetector {
         );
 
         // Update integrated martingale if enabled
-        if let Some(ref mut ledger) = self.martingale_ledger {
-            if !ledger.is_stopped() {
-                let _verdict = ledger.append(log_lr, payload_digest, timestamp_ns)?;
-            }
+        if let Some(ref mut ledger) = self.martingale_ledger
+            && !ledger.is_stopped()
+        {
+            let _verdict = ledger.append(log_lr, payload_digest, timestamp_ns)?;
         }
 
         // Check for change-point detection
         if self.cusum_statistic_millionths >= self.threshold_millionths
             && self.observations.len() >= MIN_OBSERVATIONS_FOR_DETECTION as usize
         {
-            self.change_detected = true;
             let detection_time = self.observations.len() as u64;
 
             // Estimate change point location (simplified: assume recent change)
@@ -528,22 +790,25 @@ impl ChangePointDetector {
                 .alternative
                 .estimate_post_change_parameters(post_change_observations);
 
-            // Generate evidence hash
-            let evidence_data = self.compute_evidence_data(detection_time, estimated_change_point);
-            let evidence_hash = ContentHash::compute(&evidence_data);
+            // Generate an evidence hash over every public verdict field. A
+            // verifier recomputes this hash before accepting the signature.
+            let evidence_hash = change_point_evidence_hash(
+                &self.detector_id,
+                detection_time,
+                estimated_change_point,
+                &pre_change_parameters,
+                &post_change_parameters,
+                self.cusum_statistic_millionths,
+            )?;
 
-            // bd-k2bz7: sign the evidence hash with the engine's default
-            // Ed25519 evidence signer so this detection is an authenticated,
-            // auditable decision artifact (not merely hash-addressed). The
-            // detached 64-byte signature verifies against
-            // `evidence_ledger::shared_evidence_verification_key()`.
-            let signed_evidence = Some(
-                crate::evidence_ledger::sign_evidence_preimage(evidence_hash.as_bytes())
-                    .to_bytes()
-                    .to_vec(),
-            );
+            let evidence_signature_envelope = evidence_signing_authority
+                .sign_detached(evidence_hash.as_bytes(), self.epoch)
+                .map_err(|error| ChangePointError::EvidenceSigning(error.to_string()))?;
+            let signed_evidence = Some(evidence_signature_envelope.signature.to_bytes().to_vec());
+            self.change_detected = true;
 
             Ok(ChangePointVerdict::ChangeDetected {
+                detector_id: self.detector_id.clone(),
                 detection_time,
                 estimated_change_point,
                 pre_change_parameters,
@@ -551,6 +816,7 @@ impl ChangePointDetector {
                 cusum_statistic_millionths: self.cusum_statistic_millionths,
                 evidence_hash,
                 signed_evidence,
+                evidence_signature_envelope: Some(evidence_signature_envelope),
             })
         } else {
             Ok(ChangePointVerdict::Continue)
@@ -690,15 +956,6 @@ impl ChangePointDetector {
         format!("{}:{}:{}", self.detector_id, observation, timestamp_ns).into_bytes()
     }
 
-    /// Compute evidence data for signing.
-    fn compute_evidence_data(&self, detection_time: u64, change_point: u64) -> Vec<u8> {
-        format!(
-            "detector:{},detection:{},change:{},cusum:{}",
-            self.detector_id, detection_time, change_point, self.cusum_statistic_millionths
-        )
-        .into_bytes()
-    }
-
     fn bocpd_change_point_probability_millionths(&self) -> i64 {
         if self.change_detected || self.observations.is_empty() || self.threshold_millionths <= 0 {
             return MILLION;
@@ -707,6 +964,49 @@ impl ChangePointDetector {
         ((self.cusum_statistic_millionths as i128 * MILLION as i128)
             / self.threshold_millionths as i128)
             .clamp(0, MILLION as i128) as i64
+    }
+}
+
+/// Deliberate opt-in for legacy-shaped deterministic lab fixtures.
+///
+/// Production code must use
+/// [`ChangePointDetector::try_new_with_runtime_authority`].
+pub trait LabFixtureChangePointDetectorExt: Sized {
+    fn new(
+        detector_id: impl Into<String>,
+        alternative: CompositeAlternative,
+        threshold_millionths: i64,
+        epoch: SecurityEpoch,
+    ) -> Self;
+
+    fn new_with_default_threshold(
+        detector_id: impl Into<String>,
+        alternative: CompositeAlternative,
+        epoch: SecurityEpoch,
+    ) -> ChangePointDetector;
+}
+
+impl LabFixtureChangePointDetectorExt for ChangePointDetector {
+    fn new(
+        detector_id: impl Into<String>,
+        alternative: CompositeAlternative,
+        threshold_millionths: i64,
+        epoch: SecurityEpoch,
+    ) -> Self {
+        ChangePointDetector::new_lab(detector_id, alternative, threshold_millionths, epoch)
+    }
+
+    fn new_with_default_threshold(
+        detector_id: impl Into<String>,
+        alternative: CompositeAlternative,
+        epoch: SecurityEpoch,
+    ) -> ChangePointDetector {
+        ChangePointDetector::new_lab(
+            detector_id,
+            alternative,
+            DEFAULT_CUSUM_THRESHOLD_MILLIONTHS,
+            epoch,
+        )
     }
 }
 
@@ -735,6 +1035,8 @@ pub enum ChangePointError {
     InvalidObservation(String),
     /// Martingale ledger error.
     MartingaleError(String),
+    /// Runtime evidence identity was unavailable or invalid.
+    EvidenceSigning(String),
     /// Insufficient data for detection.
     InsufficientData,
 }
@@ -745,6 +1047,7 @@ impl fmt::Display for ChangePointError {
             Self::AlreadyDetected => write!(f, "change already detected"),
             Self::InvalidObservation(msg) => write!(f, "invalid observation: {}", msg),
             Self::MartingaleError(msg) => write!(f, "martingale error: {}", msg),
+            Self::EvidenceSigning(msg) => write!(f, "evidence signing failed: {}", msg),
             Self::InsufficientData => write!(f, "insufficient data for detection"),
         }
     }
@@ -1067,7 +1370,7 @@ mod tests {
         assert!(*estimated_mean >= 1_100_000 && *estimated_mean <= 1_300_000);
 
         // Test clamping to range
-        let clamped_params = alt.estimate_post_change_parameters(&vec![10_000_000]); // Way above range
+        let clamped_params = alt.estimate_post_change_parameters(&[10_000_000]); // Way above range
         let clamped_mean = clamped_params
             .get("estimated_mean_millionths")
             .expect("should have clamped mean");
@@ -1080,24 +1383,68 @@ mod tests {
         assert!(!continue_verdict.is_change_detected());
         assert!(continue_verdict.detection_time().is_none());
 
-        let evidence_hash = ContentHash::compute(b"test");
-        let signed_evidence = Some(
-            crate::evidence_ledger::sign_evidence_preimage(evidence_hash.as_bytes())
-                .to_bytes()
-                .to_vec(),
-        );
+        let detector_id = "verdict-methods";
+        let pre_change_parameters = BTreeMap::new();
+        let post_change_parameters = BTreeMap::new();
+        let evidence_hash = change_point_evidence_hash(
+            detector_id,
+            42,
+            37,
+            &pre_change_parameters,
+            &post_change_parameters,
+            5_000_000,
+        )
+        .expect("evidence payload");
+        let authority = RuntimeEvidenceAuthority::from_signing_key(
+            "change-point-verdict-methods",
+            crate::signature_preimage::SigningKey::from_bytes([0x63; 32])
+                .expect("non-zero verdict test key"),
+            SecurityEpoch::from_raw(1),
+            1,
+            None,
+        )
+        .expect("runtime evidence authority");
+        let evidence_signature_envelope = authority
+            .sign_detached(evidence_hash.as_bytes(), SecurityEpoch::from_raw(1))
+            .expect("runtime evidence signature");
+        let signed_evidence = Some(evidence_signature_envelope.signature.to_bytes().to_vec());
         let change_verdict = ChangePointVerdict::ChangeDetected {
+            detector_id: detector_id.to_string(),
             detection_time: 42,
             estimated_change_point: 37,
-            pre_change_parameters: BTreeMap::new(),
-            post_change_parameters: BTreeMap::new(),
+            pre_change_parameters,
+            post_change_parameters,
             cusum_statistic_millionths: 5_000_000,
             evidence_hash,
             signed_evidence,
+            evidence_signature_envelope: Some(evidence_signature_envelope),
         };
+        let trusted_identity = authority.verification_identity();
 
         assert!(change_verdict.is_change_detected());
         assert_eq!(change_verdict.detection_time(), Some(42));
+        change_verdict
+            .verify_evidence_signature(&trusted_identity)
+            .expect("signature and provenance verify");
+
+        let mut legacy_value =
+            serde_json::to_value(&change_verdict).expect("serialize current verdict");
+        let legacy_fields = legacy_value
+            .get_mut("ChangeDetected")
+            .and_then(serde_json::Value::as_object_mut)
+            .expect("verdict uses the externally tagged wire shape");
+        legacy_fields.remove("detector_id");
+        legacy_fields.remove("evidence_signature_envelope");
+        let legacy_verdict: ChangePointVerdict =
+            serde_json::from_value(legacy_value).expect("legacy verdict remains readable");
+        assert!(legacy_verdict.is_change_detected());
+        assert!(
+            legacy_verdict
+                .verify_evidence_signature(&trusted_identity)
+                .is_err(),
+            "legacy verdict is readable but cannot claim current runtime authentication"
+        );
+
         // bd-k2bz7: change-point evidence now carries a detached signature.
         assert!(matches!(
             change_verdict,
@@ -1119,8 +1466,96 @@ mod tests {
     }
 
     #[test]
+    fn bd_90u6o_deserialized_detector_requires_matching_signer_reattachment() {
+        use crate::evidence_ledger::RuntimeEvidenceAuthority;
+        use crate::signature_preimage::SigningKey;
+
+        let epoch = SecurityEpoch::from_raw(3);
+        let identity = RuntimeEvidenceAuthority::from_signing_key(
+            "change-point-replay",
+            SigningKey::from_bytes([0x51; 32]).expect("non-zero test key"),
+            epoch,
+            1,
+            None,
+        )
+        .expect("test identity");
+        let detector = ChangePointDetector::try_new_with_runtime_authority(
+            "change-point-replay",
+            sample_normal_alternative(),
+            500_000,
+            epoch,
+            identity.clone(),
+        )
+        .expect("explicit identity");
+        let recorded_identity = detector
+            .evidence_verification_identity()
+            .expect("public identity is recorded")
+            .clone();
+        let bytes = serde_json::to_vec(&detector).expect("serialize detector state");
+        let mut restored: ChangePointDetector =
+            serde_json::from_slice(&bytes).expect("deserialize detector state");
+        assert_eq!(
+            restored, detector,
+            "detector equality compares recorded state, not the transient private signer"
+        );
+        assert_eq!(
+            restored.evidence_verification_identity(),
+            Some(&recorded_identity)
+        );
+
+        let before = restored.observation_count();
+        let error = restored
+            .process_observation(2_000_000, 1_000_000)
+            .expect_err("deserialized state must not silently select a process-global key");
+        assert!(matches!(error, ChangePointError::EvidenceSigning(_)));
+        assert_eq!(
+            restored.observation_count(),
+            before,
+            "missing signer must fail before detector state advances"
+        );
+
+        let wrong_identity = RuntimeEvidenceAuthority::from_signing_key(
+            "change-point-replay",
+            SigningKey::from_bytes([0x52; 32]).expect("non-zero test key"),
+            epoch,
+            1,
+            None,
+        )
+        .expect("wrong identity");
+        assert!(
+            restored.attach_runtime_authority(wrong_identity).is_err(),
+            "replay must reject a key that differs from the recorded public identity"
+        );
+
+        let mut missing_identity_value =
+            serde_json::to_value(&detector).expect("serialize detector value");
+        missing_identity_value
+            .as_object_mut()
+            .expect("detector serializes as an object")
+            .remove("evidence_verification_identity");
+        let mut missing_identity_state: ChangePointDetector =
+            serde_json::from_value(missing_identity_value).expect("legacy-shaped detector state");
+        assert!(
+            missing_identity_state
+                .attach_runtime_authority(identity.clone())
+                .is_err(),
+            "ordinary replay attachment must reject state with no recorded trust identity"
+        );
+
+        restored
+            .attach_runtime_authority(identity)
+            .expect("matching secure key may resume the detector");
+        assert!(matches!(
+            restored
+                .process_observation(2_000_000, 1_000_000)
+                .expect("reattached detector processes"),
+            ChangePointVerdict::Continue
+        ));
+    }
+
+    #[test]
     fn change_detection_evidence_is_signed_and_verifies_bd_k2bz7() {
-        use crate::signature_preimage::{SIGNATURE_LEN, Signature, verify_signature};
+        use crate::signature_preimage::{SIGNATURE_LEN, Signature};
 
         // Drive the detector to a detection (low threshold + large signal,
         // mirroring `already_detected_error`), then verify the emitted
@@ -1131,6 +1566,10 @@ mod tests {
             500_000, // low threshold for quick detection
             SecurityEpoch::from_raw(1),
         );
+        let trusted_identity = detector
+            .evidence_verification_identity()
+            .expect("detector records its lab verification identity")
+            .clone();
         let mut detected: Option<ChangePointVerdict> = None;
         for i in 1..=10u64 {
             let verdict = detector
@@ -1143,9 +1582,41 @@ mod tests {
         }
 
         let verdict = detected.expect("a change point should be detected under a sustained shift");
+        verdict
+            .verify_evidence_signature(&trusted_identity)
+            .expect("emitted verdict must verify through its public API");
+        let mut raw_signature_tamper = verdict.clone();
+        if let ChangePointVerdict::ChangeDetected {
+            signed_evidence: Some(signature),
+            ..
+        } = &mut raw_signature_tamper
+        {
+            signature[0] ^= 1;
+        }
+        assert!(
+            raw_signature_tamper
+                .verify_evidence_signature(&trusted_identity)
+                .is_err(),
+            "legacy signature projection must match the signed provenance envelope"
+        );
+        let mut parameter_tamper = verdict.clone();
+        if let ChangePointVerdict::ChangeDetected {
+            post_change_parameters,
+            ..
+        } = &mut parameter_tamper
+        {
+            post_change_parameters.insert("attacker_override".to_string(), 1);
+        }
+        assert!(
+            parameter_tamper
+                .verify_evidence_signature(&trusted_identity)
+                .is_err(),
+            "every public parameter map must be covered by the evidence hash"
+        );
         let ChangePointVerdict::ChangeDetected {
             evidence_hash,
             signed_evidence,
+            evidence_signature_envelope,
             ..
         } = verdict
         else {
@@ -1156,14 +1627,20 @@ mod tests {
             <[u8; SIGNATURE_LEN]>::try_from(sig_bytes.as_slice())
                 .expect("64-byte Ed25519 signature"),
         );
+        let envelope = evidence_signature_envelope
+            .expect("current change-point evidence must record signer provenance");
+        assert_eq!(signature, envelope.signature);
+        envelope
+            .verify_detached(evidence_hash.as_bytes(), &trusted_identity)
+            .expect("signature and public provenance must verify");
+
+        let mut tampered = envelope;
+        tampered.producer_id.push_str("-forged");
         assert!(
-            verify_signature(
-                &crate::evidence_ledger::shared_evidence_verification_key(),
-                evidence_hash.as_bytes(),
-                &signature,
-            )
-            .is_ok(),
-            "emitted change-point evidence signature must verify against the shared evidence key"
+            tampered
+                .verify_detached(evidence_hash.as_bytes(), &trusted_identity)
+                .is_err(),
+            "producer provenance must be bound by the signature"
         );
     }
 

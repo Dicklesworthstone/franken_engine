@@ -123,15 +123,20 @@ impl DerivationContext {
 
     /// Canonical byte serialization for derivation input.
     ///
-    /// Format: `key1=value1\0key2=value2\0...` (sorted by key, NUL-separated).
+    /// Each `(key, value)` pair (sorted by key via the backing `BTreeMap`) is
+    /// encoded as `len(key) as u64 LE || key || len(value) as u64 LE ||
+    /// value`. Length-prefixing every field makes the encoding injective, so
+    /// no two distinct contexts can share canonical bytes. A plain
+    /// `key=value\0` join would *not*: `{"a": "b=c"}` and `{"a=b": "c"}` both
+    /// flatten to `a=b=c`, which would silently derive identical key material
+    /// (the bytes feed the HKDF `info` string and the audit context hash). An
+    /// empty context still serializes to an empty byte string.
     pub fn to_canonical_bytes(&self) -> Vec<u8> {
         let mut bytes = Vec::new();
-        for (i, (k, v)) in self.entries.iter().enumerate() {
-            if i > 0 {
-                bytes.push(0); // NUL separator
-            }
+        for (k, v) in &self.entries {
+            bytes.extend_from_slice(&(k.len() as u64).to_le_bytes());
             bytes.extend_from_slice(k.as_bytes());
-            bytes.push(b'=');
+            bytes.extend_from_slice(&(v.len() as u64).to_le_bytes());
             bytes.extend_from_slice(v.as_bytes());
         }
         bytes
@@ -366,9 +371,10 @@ impl KeyDeriver for DeterministicTestDeriver {
         }
 
         // info = domain_sep || 0xff || epoch_be(8) || 0xff || canonical_context
-        // The 0xff markers are field separators that, combined with the
-        // fixed-width epoch field, ensure no two distinct (domain, epoch,
-        // context) tuples produce a colliding info string.
+        // The 0xff markers separate the domain from the fixed-width epoch from
+        // the trailing canonical context; the context itself is internally
+        // length-prefixed (see `to_canonical_bytes`), so no two distinct
+        // (domain, epoch, context) tuples produce a colliding info string.
         let mut info = Vec::new();
         info.extend_from_slice(request.domain.separator());
         info.push(0xff);
@@ -626,6 +632,18 @@ mod tests {
 
     fn test_master_key() -> Vec<u8> {
         b"test-master-key-32-bytes-long!!!".to_vec()
+    }
+
+    /// Build the expected length-prefixed canonical encoding of one
+    /// `(key, value)` entry, mirroring `DerivationContext::to_canonical_bytes`
+    /// (`len(key) u64 LE || key || len(value) u64 LE || value`).
+    fn lp_entry(key: &str, value: &str) -> Vec<u8> {
+        let mut b = Vec::new();
+        b.extend_from_slice(&(key.len() as u64).to_le_bytes());
+        b.extend_from_slice(key.as_bytes());
+        b.extend_from_slice(&(value.len() as u64).to_le_bytes());
+        b.extend_from_slice(value.as_bytes());
+        b
     }
 
     // -- KeyDomain basics --
@@ -1347,17 +1365,19 @@ mod tests {
         let ctx = DerivationContext::with("key", "val");
         assert_eq!(ctx.len(), 1);
         assert!(!ctx.is_empty());
-        assert_eq!(ctx.to_canonical_bytes(), b"key=val");
+        assert_eq!(ctx.to_canonical_bytes(), lp_entry("key", "val"));
     }
 
     #[test]
-    fn context_nul_separator_between_entries() {
+    fn context_length_prefixed_between_entries() {
         let mut ctx = DerivationContext::empty();
         ctx.add("a", "1");
         ctx.add("b", "2");
         let bytes = ctx.to_canonical_bytes();
-        // Format: a=1\0b=2
-        assert_eq!(bytes, b"a=1\0b=2");
+        // sorted by key: len-prefixed (a,1) then len-prefixed (b,2)
+        let mut expected = lp_entry("a", "1");
+        expected.extend(lp_entry("b", "2"));
+        assert_eq!(bytes, expected);
     }
 
     #[test]
@@ -1366,19 +1386,52 @@ mod tests {
         ctx.add("k", "old");
         ctx.add("k", "new");
         assert_eq!(ctx.len(), 1);
-        assert_eq!(ctx.to_canonical_bytes(), b"k=new");
+        assert_eq!(ctx.to_canonical_bytes(), lp_entry("k", "new"));
     }
 
     #[test]
     fn context_empty_value() {
         let ctx = DerivationContext::with("key", "");
-        assert_eq!(ctx.to_canonical_bytes(), b"key=");
+        assert_eq!(ctx.to_canonical_bytes(), lp_entry("key", ""));
     }
 
     #[test]
     fn context_empty_key() {
         let ctx = DerivationContext::with("", "val");
-        assert_eq!(ctx.to_canonical_bytes(), b"=val");
+        assert_eq!(ctx.to_canonical_bytes(), lp_entry("", "val"));
+    }
+
+    #[test]
+    fn context_separator_ambiguity_does_not_collide() {
+        // Regression: a plain `key=value\0` join flattens both of these to
+        // `a=b=c`, deriving identical key material. Length-prefixing keeps
+        // them distinct.
+        let ctx_a = DerivationContext::with("a", "b=c");
+        let ctx_b = DerivationContext::with("a=b", "c");
+        assert_ne!(ctx_a.to_canonical_bytes(), ctx_b.to_canonical_bytes());
+
+        let deriver = DeterministicTestDeriver;
+        let epoch = SecurityEpoch::from_raw(1);
+        let key_a = deriver
+            .derive(&DerivationRequest {
+                master_key: test_master_key(),
+                domain: KeyDomain::Session,
+                epoch,
+                context: ctx_a,
+                output_len: 32,
+            })
+            .expect("derive a");
+        let key_b = deriver
+            .derive(&DerivationRequest {
+                master_key: test_master_key(),
+                domain: KeyDomain::Session,
+                epoch,
+                context: ctx_b,
+                output_len: 32,
+            })
+            .expect("derive b");
+        assert_ne!(key_a.key_bytes, key_b.key_bytes);
+        assert_ne!(key_a.context_hash, key_b.context_hash);
     }
 
     // ── Enrichment: output length boundaries ─────────────────────
@@ -1928,11 +1981,12 @@ mod tests {
         ctx.add("apple", "a");
         ctx.add("mango", "m");
         let bytes = ctx.to_canonical_bytes();
-        let s = String::from_utf8_lossy(&bytes);
-        // BTreeMap sorts keys alphabetically: apple, mango, zebra
-        assert!(s.starts_with("apple=a"));
-        assert!(s.contains("mango=m"));
-        assert!(s.ends_with("zebra=z"));
+        // BTreeMap sorts keys alphabetically: apple, mango, zebra. Each entry
+        // is length-prefixed (see `to_canonical_bytes`).
+        let mut expected = lp_entry("apple", "a");
+        expected.extend(lp_entry("mango", "m"));
+        expected.extend(lp_entry("zebra", "z"));
+        assert_eq!(bytes, expected);
     }
 
     #[test]

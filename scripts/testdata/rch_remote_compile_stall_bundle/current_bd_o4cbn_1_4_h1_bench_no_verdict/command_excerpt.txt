@@ -1,0 +1,4 @@
+Selected worker: vmi1156319
+Executing command remotely: cargo bench --bench hot_paths -- --save-baseline post_h1 real_runtime_hot_paths
+Compiling frankenengine-engine v0.1.0
+No Criterion verdict was emitted before build 29890796996001804 was cancelled.

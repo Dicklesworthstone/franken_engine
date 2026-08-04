@@ -22,6 +22,7 @@ const EXPECTED_SCENARIOS: &[&str] = &[
     "proxy_trap_authority_smuggling",
     "reflect_apply_authority_smuggling",
     "shell_command_injection_package_script",
+    "smuggle_flow_via_unanalyzed_construct",
     "supply_chain_backdoor_execution",
     "typed_effect_laundering_downcast",
     "with_block_scope_smuggling",

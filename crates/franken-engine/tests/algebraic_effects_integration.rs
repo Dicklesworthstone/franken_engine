@@ -7,6 +7,9 @@
 use frankenengine_engine::algebraic_effects::*;
 use frankenengine_engine::capability::RuntimeCapability;
 use frankenengine_engine::security_epoch::SecurityEpoch;
+use frankenengine_extension_host::process_spawn::{
+    ProcessLaunch, ProcessSpawnRequest, ProcessStdio,
+};
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
@@ -221,35 +224,46 @@ fn test_net_connect_effect() {
 #[test]
 fn test_proc_spawn_effect() {
     let mut env = BTreeMap::new();
-    env.insert("PATH".to_string(), "/usr/bin".to_string());
+    env.insert("LANG".to_string(), "C".to_string());
 
     let effect = ProcSpawnEffect {
-        command: "echo".to_string(),
-        args: vec!["hello".to_string()],
-        env: env.clone(),
-        cwd: Some("/tmp".to_string()),
+        request: ProcessSpawnRequest::Run {
+            launch: ProcessLaunch {
+                executable: "/usr/bin/echo".to_string(),
+                argv: vec!["hello".to_string()],
+                env: env.clone(),
+                cwd: Some("/tmp".to_string()),
+                shell: false,
+                stdio: ProcessStdio::default(),
+            },
+            stdin: Vec::new(),
+            timeout_millis: Some(1_000),
+        },
     };
 
     assert_eq!(Effect::effect_name(&effect), "proc:spawn");
     assert!(
         Effect::required_capabilities(&effect)
-            .custom_caps
-            .contains("proc:spawn")
+            .runtime_caps
+            .contains(&RuntimeCapability::ProcessSpawn)
     );
 
     let params = Effect::parameters(&effect);
-    let (cmd, args, env_params, cwd) = params
-        .downcast_ref::<(
-            String,
-            Vec<String>,
-            BTreeMap<String, String>,
-            Option<String>,
-        )>()
-        .unwrap();
-    assert_eq!(*cmd, "echo");
-    assert_eq!(*args, vec!["hello"]);
-    assert_eq!(*env_params, env);
-    assert_eq!(*cwd, Some("/tmp".to_string()));
+    let request = params.downcast_ref::<ProcessSpawnRequest>().unwrap();
+    assert_eq!(request, &effect.request);
+    let ProcessSpawnRequest::Run {
+        launch,
+        timeout_millis,
+        ..
+    } = request
+    else {
+        panic!("expected a synchronous process run request")
+    };
+    assert_eq!(launch.executable, "/usr/bin/echo");
+    assert_eq!(launch.argv, vec!["hello"]);
+    assert_eq!(launch.env, env);
+    assert_eq!(launch.cwd.as_deref(), Some("/tmp"));
+    assert_eq!(*timeout_millis, Some(1_000));
 }
 
 /// Test policy request effect.

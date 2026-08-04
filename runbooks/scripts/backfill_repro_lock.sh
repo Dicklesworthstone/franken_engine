@@ -7,7 +7,8 @@
 # docs/REPRODUCIBILITY_CONTRACT.md.
 #
 # Usage:
-#   runbooks/scripts/backfill_repro_lock.sh <gate-name> <bundle-dir> [verification-command]
+#   runbooks/scripts/backfill_repro_lock.sh \
+#       <gate-name> <bundle-dir> [verification-command] [replay-command]
 #
 # Example:
 #   runbooks/scripts/backfill_repro_lock.sh \
@@ -29,13 +30,16 @@ export LC_ALL=C
 export LANG=C
 export LANGUAGE=C
 
-readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-readonly PROJECT_DIR="$(cd "${SCRIPT_DIR}/../.." && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+readonly SCRIPT_DIR
+PROJECT_DIR="$(cd "${SCRIPT_DIR}/../.." && pwd)"
+readonly PROJECT_DIR
 cd "${PROJECT_DIR}"
 
 usage() {
   cat >&2 <<'EOF'
-Usage: runbooks/scripts/backfill_repro_lock.sh <gate-name> <bundle-dir> [verification-command]
+Usage: runbooks/scripts/backfill_repro_lock.sh \
+  <gate-name> <bundle-dir> [verification-command] [replay-command]
 
 Arguments:
   gate-name              kebab-case name of the gate emitting the bundle
@@ -45,6 +49,13 @@ Arguments:
   verification-command   (optional) shell command that re-derives the
                          bundle deterministically. Default:
                          './scripts/run_${gate_name}.sh ci'.
+                         Stored as operator-facing metadata only.
+  replay-command         (optional) authoritative command executed by the
+                         third-party verifier. It must be one bare `cargo ...`
+                         command or one repository `./scripts/...` command,
+                         without shell operators, env assignments, rch, or a
+                         path-qualified cargo binary. Defaults to
+                         verification-command when that command is canonical.
 
 Environment:
   BACKFILL_REPRO_LOCK_OVERWRITE
@@ -52,7 +63,41 @@ Environment:
 EOF
 }
 
-if [[ $# -lt 2 ]]; then
+canonical_replay_command() {
+  local command_text="$1"
+  local first_token token
+  local -a command_argv=()
+
+  [[ -n "${command_text}" && "${command_text}" != *$'\n'* ]] || return 1
+
+  # The verifier does not interpret shell syntax. Keep the lock grammar small
+  # enough that whitespace splitting is unambiguous and every token is passed
+  # literally to exec.
+  if [[ ! "${command_text}" =~ ^[[:alnum:]_./:+,@%=-]+([[:blank:]]+[[:alnum:]_./:+,@%=-]+)*$ ]]; then
+    return 1
+  fi
+
+  read -r -a command_argv <<<"${command_text}"
+  ((${#command_argv[@]} > 0)) || return 1
+  first_token="${command_argv[0]}"
+
+  for token in "${command_argv[@]}"; do
+    case "${token}" in
+      RUSTFLAGS=*|RUSTFLAGS+=*|CARGO_ENCODED_RUSTFLAGS=*|CARGO_ENCODED_RUSTFLAGS+=*|--config|--config=*)
+        return 1
+        ;;
+    esac
+  done
+
+  if [[ "${first_token}" == "cargo" ]]; then
+    return 0
+  fi
+
+  [[ "${first_token}" =~ ^\./scripts/[[:alnum:]_./-]+\.sh$ ]] || return 1
+  [[ "${first_token}" != *"/../"* && "${first_token}" != *"/./"* && "${first_token}" != *"//"* ]]
+}
+
+if [[ $# -lt 2 || $# -gt 4 ]]; then
   usage
   exit 64
 fi
@@ -60,6 +105,15 @@ fi
 gate_name="$1"
 bundle_dir="$2"
 verification_command="${3:-./scripts/run_${gate_name}.sh ci}"
+replay_command="${4:-${verification_command}}"
+
+if ! canonical_replay_command "${replay_command}"; then
+  echo "ERROR: replay-command is not a canonical bare cargo or ./scripts command" >&2
+  if [[ $# -lt 4 ]]; then
+    echo "ERROR: verification-command is metadata only when it contains env/rch/shell syntax; pass a separate replay-command" >&2
+  fi
+  exit 64
+fi
 
 if ! command -v jq >/dev/null 2>&1; then
   echo "ERROR: jq is required" >&2
@@ -94,6 +148,7 @@ lock_json="$(jq -n \
   --arg gate_name "${gate_name}" \
   --arg bundle_dir "${bundle_dir}" \
   --arg verification_command "${verification_command}" \
+  --arg replay_command "${replay_command}" \
   --arg generated_at_utc "${generated_at_utc}" \
   --arg lock_id "${lock_id}" \
   --arg manifest_id "${manifest_id}" \
@@ -130,10 +185,10 @@ lock_json="$(jq -n \
     lock_id: $lock_id,
     manifest_id: $manifest_id,
     replay: {
-      command_sequence: [$verification_command],
+      command_sequence: [$replay_command],
       environment_vars: {
         CARGO_INCREMENTAL: "0",
-        RUSTFLAGS: "-C linker=cc"
+        RUSTFLAGS: "-Clinker-features=-lld"
       },
       working_directory: "/data/projects/franken_engine"
     },
@@ -164,5 +219,6 @@ printf -- '- Wrote repro.lock: %s\n' "${LOCK_PATH}"
 printf -- '- Gate: %s\n' "${gate_name}"
 printf -- '- Source commit: %s\n' "${source_commit}"
 printf -- '- Verification command: %s\n' "${verification_command}"
+printf -- '- Replay command: %s\n' "${replay_command}"
 printf -- '\nNext step: re-run the audit to confirm coverage:\n'
 printf -- '  runbooks/scripts/audit_repro_lock_coverage.sh\n'

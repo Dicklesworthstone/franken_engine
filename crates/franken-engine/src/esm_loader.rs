@@ -220,6 +220,11 @@ impl EsmModule {
         }
     }
 
+    /// Create a WebAssembly module record for the ESM loader graph.
+    pub fn wasm(specifier: impl Into<String>, source: impl Into<String>) -> Self {
+        Self::new(specifier, source, ModuleSyntax::Wasm)
+    }
+
     /// Add an import entry.
     pub fn add_import(&mut self, entry: ImportEntry) {
         self.dependencies.insert(entry.module_request.clone());

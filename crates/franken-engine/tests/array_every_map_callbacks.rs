@@ -37,7 +37,7 @@ fn module(
     function_table: Vec<Ir3FunctionDesc>,
 ) -> Ir3Module {
     let mut module = Ir3Module::new(ContentHash::compute(source_label.as_bytes()), source_label);
-    module.constant_pool = pool.into_iter().map(str::to_string).collect();
+    module.constant_pool = pool.into_iter().map(Into::into).collect();
     module.required_capabilities = instructions
         .iter()
         .filter_map(|instruction| match instruction {

@@ -84,11 +84,11 @@ fn three_module_graph(id: &str, kind: EntryKind) -> Entrygraph {
 #[test]
 fn budget_exhaustion_marks_remaining_modules() {
     let mut cfg = default_config();
-    cfg.max_compile_time_micros = 5; // Very tight budget: 5 microseconds
+    cfg.max_compile_time_micros = 11; // Exactly enough for the root module.
     cfg.min_module_count = 1;
 
     // Each module simulates compile_time = source_size_bytes / 100 + 1
-    // Module with 1000 bytes -> 11 micros (exceeds budget)
+    // Module with 1000 bytes -> 11 micros (consumes the full budget)
     let graph = make_graph(
         "budget-test",
         EntryKind::AppEntry,

@@ -1,0 +1,136 @@
+---
+source: crates/franken-engine/tests/ast_parser_golden_integration.rs
+assertion_line: 79
+expression: scrubbed_actual
+---
+{
+  "goal": "Script",
+  "body": [
+    {
+      "VariableDeclaration": {
+        "kind": "Const",
+        "declarations": [
+          {
+            "pattern": {
+              "Identifier": "basic"
+            },
+            "initializer": {
+              "TemplateLiteral": {
+                "quasis": [
+                  "Hello, world!"
+                ],
+                "expressions": []
+              }
+            },
+            "span": {
+              "start_offset": "[START_OFFSET]",
+              "end_offset": "[END_OFFSET]",
+              "start_line": "[START_LINE]",
+              "start_column": "[START_COLUMN]",
+              "end_line": "[END_LINE]",
+              "end_column": "[END_COLUMN]"
+            }
+          }
+        ],
+        "span": {
+          "start_offset": "[START_OFFSET]",
+          "end_offset": "[END_OFFSET]",
+          "start_line": "[START_LINE]",
+          "start_column": "[START_COLUMN]",
+          "end_line": "[END_LINE]",
+          "end_column": "[END_COLUMN]"
+        }
+      }
+    },
+    {
+      "VariableDeclaration": {
+        "kind": "Const",
+        "declarations": [
+          {
+            "pattern": {
+              "Identifier": "withVariable"
+            },
+            "initializer": {
+              "TemplateLiteral": {
+                "quasis": [
+                  "Hello, ",
+                  "!"
+                ],
+                "expressions": [
+                  {
+                    "Identifier": "name"
+                  }
+                ]
+              }
+            },
+            "span": {
+              "start_offset": "[START_OFFSET]",
+              "end_offset": "[END_OFFSET]",
+              "start_line": "[START_LINE]",
+              "start_column": "[START_COLUMN]",
+              "end_line": "[END_LINE]",
+              "end_column": "[END_COLUMN]"
+            }
+          }
+        ],
+        "span": {
+          "start_offset": "[START_OFFSET]",
+          "end_offset": "[END_OFFSET]",
+          "start_line": "[START_LINE]",
+          "start_column": "[START_COLUMN]",
+          "end_line": "[END_LINE]",
+          "end_column": "[END_COLUMN]"
+        }
+      }
+    },
+    {
+      "VariableDeclaration": {
+        "kind": "Const",
+        "declarations": [
+          {
+            "pattern": {
+              "Identifier": "multiline"
+            },
+            "initializer": {
+              "TemplateLiteral": {
+                "quasis": [
+                  "\n  Line 1\n  Line 2\n  Value: ",
+                  "\n"
+                ],
+                "expressions": [
+                  {
+                    "Identifier": "value"
+                  }
+                ]
+              }
+            },
+            "span": {
+              "start_offset": "[START_OFFSET]",
+              "end_offset": "[END_OFFSET]",
+              "start_line": "[START_LINE]",
+              "start_column": "[START_COLUMN]",
+              "end_line": "[END_LINE]",
+              "end_column": "[END_COLUMN]"
+            }
+          }
+        ],
+        "span": {
+          "start_offset": "[START_OFFSET]",
+          "end_offset": "[END_OFFSET]",
+          "start_line": "[START_LINE]",
+          "start_column": "[START_COLUMN]",
+          "end_line": "[END_LINE]",
+          "end_column": "[END_COLUMN]"
+        }
+      }
+    }
+  ],
+  "span": {
+    "start_offset": "[START_OFFSET]",
+    "end_offset": "[END_OFFSET]",
+    "start_line": "[START_LINE]",
+    "start_column": "[START_COLUMN]",
+    "end_line": "[END_LINE]",
+    "end_column": "[END_COLUMN]"
+  }
+}

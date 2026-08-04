@@ -13,19 +13,16 @@
 //!
 //! Plan reference: bd-cixqu.2.1
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 use std::time::Instant;
 
 use serde::{Deserialize, Serialize};
 
 use crate::fleet_convergence::{ContainmentThresholds, PartitionMode};
 use crate::fleet_immune_protocol::{
-    ContainmentAction, FleetProtocolState, GossipConfig, MessageSignature, NodeId, ProtocolError,
-    QuorumCheckpoint,
+    FleetProtocolState, GossipConfig, MessageSignature, NodeId, ProtocolError,
 };
-use crate::fleet_simulator::{
-    FleetSimulator, FleetSimulatorError, MessagePayload, QuarantineStats,
-};
+use crate::fleet_simulator::{FleetSimulator, FleetSimulatorError, QuarantineStats};
 use crate::hash_tiers::AuthenticityHash;
 
 // ---------------------------------------------------------------------------
@@ -145,8 +142,10 @@ impl FleetConvergenceHarness {
 
     /// Create a new fleet convergence harness with N nodes.
     pub fn with_node_count(node_count: usize) -> Result<Self, ConvergenceHarnessError> {
-        let mut config = ConvergenceHarnessConfig::default();
-        config.default_node_count = node_count;
+        let config = ConvergenceHarnessConfig {
+            default_node_count: node_count,
+            ..Default::default()
+        };
         Self::with_config(config)
     }
 

@@ -16,16 +16,18 @@ use sha2::{Digest, Sha256};
 
 pub use crate::ast::ParseGoal;
 use crate::ast::{
-    ArrowBody, AssignmentOperator, BinaryOperator, BindingPattern, BlockStatement, BreakStatement,
-    CatchClause, ClassDeclaration, ContinueStatement, DoWhileStatement, ExportDeclaration,
-    ExportKind, Expression, ExpressionStatement, ForInStatement, ForOfStatement, ForStatement,
-    FunctionDeclaration, FunctionParam, IfStatement, ImportClause, ImportDeclaration,
-    ImportSpecifier, LabeledStatement, MethodDefinition, MethodKind, ObjectPatternProperty,
-    ObjectProperty, ReturnStatement, SourceSpan, Statement, SwitchCase, SwitchStatement,
-    SyntaxTree, ThrowStatement, TryCatchStatement, UnaryOperator, VariableDeclaration,
-    VariableDeclarationKind, VariableDeclarator, WhileStatement, WithStatement,
+    ArrowBody, AssignmentOperator, AssignmentStrictness, BinaryOperator, BindingPattern,
+    BlockStatement, BreakStatement, CatchClause, ClassDeclaration, ContinueStatement,
+    DoWhileStatement, ExportDeclaration, ExportKind, Expression, ExpressionStatement,
+    ForInStatement, ForOfStatement, ForStatement, FunctionDeclaration, FunctionParam, IfStatement,
+    ImportClause, ImportDeclaration, ImportSpecifier, LabeledStatement, MethodDefinition,
+    MethodKind, NamedExportClause, ObjectPatternProperty, ObjectProperty, ObjectPropertyKind,
+    ReturnStatement, SourceSpan, Statement, SwitchCase, SwitchStatement, SyntaxTree,
+    ThrowStatement, TryCatchStatement, UnaryOperator, VariableDeclaration, VariableDeclarationKind,
+    VariableDeclarator, WhileStatement, WithStatement,
 };
 use crate::deterministic_serde::{self, CanonicalValue};
+use crate::js_string::JsString;
 
 pub type ParseResult<T> = Result<T, ParseError>;
 
@@ -1003,7 +1005,32 @@ impl ParseEventIr {
                     None,
                 )
             })?;
-        self.materialize_with_tree(&parsed, Some(source_text))
+        let materialization_tree = self.historical_root_span_tree(&parsed).unwrap_or(parsed);
+        self.materialize_with_tree(&materialization_tree, Some(source_text))
+    }
+
+    fn historical_root_span_tree(&self, current: &SyntaxTree) -> Option<SyntaxTree> {
+        if current.span.end_column == 1 {
+            return None;
+        }
+        let completed = self.events.last()?;
+        if completed.kind != ParseEventKind::ParseCompleted
+            || completed.payload_kind.as_deref() != Some("syntax_tree")
+        {
+            return None;
+        }
+
+        let mut historical_span = current.span.clone();
+        historical_span.end_column = 1;
+        if completed.span.as_ref() != Some(&historical_span) {
+            return None;
+        }
+
+        let mut historical_tree = current.clone();
+        historical_tree.span = historical_span;
+        let historical_hash = historical_tree.canonical_hash();
+        (completed.payload_hash.as_deref() == Some(historical_hash.as_str()))
+            .then_some(historical_tree)
     }
 
     /// Materialize a deterministic AST witness from this event stream and a canonical AST.
@@ -2048,6 +2075,11 @@ struct ParseExecutionContext<'a> {
     /// Current statement nesting depth (if/for/while/try/switch/function bodies).
     /// Guards against stack overflow from deeply nested statements.
     statement_depth: u64,
+    /// Current binding-pattern nesting depth (destructuring: `[[[...]]]`,
+    /// `{a:{b:{c:...}}}`). Guards against stack overflow from deeply nested
+    /// destructuring patterns, whose recursive descent is separate from the
+    /// statement/expression guards (bd-c4lhp).
+    pattern_depth: u64,
     /// Whether the current parsing context is in strict mode.
     strict_mode: bool,
 }
@@ -2076,9 +2108,93 @@ impl<'a> ParseExecutionContext<'a> {
 /// A logical line that may span multiple physical lines (for block statements).
 struct LogicalLine {
     text: String,
+    /// Maps every byte boundary in `text` back to the corresponding byte
+    /// boundary in the physical source. Normalized separator spaces can span
+    /// an arbitrary physical gap, so offsets cannot be reconstructed from
+    /// `byte_offset` alone.
+    source_boundaries: Vec<usize>,
     byte_offset: u64,
     start_line: u64,
     end_line: u64,
+}
+
+impl LogicalLine {
+    fn source_offset_at(&self, logical_offset: usize) -> usize {
+        *self
+            .source_boundaries
+            .get(logical_offset)
+            .expect("logical-line boundary map covers normalized text")
+    }
+}
+
+fn append_source_fragment(
+    logical_text: &mut String,
+    source_boundaries: &mut Vec<usize>,
+    fragment: &str,
+    source_start: usize,
+) {
+    if source_boundaries.is_empty() {
+        debug_assert!(logical_text.is_empty());
+        source_boundaries.push(source_start);
+    } else {
+        debug_assert_eq!(
+            source_boundaries.len(),
+            logical_text.len().saturating_add(1)
+        );
+        debug_assert_eq!(source_boundaries.last().copied(), Some(source_start));
+    }
+
+    logical_text.push_str(fragment);
+    source_boundaries
+        .extend((1..=fragment.len()).map(|length| source_start.saturating_add(length)));
+    debug_assert_eq!(
+        source_boundaries.len(),
+        logical_text.len().saturating_add(1)
+    );
+}
+
+fn append_normalized_separator(
+    logical_text: &mut String,
+    source_boundaries: &mut Vec<usize>,
+    following_source_offset: usize,
+) {
+    debug_assert_eq!(
+        source_boundaries.len(),
+        logical_text.len().saturating_add(1)
+    );
+    debug_assert!(
+        source_boundaries
+            .last()
+            .is_some_and(|offset| *offset <= following_source_offset)
+    );
+    logical_text.push(' ');
+    source_boundaries.push(following_source_offset);
+}
+
+fn logical_line_from_buffer(
+    text: &str,
+    source_boundaries: &[usize],
+    start_line: u64,
+    end_line: u64,
+) -> Option<LogicalLine> {
+    debug_assert_eq!(source_boundaries.len(), text.len().saturating_add(1));
+    let leading = text.len().saturating_sub(text.trim_start().len());
+    let trimmed_end = text.trim_end().len();
+    if trimmed_end <= leading {
+        return None;
+    }
+
+    let text = text[leading..trimmed_end].to_string();
+    let source_boundaries = source_boundaries[leading..=trimmed_end].to_vec();
+    let byte_offset = source_boundaries[0] as u64;
+    debug_assert_eq!(source_boundaries.len(), text.len().saturating_add(1));
+    Some(LogicalLine {
+        text,
+        source_boundaries,
+        byte_offset,
+        start_line,
+        end_line,
+    })
 }
 
 fn merge_logical_lines_keyword_allows_regex(identifier: &str) -> bool {
@@ -2138,8 +2254,8 @@ fn merge_logical_lines_requires_continuation(
 }
 
 /// Replace comment bytes with spaces so the line-merge and statement-segment
-/// passes never observe comment characters. Newlines are preserved (for line/
-/// column accuracy) and every blanked character emits exactly `len_utf8()`
+/// passes never observe comment characters. ECMAScript line terminators are
+/// preserved for line/column accuracy, and every blanked character emits exactly `len_utf8()`
 /// spaces, so total byte length and the byte offset of every non-comment byte
 /// are identical to the original source — spans stay accurate.
 ///
@@ -2160,9 +2276,9 @@ fn strip_comments_to_whitespace(text: &str) -> String {
     let mut chars = text.chars().peekable();
     while let Some(ch) = chars.next() {
         if in_line_comment {
-            if ch == '\n' {
+            if is_ecmascript_line_terminator(ch) {
                 in_line_comment = false;
-                out.push('\n');
+                out.push(ch);
             } else {
                 push_blanked(&mut out, ch);
             }
@@ -2174,8 +2290,8 @@ fn strip_comments_to_whitespace(text: &str) -> String {
                 push_blanked(&mut out, '*');
                 push_blanked(&mut out, '/');
                 in_block_comment = false;
-            } else if ch == '\n' {
-                out.push('\n');
+            } else if is_ecmascript_line_terminator(ch) {
+                out.push(ch);
             } else {
                 push_blanked(&mut out, ch);
             }
@@ -2257,7 +2373,7 @@ fn strip_comments_to_whitespace(text: &str) -> String {
                 last_significant = Some(ch);
                 trailing_identifier.clear();
             }
-            ch if ch.is_ascii_whitespace() => {
+            ch if ch.is_ascii_whitespace() || is_ecmascript_line_terminator(ch) => {
                 out.push(ch);
             }
             ch if ch.is_ascii_alphabetic() || ch == '_' || ch == '$' => {
@@ -2293,14 +2409,86 @@ fn push_blanked(out: &mut String, ch: char) {
     }
 }
 
+#[inline]
+fn is_ecmascript_line_terminator(ch: char) -> bool {
+    matches!(ch, '\r' | '\n' | '\u{2028}' | '\u{2029}')
+}
+
+#[derive(Debug, Clone, Copy)]
+struct PhysicalLine<'a> {
+    segment: &'a str,
+    content: &'a str,
+    terminator: &'a str,
+}
+
+fn source_line_terminator_ranges(source: &str) -> Vec<(usize, usize)> {
+    let mut ranges = Vec::new();
+    let mut chars = source.char_indices().peekable();
+    while let Some((index, ch)) = chars.next() {
+        match ch {
+            '\r' => {
+                let end = if matches!(chars.peek(), Some((_, '\n'))) {
+                    chars.next().map_or(index.saturating_add(1), |(next, ch)| {
+                        next.saturating_add(ch.len_utf8())
+                    })
+                } else {
+                    index.saturating_add(ch.len_utf8())
+                };
+                ranges.push((index, end));
+            }
+            ch if is_ecmascript_line_terminator(ch) => {
+                ranges.push((index, index.saturating_add(ch.len_utf8())));
+            }
+            _ => {}
+        }
+    }
+    ranges
+}
+
+fn source_position_at_offset(
+    source_offset: usize,
+    line_terminators: &[(usize, usize)],
+) -> (u64, u64) {
+    let completed_lines = line_terminators.partition_point(|(_, end)| *end <= source_offset);
+    let line_start = completed_lines
+        .checked_sub(1)
+        .map_or(0, |previous| line_terminators[previous].1);
+    (
+        completed_lines.saturating_add(1) as u64,
+        source_offset.saturating_sub(line_start).saturating_add(1) as u64,
+    )
+}
+
+fn physical_line_segments(source: &str) -> Vec<PhysicalLine<'_>> {
+    let mut lines = Vec::new();
+    let mut start = 0usize;
+    for (terminator_start, terminator_end) in source_line_terminator_ranges(source) {
+        lines.push(PhysicalLine {
+            segment: &source[start..terminator_end],
+            content: &source[start..terminator_start],
+            terminator: &source[terminator_start..terminator_end],
+        });
+        start = terminator_end;
+    }
+    if start < source.len() {
+        lines.push(PhysicalLine {
+            segment: &source[start..],
+            content: &source[start..],
+            terminator: "",
+        });
+    }
+    lines
+}
+
 /// Merge physical lines into logical lines by tracking brace/paren/bracket depth.
 /// When a line ends with unbalanced delimiters, subsequent lines are merged until balance.
 fn merge_logical_lines(text: &str) -> Vec<LogicalLine> {
+    let physical_lines = physical_line_segments(text);
     let mut result = Vec::with_capacity(16);
     let mut current_text = String::new();
-    let mut current_byte_offset: u64 = 0;
+    let mut current_source_boundaries = Vec::new();
     let mut current_start_line: u64 = 0;
-    let mut byte_offset: u64 = 0;
+    let mut byte_offset: usize = 0;
     let mut brace_depth: i64 = 0;
     let mut paren_depth: i64 = 0;
     let mut bracket_depth: i64 = 0;
@@ -2313,37 +2501,99 @@ fn merge_logical_lines(text: &str) -> Vec<LogicalLine> {
     let mut last_significant: Option<char> = None;
     let mut trailing_identifier = String::new();
 
-    for (line_idx, segment) in text.split_inclusive('\n').enumerate() {
+    for (line_idx, physical_line) in physical_lines.iter().copied().enumerate() {
         let line_no = (line_idx as u64).saturating_add(1);
-        let line = segment
-            .strip_suffix('\n')
-            .unwrap_or(segment)
-            .strip_suffix('\r')
-            .unwrap_or(segment.strip_suffix('\n').unwrap_or(segment));
+        let segment = physical_line.segment;
+        let line = physical_line.content;
+        let line_ending = physical_line.terminator;
 
         if line_idx == 0 {
             let line_without_bom = line.strip_prefix('\u{feff}').unwrap_or(line);
             if line_without_bom.starts_with("#!") {
-                byte_offset = byte_offset.saturating_add(segment.len() as u64);
+                byte_offset = byte_offset.saturating_add(segment.len());
                 continue;
             }
         }
 
         if !accumulating {
-            current_text.clear();
-            current_byte_offset = byte_offset;
-            current_start_line = line_no;
-            last_significant = None;
-            trailing_identifier.clear();
-            current_text.push_str(line);
-        } else {
-            let preserve_leading_whitespace =
-                in_quote.is_some() || in_block_comment || in_regex_literal;
-            current_text.push(' ');
-            if preserve_leading_whitespace {
-                current_text.push_str(line);
+            // bd-suwvw: a balanced previous logical line followed by a line
+            // STARTING with `.` + identifier is a method-chain continuation
+            // (`Promise.resolve()\n  .then(cb)\n  .then(cb2)` — the common
+            // formatter layout). Without this, the leading-dot line becomes
+            // its own statement and misparses. Only merge when the previous
+            // line did not end with an explicit `;` (after which a leading
+            // dot cannot continue the expression) and the dot is followed by
+            // an identifier start (so `.5` numeric literals never merge).
+            let trimmed_line = line.trim_start();
+            let dot_continues_previous = trimmed_line.starts_with('.')
+                && trimmed_line[1..]
+                    .chars()
+                    .next()
+                    .is_some_and(|c| c.is_ascii_alphabetic() || c == '_' || c == '$')
+                && result
+                    .last()
+                    .is_some_and(|prev: &LogicalLine| !prev.text.ends_with(';'));
+            if dot_continues_previous {
+                let prev = result.pop().expect("checked non-empty above");
+                current_text = prev.text;
+                current_source_boundaries = prev.source_boundaries;
+                let leading = line.len().saturating_sub(trimmed_line.len());
+                let trimmed_source_offset = byte_offset.saturating_add(leading);
+                append_normalized_separator(
+                    &mut current_text,
+                    &mut current_source_boundaries,
+                    trimmed_source_offset,
+                );
+                append_source_fragment(
+                    &mut current_text,
+                    &mut current_source_boundaries,
+                    trimmed_line,
+                    trimmed_source_offset,
+                );
+                current_start_line = prev.start_line;
+                last_significant = None;
+                trailing_identifier.clear();
             } else {
-                current_text.push_str(line.trim_start());
+                current_text.clear();
+                current_source_boundaries.clear();
+                current_start_line = line_no;
+                last_significant = None;
+                trailing_identifier.clear();
+                append_source_fragment(
+                    &mut current_text,
+                    &mut current_source_boundaries,
+                    line,
+                    byte_offset,
+                );
+            }
+        } else {
+            if in_quote.is_some() {
+                append_source_fragment(
+                    &mut current_text,
+                    &mut current_source_boundaries,
+                    line,
+                    byte_offset,
+                );
+            } else {
+                let preserve_leading_whitespace = in_block_comment || in_regex_literal;
+                let (fragment, fragment_source_offset) = if preserve_leading_whitespace {
+                    (line, byte_offset)
+                } else {
+                    let fragment = line.trim_start();
+                    let leading = line.len().saturating_sub(fragment.len());
+                    (fragment, byte_offset.saturating_add(leading))
+                };
+                append_normalized_separator(
+                    &mut current_text,
+                    &mut current_source_boundaries,
+                    fragment_source_offset,
+                );
+                append_source_fragment(
+                    &mut current_text,
+                    &mut current_source_boundaries,
+                    fragment,
+                    fragment_source_offset,
+                );
             }
         }
 
@@ -2470,7 +2720,21 @@ fn merge_logical_lines(text: &str) -> Vec<LogicalLine> {
             }
         }
 
-        byte_offset = byte_offset.saturating_add(segment.len() as u64);
+        // Preserve physical line terminators while a quoted token is open.
+        // The exact string cooker must distinguish a backslash continuation
+        // (which removes the terminator) from a raw ECMAScript line terminator
+        // (whose validity depends on the literal grammar).
+        if in_quote.is_some() && !line_ending.is_empty() {
+            append_source_fragment(
+                &mut current_text,
+                &mut current_source_boundaries,
+                line_ending,
+                byte_offset.saturating_add(line.len()),
+            );
+            escaped = false;
+        }
+
+        byte_offset = byte_offset.saturating_add(segment.len());
 
         let balanced = brace_depth <= 0
             && paren_depth <= 0
@@ -2484,14 +2748,13 @@ fn merge_logical_lines(text: &str) -> Vec<LogicalLine> {
                 trailing_identifier.as_str(),
             )
         {
-            let trimmed = current_text.trim();
-            if !trimmed.is_empty() {
-                result.push(LogicalLine {
-                    text: trimmed.to_string(),
-                    byte_offset: current_byte_offset,
-                    start_line: current_start_line,
-                    end_line: line_no,
-                });
+            if let Some(logical_line) = logical_line_from_buffer(
+                &current_text,
+                &current_source_boundaries,
+                current_start_line,
+                line_no,
+            ) {
+                result.push(logical_line);
             }
             brace_depth = 0;
             paren_depth = 0;
@@ -2507,16 +2770,15 @@ fn merge_logical_lines(text: &str) -> Vec<LogicalLine> {
         }
     }
 
-    if accumulating {
-        let trimmed = current_text.trim();
-        if !trimmed.is_empty() {
-            result.push(LogicalLine {
-                text: trimmed.to_string(),
-                byte_offset: current_byte_offset,
-                start_line: current_start_line,
-                end_line: text.lines().count().max(1) as u64,
-            });
-        }
+    if accumulating
+        && let Some(logical_line) = logical_line_from_buffer(
+            &current_text,
+            &current_source_boundaries,
+            current_start_line,
+            line_count(text),
+        )
+    {
+        result.push(logical_line);
     }
 
     result
@@ -2546,7 +2808,8 @@ fn parse_source(
         token_count,
         max_recursion_observed: 0,
         statement_depth: 0,
-        strict_mode: false,
+        pattern_depth: 0,
+        strict_mode: goal == ParseGoal::Module,
     };
 
     if source_bytes > options.budget.max_source_bytes {
@@ -2577,35 +2840,32 @@ fn parse_source(
 
     let stripped = strip_comments_to_whitespace(text);
     let logical_lines = merge_logical_lines(&stripped);
+    let source_line_terminators = source_line_terminator_ranges(text);
     let mut statements = Vec::with_capacity(8);
-
-    // Check for "use strict" directive in the first statement of global scripts
-    if !logical_lines.is_empty() {
-        let first_line = &logical_lines[0];
-        if let Some((_start, _end, text)) = split_statement_segments(&first_line.text)
-            .into_iter()
-            .next()
-        {
-            let trimmed_text = text.trim();
-            if is_use_strict_directive(trimmed_text) {
-                context.strict_mode = true;
-            }
-        }
-    }
+    context.strict_mode |= has_use_strict_directive(&stripped);
 
     for logical_line in &logical_lines {
+        debug_assert_eq!(
+            logical_line.byte_offset,
+            logical_line.source_offset_at(0) as u64
+        );
+        debug_assert!(logical_line.start_line <= logical_line.end_line);
         for (start_in_line, end_in_line, statement_text) in
             split_statement_segments(&logical_line.text)
         {
+            let start_offset = logical_line.source_offset_at(start_in_line);
+            let end_offset = logical_line.source_offset_at(end_in_line);
+            let (start_line, start_column) =
+                source_position_at_offset(start_offset, &source_line_terminators);
+            let (end_line, end_column) =
+                source_position_at_offset(end_offset, &source_line_terminators);
             let span = SourceSpan::new(
-                logical_line
-                    .byte_offset
-                    .saturating_add(start_in_line as u64),
-                logical_line.byte_offset.saturating_add(end_in_line as u64),
-                logical_line.start_line,
-                start_in_line.saturating_add(1) as u64,
-                logical_line.end_line,
-                end_in_line.saturating_add(1) as u64,
+                start_offset as u64,
+                end_offset as u64,
+                start_line,
+                start_column,
+                end_line,
+                end_column,
             );
             statements.extend(parse_module_statement_segment(
                 statement_text,
@@ -2617,7 +2877,8 @@ fn parse_source(
     }
 
     let source_len = to_u64(text.len(), source_label, None)?;
-    let span = SourceSpan::new(0, source_len, 1, 1, line_count(text), 1);
+    let (end_line, end_column) = source_end_position(text, source_label)?;
+    let span = SourceSpan::new(0, source_len, 1, 1, end_line, end_column);
     Ok(SyntaxTree {
         goal,
         body: statements,
@@ -2692,7 +2953,7 @@ fn parse_named_declaration_export(
     Ok(Some(vec![
         declaration,
         Statement::Export(ExportDeclaration {
-            kind: ExportKind::NamedClause(clause),
+            kind: ExportKind::NamedClause(clause.into()),
             span,
         }),
     ]))
@@ -2752,13 +3013,21 @@ fn format_named_export_clause(names: &[String]) -> String {
 }
 
 fn line_count(source: &str) -> u64 {
-    let mut count = 1u64;
-    for byte in source.as_bytes() {
-        if *byte == b'\n' {
-            count = count.saturating_add(1);
-        }
-    }
-    count
+    (source_line_terminator_ranges(source).len() as u64).saturating_add(1)
+}
+
+fn source_end_position(source: &str, source_label: &str) -> ParseResult<(u64, u64)> {
+    let terminators = source_line_terminator_ranges(source);
+    let final_line_start = terminators.last().map_or(0, |(_, end)| *end);
+    let end_column = to_u64(
+        source
+            .len()
+            .saturating_sub(final_line_start)
+            .saturating_add(1),
+        source_label,
+        None,
+    )?;
+    Ok(((terminators.len() as u64).saturating_add(1), end_column))
 }
 
 /// Strip one or more leading `label:` prefixes from a statement segment,
@@ -3377,7 +3646,7 @@ fn parse_named_export_clause(
     clause: &str,
     source_label: &str,
     span: &SourceSpan,
-) -> ParseResult<String> {
+) -> ParseResult<NamedExportClause> {
     let clause = clause.trim();
     let Some(inner_and_trailing) = clause.strip_prefix('{') else {
         return Err(ParseError::new(
@@ -3400,8 +3669,9 @@ fn parse_named_export_clause(
     let specifiers = &inner_and_trailing[..close_index];
     validate_named_export_specifiers(specifiers, source_label, span)?;
 
+    let canonical_head = canonicalize_whitespace(&clause[..close_index + 2]);
     let trailing = inner_and_trailing[close_index + 1..].trim();
-    if !trailing.is_empty() {
+    let source = if !trailing.is_empty() {
         let Some(source_raw) = trailing.strip_prefix("from").map(str::trim_start) else {
             return Err(ParseError::new(
                 ParseErrorCode::UnsupportedSyntax,
@@ -3411,17 +3681,19 @@ fn parse_named_export_clause(
             ));
         };
 
-        if parse_quoted_string(source_raw).is_none() {
-            return Err(ParseError::new(
+        Some(parse_quoted_string(source_raw).ok_or_else(|| {
+            ParseError::new(
                 ParseErrorCode::UnsupportedSyntax,
                 "export source must be quoted",
                 source_label.to_string(),
                 Some(span.clone()),
-            ));
-        }
-    }
+            )
+        })?)
+    } else {
+        None
+    };
 
-    Ok(canonicalize_whitespace(clause))
+    Ok(NamedExportClause::new(canonical_head, source))
 }
 
 fn validate_named_export_specifiers(
@@ -3477,6 +3749,35 @@ fn validate_named_export_specifiers(
 
 /// Parse a binding pattern: identifier, `{ ... }` object, or `[ ... ]` array.
 fn parse_binding_pattern(
+    source: &str,
+    span: &SourceSpan,
+    context: &mut ParseExecutionContext<'_>,
+) -> ParseResult<BindingPattern> {
+    // Guard against stack overflow from deeply nested destructuring patterns
+    // (`[[[...]]]`, `{a:{b:{c:...}}}`). Their recursive descent is separate from
+    // the statement/expression depth guards, so without this a deeply nested
+    // pattern would overflow the native stack and abort the process rather than
+    // surface a recoverable budget error (bd-c4lhp).
+    context.pattern_depth += 1;
+    if context.pattern_depth > context.options.budget.max_recursion_depth {
+        context.pattern_depth -= 1;
+        return Err(ParseError::new(
+            ParseErrorCode::BudgetExceeded,
+            format!(
+                "binding-pattern nesting budget exceeded: depth={} max={}",
+                context.options.budget.max_recursion_depth,
+                context.options.budget.max_recursion_depth
+            ),
+            context.source_label.to_string(),
+            Some(span.clone()),
+        ));
+    }
+    let result = parse_binding_pattern_inner(source, span, context);
+    context.pattern_depth -= 1;
+    result
+}
+
+fn parse_binding_pattern_inner(
     source: &str,
     span: &SourceSpan,
     context: &mut ParseExecutionContext<'_>,
@@ -3676,7 +3977,13 @@ fn parse_object_binding_pattern(
         if let Some(colon_pos) = find_top_level_colon_in_pattern(seg) {
             let key_src = seg[..colon_pos].trim();
             let value_src = seg[colon_pos + 1..].trim();
-            let key = Expression::Identifier(key_src.to_string());
+            let key = parse_contextual_static_property_key(
+                key_src,
+                span,
+                context,
+                legacy_decimal_escape_mode(context),
+                "object-binding",
+            )?;
             let value = parse_binding_pattern(value_src, span, context)?;
             properties.push(ObjectPatternProperty {
                 key,
@@ -3704,6 +4011,28 @@ fn parse_object_binding_pattern(
     }
 
     Ok(BindingPattern::ObjectPattern(properties))
+}
+
+fn parse_contextual_static_property_key(
+    source: &str,
+    span: &SourceSpan,
+    context: &ParseExecutionContext<'_>,
+    legacy_mode: LegacyDecimalEscapeMode,
+    construct: &str,
+) -> ParseResult<Expression> {
+    if matches!(source.as_bytes().first(), Some(b'\'' | b'"')) {
+        return parse_quoted_expression_string(source, legacy_mode)
+            .map(Expression::StringLiteral)
+            .ok_or_else(|| {
+                ParseError::new(
+                    ParseErrorCode::UnsupportedSyntax,
+                    format!("invalid quoted {construct} property key: `{source}`"),
+                    context.source_label.to_string(),
+                    Some(span.clone()),
+                )
+            });
+    }
+    Ok(Expression::Identifier(source.to_string()))
 }
 
 /// Find `:` at the top level of a pattern element.
@@ -4158,37 +4487,32 @@ fn parse_primary_expression(
 ) -> ParseResult<Expression> {
     let expression = expression.trim();
 
-    if let Some(value) = parse_quoted_string(expression) {
+    let legacy_decimal_escapes = legacy_decimal_escape_mode(context);
+    if let Some(value) = parse_quoted_expression_string(expression, legacy_decimal_escapes) {
         return Ok(Expression::StringLiteral(value));
     }
 
-    // Reject unterminated / malformed string literals (bd-wa01t). An expression
-    // starting with `'` or `"` that did not parse as a balanced string literal
-    // would otherwise fall through to `Expression::Raw`, silently passing
-    // malformed source on to lowering instead of fail-closed parsing.
-    //
-    // EXCEPTION (bd-bulsc): a *balanced* string literal may be the base of a
-    // postfix member/call/index chain (`"abc".split(",")`). In that case the
-    // whole expression is not a pure string (so `parse_quoted_string` above
-    // returned `None`), but it is well-formed — fall through to
-    // `try_parse_postfix` below, which parses the tail as postfix on the
-    // `StringLiteral` base. Only fail closed when the leading quote does not
-    // open a balanced literal followed by a `.`/`[`/`(` tail.
-    if let Some(first) = expression.as_bytes().first()
-        && (*first == b'"' || *first == b'\'')
-    {
-        let string_prefixed_postfix = leading_string_literal_end(expression).is_some_and(|end| {
-            let tail = expression[end..].trim_start();
-            tail.starts_with('.') || tail.starts_with('[') || tail.starts_with('(')
-        });
-        if !string_prefixed_postfix {
+    // A malformed quoted expression must not fall through to `Raw`. A valid,
+    // balanced quoted literal may still be the base of a postfix chain such
+    // as `"abc".length`; record that valid leading literal and let the real
+    // postfix parser validate its complete tail below.
+    let has_valid_quoted_prefix = if matches!(expression.as_bytes().first(), Some(b'"' | b'\'')) {
+        let valid = leading_string_literal_end(expression)
+            .and_then(|end| {
+                parse_quoted_expression_string(&expression[..end], legacy_decimal_escapes)
+            })
+            .is_some();
+        if !valid {
             return Err(unsupported_expression_syntax_error(
                 "unterminated or malformed string literal",
                 span,
                 context,
             ));
         }
-    }
+        true
+    } else {
+        false
+    };
 
     // Regex literal: /pattern/flags
     if let Some((pattern, flags)) = parse_regexp_literal(expression) {
@@ -4362,6 +4686,14 @@ fn parse_primary_expression(
         return result;
     }
 
+    if has_valid_quoted_prefix {
+        return Err(unsupported_expression_syntax_error(
+            "unsupported or malformed string-literal postfix expression",
+            span,
+            context,
+        ));
+    }
+
     // Unterminated template literal (bd-no788 cases 1-3). A *complete* template
     // (`` `x` ``) is consumed by the both-backticks gate above; a tagged
     // template or a template with a trailing member/call (``tag`x` `` /
@@ -4516,18 +4848,22 @@ fn try_parse_arrow_function(
         let after = after_params.trim_start();
         let body_src = after.strip_prefix("=>")?;
         let body_src = body_src.trim();
-
-        let params = match parse_arrow_params(params_src, span, context) {
-            Ok(p) => p,
-            Err(e) => return Some(Err(e)),
+        let directive_source = if body_src.starts_with('{') {
+            extract_balanced(body_src, '{', '}')
+                .map(|(inner, _)| inner)
+                .unwrap_or("")
+        } else {
+            ""
         };
-        Some(parse_arrow_body(
-            body_src,
-            params,
-            is_async,
-            span,
+
+        Some(with_function_strict_mode(
+            directive_source,
+            false,
             context,
-            recursion_depth,
+            |context| {
+                let params = parse_arrow_params(params_src, span, context)?;
+                parse_arrow_body(body_src, params, is_async, span, context, recursion_depth)
+            },
         ))
     } else {
         // ident => body (single param, no parens)
@@ -4589,7 +4925,8 @@ fn parse_arrow_body(
 ) -> ParseResult<Expression> {
     let body = if body_src.starts_with('{') {
         if let Some((block_src, _)) = extract_balanced(body_src, '{', '}') {
-            let stmts = parse_body_statements(block_src, ParseGoal::Script, span, context)?;
+            let stmts =
+                parse_function_body_statements(block_src, ParseGoal::Script, span, context, false)?;
             ArrowBody::Block(BlockStatement {
                 body: stmts,
                 span: span.clone(),
@@ -5100,6 +5437,7 @@ fn try_parse_assignment(
                 operator: op,
                 left: Box::new(left),
                 right: Box::new(right),
+                assignment_strictness: AssignmentStrictness::from_strict_mode(context.strict_mode),
             }));
         }
         i += 1;
@@ -5247,7 +5585,7 @@ fn try_parse_conditional(
             // Found ternary `?`. Now find the matching `:` at the same depth.
             let test_src = expr[..i].trim();
             let rest = &expr[i + 1..];
-            if let Some(colon_idx) = find_top_level_colon(rest) {
+            if let Some(colon_idx) = find_ternary_colon(rest) {
                 let consequent_src = rest[..colon_idx].trim();
                 let alternate_src = rest[colon_idx + 1..].trim();
                 if test_src.is_empty() || consequent_src.is_empty() || alternate_src.is_empty() {
@@ -5341,9 +5679,104 @@ fn find_top_level_colon(s: &str) -> Option<usize> {
     None
 }
 
+/// Find the `:` that matches the *first* top-level `?` of a ternary, given the
+/// slice *after* that `?`. Unlike [`find_top_level_colon`], this skips the `:`
+/// of any nested ternary by tracking `?` depth, so `b ? c : d : e` returns the
+/// index of the second (outer) `:`, grouping `a ? b ? c : d : e` as
+/// `a ? (b ? c : d) : e`. `?.` (optional chaining) and `??` (nullish) are not
+/// ternary `?`. (A dedicated finder rather than changing `find_top_level_colon`,
+/// which labeled statements and object/type patterns also rely on.)
+fn find_ternary_colon(s: &str) -> Option<usize> {
+    let bytes = s.as_bytes();
+    let mut depth_paren: i64 = 0;
+    let mut depth_bracket: i64 = 0;
+    let mut depth_brace: i64 = 0;
+    let mut in_quote: Option<u8> = None;
+    let mut escaped = false;
+    let mut question_depth: i64 = 0;
+    let mut i: usize = 0;
+    while i < bytes.len() {
+        let b = bytes[i];
+        if let Some(q) = in_quote {
+            if escaped {
+                escaped = false;
+            } else if b == b'\\' {
+                escaped = true;
+            } else if b == q {
+                in_quote = None;
+            }
+            i += 1;
+            continue;
+        }
+        match b {
+            b'\'' | b'"' | b'`' => {
+                in_quote = Some(b);
+                i += 1;
+                continue;
+            }
+            b'(' => depth_paren += 1,
+            b')' => depth_paren -= 1,
+            b'[' => depth_bracket += 1,
+            b']' => depth_bracket -= 1,
+            b'{' => depth_brace += 1,
+            b'}' => depth_brace -= 1,
+            _ => {}
+        }
+        if depth_paren == 0 && depth_bracket == 0 && depth_brace == 0 {
+            if b == b'?' {
+                match bytes.get(i + 1).copied() {
+                    // Nullish `??` — skip both bytes, not a ternary `?`.
+                    Some(b'?') => {
+                        i += 2;
+                        continue;
+                    }
+                    // Optional chaining `?.` — not a ternary `?`.
+                    Some(b'.') => {}
+                    _ => question_depth += 1,
+                }
+            } else if b == b':' {
+                if question_depth == 0 {
+                    return Some(i);
+                }
+                question_depth -= 1;
+            }
+        }
+        i += 1;
+    }
+    None
+}
+
 // ---------------------------------------------------------------------------
 // Binary expression parsing with precedence scanning
 // ---------------------------------------------------------------------------
+
+/// Whether `b`, as the last significant byte before a `+`/`-`, means that
+/// `+`/`-` is a unary sign rather than a binary operator. True for operator and
+/// open-delimiter/separator bytes (after which an operand has not yet appeared).
+fn is_operator_context_byte(b: u8) -> bool {
+    matches!(
+        b,
+        b'+' | b'-'
+            | b'*'
+            | b'/'
+            | b'%'
+            | b'<'
+            | b'>'
+            | b'='
+            | b'&'
+            | b'|'
+            | b'^'
+            | b'~'
+            | b'!'
+            | b'('
+            | b'['
+            | b'{'
+            | b','
+            | b';'
+            | b':'
+            | b'?'
+    )
+}
 
 /// Try to find and parse a binary expression by locating the lowest-precedence
 /// top-level operator and recursively parsing left and right operands.
@@ -5448,7 +5881,17 @@ fn try_parse_binary(
                 // Make sure we have non-empty operands on both sides.
                 let lhs = expr[..i].trim();
                 let rhs = expr[i + len..].trim();
-                if !lhs.is_empty() && !rhs.is_empty() {
+                // A `+`/`-` in unary position (no left operand, or the
+                // preceding significant byte is itself an operator) is a sign
+                // belonging to the right operand, not a binary split point —
+                // e.g. the `-` in `2 * -3`, `a - -b`, or `2 ** -1`. Skipping it
+                // lets the real binary operator win the split.
+                let unary_sign = matches!(op, BinaryOperator::Add | BinaryOperator::Subtract)
+                    && lhs
+                        .as_bytes()
+                        .last()
+                        .is_none_or(|&c| is_operator_context_byte(c));
+                if !lhs.is_empty() && !rhs.is_empty() && !unary_sign {
                     best_op = Some(op);
                     best_pos = i;
                     best_len = len;
@@ -5721,6 +6164,7 @@ fn try_parse_update(
             operator: op,
             left: Box::new(target),
             right: Box::new(Expression::NumericLiteral(1)),
+            assignment_strictness: AssignmentStrictness::from_strict_mode(context.strict_mode),
         }));
     }
 
@@ -5747,6 +6191,7 @@ fn try_parse_update(
             operator: assign_op,
             left: Box::new(target),
             right: Box::new(Expression::NumericLiteral(1)),
+            assignment_strictness: AssignmentStrictness::from_strict_mode(context.strict_mode),
         };
         return Some(Ok(Expression::Binary {
             operator: adjust_op,
@@ -5828,14 +6273,14 @@ fn try_parse_postfix(
                 .iter()
                 .map(|quasi| {
                     let cooked = unescape_string_literal(quasi).unwrap_or_else(|| quasi.clone());
-                    Some(Expression::StringLiteral(cooked))
+                    Some(Expression::StringLiteral(cooked.into()))
                 })
                 .collect();
             // `.raw` array (bd-vl55w): parse_template_literal keeps quasis raw
             // (escapes included literally), so use them as-is for `.raw`.
             let raw_strings: Vec<Option<Expression>> = quasis
                 .iter()
-                .map(|quasi| Some(Expression::StringLiteral(quasi.clone())))
+                .map(|quasi| Some(Expression::StringLiteral(quasi.clone().into())))
                 .collect();
             // ES2020 §12.2.9: the strings array carries a `.raw` sibling array
             // (used by String.raw and `tag` functions reading `s.raw[i]`). An
@@ -5866,8 +6311,12 @@ fn try_parse_postfix(
                                     object: Box::new(Expression::Identifier(strings_param.clone())),
                                     property: Box::new(Expression::Identifier("raw".to_string())),
                                     computed: false,
+                                    span: None,
                                 }),
                                 right: Box::new(Expression::ArrayLiteral(raw_strings)),
+                                assignment_strictness: AssignmentStrictness::from_strict_mode(
+                                    context.strict_mode,
+                                ),
                             },
                             span: span.clone(),
                         }),
@@ -5883,6 +6332,7 @@ fn try_parse_postfix(
             let strings_with_raw = Expression::Call {
                 callee: Box::new(raw_arrow),
                 arguments: vec![Expression::ArrayLiteral(cooked_strings)],
+                span: None,
             };
             let mut arguments = Vec::with_capacity(expressions.len() + 1);
             arguments.push(strings_with_raw);
@@ -5890,6 +6340,7 @@ fn try_parse_postfix(
             return Some(Ok(Expression::Call {
                 callee: Box::new(callee),
                 arguments,
+                span: Some(*span),
             }));
         }
     }
@@ -5933,11 +6384,13 @@ fn try_parse_postfix(
             Expression::OptionalCall {
                 callee: Box::new(callee),
                 arguments,
+                span: Some(*span),
             }
         } else {
             Expression::Call {
                 callee: Box::new(callee),
                 arguments,
+                span: Some(*span),
             }
         }));
     }
@@ -5981,12 +6434,14 @@ fn try_parse_postfix(
                 object: Box::new(object),
                 property: Box::new(property),
                 computed: true,
+                span: Some(*span),
             }
         } else {
             Expression::Member {
                 object: Box::new(object),
                 property: Box::new(property),
                 computed: true,
+                span: Some(*span),
             }
         }));
     }
@@ -6014,10 +6469,11 @@ fn try_parse_postfix(
                 context,
             )));
         }
-        if let Some(message) = unsupported_meta_property_message(object_src, property_src) {
-            return Some(Err(unsupported_expression_syntax_error(
-                message, span, context,
-            )));
+        if object_src == "new" && property_src == "target" {
+            return Some(Ok(Expression::NewTarget));
+        }
+        if object_src == "import" && property_src == "meta" {
+            return Some(Ok(Expression::ImportMeta));
         }
         if !object_src.is_empty() && is_identifier(property_src) {
             let object = match parse_expression(object_src, span, context, recursion_depth + 1) {
@@ -6031,6 +6487,7 @@ fn try_parse_postfix(
                         property_src,
                     ))),
                     computed: false,
+                    span: Some(*span),
                 }
             } else {
                 Expression::Member {
@@ -6039,6 +6496,7 @@ fn try_parse_postfix(
                         property_src,
                     ))),
                     computed: false,
+                    span: Some(*span),
                 }
             }));
         }
@@ -6081,14 +6539,6 @@ fn unsupported_expression_syntax_error(
     )
 }
 
-fn unsupported_meta_property_message(object_src: &str, property_src: &str) -> Option<&'static str> {
-    match (object_src, property_src) {
-        ("import", "meta") => Some("import.meta meta-property is not supported"),
-        ("new", "target") => Some("new.target meta-property is not supported"),
-        _ => None,
-    }
-}
-
 fn contains_optional_chain(expression: &Expression) -> bool {
     match expression {
         Expression::OptionalCall { .. } | Expression::OptionalMember { .. } => true,
@@ -6110,9 +6560,9 @@ fn contains_optional_chain(expression: &Expression) -> bool {
                 || contains_optional_chain(consequent)
                 || contains_optional_chain(alternate)
         }
-        Expression::Call { callee, arguments } => {
-            contains_optional_chain(callee) || arguments.iter().any(contains_optional_chain)
-        }
+        Expression::Call {
+            callee, arguments, ..
+        } => contains_optional_chain(callee) || arguments.iter().any(contains_optional_chain),
         Expression::Member {
             object, property, ..
         } => contains_optional_chain(object) || contains_optional_chain(property),
@@ -6141,6 +6591,8 @@ fn contains_optional_chain(expression: &Expression) -> bool {
         | Expression::NullLiteral
         | Expression::UndefinedLiteral
         | Expression::This
+        | Expression::NewTarget
+        | Expression::ImportMeta
         | Expression::Super
         | Expression::Function { .. }
         | Expression::Raw(_)
@@ -6233,12 +6685,10 @@ fn find_first_top_level_paren_pair(s: &str) -> Option<(usize, usize)> {
                     paren += 1;
                 }
             }
-            b')' => {
-                if open.is_some() {
-                    paren -= 1;
-                    if paren == 0 {
-                        return Some((open.unwrap(), i));
-                    }
+            b')' if open.is_some() => {
+                paren -= 1;
+                if paren == 0 {
+                    return Some((open.unwrap(), i));
                 }
             }
             _ => {}
@@ -6540,6 +6990,7 @@ fn parse_object_literal(
                 value: spread,
                 computed: false,
                 shorthand: true,
+                kind: ObjectPropertyKind::Data,
             });
         } else if let Some(colon_idx) = find_top_level_colon(p) {
             // Split on first top-level colon for key:value.
@@ -6567,6 +7018,17 @@ fn parse_object_literal(
                 value,
                 computed,
                 shorthand: false,
+                kind: ObjectPropertyKind::Data,
+            });
+        } else if let Some((key, value, computed, kind)) =
+            try_parse_object_accessor(p, span, context, recursion_depth)?
+        {
+            properties.push(ObjectProperty {
+                key,
+                value,
+                computed,
+                shorthand: false,
+                kind,
             });
         } else if let Some((key, value, computed)) =
             try_parse_object_method(p, span, context, recursion_depth)?
@@ -6578,6 +7040,7 @@ fn parse_object_literal(
                 value,
                 computed,
                 shorthand: false,
+                kind: ObjectPropertyKind::Data,
             });
         } else {
             // Shorthand property: { x } means { x: x }
@@ -6588,10 +7051,60 @@ fn parse_object_literal(
                 value,
                 computed: false,
                 shorthand: true,
+                kind: ObjectPropertyKind::Data,
             });
         }
     }
     Ok(Expression::ObjectLiteral(properties))
+}
+
+fn object_accessor_tail<'a>(part: &'a str, prefix: &str) -> Option<&'a str> {
+    let rest = part.strip_prefix(prefix)?;
+    let first = rest.chars().next()?;
+    first.is_whitespace().then(|| rest.trim_start())
+}
+
+fn try_parse_object_accessor(
+    part: &str,
+    span: &SourceSpan,
+    context: &mut ParseExecutionContext<'_>,
+    recursion_depth: u64,
+) -> ParseResult<Option<(Expression, Expression, bool, ObjectPropertyKind)>> {
+    for (prefix, kind) in [
+        ("get", ObjectPropertyKind::Get),
+        ("set", ObjectPropertyKind::Set),
+    ] {
+        let Some(rest) = object_accessor_tail(part, prefix) else {
+            continue;
+        };
+        if rest.starts_with('[') {
+            if let Some((key_inner, after)) = extract_balanced(rest, '[', ']') {
+                let after = after.trim_start();
+                if after.starts_with('(') {
+                    let key =
+                        parse_expression(key_inner.trim(), span, context, recursion_depth + 1)?;
+                    let value =
+                        parse_function_expression(after, span, context, recursion_depth + 1)?;
+                    return Ok(Some((key, value, true, kind)));
+                }
+            }
+            return Ok(None);
+        }
+
+        let Some(paren_idx) = rest.find('(') else {
+            return Ok(None);
+        };
+        let key_src = rest[..paren_idx].trim();
+        if key_src.is_empty() {
+            return Ok(None);
+        }
+        let key = parse_expression(key_src, span, context, recursion_depth + 1)?;
+        let value =
+            parse_function_expression(&rest[paren_idx..], span, context, recursion_depth + 1)?;
+        return Ok(Some((key, value, false, kind)));
+    }
+
+    Ok(None)
 }
 
 /// Try to parse an object-literal method shorthand:
@@ -6601,10 +7114,8 @@ fn parse_object_literal(
 /// expression, or `Ok(None)` when `part` is not a method definition so the
 /// caller can fall back to shorthand-identifier handling.
 ///
-/// Getter/setter (`get`/`set`), `async`, and generator (`*`) method forms are
-/// intentionally not recognized here — their key is not a bare identifier, so
-/// they return `None` and fall through unchanged rather than being silently
-/// reinterpreted as plain data methods.
+/// `async` and generator (`*`) method forms are intentionally not recognized
+/// here. Getter/setter forms are handled by `try_parse_object_accessor`.
 fn try_parse_object_method(
     part: &str,
     span: &SourceSpan,
@@ -6624,16 +7135,26 @@ fn try_parse_object_method(
         return Ok(None);
     }
 
-    // Plain method: `name(params){body}` where `name` is a bare identifier.
+    // Plain method: `name(params){body}` where `name` is an IdentifierName or
+    // quoted PropertyName.
     let Some(paren_idx) = part.find('(') else {
         return Ok(None);
     };
     let name = part[..paren_idx].trim();
-    if !is_identifier(name) {
+    let key = if is_identifier(name) {
+        Expression::Identifier(canonicalize_identifier(name))
+    } else if matches!(name.as_bytes().first(), Some(b'\'' | b'"')) {
+        parse_contextual_static_property_key(
+            name,
+            span,
+            context,
+            legacy_decimal_escape_mode(context),
+            "object-method",
+        )?
+    } else {
         return Ok(None);
-    }
+    };
     let value = parse_function_expression(&part[paren_idx..], span, context, recursion_depth + 1)?;
-    let key = Expression::Identifier(canonicalize_identifier(name));
     Ok(Some((key, value, false)))
 }
 
@@ -6903,62 +7424,234 @@ fn parse_f64_numeric_literal(input: &str) -> Option<f64> {
     digits_ref.parse::<f64>().ok()
 }
 
-/// If `expr` begins with a string literal (`"..."` or `'...'`), return the byte
-/// index just past its closing quote. Unlike [`parse_quoted_string`], the literal
-/// need not span the whole input, so a string literal can be recognized as the
-/// base of a postfix member/call/index chain (`"abc".split(",")`, bd-bulsc).
-///
-/// Returns `None` for a genuinely unterminated literal (no closing quote, or an
-/// embedded newline before it — mirroring `parse_quoted_string`'s single-line
-/// acceptance), so the bd-wa01t fail-closed guard still fires for malformed input.
-/// Quotes, backslash, and newlines are ASCII, so byte scanning is UTF-8-safe and
-/// the returned index lands on a char boundary (just past an ASCII quote).
-fn leading_string_literal_end(expr: &str) -> Option<usize> {
-    let bytes = expr.as_bytes();
-    let quote = *bytes.first()?;
-    if quote != b'"' && quote != b'\'' {
-        return None;
-    }
-    let mut i = 1;
-    while i < bytes.len() {
-        match bytes[i] {
-            b'\\' => i += 2,              // skip the escaped byte
-            b'\n' | b'\r' => return None, // unterminated single-line literal
-            c if c == quote => return Some(i + 1),
-            _ => i += 1,
-        }
-    }
-    None // ran off the end without a closing quote
+fn push_char_utf16(units: &mut Vec<u16>, value: char) {
+    let mut encoded = [0_u16; 2];
+    units.extend_from_slice(value.encode_utf16(&mut encoded));
 }
 
-fn parse_quoted_string(input: &str) -> Option<String> {
-    if input.len() < 2 {
+/// Decode the numeric payload after a `\u` escape without forcing it through
+/// Rust's Unicode-scalar-only `char` carrier. Four-digit escapes denote one
+/// UTF-16 code unit and may therefore be a surrogate. Braced escapes denote a
+/// code point up to U+10FFFF; values in the surrogate range remain one exact
+/// code unit, matching ECMAScript string values.
+fn decode_quoted_unicode_escape(
+    chars: &mut std::iter::Peekable<std::str::Chars<'_>>,
+) -> Option<u32> {
+    if chars.peek() == Some(&'{') {
+        chars.next();
+        let mut value = 0_u32;
+        let mut digits = 0_u32;
+        loop {
+            match chars.next()? {
+                '}' if digits > 0 => break,
+                '}' => return None,
+                ch => {
+                    value = value.checked_mul(16)?.checked_add(ch.to_digit(16)?)?;
+                    if value > 0x10_FFFF {
+                        return None;
+                    }
+                    digits += 1;
+                }
+            }
+        }
+        Some(value)
+    } else {
+        let mut value = 0_u32;
+        for _ in 0..4 {
+            value = value
+                .checked_mul(16)?
+                .checked_add(chars.next()?.to_digit(16)?)?;
+        }
+        Some(value)
+    }
+}
+
+/// If `expr` begins with a quoted literal, return the byte index immediately
+/// after its closing delimiter. This scanner recognizes only the lexical
+/// extent; callers must still run [`parse_quoted_expression_string`] over the
+/// returned prefix to validate escape payloads.
+fn leading_string_literal_end(expr: &str) -> Option<usize> {
+    let mut chars = expr.char_indices().peekable();
+    let (_, delimiter) = chars.next()?;
+    if !matches!(delimiter, '\'' | '"') {
         return None;
     }
-    let first = input.as_bytes()[0];
-    let last = input.as_bytes()[input.len() - 1];
-    if (first == b'\'' && last == b'\'') || (first == b'"' && last == b'"') {
-        let inner = &input[1..input.len() - 1];
-        if inner.contains('\n') || inner.contains('\r') {
-            return None;
+
+    while let Some((index, ch)) = chars.next() {
+        match ch {
+            '\\' => {
+                let (_, escaped) = chars.next()?;
+                if escaped == '\r' && chars.peek().is_some_and(|(_, next)| *next == '\n') {
+                    chars.next();
+                }
+            }
+            '\n' | '\r' => return None,
+            ch if ch == delimiter => return Some(index + ch.len_utf8()),
+            _ => {}
         }
-        return unescape_string_literal(inner);
     }
     None
 }
 
-/// Translate ES2020 string-literal escape sequences in the already-delimited
-/// inner content (no surrounding quotes) into their character values
-/// (bd-kmdzx). Single- and double-quoted literals share identical escape
-/// semantics. Returns `None` for a malformed escape (incomplete `\x`/`\u`,
-/// out-of-range code point, trailing backslash) so the caller fails closed with
-/// a parse error rather than silently keeping corrupt content — matching the
-/// ES2020 early SyntaxError for bad escapes. Raw line terminators are rejected
-/// by the caller before this runs, so `\n`/`\t`/… here are always the
-/// two-character backslash forms, never literal control characters.
+/// Cook one quoted expression literal into its exact ECMAScript UTF-16 value.
+/// Unlike a Rust `String`, [`JsString`] can retain unpaired surrogate escapes.
+/// Adjacent high/low units are normalized by `JsString::from_code_units`, so
+/// paired escapes still heal to the ordinary UTF-8 fast representation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LegacyDecimalEscapeMode {
+    AnnexBSloppy,
+    Reject,
+}
+
+fn legacy_decimal_escape_mode(context: &ParseExecutionContext<'_>) -> LegacyDecimalEscapeMode {
+    if context.strict_mode {
+        LegacyDecimalEscapeMode::Reject
+    } else {
+        LegacyDecimalEscapeMode::AnnexBSloppy
+    }
+}
+
+fn decode_legacy_decimal_escape(
+    first: char,
+    chars: &mut std::iter::Peekable<std::str::Chars<'_>>,
+    mode: LegacyDecimalEscapeMode,
+) -> Option<u16> {
+    if mode == LegacyDecimalEscapeMode::Reject {
+        return None;
+    }
+    if matches!(first, '8' | '9') {
+        return u16::try_from(u32::from(first)).ok();
+    }
+
+    let mut value = first.to_digit(8)?;
+    let following_limit = if matches!(first, '0'..='3') { 2 } else { 1 };
+    for _ in 0..following_limit {
+        let Some(digit) = chars.peek().and_then(|next| next.to_digit(8)) else {
+            break;
+        };
+        chars.next();
+        value = value.checked_mul(8)?.checked_add(digit)?;
+    }
+    u16::try_from(value).ok()
+}
+
+fn parse_quoted_expression_string(
+    input: &str,
+    legacy_mode: LegacyDecimalEscapeMode,
+) -> Option<JsString> {
+    if input.len() < 2 {
+        return None;
+    }
+    let delimiter = input.chars().next()?;
+    if !matches!(delimiter, '\'' | '"') || input.chars().next_back()? != delimiter {
+        return None;
+    }
+    let inner = &input[delimiter.len_utf8()..input.len() - delimiter.len_utf8()];
+    let mut units = Vec::with_capacity(inner.len());
+    let mut chars = inner.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if ch != '\\' {
+            if ch == delimiter || matches!(ch, '\n' | '\r') {
+                return None;
+            }
+            push_char_utf16(&mut units, ch);
+            continue;
+        }
+
+        let escaped = chars.next()?;
+        match escaped {
+            '\n' | '\u{2028}' | '\u{2029}' => {}
+            '\r' => {
+                if chars.peek() == Some(&'\n') {
+                    chars.next();
+                }
+            }
+            'n' => units.push(u16::from(b'\n')),
+            't' => units.push(u16::from(b'\t')),
+            'r' => units.push(u16::from(b'\r')),
+            'b' => units.push(0x0008),
+            'f' => units.push(0x000C),
+            'v' => units.push(0x000B),
+            '0' if !chars.peek().is_some_and(char::is_ascii_digit) => units.push(0),
+            decimal @ '0'..='9' => {
+                units.push(decode_legacy_decimal_escape(
+                    decimal,
+                    &mut chars,
+                    legacy_mode,
+                )?);
+            }
+            '\\' => units.push(u16::from(b'\\')),
+            '\'' => units.push(u16::from(b'\'')),
+            '"' => units.push(u16::from(b'"')),
+            '`' => units.push(u16::from(b'`')),
+            'x' => {
+                let high = chars.next()?.to_digit(16)?;
+                let low = chars.next()?.to_digit(16)?;
+                units.push(u16::try_from(high * 16 + low).ok()?);
+            }
+            'u' => {
+                let value = decode_quoted_unicode_escape(&mut chars)?;
+                if let Ok(unit) = u16::try_from(value) {
+                    units.push(unit);
+                } else {
+                    push_char_utf16(&mut units, char::from_u32(value)?);
+                }
+            }
+            // ES NonEscapeCharacter: the escape contributes the character.
+            other => push_char_utf16(&mut units, other),
+        }
+    }
+    Some(JsString::from_code_units(&units))
+}
+
+/// Parse a quoted module specifier into its exact ECMAScript UTF-16 value.
+/// Module code is strict, so legacy decimal escapes remain rejected while
+/// lone-surrogate Unicode escapes stay distinct rather than being projected
+/// through UTF-8.
+pub(crate) fn parse_quoted_string(input: &str) -> Option<JsString> {
+    parse_quoted_expression_string(input, LegacyDecimalEscapeMode::Reject)
+}
+
+/// Legacy UTF-8 cooker retained for template-literal quasis. Quoted
+/// expression literals use [`parse_quoted_expression_string`] so lone UTF-16
+/// units are never forced through this scalar-only seam.
+fn decode_unicode_escape_value(
+    chars: &mut std::iter::Peekable<std::str::Chars<'_>>,
+) -> Option<u32> {
+    if chars.peek() == Some(&'{') {
+        chars.next();
+        let mut code: u32 = 0;
+        let mut digits = 0u32;
+        loop {
+            match chars.next()? {
+                '}' => break,
+                c => {
+                    let d = c.to_digit(16)?;
+                    code = code.checked_mul(16)?.checked_add(d)?;
+                    if code > 0x0010_FFFF {
+                        return None;
+                    }
+                    digits += 1;
+                }
+            }
+        }
+        if digits == 0 {
+            return None;
+        }
+        Some(code)
+    } else {
+        let mut code: u32 = 0;
+        for _ in 0..4 {
+            code = code
+                .checked_mul(16)?
+                .checked_add(chars.next()?.to_digit(16)?)?;
+        }
+        Some(code)
+    }
+}
+
 fn unescape_string_literal(inner: &str) -> Option<String> {
     if !inner.contains('\\') {
-        // Fast path: nothing to unescape.
         return Some(inner.to_string());
     }
     let mut out = String::with_capacity(inner.len());
@@ -6968,62 +7661,39 @@ fn unescape_string_literal(inner: &str) -> Option<String> {
             out.push(ch);
             continue;
         }
-        // Backslash begins an escape sequence; consume the descriptor char.
-        let esc = chars.next()?;
-        match esc {
+        match chars.next()? {
             'n' => out.push('\n'),
             't' => out.push('\t'),
             'r' => out.push('\r'),
             'b' => out.push('\u{0008}'),
             'f' => out.push('\u{000C}'),
             'v' => out.push('\u{000B}'),
-            // `\0` is the NUL character only when not the start of a legacy
-            // octal escape (i.e. not followed by another digit).
             '0' if !chars.peek().is_some_and(|c| c.is_ascii_digit()) => out.push('\0'),
             '\\' => out.push('\\'),
             '\'' => out.push('\''),
             '"' => out.push('"'),
             '`' => out.push('`'),
             'x' => {
-                // `\xHH`: exactly two hex digits.
-                let hi = chars.next()?.to_digit(16)?;
-                let lo = chars.next()?.to_digit(16)?;
-                out.push(char::from_u32(hi * 16 + lo)?);
+                let high = chars.next()?.to_digit(16)?;
+                let low = chars.next()?.to_digit(16)?;
+                out.push(char::from_u32(high * 16 + low)?);
             }
             'u' => {
-                if chars.peek() == Some(&'{') {
-                    // `\u{H...}`: one or more hex digits, code point <= 0x10FFFF.
-                    chars.next();
-                    let mut code: u32 = 0;
-                    let mut digits = 0u32;
-                    loop {
-                        match chars.next()? {
-                            '}' => break,
-                            c => {
-                                let d = c.to_digit(16)?;
-                                code = code.checked_mul(16)?.checked_add(d)?;
-                                if code > 0x0010_FFFF {
-                                    return None;
-                                }
-                                digits += 1;
-                            }
-                        }
-                    }
-                    if digits == 0 {
+                let high = decode_unicode_escape_value(&mut chars)?;
+                let decoded = if (0xD800..=0xDBFF).contains(&high) {
+                    if chars.next()? != '\\' || chars.next()? != 'u' {
                         return None;
                     }
-                    out.push(char::from_u32(code)?);
-                } else {
-                    // `\uHHHH`: exactly four hex digits.
-                    let mut code: u32 = 0;
-                    for _ in 0..4 {
-                        code = code * 16 + chars.next()?.to_digit(16)?;
+                    let low = decode_unicode_escape_value(&mut chars)?;
+                    if !(0xDC00..=0xDFFF).contains(&low) {
+                        return None;
                     }
-                    out.push(char::from_u32(code)?);
-                }
+                    char::from_u32(0x10000 + ((high - 0xD800) << 10) + (low - 0xDC00))?
+                } else {
+                    char::from_u32(high)?
+                };
+                out.push(decoded);
             }
-            // Any other escaped character is the identity of that character
-            // (ES2020 non-strict `NonEscapeCharacter`), e.g. `\q` -> `q`.
             other => out.push(other),
         }
     }
@@ -7172,6 +7842,21 @@ const fn is_two_char_operator(first: u8, second: u8) -> bool {
             | (b'?', b'?')
             | (b'=', b'>')
     )
+}
+
+/// The ASCII bytes that ES2020 §11.2 `WhiteSpace` treats as insignificant
+/// between tokens: `<SP>`, `<TAB>`, `<VT>`, `<FF>`, `<CR>`, `<LF>`.
+///
+/// This deliberately includes `U+000B VERTICAL TAB`, which `u8::is_ascii_whitespace`
+/// (the WhatWG-Infra definition Rust follows) omits. That omission was the
+/// source of the SIMD-vs-scalar token-count divergence tracked by bd-2noh9: the
+/// SIMD [`Utf8BoundarySafeScanner`] classifies `<VT>` as whitespace via
+/// `LEX_CLASS_WHITESPACE` (so it produces no token), while the scalar reference
+/// used `is_ascii_whitespace` and counted a lone `<VT>` as a symbol token. This
+/// predicate mirrors the SIMD whitespace class exactly (see
+/// `build_lex_byte_class_table`) so both counters agree with the ES spec.
+const fn is_ascii_lexical_whitespace(byte: u8) -> bool {
+    matches!(byte, b' ' | b'\t' | b'\n' | 0x0b | 0x0c | b'\r')
 }
 
 #[inline]
@@ -7412,7 +8097,7 @@ fn count_lexical_tokens_scalar_reference(input: &str) -> u64 {
 
     while index < bytes.len() {
         let byte = bytes[index];
-        if byte.is_ascii_whitespace() {
+        if is_ascii_lexical_whitespace(byte) {
             index = index.saturating_add(1);
             continue;
         }
@@ -8121,23 +8806,6 @@ fn parse_body_statements(
     let logical_lines = merge_logical_lines(trimmed);
     let mut stmts = Vec::with_capacity(8);
 
-    // Save the current strict mode state to restore later for nested scopes
-    let saved_strict_mode = context.strict_mode;
-
-    // Check for "use strict" directive in the first statement
-    if !logical_lines.is_empty() {
-        let first_line = &logical_lines[0];
-        if let Some((_start, _end, text)) = split_statement_segments(&first_line.text)
-            .into_iter()
-            .next()
-        {
-            let trimmed_text = text.trim();
-            if is_use_strict_directive(trimmed_text) {
-                context.strict_mode = true;
-            }
-        }
-    }
-
     for ll in &logical_lines {
         for (_start, _end, text) in split_statement_segments(&ll.text) {
             let inner_span = span.clone();
@@ -8145,21 +8813,154 @@ fn parse_body_statements(
         }
     }
 
-    // Restore the previous strict mode state (for nested function contexts)
-    context.strict_mode = saved_strict_mode;
-
     Ok(stmts)
 }
 
-fn is_use_strict_directive(statement: &str) -> bool {
-    let trimmed = statement.trim();
-    // Check for "use strict" or 'use strict' directive
-    (trimmed == "\"use strict\";" ||
-     trimmed == "'use strict';" ||
-     trimmed == "\"use strict\"" ||
-     trimmed == "'use strict'") &&
-    // Ensure it's not a complex expression
-    !trimmed.contains('(') && !trimmed.contains('+') && !trimmed.contains('-')
+fn parse_function_body_statements(
+    body_src: &str,
+    goal: ParseGoal,
+    span: &SourceSpan,
+    context: &mut ParseExecutionContext<'_>,
+    force_strict: bool,
+) -> ParseResult<Vec<Statement>> {
+    with_function_strict_mode(body_src, force_strict, context, |context| {
+        parse_body_statements(body_src, goal, span, context)
+    })
+}
+
+fn with_function_strict_mode<T>(
+    body_src: &str,
+    force_strict: bool,
+    context: &mut ParseExecutionContext<'_>,
+    operation: impl FnOnce(&mut ParseExecutionContext<'_>) -> ParseResult<T>,
+) -> ParseResult<T> {
+    let saved_strict_mode = context.strict_mode;
+    context.strict_mode |= force_strict || has_use_strict_directive(body_src);
+    let result = operation(context);
+    context.strict_mode = saved_strict_mode;
+    result
+}
+
+fn is_directive_whitespace(ch: char) -> bool {
+    ch.is_whitespace() || ch == '\u{FEFF}'
+}
+
+fn starts_directive_identifier_part(source: &str) -> bool {
+    source.chars().next().is_some_and(|ch| {
+        matches!(ch, '\\' | '\u{200C}' | '\u{200D}') || is_identifier_continue(ch)
+    })
+}
+
+fn starts_directive_expression_continuation(source: &str) -> bool {
+    let source = source.trim_start_matches(is_directive_whitespace);
+    if source.starts_with("++") || source.starts_with("--") {
+        return false;
+    }
+    if source.starts_with('.') && source.as_bytes().get(1).is_some_and(u8::is_ascii_digit) {
+        return false;
+    }
+    if source.starts_with("!=") {
+        return true;
+    }
+    matches!(
+        source.chars().next(),
+        Some(
+            '(' | '['
+                | '`'
+                | '.'
+                | '+'
+                | '-'
+                | '*'
+                | '/'
+                | '%'
+                | '<'
+                | '>'
+                | '='
+                | '&'
+                | '|'
+                | '^'
+                | '?'
+                | ','
+        )
+    ) || source
+        .strip_prefix("in")
+        .is_some_and(|rest| !starts_directive_identifier_part(rest))
+        || source
+            .strip_prefix("instanceof")
+            .is_some_and(|rest| !starts_directive_identifier_part(rest))
+}
+
+fn trim_directive_whitespace(mut source: &str) -> (&str, bool) {
+    let mut saw_line_terminator = false;
+    let mut whitespace_end = 0usize;
+    for (index, ch) in source.char_indices() {
+        if is_directive_whitespace(ch) {
+            saw_line_terminator |= matches!(ch, '\n' | '\r' | '\u{2028}' | '\u{2029}');
+            whitespace_end = index + ch.len_utf8();
+        } else {
+            break;
+        }
+    }
+    source = &source[whitespace_end..];
+    (source, saw_line_terminator)
+}
+
+fn strip_initial_hashbang(source: &str) -> &str {
+    let source = source.strip_prefix('\u{FEFF}').unwrap_or(source);
+    if !source.starts_with("#!") {
+        return source;
+    }
+    source_line_terminator_ranges(source)
+        .first()
+        .map_or("", |(_, end)| &source[*end..])
+}
+
+fn has_use_strict_directive(source: &str) -> bool {
+    let mut source = strip_initial_hashbang(source);
+    loop {
+        (source, _) = trim_directive_whitespace(source);
+        let Some(delimiter) = source.chars().next().filter(|ch| matches!(ch, '\'' | '"')) else {
+            return false;
+        };
+
+        let mut escaped = false;
+        let mut closing_index = None;
+        for (index, ch) in source[delimiter.len_utf8()..].char_indices() {
+            if escaped {
+                escaped = false;
+            } else if ch == '\\' {
+                escaped = true;
+            } else if ch == delimiter {
+                closing_index = Some(delimiter.len_utf8() + index);
+                break;
+            } else if matches!(ch, '\n' | '\r' | '\u{2028}' | '\u{2029}') {
+                return false;
+            }
+        }
+        let Some(closing_index) = closing_index else {
+            return false;
+        };
+        let directive = &source[delimiter.len_utf8()..closing_index];
+        let after_literal = &source[closing_index + delimiter.len_utf8()..];
+        let (after_whitespace, saw_line_terminator) = trim_directive_whitespace(after_literal);
+        let terminated = after_whitespace.is_empty()
+            || after_whitespace.starts_with(';')
+            || (saw_line_terminator && !starts_directive_expression_continuation(after_whitespace));
+        if !terminated {
+            return false;
+        }
+        if directive == "use strict" {
+            return true;
+        }
+
+        source = if let Some(rest) = after_whitespace.strip_prefix(';') {
+            rest
+        } else if saw_line_terminator {
+            after_whitespace
+        } else {
+            return false;
+        };
+    }
 }
 
 fn parse_block_statement(
@@ -8356,6 +9157,7 @@ fn build_sequence_expression(operands: Vec<Expression>, span: &SourceSpan) -> Ex
             is_async: false,
         }),
         arguments: operands,
+        span: Some(*span),
     }
 }
 
@@ -8383,6 +9185,60 @@ fn parse_expression_allowing_sequence(
     parse_expression(src, span, context, 1)
 }
 
+/// Split a C-style `for` header into `(init, condition, update)` on the first
+/// two *top-level* semicolons (ignoring `;` inside `()`/`[]`/`{}`/quotes).
+/// Anything after the second top-level `;` stays in `update` (matching the
+/// previous `splitn(3, ';')` leniency). Returns `None` if fewer than two
+/// top-level semicolons are present.
+fn split_for_header(header: &str) -> Option<(&str, &str, &str)> {
+    let bytes = header.as_bytes();
+    let mut depth_paren: i64 = 0;
+    let mut depth_bracket: i64 = 0;
+    let mut depth_brace: i64 = 0;
+    let mut in_quote: Option<u8> = None;
+    let mut escaped = false;
+    let mut semis: [usize; 2] = [0, 0];
+    let mut count: usize = 0;
+    let mut i: usize = 0;
+    while i < bytes.len() {
+        let b = bytes[i];
+        if let Some(q) = in_quote {
+            if escaped {
+                escaped = false;
+            } else if b == b'\\' {
+                escaped = true;
+            } else if b == q {
+                in_quote = None;
+            }
+            i += 1;
+            continue;
+        }
+        match b {
+            b'\'' | b'"' | b'`' => in_quote = Some(b),
+            b'(' => depth_paren += 1,
+            b')' => depth_paren -= 1,
+            b'[' => depth_bracket += 1,
+            b']' => depth_bracket -= 1,
+            b'{' => depth_brace += 1,
+            b'}' => depth_brace -= 1,
+            b';' if depth_paren == 0 && depth_bracket == 0 && depth_brace == 0 && count < 2 => {
+                semis[count] = i;
+                count += 1;
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    if count < 2 {
+        return None;
+    }
+    Some((
+        &header[..semis[0]],
+        &header[semis[0] + 1..semis[1]],
+        &header[semis[1] + 1..],
+    ))
+}
+
 fn parse_for_statement(
     statement: &str,
     goal: ParseGoal,
@@ -8393,6 +9249,20 @@ fn parse_for_statement(
         .strip_prefix("for")
         .unwrap_or(statement)
         .trim_start();
+    // bd-suwvw: accept the `for await (const x of iterable)` header shape.
+    // The engine's iteration protocol is synchronous (there is no
+    // `@@asyncIterator` dispatch); `for await` lowers to the same for-of
+    // machinery. Deterministic async iterables the engine itself vends
+    // (`require('timers/promises').setInterval`) advance the virtual clock
+    // inside their `next` step, so the observable console output matches the
+    // async protocol for engine-supported iterables. `await` must be a whole
+    // word (`for awaitFoo(...)` is not a for-await header).
+    let after_for = match after_for.strip_prefix("await") {
+        Some(rest) if rest.starts_with(|c: char| c.is_ascii_whitespace() || c == '(') => {
+            rest.trim_start()
+        }
+        _ => after_for,
+    };
     let (header_src, rest) = extract_balanced(after_for, '(', ')').ok_or_else(|| {
         ParseError::new(
             ParseErrorCode::UnsupportedSyntax,
@@ -8407,11 +9277,13 @@ fn parse_for_statement(
         return Ok(forin);
     }
 
-    // Split header by semicolons: init; condition; update
-    let parts: Vec<&str> = header_src.splitn(3, ';').collect();
-    let (init_src, cond_src, update_src) = match parts.len() {
-        3 => (parts[0].trim(), parts[1].trim(), parts[2].trim()),
-        _ => {
+    // Split header by top-level semicolons: init; condition; update. The split
+    // must be nesting-aware so a `;` inside an arrow/block body or a string in
+    // a header clause (e.g. `for (let f = () => { a; return b; }; i < n; i++)`)
+    // does not mis-split the three parts.
+    let (init_src, cond_src, update_src) = match split_for_header(header_src) {
+        Some((init, cond, update)) => (init.trim(), cond.trim(), update.trim()),
+        None => {
             return Err(ParseError::new(
                 ParseErrorCode::UnsupportedSyntax,
                 "for statement header must have three semicolon-separated parts",
@@ -8434,12 +9306,16 @@ fn parse_for_statement(
     let condition = if cond_src.is_empty() {
         None
     } else {
-        Some(parse_expression_allowing_sequence(cond_src, &span, context)?)
+        Some(parse_expression_allowing_sequence(
+            cond_src, &span, context,
+        )?)
     };
     let update = if update_src.is_empty() {
         None
     } else {
-        Some(parse_expression_allowing_sequence(update_src, &span, context)?)
+        Some(parse_expression_allowing_sequence(
+            update_src, &span, context,
+        )?)
     };
 
     let body_src = rest.trim();
@@ -8508,6 +9384,7 @@ fn try_parse_for_in_of(
         Ok(Some(Statement::ForIn(ForInStatement {
             binding,
             binding_kind,
+            assignment_strictness: AssignmentStrictness::from_strict_mode(context.strict_mode),
             object,
             body: Box::new(body),
             span: span.clone(),
@@ -8517,6 +9394,7 @@ fn try_parse_for_in_of(
         Ok(Some(Statement::ForOf(ForOfStatement {
             binding,
             binding_kind,
+            assignment_strictness: AssignmentStrictness::from_strict_mode(context.strict_mode),
             iterable,
             body: Box::new(body),
             span: span.clone(),
@@ -8789,7 +9667,17 @@ fn parse_try_catch_statement(
                     Some(span.clone()),
                 )
             })?;
-            (Some(p.trim().to_string()), r)
+            let parameter = p.trim();
+            if parameter.is_empty() {
+                return Err(ParseError::new(
+                    ParseErrorCode::UnsupportedSyntax,
+                    "catch clause parameter cannot be empty",
+                    context.source_label.to_string(),
+                    Some(span.clone()),
+                ));
+            }
+            parse_binding_pattern(parameter, &span, context)?;
+            (Some(parameter.to_string()), r)
         } else {
             (None, after_catch)
         };
@@ -8819,29 +9707,42 @@ fn parse_try_catch_statement(
     };
 
     // Parse optional finally clause.
-    let finalizer = if rest.starts_with("finally") {
+    let (finalizer, rest) = if rest.starts_with("finally") {
         let after_finally = rest.strip_prefix("finally").unwrap_or(rest).trim_start();
-        let (finally_inner, _) = extract_balanced(after_finally, '{', '}').ok_or_else(|| {
-            ParseError::new(
-                ParseErrorCode::UnsupportedSyntax,
-                "finally clause requires a braced block",
-                context.source_label.to_string(),
-                Some(span.clone()),
-            )
-        })?;
+        let (finally_inner, rest2) =
+            extract_balanced(after_finally, '{', '}').ok_or_else(|| {
+                ParseError::new(
+                    ParseErrorCode::UnsupportedSyntax,
+                    "finally clause requires a braced block",
+                    context.source_label.to_string(),
+                    Some(span.clone()),
+                )
+            })?;
         let finally_body = parse_body_statements(finally_inner, goal, &span, context)?;
-        Some(BlockStatement {
-            body: finally_body,
-            span: span.clone(),
-        })
+        (
+            Some(BlockStatement {
+                body: finally_body,
+                span: span.clone(),
+            }),
+            rest2.trim(),
+        )
     } else {
-        None
+        (None, rest)
     };
 
     if handler.is_none() && finalizer.is_none() {
         return Err(ParseError::new(
             ParseErrorCode::UnsupportedSyntax,
             "try statement requires at least a catch or finally clause",
+            context.source_label.to_string(),
+            Some(span),
+        ));
+    }
+
+    if !rest.is_empty() {
+        return Err(ParseError::new(
+            ParseErrorCode::UnsupportedSyntax,
+            "try statement has unexpected trailing tokens",
             context.source_label.to_string(),
             Some(span),
         ));
@@ -9071,8 +9972,6 @@ fn parse_function_expression(
             Some(span.clone()),
         )
     })?;
-    let params = parse_arrow_params(params_src, span, context)?;
-
     // Parse body.
     let rest = rest.trim_start();
     let (body_src, _) = extract_balanced(rest, '{', '}').ok_or_else(|| {
@@ -9084,7 +9983,11 @@ fn parse_function_expression(
         )
     })?;
     let goal = ParseGoal::Script;
-    let body_stmts = parse_body_statements(body_src, goal, span, context)?;
+    let (params, body_stmts) = with_function_strict_mode(body_src, false, context, |context| {
+        let params = parse_arrow_params(params_src, span, context)?;
+        let body = parse_body_statements(body_src, goal, span, context)?;
+        Ok((params, body))
+    })?;
 
     Ok(Expression::Function {
         name,
@@ -9102,6 +10005,7 @@ fn parse_function_expression(
 /// clause, and braced body — from a `class ...` source. Used by both the
 /// declaration (`parse_class_declaration`) and expression
 /// (`parse_class_expression`) entry points so the two never diverge.
+#[allow(clippy::type_complexity)]
 fn parse_class_parts(
     statement: &str,
     span: &SourceSpan,
@@ -9149,10 +10053,10 @@ fn parse_class_parts(
             )
         })?;
         let super_name = after_extends[..brace].trim();
-        (
-            Some(Box::new(Expression::Identifier(super_name.to_string()))),
-            &after_extends[brace..],
-        )
+        let super_class = with_function_strict_mode("", true, context, |context| {
+            parse_expression(super_name, span, context, 1)
+        })?;
+        (Some(Box::new(super_class)), &after_extends[brace..])
     } else {
         (None, rest)
     };
@@ -9264,7 +10168,28 @@ fn parse_class_body(
         } else {
             kind
         };
-        let key = Expression::Identifier(method_name.to_string());
+        let (key, computed) = if let Some(inner) = method_name
+            .strip_prefix('[')
+            .and_then(|name| name.strip_suffix(']'))
+        {
+            (
+                with_function_strict_mode("", true, context, |context| {
+                    parse_expression(inner.trim(), span, context, 1)
+                })?,
+                true,
+            )
+        } else {
+            (
+                parse_contextual_static_property_key(
+                    method_name,
+                    span,
+                    context,
+                    LegacyDecimalEscapeMode::Reject,
+                    "class-method",
+                )?,
+                false,
+            )
+        };
         let rest = &rest[paren_idx..];
 
         // Parse parameters.
@@ -9276,8 +10201,6 @@ fn parse_class_body(
                 Some(span.clone()),
             )
         })?;
-        let params = parse_arrow_params(params_src, span, context)?;
-
         // Parse method body.
         let rest = rest.trim_start();
         let (body_src, _) = extract_balanced(rest, '{', '}').ok_or_else(|| {
@@ -9289,7 +10212,11 @@ fn parse_class_body(
             )
         })?;
         let goal = ParseGoal::Script;
-        let body_stmts = parse_body_statements(body_src, goal, span, context)?;
+        let (params, body_stmts) = with_function_strict_mode(body_src, true, context, |context| {
+            let params = parse_arrow_params(params_src, span, context)?;
+            let body = parse_body_statements(body_src, goal, span, context)?;
+            Ok((params, body))
+        })?;
 
         methods.push(MethodDefinition {
             key,
@@ -9300,7 +10227,7 @@ fn parse_class_body(
                 span: span.clone(),
             },
             is_static,
-            computed: false,
+            computed,
             span: span.clone(),
         });
     }
@@ -9422,8 +10349,6 @@ fn parse_function_declaration(
         )
     })?;
 
-    let params = parse_arrow_params(params_src, &span, context)?;
-
     // Parse body.
     let rest = rest.trim_start();
     let (body_src, _) = extract_balanced(rest, '{', '}').ok_or_else(|| {
@@ -9435,7 +10360,11 @@ fn parse_function_declaration(
         )
     })?;
     let goal = ParseGoal::Script; // Function bodies use script goal.
-    let body_stmts = parse_body_statements(body_src, goal, &span, context)?;
+    let (params, body_stmts) = with_function_strict_mode(body_src, false, context, |context| {
+        let params = parse_arrow_params(params_src, &span, context)?;
+        let body = parse_body_statements(body_src, goal, &span, context)?;
+        Ok((params, body))
+    })?;
 
     Ok(Statement::FunctionDeclaration(FunctionDeclaration {
         name,
@@ -9456,6 +10385,69 @@ mod tests {
     use std::io::Cursor;
 
     use super::*;
+
+    #[test]
+    fn unescape_combines_surrogate_pair_escapes_into_code_point() {
+        // `"\uD83D\uDE00"` is the standard pre-ES6 spelling of U+1F600;
+        // adjacent high+low surrogate escapes cook to one code point
+        // (bd-k9jb0), in any escape spelling.
+        assert_eq!(
+            unescape_string_literal(r"\uD83D\uDE00").as_deref(),
+            Some("\u{1F600}")
+        );
+        // Mixed 4-hex and braced spellings combine identically.
+        assert_eq!(
+            unescape_string_literal(r"\uD83D\u{DE00}").as_deref(),
+            Some("\u{1F600}")
+        );
+        assert_eq!(
+            unescape_string_literal(r"\u{D83D}\uDE00").as_deref(),
+            Some("\u{1F600}")
+        );
+        assert_eq!(
+            unescape_string_literal(r"\u{D83D}\u{DE00}").as_deref(),
+            Some("\u{1F600}")
+        );
+        // Direct supplementary code point still decodes without pairing.
+        assert_eq!(
+            unescape_string_literal(r"\u{1F600}").as_deref(),
+            Some("\u{1F600}")
+        );
+        // Surrounding content is preserved across the combined pair.
+        assert_eq!(
+            unescape_string_literal(r"a\uD83D\uDE00b").as_deref(),
+            Some("a\u{1F600}b")
+        );
+    }
+
+    #[test]
+    fn unescape_lone_surrogate_escapes_fail_closed() {
+        // Lone surrogate VALUES are unrepresentable in the UTF-8 string
+        // model (bd-neika); decoding stays a fail-closed parse error.
+        assert_eq!(unescape_string_literal(r"\uD83D"), None);
+        assert_eq!(unescape_string_literal(r"\uDE00"), None);
+        assert_eq!(unescape_string_literal(r"\u{D83D}"), None);
+        // High surrogate followed by anything but a low-surrogate escape.
+        assert_eq!(unescape_string_literal(r"\uD83Dx"), None);
+        assert_eq!(unescape_string_literal(r"\uD83D\n"), None);
+        assert_eq!(unescape_string_literal(r"\uD83DA"), None);
+        // Reversed order (low then high) is not a valid pair.
+        assert_eq!(unescape_string_literal(r"\uDE00\uD83D"), None);
+    }
+
+    #[test]
+    fn parsed_string_literal_cooks_surrogate_pair_escapes() {
+        // End-to-end through the parser: the literal's cooked value is U+1F600.
+        let parser = CanonicalEs2020Parser;
+        let tree = parser
+            .parse(r#"const s = "\uD83D\uDE00";"#, ParseGoal::Script)
+            .expect("surrogate-pair string literal should parse");
+        let rendered = format!("{tree:?}");
+        assert!(
+            rendered.contains('\u{1F600}'),
+            "cooked literal should contain U+1F600, got: {rendered}"
+        );
+    }
 
     #[test]
     fn script_goal_rejects_import_declaration() {
@@ -9597,10 +10589,7 @@ mod tests {
         let tree = parser.parse("'hello'", ParseGoal::Script).expect("parse");
         match &tree.body[0] {
             Statement::Expression(expr) => {
-                assert_eq!(
-                    expr.expression,
-                    Expression::StringLiteral("hello".to_string())
-                );
+                assert_eq!(expr.expression, Expression::StringLiteral("hello".into()));
             }
             _ => panic!("expected expression statement"),
         }
@@ -9612,13 +10601,350 @@ mod tests {
         let tree = parser.parse("\"world\"", ParseGoal::Script).expect("parse");
         match &tree.body[0] {
             Statement::Expression(expr) => {
-                assert_eq!(
-                    expr.expression,
-                    Expression::StringLiteral("world".to_string())
-                );
+                assert_eq!(expr.expression, Expression::StringLiteral("world".into()));
             }
             _ => panic!("expected expression statement"),
         }
+    }
+
+    #[test]
+    fn string_literal_surrogate_escapes_preserve_exact_utf16_bd_vltnh() {
+        let cases: [(&str, &[u16], bool); 5] = [
+            (r#""\uD800""#, &[0xD800], false),
+            (r"'\uDC00'", &[0xDC00], false),
+            (r#""\u{D800}""#, &[0xD800], false),
+            (r#""a\uD800b""#, &[0x0061, 0xD800, 0x0062], false),
+            (r#""\uD83D\uDE00""#, &[0xD83D, 0xDE00], true),
+        ];
+
+        for (source, expected_units, expected_well_formed) in cases {
+            let tree = CanonicalEs2020Parser
+                .parse(source, ParseGoal::Script)
+                .unwrap_or_else(|error| panic!("{source:?} should parse: {error}"));
+            let Statement::Expression(expression) = &tree.body[0] else {
+                panic!("{source:?} should be an expression statement");
+            };
+            let Expression::StringLiteral(value) = &expression.expression else {
+                panic!("{source:?} should produce a string literal");
+            };
+            assert_eq!(value.code_units_vec(), expected_units, "{source:?}");
+            assert_eq!(value.is_well_formed(), expected_well_formed, "{source:?}");
+        }
+    }
+
+    #[test]
+    fn string_literal_ordinary_escapes_are_cooked_bd_vltnh() {
+        for (source, expected) in [
+            (r#""\n\t\r\b\f\v\0""#, "\n\t\r\u{0008}\u{000C}\u{000B}\0"),
+            (r#""\x41\u0042\u{43}""#, "ABC"),
+            (r#""\q""#, "q"),
+            (r#""\"""#, "\""),
+        ] {
+            let value = parse_quoted_expression_string(source, LegacyDecimalEscapeMode::Reject)
+                .unwrap_or_else(|| panic!("{source:?} should cook"));
+            assert_eq!(value, expected, "{source:?}");
+            assert!(value.is_well_formed(), "{source:?}");
+        }
+    }
+
+    #[test]
+    fn string_literal_line_continuations_and_astral_escape_bd_vltnh() {
+        for source in [
+            "\"a\\\nb\"",
+            "\"a\\\rb\"",
+            "\"a\\\r\nb\"",
+            "\"a\\\u{2028}b\"",
+            "\"a\\\u{2029}b\"",
+        ] {
+            let value = parse_quoted_expression_string(source, LegacyDecimalEscapeMode::Reject)
+                .unwrap_or_else(|| panic!("{source:?} should cook"));
+            assert_eq!(value, "ab", "{source:?}");
+        }
+
+        for (source, expected) in [
+            ("\"a\u{2028}b\"", "a\u{2028}b"),
+            ("\"a\u{2029}b\"", "a\u{2029}b"),
+        ] {
+            assert_eq!(
+                parse_quoted_expression_string(source, LegacyDecimalEscapeMode::Reject)
+                    .unwrap_or_else(|| panic!("{source:?} should cook")),
+                expected,
+                "{source:?}"
+            );
+            let tree = CanonicalEs2020Parser
+                .parse(source, ParseGoal::Script)
+                .unwrap_or_else(|error| panic!("{source:?} should parse: {error}"));
+            assert!(matches!(
+                first_expr(&tree),
+                Expression::StringLiteral(value) if value == expected
+            ));
+        }
+
+        assert_eq!(
+            parse_quoted_expression_string(r#""\u{1F600}""#, LegacyDecimalEscapeMode::Reject,)
+                .expect("braced astral escape should cook")
+                .code_units_vec(),
+            [0xD83D, 0xDE00]
+        );
+        assert_eq!(
+            parse_quoted_expression_string(
+                "\"\\uD83D\\\n\\uDE00\"",
+                LegacyDecimalEscapeMode::Reject,
+            )
+            .expect("continuation may separate surrogate escapes")
+            .code_units_vec(),
+            [0xD83D, 0xDE00]
+        );
+
+        for source in ["\"a\\\nb\"", "\"a\\\rb\"", "\"a\\\r\nb\""] {
+            let tree = CanonicalEs2020Parser
+                .parse(source, ParseGoal::Script)
+                .unwrap_or_else(|error| panic!("{source:?} should parse: {error}"));
+            assert!(matches!(
+                first_expr(&tree),
+                Expression::StringLiteral(value) if value == "ab"
+            ));
+        }
+
+        let nul_then_digit = CanonicalEs2020Parser
+            .parse("\"\\0\\\n8\"", ParseGoal::Script)
+            .expect("line continuation after NUL escape must reset decimal lookahead");
+        assert!(matches!(
+            first_expr(&nul_then_digit),
+            Expression::StringLiteral(value) if value.code_units_vec() == [0x0000, 0x0038]
+        ));
+
+        for source in ["\"a\nb\"", "\"a\rb\"", "\"a\r\nb\""] {
+            let error = CanonicalEs2020Parser
+                .parse(source, ParseGoal::Script)
+                .expect_err("raw LF/CRLF in a quoted literal must fail closed");
+            assert_eq!(error.code, ParseErrorCode::UnsupportedSyntax, "{source:?}");
+        }
+    }
+
+    #[test]
+    fn quoted_and_template_continuations_keep_physical_positions_bd_21nbg() {
+        let parser = CanonicalEs2020Parser;
+        for terminator in ["\r", "\r\n", "\n", "\u{2028}", "\u{2029}"] {
+            let quoted_source = format!("\"a\\{terminator}b\"");
+            let quoted_tree = parser
+                .parse(quoted_source.as_str(), ParseGoal::Script)
+                .unwrap_or_else(|error| panic!("failed to parse {quoted_source:?}: {error}"));
+            assert!(matches!(
+                first_expr(&quoted_tree),
+                Expression::StringLiteral(value) if value == "ab"
+            ));
+
+            let template_source = format!("let value = `a\\{terminator}b`;{terminator}after;");
+            let template_tree = parser
+                .parse(template_source.as_str(), ParseGoal::Script)
+                .unwrap_or_else(|error| panic!("failed to parse {template_source:?}: {error}"));
+            assert_eq!(template_tree.body.len(), 2, "{template_source:?}");
+            let Statement::VariableDeclaration(declaration) = &template_tree.body[0] else {
+                panic!("expected template declaration for {template_source:?}");
+            };
+            let Some(Expression::TemplateLiteral { quasis, .. }) =
+                declaration.declarations[0].initializer.as_ref()
+            else {
+                panic!("expected template initializer for {template_source:?}");
+            };
+            assert_eq!(quasis.len(), 1, "{template_source:?}");
+            assert_eq!(
+                quasis[0],
+                format!("a\\{terminator}b"),
+                "template raw quasi must retain {terminator:?}"
+            );
+            assert_eq!(
+                template_tree.body[1].span().start_line,
+                3,
+                "{template_source:?}"
+            );
+            assert_eq!(
+                template_tree.body[1].span().start_column,
+                1,
+                "{template_source:?}"
+            );
+            assert_eq!(
+                template_tree.body[1].span().start_offset,
+                template_source.find("after").expect("after is present") as u64,
+                "{template_source:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn malformed_quoted_expression_literals_fail_closed_bd_vltnh() {
+        for source in [
+            "\"unterminated",
+            "\"trailing\\",
+            r#""\x""#,
+            r#""\xZZ""#,
+            r#""\u""#,
+            r#""\u12""#,
+            r#""\u{}""#,
+            r#""\u{110000}""#,
+            r#""a"b""#,
+            "\"\\u\\\n0041\"",
+            "\"\\x\\\n41\"",
+            "\"\\u{4\\\n1}\"",
+        ] {
+            let error = CanonicalEs2020Parser
+                .parse(source, ParseGoal::Script)
+                .expect_err("malformed quoted source must fail closed");
+            assert_eq!(error.code, ParseErrorCode::UnsupportedSyntax, "{source:?}");
+        }
+    }
+
+    // Node 20.19.4 matches these Annex-B values and strict failures. Bun
+    // 1.3.14's CLI parser currently diverges by rejecting sloppy octal while
+    // accepting strict `\8`/`\9`; this parser follows ECMA-262 and Node.
+    #[test]
+    fn legacy_decimal_escapes_follow_annex_b_in_sloppy_scripts_bd_xcqzp() {
+        let parser = CanonicalEs2020Parser;
+        for (source, expected_units) in [
+            (r#""\1""#, &[0x0001][..]),
+            (r#""\8""#, &[0x0038][..]),
+            (r#""\9""#, &[0x0039][..]),
+            (r#""\08""#, &[0x0000, 0x0038][..]),
+            (r#""\18""#, &[0x0001, 0x0038][..]),
+            (r#""\118""#, &[0x0009, 0x0038][..]),
+            (r#""\377""#, &[0x00FF][..]),
+            (r#""\400""#, &[0x0020, 0x0030][..]),
+            (r#""\478""#, &[0x0027, 0x0038][..]),
+        ] {
+            let tree = parser
+                .parse(source, ParseGoal::Script)
+                .unwrap_or_else(|error| panic!("sloppy {source:?} should parse: {error}"));
+            assert!(matches!(
+                first_expr(&tree),
+                Expression::StringLiteral(value)
+                    if value.code_units_vec() == expected_units
+            ));
+        }
+
+        let postfix = parser
+            .parse(r#""\1".length"#, ParseGoal::Script)
+            .expect("a sloppy legacy escape may be a postfix receiver");
+        assert!(matches!(
+            first_expr(&postfix),
+            Expression::Member { object, .. }
+                if matches!(object.as_ref(), Expression::StringLiteral(value)
+                    if value.code_units_vec() == [0x0001])
+        ));
+
+        for source in [
+            r#"let value = "\118";"#,
+            r#"({"\1": value});"#,
+            r#"let {"\1": value} = source;"#,
+            r#"({ "\1"() {} });"#,
+            r#""use\x20strict"; "\1";"#,
+            r#""not a directive" + suffix; "use strict"; "\1";"#,
+            r#"{ "use strict"; "\1"; }"#,
+            r#"; "use strict"; "\1";"#,
+            "\"use strict\"\n+suffix; \"\\1\";",
+        ] {
+            parser
+                .parse(source, ParseGoal::Script)
+                .unwrap_or_else(|error| panic!("sloppy context should accept {source:?}: {error}"));
+        }
+    }
+
+    #[test]
+    fn strict_and_module_code_reject_legacy_decimal_escapes_bd_xcqzp() {
+        let parser = CanonicalEs2020Parser;
+        for source in [
+            r#""use strict"; "\1";"#,
+            r#""prologue"; "use strict"; "\8";"#,
+            r#""\1"; "use strict";"#,
+            r#""use strict"; ({"\1": value});"#,
+            r#""use strict"; let {"\1": value} = source;"#,
+            r#""use strict"; ({ "\1"() {} });"#,
+            r#"function f() { "prologue"; "use strict"; return "\1"; }"#,
+            r#""use strict"; function f() { return "\1"; }"#,
+            r#"const f = () => { "use strict"; return "\1"; };"#,
+            r#"class C { method() { return "\1"; } }"#,
+            r#"function f(value = "\1") { "use strict"; }"#,
+            r#"const f = (value = "\1") => { "use strict"; };"#,
+            r#"class C { method(value = "\1") {} }"#,
+            r#"class C { "\1"() {} }"#,
+            r#"class C { ["\1"]() {} }"#,
+            r#"class C extends ("\1") {}"#,
+        ] {
+            let error = parser
+                .parse(source, ParseGoal::Script)
+                .expect_err("strict Script code must reject legacy decimal escapes");
+            assert_eq!(error.code, ParseErrorCode::UnsupportedSyntax, "{source:?}");
+        }
+
+        parser
+            .parse(r#"class C { "ok"() {} }"#, ParseGoal::Script)
+            .expect("an ordinary quoted class method name remains valid");
+        parser
+            .parse(r#"class C { ["ok"]() {} }"#, ParseGoal::Script)
+            .expect("an ordinary computed class method name remains valid");
+
+        for source in [
+            r#""\1";"#,
+            r#""\8";"#,
+            r#""\9";"#,
+            r#""\08";"#,
+            r#"let {"\1": value} = source;"#,
+        ] {
+            let error = parser
+                .parse(source, ParseGoal::Module)
+                .expect_err("Module code is strict and must reject legacy decimal escapes");
+            assert_eq!(error.code, ParseErrorCode::UnsupportedSyntax, "{source:?}");
+        }
+
+        parser
+            .parse(r#""use strict"; "\0";"#, ParseGoal::Script)
+            .expect("plain NUL escapes remain valid in strict Script code");
+        parser
+            .parse(r#""\0";"#, ParseGoal::Module)
+            .expect("plain NUL escapes remain valid in Module code");
+    }
+
+    #[test]
+    fn quoted_expression_postfix_base_uses_exact_cooker_bd_vltnh() {
+        let tree = CanonicalEs2020Parser
+            .parse(r#""\uD800".length"#, ParseGoal::Script)
+            .expect("exact quoted literal may be a postfix base");
+        assert!(matches!(
+            first_expr(&tree),
+            Expression::Member { object, property, computed: false, .. }
+                if matches!(object.as_ref(), Expression::StringLiteral(value)
+                    if value.code_units_vec() == [0xD800])
+                    && matches!(property.as_ref(), Expression::Identifier(name)
+                        if name == "length")
+        ));
+
+        for source in [r#""\xZZ".length"#, r#""a"b".length"#, r#""a"."#, r#""a"["#] {
+            let error = CanonicalEs2020Parser
+                .parse(source, ParseGoal::Script)
+                .expect_err("malformed quoted postfix source must fail closed");
+            assert_eq!(error.code, ParseErrorCode::UnsupportedSyntax, "{source:?}");
+        }
+    }
+
+    #[test]
+    fn exact_module_string_wrapper_preserves_lone_units_bd_lfq44() {
+        assert_eq!(
+            parse_quoted_string(r#""\uD800""#)
+                .expect("high surrogate should remain representable")
+                .code_units_vec(),
+            [0xD800]
+        );
+        assert_eq!(
+            parse_quoted_string(r"'\uDC00'")
+                .expect("low surrogate should remain representable")
+                .code_units_vec(),
+            [0xDC00]
+        );
+        assert_eq!(
+            parse_quoted_string(r#""\uD83D\uDE00""#)
+                .and_then(|value| value.as_str().map(str::to_string)),
+            Some("😀".to_string()),
+        );
     }
 
     #[test]
@@ -9820,7 +11146,7 @@ mod tests {
                 assert_eq!(first.name(), Some("first"));
                 assert_eq!(
                     first.initializer,
-                    Some(Expression::StringLiteral("a,b".to_string()))
+                    Some(Expression::StringLiteral("a,b".into()))
                 );
                 let second = &variable_declaration.declarations[1];
                 assert_eq!(second.name(), Some("second"));
@@ -10370,17 +11696,18 @@ mod tests {
                 let declarator = &decl.declarations[0];
                 if let Some(init) = &declarator.initializer {
                     match init {
-                        Expression::Await(inner) => {
-                            assert_eq!(
-                                **inner,
-                                Expression::Call {
-                                    callee: Box::new(Expression::Identifier(
-                                        "fetchData".to_string(),
-                                    )),
-                                    arguments: Vec::new(),
-                                }
-                            );
-                        }
+                        Expression::Await(inner) => match inner.as_ref() {
+                            Expression::Call {
+                                callee, arguments, ..
+                            } => {
+                                assert_eq!(
+                                    **callee,
+                                    Expression::Identifier("fetchData".to_string())
+                                );
+                                assert!(arguments.is_empty());
+                            }
+                            _ => panic!("expected call expression in await"),
+                        },
                         _ => panic!("expected await expression in initializer"),
                     }
                 } else {
@@ -10399,15 +11726,15 @@ mod tests {
             .expect("parse");
         match &tree.body[0] {
             Statement::Expression(expr) => match &expr.expression {
-                Expression::Await(inner) => {
-                    assert_eq!(
-                        **inner,
-                        Expression::Call {
-                            callee: Box::new(Expression::Identifier("doSomething".to_string(),)),
-                            arguments: Vec::new(),
-                        }
-                    );
-                }
+                Expression::Await(inner) => match inner.as_ref() {
+                    Expression::Call {
+                        callee, arguments, ..
+                    } => {
+                        assert_eq!(**callee, Expression::Identifier("doSomething".to_string()));
+                        assert!(arguments.is_empty());
+                    }
+                    _ => panic!("expected call expression in await"),
+                },
                 _ => panic!("expected await expression"),
             },
             _ => panic!("expected expression statement"),
@@ -10680,7 +12007,8 @@ mod tests {
         match &tree.body[0] {
             Statement::Export(export) => match &export.kind {
                 ExportKind::NamedClause(clause) => {
-                    assert_eq!(clause, "{ a, b }");
+                    assert_eq!(clause.canonical_head(), "{ a, b }");
+                    assert!(clause.source().is_none());
                 }
                 _ => panic!("expected named clause export"),
             },
@@ -10700,12 +12028,61 @@ mod tests {
         match &tree.body[0] {
             Statement::Export(export) => match &export.kind {
                 ExportKind::NamedClause(clause) => {
-                    assert_eq!(clause, "{ default as dep, run as start } from \"pkg\"");
+                    assert_eq!(clause.canonical_head(), "{ default as dep, run as start }");
+                    assert_eq!(clause.source().and_then(JsString::as_str), Some("pkg"));
                 }
                 _ => panic!("expected named clause export"),
             },
             _ => panic!("expected export statement"),
         }
+    }
+
+    #[test]
+    fn export_named_clause_cooks_source_without_collapsing_inner_space_bd_vltnh() {
+        let tree = CanonicalEs2020Parser
+            .parse("export { dep } from \"pkg  name\"", ParseGoal::Module)
+            .expect("named export source should parse");
+        let Statement::Export(export) = &tree.body[0] else {
+            panic!("expected named export clause");
+        };
+        assert!(matches!(
+            &export.kind,
+            ExportKind::NamedClause(clause)
+                if clause.canonical_head() == "{ dep }"
+                    && clause.source().and_then(JsString::as_str) == Some("pkg  name")
+        ));
+    }
+
+    #[test]
+    fn module_declarations_preserve_distinct_lone_surrogate_sources_bd_lfq44() {
+        let import_tree = CanonicalEs2020Parser
+            .parse(r#"import "\uD800"; import "\uDC00""#, ParseGoal::Module)
+            .expect("exact import sources should parse");
+        let [Statement::Import(first), Statement::Import(second)] = import_tree.body.as_slice()
+        else {
+            panic!("expected two side-effect imports");
+        };
+        assert_eq!(first.source.code_units_vec(), [0xD800]);
+        assert_eq!(second.source.code_units_vec(), [0xDC00]);
+        assert_ne!(first.source, second.source);
+
+        let export_tree = CanonicalEs2020Parser
+            .parse(r#"export { value } from "\uDC00""#, ParseGoal::Module)
+            .expect("exact re-export source should parse");
+        let Statement::Export(export) = &export_tree.body[0] else {
+            panic!("expected named re-export");
+        };
+        let ExportKind::NamedClause(clause) = &export.kind else {
+            panic!("expected named export clause");
+        };
+        assert_eq!(clause.canonical_head(), "{ value }");
+        assert_eq!(
+            clause
+                .source()
+                .expect("re-export must retain its source")
+                .code_units_vec(),
+            [0xDC00]
+        );
     }
 
     #[test]
@@ -10725,7 +12102,8 @@ mod tests {
         assert!(matches!(
             &tree.body[1],
             Statement::Export(export)
-                if matches!(&export.kind, ExportKind::NamedClause(clause) if clause == "{ x }")
+                if matches!(&export.kind, ExportKind::NamedClause(clause)
+                    if clause.canonical_head() == "{ x }" && clause.source().is_none())
         ));
     }
 
@@ -10744,7 +12122,8 @@ mod tests {
         assert!(matches!(
             &tree.body[1],
             Statement::Export(export)
-                if matches!(&export.kind, ExportKind::NamedClause(clause) if clause == "{ run }")
+                if matches!(&export.kind, ExportKind::NamedClause(clause)
+                    if clause.canonical_head() == "{ run }" && clause.source().is_none())
         ));
     }
 
@@ -10766,7 +12145,8 @@ mod tests {
         assert!(matches!(
             &tree.body[1],
             Statement::Export(export)
-                if matches!(&export.kind, ExportKind::NamedClause(clause) if clause == "{ run }")
+                if matches!(&export.kind, ExportKind::NamedClause(clause)
+                    if clause.canonical_head() == "{ run }" && clause.source().is_none())
         ));
         assert!(matches!(
             &tree.body[2],
@@ -10812,7 +12192,8 @@ mod tests {
         assert!(matches!(
             &tree.body[1],
             Statement::Export(export)
-                if matches!(&export.kind, ExportKind::NamedClause(clause) if clause == "{ Runner }")
+                if matches!(&export.kind, ExportKind::NamedClause(clause)
+                    if clause.canonical_head() == "{ Runner }" && clause.source().is_none())
         ));
     }
 
@@ -10945,6 +12326,140 @@ mod tests {
         assert!(lex_has_class(b'\"', LEX_CLASS_QUOTE));
         assert!(lex_has_class(b'=', LEX_CLASS_TWO_CHAR_OPERATOR_LEAD));
         assert!(!lex_has_class(b'+', LEX_CLASS_TWO_CHAR_OPERATOR_LEAD));
+        // bd-2noh9: `<VT>` (0x0B) and `<FF>` (0x0C) are ES2020 WhiteSpace.
+        assert!(lex_has_class(0x0b, LEX_CLASS_WHITESPACE));
+        assert!(lex_has_class(0x0c, LEX_CLASS_WHITESPACE));
+    }
+
+    /// The scalar reference's whitespace predicate must classify the exact same
+    /// byte set as the SIMD scanner's `LEX_CLASS_WHITESPACE` bit — otherwise the
+    /// two token counters diverge (bd-2noh9). This locks the two independent
+    /// implementations together without coupling their code paths.
+    #[test]
+    fn ascii_lexical_whitespace_matches_the_simd_whitespace_class_bd_2noh9() {
+        for byte in 0u8..=255 {
+            assert_eq!(
+                is_ascii_lexical_whitespace(byte),
+                lex_has_class(byte, LEX_CLASS_WHITESPACE),
+                "whitespace classification disagrees for byte {byte:#04x}"
+            );
+        }
+        // Pin the specific WhatWG-Infra vs ES2020 gap: `is_ascii_whitespace`
+        // omits `<VT>`, but the lexical-whitespace predicate must include it.
+        assert!(is_ascii_lexical_whitespace(0x0b));
+        assert!(!0x0b_u8.is_ascii_whitespace());
+    }
+
+    /// Regression for bd-2noh9: a `<VT>` (U+000B) between/around tokens must be
+    /// treated as whitespace by BOTH counters (it produces no token), and an
+    /// exhaustive control-byte differential must show no residual SIMD-vs-scalar
+    /// divergence on ASCII input.
+    #[test]
+    fn vertical_tab_token_count_parity_bd_2noh9() {
+        // `<VT>` splits two identifiers but is not itself a token: `a <VT> b`
+        // is two tokens, exactly like `a b`.
+        assert_eq!(count_lexical_tokens("a\u{000b}b"), 2);
+        assert_eq!(count_lexical_tokens_scalar_reference("a\u{000b}b"), 2);
+        assert_eq!(count_lexical_tokens("a b"), 2);
+        // A run of only whitespace (including `<VT>`) yields zero tokens.
+        assert_eq!(count_lexical_tokens("\u{000b}\u{000c}\t \r\n"), 0);
+        assert_eq!(
+            count_lexical_tokens_scalar_reference("\u{000b}\u{000c}\t \r\n"),
+            0
+        );
+
+        // Exhaustive differential: every ASCII control/space byte, each embedded
+        // between two identifiers and standing alone, must count identically
+        // under the SIMD scanner and the scalar reference.
+        for byte in 0u8..=0x7f {
+            let embedded = format!("a{}b", byte as char);
+            assert_eq!(
+                count_lexical_tokens(&embedded),
+                count_lexical_tokens_scalar_reference(&embedded),
+                "embedded parity drift for byte {byte:#04x}"
+            );
+            let alone = (byte as char).to_string();
+            assert_eq!(
+                count_lexical_tokens(&alone),
+                count_lexical_tokens_scalar_reference(&alone),
+                "standalone parity drift for byte {byte:#04x}"
+            );
+        }
+    }
+
+    /// Parse `source` under a small recursion budget so the depth guards fire
+    /// well before the native stack is at risk of overflow.
+    fn parse_with_recursion_limit(
+        source: &str,
+        max_recursion_depth: u64,
+    ) -> ParseResult<SyntaxTree> {
+        let parser = CanonicalEs2020Parser;
+        let options = ParserOptions {
+            mode: ParserMode::ScalarReference,
+            budget: ParserBudget {
+                max_source_bytes: 1 << 20,
+                max_token_count: 1 << 20,
+                max_recursion_depth,
+            },
+        };
+        parser.parse_with_options(source, ParseGoal::Script, &options)
+    }
+
+    /// bd-c4lhp: deeply nested array destructuring must surface a recoverable
+    /// budget error, never overflow the native stack. Before the fix,
+    /// `parse_binding_pattern` recursed with no depth guard, so this input
+    /// aborted the process (SIGABRT, "thread '…' has overflowed its stack").
+    #[test]
+    fn deeply_nested_array_destructuring_is_depth_bounded_bd_c4lhp() {
+        let depth = 2000;
+        let src = format!("let {}x{} = 0;", "[".repeat(depth), "]".repeat(depth));
+        let err = parse_with_recursion_limit(&src, 32)
+            .expect_err("deep array destructuring must hit the pattern budget");
+        assert_eq!(err.code, ParseErrorCode::BudgetExceeded);
+        assert!(
+            err.message
+                .contains("binding-pattern nesting budget exceeded"),
+            "expected the binding-pattern guard, got: {}",
+            err.message
+        );
+    }
+
+    /// bd-c4lhp: the same guard bounds deeply nested object destructuring.
+    #[test]
+    fn deeply_nested_object_destructuring_is_depth_bounded_bd_c4lhp() {
+        let depth = 2000;
+        let src = format!("let {}x{} = 0;", "{a:".repeat(depth), "}".repeat(depth));
+        let err = parse_with_recursion_limit(&src, 32)
+            .expect_err("deep object destructuring must hit the pattern budget");
+        assert_eq!(err.code, ParseErrorCode::BudgetExceeded);
+        assert!(
+            err.message
+                .contains("binding-pattern nesting budget exceeded"),
+            "expected the binding-pattern guard, got: {}",
+            err.message
+        );
+    }
+
+    /// The pattern-depth guard bounds nesting without rejecting valid patterns:
+    /// a moderately nested destructuring pattern below the limit still parses.
+    #[test]
+    fn moderately_nested_destructuring_still_parses_bd_c4lhp() {
+        parse_with_recursion_limit("let [a, [b, [c, [d]]]] = x;", 32)
+            .expect("shallow destructuring must parse cleanly");
+        parse_with_recursion_limit("let { a: { b: { c: d } } } = x;", 32)
+            .expect("shallow object destructuring must parse cleanly");
+    }
+
+    /// bd-c4lhp: the sibling expression depth guard likewise bounds deeply
+    /// nested parentheses — deep nesting is uniformly a recoverable budget
+    /// error, never a process abort.
+    #[test]
+    fn deeply_nested_parentheses_are_depth_bounded_bd_c4lhp() {
+        let depth = 2000;
+        let src = format!("{}1{};", "(".repeat(depth), ")".repeat(depth));
+        let err = parse_with_recursion_limit(&src, 32)
+            .expect_err("deep parentheses must hit the recursion budget");
+        assert_eq!(err.code, ParseErrorCode::BudgetExceeded);
     }
 
     #[test]
@@ -10959,6 +12474,13 @@ mod tests {
             "`hello ${name}`",
             "`value ${foo({ bar: 1 })}`",
             "`unterminated ${value`",
+            // bd-2noh9: `<VT>` (U+000B) is ES2020 §11.2 WhiteSpace but is omitted
+            // by `is_ascii_whitespace`; exercise it between and around tokens.
+            "a\u{000b}b",
+            "return\u{000b}x",
+            "\u{000b}\u{000b}\u{000b}",
+            "a\u{000b}\u{000c}\u{0009}b",
+            "x\u{000b}==\u{000b}y",
         ];
 
         for source in cases {
@@ -11751,6 +13273,121 @@ mod tests {
     }
 
     #[test]
+    fn materialize_from_source_accepts_exact_historical_root_column_bd_4tt6s() {
+        let parser = CanonicalEs2020Parser;
+        let source = "alpha";
+        let options = ParserOptions::default();
+        let current = parser
+            .parse(source, ParseGoal::Script)
+            .expect("current source should parse");
+        assert_eq!(current.span.end_column, 6);
+
+        let mut historical = current.clone();
+        historical.span.end_column = 1;
+        let historical_hash = historical.canonical_hash();
+
+        for event_ir in [
+            ParseEventIr::from_parse_source(
+                &historical,
+                source,
+                "historical-source.js",
+                options.mode,
+            ),
+            ParseEventIr::from_syntax_tree(&historical, "historical-tree.js", options.mode),
+        ] {
+            let materialized = event_ir
+                .materialize_from_source(source, &options)
+                .expect("the exact historical root-column defect should remain readable");
+            assert_eq!(materialized.syntax_tree, historical);
+            assert_eq!(materialized.syntax_tree.canonical_hash(), historical_hash);
+        }
+
+        let trailing_source = "alpha\n";
+        let (result, current_ir) =
+            parser.parse_with_event_ir(trailing_source, ParseGoal::Script, &options);
+        let trailing_tree = result.expect("trailing-LF source should parse");
+        assert_eq!(trailing_tree.span.end_column, 1);
+        assert_eq!(
+            current_ir
+                .materialize_from_source(trailing_source, &options)
+                .expect("current trailing-LF stream should materialize")
+                .syntax_tree,
+            trailing_tree
+        );
+    }
+
+    #[test]
+    fn materialize_from_source_rejects_inexact_historical_root_column_bd_4tt6s() {
+        let parser = CanonicalEs2020Parser;
+        let source = "alpha";
+        let options = ParserOptions::default();
+        let current = parser
+            .parse(source, ParseGoal::Script)
+            .expect("current source should parse");
+        let mut historical = current.clone();
+        historical.span.end_column = 1;
+
+        let mut wrong_other_field = ParseEventIr::from_parse_source(
+            &historical,
+            source,
+            "wrong-other-field.js",
+            options.mode,
+        );
+        wrong_other_field
+            .events
+            .last_mut()
+            .and_then(|event| event.span.as_mut())
+            .expect("completed span")
+            .start_column = 2;
+        assert_eq!(
+            wrong_other_field
+                .materialize_from_source(source, &options)
+                .expect_err("a second span-field drift must not use the historical path")
+                .code,
+            ParseEventMaterializationErrorCode::AstHashMismatch
+        );
+
+        let mut current_hash_with_old_span = ParseEventIr::from_parse_source(
+            &current,
+            source,
+            "current-hash-old-span.js",
+            options.mode,
+        );
+        current_hash_with_old_span
+            .events
+            .last_mut()
+            .and_then(|event| event.span.as_mut())
+            .expect("completed span")
+            .end_column = 1;
+        assert_eq!(
+            current_hash_with_old_span
+                .materialize_from_source(source, &options)
+                .expect_err("a current hash must not authenticate a historical span")
+                .code,
+            ParseEventMaterializationErrorCode::StatementSpanMismatch
+        );
+
+        let mut old_hash_with_current_span = ParseEventIr::from_parse_source(
+            &historical,
+            source,
+            "old-hash-current-span.js",
+            options.mode,
+        );
+        old_hash_with_current_span
+            .events
+            .last_mut()
+            .expect("completed event")
+            .span = Some(current.span.clone());
+        assert_eq!(
+            old_hash_with_current_span
+                .materialize_from_source(source, &options)
+                .expect_err("a historical hash must not authenticate the current span")
+                .code,
+            ParseEventMaterializationErrorCode::AstHashMismatch
+        );
+    }
+
+    #[test]
     fn materialized_ast_node_ids_are_deterministic_for_identical_inputs() {
         let parser = CanonicalEs2020Parser;
         let source = "await work";
@@ -12107,6 +13744,229 @@ mod tests {
     }
 
     #[test]
+    fn line_count_recognizes_ecmascript_line_terminators_bd_21nbg() {
+        for (source, expected) in [
+            ("alpha\rbeta", 2),
+            ("alpha\r\nbeta", 2),
+            ("alpha\nbeta", 2),
+            ("alpha\u{2028}beta", 2),
+            ("alpha\u{2029}beta", 2),
+            ("alpha\r\n\u{2028}\u{2029}", 4),
+        ] {
+            assert_eq!(line_count(source), expected, "{source:?}");
+        }
+    }
+
+    #[test]
+    fn ecmascript_line_terminators_split_physical_statements_bd_21nbg() {
+        let parser = CanonicalEs2020Parser;
+        for terminator in ["\r", "\r\n", "\n", "\u{2028}", "\u{2029}"] {
+            let source = format!("first;{terminator}second;");
+            let tree = parser
+                .parse(source.as_str(), ParseGoal::Script)
+                .unwrap_or_else(|error| panic!("failed to parse {source:?}: {error}"));
+            assert_eq!(tree.body.len(), 2, "{source:?}");
+            assert_eq!(tree.body[0].span().start_line, 1, "{source:?}");
+            assert_eq!(tree.body[0].span().end_line, 1, "{source:?}");
+            assert_eq!(tree.body[1].span().start_line, 2, "{source:?}");
+            assert_eq!(tree.body[1].span().end_line, 2, "{source:?}");
+
+            let blank_line_source = format!("first;{terminator}{terminator}second;");
+            let blank_line_tree = parser
+                .parse(blank_line_source.as_str(), ParseGoal::Script)
+                .unwrap_or_else(|error| panic!("failed to parse {blank_line_source:?}: {error}"));
+            assert_eq!(blank_line_tree.body.len(), 2, "{blank_line_source:?}");
+            assert_eq!(
+                blank_line_tree.body[1].span().start_line,
+                3,
+                "{blank_line_source:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn normalized_logical_lines_map_spans_to_physical_source_bd_crph5() {
+        let parser = CanonicalEs2020Parser;
+        for terminator in ["\r", "\r\n", "\n", "\u{2028}", "\u{2029}"] {
+            let source = format!("call({terminator}  value{terminator});  after;");
+            let tree = parser
+                .parse(source.as_str(), ParseGoal::Script)
+                .unwrap_or_else(|error| panic!("failed to parse {source:?}: {error}"));
+            assert_eq!(tree.body.len(), 2, "{source:?}");
+
+            let call_span = tree.body[0].span();
+            assert_eq!(call_span.start_offset, 0, "{source:?}");
+            assert_eq!(
+                call_span.end_offset,
+                source.find(';').expect("call terminator is present") as u64,
+                "{source:?}"
+            );
+            assert_eq!(call_span.start_line, 1, "{source:?}");
+            assert_eq!(call_span.start_column, 1, "{source:?}");
+            assert_eq!(call_span.end_line, 3, "{source:?}");
+            assert_eq!(call_span.end_column, 2, "{source:?}");
+
+            let after_offset = source.find("after").expect("after is present") as u64;
+            let after_span = tree.body[1].span();
+            assert_eq!(after_span.start_offset, after_offset, "{source:?}");
+            assert_eq!(after_span.end_offset, after_offset + 5, "{source:?}");
+            assert_eq!(after_span.start_line, 3, "{source:?}");
+            assert_eq!(after_span.start_column, 5, "{source:?}");
+            assert_eq!(after_span.end_line, 3, "{source:?}");
+            assert_eq!(after_span.end_column, 10, "{source:?}");
+        }
+    }
+
+    #[test]
+    fn leading_dot_continuation_maps_across_trivia_gap_bd_crph5() {
+        let parser = CanonicalEs2020Parser;
+        let source = "value\n// gap\n  .method();\n  after;";
+        let tree = parser
+            .parse(source, ParseGoal::Script)
+            .unwrap_or_else(|error| panic!("failed to parse {source:?}: {error}"));
+        assert_eq!(tree.body.len(), 2);
+
+        let chained_span = tree.body[0].span();
+        assert_eq!(chained_span.start_offset, 0);
+        assert_eq!(
+            chained_span.end_offset,
+            source.find(';').expect("chain terminator is present") as u64
+        );
+        assert_eq!(chained_span.start_line, 1);
+        assert_eq!(chained_span.start_column, 1);
+        assert_eq!(chained_span.end_line, 3);
+        assert_eq!(chained_span.end_column, 12);
+
+        let after_offset = source.find("after").expect("after is present") as u64;
+        let after_span = tree.body[1].span();
+        assert_eq!(after_span.start_offset, after_offset);
+        assert_eq!(after_span.end_offset, after_offset + 5);
+        assert_eq!(after_span.start_line, 4);
+        assert_eq!(after_span.start_column, 3);
+        assert_eq!(after_span.end_line, 4);
+        assert_eq!(after_span.end_column, 8);
+    }
+
+    #[test]
+    fn comment_gaps_and_multiline_blocks_map_physical_spans_bd_crph5() {
+        let parser = CanonicalEs2020Parser;
+        for terminator in ["\r", "\r\n", "\n", "\u{2028}", "\u{2029}"] {
+            let source = format!(
+                "  first; // trailing é{terminator}{terminator}if (ready) {{{terminator}  work();{terminator}}}{terminator}  after;"
+            );
+            let tree = parser
+                .parse(source.as_str(), ParseGoal::Script)
+                .unwrap_or_else(|error| panic!("failed to parse {source:?}: {error}"));
+            assert_eq!(tree.body.len(), 3, "{source:?}");
+
+            let first_span = tree.body[0].span();
+            assert_eq!(first_span.start_offset, 2, "{source:?}");
+            assert_eq!(first_span.end_offset, 7, "{source:?}");
+            assert_eq!(first_span.start_line, 1, "{source:?}");
+            assert_eq!(first_span.start_column, 3, "{source:?}");
+            assert_eq!(first_span.end_line, 1, "{source:?}");
+            assert_eq!(first_span.end_column, 8, "{source:?}");
+
+            let block_start = source.find("if").expect("block start is present") as u64;
+            let block_end = source.find('}').expect("block end is present") as u64 + 1;
+            let block_span = tree.body[1].span();
+            assert_eq!(block_span.start_offset, block_start, "{source:?}");
+            assert_eq!(block_span.end_offset, block_end, "{source:?}");
+            assert_eq!(block_span.start_line, 3, "{source:?}");
+            assert_eq!(block_span.start_column, 1, "{source:?}");
+            assert_eq!(block_span.end_line, 5, "{source:?}");
+            assert_eq!(block_span.end_column, 2, "{source:?}");
+
+            let after_offset = source.find("after").expect("after is present") as u64;
+            let after_span = tree.body[2].span();
+            assert_eq!(after_span.start_offset, after_offset, "{source:?}");
+            assert_eq!(after_span.end_offset, after_offset + 5, "{source:?}");
+            assert_eq!(after_span.start_line, 6, "{source:?}");
+            assert_eq!(after_span.start_column, 3, "{source:?}");
+            assert_eq!(after_span.end_line, 6, "{source:?}");
+            assert_eq!(after_span.end_column, 8, "{source:?}");
+        }
+    }
+
+    #[test]
+    fn quoted_multiline_spans_and_boundary_maps_remain_exact_bd_crph5() {
+        let parser = CanonicalEs2020Parser;
+        for terminator in ["\r", "\r\n", "\n", "\u{2028}", "\u{2029}"] {
+            let source = format!("const value = `a{terminator}b`;  next;");
+            let tree = parser
+                .parse(source.as_str(), ParseGoal::Script)
+                .unwrap_or_else(|error| panic!("failed to parse {source:?}: {error}"));
+            assert_eq!(tree.body.len(), 2, "{source:?}");
+
+            let template_span = tree.body[0].span();
+            assert_eq!(template_span.start_offset, 0, "{source:?}");
+            assert_eq!(
+                template_span.end_offset,
+                source.find(';').expect("template terminator is present") as u64,
+                "{source:?}"
+            );
+            assert_eq!(template_span.start_line, 1, "{source:?}");
+            assert_eq!(template_span.start_column, 1, "{source:?}");
+            assert_eq!(template_span.end_line, 2, "{source:?}");
+            assert_eq!(template_span.end_column, 3, "{source:?}");
+
+            let next_offset = source.find("next").expect("next is present") as u64;
+            let next_span = tree.body[1].span();
+            assert_eq!(next_span.start_offset, next_offset, "{source:?}");
+            assert_eq!(next_span.end_offset, next_offset + 4, "{source:?}");
+            assert_eq!(next_span.start_line, 2, "{source:?}");
+            assert_eq!(next_span.start_column, 6, "{source:?}");
+            assert_eq!(next_span.end_line, 2, "{source:?}");
+            assert_eq!(next_span.end_column, 10, "{source:?}");
+
+            let stripped = strip_comments_to_whitespace(&source);
+            for logical_line in merge_logical_lines(&stripped) {
+                assert_eq!(
+                    logical_line.source_boundaries.len(),
+                    logical_line.text.len() + 1,
+                    "{source:?}"
+                );
+                assert!(
+                    logical_line
+                        .source_boundaries
+                        .windows(2)
+                        .all(|window| window[0] <= window[1]),
+                    "{source:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn syntax_tree_root_span_ends_at_eof_byte_column_bd_4tt6s() {
+        let parser = CanonicalEs2020Parser;
+        let cases = [
+            ("alpha", 1, 6),
+            ("alpha\nbeta", 2, 5),
+            ("alpha\n", 2, 1),
+            ("alpha\r\nbeta", 2, 5),
+            ("alpha\r\n", 2, 1),
+            ("alpha\rbeta", 2, 5),
+            ("alpha\r", 2, 1),
+            ("alpha\u{2028}beta", 2, 5),
+            ("alpha\u{2028}", 2, 1),
+            ("alpha\u{2029}beta", 2, 5),
+            ("alpha\u{2029}", 2, 1),
+            ("'é'", 1, 5),
+            ("alpha  ", 1, 8),
+        ];
+
+        for (source, expected_line, expected_column) in cases {
+            let tree = parser
+                .parse(source, ParseGoal::Script)
+                .unwrap_or_else(|error| panic!("failed to parse {source:?}: {error}"));
+            assert_eq!(tree.span.end_offset, source.len() as u64, "{source:?}");
+            assert_eq!(tree.span.end_line, expected_line, "{source:?}");
+            assert_eq!(tree.span.end_column, expected_column, "{source:?}");
+        }
+    }
+
+    #[test]
     fn is_identifier_empty_returns_false() {
         assert!(!is_identifier(""));
     }
@@ -12320,9 +14180,18 @@ mod tests {
 
     #[test]
     fn parse_quoted_string_valid_extracts_inner() {
-        assert_eq!(parse_quoted_string("'abc'"), Some("abc".to_string()));
-        assert_eq!(parse_quoted_string("\"xyz\""), Some("xyz".to_string()));
-        assert_eq!(parse_quoted_string("''"), Some(String::new()));
+        assert_eq!(
+            parse_quoted_string("'abc'").and_then(|value| value.as_str().map(str::to_string)),
+            Some("abc".to_string())
+        );
+        assert_eq!(
+            parse_quoted_string("\"xyz\"").and_then(|value| value.as_str().map(str::to_string)),
+            Some("xyz".to_string())
+        );
+        assert_eq!(
+            parse_quoted_string("''").and_then(|value| value.as_str().map(str::to_string)),
+            Some(String::new())
+        );
     }
 
     // -- parse_i64_numeric_literal edge cases --
@@ -12831,14 +14700,14 @@ mod tests {
             statement_kind_label(&Statement::Import(ImportDeclaration {
                 clause: ImportClause::SideEffect,
                 binding: None,
-                source: "m".to_string(),
+                source: "m".into(),
                 span: span.clone(),
             })),
             "import"
         );
         assert_eq!(
             statement_kind_label(&Statement::Export(ExportDeclaration {
-                kind: ExportKind::NamedClause("{}".to_string()),
+                kind: ExportKind::NamedClause("{}".into()),
                 span: span.clone(),
             })),
             "export"
@@ -13003,10 +14872,67 @@ mod tests {
             .expect("parse should succeed")
     }
 
+    fn parse_single_script_statement(source: &str) -> ParseResult<Statement> {
+        let options = ParserOptions::default();
+        let span = SourceSpan::new(0, source.len() as u64, 1, 1, 1, source.len() as u64 + 1);
+        let mut context = ParseExecutionContext {
+            source_label: "test.js",
+            options: &options,
+            source_bytes: source.len() as u64,
+            token_count: 0,
+            max_recursion_observed: 0,
+            statement_depth: 0,
+            pattern_depth: 0,
+            strict_mode: false,
+        };
+        parse_statement(source, ParseGoal::Script, span, &mut context)
+    }
+
     fn first_expr(tree: &SyntaxTree) -> &Expression {
         match &tree.body[0] {
             Statement::Expression(es) => &es.expression,
             other => panic!("expected Expression statement, got {:?}", other),
+        }
+    }
+
+    // bd-fqlfw.1.1 (E1.T1): expression-level Member/Call nodes — the carriers of
+    // capability/IFC-relevant accessors (`process.env.X`, bare `eval(...)`) — carry
+    // a `SourceSpan` populated by the parser. Spans are currently statement-granular
+    // (the enclosing source region); precise sub-expression offsets are a follow-up.
+    #[test]
+    fn member_and_call_expressions_carry_source_spans_bd_fqlfw_1_1() {
+        // `process.env.HOME` parses to a Member accessor that carries a span.
+        let src = "process.env.HOME";
+        let tree = parse_script(src);
+        let Statement::Expression(stmt) = &tree.body[0] else {
+            panic!("expected expression statement");
+        };
+        let stmt_span = stmt.span;
+        match &stmt.expression {
+            Expression::Member { span, .. } => {
+                let span = span.expect("parser must populate Member span");
+                // The accessor span maps onto the real source region.
+                assert_eq!(span, stmt_span, "member span maps to the source region");
+                assert!(
+                    span.start_offset <= span.end_offset && span.end_offset <= src.len() as u64 + 1,
+                    "member span must map into source offsets (got {span:?})"
+                );
+            }
+            other => panic!("expected Member, got {other:?}"),
+        }
+
+        // A bare `eval(...)` call — a dynamic-code accessor — also carries a span.
+        let src = "eval(\"x\")";
+        let tree = parse_script(src);
+        match first_expr(&tree) {
+            Expression::Call { span, .. } => {
+                let span = span.expect("parser must populate Call span");
+                assert!(
+                    span.start_offset <= span.end_offset && span.end_offset <= src.len() as u64 + 1,
+                    "call span must map into source offsets (got {span:?})"
+                );
+            }
+            other => panic!("expected Call, got {other:?}"),
         }
     }
 
@@ -13203,8 +15129,10 @@ mod tests {
                 operator,
                 left,
                 right,
+                assignment_strictness,
             } => {
                 assert_eq!(*operator, AssignmentOperator::Assign);
+                assert_eq!(*assignment_strictness, AssignmentStrictness::Sloppy);
                 assert!(matches!(left.as_ref(), Expression::Identifier(n) if n == "x"));
                 assert!(matches!(right.as_ref(), Expression::NumericLiteral(42)));
             }
@@ -13221,6 +15149,106 @@ mod tests {
             }
             other => panic!("expected Assignment, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn assignment_strictness_preserves_exact_directive_provenance_bd_0k19b() {
+        let strict = parse_script(r#""use strict"; target = 1;"#);
+        assert!(matches!(
+            &strict.body[1],
+            Statement::Expression(ExpressionStatement {
+                expression: Expression::Assignment {
+                    assignment_strictness: AssignmentStrictness::Strict,
+                    ..
+                },
+                ..
+            })
+        ));
+
+        let escaped = parse_script(r#""use\x20strict"; target = 1;"#);
+        assert!(matches!(
+            &escaped.body[1],
+            Statement::Expression(ExpressionStatement {
+                expression: Expression::Assignment {
+                    assignment_strictness: AssignmentStrictness::Sloppy,
+                    ..
+                },
+                ..
+            })
+        ));
+
+        let module = CanonicalEs2020Parser
+            .parse("target = 1;", ParseGoal::Module)
+            .expect("module assignment should parse");
+        assert!(matches!(
+            &module.body[0],
+            Statement::Expression(ExpressionStatement {
+                expression: Expression::Assignment {
+                    assignment_strictness: AssignmentStrictness::Strict,
+                    ..
+                },
+                ..
+            })
+        ));
+
+        let inherited = parse_script(r#""use strict"; function f() { target = 1; }"#);
+        let Statement::FunctionDeclaration(function) = &inherited.body[1] else {
+            panic!("expected function declaration");
+        };
+        assert!(matches!(
+            &function.body.body[0],
+            Statement::Expression(ExpressionStatement {
+                expression: Expression::Assignment {
+                    assignment_strictness: AssignmentStrictness::Strict,
+                    ..
+                },
+                ..
+            })
+        ));
+
+        let function_local = parse_script(r#"function f() { "use strict"; target = 1; }"#);
+        let Statement::FunctionDeclaration(function) = &function_local.body[0] else {
+            panic!("expected function declaration");
+        };
+        assert!(matches!(
+            &function.body.body[1],
+            Statement::Expression(ExpressionStatement {
+                expression: Expression::Assignment {
+                    assignment_strictness: AssignmentStrictness::Strict,
+                    ..
+                },
+                ..
+            })
+        ));
+
+        let strict_loops =
+            parse_script(r#""use strict"; for (key in object) {} for (value of values) {}"#);
+        assert!(matches!(
+            &strict_loops.body[1],
+            Statement::ForIn(ForInStatement {
+                assignment_strictness: AssignmentStrictness::Strict,
+                ..
+            })
+        ));
+        assert!(matches!(
+            &strict_loops.body[2],
+            Statement::ForOf(ForOfStatement {
+                assignment_strictness: AssignmentStrictness::Strict,
+                ..
+            })
+        ));
+
+        let strict_update = parse_script(r#""use strict"; ++target;"#);
+        assert!(matches!(
+            &strict_update.body[1],
+            Statement::Expression(ExpressionStatement {
+                expression: Expression::Assignment {
+                    assignment_strictness: AssignmentStrictness::Strict,
+                    ..
+                },
+                ..
+            })
+        ));
     }
 
     #[test]
@@ -13244,7 +15272,9 @@ mod tests {
     fn call_expression_no_args() {
         let tree = parse_script("foo()");
         match first_expr(&tree) {
-            Expression::Call { callee, arguments } => {
+            Expression::Call {
+                callee, arguments, ..
+            } => {
                 assert!(matches!(callee.as_ref(), Expression::Identifier(n) if n == "foo"));
                 assert!(arguments.is_empty());
             }
@@ -13256,7 +15286,9 @@ mod tests {
     fn call_expression_with_args() {
         let tree = parse_script("foo(1, 2)");
         match first_expr(&tree) {
-            Expression::Call { callee, arguments } => {
+            Expression::Call {
+                callee, arguments, ..
+            } => {
                 assert!(matches!(callee.as_ref(), Expression::Identifier(n) if n == "foo"));
                 assert_eq!(arguments.len(), 2);
                 assert!(matches!(&arguments[0], Expression::NumericLiteral(1)));
@@ -13274,6 +15306,7 @@ mod tests {
                 object,
                 property,
                 computed,
+                ..
             } => {
                 assert!(matches!(object.as_ref(), Expression::Identifier(n) if n == "obj"));
                 assert!(matches!(property.as_ref(), Expression::Identifier(n) if n == "prop"));
@@ -13291,6 +15324,7 @@ mod tests {
                 object,
                 property,
                 computed,
+                ..
             } => {
                 assert!(matches!(object.as_ref(), Expression::Identifier(n) if n == "arr"));
                 assert!(matches!(property.as_ref(), Expression::NumericLiteral(0)));
@@ -13414,6 +15448,7 @@ mod tests {
                 object,
                 property,
                 computed,
+                ..
             } => {
                 assert!(!computed);
                 assert!(matches!(property.as_ref(), Expression::Identifier(n) if n == "c"));
@@ -13422,6 +15457,7 @@ mod tests {
                         object: inner_obj,
                         property: inner_prop,
                         computed: inner_computed,
+                        ..
                     } => {
                         assert!(!inner_computed);
                         assert!(
@@ -13523,6 +15559,31 @@ mod tests {
     }
 
     #[test]
+    fn try_catch_without_binding() {
+        let tree = parse_script("try { x } catch { y }");
+        match &tree.body[0] {
+            Statement::TryCatch(s) => {
+                let handler = s.handler.as_ref().expect("catch handler present");
+                assert_eq!(handler.parameter, None);
+                assert!(s.finalizer.is_none());
+            }
+            other => panic!("expected TryCatch, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn try_finally_statement() {
+        let tree = parse_script("try { x } finally { z }");
+        match &tree.body[0] {
+            Statement::TryCatch(s) => {
+                assert!(s.handler.is_none());
+                assert!(s.finalizer.is_some());
+            }
+            other => panic!("expected TryCatch, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn try_catch_finally() {
         let tree = parse_script("try { x } catch (e) { y } finally { z }");
         match &tree.body[0] {
@@ -13531,6 +15592,57 @@ mod tests {
                 assert!(s.finalizer.is_some());
             }
             other => panic!("expected TryCatch, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn try_catch_preserves_statement_and_clause_spans() {
+        let tree = parse_script("try { x } catch (e) { y } finally { z }");
+        match &tree.body[0] {
+            Statement::TryCatch(s) => {
+                assert_eq!(*tree.body[0].span(), s.span);
+                assert_eq!(s.block.span, s.span);
+                assert_eq!(
+                    s.handler.as_ref().expect("catch handler present").span,
+                    s.span
+                );
+                assert_eq!(
+                    s.finalizer.as_ref().expect("finally block present").span,
+                    s.span
+                );
+            }
+            other => panic!("expected TryCatch, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn malformed_try_catch_finally_syntax_is_rejected() {
+        let parser = CanonicalEs2020Parser;
+        for source in [
+            "try { x }",
+            "try x catch (e) { y }",
+            "try { x } catch () { y }",
+            "try { x } catch (e) y",
+            "try { x } catch (e) unexpected { y }",
+            "try { x } finally z",
+            "try { x } finally unexpected { z }",
+        ] {
+            assert!(
+                parser.parse(source, ParseGoal::Script).is_err(),
+                "source should fail: {source}"
+            );
+        }
+    }
+
+    #[test]
+    fn try_statement_rejects_unconsumed_clause_tail() {
+        for source in [
+            "try { x } catch (e) { y } trailing",
+            "try { x } finally { z } trailing",
+        ] {
+            let error = parse_single_script_statement(source)
+                .expect_err("single try statement should reject unconsumed trailing text");
+            assert_eq!(error.code, ParseErrorCode::UnsupportedSyntax);
         }
     }
 
@@ -13760,6 +15872,55 @@ mod tests {
     }
 
     #[test]
+    fn comments_preserve_ecmascript_line_terminators_and_spans_bd_21nbg() {
+        let parser = CanonicalEs2020Parser;
+        for terminator in ["\r", "\r\n", "\n", "\u{2028}", "\u{2029}"] {
+            let line_source = format!("first; // comment{terminator}second;");
+            let stripped = strip_comments_to_whitespace(&line_source);
+            assert_eq!(stripped.len(), line_source.len(), "{line_source:?}");
+            assert!(stripped.contains(terminator), "{line_source:?}");
+            let tree = parser
+                .parse(line_source.as_str(), ParseGoal::Script)
+                .unwrap_or_else(|error| panic!("failed to parse {line_source:?}: {error}"));
+            assert_eq!(tree.body.len(), 2, "{line_source:?}");
+            assert_eq!(tree.body[1].span().start_line, 2, "{line_source:?}");
+            assert_eq!(
+                tree.body[1].span().start_offset,
+                line_source.find("second").expect("second is present") as u64,
+                "{line_source:?}"
+            );
+
+            let block_source = format!("first; /* comment{terminator}still */{terminator}second;");
+            let stripped = strip_comments_to_whitespace(&block_source);
+            assert_eq!(stripped.len(), block_source.len(), "{block_source:?}");
+            assert_eq!(
+                stripped.matches(terminator).count(),
+                block_source.matches(terminator).count(),
+                "{block_source:?}"
+            );
+            let tree = parser
+                .parse(block_source.as_str(), ParseGoal::Script)
+                .unwrap_or_else(|error| panic!("failed to parse {block_source:?}: {error}"));
+            assert_eq!(tree.body.len(), 2, "{block_source:?}");
+            assert_eq!(tree.body[1].span().start_line, 3, "{block_source:?}");
+            assert_eq!(
+                tree.body[1].span().start_offset,
+                block_source.find("second").expect("second is present") as u64,
+                "{block_source:?}"
+            );
+
+            let regex_source = format!("const value ={terminator}/a\\//;{terminator}value;");
+            let stripped = strip_comments_to_whitespace(&regex_source);
+            assert_eq!(stripped.len(), regex_source.len(), "{regex_source:?}");
+            assert!(stripped.contains("/a\\//"), "{regex_source:?}");
+            let tree = parser
+                .parse(regex_source.as_str(), ParseGoal::Script)
+                .unwrap_or_else(|error| panic!("failed to parse {regex_source:?}: {error}"));
+            assert_eq!(tree.body.len(), 2, "{regex_source:?}");
+        }
+    }
+
+    #[test]
     fn strip_comments_leaves_double_slash_inside_string_intact() {
         let src = "var u = \"http://example.com\"; // trailing\n";
         let stripped = strip_comments_to_whitespace(src);
@@ -13940,15 +16101,27 @@ process.exit(attackSucceeded ? 0 : 1);"#,
     }
 
     #[test]
-    fn parse_script_hashbang_preserves_following_strict_mode_directive() {
+    fn parse_script_hashbang_preserves_following_strict_mode_directive_bd_21nbg() {
         let parser = CanonicalEs2020Parser;
-        let err = parser
-            .parse(
-                "#! /usr/bin/env node\n\"use strict\";\nwith (obj) { x; }",
-                ParseGoal::Script,
-            )
-            .expect_err("strict-mode with should still be rejected after hashbang");
-        assert_eq!(err.code, ParseErrorCode::StrictModeWithStatement);
+        for bom in ["", "\u{FEFF}"] {
+            for terminator in ["\r", "\r\n", "\n", "\u{2028}", "\u{2029}"] {
+                let hashbang = format!("{bom}#! /usr/bin/env node{terminator}");
+                let source = format!("{hashbang}\"use strict\";{terminator}with (obj) {{ x; }}");
+                let lines = merge_logical_lines(&source);
+                assert_eq!(lines[0].byte_offset, hashbang.len() as u64, "{source:?}");
+                assert_eq!(lines[0].start_line, 2, "{source:?}");
+                assert_eq!(lines[0].text, "\"use strict\";", "{source:?}");
+
+                let err = parser
+                    .parse(source.as_str(), ParseGoal::Script)
+                    .expect_err("strict-mode with should still be rejected after hashbang");
+                assert_eq!(
+                    err.code,
+                    ParseErrorCode::StrictModeWithStatement,
+                    "{source:?}"
+                );
+            }
+        }
     }
 
     // -----------------------------------------------------------------------
@@ -14015,6 +16188,41 @@ process.exit(attackSucceeded ? 0 : 1);"#,
     #[test]
     fn find_top_level_colon_none() {
         assert_eq!(find_top_level_colon("abc"), None);
+    }
+
+    #[test]
+    fn find_ternary_colon_skips_nested_question() {
+        // Non-nested: the only top-level colon.
+        assert_eq!(find_ternary_colon(" b : c"), Some(3));
+        // Consequent-nested: the inner `?`'s colon is skipped, the outer wins.
+        // Slice is the tail after the outer `?` of `a ? b ? c : d : e`.
+        let rest = " b ? c : d : e";
+        let idx = find_ternary_colon(rest).expect("outer colon");
+        assert_eq!(&rest[idx..idx + 1], ":");
+        assert_eq!(rest[..idx].trim(), "b ? c : d");
+        assert_eq!(rest[idx + 1..].trim(), "e");
+        // `?.` and `??` are not ternary `?`.
+        assert_eq!(find_ternary_colon("a ?? b : c"), Some(7));
+        assert_eq!(find_ternary_colon("a?.b : c"), Some(5));
+    }
+
+    #[test]
+    fn split_for_header_is_nesting_aware() {
+        assert_eq!(
+            split_for_header("i = 0; i < n; i++"),
+            Some(("i = 0", " i < n", " i++"))
+        );
+        // A `;` inside an arrow/block body must not split the header.
+        let header = "let f = () => { a; return b; }; i < n; i++";
+        assert_eq!(
+            split_for_header(header),
+            Some(("let f = () => { a; return b; }", " i < n", " i++"))
+        );
+        // Empty clauses are still two top-level semicolons.
+        assert_eq!(split_for_header(";;"), Some(("", "", "")));
+        // Fewer than two top-level semicolons -> None.
+        assert_eq!(split_for_header("i < n"), None);
+        assert_eq!(split_for_header("a; b"), None);
     }
 
     // -----------------------------------------------------------------------
@@ -14319,7 +16527,9 @@ process.exit(attackSucceeded ? 0 : 1);"#,
     fn tagged_template_expression_is_call_with_template_argument() {
         let tree = parse_script("render`hello ${name}`");
         match first_expr(&tree) {
-            Expression::Call { callee, arguments } => {
+            Expression::Call {
+                callee, arguments, ..
+            } => {
                 assert!(
                     matches!(callee.as_ref(), Expression::Identifier(name) if name == "render")
                 );
@@ -14337,7 +16547,9 @@ process.exit(attackSucceeded ? 0 : 1);"#,
     fn tagged_template_member_expression_is_call_with_template_argument() {
         let tree = parse_script("view.render`ok`");
         match first_expr(&tree) {
-            Expression::Call { callee, arguments } => {
+            Expression::Call {
+                callee, arguments, ..
+            } => {
                 assert!(matches!(callee.as_ref(), Expression::Member { .. }));
                 // tag(stringsObject): the `.raw`-attaching IIFE, no substitutions
                 assert_eq!(arguments.len(), 1);
@@ -14722,13 +16934,16 @@ process.exit(attackSucceeded ? 0 : 1);"#,
     fn regexp_literal_receiver_member_call_parses_bd_wni4m() {
         let tree = parse_script(r#"/ab/.test("xabz");"#);
         match first_expr(&tree) {
-            Expression::Call { callee, arguments } => {
+            Expression::Call {
+                callee, arguments, ..
+            } => {
                 assert_eq!(arguments.len(), 1);
                 match callee.as_ref() {
                     Expression::Member {
                         object,
                         property,
                         computed,
+                        ..
                     } => {
                         assert!(!computed);
                         assert!(matches!(

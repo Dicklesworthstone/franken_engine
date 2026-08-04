@@ -79,14 +79,16 @@ VERDICT_ONLY=0
 
 CARGO="${CARGO:-/home/ubuntu/.cargo/bin/cargo}"
 TIME_BIN="/usr/bin/time"
+CURRENT_RUSTFLAGS="-C force-frame-pointers=yes -C linker=cc -Clinker-features=-lld"
 
 if [[ "$VERDICT_ONLY" -eq 0 ]]; then
     # -----------------------------------------------------------------------
-    # 1. Build the bench with the identical pass1 flags (mimalloc is in-tree).
+    # 1. Build with the current-policy successor flags (mimalloc is in-tree).
     # -----------------------------------------------------------------------
-    echo "[h7.2] building hot_paths bench (pass1 flags, mimalloc global allocator)..."
+    echo "[h7.2] building hot_paths bench (current linker-policy flags, mimalloc global allocator)..."
+    env -u CARGO_ENCODED_RUSTFLAGS \
     RCH_CARGO_WRAPPER_BYPASS=1 \
-    RUSTFLAGS="-C force-frame-pointers=yes -C linker=cc" \
+    RUSTFLAGS="$CURRENT_RUSTFLAGS" \
     CARGO_INCREMENTAL=0 \
     "$CARGO" bench --bench hot_paths --no-run
 
@@ -144,9 +146,9 @@ fi
 # ---------------------------------------------------------------------------
 # 5. Fingerprint for this run.
 # ---------------------------------------------------------------------------
-python3 - "$RUN_DIR" "$BEAD" "$PASS1_DIR" <<'PYFP'
+python3 - "$RUN_DIR" "$BEAD" "$PASS1_DIR" "$CURRENT_RUSTFLAGS" "$VERDICT_ONLY" <<'PYFP'
 import json, subprocess, sys, time, platform
-run_dir, bead, pass1_dir = sys.argv[1:4]
+run_dir, bead, pass1_dir, current_rustflags, verdict_only = sys.argv[1:6]
 def sh(*a):
     try:
         return subprocess.check_output(a, text=True, stderr=subprocess.DEVNULL).strip()
@@ -165,11 +167,22 @@ fp = {
         "kernel": platform.release(),
     },
     "toolchain": {"rustc": sh("rustc", "--version"), "python": platform.python_version()},
-    "build_flags": {
-        "RUSTFLAGS": "-C force-frame-pointers=yes -C linker=cc",
-        "CARGO_INCREMENTAL": "0",
-    },
 }
+if verdict_only == "0":
+    fp["build_flags"] = {
+        "RUSTFLAGS": current_rustflags,
+        "CARGO_ENCODED_RUSTFLAGS": None,
+        "CARGO_INCREMENTAL": "0",
+    }
+    fp["build_provenance"] = {
+        "status": "executed_build_command",
+        "effective_channel": "RUSTFLAGS",
+    }
+else:
+    fp["build_provenance"] = {
+        "status": "unknown",
+        "reason": "verdict-only mode reused Criterion artifacts without a bound source-run fingerprint",
+    }
 json.dump(fp, open(f"{run_dir}/fingerprint.json", "w"), indent=2)
 PYFP
 

@@ -6,7 +6,7 @@
 #![forbid(unsafe_code)]
 
 use frankenengine_engine::change_point_detector::{
-    ChangePointDetector, ChangePointVerdict, CompositeAlternative,
+    ChangePointDetector, CompositeAlternative, LabFixtureChangePointDetectorExt as _,
 };
 use frankenengine_engine::detection_delay_bound_proof::{
     ArlComputationStatus, AverageRunLengthAnalysis, DelayBoundConfiguration, DelayBoundError,
@@ -32,7 +32,7 @@ fn test_arl_analysis_integration_with_detector() {
         AverageRunLengthAnalysis::compute(config.clone(), alternative.clone()).unwrap();
 
     // Create a detector with the same parameters
-    let mut detector =
+    let _detector =
         ChangePointDetector::new_with_default_threshold("test_detector", alternative, epoch);
 
     // Verify ARL analysis is reasonable
@@ -259,7 +259,7 @@ fn test_proof_obligations_completeness() {
 
         // Verify each obligation has proper structure
         assert!(!obligation.statement.is_empty());
-        assert!(obligation.id.0.len() > 0);
+        assert!(!obligation.id.0.is_empty());
     }
 
     assert!(has_liveness, "Should have liveness obligation");
@@ -365,13 +365,13 @@ fn test_delay_bound_trade_offs() {
 
     let mut results = Vec::new();
     for alt in alternatives {
-        if let Ok(arl) = AverageRunLengthAnalysis::compute(config.clone(), alt.clone()) {
-            if let Ok(bound) = WorstCaseDelayBound::compute(config.clone(), alt, &arl) {
-                results.push((
-                    arl.false_alarm_rate_millionths,
-                    bound.delay_bound_millionths,
-                ));
-            }
+        if let Ok(arl) = AverageRunLengthAnalysis::compute(config.clone(), alt.clone())
+            && let Ok(bound) = WorstCaseDelayBound::compute(config.clone(), alt, &arl)
+        {
+            results.push((
+                arl.false_alarm_rate_millionths,
+                bound.delay_bound_millionths,
+            ));
         }
     }
 

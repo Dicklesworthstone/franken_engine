@@ -1,0 +1,59 @@
+{
+  "artifacts": {
+    "bundle_path": "artifacts/reproducibility_bundles/FE-CLAIM-023",
+    "env_json": "env.json",
+    "manifest_json": "manifest.json",
+    "primary": "scripts/run_rgc_cross_platform_matrix_gate.sh",
+    "repro_lock": "repro.lock"
+  },
+  "canonicalization": {
+    "encoding": "utf-8",
+    "format": "json",
+    "key_ordering": "lexicographic",
+    "newline": "lf"
+  },
+  "claim": {
+    "id": "FE-CLAIM-023",
+    "original_artifact_path": "scripts/run_rgc_cross_platform_matrix_gate.sh",
+    "scope": "reproducibility",
+    "state": "observed"
+  },
+  "generated_at_utc": "2026-05-26T04:44:29.262110+00:00",
+  "inputs": {
+    "dependencies": [
+      "frankenengine-engine",
+      "franken-extension-host"
+    ],
+    "source_files": [
+      "scripts/run_rgc_cross_platform_matrix_gate.sh"
+    ]
+  },
+  "manifest_id": "manifest-fe-claim-023-20260526",
+  "outputs": {
+    "decision_artifacts": "generated",
+    "execution_trace": "deterministic",
+    "verification_result": "pending"
+  },
+  "provenance": {
+    "audit_source": "bd-cixqu.4.1",
+    "bead_id": "bd-cixqu.4.2",
+    "generated_by": "backfill_reproducibility_bundles.py"
+  },
+  "retention": {
+    "backup_required": true,
+    "immutable": true,
+    "policy": "permanent"
+  },
+  "schema_hash": "sha256:8f9a0b1c2d3e4f5678abc9def0123456789abcdef0123456789abcdef01234567",
+  "schema_version": "frankenengine.reproducibility.manifest.v1",
+  "source_revision": {
+    "branch": "main",
+    "commit": "b672bf13d6a91a67c1d884432c00d4fe2e2b4db0",
+    "repository": "franken_engine"
+  },
+  "validation": {
+    "hash_verified": true,
+    "provenance_linked": true,
+    "schema_validated": true
+  }
+}

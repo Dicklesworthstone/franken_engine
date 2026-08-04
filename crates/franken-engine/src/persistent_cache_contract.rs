@@ -25,6 +25,7 @@ pub const TRACE_IDS_SCHEMA_VERSION: &str = "franken-engine.rgc-persistent-cache-
 pub const RUN_MANIFEST_SCHEMA_VERSION: &str = "franken-engine.rgc-persistent-cache-run-manifest.v1";
 #[cfg(test)]
 pub const DOCS_CONTRACT_SCHEMA_VERSION: &str = "franken-engine.rgc-persistent-cache-docs.v1";
+const CURRENT_ENGINE_VERSION_MARKER: &str = concat!("engine-", env!("CARGO_PKG_VERSION"));
 
 static NEXT_TEMP_FILE_ID: AtomicU64 = AtomicU64::new(0);
 
@@ -427,7 +428,7 @@ fn evaluate_default_artifacts(
         dependency_hash,
         "lower_ir3",
         "baseline_deterministic_profile",
-        "engine-0.1.0",
+        CURRENT_ENGINE_VERSION_MARKER,
     );
     cache
         .insert(
@@ -472,7 +473,7 @@ fn evaluate_default_artifacts(
         dependency_hash,
         "codegen_aot",
         "baseline_throughput_profile",
-        "engine-0.1.0",
+        CURRENT_ENGINE_VERSION_MARKER,
     );
     cache
         .insert(
@@ -1120,7 +1121,7 @@ mod tests {
             ContentHash::compute(b"deps"),
             "lower_ir3",
             "baseline_deterministic_profile",
-            "engine-0.1.0",
+            CURRENT_ENGINE_VERSION_MARKER,
         );
         let material_b = material_a.clone();
         assert_eq!(material_a.cache_key_id(), material_b.cache_key_id());
@@ -1139,7 +1140,7 @@ mod tests {
             ContentHash::compute(b"depgraph:root->shared->runtime"),
             "codegen_aot",
             "baseline_throughput_profile",
-            "engine-0.1.0",
+            CURRENT_ENGINE_VERSION_MARKER,
         );
         let mut cache = ModuleCache::new();
         let ctx = CacheContext::new("t", "d", "p");
@@ -1184,7 +1185,7 @@ mod tests {
             ContentHash::compute(b"depgraph:root->shared->runtime"),
             "codegen_aot",
             "baseline_throughput_profile",
-            "engine-0.1.0",
+            CURRENT_ENGINE_VERSION_MARKER,
         );
         let mut cache = ModuleCache::new();
         let ctx = CacheContext::new("t", "d", "p");
@@ -1762,7 +1763,7 @@ mod tests {
             ContentHash::compute(b"depgraph:root->shared->runtime"),
             "codegen_aot",
             "baseline_throughput_profile",
-            "engine-0.1.0",
+            CURRENT_ENGINE_VERSION_MARKER,
         );
         let mut cache = ModuleCache::new();
         let ctx = CacheContext::new("t", "d", "p");
@@ -1808,7 +1809,7 @@ mod tests {
             ContentHash::compute(b"depgraph:root->shared->runtime"),
             "lower_ir3",
             "baseline_deterministic_profile",
-            "engine-0.1.0",
+            CURRENT_ENGINE_VERSION_MARKER,
         );
         material.policy_version = 999;
         let mut cache = ModuleCache::new();

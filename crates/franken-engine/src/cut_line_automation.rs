@@ -17,6 +17,23 @@ use crate::hash_tiers::ContentHash;
 use crate::security_epoch::SecurityEpoch;
 use crate::self_replacement::{GateResult, GateVerdict, RiskLevel};
 
+/// Append a variable-length field to a content-hash preimage with a fixed-width
+/// `u64` length prefix.
+///
+/// The promotion-record content hash commits to the identity of a promotion
+/// decision, so its preimage must be injective. Joining variable-length fields
+/// with a byte delimiter (`|`/`=`/`;`) is not injective when a field can legally
+/// contain the delimiter — e.g. `zone="a", rationale="b|c"` and
+/// `zone="a|b", rationale="c"` both serialize to `…a|b|c…`. Length-prefixing
+/// every variable-length field, count-prefixing every collection, and marking
+/// every `Option` with a presence byte removes the ambiguity; fixed-width
+/// fields (`u64` via `to_be_bytes`, single-byte bools) are self-delimiting.
+/// Cf. the same fix crate-wide in commits 7f500570 / 1d3e0542.
+fn hash_field(buf: &mut Vec<u8>, bytes: &[u8]) {
+    buf.extend_from_slice(&(bytes.len() as u64).to_le_bytes());
+    buf.extend_from_slice(bytes);
+}
+
 const C1_FRX20_1_UNIT_TAXONOMY_REF_KEY: &str = "frx20_1_unit_taxonomy_ref";
 const C1_FRX20_3_E2E_MANIFEST_REF_KEY: &str = "frx20_3_e2e_manifest_ref";
 const C1_FRX20_4_LOG_SCHEMA_REF_KEY: &str = "frx20_4_logging_schema_ref";
@@ -658,44 +675,49 @@ impl PromotionRecord {
         predecessor_hash: &Option<ContentHash>,
     ) -> ContentHash {
         let mut canonical = Vec::new();
-        canonical.extend_from_slice(b"cut-line-promotion-record|");
-        canonical.extend_from_slice(cut_line.as_str().as_bytes());
-        canonical.push(b'|');
-        canonical.extend_from_slice(format!("{verdict}").as_bytes());
-        canonical.push(b'|');
-        canonical.extend_from_slice(format!("{risk_level}").as_bytes());
-        canonical.push(b'|');
+        canonical.extend_from_slice(b"cut-line-promotion-record:v1");
+        hash_field(&mut canonical, cut_line.as_str().as_bytes());
+        hash_field(&mut canonical, format!("{verdict}").as_bytes());
+        hash_field(&mut canonical, format!("{risk_level}").as_bytes());
         canonical.extend_from_slice(&epoch.as_u64().to_be_bytes());
-        canonical.push(b'|');
         canonical.extend_from_slice(&timestamp_ns.to_be_bytes());
-        canonical.push(b'|');
-        canonical.extend_from_slice(zone.as_bytes());
-        canonical.push(b'|');
-        canonical.extend_from_slice(rationale.as_bytes());
-        canonical.push(b'|');
-        // Metadata is BTreeMap so iteration is deterministic.
+        hash_field(&mut canonical, zone.as_bytes());
+        hash_field(&mut canonical, rationale.as_bytes());
+        // Metadata is BTreeMap so iteration is deterministic; count-prefix the
+        // map and length-prefix each key/value (both are free-form).
+        canonical.extend_from_slice(&(metadata.len() as u64).to_le_bytes());
         for (k, v) in metadata {
-            canonical.extend_from_slice(k.as_bytes());
-            canonical.push(b'=');
-            canonical.extend_from_slice(v.as_bytes());
-            canonical.push(b';');
+            hash_field(&mut canonical, k.as_bytes());
+            hash_field(&mut canonical, v.as_bytes());
         }
-        canonical.push(b'|');
-        if let Some(pred) = predecessor_hash {
-            canonical.extend_from_slice(pred.as_bytes());
+        // Optional predecessor: presence byte then the fixed 32-byte hash.
+        match predecessor_hash {
+            Some(pred) => {
+                canonical.push(1);
+                canonical.extend_from_slice(pred.as_bytes());
+            }
+            None => canonical.push(0),
         }
-        canonical.push(b'|');
-        // Sort evaluations by category for insertion-order independence.
+        // Sort evaluations by category for insertion-order independence,
+        // count-prefix the list, and mark the optional score with a presence byte.
         let mut sorted_evals: Vec<_> = evaluations.iter().collect();
         sorted_evals.sort_by(|a, b| a.category.as_str().cmp(b.category.as_str()));
+        canonical.extend_from_slice(&(sorted_evals.len() as u64).to_le_bytes());
         for eval in &sorted_evals {
-            canonical.extend_from_slice(eval.category.as_str().as_bytes());
-            canonical.push(if eval.mandatory { b'M' } else { b'm' });
-            canonical.push(if eval.passed { b'1' } else { b'0' });
-            if let Some(score) = eval.score_millionths {
-                canonical.extend_from_slice(&score.to_le_bytes());
+            hash_field(&mut canonical, eval.category.as_str().as_bytes());
+            canonical.push(u8::from(eval.mandatory));
+            canonical.push(u8::from(eval.passed));
+            match eval.score_millionths {
+                Some(score) => {
+                    canonical.push(1);
+                    canonical.extend_from_slice(&score.to_le_bytes());
+                }
+                None => canonical.push(0),
             }
-            canonical.extend_from_slice(format!("{}", eval.input_validity).as_bytes());
+            hash_field(
+                &mut canonical,
+                format!("{}", eval.input_validity).as_bytes(),
+            );
         }
         ContentHash::compute(&canonical)
     }
@@ -1636,6 +1658,41 @@ mod tests {
 
     fn test_epoch() -> SecurityEpoch {
         SecurityEpoch::from_raw(42)
+    }
+
+    #[test]
+    fn promotion_record_hash_is_injective_across_zone_rationale_boundary() {
+        // bd-xnwn6: zone and rationale were '|'-joined free-form fields, so
+        // (zone="a", rationale="b|c") and (zone="a|b", rationale="c") both
+        // serialized to "…a|b|c…" and collided. Length-prefixing each field pins
+        // them to distinct hashes (all other arguments are identical).
+        let epoch = test_epoch();
+        let meta: BTreeMap<String, String> = BTreeMap::new();
+        let h1 = PromotionRecord::compute_hash(
+            CutLine::C0,
+            &GateVerdict::Approved,
+            &RiskLevel::Low,
+            &[],
+            &epoch,
+            0,
+            "a",
+            "b|c",
+            &meta,
+            &None,
+        );
+        let h2 = PromotionRecord::compute_hash(
+            CutLine::C0,
+            &GateVerdict::Approved,
+            &RiskLevel::Low,
+            &[],
+            &epoch,
+            0,
+            "a|b",
+            "c",
+            &meta,
+            &None,
+        );
+        assert_ne!(h1, h2, "zone/rationale field boundary must not collide");
     }
 
     fn make_passing_input(category: GateCategory, now_ns: u64) -> GateInput {

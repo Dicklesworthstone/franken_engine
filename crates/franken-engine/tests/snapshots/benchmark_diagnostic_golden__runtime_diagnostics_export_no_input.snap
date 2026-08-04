@@ -1,0 +1,11 @@
+---
+source: tests/benchmark_diagnostic_golden.rs
+expression: content
+---
+{
+  "exit_code": 2,
+  "stdout": "",
+  "stderr": "missing required --input <path>\n",
+  "command": "runtime_diagnostics export-evidence",
+  "category": "diagnostic"
+}

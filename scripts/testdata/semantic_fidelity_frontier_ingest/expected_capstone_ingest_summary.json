@@ -1,0 +1,104 @@
+{
+  "schema_version": "franken-engine.semantic-fidelity-frontier-ingest-summary.v1",
+  "owning_bead": "bd-09bea.3",
+  "generated_from": {
+    "run_manifest_sha256": "sha256:796a352903b38423dd449a07d9cf9ab986d29af485e3cd5aceceace02900a5e0",
+    "source_bead_ids": [
+      "bd-fqlfw.7",
+      "bd-mihky",
+      "bd-mihky.10"
+    ],
+    "source_bundle_path": "artifacts/semantic_fidelity_workbench_gate/bd-mihky-10-capstone-20300101T000000Z",
+    "source_suite_id": "semfid-suite-rangeerror-tointeger-v1",
+    "source_suite_sha256": "sha256:e730923d9f91db98d243d3bb554ca4288604b5f9660d71de1ce3b533279c3e77",
+    "summary_sha256": "sha256:f8610944042df380bc7a9b2ef0d3172f8051bcc690559bd9bfa64f686c3d2c48",
+    "vector_results_sha256": "sha256:654642495dbd12f23bb896c4c743760b5720acc87b3317c6cb09693a2717ff80",
+    "workbench_schema_version": "franken-engine.semantic-fidelity-vectors.v1"
+  },
+  "row_count": 13,
+  "state_counts": [
+    {
+      "count": 11,
+      "state": "accepted_external_oracle"
+    },
+    {
+      "count": 2,
+      "state": "declared_non_execution"
+    }
+  ],
+  "coverage_counts": [
+    {
+      "count": 11,
+      "coverage": "eligible_subset_row"
+    },
+    {
+      "count": 2,
+      "coverage": "non_passing_scoped_evidence"
+    }
+  ],
+  "declared_non_execution_rows": [
+    {
+      "cluster_id": "semfid-cluster-5b464fd002063f26",
+      "coverage_counting": "non_passing_scoped_evidence",
+      "oracle_mode": "source_eval_declared",
+      "related_bead_ids": [
+        "bd-fqlfw.7",
+        "bd-mihky",
+        "bd-mihky.10",
+        "bd-mihky.6"
+      ],
+      "route": {
+        "engine_lane": "quickjs_inspired",
+        "route_id": "engine.source-eval.array-length-fractional-assignment",
+        "route_kind": "source_eval"
+      },
+      "row_id": "semfid-frontier-row-semfid-engine-source-eval-array-length-fractional-expected-unknown-engine-source-eval-array-length-fractional-assignment",
+      "scope_state": "declared_non_execution",
+      "semantic_family": "array_length_range",
+      "unsupported_reason": "engine_route_not_executed_by_runner",
+      "vector_id": "semfid-engine-source-eval-array-length-fractional-expected-unknown"
+    },
+    {
+      "cluster_id": "semfid-cluster-f0276e2db4042038",
+      "coverage_counting": "non_passing_scoped_evidence",
+      "oracle_mode": "source_eval_declared",
+      "related_bead_ids": [
+        "bd-fqlfw.7",
+        "bd-mihky",
+        "bd-mihky.10",
+        "bd-mihky.6"
+      ],
+      "route": {
+        "engine_lane": "quickjs_inspired",
+        "route_id": "engine.source-eval.string-from-code-point-high",
+        "route_kind": "source_eval"
+      },
+      "row_id": "semfid-frontier-row-semfid-engine-source-eval-string-from-code-point-high-expected-unknown-engine-source-eval-string-from-code-point-high",
+      "scope_state": "declared_non_execution",
+      "semantic_family": "string_from_code_point_range",
+      "unsupported_reason": "engine_route_not_executed_by_runner",
+      "vector_id": "semfid-engine-source-eval-string-from-code-point-high-expected-unknown"
+    }
+  ],
+  "accepted_external_oracle_sample": {
+    "cluster_id": "semfid-cluster-8187d37eaa13d1fe",
+    "coverage_counting": "eligible_subset_row",
+    "oracle_mode": "external_oracle",
+    "related_bead_ids": [
+      "bd-fqlfw.7",
+      "bd-mihky",
+      "bd-mihky.10",
+      "bd-xulus"
+    ],
+    "route": {
+      "external_runtime": "node",
+      "route_id": "oracle.node.array-constructor-negative-length",
+      "route_kind": "node_oracle"
+    },
+    "row_id": "semfid-frontier-row-semfid-array-constructor-negative-length-range-error-oracle-node-array-constructor-negative-length",
+    "scope_state": "accepted_external_oracle",
+    "semantic_family": "array_length_range",
+    "unsupported_reason": null,
+    "vector_id": "semfid-array-constructor-negative-length-range-error"
+  }
+}

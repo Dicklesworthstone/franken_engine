@@ -52,6 +52,28 @@ Comprehensive audit reveals a **critical execution gap**: While FrankenEngine ha
 
 ## Specific Missing Components
 
+### 0. Property-Key Enumeration Order (Documented Divergence)
+
+Tracking bead: `bd-qporw`
+
+Current object storage uses deterministic `BTreeMap` ordering for string keys.
+That is stable for replay, but it diverges from ECMAScript
+`[[OwnPropertyKeys]]`, which requires integer-index keys first in ascending
+numeric order, then non-index string keys in insertion order, then symbols in
+insertion order.
+
+Observable impact:
+
+- `Object.keys({z: 1, a: 2})` is ordered as `["a", "z"]` by the current
+  storage model instead of donor order `["z", "a"]`.
+- `Object.values`, `Object.entries`, `for...in`, `Reflect.ownKeys`, and
+  `JSON.stringify` inherit the same ordering decision.
+- This is an accepted deterministic-runtime divergence for the current lane,
+  not conformance evidence. A donor-equivalent fix requires deterministic
+  insertion-order-preserving storage, such as ordered entries plus a lookup
+  index or order stamps, without introducing `HashMap` iteration into
+  replay/hash-sensitive paths.
+
 ### 1. WeakMap/WeakSet (Not Defined)
 - No BuiltinId variants for WeakMap or WeakSet
 - No installation functions  

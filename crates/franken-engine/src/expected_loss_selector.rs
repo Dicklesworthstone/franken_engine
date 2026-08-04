@@ -1008,6 +1008,22 @@ fn compute_borderline_sensitivity(
     (true, deltas)
 }
 
+/// Append a field's `Display` form to a content-hash preimage with a fixed-width
+/// `u64` length prefix.
+///
+/// This receipt hash commits to the identity of a runtime decision, so its
+/// preimage must be injective. The previous `format!("{}|{}|…")` join over the
+/// free-form `trace_id`/`decision_id`/`policy_id`/`extension_id` strings was not
+/// injective — a field containing `|` lets two distinct inputs collide (e.g.
+/// `trace_id="a|b", decision_id="c"` and `trace_id="a", decision_id="b|c"` both
+/// serialize to `a|b|c|…`). Length-prefixing every field removes the ambiguity.
+/// Cf. the same fix crate-wide in commits 7f500570 / 1d3e0542.
+fn hash_display(preimage: &mut Vec<u8>, value: &dyn fmt::Display) {
+    let rendered = value.to_string();
+    preimage.extend_from_slice(&(rendered.len() as u64).to_le_bytes());
+    preimage.extend_from_slice(rendered.as_bytes());
+}
+
 fn compute_runtime_decision_receipt_hash(
     input: &RuntimeDecisionScoringInput,
     selected: (ContainmentAction, i64),
@@ -1017,35 +1033,48 @@ fn compute_runtime_decision_receipt_hash(
     alien_risk_envelope: &AlienRiskEnvelope,
     alien_floor_gap_steps: u32,
 ) -> ContentHash {
-    let preimage = format!(
-        "{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}",
-        input.trace_id,
-        input.decision_id,
-        input.policy_id,
-        input.extension_id,
-        input.policy_version,
-        input.timestamp_ns,
-        selected.0,
-        selected.1,
-        confidence_interval.lower_millionths,
-        confidence_interval.upper_millionths,
-        attacker_roi.roi_millionths,
-        fleet_roi_summary.extension_count,
-        fleet_roi_summary.average_roi_millionths,
-        alien_risk_envelope.tail_confidence_millionths,
-        alien_risk_envelope.tail_var_millionths,
-        alien_risk_envelope.tail_cvar_millionths,
-        alien_risk_envelope.conformal_quantile_millionths,
-        alien_risk_envelope.conformal_p_value_millionths,
-        alien_risk_envelope.e_value_millionths,
-        alien_risk_envelope.regime_shift_score_millionths,
-        alien_risk_envelope.alert_level,
-        alien_risk_envelope
+    let mut preimage: Vec<u8> = Vec::new();
+    hash_display(&mut preimage, &input.trace_id);
+    hash_display(&mut preimage, &input.decision_id);
+    hash_display(&mut preimage, &input.policy_id);
+    hash_display(&mut preimage, &input.extension_id);
+    hash_display(&mut preimage, &input.policy_version);
+    hash_display(&mut preimage, &input.timestamp_ns);
+    hash_display(&mut preimage, &selected.0);
+    hash_display(&mut preimage, &selected.1);
+    hash_display(&mut preimage, &confidence_interval.lower_millionths);
+    hash_display(&mut preimage, &confidence_interval.upper_millionths);
+    hash_display(&mut preimage, &attacker_roi.roi_millionths);
+    hash_display(&mut preimage, &fleet_roi_summary.extension_count);
+    hash_display(&mut preimage, &fleet_roi_summary.average_roi_millionths);
+    hash_display(
+        &mut preimage,
+        &alien_risk_envelope.tail_confidence_millionths,
+    );
+    hash_display(&mut preimage, &alien_risk_envelope.tail_var_millionths);
+    hash_display(&mut preimage, &alien_risk_envelope.tail_cvar_millionths);
+    hash_display(
+        &mut preimage,
+        &alien_risk_envelope.conformal_quantile_millionths,
+    );
+    hash_display(
+        &mut preimage,
+        &alien_risk_envelope.conformal_p_value_millionths,
+    );
+    hash_display(&mut preimage, &alien_risk_envelope.e_value_millionths);
+    hash_display(
+        &mut preimage,
+        &alien_risk_envelope.regime_shift_score_millionths,
+    );
+    hash_display(&mut preimage, &alien_risk_envelope.alert_level);
+    hash_display(
+        &mut preimage,
+        &alien_risk_envelope
             .recommended_floor_action
             .map_or_else(|| "none".to_string(), |action| action.to_string()),
-        alien_floor_gap_steps,
     );
-    ContentHash::compute(preimage.as_bytes())
+    hash_display(&mut preimage, &alien_floor_gap_steps);
+    ContentHash::compute(&preimage)
 }
 
 fn floor_gap_steps(
@@ -3027,6 +3056,32 @@ mod tests {
             .score_runtime_decision(&input)
             .expect("operation should succeed for valid inputs");
         assert_eq!(score1.receipt_preimage_hash, score2.receipt_preimage_hash);
+    }
+
+    #[test]
+    fn receipt_preimage_hash_is_injective_across_id_field_boundary() {
+        // bd-hkf62: trace_id/decision_id/policy_id/extension_id were '|'-joined
+        // free-form strings, so (trace_id="a|b", decision_id="c") and
+        // (trace_id="a", decision_id="b|c") produced the same receipt preimage.
+        // Length-prefixing each field pins them to distinct hashes (the two
+        // inputs are otherwise identical, so every other receipt field matches).
+        let mut selector = ExpectedLossSelector::balanced();
+        let mut input1 = sample_runtime_input(certain_benign());
+        input1.trace_id = "a|b".to_string();
+        input1.decision_id = "c".to_string();
+        let mut input2 = sample_runtime_input(certain_benign());
+        input2.trace_id = "a".to_string();
+        input2.decision_id = "b|c".to_string();
+        let score1 = selector
+            .score_runtime_decision(&input1)
+            .expect("operation should succeed for valid inputs");
+        let score2 = selector
+            .score_runtime_decision(&input2)
+            .expect("operation should succeed for valid inputs");
+        assert_ne!(
+            score1.receipt_preimage_hash, score2.receipt_preimage_hash,
+            "trace_id/decision_id field boundary must not collide"
+        );
     }
 
     #[test]

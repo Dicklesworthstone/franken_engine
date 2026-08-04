@@ -1,0 +1,84 @@
+{
+  "artifacts": {
+    "bundle_path": "artifacts/reproducibility_bundles/FE-CLAIM-009",
+    "env_json": "env.json",
+    "manifest_json": "manifest.json",
+    "primary": "scripts/run_claim_to_proof_matrix_gate.sh",
+    "repro_lock": "repro.lock"
+  },
+  "canonicalization": {
+    "encoding": "utf-8",
+    "format": "json",
+    "key_ordering": "lexicographic",
+    "newline": "lf"
+  },
+  "claim": {
+    "id": "FE-CLAIM-009",
+    "original_artifact_path": "docs/RUNTIME_CHARTER.md",
+    "scope": "evidence",
+    "state": "observed"
+  },
+  "generated_at_utc": "2026-07-27T03:20:12.245131+00:00",
+  "inputs": {
+    "dependencies": [
+      "scripts/run_claim_to_proof_matrix_gate.sh",
+      "scripts/e2e/claim_to_proof_matrix_repro_lock_smoke.sh"
+    ],
+    "source_files": [
+      "docs/claim_to_proof_matrix_v1.json",
+      "docs/REPRODUCIBILITY_CONTRACT.md",
+      "scripts/run_claim_to_proof_matrix_gate.sh",
+      "scripts/testdata/claim_to_proof_matrix_repro_lock/claim_to_proof_matrix_fixture.json"
+    ]
+  },
+  "manifest_id": "manifest-fe-claim-009-20260521",
+  "outputs": {
+    "decision_artifacts": "generated",
+    "environment_fingerprint": {
+      "digest": "sha256:856793073ed9f63e785edcc36f71f8cb2ed0d4445b80a44a356fa2cddbef9ba0",
+      "fields": {
+        "architecture": "x86_64",
+        "cargo_version": "cargo 1.99.0-nightly (3efb1f477 2026-07-17)",
+        "kernel_release": "6.17.0-41-generic",
+        "platform": "linux",
+        "rustc_host_triple": "x86_64-unknown-linux-gnu",
+        "rustc_version": "rustc 1.99.0-nightly (008fa22ce 2026-07-25)"
+      },
+      "material_digest": "sha256:600ced6ccda317951a8bb5d5b3c91894965bbf3d1df638235f3518ee0d500bab",
+      "schema_version": "franken-engine.evidence-environment-fingerprint.v1"
+    },
+    "execution_trace": "deterministic",
+    "exit_code": 0,
+    "verification_command": "./scripts/run_claim_to_proof_matrix_gate.sh ci",
+    "verification_result": "passed",
+    "verified_at_utc": "2026-07-27T03:20:12.245131+00:00"
+  },
+  "provenance": {
+    "audit_source": "bd-cixqu.4.4",
+    "bead_id": "bd-cixqu.4",
+    "blocking_beads_closed": [
+      "bd-cixqu.4.1",
+      "bd-cixqu.4.2",
+      "bd-cixqu.4.3"
+    ],
+    "generated_by": "reemit_evidence_receipts.py (live gate run)"
+  },
+  "retention": {
+    "backup_required": true,
+    "immutable": true,
+    "policy": "permanent"
+  },
+  "schema_hash": "sha256:8f9a0b1c2d3e4f5678abc9def0123456789abcdef0123456789abcdef01234567",
+  "schema_version": "frankenengine.reproducibility.manifest.v1",
+  "source_revision": {
+    "branch": "main",
+    "commit": "5a40110e59ff763e18d8d3ccb212af62e1ff737d",
+    "repository": "franken_engine",
+    "worktree_dirty": false
+  },
+  "validation": {
+    "hash_verified": true,
+    "provenance_linked": true,
+    "schema_validated": true
+  }
+}

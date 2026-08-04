@@ -14,9 +14,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use frankenengine_engine::capability_witness::{
-    CapabilityWitness, ConfidenceInterval, LifecycleState, PromotionTheoremInput, ProofKind,
-    ProofObligation, PublicationEntryKind, SourceCapabilitySet, WitnessBuilder,
-    WitnessPublicationConfig, WitnessPublicationError, WitnessPublicationEvent,
+    CapabilityWitness, CapabilityWitnessTrustRoot, ConfidenceInterval, LifecycleState,
+    PromotionTheoremInput, ProofKind, ProofObligation, PublicationEntryKind, SourceCapabilitySet,
+    WitnessBuilder, WitnessPublicationConfig, WitnessPublicationError, WitnessPublicationEvent,
     WitnessPublicationPipeline, WitnessPublicationQuery,
 };
 use frankenengine_engine::engine_object_id::{self, EngineObjectId, ObjectDomain, SchemaId};
@@ -35,6 +35,10 @@ fn synthesizer_signing_key() -> SigningKey {
 
 fn tree_head_signing_key() -> SigningKey {
     SigningKey::from_bytes([0x44; 32]).unwrap()
+}
+
+fn witness_trust_root() -> CapabilityWitnessTrustRoot {
+    CapabilityWitnessTrustRoot::single_authority(synthesizer_signing_key().verification_key())
 }
 
 fn extension_id(seed: u64) -> EngineObjectId {
@@ -151,7 +155,7 @@ fn build_promoted_witness(seed: u64, signing_key: &SigningKey) -> CapabilityWitn
 }
 
 fn build_pipeline() -> WitnessPublicationPipeline {
-    WitnessPublicationPipeline::new(
+    let mut pipeline = WitnessPublicationPipeline::new(
         SecurityEpoch::from_raw(2_000),
         tree_head_signing_key(),
         WitnessPublicationConfig {
@@ -160,7 +164,9 @@ fn build_pipeline() -> WitnessPublicationPipeline {
             governance_ledger_config: None,
         },
     )
-    .expect("build publication pipeline")
+    .expect("build publication pipeline");
+    pipeline.set_witness_trust_root(witness_trust_root());
+    pipeline
 }
 
 fn assert_structured_event(event: &WitnessPublicationEvent, expected_event: &str) {

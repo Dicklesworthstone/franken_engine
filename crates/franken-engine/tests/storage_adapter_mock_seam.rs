@@ -43,15 +43,20 @@ use frankenengine_engine::storage_adapter::{
     InMemoryStorageAdapter, STORAGE_SCHEMA_VERSION, StorageAdapter, StorageError, StoreKind,
     StoreQuery, StoreRecord,
 };
+use frankenengine_engine::typed_persistence_models::{
+    IfcProvenanceEntry, ReplacementLineageEntry, ShadowEvidenceJournalEntry,
+    SpecializationIndexEntry, TypedStoreRecord,
+};
 
 fn context() -> EventContext {
     EventContext::new("trace-it", "decision-it", "policy-it").expect("context")
 }
 
-fn all_store_kinds() -> [StoreKind; 8] {
+fn all_store_kinds() -> [StoreKind; 9] {
     [
         StoreKind::ReplayIndex,
         StoreKind::EvidenceIndex,
+        StoreKind::ShadowEvidenceJournal,
         StoreKind::BenchmarkLedger,
         StoreKind::PolicyCache,
         StoreKind::PlasWitness,
@@ -61,7 +66,140 @@ fn all_store_kinds() -> [StoreKind; 8] {
     ]
 }
 
-fn seed_store<A: StorageAdapter>(adapter: &mut A, store: StoreKind, context: &EventContext) {
+fn typed_heavy_store_kind(store: StoreKind) -> bool {
+    matches!(
+        store,
+        StoreKind::ShadowEvidenceJournal
+            | StoreKind::ReplacementLineage
+            | StoreKind::IfcProvenance
+            | StoreKind::SpecializationIndex
+    )
+}
+
+fn shadow_evidence_journal_fixture(journal_event_id: i64) -> ShadowEvidenceJournalEntry {
+    let collected_timestamp_ms = 1_700_000_300_000 + journal_event_id;
+    let freshness_window_ms = 30_000;
+    ShadowEvidenceJournalEntry {
+        journal_event_id,
+        bead_id: format!("bd-shadow-{journal_event_id}"),
+        event_kind: "source_snapshot".to_string(),
+        source_kind: "br_queue_snapshot_json".to_string(),
+        source_locator: "br ready --json".to_string(),
+        collected_timestamp_ms,
+        sequence_id: journal_event_id,
+        payload_content_hash:
+            "sha256:0277a79f84690d36b4fabc8986caa314fa3bf841a6008857c1ba0fedaf268551".to_string(),
+        normalized_payload_path: Some("artifacts/shadow/br_queue_snapshot.json".to_string()),
+        normalized_payload_json: r#"[{"id":"bd-a","status":"ready"}]"#.to_string(),
+        normalized_payload_hash:
+            "sha256:0277a79f84690d36b4fabc8986caa314fa3bf841a6008857c1ba0fedaf268551".to_string(),
+        raw_evidence_hashes_json:
+            r#"["sha256:40d47631ec52fba5f92357f7d466ad5b789718d98ba0717f09063770c7bb0216"]"#
+                .to_string(),
+        freshness_window_ms,
+        freshness_deadline_ms: collected_timestamp_ms + freshness_window_ms,
+        degradation_state: "confirmed".to_string(),
+        retention_class: "windowed".to_string(),
+        parent_event_ids_json: "[]".to_string(),
+        metadata_json: r#"{"source_id":"br_queue_snapshot_json"}"#.to_string(),
+    }
+}
+
+fn replacement_lineage_fixture(sequence_id: i64) -> ReplacementLineageEntry {
+    ReplacementLineageEntry {
+        sequence_id,
+        slot_id: format!("slot-{sequence_id}"),
+        operation_type: "promotion".to_string(),
+        source_state: "candidate".to_string(),
+        target_state: "active".to_string(),
+        receipt_artifact_id: format!("receipt-{sequence_id}"),
+        receipt_signature: format!("signature-{sequence_id}"),
+        timestamp_ms: 1_700_000_000_000 + sequence_id,
+        metadata_json: "{}".to_string(),
+    }
+}
+
+fn ifc_provenance_fixture(provenance_id: i64) -> IfcProvenanceEntry {
+    IfcProvenanceEntry {
+        provenance_id,
+        source_label: format!("source-{provenance_id}"),
+        target_label: format!("target-{provenance_id}"),
+        edge_type: "flow".to_string(),
+        flow_operation: "copy".to_string(),
+        security_level: "internal".to_string(),
+        declassification_ref: None,
+        timestamp_ms: 1_700_000_100_000 + provenance_id,
+        trace_id: format!("trace-{provenance_id}"),
+        metadata_json: "{}".to_string(),
+    }
+}
+
+fn specialization_index_fixture(specialization_id: i64) -> SpecializationIndexEntry {
+    SpecializationIndexEntry {
+        specialization_id,
+        proof_artifact_id: format!("proof-{specialization_id}"),
+        specialization_type: "validation".to_string(),
+        specialized_version: format!("v{specialization_id}"),
+        status: "active".to_string(),
+        invalidation_timestamp_ms: None,
+        invalidation_reason: None,
+        security_epoch: 7,
+        created_timestamp_ms: 1_700_000_200_000 + specialization_id,
+        specialized_content_hash: format!("hash-{specialization_id}"),
+        metadata_json: "{}".to_string(),
+    }
+}
+
+fn typed_store_record(store: StoreKind, ordinal: i64) -> Option<StoreRecord> {
+    match store {
+        StoreKind::ShadowEvidenceJournal => Some(
+            shadow_evidence_journal_fixture(ordinal)
+                .to_store_record(0)
+                .expect("shadow journal fixture is valid"),
+        ),
+        StoreKind::ReplacementLineage => Some(
+            replacement_lineage_fixture(ordinal)
+                .to_store_record(0)
+                .expect("replacement fixture is valid"),
+        ),
+        StoreKind::IfcProvenance => Some(
+            ifc_provenance_fixture(ordinal)
+                .to_store_record(0)
+                .expect("ifc fixture is valid"),
+        ),
+        StoreKind::SpecializationIndex => Some(
+            specialization_index_fixture(ordinal)
+                .to_store_record(0)
+                .expect("specialization fixture is valid"),
+        ),
+        _ => None,
+    }
+}
+
+fn store_query_for_all_records(store: StoreKind) -> StoreQuery {
+    if typed_heavy_store_kind(store) {
+        StoreQuery {
+            key_prefix: Some(format!("typed/{}/", store.as_str())),
+            metadata_filters: BTreeMap::new(),
+            limit: None,
+        }
+    } else {
+        StoreQuery::default()
+    }
+}
+
+fn put_test_record<A: StorageAdapter>(
+    adapter: &mut A,
+    store: StoreKind,
+    ordinal: i64,
+    context: &EventContext,
+) -> StoreRecord {
+    if let Some(record) = typed_store_record(store, ordinal) {
+        return adapter
+            .put(store, record.key, record.value, record.metadata, context)
+            .expect("put typed fixture");
+    }
+
     let mut metadata = BTreeMap::new();
     metadata.insert("zone".to_string(), "prod".to_string());
     metadata.insert("store".to_string(), store.as_str().to_string());
@@ -69,21 +207,17 @@ fn seed_store<A: StorageAdapter>(adapter: &mut A, store: StoreKind, context: &Ev
     adapter
         .put(
             store,
-            format!("{}/z", store.as_str()),
-            vec![2, 2],
-            metadata.clone(),
-            context,
-        )
-        .expect("seed z");
-    adapter
-        .put(
-            store,
-            format!("{}/a", store.as_str()),
-            vec![1, 1],
+            format!("{}/{ordinal}", store.as_str()),
+            vec![ordinal as u8],
             metadata,
             context,
         )
-        .expect("seed a");
+        .expect("put generic fixture")
+}
+
+fn seed_store<A: StorageAdapter>(adapter: &mut A, store: StoreKind, context: &EventContext) {
+    put_test_record(adapter, store, 2, context);
+    put_test_record(adapter, store, 1, context);
 }
 
 fn snapshot_all<A: StorageAdapter>(
@@ -95,7 +229,7 @@ fn snapshot_all<A: StorageAdapter>(
         .copied()
         .map(|store| {
             let rows = adapter
-                .query(store, &StoreQuery::default(), context)
+                .query(store, &store_query_for_all_records(store), context)
                 .expect("snapshot query");
             (store, rows)
         })
@@ -1048,13 +1182,20 @@ fn enrichment_store_kind_serde_all_variants_roundtrip() {
 }
 
 #[test]
-fn enrichment_store_kind_integration_points_all_start_with_frankensqlite() {
+fn enrichment_store_kind_integration_points_match_store_authority() {
     for kind in all_store_kinds() {
-        assert!(
-            kind.integration_point().starts_with("frankensqlite::"),
-            "{:?} integration_point does not start with 'frankensqlite::'",
-            kind
-        );
+        let integration_point = kind.integration_point();
+        if typed_heavy_store_kind(kind) {
+            assert!(
+                integration_point.starts_with("sqlmodel_rust::"),
+                "{kind:?} typed-heavy integration_point does not start with 'sqlmodel_rust::'"
+            );
+        } else {
+            assert!(
+                integration_point.starts_with("frankensqlite::"),
+                "{kind:?} integration_point does not start with 'frankensqlite::'"
+            );
+        }
     }
 }
 
@@ -2244,20 +2385,12 @@ fn enrichment_in_memory_stores_are_fully_isolated() {
     let ctx = context();
 
     for kind in all_store_kinds() {
-        adapter
-            .put(
-                kind,
-                format!("{}/key", kind.as_str()),
-                vec![kind as u8],
-                BTreeMap::new(),
-                &ctx,
-            )
-            .expect("put");
+        put_test_record(&mut adapter, kind, 0, &ctx);
     }
 
     for kind in all_store_kinds() {
         let rows = adapter
-            .query(kind, &StoreQuery::default(), &ctx)
+            .query(kind, &store_query_for_all_records(kind), &ctx)
             .expect("query");
         assert_eq!(
             rows.len(),
@@ -2574,10 +2707,10 @@ fn enrichment_determinism_batch_then_query_order_is_canonical() {
 
     let entries: Vec<BatchPutEntry> = (0..20u8)
         .rev()
-        .map(|i| BatchPutEntry {
-            key: format!("item/{i:03}"),
-            value: vec![i],
-            metadata: BTreeMap::new(),
+        .map(|i| {
+            ifc_provenance_fixture(i.into())
+                .to_batch_put_entry()
+                .expect("ifc batch fixture is valid")
         })
         .collect();
     adapter
@@ -2585,11 +2718,15 @@ fn enrichment_determinism_batch_then_query_order_is_canonical() {
         .expect("batch");
 
     let rows = adapter
-        .query(StoreKind::IfcProvenance, &StoreQuery::default(), &ctx)
+        .query(
+            StoreKind::IfcProvenance,
+            &store_query_for_all_records(StoreKind::IfcProvenance),
+            &ctx,
+        )
         .expect("query");
     assert_eq!(rows.len(), 20);
     for (i, row) in rows.iter().enumerate() {
-        assert_eq!(row.key, format!("item/{i:03}"));
+        assert_eq!(row.key, format!("typed/ifc_provenance/{i:020}"));
     }
 }
 
@@ -2703,39 +2840,23 @@ fn enrichment_cross_concern_batch_then_individual_overwrites() {
 fn enrichment_cross_concern_migration_preserves_existing_data() {
     let mut adapter = InMemoryStorageAdapter::new();
     let ctx = context();
-    adapter
-        .put(
-            StoreKind::SpecializationIndex,
-            "spec/1".to_string(),
-            vec![1],
-            BTreeMap::new(),
-            &ctx,
-        )
-        .expect("put");
-    adapter
-        .put(
-            StoreKind::ReplacementLineage,
-            "rep/1".to_string(),
-            vec![2],
-            BTreeMap::new(),
-            &ctx,
-        )
-        .expect("put");
+    let specialization = put_test_record(&mut adapter, StoreKind::SpecializationIndex, 1, &ctx);
+    let replacement = put_test_record(&mut adapter, StoreKind::ReplacementLineage, 2, &ctx);
 
     adapter
         .migrate_to(STORAGE_SCHEMA_VERSION + 1)
         .expect("migrate");
 
     let s = adapter
-        .get(StoreKind::SpecializationIndex, "spec/1", &ctx)
+        .get(StoreKind::SpecializationIndex, &specialization.key, &ctx)
         .expect("get")
         .expect("exists");
-    assert_eq!(s.value, vec![1]);
+    assert_eq!(s.value, specialization.value);
     let r = adapter
-        .get(StoreKind::ReplacementLineage, "rep/1", &ctx)
+        .get(StoreKind::ReplacementLineage, &replacement.key, &ctx)
         .expect("get")
         .expect("exists");
-    assert_eq!(r.value, vec![2]);
+    assert_eq!(r.value, replacement.value);
 }
 
 #[test]
@@ -2745,21 +2866,13 @@ fn enrichment_cross_concern_all_stores_populated_and_queried() {
 
     for kind in all_store_kinds() {
         for i in 0..3 {
-            adapter
-                .put(
-                    kind,
-                    format!("{}/{i}", kind.as_str()),
-                    vec![i as u8],
-                    BTreeMap::new(),
-                    &ctx,
-                )
-                .expect("put");
+            put_test_record(&mut adapter, kind, i, &ctx);
         }
     }
 
     for kind in all_store_kinds() {
         let rows = adapter
-            .query(kind, &StoreQuery::default(), &ctx)
+            .query(kind, &store_query_for_all_records(kind), &ctx)
             .expect("query");
         assert_eq!(rows.len(), 3, "store {:?} should have 3 records", kind);
     }

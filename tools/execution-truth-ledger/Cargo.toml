@@ -1,0 +1,60 @@
+[package]
+name = "franken-execution-truth-ledger-tool"
+version = "0.1.0"
+edition = "2024"
+publish = false
+autobins = false
+autotests = false
+build = "build.rs"
+
+# Keep the evidence gate independently resolvable. A broken runtime or sibling
+# path dependency must not prevent the truth ledger from reporting that break.
+[workspace]
+
+[features]
+default = []
+tier-r-probe = ["dep:frankenengine-core"]
+
+[lib]
+name = "frankenengine_engine"
+path = "src/lib.rs"
+
+[[bin]]
+name = "franken_execution_truth_ledger"
+path = "../../crates/franken-engine/src/bin/franken_execution_truth_ledger.rs"
+
+[[bin]]
+name = "franken_verification_coverage_contract"
+path = "../../crates/franken-engine/src/bin/franken_verification_coverage_contract.rs"
+
+[[bin]]
+name = "franken_provisional_tier_r_probe"
+path = "src/tier_r_probe.rs"
+required-features = ["tier-r-probe"]
+
+[[test]]
+name = "execution_truth_ledger_integration"
+path = "../../crates/franken-engine/tests/execution_truth_ledger_integration.rs"
+
+[[test]]
+name = "verification_coverage_contract_integration"
+path = "../../crates/franken-engine/tests/verification_coverage_contract_integration.rs"
+
+[dependencies]
+chrono = { version = "0.4", features = ["serde"] }
+hex = "0.4"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+sha2 = "0.10"
+rustix = { version = "1.1", features = ["fs"] }
+frankenengine-core = { path = "../../crates/franken-core", optional = true }
+
+[dev-dependencies]
+proptest = "1.0"
+tempfile = "3.0"
+
+[build-dependencies]
+hex = "0.4"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+sha2 = "0.10"

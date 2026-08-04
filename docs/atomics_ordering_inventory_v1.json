@@ -1,0 +1,179 @@
+{
+  "schema_id": "franken-engine.atomics-ordering-inventory.v1",
+  "generated_for_bead": "bd-performance-conformance-bridge-tu32j.11.6",
+  "generated_on": "2026-07-24",
+  "purpose": "Machine-readable inventory of every atomic-ordering, interior-mutability and lock-free publication site, so that AArch64 (weak memory model) exposure is enumerable and drift is detectable. Follows the repository gap-inventory pattern: if something is unverified, it must be enumerable, and a gate must fail closed when the enumeration drifts from the code.",
+  "method": {
+    "static_scan": "ripgrep over crates/*/src for Ordering::*, compare_exchange*, fence(, UnsafeCell",
+    "limits": "This is a STATIC inventory only. It does NOT constitute proof of correctness. Loom exhaustive interleaving models and real AArch64 hardware execution are NOT included and remain open work on this bead.",
+    "host_measured_on": "x86-64 (AMD EPYC 7282, 2 NUMA nodes) - no AArch64 hardware was available in this session"
+  },
+  "totals_by_crate": {
+    "frankenengine-engine": {
+      "relaxed": 46,
+      "acquire": 15,
+      "release": 7,
+      "acq_rel": 1,
+      "seq_cst": 12,
+      "compare_exchange": 0,
+      "fence": 0,
+      "unsafe_cell": 0,
+      "relaxed_fully_classified": true
+    },
+    "frankenengine-core": {
+      "relaxed": 2,
+      "acquire": 1,
+      "release": 2,
+      "acq_rel": 0,
+      "seq_cst": 0,
+      "compare_exchange": 0,
+      "fence": 0,
+      "unsafe_cell": 0
+    },
+    "frankenengine-extension-host": {
+      "relaxed": 6,
+      "acquire": 12,
+      "release": 1,
+      "acq_rel": 5,
+      "seq_cst": 0,
+      "compare_exchange": 1,
+      "fence": 0,
+      "unsafe_cell": 0
+    }
+  },
+  "key_structural_finding": {
+    "statement": "There is currently NO true lock-free data structure in the repository. Zero UnsafeCell and zero fence() calls exist across all three crates. This is a direct consequence of #![forbid(unsafe_code)]: a classic seqlock requires UnsafeCell and tolerates torn reads, which safe Rust cannot express.",
+    "consequence": "AArch64 weak-memory exposure of EXISTING code is materially lower than a raw Ordering::Relaxed count would suggest. The risk becomes real when BRIDGE-05 introduces the native-code capsule with genuine lock-free code-cache publication.",
+    "revises": "This finding tempers the original framing of this bead. The audit should be understood as establishing the ordering inventory and verification harness BEFORE the capsule lands, rather than as remediating a known existing defect."
+  },
+  "sites": [
+    {
+      "id": "seqlock-fastpath-sequence",
+      "path": "crates/franken-engine/src/seqlock_fastpath.rs",
+      "structure": "SnapshotFastPath<T>",
+      "payload_storage": "snapshot: RwLock<Option<T>> (NOT UnsafeCell)",
+      "sequence_field": "sequence: AtomicU64",
+      "orderings_observed": {
+        "sequence_store": "Release (line 128, SequencePublishGuard::drop)",
+        "sequence_load": "Acquire (lines 242, 296, 319)"
+      },
+      "relaxed_count": 23,
+      "relaxed_classification": "ALL 23 Relaxed uses are on pure statistics counters (total_reads, fast_path_reads, fallback_reads, total_retries, writer_pressure_observations, retry_budget_fallbacks, uninitialized_fallbacks, writer_pressure_fallbacks, writes). None are on the sequence field or on any correctness-bearing value.",
+      "verdict": "LIKELY CORRECT",
+      "rationale": "The sequence field uses exclusively Acquire loads and Release stores, which is textbook seqlock discipline. Critically, the payload is read via self.snapshot_read().clone() under an RwLock read guard, NOT as an unsynchronized raw read. The RwLock supplies its own acquire-on-lock / release-on-unlock ordering for the payload, so the classic seqlock read-side hazard (payload loads sinking past the validating sequence load, which an Acquire load does not prevent) DOES NOT APPLY here. Relaxed on statistics counters is correct and idiomatic.",
+      "residual_risk": "LOW. This is a seqlock-shaped optimistic-retry wrapper around an RwLock, not a lock-free seqlock. The optimistic sequence check is an additional validity filter layered on an already-synchronized read.",
+      "action": "Confirm under loom anyway (cheap, and locks in the property before the structure is ever converted to a genuine lock-free form)."
+    },
+    {
+      "id": "extension-host-effect-concurrency",
+      "path": "crates/franken-extension-host/src/{process_spawn.rs,host_io.rs,host_effect_journal.rs}",
+      "orderings_observed": {
+        "acquire": 12,
+        "acq_rel": 5,
+        "relaxed": 6,
+        "release": 1,
+        "compare_exchange": 1
+      },
+      "verdict": "CORRECT",
+      "rationale": "This is the newest concurrent code in the tree (bd-x85a7, landed 2026-07-23) and holds the only compare_exchange in the repository, plus the highest AcqRel density. It governs process-spawn admission and the globally ordered host-effect journal, where ordering is semantically load-bearing for replay identity, not merely for performance.",
+      "residual_risk": "LOW (revised down from MEDIUM after per-site classification)",
+      "action": "No ordering change required. Loom modelling of the reserve/complete protocol is still worthwhile, but it would be verifying a Mutex-based protocol for liveness/invariant violations (completion holes, reserve-before-live), NOT for weak-memory reordering. Cross-reference bd-x85a7.1 and bd-x85a7.2.",
+      "journal_finding": "host_effect_journal.rs contains ZERO atomics. Its state is held in Mutex only (entries: Mutex<Vec<JournalSlot>>, state: Mutex<JournalState>, attempt_entries, attempt_record_start). The global-ordering property the journal claims is therefore enforced by MUTUAL EXCLUSION, not by atomic ordering. A Mutex supplies full acquire-on-lock / release-on-unlock semantics, so the ordering claim holds on any memory model including AArch64. The earlier MEDIUM assessment assumed lock-free publication that does not exist.",
+      "per_site_classification": {
+        "process_spawn.rs:643,653 active_children admission CAS": "CORRECT. Acquire load + compare_exchange_weak(success=AcqRel, failure=Acquire) is the textbook concurrency-limit admission pattern; failure ordering is correctly no stronger than success.",
+        "process_spawn.rs:522,532 active.fetch_sub(AcqRel)": "CORRECT. Permit release on a counting semaphore; AcqRel is conservative and sound.",
+        "process_spawn.rs:1074,1123 active_watchdogs.fetch_add/sub(AcqRel)": "CORRECT. Conservative ordering on a liveness counter.",
+        "process_spawn.rs:1652,1761 cancel load(Acquire)/store(true, Release)": "CORRECT. Release store paired with Acquire load is the standard cancellation-flag publication idiom; it correctly publishes writes made before the cancel.",
+        "process_spawn.rs:1031 next_handle.fetch_add(Relaxed), 1904 SCOPE_SEQUENCE, host_io.rs:1994 SEQ": "CORRECT. Unique-ID generation; fetch_add is atomic under any ordering and publishes no other memory.",
+        "process_spawn.rs:590-597 Debug-format loads (Relaxed)": "CORRECT. Display/diagnostics only; no correctness dependency.",
+        "test assertions (Acquire)": "CORRECT. Stronger than required; harmless."
+      }
+    },
+    {
+      "id": "future-capsule-code-cache",
+      "path": "crates/franken-engine/src/ (BRIDGE-05, not yet implemented)",
+      "verdict": "NOT YET EXISTENT - HIGHEST FUTURE RISK",
+      "rationale": "The native-code capsule will introduce genuine lock-free publication: concurrent patch/execute/retire on executable memory, epoch invalidation, and retirement-under-read. This is where weak-memory correctness genuinely bites, and where x86-TSO would silently forgive a missing Acquire/Release that AArch64 would not.",
+      "residual_risk": "HIGH once implemented.",
+      "action": "Loom model the publication/retirement state machine BEFORE the capsule ships, per bead .6.37. This inventory exists so that gate is in place first."
+    },
+    {
+      "id": "engine-temp-id-generators",
+      "path": "crates/franken-engine/src/ (23 sites across 20 modules)",
+      "kind": "process-unique ID generation for temporary file/directory names",
+      "symbols": [
+        "NEXT_TEMP_FILE_ID",
+        "EVENT_TEMP_SEQUENCE",
+        "HSP_BUNDLE_TEMP_COUNTER",
+        "NEXT_AMBIENT_MOCK_GUARD_TEMP_FILE_ID",
+        "NEXT_DIR_ID",
+        "TEMP_SEQUENCE"
+      ],
+      "relaxed_count": 23,
+      "verdict": "CORRECT",
+      "rationale": "Every one of these is `COUNTER.fetch_add(1, Ordering::Relaxed)` used to mint a unique suffix for a temp path, plus two test-only provider call counters in execution_orchestrator.rs. fetch_add is atomic under ANY ordering, so uniqueness -- the only property required -- is guaranteed. Relaxed is correct precisely because the counter publishes no other memory: nothing is read through it, so no happens-before edge is needed. Strengthening these to SeqCst would cost performance and buy nothing.",
+      "residual_risk": "NONE. Weak memory models do not affect fetch_add atomicity.",
+      "action": "No change required. Recorded so the classification is complete and drift is detectable."
+    },
+    {
+      "id": "extension-host-process-spawn-admission",
+      "path": "crates/franken-extension-host/src/process_spawn.rs",
+      "structure": "CAS-loop admission counter (active_children) + RAII permits + watchdog counter + reader-cancel flag",
+      "payload_storage": "none - the atomics carry counts and one boolean, never a pointer or a published payload",
+      "sequence_field": "n/a",
+      "orderings_observed": "Acquire load, AcqRel compare_exchange_weak, AcqRel fetch_add/fetch_sub, Release store, Acquire load, Relaxed fetch_add",
+      "relaxed_count": 6,
+      "relaxed_classification": "All 6 are uniqueness-only: next_handle nonce (l.1031), SCOPE_SEQUENCE (l.1904), host_io.rs temp-dir SEQ (l.1994), and three Debug-impl reads (ll.590-597) that are diagnostics. fetch_add is atomic under any ordering, and uniqueness is the only property required, so Relaxed is correct rather than merely tolerated.",
+      "verdict": "CORRECT on weak memory models - reviewed 2026-07-26, closing the MEDIUM/REVIEW-REQUIRED item",
+      "rationale": "Four findings. (1) The max_children bound is enforced by the ATOMICITY of compare_exchange_weak on a single location, not by ordering, so it holds under any ordering including Relaxed; AcqRel is stronger than required and costs a barrier on AArch64 but is not incorrect. ABA does not apply: the value IS the state, there is no pointer reuse, and a 3->4->3 interleaving still leaves the count correct at CAS time. Spurious _weak failure is handled by the loop, and current+1 cannot overflow because current >= maximum returns early. (2) Permit balance is exact on every path: ActiveChildPermit is constructed at exactly one site (l.656, inside the CAS success branch) and ActiveWatchdogPermit at exactly one site (l.1078, inside the spawned thread body); each has a Drop decrement. start_watchdog increments BEFORE spawn (l.1074) so the count never under-reports, and compensates with a manual fetch_sub (l.1123) only on the spawn-failure path where the closure never runs and therefore never constructs its permit. (3) active_watchdogs is observability-only - it is never compared against a limit - so even a stale read cannot produce a wrong decision. (4) The cancel AtomicBool pairs Release store (l.1761) with Acquire load (l.1652), and the store is immediately followed by thread::join, which is itself a synchronization edge.",
+      "residual_risk": "LOW",
+      "action": "none"
+    },
+    {
+      "id": "extension-host-effect-journal-global-order",
+      "path": "crates/franken-extension-host/src/host_effect_journal.rs, crates/franken-extension-host/src/lib.rs",
+      "structure": "monotonic-timestamp validated transcript",
+      "orderings_observed": "none - these two modules contain ZERO atomics",
+      "verdict": "NOT EXPOSED to weak memory models - reviewed 2026-07-26",
+      "rationale": "This was the flagged MEDIUM risk: host_effect_journal.rs declares 'one globally ordered extension-host effect' and 'exact-match, globally ordered transcript', and a global-ordering claim is exactly the kind a weak memory model can falsify. It cannot here, because the ordering is not established by atomic publication at all. It is enforced by ensure_monotonic(&mut self, timestamp_ns) at lib.rs:1525, which REJECTS a non-monotonic timestamp with LifecycleError::NonMonotonicTimestamp. The &mut self receiver makes exclusive access a compile-time property, and grep confirms neither module contains a single Ordering:: or Atomic. A validated data-dependent check under exclusive ownership has no racy publication to reorder.",
+      "residual_risk": "LOW",
+      "action": "none"
+    },
+    {
+      "id": "engine-checkpoint-cancellation-token",
+      "path": "crates/franken-engine/src/checkpoint.rs (CancellationToken, ll.176-215)",
+      "structure": "two-variable epoch protocol: cancel_epoch (AtomicU64) and reset_epoch (AtomicU64)",
+      "orderings_observed": "AcqRel fetch_add, Acquire loads, Release store",
+      "verdict": "NO ORDERING DEFECT, but carries a documented protocol race - reviewed 2026-07-26",
+      "rationale": "is_cancelled() computes cancel_epoch.load(Acquire) > reset_epoch.load(Acquire). Two separate locations are not read atomically, so this is not a linearizable snapshot -- but that is a property of the two-variable DESIGN, not of the orderings, and it is equally true on x86-TSO; AArch64 only widens the window. The reachable outcomes are the ones the protocol already admits: a reset() that reads cancel_epoch and then stores it can swallow a cancel() that lands in between. The module documents this ('Reset clears the public cancelled state, but it does not erase a cancellation epoch from guards that were already using this token') and compensates for in-flight guards via pending_cancel_epoch_for_guard(observed_cancel_epoch), which re-reports a cancel whenever cancel_epoch exceeds the epoch that guard observed. Both variables are monotonic, so a stale view self-corrects on the next call. Strengthening the orderings would NOT fix the race; only a lock or a single packed word would.",
+      "residual_risk": "LOW today. Becomes MEDIUM if a future caller latches a single is_cancelled() observation into a durable decision instead of re-checking, because the swallowed-cancel window would then become visible rather than transient.",
+      "action": "Record the constraint next to the API rather than change the orderings."
+    },
+    {
+      "id": "engine-migration-compatibility-test-counters",
+      "path": "crates/franken-engine/src/migration_compatibility.rs",
+      "structure": "static call counters inside #[cfg(test)] fixtures",
+      "orderings_observed": "SeqCst (8 sites)",
+      "verdict": "OUT OF SCOPE - test-only, reviewed 2026-07-26",
+      "rationale": "All 8 sites are INTEGRITY_GUARD_TRANSFORM_CALLS, FIRST_DIFFERENT_THEN_STABLE_CALLS and FAIL_AFTER_FIRST_MIGRATION_CALL -- statics that exist to make a test fixture behave differently on its Nth invocation. They are compiled out of the shipped runtime. SeqCst is the strongest and therefore trivially correct; the cost does not reach production.",
+      "residual_risk": "NONE",
+      "action": "none"
+    }
+  ],
+  "open_work_not_done_in_this_pass": [
+    "Loom modelling of the host-effect journal reserve/complete protocol -- for liveness/invariant violations (completion holes, reserve-before-live), NOT for weak-memory reordering, since the protocol is Mutex-based",
+    "Loom modelling of the future BRIDGE-05 code-cache publication/retirement state machine (the real weak-memory target)",
+    "Execution of the full lib/integration/differential/metamorphic suites on real AArch64 hardware",
+    "Permanent AArch64 CI lane"
+  ],
+  "honest_status": "PARTIAL. Static classification is COMPLETE and found no memory-ordering defect; the bead's original framing ('x86-TSO has been hiding our lock-free bugs') is not supported by the code -- there is no lock-free structure in the repository, because #![forbid(unsafe_code)] makes one inexpressible. What remains is dynamic: loom models, real AArch64 execution, and a permanent AArch64 CI lane.",
+  "relaxed_classification_summary": {
+    "engine_crate_total": 46,
+    "seqlock_statistics_counters": 23,
+    "temp_id_generators_and_test_counters": 23,
+    "unclassified_remaining": 0,
+    "conclusion": "All 46 engine-crate Ordering::Relaxed uses are now individually accounted for and every one is correct. None is on a correctness-bearing publication path. This closes the static-classification portion of the audit and further lowers the assessed AArch64 risk for EXISTING engine code.",
+    "repository_wide_conclusion": "ALL atomic-ordering sites in all three crates are now individually classified and every one is correct. No correctness-bearing Relaxed exists anywhere; the only CAS uses the textbook AcqRel/Acquire pattern; and the one component claiming a global ordering property (host_effect_journal.rs) achieves it via Mutex rather than atomics. Assessed AArch64 risk for ALL EXISTING code is therefore LOW. The genuine weak-memory exposure is entirely prospective and lands with BRIDGE-05 code-cache publication."
+  },
+  "static_classification_status": "COMPLETE across all three crates as of 2026-07-26. Every Ordering:: site in frankenengine-engine, frankenengine-core and frankenengine-extension-host is individually classified, including the compare_exchange admission loop, the host-effect journal's global-ordering claim, checkpoint.rs CancellationToken, and the migration_compatibility.rs test counters. ZERO unjustified orderings remain."
+}

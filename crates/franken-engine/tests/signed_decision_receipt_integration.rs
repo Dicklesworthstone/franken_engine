@@ -10,7 +10,6 @@ use frankenengine_engine::evidence_contract::{
     ActionType, DecisionAction, ExpectedLossEntry, PosteriorSnapshot, ReceiptRecord,
     SignatureAlgorithm, SignatureBundle, VerificationMetadata,
 };
-use serde_json;
 
 fn valid_test_receipt() -> ReceiptRecord {
     let posterior_snapshot = PosteriorSnapshot {

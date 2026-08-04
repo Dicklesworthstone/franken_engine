@@ -51,6 +51,32 @@ pub const TS_MANIFEST_COMPONENT: &str = "ts_resolution_manifest";
 pub const TS_MANIFEST_POLICY_ID: &str = "RGC-204B";
 
 // ---------------------------------------------------------------------------
+// Content-hash preimage helpers
+// ---------------------------------------------------------------------------
+//
+// The content hashes below back deterministic TS-resolution replay (Charter
+// §3) and its evidence chain (§6), so their preimages must be *injective*:
+// distinct logical inputs must never share a preimage. Feeding adjacent
+// free-form `String`s (paths, ids) into the hasher with no length marker, or
+// looping over a map/vec with no count marker, breaks that — `("ab","c")` then
+// collides with `("a","bc")`. These helpers length-prefix every variable field
+// and count-prefix every collection (mirroring `hash_len_prefixed` in the
+// sibling `semantic_canonical_basis` module).
+
+/// Feed `bytes` into `h` with a fixed-width `u64` little-endian length prefix
+/// so that adjacent variable-length fields cannot share a preimage.
+fn update_len_prefixed(h: &mut Sha256, bytes: &[u8]) {
+    h.update((bytes.len() as u64).to_le_bytes());
+    h.update(bytes);
+}
+
+/// Feed a `u64` little-endian count prefix so the boundaries between the
+/// (variable-length) items of a collection cannot be re-segmented.
+fn update_count(h: &mut Sha256, count: usize) {
+    h.update((count as u64).to_le_bytes());
+}
+
+// ---------------------------------------------------------------------------
 // Tsconfig Snapshot
 // ---------------------------------------------------------------------------
 
@@ -99,26 +125,27 @@ impl TsconfigSnapshot {
     /// Compute a deterministic content hash of this snapshot.
     pub fn content_hash(&self) -> ContentHash {
         let mut hasher = Sha256::new();
-        hasher.update(self.root_dir.as_bytes());
-        hasher.update(self.base_url.as_bytes());
-        hasher.update(
-            // ModuleResolution derives Serialize and has no non-serializable fields.
-            serde_json::to_string(&self.module_resolution)
-                .unwrap_or_else(|e| panic!("failed to serialize module_resolution for hash: {}", e))
-                .as_bytes(),
-        );
+        update_len_prefixed(&mut hasher, self.root_dir.as_bytes());
+        update_len_prefixed(&mut hasher, self.base_url.as_bytes());
+        // ModuleResolution derives Serialize and has no non-serializable fields.
+        let module_resolution_json = serde_json::to_string(&self.module_resolution)
+            .unwrap_or_else(|e| panic!("failed to serialize module_resolution for hash: {}", e));
+        update_len_prefixed(&mut hasher, module_resolution_json.as_bytes());
+        update_count(&mut hasher, self.paths.len());
         for (k, vs) in &self.paths {
-            hasher.update(k.as_bytes());
+            update_len_prefixed(&mut hasher, k.as_bytes());
+            update_count(&mut hasher, vs.len());
             for v in vs {
-                hasher.update(v.as_bytes());
+                update_len_prefixed(&mut hasher, v.as_bytes());
             }
         }
-        hasher.update(self.target.as_bytes());
-        hasher.update(self.module_system.as_bytes());
-        hasher.update(self.jsx.as_bytes());
+        update_len_prefixed(&mut hasher, self.target.as_bytes());
+        update_len_prefixed(&mut hasher, self.module_system.as_bytes());
+        update_len_prefixed(&mut hasher, self.jsx.as_bytes());
         hasher.update([u8::from(self.strict)]);
+        update_count(&mut hasher, self.custom_conditions.len());
         for cond in &self.custom_conditions {
-            hasher.update(cond.as_bytes());
+            update_len_prefixed(&mut hasher, cond.as_bytes());
         }
         ContentHash::compute(&hasher.finalize())
     }
@@ -253,16 +280,15 @@ impl TsResolutionReplayIndex {
         }
 
         let mut hasher = Sha256::new();
-        hasher.update(tsconfig_hash.as_bytes());
+        update_len_prefixed(&mut hasher, tsconfig_hash.as_bytes());
         // ResolutionMode derives Serialize and has no non-serializable fields.
-        hasher.update(
-            serde_json::to_string(&mode)
-                .unwrap_or_else(|e| panic!("failed to serialize resolution mode for hash: {}", e))
-                .as_bytes(),
-        );
+        let mode_json = serde_json::to_string(&mode)
+            .unwrap_or_else(|e| panic!("failed to serialize resolution mode for hash: {}", e));
+        update_len_prefixed(&mut hasher, mode_json.as_bytes());
+        update_count(&mut hasher, map.len());
         for (k, v) in &map {
-            hasher.update(k.as_bytes());
-            hasher.update(v.resolved_path.as_bytes());
+            update_len_prefixed(&mut hasher, k.as_bytes());
+            update_len_prefixed(&mut hasher, v.resolved_path.as_bytes());
         }
         let index_hash = format!("sha256:{}", hex::encode(hasher.finalize()));
 
@@ -447,14 +473,14 @@ impl TsExecutionManifest {
             generated_at_utc,
         } = input;
         let mut hasher = Sha256::new();
-        hasher.update(trace_id.as_bytes());
-        hasher.update(decision_id.as_bytes());
-        hasher.update(tsconfig_hash.as_bytes());
-        hasher.update(source_path.as_bytes());
-        hasher.update(normalization.source_hash.as_bytes());
-        hasher.update(normalization.normalized_hash.as_bytes());
+        update_len_prefixed(&mut hasher, trace_id.as_bytes());
+        update_len_prefixed(&mut hasher, decision_id.as_bytes());
+        update_len_prefixed(&mut hasher, tsconfig_hash.as_bytes());
+        update_len_prefixed(&mut hasher, source_path.as_bytes());
+        update_len_prefixed(&mut hasher, normalization.source_hash.as_bytes());
+        update_len_prefixed(&mut hasher, normalization.normalized_hash.as_bytes());
         hasher.update(resolution.decision_count.to_le_bytes());
-        hasher.update(ir_pipeline.ir0_hash.as_bytes());
+        update_len_prefixed(&mut hasher, ir_pipeline.ir0_hash.as_bytes());
         let manifest_hash = format!("sha256:{}", hex::encode(hasher.finalize()));
 
         Self {
@@ -839,9 +865,10 @@ pub fn run_manifest_corpus() -> (
     }
 
     let mut hasher = Sha256::new();
+    update_count(&mut hasher, specimens.len());
     for ev in &specimens {
-        hasher.update(ev.specimen_id.as_bytes());
-        hasher.update(ev.verdict.as_str().as_bytes());
+        update_len_prefixed(&mut hasher, ev.specimen_id.as_bytes());
+        update_len_prefixed(&mut hasher, ev.verdict.as_str().as_bytes());
     }
     let evidence_hash = format!("sha256:{}", hex::encode(hasher.finalize()));
 
@@ -1228,6 +1255,32 @@ mod tests {
         s1.paths.insert("@app/*".into(), vec!["./src/*".into()]);
         let s2 = TsconfigSnapshot::default();
         assert_ne!(s1.content_hash(), s2.content_hash());
+    }
+
+    #[test]
+    fn content_hash_injective_across_field_boundary_bd_hg2pf() {
+        // Regression (bd-hg2pf): adjacent free strings (root_dir, base_url, …)
+        // were concatenated into the preimage with no length prefix, so
+        // ("ab","c") aliased ("a","bc"). Length prefixes keep them distinct.
+        let a = TsconfigSnapshot {
+            root_dir: "ab".into(),
+            base_url: "c".into(),
+            ..Default::default()
+        };
+        let b = TsconfigSnapshot {
+            root_dir: "a".into(),
+            base_url: "bc".into(),
+            ..Default::default()
+        };
+        assert_ne!(a.content_hash(), b.content_hash());
+
+        // The same shift moved across the uncounted `paths` map must also be
+        // distinguished: one alias {"a*" -> ["b","c"]} vs {"a*" -> ["bc"]}.
+        let mut p1 = TsconfigSnapshot::default();
+        p1.paths.insert("a*".into(), vec!["b".into(), "c".into()]);
+        let mut p2 = TsconfigSnapshot::default();
+        p2.paths.insert("a*".into(), vec!["bc".into()]);
+        assert_ne!(p1.content_hash(), p2.content_hash());
     }
 
     #[test]

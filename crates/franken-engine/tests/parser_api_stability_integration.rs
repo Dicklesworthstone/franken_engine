@@ -164,8 +164,10 @@ fn golden_version_v1_nonempty_fields() {
 }
 
 #[test]
-fn golden_version_check_against_live_no_mismatches() {
-    let golden = GoldenVersionVector::v1();
+fn golden_version_current_check_against_live_no_mismatches() {
+    let golden = GoldenVersionVector::current();
+    assert_eq!(golden, GoldenVersionVector::v6());
+    assert_eq!(golden.ast_schema, "franken-engine.parser-ast.schema.v6");
     let mismatches = golden.check_against_live();
     assert!(
         mismatches.is_empty(),
@@ -174,8 +176,17 @@ fn golden_version_check_against_live_no_mismatches() {
 }
 
 #[test]
+fn golden_version_v3_remains_historical_after_module_source_bump_bd_lfq44() {
+    let mismatches = GoldenVersionVector::v3().check_against_live();
+    assert_eq!(mismatches.len(), 1);
+    assert_eq!(mismatches[0].0, "ast_schema");
+    assert_eq!(mismatches[0].1, "franken-engine.parser-ast.schema.v3");
+    assert_eq!(mismatches[0].2, "franken-engine.parser-ast.schema.v6");
+}
+
+#[test]
 fn golden_version_serde() {
-    let golden = GoldenVersionVector::v1();
+    let golden = GoldenVersionVector::current();
     let json = serde_json::to_string(&golden).unwrap();
     let back: GoldenVersionVector = serde_json::from_str(&json).unwrap();
     assert_eq!(back, golden);
@@ -414,7 +425,7 @@ fn full_lifecycle_parse_check_log() {
     assert_eq!(entry.outcome, IntegrationOutcome::Success);
 
     // 4. Check golden vector
-    let golden = GoldenVersionVector::v1();
+    let golden = GoldenVersionVector::current();
     let mismatches = golden.check_against_live();
     assert!(mismatches.is_empty());
 
@@ -686,8 +697,8 @@ fn golden_version_v1_all_fields_populated() {
 }
 
 #[test]
-fn golden_version_v1_detects_hypothetical_drift() {
-    let mut g = GoldenVersionVector::v1();
+fn golden_version_current_detects_hypothetical_drift() {
+    let mut g = GoldenVersionVector::current();
     g.ast_contract = "franken-engine.parser-ast.contract.v99".into();
     let mismatches = g.check_against_live();
     assert_eq!(mismatches.len(), 1);
@@ -695,8 +706,8 @@ fn golden_version_v1_detects_hypothetical_drift() {
 }
 
 #[test]
-fn golden_version_v1_detects_multiple_drifts() {
-    let mut g = GoldenVersionVector::v1();
+fn golden_version_current_detects_multiple_drifts() {
+    let mut g = GoldenVersionVector::current();
     g.ast_contract = "DRIFTED".into();
     g.event_ir_contract = "DRIFTED".into();
     let mismatches = g.check_against_live();

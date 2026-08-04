@@ -476,9 +476,7 @@ impl ChangePointDetector {
 
     /// Reset to initial state.
     pub fn reset(&mut self) {
-        for p in &mut self.run_length_probs {
-            *p = 0;
-        }
+        self.run_length_probs.fill(0);
         self.run_length_probs[0] = MILLION;
     }
 }

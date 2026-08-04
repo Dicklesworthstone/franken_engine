@@ -56,6 +56,48 @@
       "expected_capture_decision": "fail_closed",
       "expected_truth_state": "contaminated",
       "expected_local_fallback_observed": true
+    },
+    {
+      "case_id": "current_bd_o4cbn_9_7_ledger_no_verdict",
+      "category": "current_no_verdict_inventory",
+      "fixture_dir": "scripts/testdata/rch_remote_compile_stall_bundle/current_bd_o4cbn_9_7_ledger_no_verdict",
+      "harness_case_id": "cargo-check-lib",
+      "expected_final_verdict": "fresh_heartbeat_frozen_progress_stall",
+      "expected_reason_code": "fresh_heartbeat_frozen_progress",
+      "expected_source_evidence": false,
+      "expected_exit_code": 0,
+      "expected_selected_worker": "vmi1167313",
+      "expected_capture_decision": "captured",
+      "expected_truth_state": "confirmed",
+      "expected_local_fallback_observed": false
+    },
+    {
+      "case_id": "current_bd_o4cbn_1_4_h1_bench_no_verdict",
+      "category": "current_no_verdict_inventory",
+      "fixture_dir": "scripts/testdata/rch_remote_compile_stall_bundle/current_bd_o4cbn_1_4_h1_bench_no_verdict",
+      "harness_case_id": "cargo-check-lib",
+      "expected_final_verdict": "fresh_heartbeat_frozen_progress_stall",
+      "expected_reason_code": "fresh_heartbeat_frozen_progress",
+      "expected_source_evidence": false,
+      "expected_exit_code": 0,
+      "expected_selected_worker": "vmi1156319",
+      "expected_capture_decision": "captured",
+      "expected_truth_state": "confirmed",
+      "expected_local_fallback_observed": false
+    },
+    {
+      "case_id": "current_bd_fqlfw_2_4_perf_arm_no_verdict_degraded",
+      "category": "current_degraded_missing_optional_inventory",
+      "fixture_dir": "scripts/testdata/rch_remote_compile_stall_bundle/current_bd_fqlfw_2_4_perf_arm_no_verdict_degraded",
+      "harness_case_id": "cargo-check-lib",
+      "expected_final_verdict": "missing_remote_proof",
+      "expected_reason_code": "missing_worker_or_command_evidence",
+      "expected_source_evidence": false,
+      "expected_exit_code": 42,
+      "expected_selected_worker": "vmi1227854",
+      "expected_capture_decision": "captured_degraded",
+      "expected_truth_state": "degraded",
+      "expected_local_fallback_observed": false
     }
   ]
 }

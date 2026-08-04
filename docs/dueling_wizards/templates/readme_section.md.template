@@ -1,0 +1,22 @@
+<!-- README section per DW.DOCS (bd-fqlfw.12). Insert under the correct audience reading guide.
+     Prose rules: precise, de-slopified, NO absolute-superiority terms (the claim gate rejects
+     guarantees/unbreakable/always/proves/category-defining/>=Nx-faster without artifacts). -->
+
+## <Capability Name>
+
+<One-sentence statement of what it does and the unique value (why this runtime can do it).>
+
+**When to use it.** <Concrete trigger / audience.>
+
+```bash
+# Minimal, copy-pasteable example that actually runs:
+frankenctl <cap> <args> --json
+```
+
+**Status:** <OBSERVED|TARGETED|HYPOTHESIS> — <one line on what that means for the reader; link
+to the claim-to-proof matrix row>. Verify with `./scripts/run_dw_<cap>.sh ci` (emits a
+content-addressed bundle under `artifacts/<cap>/`); replay a bundle with
+`./scripts/e2e/dw_<cap>_replay.sh bundle <run_dir>`.
+
+<Optional: a 2-3 row table of the most useful flags, or a pointer to the operator runbook
+`runbooks/dw_<cap>.md` and the `--help` output.>

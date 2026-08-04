@@ -19,17 +19,20 @@
 //! difference is in policy (instruction budget, register limit, dispatch
 //! strategy), not in a second engine backend.
 //!
-//! `BTreeMap`/`BTreeSet` for deterministic ordering.
+//! `BTreeMap`/`BTreeSet` provide deterministic internal ordering; observable
+//! data properties use explicit ECMAScript own-key order.
 //! `#![forbid(unsafe_code)]` — no unsafe anywhere.
 //!
 //! Plan reference: Section 10.2 item 8, bd-2f8.
 //! Dependencies: bd-crp (parser), bd-1wa (IR contract), bd-20b (slot registry).
 
+use std::cell::{Ref, RefCell, RefMut};
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -43,10 +46,18 @@ use crate::checkpoint::{
 use crate::hash_tiers::ContentHash;
 use crate::ir_contract::{
     HostcallDecisionRecord, IR_ACCESSOR_GET_PREFIX, IR_ACCESSOR_SET_PREFIX,
-    IR_SUPER_CONSTRUCTOR_PROPERTY, IR_SUPER_PROTOTYPE_PROPERTY, Ir0Module, Ir3Instruction,
-    Ir3Module, IteratorCloseReason, RegRange, WitnessEvent, WitnessEventKind,
+    IR_SUPER_CONSTRUCTOR_PROPERTY, IR_SUPER_PROTOTYPE_PROPERTY, Ir0Module, Ir3FunctionDesc,
+    Ir3Instruction, Ir3Module, IteratorCloseReason, RegRange, WitnessEvent, WitnessEventKind,
 };
-use crate::lowering_pipeline::{LoweringContext, lower_ir0_to_ir3};
+use crate::js_string::JsString;
+use crate::lowering_pipeline::{
+    CLASS_EXPRESSION_CONSTRUCTOR_SELF_CAPTURE_PREFIX, FUNCTION_EXPRESSION_SELF_CAPTURE_PREFIX,
+    LoweringContext, lower_ir0_to_ir3,
+};
+use crate::object_model::{
+    BaselineStringAccessor, BaselineSymbolProperty, ExactOrderedStringMap, OrderedStringMap,
+    PropertyKey as TypedPropertyKey, SymbolId, WellKnownSymbol, canonical_array_index,
+};
 use crate::parser::{CanonicalEs2020Parser, ParserOptions, ParserSource};
 use crate::runtime_config::ExecutionConfig;
 
@@ -92,6 +103,8 @@ const MEMORY_ESTIMATE_MAP_ENTRY_BYTES: u64 = 48;
 const MEMORY_ESTIMATE_SCOPE_FRAME_BASE_BYTES: u64 = 32;
 /// Approximate per-scope-binding base footprint.
 const MEMORY_ESTIMATE_SCOPE_BINDING_BASE_BYTES: u64 = 24;
+/// Approximate inline footprint of one IFC label value.
+const MEMORY_ESTIMATE_LABEL_BASE_BYTES: u64 = 32;
 /// Approximate per-closure base footprint.
 const MEMORY_ESTIMATE_CLOSURE_BASE_BYTES: u64 = 32;
 /// Approximate per-call-frame base footprint.
@@ -100,6 +113,12 @@ const MEMORY_ESTIMATE_CALL_FRAME_BASE_BYTES: u64 = 64;
 const MEMORY_ESTIMATE_ITERATOR_BASE_BYTES: u64 = 32;
 /// Approximate per-generator base footprint.
 const MEMORY_ESTIMATE_GENERATOR_BASE_BYTES: u64 = 48;
+/// Approximate per-resumable CopyDataProperties state footprint.
+const MEMORY_ESTIMATE_COPY_DATA_PROPERTIES_STATE_BASE_BYTES: u64 = 64;
+/// Fixed persisted mapping for ES2020 well-known Symbol identities.
+const WELL_KNOWN_SYMBOL_SCHEMA: &str = "es2020-symbol-ids-1-13-v1";
+/// First dynamically allocated Symbol identity after the fixed well-known set.
+const FIRST_DYNAMIC_SYMBOL_ID: u32 = 14;
 
 /// Canonical operator-facing label for the deterministic execution profile.
 pub const DETERMINISTIC_PROFILE_LABEL: &str = "baseline_deterministic_profile";
@@ -238,6 +257,12 @@ impl From<i64> for Float64 {
 // ---------------------------------------------------------------------------
 
 /// Runtime value representation for the baseline interpreter.
+///
+/// This enum is intentionally non-exhaustive at the public crate boundary.
+/// Downstream consumers must retain a fallback arm so additive JavaScript
+/// value kinds can land without another source-breaking exhaustive-match
+/// migration.
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum Value {
     /// Undefined.
@@ -252,8 +277,10 @@ pub enum Value {
     /// IEEE 754 floating-point (f64). Used for fractional values, NaN,
     /// Infinity, and -0. Wrapped in Float64 for deterministic ordering.
     Float(Float64),
-    /// String.
-    Str(String),
+    /// String. Backed by [`JsString`] so lone UTF-16 surrogates are exact
+    /// (bd-2vzgi parity with the engine's bd-neika string model); well-formed
+    /// strings keep the prior plain-string serde wire format.
+    Str(JsString),
     /// Object reference (heap index).
     Object(ObjectId),
     /// Function reference (function table index).
@@ -279,6 +306,350 @@ pub enum Value {
     Promise(u32),
     /// Builtin callable bound into the runtime environment.
     BuiltinFunction(BuiltinFunction),
+    /// ECMAScript Symbol primitive identity. Additive variants stay at the
+    /// tail so all pre-existing non-self-describing serde discriminants remain
+    /// stable.
+    Symbol(SymbolId),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum RuntimeSymbolKind {
+    Private,
+    Global,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RuntimeSymbolRecord {
+    symbol_id: SymbolId,
+    kind: RuntimeSymbolKind,
+    description: Option<JsString>,
+    registry_key: Option<JsString>,
+}
+
+struct RuntimeSymbolRecordRef<'a>(&'a RuntimeSymbolRecord);
+
+impl Serialize for RuntimeSymbolRecordRef<'_> {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeStruct as _;
+
+        let record = self.0;
+        let mut wire = serializer.serialize_struct(
+            "RuntimeSymbolRecord",
+            if matches!(record.kind, RuntimeSymbolKind::Global) {
+                4
+            } else {
+                3
+            },
+        )?;
+        wire.serialize_field("symbol_id", &record.symbol_id.0)?;
+        wire.serialize_field(
+            "kind",
+            match record.kind {
+                RuntimeSymbolKind::Private => "private",
+                RuntimeSymbolKind::Global => "global",
+            },
+        )?;
+        wire.serialize_field("description", &record.description)?;
+        if matches!(record.kind, RuntimeSymbolKind::Global) {
+            wire.serialize_field("registry_key", &record.registry_key)?;
+        }
+        wire.end()
+    }
+}
+
+/// Distinguishes a missing field from a present JSON `null` field.
+#[derive(Debug)]
+struct PresentNullable<T>(Option<T>);
+
+impl<'de, T: Deserialize<'de>> Deserialize<'de> for PresentNullable<T> {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        Option::<T>::deserialize(deserializer).map(Self)
+    }
+}
+
+fn deserialize_present_nullable<'de, D, T>(
+    deserializer: D,
+) -> Result<Option<PresentNullable<T>>, D::Error>
+where
+    D: Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    PresentNullable::<T>::deserialize(deserializer).map(Some)
+}
+
+/// Distinguishes an absent optional field from a present value while still
+/// rejecting JSON `null` for non-nullable records.
+#[derive(Debug)]
+struct PresentValue<T>(T);
+
+impl<'de, T: Deserialize<'de>> Deserialize<'de> for PresentValue<T> {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        T::deserialize(deserializer).map(Self)
+    }
+}
+
+fn deserialize_present_value<'de, D, T>(
+    deserializer: D,
+) -> Result<Option<PresentValue<T>>, D::Error>
+where
+    D: Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    PresentValue::<T>::deserialize(deserializer).map(Some)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RuntimeSymbolState {
+    next_symbol_id: u32,
+    symbols: BTreeMap<SymbolId, RuntimeSymbolRecord>,
+}
+
+impl Default for RuntimeSymbolState {
+    fn default() -> Self {
+        Self {
+            next_symbol_id: FIRST_DYNAMIC_SYMBOL_ID,
+            symbols: BTreeMap::new(),
+        }
+    }
+}
+
+impl Serialize for RuntimeSymbolState {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeStruct as _;
+
+        let records = self
+            .symbols
+            .values()
+            .map(RuntimeSymbolRecordRef)
+            .collect::<Vec<_>>();
+        let mut state = serializer.serialize_struct("RuntimeSymbolState", 3)?;
+        state.serialize_field("well_known_schema", WELL_KNOWN_SYMBOL_SCHEMA)?;
+        state.serialize_field("next_symbol_id", &self.next_symbol_id)?;
+        state.serialize_field("symbols", &records)?;
+        state.end()
+    }
+}
+
+impl<'de> Deserialize<'de> for RuntimeSymbolState {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        use serde::de::Error as _;
+
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct SymbolStateWire {
+            well_known_schema: String,
+            next_symbol_id: u32,
+            symbols: Vec<SymbolRecordWire>,
+        }
+
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct SymbolRecordWire {
+            symbol_id: u32,
+            kind: String,
+            #[serde(default, deserialize_with = "deserialize_present_nullable")]
+            description: Option<PresentNullable<JsString>>,
+            #[serde(default, deserialize_with = "deserialize_present_nullable")]
+            registry_key: Option<PresentNullable<JsString>>,
+        }
+
+        let wire = SymbolStateWire::deserialize(deserializer)?;
+        if wire.well_known_schema != WELL_KNOWN_SYMBOL_SCHEMA {
+            return Err(D::Error::custom("unknown well-known Symbol schema"));
+        }
+        let mut symbols = BTreeMap::new();
+        let mut previous_id = None;
+        for record in wire.symbols {
+            let id = SymbolId(record.symbol_id);
+            if let Some(previous) = previous_id
+                && id <= previous
+            {
+                return Err(D::Error::custom(
+                    "dynamic Symbol records must be strictly increasing",
+                ));
+            }
+            previous_id = Some(id);
+            let description = record
+                .description
+                .ok_or_else(|| D::Error::custom("Symbol description field is required"))?
+                .0;
+            let (kind, registry_key) = match record.kind.as_str() {
+                "private" => {
+                    if record.registry_key.is_some() {
+                        return Err(D::Error::custom(
+                            "private Symbol record forbids registry_key",
+                        ));
+                    }
+                    (RuntimeSymbolKind::Private, None)
+                }
+                "global" => {
+                    let registry_key = record
+                        .registry_key
+                        .ok_or_else(|| {
+                            D::Error::custom("global Symbol record requires registry_key")
+                        })?
+                        .0
+                        .ok_or_else(|| {
+                            D::Error::custom("global Symbol registry_key cannot be null")
+                        })?;
+                    if description.as_ref() != Some(&registry_key) {
+                        return Err(D::Error::custom(
+                            "global Symbol description must equal registry_key",
+                        ));
+                    }
+                    (RuntimeSymbolKind::Global, Some(registry_key))
+                }
+                _ => return Err(D::Error::custom("unknown dynamic Symbol kind")),
+            };
+            if symbols
+                .insert(
+                    id,
+                    RuntimeSymbolRecord {
+                        symbol_id: id,
+                        kind,
+                        description,
+                        registry_key,
+                    },
+                )
+                .is_some()
+            {
+                return Err(D::Error::custom("duplicate dynamic Symbol id"));
+            }
+        }
+        let state = Self {
+            next_symbol_id: wire.next_symbol_id,
+            symbols,
+        };
+        state.validate().map_err(D::Error::custom)?;
+        Ok(state)
+    }
+}
+
+impl RuntimeSymbolState {
+    fn is_default(&self) -> bool {
+        self.next_symbol_id == FIRST_DYNAMIC_SYMBOL_ID && self.symbols.is_empty()
+    }
+
+    fn validate(&self) -> Result<(), String> {
+        if self.next_symbol_id < FIRST_DYNAMIC_SYMBOL_ID {
+            return Err("next_symbol_id overlaps reserved well-known Symbols".to_string());
+        }
+        let mut registry_keys = BTreeSet::new();
+        for (id, record) in &self.symbols {
+            if id.0 < FIRST_DYNAMIC_SYMBOL_ID || id.0 == u32::MAX {
+                return Err(format!("invalid dynamic Symbol id {}", id.0));
+            }
+            if record.symbol_id != *id {
+                return Err("dynamic Symbol record id mismatch".to_string());
+            }
+            if id.0 >= self.next_symbol_id {
+                return Err(format!(
+                    "dynamic Symbol id {} is not below next_symbol_id {}",
+                    id.0, self.next_symbol_id
+                ));
+            }
+            match record.kind {
+                RuntimeSymbolKind::Private => {
+                    if record.registry_key.is_some() {
+                        return Err("private Symbol has a registry key".to_string());
+                    }
+                }
+                RuntimeSymbolKind::Global => {
+                    let key = record
+                        .registry_key
+                        .as_ref()
+                        .ok_or_else(|| "global Symbol lacks a registry key".to_string())?;
+                    if record.description.as_ref() != Some(key) {
+                        return Err("global Symbol description/registry mismatch".to_string());
+                    }
+                    if !registry_keys.insert(key.clone()) {
+                        return Err("duplicate global Symbol registry key".to_string());
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn contains(&self, id: SymbolId) -> bool {
+        (1..FIRST_DYNAMIC_SYMBOL_ID).contains(&id.0) || self.symbols.contains_key(&id)
+    }
+
+    fn allocate_private(
+        &mut self,
+        description: Option<JsString>,
+    ) -> Result<SymbolId, InterpreterError> {
+        self.allocate(RuntimeSymbolKind::Private, description, None)
+    }
+
+    fn intern_global(&mut self, key: JsString) -> Result<SymbolId, InterpreterError> {
+        if let Some(record) = self.symbols.values().find(|record| {
+            matches!(record.kind, RuntimeSymbolKind::Global)
+                && record.registry_key.as_ref() == Some(&key)
+        }) {
+            return Ok(record.symbol_id);
+        }
+        self.allocate(RuntimeSymbolKind::Global, Some(key.clone()), Some(key))
+    }
+
+    fn allocate(
+        &mut self,
+        kind: RuntimeSymbolKind,
+        description: Option<JsString>,
+        registry_key: Option<JsString>,
+    ) -> Result<SymbolId, InterpreterError> {
+        if self.next_symbol_id == u32::MAX {
+            return Err(InterpreterError::TypeError {
+                expected: "available Symbol identity".to_string(),
+                got: "Symbol identity space exhausted".to_string(),
+            });
+        }
+        let symbol_id = SymbolId(self.next_symbol_id);
+        self.next_symbol_id += 1;
+        self.symbols.insert(
+            symbol_id,
+            RuntimeSymbolRecord {
+                symbol_id,
+                kind,
+                description,
+                registry_key,
+            },
+        );
+        Ok(symbol_id)
+    }
+
+    fn key_for(&self, id: SymbolId) -> Option<&JsString> {
+        self.symbols.get(&id).and_then(|record| {
+            matches!(record.kind, RuntimeSymbolKind::Global)
+                .then_some(record.registry_key.as_ref())
+                .flatten()
+        })
+    }
+
+    fn description(&self, id: SymbolId) -> Option<&JsString> {
+        self.symbols
+            .get(&id)
+            .and_then(|record| record.description.as_ref())
+    }
+}
+
+fn well_known_symbol_description(id: SymbolId) -> Option<&'static str> {
+    match id.0 {
+        1 => Some("Symbol.iterator"),
+        2 => Some("Symbol.toPrimitive"),
+        3 => Some("Symbol.hasInstance"),
+        4 => Some("Symbol.toStringTag"),
+        5 => Some("Symbol.species"),
+        6 => Some("Symbol.isConcatSpreadable"),
+        7 => Some("Symbol.unscopables"),
+        8 => Some("Symbol.asyncIterator"),
+        9 => Some("Symbol.match"),
+        10 => Some("Symbol.matchAll"),
+        11 => Some("Symbol.replace"),
+        12 => Some("Symbol.search"),
+        13 => Some("Symbol.split"),
+        _ => None,
+    }
 }
 
 /// Small set of builtin callable kinds the baseline interpreter exposes as
@@ -287,6 +658,21 @@ pub enum Value {
 #[serde(rename_all = "snake_case")]
 pub enum BuiltinFunctionKind {
     Require,
+    // NOTE: variants must be appended at the tail only — `kind as u64` feeds
+    // the register content hash, so mid-enum insertion silently shifts every
+    // downstream ordinal (same rule as the engine's BuiltinFunctionKind).
+    StringPrototypeCharAt,
+    StringPrototypeCharCodeAt,
+    StringPrototypeCodePointAt,
+    StringPrototypeAt,
+    StringPrototypeIsWellFormed,
+    StringPrototypeToWellFormed,
+    ArrayIsArray,
+    Symbol,
+    SymbolFor,
+    SymbolKeyFor,
+    SymbolPrototypeToString,
+    GeneratorPrototypeNext,
 }
 
 /// First-class builtin callable value with the module provenance needed for
@@ -306,14 +692,64 @@ impl BuiltinFunction {
         }
     }
 
+    /// A receiver-bound String.prototype method surfaced by `GetProperty` on
+    /// a string value (bd-2vzgi). Carries no module provenance.
+    fn string_method(kind: BuiltinFunctionKind) -> Self {
+        Self {
+            kind,
+            module_specifier: String::new(),
+        }
+    }
+
+    /// Receiver-independent `Array.isArray`, materialized by the dedicated
+    /// pure factory hostcall emitted for an unshadowed static member read.
+    fn array_is_array() -> Self {
+        Self {
+            kind: BuiltinFunctionKind::ArrayIsArray,
+            module_specifier: String::new(),
+        }
+    }
+
+    fn symbol(kind: BuiltinFunctionKind) -> Self {
+        Self {
+            kind,
+            module_specifier: String::new(),
+        }
+    }
+
+    fn generator_next() -> Self {
+        Self {
+            kind: BuiltinFunctionKind::GeneratorPrototypeNext,
+            module_specifier: String::new(),
+        }
+    }
+
     fn display_name(&self) -> &'static str {
         match self.kind {
             BuiltinFunctionKind::Require => "require",
+            BuiltinFunctionKind::StringPrototypeCharAt => "charAt",
+            BuiltinFunctionKind::StringPrototypeCharCodeAt => "charCodeAt",
+            BuiltinFunctionKind::StringPrototypeCodePointAt => "codePointAt",
+            BuiltinFunctionKind::StringPrototypeAt => "at",
+            BuiltinFunctionKind::StringPrototypeIsWellFormed => "isWellFormed",
+            BuiltinFunctionKind::StringPrototypeToWellFormed => "toWellFormed",
+            BuiltinFunctionKind::ArrayIsArray => "isArray",
+            BuiltinFunctionKind::Symbol => "Symbol",
+            BuiltinFunctionKind::SymbolFor => "for",
+            BuiltinFunctionKind::SymbolKeyFor => "keyFor",
+            BuiltinFunctionKind::SymbolPrototypeToString => "toString",
+            BuiltinFunctionKind::GeneratorPrototypeNext => "next",
         }
     }
 }
 
 impl Value {
+    /// Convenience constructor funneling any string-ish payload into the
+    /// canonical [`JsString`] backing (mirrors the engine's `Value::str`).
+    pub fn str(value: impl Into<JsString>) -> Self {
+        Self::Str(value.into())
+    }
+
     /// Truthiness: Undefined, Null, Bool(false), Int(0), Float(0.0/-0.0/NaN), Str("") are falsy.
     pub fn is_truthy(&self) -> bool {
         match self {
@@ -322,6 +758,7 @@ impl Value {
             Self::Int(n) => *n != 0,
             Self::Float(f) => !f.is_nan() && f.inner() != 0.0,
             Self::Str(s) => !s.is_empty(),
+            Self::Symbol(_) => true,
             Self::Object(_)
             | Self::Function(_)
             | Self::Closure(_)
@@ -341,6 +778,37 @@ impl Value {
         matches!(self, Self::Undefined | Self::Null)
     }
 
+    /// Whether this runtime value has ECMAScript object identity.
+    ///
+    /// The baseline carrier keeps functions, promises, iterators, and other
+    /// exotic objects in dedicated variants instead of wrapping each one in
+    /// [`Value::Object`]. Keep this match exhaustive so every future variant
+    /// makes an explicit object-versus-primitive choice (bd-ptu9m).
+    #[allow(clippy::match_like_matches_macro)] // Exhaustiveness is the point of this classifier.
+    pub fn is_object_like(&self) -> bool {
+        match self {
+            Self::Undefined
+            | Self::Null
+            | Self::Bool(_)
+            | Self::Int(_)
+            | Self::Float(_)
+            | Self::Str(_)
+            | Self::Symbol(_) => false,
+            Self::Object(_)
+            | Self::Function(_)
+            | Self::Closure(_)
+            | Self::Iterator(_)
+            | Self::GeneratorFunction(_)
+            | Self::Generator(_)
+            | Self::AsyncFunction(_)
+            | Self::AsyncFunctionObject(_)
+            | Self::AsyncGeneratorFunction(_)
+            | Self::AsyncGeneratorObject(_)
+            | Self::Promise(_)
+            | Self::BuiltinFunction(_) => true,
+        }
+    }
+
     /// Type name for error messages.
     pub fn type_name(&self) -> &'static str {
         match self {
@@ -349,6 +817,7 @@ impl Value {
             Self::Bool(_) => "boolean",
             Self::Int(_) | Self::Float(_) => "number",
             Self::Str(_) => "string",
+            Self::Symbol(_) => "symbol",
             Self::Object(_) => "object",
             Self::Function(_)
             | Self::Closure(_)
@@ -371,6 +840,7 @@ impl Value {
             Self::Bool(_) => "boolean",
             Self::Int(_) | Self::Float(_) => "number",
             Self::Str(_) => "string",
+            Self::Symbol(_) => "symbol",
             Self::Function(_)
             | Self::Closure(_)
             | Self::GeneratorFunction(_)
@@ -395,6 +865,7 @@ impl fmt::Display for Value {
             Self::Int(n) => write!(f, "{n}"),
             Self::Float(fv) => write!(f, "{fv}"),
             Self::Str(s) => write!(f, "{s}"),
+            Self::Symbol(id) => write!(f, "Symbol({})", id.0),
             Self::Object(id) => write!(f, "[object#{}]", id.0),
             Self::Function(idx) => write!(f, "[function#{idx}]"),
             Self::Closure(idx) => write!(f, "[closure#{idx}]"),
@@ -420,27 +891,628 @@ pub struct ObjectId(pub u32);
 // ---------------------------------------------------------------------------
 
 /// A heap-allocated object with string-keyed properties.
-#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default)]
 pub struct HeapObject {
-    /// Property storage (BTreeMap for deterministic ordering).
-    pub properties: BTreeMap<String, Value>,
+    /// Data properties in ECMAScript own-key order with deterministic lookup.
+    pub properties: OrderedStringMap<Value>,
     /// Accessor descriptor storage, parallel to `properties` so the baseline
     /// heap can model the object_model accessor/data split.
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub accessors: BTreeMap<String, AccessorProperty>,
     /// Prototype link used by membership operators and constructor instances.
     pub prototype: Option<ObjectId>,
     /// Constructor function index that allocated this object via `Construct`.
     pub constructor_function: Option<u32>,
     /// Whether this object was allocated by an array-producing path.
-    #[serde(default)]
     pub is_array: bool,
+}
+
+struct HeapSymbolPropertyRef<'a> {
+    symbol_id: SymbolId,
+    property: &'a BaselineSymbolProperty<Value>,
+}
+
+impl Serialize for HeapSymbolPropertyRef<'_> {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeStruct as _;
+
+        match self.property {
+            BaselineSymbolProperty::Data(value) => {
+                let mut record = serializer.serialize_struct("SymbolProperty", 3)?;
+                record.serialize_field("symbol_id", &self.symbol_id.0)?;
+                record.serialize_field("kind", "data")?;
+                record.serialize_field("value", value)?;
+                record.end()
+            }
+            BaselineSymbolProperty::Accessor { get, set } => {
+                let mut record = serializer.serialize_struct("SymbolProperty", 4)?;
+                record.serialize_field("symbol_id", &self.symbol_id.0)?;
+                record.serialize_field("kind", "accessor")?;
+                record.serialize_field("get", get)?;
+                record.serialize_field("set", set)?;
+                record.end()
+            }
+        }
+    }
+}
+
+impl Serialize for HeapObject {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeStruct as _;
+
+        let has_exact_only_accessors = self.has_exact_only_accessors();
+        let exact_accessor_entries =
+            has_exact_only_accessors.then(|| self.exact_accessor_entries());
+        let has_accessors = !self.accessors.is_empty() || has_exact_only_accessors;
+        let needs_exact_order = self.properties.baseline_string_key_order().is_some()
+            || self.properties.exact_len() != self.properties.len()
+            || has_exact_only_accessors;
+        let order = needs_exact_order.then(|| {
+            self.own_exact_property_keys()
+                .into_iter()
+                .filter(|key| key.as_str().and_then(canonical_array_index).is_none())
+                .collect::<Vec<_>>()
+        });
+        let symbol_properties = self
+            .properties
+            .baseline_symbol_properties()
+            .map(|(symbol_id, property)| HeapSymbolPropertyRef {
+                symbol_id,
+                property,
+            })
+            .collect::<Vec<_>>();
+        let field_count = 4
+            + if has_accessors { 1 } else { 0 }
+            + if order.is_some() { 1 } else { 0 }
+            + if symbol_properties.is_empty() { 0 } else { 1 };
+        let mut object = serializer.serialize_struct("HeapObject", field_count)?;
+        object.serialize_field("properties", &self.properties)?;
+        if has_accessors {
+            if let Some(exact_accessor_entries) = &exact_accessor_entries {
+                object.serialize_field("accessors", exact_accessor_entries)?;
+            } else {
+                object.serialize_field("accessors", &self.accessors)?;
+            }
+        }
+        object.serialize_field("prototype", &self.prototype)?;
+        object.serialize_field("constructor_function", &self.constructor_function)?;
+        object.serialize_field("is_array", &self.is_array)?;
+        if let Some(order) = &order {
+            object.serialize_field("own_string_key_order", order)?;
+        }
+        if !symbol_properties.is_empty() {
+            object.serialize_field("symbol_properties", &symbol_properties)?;
+        }
+        object.end()
+    }
+}
+
+impl<'de> Deserialize<'de> for HeapObject {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        use serde::de::Error as _;
+
+        #[derive(Deserialize)]
+        struct HeapObjectWire {
+            properties: OrderedStringMap<Value>,
+            #[serde(default)]
+            accessors: ExactOrderedStringMap<AccessorProperty>,
+            prototype: Option<ObjectId>,
+            constructor_function: Option<u32>,
+            #[serde(default)]
+            is_array: bool,
+            #[serde(default)]
+            own_string_key_order: Option<Vec<JsString>>,
+            #[serde(default)]
+            symbol_properties: Vec<HeapSymbolPropertyWire>,
+        }
+
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct HeapSymbolPropertyWire {
+            symbol_id: u32,
+            kind: String,
+            value: Option<Value>,
+            #[serde(default, deserialize_with = "deserialize_present_nullable")]
+            get: Option<PresentNullable<Value>>,
+            #[serde(default, deserialize_with = "deserialize_present_nullable")]
+            set: Option<PresentNullable<Value>>,
+        }
+
+        let wire = HeapObjectWire::deserialize(deserializer)?;
+        let mut object = Self {
+            properties: wire.properties,
+            accessors: BTreeMap::new(),
+            prototype: wire.prototype,
+            constructor_function: wire.constructor_function,
+            is_array: wire.is_array,
+        };
+
+        for (key, accessor) in wire.accessors {
+            if object.properties.contains_exact_key(&key) {
+                return Err(D::Error::custom(
+                    "property key cannot be both data and accessor",
+                ));
+            }
+            object.insert_exact_accessor(key, accessor);
+        }
+
+        if let Some(order) = wire.own_string_key_order {
+            let mut encoded = BTreeSet::new();
+            for key in &order {
+                if key.as_str().and_then(canonical_array_index).is_some() {
+                    return Err(D::Error::custom(
+                        "canonical array index in ordinary-string key order",
+                    ));
+                }
+                if !encoded.insert(key.clone()) {
+                    return Err(D::Error::custom(
+                        "duplicate key in ordinary-string key order",
+                    ));
+                }
+            }
+            let live = object
+                .own_exact_property_keys()
+                .into_iter()
+                .filter(|key| key.as_str().and_then(canonical_array_index).is_none())
+                .collect::<BTreeSet<_>>();
+            if encoded != live {
+                return Err(D::Error::custom(
+                    "ordinary-string key order must contain every live ordinary key exactly once",
+                ));
+            }
+            object.properties.set_baseline_string_key_order(Some(order));
+        } else if object.properties.exact_len() != object.properties.len()
+            || object.has_exact_only_accessors()
+        {
+            return Err(D::Error::custom(
+                "exact string properties require own_string_key_order",
+            ));
+        }
+
+        let mut seen_symbols = BTreeSet::new();
+        for record in wire.symbol_properties {
+            let symbol_id = SymbolId(record.symbol_id);
+            if symbol_id.0 == 0 {
+                return Err(D::Error::custom("Symbol property id 0 is invalid"));
+            }
+            if !seen_symbols.insert(symbol_id) {
+                return Err(D::Error::custom("duplicate Symbol property id"));
+            }
+            let property = match record.kind.as_str() {
+                "data" => {
+                    if record.get.is_some() || record.set.is_some() {
+                        return Err(D::Error::custom("data Symbol property forbids get/set"));
+                    }
+                    BaselineSymbolProperty::Data(
+                        record.value.ok_or_else(|| {
+                            D::Error::custom("data Symbol property requires value")
+                        })?,
+                    )
+                }
+                "accessor" => {
+                    if record.value.is_some() {
+                        return Err(D::Error::custom("accessor Symbol property forbids value"));
+                    }
+                    let get = record
+                        .get
+                        .ok_or_else(|| D::Error::custom("accessor Symbol property requires get"))?
+                        .0;
+                    let set = record
+                        .set
+                        .ok_or_else(|| D::Error::custom("accessor Symbol property requires set"))?
+                        .0;
+                    BaselineSymbolProperty::Accessor { get, set }
+                }
+                _ => return Err(D::Error::custom("unknown Symbol property kind")),
+            };
+            object
+                .properties
+                .insert_baseline_symbol_property(symbol_id, property);
+        }
+
+        Ok(object)
+    }
+}
+
+impl PartialEq for HeapObject {
+    fn eq(&self, other: &Self) -> bool {
+        self.properties == other.properties
+            && self.accessors == other.accessors
+            && self.prototype == other.prototype
+            && self.constructor_function == other.constructor_function
+            && self.is_array == other.is_array
+            && self.properties.baseline_string_key_order().is_some()
+                == other.properties.baseline_string_key_order().is_some()
+            && self.own_exact_property_keys() == other.own_exact_property_keys()
+            && self.properties.baseline_symbol_key_order()
+                == other.properties.baseline_symbol_key_order()
+            && self
+                .properties
+                .baseline_symbol_properties()
+                .eq(other.properties.baseline_symbol_properties())
+    }
+}
+
+impl Eq for HeapObject {}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum PropertyOrderRollback {
+    Unchanged,
+    RemoveInsertedKey,
+    Restore(Option<Vec<JsString>>),
 }
 
 impl HeapObject {
     pub fn new() -> Self {
         Self::default()
     }
+
+    fn exact_accessor(&self, key: &JsString) -> Option<AccessorProperty> {
+        match key.as_str() {
+            Some(key) => self.accessors.get(key).cloned(),
+            None => self
+                .properties
+                .baseline_exact_string_accessor(key)
+                .map(|accessor| AccessorProperty {
+                    get: accessor.get.clone(),
+                    set: accessor.set.clone(),
+                }),
+        }
+    }
+
+    fn insert_exact_accessor(
+        &mut self,
+        key: JsString,
+        accessor: AccessorProperty,
+    ) -> Option<AccessorProperty> {
+        match key.as_str() {
+            Some(key) => self.accessors.insert(key.to_string(), accessor),
+            None => self
+                .properties
+                .insert_baseline_exact_string_accessor(
+                    key,
+                    BaselineStringAccessor {
+                        get: accessor.get,
+                        set: accessor.set,
+                    },
+                )
+                .map(|accessor| AccessorProperty {
+                    get: accessor.get,
+                    set: accessor.set,
+                }),
+        }
+    }
+
+    fn remove_exact_accessor(&mut self, key: &JsString) -> Option<AccessorProperty> {
+        match key.as_str() {
+            Some(key) => self.accessors.remove(key),
+            None => self
+                .properties
+                .remove_baseline_exact_string_accessor(key)
+                .map(|accessor| AccessorProperty {
+                    get: accessor.get,
+                    set: accessor.set,
+                }),
+        }
+    }
+
+    fn exact_accessor_entries(&self) -> Vec<(JsString, AccessorProperty)> {
+        self.own_exact_property_keys()
+            .into_iter()
+            .filter_map(|key| self.exact_accessor(&key).map(|accessor| (key, accessor)))
+            .collect()
+    }
+
+    fn has_exact_only_accessors(&self) -> bool {
+        self.properties
+            .baseline_exact_string_accessors()
+            .next()
+            .is_some()
+    }
+
+    fn contains_own_property(&self, key: &str) -> bool {
+        self.accessors.contains_key(key) || self.properties.contains_key(key)
+    }
+
+    fn contains_own_runtime_property(&self, key: &RuntimePropertyKey) -> bool {
+        match key {
+            RuntimePropertyKey::String(key) => {
+                self.properties.contains_exact_key(key)
+                    || match key.as_str() {
+                        Some(key) => self.accessors.contains_key(key),
+                        None => self
+                            .properties
+                            .baseline_exact_string_accessor(key)
+                            .is_some(),
+                    }
+            }
+            RuntimePropertyKey::Symbol(symbol) => {
+                self.properties.baseline_symbol_property(*symbol).is_some()
+            }
+        }
+    }
+
+    /// Record a logical own-property definition without moving an existing
+    /// key across data/accessor descriptor-kind transitions.
+    ///
+    /// Before recording, reconcile the hidden chronology with the observable
+    /// public fields. This preserves the position of an accessor inserted
+    /// directly through the ADR-frozen public `accessors` map before a later
+    /// interpreter mutation. The returned delta restores the exact prior
+    /// hidden state if the definition is rejected by the memory budget.
+    fn record_property_definition(
+        &mut self,
+        key: &JsString,
+        existed: bool,
+    ) -> PropertyOrderRollback {
+        if key.as_str().and_then(canonical_array_index).is_some() {
+            return PropertyOrderRollback::Unchanged;
+        }
+
+        let normalized = self
+            .own_exact_property_keys()
+            .into_iter()
+            .filter(|candidate| candidate.as_str().and_then(canonical_array_index).is_none())
+            .collect::<Vec<_>>();
+        let previous = self
+            .properties
+            .baseline_string_key_order()
+            .map(<[JsString]>::to_vec);
+        let normalized_existing = previous.as_deref() == Some(normalized.as_slice());
+        if !normalized_existing {
+            self.properties
+                .set_baseline_string_key_order(Some(normalized));
+        }
+
+        let order = self
+            .properties
+            .baseline_string_key_order_mut()
+            .expect("ordinary-string order was just initialized");
+        let key_was_inserted = if existed && order.iter().any(|candidate| candidate == key) {
+            false
+        } else {
+            order.retain(|candidate| candidate != key);
+            order.push(key.clone());
+            true
+        };
+
+        if !normalized_existing {
+            PropertyOrderRollback::Restore(previous)
+        } else if key_was_inserted {
+            PropertyOrderRollback::RemoveInsertedKey
+        } else {
+            PropertyOrderRollback::Unchanged
+        }
+    }
+
+    fn rollback_property_definition_order(
+        &mut self,
+        key: &JsString,
+        rollback: PropertyOrderRollback,
+    ) {
+        match rollback {
+            PropertyOrderRollback::Unchanged => {}
+            PropertyOrderRollback::RemoveInsertedKey => {
+                if let Some(order) = self.properties.baseline_string_key_order_mut() {
+                    order.retain(|candidate| candidate != key);
+                }
+            }
+            PropertyOrderRollback::Restore(previous) => {
+                self.properties.set_baseline_string_key_order(previous);
+            }
+        }
+    }
+
+    fn forget_property_order(&mut self, key: &JsString) {
+        if let Some(order) = self.properties.baseline_string_key_order_mut() {
+            order.retain(|candidate| candidate != key);
+        }
+    }
+
+    /// Return all live own string keys in ECMAScript order.
+    ///
+    /// Legacy payloads without the additive chronology sidecar recover the
+    /// strongest order their historical shape retained: ordered data keys,
+    /// then lexical accessor-only keys. The live-key union is completed
+    /// defensively so even low-level field mutation cannot hide a key.
+    #[cfg(test)]
+    fn own_property_keys(&self) -> Vec<String> {
+        let mut array_indices = BTreeMap::<u32, String>::new();
+        for key in self.properties.keys().chain(self.accessors.keys()) {
+            if let Some(index) = canonical_array_index(key) {
+                array_indices.entry(index).or_insert_with(|| key.clone());
+            }
+        }
+
+        let mut ordinary = Vec::new();
+        let mut seen = BTreeSet::new();
+        if let Some(order) = self.properties.baseline_string_key_order() {
+            for key in order {
+                let Some(key) = key.as_str() else {
+                    continue;
+                };
+                if self.contains_own_property(key) && seen.insert(key.to_string()) {
+                    ordinary.push(key.to_string());
+                }
+            }
+        }
+        for key in self.properties.keys().chain(self.accessors.keys()) {
+            if canonical_array_index(key).is_none() && seen.insert(key.clone()) {
+                ordinary.push(key.clone());
+            }
+        }
+
+        array_indices.into_values().chain(ordinary).collect()
+    }
+
+    /// Return all live exact string keys in ECMAScript string-key order.
+    fn own_exact_property_keys(&self) -> Vec<JsString> {
+        let mut array_indices = BTreeMap::<u32, JsString>::new();
+        for key in self.properties.exact_keys() {
+            if let Some(index) = key.as_str().and_then(canonical_array_index) {
+                array_indices.entry(index).or_insert(key);
+            }
+        }
+        for key in self.accessors.keys() {
+            if let Some(index) = canonical_array_index(key) {
+                array_indices
+                    .entry(index)
+                    .or_insert_with(|| JsString::from(key));
+            }
+        }
+
+        let mut ordinary = Vec::new();
+        let mut seen = BTreeSet::new();
+        if let Some(order) = self.properties.baseline_string_key_order() {
+            for key in order {
+                let runtime_key = RuntimePropertyKey::String(key.clone());
+                if self.contains_own_runtime_property(&runtime_key) && seen.insert(key.clone()) {
+                    ordinary.push(key.clone());
+                }
+            }
+        }
+        for key in self.properties.exact_keys() {
+            if key.as_str().and_then(canonical_array_index).is_none() && seen.insert(key.clone()) {
+                ordinary.push(key);
+            }
+        }
+        for key in self.accessors.keys().map(JsString::from).chain(
+            self.properties
+                .baseline_exact_string_accessors()
+                .map(|(key, _)| key.clone()),
+        ) {
+            if key.as_str().and_then(canonical_array_index).is_none() && seen.insert(key.clone()) {
+                ordinary.push(key);
+            }
+        }
+
+        array_indices.into_values().chain(ordinary).collect()
+    }
+
+    /// Return all live own keys in ECMAScript order: integer strings,
+    /// ordinary strings, then Symbols in their property-creation order.
+    #[cfg(test)]
+    fn own_typed_property_keys(&self) -> Vec<TypedPropertyKey> {
+        self.own_property_keys()
+            .into_iter()
+            .map(TypedPropertyKey::String)
+            .chain(
+                self.properties
+                    .baseline_symbol_key_order()
+                    .iter()
+                    .copied()
+                    .map(TypedPropertyKey::Symbol),
+            )
+            .collect()
+    }
+
+    fn own_runtime_property_keys(&self) -> Vec<RuntimePropertyKey> {
+        self.own_exact_property_keys()
+            .into_iter()
+            .map(RuntimePropertyKey::String)
+            .chain(
+                self.properties
+                    .baseline_symbol_key_order()
+                    .iter()
+                    .copied()
+                    .map(RuntimePropertyKey::Symbol),
+            )
+            .collect()
+    }
+}
+
+fn heap_object_contains_symbols(object: &HeapObject) -> bool {
+    !object.properties.baseline_symbol_key_order().is_empty()
+        || object
+            .properties
+            .all_data_values()
+            .any(|value| matches!(value, Value::Symbol(_)))
+        || object.accessors.values().any(|accessor| {
+            accessor
+                .get
+                .as_ref()
+                .is_some_and(|value| matches!(value, Value::Symbol(_)))
+                || accessor
+                    .set
+                    .as_ref()
+                    .is_some_and(|value| matches!(value, Value::Symbol(_)))
+        })
+        || object
+            .properties
+            .baseline_exact_string_accessors()
+            .any(|(_, accessor)| {
+                accessor
+                    .get
+                    .as_ref()
+                    .is_some_and(|value| matches!(value, Value::Symbol(_)))
+                    || accessor
+                        .set
+                        .as_ref()
+                        .is_some_and(|value| matches!(value, Value::Symbol(_)))
+            })
+        || object
+            .properties
+            .baseline_symbol_properties()
+            .any(|(_, property)| match property {
+                BaselineSymbolProperty::Data(value) => matches!(value, Value::Symbol(_)),
+                BaselineSymbolProperty::Accessor { get, set } => {
+                    get.as_ref()
+                        .is_some_and(|value| matches!(value, Value::Symbol(_)))
+                        || set
+                            .as_ref()
+                            .is_some_and(|value| matches!(value, Value::Symbol(_)))
+                }
+            })
+}
+
+fn validate_symbol_value(state: &RuntimeSymbolState, value: &Value) -> Result<(), String> {
+    if let Value::Symbol(id) = value
+        && !state.contains(*id)
+    {
+        return Err(format!("unresolved Symbol id {}", id.0));
+    }
+    Ok(())
+}
+
+fn validate_heap_symbol_references(
+    state: &RuntimeSymbolState,
+    object: &HeapObject,
+) -> Result<(), String> {
+    for value in object.properties.all_data_values() {
+        validate_symbol_value(state, value)?;
+    }
+    for accessor in object.accessors.values() {
+        if let Some(getter) = &accessor.get {
+            validate_symbol_value(state, getter)?;
+        }
+        if let Some(setter) = &accessor.set {
+            validate_symbol_value(state, setter)?;
+        }
+    }
+    for (_, accessor) in object.properties.baseline_exact_string_accessors() {
+        if let Some(getter) = &accessor.get {
+            validate_symbol_value(state, getter)?;
+        }
+        if let Some(setter) = &accessor.set {
+            validate_symbol_value(state, setter)?;
+        }
+    }
+    for (id, property) in object.properties.baseline_symbol_properties() {
+        if !state.contains(id) {
+            return Err(format!("unresolved Symbol property id {}", id.0));
+        }
+        match property {
+            BaselineSymbolProperty::Data(value) => validate_symbol_value(state, value)?,
+            BaselineSymbolProperty::Accessor { get, set } => {
+                if let Some(getter) = get {
+                    validate_symbol_value(state, getter)?;
+                }
+                if let Some(setter) = set {
+                    validate_symbol_value(state, setter)?;
+                }
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Baseline accessor descriptor: getter/setter functions for one property key.
@@ -456,18 +1528,78 @@ enum RuntimeProperty {
     Accessor(AccessorProperty),
 }
 
+/// Private executable property key. Descriptor-model and hook-facing string
+/// keys remain `String`; the runtime string arm keeps exact UTF-16 identity.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+enum RuntimePropertyKey {
+    String(JsString),
+    Symbol(SymbolId),
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum AccessorKind {
     Get,
     Set,
 }
 
+/// Resumable state for the object-rest CopyDataProperties operation.
+///
+/// Keys and exclusions are snapshotted once. Property descriptors are looked
+/// up again immediately before each read so a preceding getter can delete a
+/// later key, while keys added after the snapshot remain absent.
+#[derive(Debug, Clone)]
+enum CopyDataPropertiesWriteMode {
+    /// Object rest/spread define fresh own data properties and never invoke a
+    /// setter on the newly created target.
+    CreateData,
+    /// Object.assign performs ordinary Set on its target. The source offset
+    /// lets the HostCall resume the correct argument after a getter/setter.
+    Set {
+        target_receiver: Value,
+        source_arg_offset: u32,
+    },
+}
+
+#[derive(Debug, Clone)]
+enum CopyDataPropertiesAwaiting {
+    Getter(RuntimePropertyKey),
+    Setter,
+}
+
+#[derive(Debug, Clone)]
+struct CopyDataPropertiesState {
+    instruction_ip: usize,
+    register_base: usize,
+    call_depth: usize,
+    target_id: ObjectId,
+    source: Value,
+    /// Exact immutable code-unit snapshot for string sources. Keeping it once
+    /// makes indexed property reads linear overall instead of rescanning the
+    /// prefix for every code-unit key.
+    string_units: Option<Vec<u16>>,
+    keys: Vec<RuntimePropertyKey>,
+    excluded: BTreeSet<RuntimePropertyKey>,
+    next_index: usize,
+    write_mode: CopyDataPropertiesWriteMode,
+    /// Getter results return through the operation's scratch register;
+    /// setters return only for control-flow continuation.
+    awaiting: Option<CopyDataPropertiesAwaiting>,
+}
+
+impl CopyDataPropertiesState {
+    fn belongs_to(&self, instruction_ip: usize, register_base: usize, call_depth: usize) -> bool {
+        self.instruction_ip == instruction_ip
+            && self.register_base == register_base
+            && self.call_depth == call_depth
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct RuntimeForInState {
     object_id: ObjectId,
-    keys: Vec<String>,
+    keys: Vec<JsString>,
     next_index: usize,
-    deleted_keys: BTreeSet<String>,
+    deleted_keys: BTreeSet<JsString>,
     done: bool,
     closed: bool,
 }
@@ -475,9 +1607,23 @@ struct RuntimeForInState {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct RuntimeForOfState {
     values: Vec<Value>,
+    /// Actual iterator object returned by `Symbol.iterator`. Indexed fallback
+    /// carriers leave this empty so an unrelated property named `return` on
+    /// the iterable is never mistaken for an iterator-close hook.
+    iterator_object: Option<ObjectId>,
+    /// Custom iterator `next` method. `None` selects the existing eager
+    /// string/indexed-object carrier.
+    next_method: Option<Value>,
     next_index: usize,
     done: bool,
     closed: bool,
+    return_called: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum InlineCallCompletion {
+    Value(Value),
+    Throw(LabeledException),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -501,7 +1647,7 @@ enum ModuleRuntimeStatus {
 struct ModuleRuntimeRecord {
     status: ModuleRuntimeStatus,
     namespace_object: ObjectId,
-    exports: BTreeMap<String, Value>,
+    exports: BTreeMap<JsString, Value>,
     cjs_module_object: Option<ObjectId>,
 }
 
@@ -530,7 +1676,7 @@ struct CjsModuleContext {
 // ---------------------------------------------------------------------------
 
 /// State of a generator object.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 enum GeneratorPhase {
     /// Created but not yet started (initial .next() call).
     SuspendedStart,
@@ -545,18 +1691,13 @@ enum GeneratorPhase {
 /// A generator object holds the suspended state of a generator function.
 #[derive(Debug, Clone)]
 struct GeneratorObject {
-    /// Function index in the function table.
-    function_index: u32,
-    /// Closure index (captures from the enclosing scope).
-    closure_index: Option<u32>,
-    /// Saved instruction pointer (resume point after yield).
-    saved_ip: usize,
-    /// Saved register file snapshot at the time of yield.
-    saved_registers: Vec<Value>,
-    /// Saved IFC label snapshot for the register file at the time of yield.
-    saved_register_labels: Vec<crate::ifc_artifacts::Label>,
-    /// Saved register base offset.
-    saved_register_base: usize,
+    /// Complete isolated activation captured after parameter initialization or
+    /// a yield. This keeps lexical cells, control stacks, and registers owned
+    /// by the generator instead of borrowing the caller's active context.
+    execution: Option<ModuleExecutionSnapshot>,
+    /// Destination register that receives the argument to the next `.next(v)`
+    /// after a source `yield`. `None` while suspended at body start.
+    resume_dst: Option<u32>,
     /// Current phase of the generator.
     phase: GeneratorPhase,
 }
@@ -614,23 +1755,54 @@ struct AsyncFunctionObject {
     result_promise: u32,
 }
 
+/// Context information for resuming an async function after a pending await.
+#[derive(Debug, Clone)]
+struct AsyncResumptionContext {
+    /// The async function whose activation was suspended.
+    async_function_id: u32,
+    /// Register overwritten by the fulfillment value or rejection completion.
+    result_register: u32,
+}
+
+/// Fully validated state needed to enter an async function call frame.
+struct AsyncCallSetup {
+    function_index: u32,
+    function_entry: u32,
+    closure_index: Option<u32>,
+    captured_env: Option<Vec<ScopeFrame>>,
+    arguments: Vec<(Value, crate::ifc_artifacts::Label)>,
+    this_value: Value,
+    this_label: crate::ifc_artifacts::Label,
+    super_value: Value,
+    super_label: crate::ifc_artifacts::Label,
+    result_register: u32,
+}
+
+/// Fully validated state needed to initialize a synchronous generator through
+/// its parameter prologue and suspend it at `GeneratorBodyStart`.
+struct GeneratorCallSetup {
+    function_index: u32,
+    function_entry: u32,
+    captured_env: Vec<ScopeFrame>,
+    arguments: Vec<(Value, crate::ifc_artifacts::Label)>,
+    this_value: Value,
+    this_label: crate::ifc_artifacts::Label,
+    super_value: Value,
+    super_label: crate::ifc_artifacts::Label,
+}
+
 /// An async generator object combines generator suspension with promise wrapping.
 /// Each yield creates a promise-wrapped value, and can use await inside the body.
 #[allow(dead_code)]
 #[derive(Debug, Clone)]
 struct AsyncGeneratorObject {
-    /// Function index in the function table.
-    function_index: u32,
-    /// Closure index (captures from the enclosing scope).
-    closure_index: Option<u32>,
-    /// Saved instruction pointer (resume point after yield/await).
-    saved_ip: usize,
-    /// Saved register file snapshot at suspension.
-    saved_registers: Vec<Value>,
-    /// Saved IFC label snapshot at suspension.
-    saved_register_labels: Vec<crate::ifc_artifacts::Label>,
-    /// Saved register base offset.
-    saved_register_base: usize,
+    /// Complete isolated activation captured after parameter initialization or
+    /// a yield. Values, labels, lexical state, and abrupt-completion carriers
+    /// move together.
+    execution: Option<ModuleExecutionSnapshot>,
+    /// Destination register that receives the argument to the next
+    /// `.next(value)` after a yield.
+    resume_dst: Option<u32>,
     /// Current phase of the async generator.
     phase: AsyncGeneratorPhase,
 }
@@ -649,28 +1821,61 @@ struct CatchFrame {
     /// Call stack depth when the try block was entered.  Used to validate
     /// that the catch frame is still in scope during unwinding.
     call_depth: usize,
+    /// Active finally-frame depth at `BeginTry`. Abrupt transfer to this
+    /// handler exits and discards every finally completion above this depth.
+    finally_frame_depth: usize,
 }
 
-/// Tracks how a finally block was entered so `EndFinally` knows whether to
-/// re-throw a pending exception or continue normally.
+/// Classifies the completion record captured when a finally block is entered.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 enum FinallyMode {
     /// Entered via normal control flow (try body completed, or catch body completed).
     Normal,
-    /// Entered because an exception was in flight.  The pending exception is
-    /// stored in `InterpreterCore::pending_exception`.
+    /// Entered because an exception was in flight. `EnterFinally` moves it
+    /// from interpreter pending state into the new `FinallyFrame`.
     Exception,
-    /// Entered because a return was in flight.  The pending value is stored
-    /// in `InterpreterCore::pending_return`.
+    /// Entered because a return was in flight. `EnterFinally` moves it into
+    /// the new `FinallyFrame`.
     Return,
+}
+
+/// One-shot ownership record for the exact `EnterFinally` instruction chosen
+/// by an unwind edge. This must survive instruction-boundary cancellation or
+/// budget exhaustion before the target instruction executes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PendingFinallyEntry {
+    target: usize,
+    mode: FinallyMode,
+}
+
+/// Completion record owned by one actively executing finally body. Keeping
+/// the completion in the frame prevents a nested abrupt completion from
+/// suspending and later resurrecting a completion that it overrides.
+#[derive(Debug, Clone)]
+struct FinallyFrame {
+    completion: Option<AbruptCompletion>,
 }
 
 /// A suspended abrupt completion that should resume if a newer one is later
 /// consumed locally.
 #[derive(Debug, Clone)]
 enum AbruptCompletion {
-    Exception(Value),
-    Return(Value),
+    Exception(LabeledException),
+    Return(LabeledReturn),
+}
+
+/// Exception completion carried across calls, catches, and `finally` unwinding.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct LabeledException {
+    value: Value,
+    label: crate::ifc_artifacts::Label,
+}
+
+/// Return completion carried while control unwinds through `finally`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct LabeledReturn {
+    value: Value,
+    label: crate::ifc_artifacts::Label,
 }
 
 // ---------------------------------------------------------------------------
@@ -704,17 +1909,87 @@ impl BindingKind {
     }
 }
 
-/// A single binding in a scope environment.
+/// Mutable state shared by every scope/closure view of one lexical binding.
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct ScopeBinding {
+struct ScopeBindingState {
     value: Value,
-    kind: BindingKind,
+    label: crate::ifc_artifacts::Label,
     /// `true` once initialized (let/const start uninitialized in TDZ).
     initialized: bool,
 }
 
+/// A single binding in a scope environment.
+///
+/// Scope snapshots clone the handle, not the state. Fresh declarations create
+/// fresh cells, while closures and their callers retain live views of the same
+/// value, label, and initialization state.
+#[derive(Debug, Clone)]
+struct ScopeBinding {
+    kind: BindingKind,
+    state: Rc<RefCell<ScopeBindingState>>,
+}
+
+impl ScopeBinding {
+    fn new(kind: BindingKind) -> Self {
+        Self::with_state(
+            kind,
+            Value::Undefined,
+            crate::ifc_artifacts::Label::Public,
+            kind.is_hoisted(),
+        )
+    }
+
+    fn with_state(
+        kind: BindingKind,
+        value: Value,
+        label: crate::ifc_artifacts::Label,
+        initialized: bool,
+    ) -> Self {
+        Self {
+            kind,
+            state: Rc::new(RefCell::new(ScopeBindingState {
+                value,
+                label,
+                initialized,
+            })),
+        }
+    }
+
+    fn state(&self) -> Result<Ref<'_, ScopeBindingState>, InterpreterError> {
+        self.state
+            .try_borrow()
+            .map_err(|_| InterpreterError::TypeError {
+                expected: "available scope binding state".to_string(),
+                got: "state is already mutably borrowed".to_string(),
+            })
+    }
+
+    fn state_mut(&self) -> Result<RefMut<'_, ScopeBindingState>, InterpreterError> {
+        self.state
+            .try_borrow_mut()
+            .map_err(|_| InterpreterError::TypeError {
+                expected: "available mutable scope binding state".to_string(),
+                got: "state is already borrowed".to_string(),
+            })
+    }
+
+    fn snapshot_state(&self) -> Result<ScopeBindingState, InterpreterError> {
+        Ok(self.state()?.clone())
+    }
+
+    fn restore_state(&self, previous: ScopeBindingState) -> Result<(), InterpreterError> {
+        *self.state_mut()? = previous;
+        Ok(())
+    }
+
+    #[cfg(test)]
+    fn value(&self) -> Result<Value, InterpreterError> {
+        Ok(self.state()?.value.clone())
+    }
+}
+
 /// A single scope frame in the environment chain.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 struct ScopeFrame {
     bindings: BTreeMap<String, ScopeBinding>,
 }
@@ -732,23 +2007,11 @@ impl ScopeFrame {
         {
             return Some(existing.clone());
         }
-        let initialized = kind.is_hoisted();
-        self.bindings.insert(
-            name,
-            ScopeBinding {
-                value: Value::Undefined,
-                kind,
-                initialized,
-            },
-        )
+        self.bindings.insert(name, ScopeBinding::new(kind))
     }
 
     fn get(&self, name: &str) -> Option<&ScopeBinding> {
         self.bindings.get(name)
-    }
-
-    fn get_mut(&mut self, name: &str) -> Option<&mut ScopeBinding> {
-        self.bindings.get_mut(name)
     }
 }
 
@@ -799,16 +2062,6 @@ impl ScopeChain {
         None
     }
 
-    /// Resolve a mutable binding by walking outward from innermost scope.
-    fn resolve_mut(&mut self, name: &str) -> Option<&mut ScopeBinding> {
-        for frame in self.frames.iter_mut().rev() {
-            if let Some(binding) = frame.get_mut(name) {
-                return Some(binding);
-            }
-        }
-        None
-    }
-
     /// Snapshot current scope chain for closure capture.
     fn snapshot(&self) -> Vec<ScopeFrame> {
         self.frames.clone()
@@ -845,24 +2098,30 @@ struct CallFrame {
     /// calls, `undefined` for plain calls, or the newly allocated object for
     /// constructor calls.  Arrow functions inherit from the defining frame.
     this_value: Value,
+    /// IFC label paired with `this_value` for receiver-aware calls.
+    this_label: crate::ifc_artifacts::Label,
     /// The `new.target` value for this call frame. Constructor calls set this
     /// to the invoked constructor value; non-constructor calls use undefined.
     new_target_value: Value,
+    /// IFC label paired with `new_target_value`.
+    new_target_label: crate::ifc_artifacts::Label,
     /// The `super` value for this call frame. Constructors receive the parent
     /// constructor; methods receive the parent prototype.
     super_value: Value,
+    /// IFC label paired with `super_value`.
+    super_label: crate::ifc_artifacts::Label,
     /// For constructor calls (`new`): the `this` object allocated before
     /// entering the constructor body. If the constructor returns a non-object,
     /// this value is used as the result instead (ES2020 §9.2.2 step 13).
     construct_this: Option<Value>,
     /// Caller exception state saved across the call so callee control flow
     /// cannot clobber an outer in-flight abrupt completion.
-    saved_pending_exception: Option<Value>,
+    saved_pending_exception: Option<LabeledException>,
     /// Caller return state saved for the same reason.
-    saved_pending_return: Option<Value>,
+    saved_pending_return: Option<LabeledReturn>,
     /// Count of suspended abrupt completions before entering the callee.
     saved_suspended_abrupt_depth: usize,
-    /// Count of active finally modes before entering the callee.
+    /// Count of active finally completion frames before entering the callee.
     saved_finally_mode_depth: usize,
     /// Scope chain depth before entering the callee, restored on return.
     saved_scope_depth: usize,
@@ -870,11 +2129,6 @@ struct CallFrame {
     /// the chain with the captured environment. `None` for plain function
     /// calls where the chain is only extended, not replaced.
     saved_scope_chain: Option<Vec<ScopeFrame>>,
-    /// Closure store index for calls that execute captured environments.
-    closure_id: Option<u32>,
-    /// Number of frames from the active scope chain that belong to the
-    /// closure capture. Callee-local frames are not written back.
-    captured_scope_depth: usize,
     /// Async function ID if this frame is executing an async function.
     async_function_id: Option<u32>,
 }
@@ -885,7 +2139,67 @@ struct CallFrame {
 
 pub type ExtensionId = String;
 pub type ObjectRef = ObjectId;
+/// Legacy well-formed string property key accepted by
+/// [`InterpreterHook::pre_property_access`].
 pub type PropertyKey = String;
+
+/// Exact property-key identity presented to interpreter hooks.
+///
+/// This type is deliberately distinct from the legacy [`PropertyKey`] alias:
+/// a `Symbol` never crosses the compatibility callback as a display string,
+/// and a non-well-formed ECMAScript string retains its exact UTF-16 units.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum HookPropertyKey {
+    String(JsString),
+    Symbol(SymbolId),
+}
+
+impl HookPropertyKey {
+    /// Borrow the frozen legacy callback key when that view is lossless.
+    pub fn as_legacy_str(&self) -> Result<&str, HookPropertyKeyCompatibilityError> {
+        match self {
+            Self::String(key) => key
+                .as_str()
+                .ok_or(HookPropertyKeyCompatibilityError::NonWellFormedString),
+            Self::Symbol(_) => Err(HookPropertyKeyCompatibilityError::Symbol),
+        }
+    }
+
+    /// Convert to the frozen legacy callback key when that conversion is
+    /// lossless.
+    pub fn to_legacy_property_key(&self) -> Result<PropertyKey, HookPropertyKeyCompatibilityError> {
+        self.as_legacy_str().map(ToOwned::to_owned)
+    }
+}
+
+/// Why the default typed-key adapter cannot call a legacy string-only hook.
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum HookPropertyKeyCompatibilityError {
+    NonWellFormedString,
+    Symbol,
+}
+
+impl fmt::Display for HookPropertyKeyCompatibilityError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::NonWellFormedString => {
+                write!(
+                    f,
+                    "non-well-formed ECMAScript string property key is not representable by the legacy string hook"
+                )
+            }
+            Self::Symbol => {
+                write!(
+                    f,
+                    "Symbol property key is not representable by the legacy string hook"
+                )
+            }
+        }
+    }
+}
+
+impl std::error::Error for HookPropertyKeyCompatibilityError {}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ChallengeToken {
@@ -1167,6 +2481,7 @@ impl EvidenceLog {
                     }
                     string_hash
                 }
+                Value::Symbol(id) => 18 + u64::from(id.0),
                 Value::Object(id) => 6 + (id.0 as u64),
                 Value::Function(id) => 7 + (*id as u64),
                 Value::Closure(id) => 8 + (*id as u64),
@@ -1196,12 +2511,33 @@ impl Default for EvidenceLog {
 /// `pre_import` is part of the stable hook contract and is invoked on
 /// `ImportModule` during module loading.
 pub trait InterpreterHook: Send + Sync {
+    /// Frozen compatibility callback for well-formed string property keys.
+    ///
+    /// New implementations that need exact strings or Symbols should override
+    /// [`InterpreterHook::pre_property_access_typed`]. The default typed
+    /// adapter calls this method only when conversion is lossless.
     fn pre_property_access(
         &self,
         ctx: &HookContext,
         target: &ObjectRef,
         key: &PropertyKey,
     ) -> HookAction;
+
+    /// Typed property callback used by executable object property operations.
+    ///
+    /// The default implementation preserves existing hook implementations:
+    /// well-formed strings reach [`InterpreterHook::pre_property_access`],
+    /// while Symbols and non-well-formed strings fail closed without invoking
+    /// that legacy callback.
+    fn pre_property_access_typed(
+        &self,
+        ctx: &HookContext,
+        target: &ObjectRef,
+        key: &HookPropertyKey,
+    ) -> Result<HookAction, HookPropertyKeyCompatibilityError> {
+        let legacy_key = key.to_legacy_property_key()?;
+        Ok(self.pre_property_access(ctx, target, &legacy_key))
+    }
 
     fn pre_call(&self, ctx: &HookContext, callee: &FunctionRef, args: &[Value]) -> HookAction;
 
@@ -1292,6 +2628,9 @@ pub enum InterpreterError {
     Terminated { reason: String },
     /// Execution cancelled by CheckpointGuard.
     Cancelled,
+    /// Range error (e.g. an out-of-range code point argument). Mirrors the
+    /// engine's variant and Display wording for oracle parity (bd-7zwar).
+    RangeError { message: String },
 }
 
 impl fmt::Display for InterpreterError {
@@ -1370,12 +2709,11 @@ impl fmt::Display for InterpreterError {
                 write!(f, "uncaught exception: {value}")
             }
             Self::UninitializedBinding { name } => {
-                write!(
-                    f,
-                    "cannot access '{name}' before initialization (temporal dead zone)"
-                )
+                let name = user_visible_binding_name(name);
+                write!(f, "Cannot access '{name}' before initialization")
             }
             Self::ConstAssignment { name } => {
+                let name = user_visible_binding_name(name);
                 write!(f, "assignment to constant variable '{name}'")
             }
             Self::StringLimitExceeded { length, max } => {
@@ -1412,7 +2750,19 @@ impl fmt::Display for InterpreterError {
             Self::Terminated { reason } => {
                 write!(f, "execution terminated by containment action: {reason}")
             }
+            Self::RangeError { message } => write!(f, "range error: {message}"),
         }
+    }
+}
+
+fn user_visible_binding_name(name: &str) -> &str {
+    if name.starts_with('\0') {
+        name.rsplit_once('\0')
+            .map(|(_, source_name)| source_name)
+            .filter(|source_name| !source_name.is_empty())
+            .unwrap_or(name)
+    } else {
+        name
     }
 }
 
@@ -1590,6 +2940,8 @@ pub struct ConsoleEntry {
 pub struct ExecutionResult {
     /// Final value (from the return register or last evaluated expression).
     pub value: Value,
+    /// IFC provenance paired with [`Self::value`] at the execution boundary.
+    pub completion_label: crate::ifc_artifacts::Label,
     /// Number of instructions executed.
     pub instructions_executed: u64,
     /// Optional containment action requested by an interpreter hook.
@@ -1609,8 +2961,107 @@ pub struct ExecutionSeed {
     registers: Vec<Value>,
     register_labels: Vec<crate::ifc_artifacts::Label>,
     heap: Vec<HeapObject>,
-    function_prototypes: BTreeMap<u32, ObjectId>,
+    function_prototypes: BTreeMap<FunctionObjectKey, ObjectId>,
     function_objects: BTreeMap<FunctionObjectKey, ObjectId>,
+    symbol_state: RuntimeSymbolState,
+}
+
+impl Serialize for ExecutionSeed {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeStruct as _;
+
+        let include_symbol_state = !self.symbol_state.is_default() || self.contains_symbol_values();
+        let mut seed = serializer
+            .serialize_struct("ExecutionSeed", if include_symbol_state { 6 } else { 5 })?;
+        seed.serialize_field("registers", &self.registers)?;
+        seed.serialize_field("register_labels", &self.register_labels)?;
+        seed.serialize_field("heap", &self.heap)?;
+        seed.serialize_field(
+            "function_prototypes",
+            &self
+                .function_prototypes
+                .iter()
+                .map(|(key, value)| (*key, *value))
+                .collect::<Vec<_>>(),
+        )?;
+        seed.serialize_field(
+            "function_objects",
+            &self
+                .function_objects
+                .iter()
+                .map(|(key, value)| (*key, *value))
+                .collect::<Vec<_>>(),
+        )?;
+        if include_symbol_state {
+            seed.serialize_field("symbol_state", &self.symbol_state)?;
+        }
+        seed.end()
+    }
+}
+
+impl<'de> Deserialize<'de> for ExecutionSeed {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        use serde::de::Error as _;
+
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct ExecutionSeedWire {
+            registers: Vec<Value>,
+            register_labels: Vec<crate::ifc_artifacts::Label>,
+            heap: Vec<HeapObject>,
+            function_prototypes: Vec<(FunctionObjectKey, ObjectId)>,
+            function_objects: Vec<(FunctionObjectKey, ObjectId)>,
+            #[serde(default, deserialize_with = "deserialize_present_value")]
+            symbol_state: Option<PresentValue<RuntimeSymbolState>>,
+        }
+
+        let wire = ExecutionSeedWire::deserialize(deserializer)?;
+        let symbol_state_was_present = wire.symbol_state.is_some();
+        let function_prototypes = wire
+            .function_prototypes
+            .into_iter()
+            .collect::<BTreeMap<_, _>>();
+        let function_objects = wire
+            .function_objects
+            .into_iter()
+            .collect::<BTreeMap<_, _>>();
+        let seed = Self {
+            registers: wire.registers,
+            register_labels: wire.register_labels,
+            heap: wire.heap,
+            function_prototypes,
+            function_objects,
+            symbol_state: wire.symbol_state.map(|state| state.0).unwrap_or_default(),
+        };
+        if !symbol_state_was_present && seed.contains_symbol_values() {
+            return Err(D::Error::custom(
+                "execution seed with Symbol values or keys requires symbol_state",
+            ));
+        }
+        seed.validate_symbol_references()
+            .map_err(D::Error::custom)?;
+        Ok(seed)
+    }
+}
+
+impl ExecutionSeed {
+    fn contains_symbol_values(&self) -> bool {
+        self.registers
+            .iter()
+            .any(|value| matches!(value, Value::Symbol(_)))
+            || self.heap.iter().any(heap_object_contains_symbols)
+    }
+
+    fn validate_symbol_references(&self) -> Result<(), String> {
+        self.symbol_state.validate()?;
+        for value in &self.registers {
+            validate_symbol_value(&self.symbol_state, value)?;
+        }
+        for object in &self.heap {
+            validate_heap_symbol_references(&self.symbol_state, object)?;
+        }
+        Ok(())
+    }
 }
 
 /// Eager execution seed for testing comparison
@@ -1618,6 +3069,20 @@ pub struct ExecutionSeed {
 pub struct EagerExecutionSeed {
     pub registers: Vec<Value>,
     pub heap: Vec<HeapObject>,
+    symbol_state: RuntimeSymbolState,
+}
+
+impl EagerExecutionSeed {
+    fn validate_symbol_references(&self) -> Result<(), String> {
+        self.symbol_state.validate()?;
+        for value in &self.registers {
+            validate_symbol_value(&self.symbol_state, value)?;
+        }
+        for object in &self.heap {
+            validate_heap_symbol_references(&self.symbol_state, object)?;
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -1628,19 +3093,72 @@ struct ModuleExecutionSnapshot {
     ip: usize,
     register_base: usize,
     catch_frames: Vec<CatchFrame>,
-    pending_exception: Option<Value>,
-    pending_return: Option<Value>,
+    pending_exception: Option<LabeledException>,
+    pending_return: Option<LabeledReturn>,
     suspended_abrupt_completions: Vec<AbruptCompletion>,
-    finally_modes: Vec<FinallyMode>,
+    finally_frames: Vec<FinallyFrame>,
+    pending_finally_entry: Option<PendingFinallyEntry>,
+    copy_data_properties_states: Vec<CopyDataPropertiesState>,
     scope_chain: ScopeChain,
     pending_captures: Vec<u32>,
     current_module_specifier: Option<String>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RunLoopMode {
+    Normal,
+    Generator,
+}
+
+#[derive(Debug)]
+enum RunLoopExit {
+    Value(LabeledReturn),
+    GeneratorBodyStart,
+    GeneratorYield {
+        result: Value,
+        label: crate::ifc_artifacts::Label,
+        resume_dst: u32,
+    },
+    GeneratorReturn {
+        value: Value,
+        label: crate::ifc_artifacts::Label,
+    },
+    GeneratorThrow {
+        exception: LabeledException,
+        description: String,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 enum FunctionObjectKey {
     Function(u32),
     Closure(u32),
+    Builtin(BuiltinFunctionKind),
+}
+
+#[derive(Debug, Clone)]
+struct CallSetupRegisterSlotSnapshot {
+    index: usize,
+    value: Option<Value>,
+    label: Option<crate::ifc_artifacts::Label>,
+}
+
+#[derive(Debug, Clone)]
+struct CallSetupSnapshot {
+    heap_len: usize,
+    function_prototypes: Option<BTreeMap<FunctionObjectKey, ObjectId>>,
+    call_stack_depth: usize,
+    register_base: usize,
+    ip: usize,
+    registers_len: usize,
+    register_labels_len: usize,
+    callee_register_start: usize,
+    callee_registers: Vec<Value>,
+    callee_register_labels: Vec<crate::ifc_artifacts::Label>,
+    result_register: Option<CallSetupRegisterSlotSnapshot>,
+    async_functions_len: usize,
+    profiling_memory_stats: Option<crate::profiling::MemoryStats>,
+    estimated_memory_bytes: u64,
 }
 
 // ---------------------------------------------------------------------------
@@ -1653,6 +3171,12 @@ enum PromiseCombinatorState {
     AllSettled(crate::promise_model::PromiseAllSettledTracker),
     Race(crate::promise_model::PromiseRaceTracker),
     Any(crate::promise_model::PromiseAnyTracker),
+}
+
+#[derive(Debug, Clone)]
+struct LabeledPromiseCombinatorState {
+    tracker: PromiseCombinatorState,
+    accumulated_label: crate::ifc_artifacts::Label,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -1691,12 +3215,23 @@ pub struct InterpreterCore {
     call_stack: Vec<CallFrame>,
     /// Object heap.
     heap: Vec<HeapObject>,
+    /// Interpreter-owned Symbol identities, descriptions, and global registry.
+    symbol_state: RuntimeSymbolState,
     /// Approximate live memory tracked for fail-closed budget enforcement.
     estimated_memory_bytes: u64,
+    /// Execution snapshots moved out while a generator activation is running.
+    /// Nested generator calls accumulate here so allocation checks continue to
+    /// account for every synchronously suspended caller.
+    temporarily_suspended_execution_bytes: u64,
+    /// Call depth represented by the same temporarily moved-out executions.
+    /// Active depth checks add this to the installed activation's stack.
+    temporarily_suspended_call_depth: usize,
     /// Dedicated iterator runtime state used by iterator-specific IR3 ops.
     iterators: Vec<RuntimeIteratorState>,
-    /// Lazily allocated prototype objects for constructor functions.
-    function_prototypes: BTreeMap<u32, ObjectId>,
+    /// Lazily allocated prototype objects for constructor function values.
+    /// Closure identity is significant: repeated evaluations of the same class
+    /// expression must not share a prototype merely because they share code.
+    function_prototypes: BTreeMap<FunctionObjectKey, ObjectId>,
     /// Heap-backed own-property storage for callable values.
     function_objects: BTreeMap<FunctionObjectKey, ObjectId>,
     /// Current instruction pointer.
@@ -1717,20 +3252,28 @@ pub struct InterpreterCore {
     register_base: usize,
     /// Stack of active try/catch frames for exception unwinding.
     catch_frames: Vec<CatchFrame>,
-    /// A pending exception value during unwinding (set by `Throw`,
-    /// consumed by `EnterCatch` or re-thrown by `EndFinally`).
-    pending_exception: Option<Value>,
-    /// A pending return value during unwinding through finally blocks.
-    pending_return: Option<Value>,
+    /// A pending exception value during an unwind edge, consumed by
+    /// `EnterCatch` or moved into an owned `FinallyFrame` by `EnterFinally`.
+    pending_exception: Option<LabeledException>,
+    /// A pending return value before `EnterFinally` captures it or the return
+    /// completes.
+    pending_return: Option<LabeledReturn>,
     /// Saved outer abrupt completion state that was temporarily suspended by a
     /// newer local throw/return or by exception unwinding across nested calls
     /// or intermediary finally blocks. If the newer abrupt completion is
     /// consumed locally, the most recent suspended completion resumes.
     suspended_abrupt_completions: Vec<AbruptCompletion>,
-    /// Stack of finally-entry modes.  Pushed by `EnterFinally`, popped by
-    /// `EndFinally`.  When `Exception`, `EndFinally` re-throws the pending
-    /// exception.
-    finally_modes: Vec<FinallyMode>,
+    /// Stack of completion records owned by active finally bodies. Pushed by
+    /// `EnterFinally` and consumed by `EndFinally` or an overriding abrupt
+    /// transfer.
+    finally_frames: Vec<FinallyFrame>,
+    /// One-shot entry ownership set by an unwind edge and consumed by the
+    /// exact `EnterFinally` instruction it targets.
+    pending_finally_entry: Option<PendingFinallyEntry>,
+    /// Nested object-rest copies awaiting an accessor return. A stack rather
+    /// than a single slot is required because an included getter may itself
+    /// execute another object-rest copy.
+    copy_data_properties_states: Vec<CopyDataPropertiesState>,
     /// Pre-run caller-visible seed used for the most recent execute().
     last_pre_run_seed: Option<ExecutionSeed>,
     /// Caller-visible state immediately after the most recent execute().
@@ -1747,12 +3290,15 @@ pub struct InterpreterCore {
     async_generators: Vec<AsyncGeneratorObject>,
     /// Async function object store.
     async_functions: Vec<AsyncFunctionObject>,
+    /// Pending await continuations, keyed by the Promise returned from the
+    /// internal await reaction registration.
+    async_resumption_contexts: BTreeMap<u32, AsyncResumptionContext>,
     /// Promise store for ES2020 Promise semantics.
     promise_store: crate::promise_model::PromiseStore,
     /// Deterministic event loop state (microtasks + macrotasks + virtual clock).
     event_loop: crate::promise_model::EventLoop,
     /// Active promise combinator trackers keyed by combinator id.
-    promise_combinators: BTreeMap<u64, PromiseCombinatorState>,
+    promise_combinators: BTreeMap<u64, LabeledPromiseCombinatorState>,
     /// Watchers keyed by promise handle for combinator updates.
     promise_combinator_watchers:
         BTreeMap<crate::promise_model::PromiseHandle, Vec<PromiseCombinatorWatcher>>,
@@ -1792,6 +3338,30 @@ pub struct InterpreterCore {
 }
 
 impl InterpreterCore {
+    fn filesystem_module_specifier(value: &JsString) -> Result<&str, InterpreterError> {
+        value.as_str().ok_or_else(|| InterpreterError::TypeError {
+            expected: "well-formed UTF-8 module specifier".to_string(),
+            got: "ECMAScript string containing a lone surrogate".to_string(),
+        })
+    }
+
+    fn metadata_pool_string(
+        module: &Ir3Module,
+        pool_index: u32,
+        missing_fallback: String,
+    ) -> Result<String, InterpreterError> {
+        let Some(value) = module.constant_pool.get(pool_index as usize) else {
+            return Ok(missing_fallback);
+        };
+        value
+            .as_str()
+            .map(str::to_string)
+            .ok_or_else(|| InterpreterError::TypeError {
+                expected: "well-formed UTF-8 metadata string".to_string(),
+                got: "ECMAScript string containing a lone surrogate".to_string(),
+            })
+    }
+
     /// Create a new interpreter core with the given configuration.
     pub fn new(config: InterpreterConfig, trace_id: impl Into<String>) -> Self {
         let max_regs = config.max_registers as usize;
@@ -1802,7 +3372,10 @@ impl InterpreterCore {
             register_labels: vec![crate::ifc_artifacts::Label::Public; max_regs],
             call_stack: Vec::new(),
             heap: Vec::new(),
+            symbol_state: RuntimeSymbolState::default(),
             estimated_memory_bytes: 0,
+            temporarily_suspended_execution_bytes: 0,
+            temporarily_suspended_call_depth: 0,
             iterators: Vec::new(),
             function_prototypes: BTreeMap::new(),
             function_objects: BTreeMap::new(),
@@ -1818,7 +3391,9 @@ impl InterpreterCore {
             pending_exception: None,
             pending_return: None,
             suspended_abrupt_completions: Vec::new(),
-            finally_modes: Vec::new(),
+            finally_frames: Vec::new(),
+            pending_finally_entry: None,
+            copy_data_properties_states: Vec::new(),
             last_pre_run_seed: None,
             last_post_run_seed: None,
             scope_chain: ScopeChain::new(),
@@ -1827,6 +3402,7 @@ impl InterpreterCore {
             generators: Vec::new(),
             async_generators: Vec::new(),
             async_functions: Vec::new(),
+            async_resumption_contexts: BTreeMap::new(),
             promise_store: crate::promise_model::PromiseStore::new(),
             event_loop: crate::promise_model::EventLoop::new(),
             promise_combinators: BTreeMap::new(),
@@ -1873,11 +3449,13 @@ impl InterpreterCore {
 
     fn take_execution_result(
         &mut self,
-        value: Value,
+        completion: LabeledReturn,
         requested_hook_action: Option<HookAction>,
     ) -> ExecutionResult {
+        let LabeledReturn { value, label } = completion;
         ExecutionResult {
             value,
+            completion_label: label,
             instructions_executed: self.instructions_executed,
             requested_hook_action,
             witness_events: std::mem::take(&mut self.witness_events),
@@ -1889,6 +3467,13 @@ impl InterpreterCore {
 
     /// Execute an IR3 module and return the result.
     pub fn execute(&mut self, module: &Ir3Module) -> Result<ExecutionResult, InterpreterError> {
+        crate::ir_contract::verify_ir3_specialization(module).map_err(|error| {
+            InterpreterError::TypeError {
+                expected: "supported, structurally valid core IR3 module".to_string(),
+                got: error.to_string(),
+            }
+        })?;
+
         // Check VmDispatch capability before executing
         if !self
             .config
@@ -1910,7 +3495,7 @@ impl InterpreterCore {
             _ => current_seed,
         };
         self.last_pre_run_seed = Some(seed.clone());
-        self.reset_execution_state_from_seed(&seed);
+        self.reset_execution_state_from_seed(&seed)?;
         self.sync_estimated_memory_bytes()?;
         let entry_specifier = module.header.source_label.clone();
         self.current_module_specifier = Some(entry_specifier.clone());
@@ -1918,11 +3503,19 @@ impl InterpreterCore {
 
         self.push_event("execution_started", "ok", None);
 
-        let mut result = self.run_loop(module);
+        let mut result = self.run_loop_labeled(module);
+        if result.is_err() {
+            // CopyDataProperties continuations are internal to this execution.
+            // A fresh execute() always restarts from its caller-visible seed,
+            // so no failed/cancelled run may retain their snapshotted keys.
+            self.discard_all_copy_data_properties_states();
+        }
 
         // Drain any pending microtasks enqueued during execution
         // (promise reactions, thenable resolutions, etc.).
-        self.drain_microtasks();
+        if let Err(error) = self.drain_microtasks(Some(module)) {
+            result = Err(error);
+        }
 
         // Run the event loop until all pending work is complete after normal
         // top-level termination.  A failed script should not run timer
@@ -1969,8 +3562,17 @@ impl InterpreterCore {
             Err(InterpreterError::Halted) => {
                 // Halt is normal termination; return whatever is in r0.
                 let final_value = self.read_reg(0).unwrap_or(Value::Undefined);
+                let completion_label = self
+                    .read_reg_label(0)
+                    .unwrap_or(crate::ifc_artifacts::Label::Public);
                 self.emit_witness(WitnessEventKind::ExecutionCompleted, None);
-                Ok(self.take_execution_result(final_value, None))
+                Ok(self.take_execution_result(
+                    LabeledReturn {
+                        value: final_value,
+                        label: completion_label,
+                    },
+                    None,
+                ))
             }
             Err(e) => Err(e),
         }
@@ -1990,10 +3592,19 @@ impl InterpreterCore {
             heap: self.heap.clone(),
             function_prototypes: self.function_prototypes.clone(),
             function_objects: self.function_objects.clone(),
+            symbol_state: self.symbol_state.clone(),
         }
     }
 
-    pub fn reset_execution_state_from_seed(&mut self, seed: &ExecutionSeed) {
+    pub fn reset_execution_state_from_seed(
+        &mut self,
+        seed: &ExecutionSeed,
+    ) -> Result<(), InterpreterError> {
+        seed.validate_symbol_references()
+            .map_err(|got| InterpreterError::TypeError {
+                expected: "execution seed with resolved Symbol identities".to_string(),
+                got,
+            })?;
         self.register_base = 0;
         self.registers = seed.registers.clone();
         self.register_labels = seed.register_labels.clone();
@@ -2001,6 +3612,7 @@ impl InterpreterCore {
             .resize(self.registers.len(), crate::ifc_artifacts::Label::Public);
         self.call_stack.clear();
         self.heap = seed.heap.clone();
+        self.symbol_state = seed.symbol_state.clone();
         self.iterators.clear();
         self.function_prototypes = seed.function_prototypes.clone();
         self.function_objects = seed.function_objects.clone();
@@ -2014,14 +3626,20 @@ impl InterpreterCore {
         self.pending_exception = None;
         self.pending_return = None;
         self.suspended_abrupt_completions.clear();
-        self.finally_modes.clear();
-        self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
+        self.finally_frames.clear();
+        self.pending_finally_entry = None;
+        self.copy_data_properties_states.clear();
+        self.temporarily_suspended_execution_bytes = 0;
+        self.temporarily_suspended_call_depth = 0;
         self.module_state = ModuleState::new();
         self.active_cjs_context = None;
         self.current_module_specifier = None;
         self.promise_combinators.clear();
         self.promise_combinator_watchers.clear();
         self.next_promise_combinator_id = 0;
+        self.async_resumption_contexts.clear();
+        self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
+        Ok(())
     }
 
     // ---- Proptest helper methods (H2.4) ---------------------------------
@@ -2066,7 +3684,7 @@ impl InterpreterCore {
         let slot_idx = slot as usize;
         while self.heap.len() <= slot_idx {
             self.heap.push(HeapObject {
-                properties: std::collections::BTreeMap::new(),
+                properties: OrderedStringMap::new(),
                 accessors: std::collections::BTreeMap::new(),
                 prototype: None,
                 constructor_function: None,
@@ -2075,6 +3693,8 @@ impl InterpreterCore {
         }
 
         if let Some(heap_obj) = self.heap.get_mut(slot_idx) {
+            let existed = heap_obj.contains_own_property("value");
+            heap_obj.record_property_definition(&JsString::from("value"), existed);
             heap_obj.properties.insert("value".to_string(), value);
         }
     }
@@ -2094,13 +3714,23 @@ impl InterpreterCore {
         EagerExecutionSeed {
             registers: self.registers.clone(),
             heap: self.heap.clone(),
+            symbol_state: self.symbol_state.clone(),
         }
     }
 
     /// Reset from eager seed format for testing
-    pub fn reset_execution_state_from_seed_eager_for_test(&mut self, seed: &EagerExecutionSeed) {
+    pub fn reset_execution_state_from_seed_eager_for_test(
+        &mut self,
+        seed: &EagerExecutionSeed,
+    ) -> Result<(), InterpreterError> {
+        seed.validate_symbol_references()
+            .map_err(|got| InterpreterError::TypeError {
+                expected: "eager execution seed with resolved Symbol identities".to_string(),
+                got,
+            })?;
         self.registers = seed.registers.clone();
         self.heap = seed.heap.clone();
+        self.symbol_state = seed.symbol_state.clone();
 
         // Reset other state like the normal reset method
         self.register_base = 0;
@@ -2116,14 +3746,20 @@ impl InterpreterCore {
         self.pending_exception = None;
         self.pending_return = None;
         self.suspended_abrupt_completions.clear();
-        self.finally_modes.clear();
-        self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
+        self.finally_frames.clear();
+        self.pending_finally_entry = None;
+        self.copy_data_properties_states.clear();
+        self.temporarily_suspended_execution_bytes = 0;
+        self.temporarily_suspended_call_depth = 0;
         self.module_state = ModuleState::new();
         self.active_cjs_context = None;
         self.current_module_specifier = None;
         self.promise_combinators.clear();
         self.promise_combinator_watchers.clear();
         self.next_promise_combinator_id = 0;
+        self.async_resumption_contexts.clear();
+        self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
+        Ok(())
     }
 
     fn snapshot_module_execution(&self) -> ModuleExecutionSnapshot {
@@ -2137,14 +3773,39 @@ impl InterpreterCore {
             pending_exception: self.pending_exception.clone(),
             pending_return: self.pending_return.clone(),
             suspended_abrupt_completions: self.suspended_abrupt_completions.clone(),
-            finally_modes: self.finally_modes.clone(),
+            finally_frames: self.finally_frames.clone(),
+            pending_finally_entry: self.pending_finally_entry.clone(),
+            copy_data_properties_states: self.copy_data_properties_states.clone(),
             scope_chain: self.scope_chain.clone(),
             pending_captures: self.pending_captures.clone(),
             current_module_specifier: self.current_module_specifier.clone(),
         }
     }
 
-    fn restore_module_execution(&mut self, snapshot: ModuleExecutionSnapshot) {
+    /// Move the currently installed execution context out of the interpreter.
+    /// Heap objects, closures, generator tables, budgets, and witness streams
+    /// remain shared; only frame-local execution state is transferred.
+    fn take_module_execution(&mut self) -> ModuleExecutionSnapshot {
+        ModuleExecutionSnapshot {
+            registers: std::mem::take(&mut self.registers),
+            register_labels: std::mem::take(&mut self.register_labels),
+            call_stack: std::mem::take(&mut self.call_stack),
+            ip: std::mem::take(&mut self.ip),
+            register_base: std::mem::take(&mut self.register_base),
+            catch_frames: std::mem::take(&mut self.catch_frames),
+            pending_exception: self.pending_exception.take(),
+            pending_return: self.pending_return.take(),
+            suspended_abrupt_completions: std::mem::take(&mut self.suspended_abrupt_completions),
+            finally_frames: std::mem::take(&mut self.finally_frames),
+            pending_finally_entry: self.pending_finally_entry.take(),
+            copy_data_properties_states: std::mem::take(&mut self.copy_data_properties_states),
+            scope_chain: std::mem::replace(&mut self.scope_chain, ScopeChain::new()),
+            pending_captures: std::mem::take(&mut self.pending_captures),
+            current_module_specifier: self.current_module_specifier.take(),
+        }
+    }
+
+    fn install_module_execution(&mut self, snapshot: ModuleExecutionSnapshot) {
         self.registers = snapshot.registers;
         self.register_labels = snapshot.register_labels;
         self.register_labels
@@ -2156,10 +3817,17 @@ impl InterpreterCore {
         self.pending_exception = snapshot.pending_exception;
         self.pending_return = snapshot.pending_return;
         self.suspended_abrupt_completions = snapshot.suspended_abrupt_completions;
-        self.finally_modes = snapshot.finally_modes;
+        self.finally_frames = snapshot.finally_frames;
+        self.pending_finally_entry = snapshot.pending_finally_entry;
+        self.copy_data_properties_states = snapshot.copy_data_properties_states;
         self.scope_chain = snapshot.scope_chain;
         self.pending_captures = snapshot.pending_captures;
         self.current_module_specifier = snapshot.current_module_specifier;
+    }
+
+    fn restore_module_execution(&mut self, snapshot: ModuleExecutionSnapshot) {
+        self.install_module_execution(snapshot);
+        self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
     }
 
     fn prepare_module_execution(&mut self, module_specifier: &str) -> Result<(), InterpreterError> {
@@ -2174,7 +3842,9 @@ impl InterpreterCore {
         self.pending_exception = None;
         self.pending_return = None;
         self.suspended_abrupt_completions.clear();
-        self.finally_modes.clear();
+        self.finally_frames.clear();
+        self.pending_finally_entry = None;
+        self.copy_data_properties_states.clear();
         self.scope_chain = ScopeChain::new();
         self.pending_captures.clear();
         self.current_module_specifier = Some(module_specifier.to_string());
@@ -2187,6 +3857,7 @@ impl InterpreterCore {
         module_object: ObjectId,
         exports_object: ObjectId,
         module_specifier: Option<&str>,
+        preserve_resolved_bindings: bool,
     ) -> Result<(), InterpreterError> {
         let (filename_value, dirname_value) = self
             .cjs_filename_dirname(module_specifier.or(self.current_module_specifier.as_deref()));
@@ -2195,28 +3866,40 @@ impl InterpreterCore {
         ));
 
         let mut replaced = Vec::with_capacity(5);
-        {
-            let frame = self.scope_chain.current_mut();
-            for (name, value) in [
-                ("require", require_value),
-                ("exports", Value::Object(exports_object)),
-                ("module", Value::Object(module_object)),
-                ("__filename", filename_value),
-                ("__dirname", dirname_value),
-            ] {
-                let name = name.to_string();
+        for (name, value) in [
+            ("require", require_value),
+            ("exports", Value::Object(exports_object)),
+            ("module", Value::Object(module_object)),
+            ("__filename", filename_value),
+            ("__dirname", dirname_value),
+        ] {
+            if preserve_resolved_bindings && self.scope_chain.resolve(name).is_some() {
+                continue;
+            }
+            let name = name.to_string();
+            {
+                let frame = self.scope_chain.current_mut();
                 let replaced_binding = frame.declare(name.clone(), BindingKind::Var);
-                if let Some(binding) = frame.get_mut(&name) {
-                    binding.value = value;
-                    binding.initialized = true;
+                let replaced_state = replaced_binding
+                    .as_ref()
+                    .map(ScopeBinding::snapshot_state)
+                    .transpose()?;
+                if let Some(binding) = frame.get(&name) {
+                    let mut state = binding.state_mut()?;
+                    state.value = value;
+                    state.label = crate::ifc_artifacts::Label::Public;
+                    state.initialized = true;
                 }
-                replaced.push((name, replaced_binding));
+                replaced.push((name, replaced_binding, replaced_state));
             }
         }
         if let Err(err) = self.sync_estimated_memory_bytes() {
             let current = self.scope_chain.current_mut();
-            for (name, old) in replaced {
+            for (name, old, old_state) in replaced {
                 if let Some(old_binding) = old {
+                    if let Some(old_state) = old_state {
+                        old_binding.restore_state(old_state)?;
+                    }
                     current.bindings.insert(name, old_binding);
                 } else {
                     current.bindings.remove(&name);
@@ -2238,7 +3921,7 @@ impl InterpreterCore {
             .map(|path| path.display().to_string())
             .or_else(|| self.config.module_root.clone())
             .unwrap_or_default();
-        (Value::Str(specifier.to_string()), Value::Str(dirname))
+        (Value::str(specifier), Value::str(dirname))
     }
 
     fn inject_active_cjs_bindings(&mut self) -> Result<(), InterpreterError> {
@@ -2256,6 +3939,7 @@ impl InterpreterCore {
             module_object,
             exports_object,
             Some(module_specifier.as_str()),
+            true,
         )
     }
 
@@ -2476,6 +4160,7 @@ impl InterpreterCore {
             context.module_object,
             context.exports_object,
             Some(module_specifier),
+            false,
         )?;
         Ok(context)
     }
@@ -2484,17 +4169,26 @@ impl InterpreterCore {
         let export_value = self.prototype_chain_get(context.module_object, "exports")?;
         self.register_module_export("default", export_value.clone())?;
         if let Value::Object(object_id) = export_value {
-            let properties = self
+            let object = self
                 .heap
                 .get(object_id.0 as usize)
-                .ok_or(InterpreterError::ObjectNotFound { id: object_id.0 })?
-                .properties
-                .clone();
+                .ok_or(InterpreterError::ObjectNotFound { id: object_id.0 })?;
+            let properties = object
+                .own_exact_property_keys()
+                .into_iter()
+                .filter_map(|key| {
+                    object
+                        .properties
+                        .get_exact(&key)
+                        .cloned()
+                        .map(|value| (key, value))
+                })
+                .collect::<Vec<_>>();
             for (key, value) in properties {
-                if key == "default" {
+                if key.as_str() == Some("default") {
                     continue;
                 }
-                self.register_module_export(&key, value)?;
+                self.register_module_export_exact(key, value)?;
             }
         }
         Ok(())
@@ -2575,8 +4269,9 @@ impl InterpreterCore {
     fn import_module(
         &mut self,
         module: &Ir3Module,
-        specifier: &str,
+        specifier: &JsString,
     ) -> Result<Value, InterpreterError> {
+        let specifier = Self::filesystem_module_specifier(specifier)?;
         self.run_pre_import_hook(module, specifier)?;
         let resolved = self.resolve_module_specifier(specifier)?;
         let is_cjs = Path::new(&resolved)
@@ -2590,8 +4285,9 @@ impl InterpreterCore {
     fn require_module(
         &mut self,
         module: &Ir3Module,
-        specifier: &str,
+        specifier: &JsString,
     ) -> Result<Value, InterpreterError> {
+        let specifier = Self::filesystem_module_specifier(specifier)?;
         self.run_pre_import_hook(module, specifier)?;
         let resolved = self.resolve_require_specifier(specifier)?;
         let is_cjs = match Path::new(&resolved)
@@ -2624,9 +4320,10 @@ impl InterpreterCore {
         &mut self,
         module: &Ir3Module,
         builtin: &BuiltinFunction,
+        receiver: Option<&Value>,
         args: RegRange,
-    ) -> Result<Value, InterpreterError> {
-        match builtin.kind {
+    ) -> Result<(Value, crate::ifc_artifacts::Label), InterpreterError> {
+        let result = match builtin.kind {
             BuiltinFunctionKind::Require => {
                 let spec_val = if args.count > 0 {
                     self.read_reg(args.start)?
@@ -2649,7 +4346,457 @@ impl InterpreterCore {
                 self.current_module_specifier = previous_module_specifier;
                 result
             }
+            BuiltinFunctionKind::ArrayIsArray => {
+                let arg = if args.count > 0 {
+                    Some(self.read_reg(args.start)?)
+                } else {
+                    None
+                };
+                self.array_is_array_value(arg)
+            }
+            BuiltinFunctionKind::Symbol => {
+                let description = if args.count > 0 {
+                    self.symbol_description_argument(Some(self.read_reg(args.start)?))?
+                } else {
+                    None
+                };
+                self.allocate_private_symbol(description).map(Value::Symbol)
+            }
+            BuiltinFunctionKind::SymbolFor => {
+                let value = if args.count > 0 {
+                    self.read_reg(args.start)?
+                } else {
+                    Value::Undefined
+                };
+                let key = self.symbol_registry_key_argument(value)?;
+                self.intern_global_symbol(key).map(Value::Symbol)
+            }
+            BuiltinFunctionKind::SymbolKeyFor => {
+                let value = if args.count > 0 {
+                    self.read_reg(args.start)?
+                } else {
+                    Value::Undefined
+                };
+                let Value::Symbol(symbol) = value else {
+                    return Err(InterpreterError::TypeError {
+                        expected: "Symbol".to_string(),
+                        got: value.type_name().to_string(),
+                    });
+                };
+                Ok(self
+                    .symbol_state
+                    .key_for(symbol)
+                    .cloned()
+                    .map(Value::Str)
+                    .unwrap_or(Value::Undefined))
+            }
+            BuiltinFunctionKind::SymbolPrototypeToString => {
+                let Some(Value::Symbol(symbol)) = receiver else {
+                    return Err(InterpreterError::TypeError {
+                        expected: "Symbol receiver".to_string(),
+                        got: receiver.map_or("undefined", Value::type_name).to_string(),
+                    });
+                };
+                Ok(Value::Str(self.symbol_to_string(*symbol)))
+            }
+            BuiltinFunctionKind::GeneratorPrototypeNext => {
+                let Some(Value::Generator(generator_id)) = receiver else {
+                    return Err(InterpreterError::TypeError {
+                        expected: "Generator receiver".to_string(),
+                        got: receiver.map_or("undefined", Value::type_name).to_string(),
+                    });
+                };
+                let argument = if args.count > 0 {
+                    self.read_reg(args.start)?
+                } else {
+                    Value::Undefined
+                };
+                let argument_label = if args.count > 0 {
+                    self.read_reg_label(args.start)?
+                } else {
+                    crate::ifc_artifacts::Label::Public
+                };
+                return self.generator_next(module, *generator_id, argument, argument_label);
+            }
+            BuiltinFunctionKind::StringPrototypeCharAt
+            | BuiltinFunctionKind::StringPrototypeCharCodeAt
+            | BuiltinFunctionKind::StringPrototypeCodePointAt
+            | BuiltinFunctionKind::StringPrototypeAt
+            | BuiltinFunctionKind::StringPrototypeIsWellFormed
+            | BuiltinFunctionKind::StringPrototypeToWellFormed => {
+                let receiver = receiver.ok_or_else(|| InterpreterError::TypeError {
+                    expected: "string receiver".to_string(),
+                    got: format!("detached String.prototype.{}", builtin.display_name()),
+                })?;
+                let text = self.string_receiver_to_js_string(receiver)?;
+                let index = if args.count > 0 {
+                    Some(self.read_reg(args.start)?)
+                } else {
+                    None
+                };
+                match builtin.kind {
+                    BuiltinFunctionKind::StringPrototypeCharAt => {
+                        Self::string_char_at_value(&text, index.as_ref())
+                    }
+                    BuiltinFunctionKind::StringPrototypeCharCodeAt => {
+                        Self::string_char_code_at_value(&text, index.as_ref())
+                    }
+                    BuiltinFunctionKind::StringPrototypeCodePointAt => {
+                        Self::string_code_point_at_value(&text, index.as_ref())
+                    }
+                    BuiltinFunctionKind::StringPrototypeAt => {
+                        Self::string_at_value(&text, index.as_ref())
+                    }
+                    BuiltinFunctionKind::StringPrototypeIsWellFormed => {
+                        Ok(Self::string_is_well_formed_value(&text))
+                    }
+                    BuiltinFunctionKind::StringPrototypeToWellFormed => {
+                        Ok(Self::string_to_well_formed_value(&text))
+                    }
+                    BuiltinFunctionKind::Require
+                    | BuiltinFunctionKind::ArrayIsArray
+                    | BuiltinFunctionKind::Symbol
+                    | BuiltinFunctionKind::SymbolFor
+                    | BuiltinFunctionKind::SymbolKeyFor
+                    | BuiltinFunctionKind::SymbolPrototypeToString
+                    | BuiltinFunctionKind::GeneratorPrototypeNext => {
+                        unreachable!("handled above")
+                    }
+                }
+            }
+        };
+        result.map(|value| (value, crate::ifc_artifacts::Label::Public))
+    }
+
+    /// Single semantic implementation shared by the direct
+    /// `builtin:ArrayIsArray` hostcall and its first-class callable twin.
+    fn array_is_array_value(&self, arg: Option<Value>) -> Result<Value, InterpreterError> {
+        let Some(arg) = arg else {
+            return Ok(Value::Bool(false));
+        };
+        match arg {
+            Value::Object(object_id) => {
+                let is_array = self
+                    .heap
+                    .get(object_id.0 as usize)
+                    .ok_or(InterpreterError::ObjectNotFound { id: object_id.0 })?
+                    .is_array;
+                Ok(Value::Bool(is_array))
+            }
+            _ => Ok(Value::Bool(false)),
         }
+    }
+
+    fn symbol_description_argument(
+        &self,
+        value: Option<Value>,
+    ) -> Result<Option<JsString>, InterpreterError> {
+        match value {
+            None | Some(Value::Undefined) => Ok(None),
+            Some(Value::Str(text)) => Ok(Some(text)),
+            Some(Value::Symbol(_)) => Err(InterpreterError::TypeError {
+                expected: "Symbol description coercible to string".to_string(),
+                got: "symbol".to_string(),
+            }),
+            Some(value) => Ok(Some(JsString::from(self.value_to_string(&value)))),
+        }
+    }
+
+    fn symbol_registry_key_argument(&self, value: Value) -> Result<JsString, InterpreterError> {
+        match value {
+            Value::Str(text) => Ok(text),
+            Value::Symbol(_) => Err(InterpreterError::TypeError {
+                expected: "Symbol.for key coercible to string".to_string(),
+                got: "symbol".to_string(),
+            }),
+            value => Ok(JsString::from(self.value_to_string(&value))),
+        }
+    }
+
+    fn allocate_private_symbol(
+        &mut self,
+        description: Option<JsString>,
+    ) -> Result<SymbolId, InterpreterError> {
+        let previous = self.symbol_state.clone();
+        let previous_memory = self.estimated_memory_bytes;
+        let symbol = self.symbol_state.allocate_private(description)?;
+        if let Err(err) = self.sync_estimated_memory_bytes() {
+            self.symbol_state = previous;
+            self.estimated_memory_bytes = previous_memory;
+            return Err(err);
+        }
+        Ok(symbol)
+    }
+
+    fn intern_global_symbol(&mut self, key: JsString) -> Result<SymbolId, InterpreterError> {
+        let previous = self.symbol_state.clone();
+        let previous_memory = self.estimated_memory_bytes;
+        let symbol = self.symbol_state.intern_global(key)?;
+        if let Err(err) = self.sync_estimated_memory_bytes() {
+            self.symbol_state = previous;
+            self.estimated_memory_bytes = previous_memory;
+            return Err(err);
+        }
+        Ok(symbol)
+    }
+
+    fn symbol_to_string(&self, symbol: SymbolId) -> JsString {
+        let prefix = JsString::from("Symbol(");
+        let suffix = JsString::from(")");
+        match self.symbol_description(symbol) {
+            Some(description) => prefix.concat(&description).concat(&suffix),
+            None => prefix.concat(&suffix),
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // String.prototype method impls (bd-2vzgi) — exact UTF-16 semantics
+    // mirroring the engine's bd-neika string model. Each method has ONE impl
+    // fn shared by the hostcall dispatch ("builtin:StringPrototype*") and the
+    // first-class `BuiltinFunction` method-call path, so the two seams cannot
+    // drift (the engine's dual-seam divergence was the hard lesson of
+    // bd-neika).
+    // -----------------------------------------------------------------------
+
+    /// Receiver coercion for String.prototype methods: exact for string
+    /// values (no lossy projection), `TypeError` for undefined/null (ES
+    /// "object coercible" requirement, engine parity), display coercion for
+    /// the remaining primitives.
+    fn string_receiver_to_js_string(&self, receiver: &Value) -> Result<JsString, InterpreterError> {
+        match receiver {
+            Value::Str(s) => Ok(s.clone()),
+            Value::Undefined | Value::Null => Err(InterpreterError::TypeError {
+                expected: "object-coercible string receiver".to_string(),
+                got: receiver.type_name().to_string(),
+            }),
+            other => Ok(JsString::from(self.value_to_string(other))),
+        }
+    }
+
+    /// `ToIntegerOrInfinity`-style coercion for index arguments (engine
+    /// `value_as_integer` parity): numbers and numeric strings truncate
+    /// toward zero, `NaN` contributes 0, everything else falls back to 0.
+    fn string_index_as_integer(value: &Value) -> Result<i64, InterpreterError> {
+        Ok(match value {
+            Value::Symbol(_) => {
+                return Err(InterpreterError::TypeError {
+                    expected: "string index coercible to number".to_string(),
+                    got: "symbol".to_string(),
+                });
+            }
+            Value::Int(n) => *n,
+            Value::Float(f) => {
+                let v = f.inner();
+                if v.is_nan() { 0 } else { v.trunc() as i64 }
+            }
+            Value::Bool(true) => 1,
+            Value::Str(s) => {
+                let trimmed = s.trim();
+                if trimmed.is_empty() {
+                    0
+                } else {
+                    trimmed
+                        .parse::<f64>()
+                        .map(|v| if v.is_nan() { 0 } else { v.trunc() as i64 })
+                        .unwrap_or(0)
+                }
+            }
+            _ => 0,
+        })
+    }
+
+    /// `String.prototype.charAt`: the single UTF-16 code unit at `index`. A
+    /// surrogate half stays a real lone-surrogate string value; out-of-range
+    /// or negative indices yield the empty string.
+    fn string_char_at_value(
+        text: &JsString,
+        index: Option<&Value>,
+    ) -> Result<Value, InterpreterError> {
+        let index = index
+            .map(Self::string_index_as_integer)
+            .transpose()?
+            .unwrap_or(0);
+        if index < 0 {
+            return Ok(Value::str(""));
+        }
+        Ok(match text.encode_utf16().nth(index as usize) {
+            Some(unit) => Value::Str(JsString::from_code_units(&[unit])),
+            None => Value::str(""),
+        })
+    }
+
+    /// `String.prototype.charCodeAt`: the exact code unit as an integer, or
+    /// `NaN` when out of range.
+    fn string_char_code_at_value(
+        text: &JsString,
+        index: Option<&Value>,
+    ) -> Result<Value, InterpreterError> {
+        let index = index
+            .map(Self::string_index_as_integer)
+            .transpose()?
+            .unwrap_or(0);
+        if index < 0 {
+            return Ok(Value::Float(Float64::new(f64::NAN)));
+        }
+        Ok(match text.encode_utf16().nth(index as usize) {
+            Some(unit) => Value::Int(i64::from(unit)),
+            None => Value::Float(Float64::new(f64::NAN)),
+        })
+    }
+
+    /// `String.prototype.codePointAt`: UTF-16 code-unit indexed per ES2015
+    /// CodePointAt (a valid pair combines, an unpaired surrogate yields its
+    /// own unit value), matching the engine seams upgraded by bd-rdnhc so
+    /// the differential oracle agrees; out-of-range / negative yields
+    /// undefined.
+    fn string_code_point_at_value(
+        text: &JsString,
+        index: Option<&Value>,
+    ) -> Result<Value, InterpreterError> {
+        let index = index
+            .map(Self::string_index_as_integer)
+            .transpose()?
+            .unwrap_or(0);
+        if index < 0 {
+            return Ok(Value::Undefined);
+        }
+        Ok(match text.code_point_at(index as usize) {
+            Some(code_point) => Value::Int(i64::from(code_point)),
+            None => Value::Undefined,
+        })
+    }
+
+    /// `String.prototype.at`: relative code-unit indexing (negative counts
+    /// from the end); out-of-range yields undefined.
+    fn string_at_value(text: &JsString, index: Option<&Value>) -> Result<Value, InterpreterError> {
+        let units: Vec<u16> = text.code_units_vec();
+        let len = units.len() as i64;
+        let raw = index
+            .map(Self::string_index_as_integer)
+            .transpose()?
+            .unwrap_or(0);
+        let idx = if raw < 0 { raw + len } else { raw };
+        if idx < 0 || idx >= len {
+            return Ok(Value::Undefined);
+        }
+        Ok(Value::Str(JsString::from_code_units(
+            &[units[idx as usize]],
+        )))
+    }
+
+    /// `String.prototype.isWellFormed` (ES2024): `true` iff the string
+    /// contains no unpaired surrogate (engine parity; bd-7zwar).
+    fn string_is_well_formed_value(text: &JsString) -> Value {
+        Value::Bool(text.is_well_formed())
+    }
+
+    /// `String.prototype.toWellFormed` (ES2024): the U+FFFD projection —
+    /// exact content when already well-formed (engine parity; bd-7zwar).
+    fn string_to_well_formed_value(text: &JsString) -> Value {
+        Value::str(text.as_utf8_projection())
+    }
+
+    /// Property access on a string receiver (`GetProperty` with a
+    /// `Value::Str` object): `length` is the ES UTF-16 code-unit count and
+    /// canonical indexed keys expose one exact UTF-16 code unit, and the
+    /// known String.prototype methods surface as first-class
+    /// [`BuiltinFunction`] values the `CallMethod` seam dispatches with the
+    /// receiver. Unknown keys return `None` (the `GetProperty` caller yields
+    /// `undefined` per ES GetV semantics — bd-7zwar).
+    fn string_property_value(text: &JsString, key: &str) -> Option<Value> {
+        match key {
+            "length" => Some(Value::Int(text.utf16_len() as i64)),
+            "charAt" => Some(Value::BuiltinFunction(BuiltinFunction::string_method(
+                BuiltinFunctionKind::StringPrototypeCharAt,
+            ))),
+            "charCodeAt" => Some(Value::BuiltinFunction(BuiltinFunction::string_method(
+                BuiltinFunctionKind::StringPrototypeCharCodeAt,
+            ))),
+            "codePointAt" => Some(Value::BuiltinFunction(BuiltinFunction::string_method(
+                BuiltinFunctionKind::StringPrototypeCodePointAt,
+            ))),
+            "at" => Some(Value::BuiltinFunction(BuiltinFunction::string_method(
+                BuiltinFunctionKind::StringPrototypeAt,
+            ))),
+            "isWellFormed" => Some(Value::BuiltinFunction(BuiltinFunction::string_method(
+                BuiltinFunctionKind::StringPrototypeIsWellFormed,
+            ))),
+            "toWellFormed" => Some(Value::BuiltinFunction(BuiltinFunction::string_method(
+                BuiltinFunctionKind::StringPrototypeToWellFormed,
+            ))),
+            _ => canonical_array_index(key)
+                .and_then(|index| text.encode_utf16().nth(index as usize))
+                .map(|unit| Value::Str(JsString::from_code_units(&[unit]))),
+        }
+    }
+
+    fn symbol_property_value(&self, symbol: SymbolId, key: &RuntimePropertyKey) -> Option<Value> {
+        let RuntimePropertyKey::String(key) = key else {
+            return None;
+        };
+        match key.as_str()? {
+            "description" => Some(
+                self.symbol_description(symbol)
+                    .map(Value::Str)
+                    .unwrap_or(Value::Undefined),
+            ),
+            "toString" => Some(Value::BuiltinFunction(BuiltinFunction::symbol(
+                BuiltinFunctionKind::SymbolPrototypeToString,
+            ))),
+            _ => None,
+        }
+    }
+
+    fn symbol_constructor_property_value(key: &str) -> Option<Value> {
+        let builtin = |kind| Value::BuiltinFunction(BuiltinFunction::symbol(kind));
+        Some(match key {
+            "for" => builtin(BuiltinFunctionKind::SymbolFor),
+            "keyFor" => builtin(BuiltinFunctionKind::SymbolKeyFor),
+            "iterator" => Value::Symbol(WellKnownSymbol::Iterator.id()),
+            "toPrimitive" => Value::Symbol(WellKnownSymbol::ToPrimitive.id()),
+            "hasInstance" => Value::Symbol(WellKnownSymbol::HasInstance.id()),
+            "toStringTag" => Value::Symbol(WellKnownSymbol::ToStringTag.id()),
+            "species" => Value::Symbol(WellKnownSymbol::Species.id()),
+            "isConcatSpreadable" => Value::Symbol(WellKnownSymbol::IsConcatSpreadable.id()),
+            "unscopables" => Value::Symbol(WellKnownSymbol::Unscopables.id()),
+            "asyncIterator" => Value::Symbol(WellKnownSymbol::AsyncIterator.id()),
+            "match" => Value::Symbol(WellKnownSymbol::Match.id()),
+            "matchAll" => Value::Symbol(WellKnownSymbol::MatchAll.id()),
+            "replace" => Value::Symbol(WellKnownSymbol::Replace.id()),
+            "search" => Value::Symbol(WellKnownSymbol::Search.id()),
+            "split" => Value::Symbol(WellKnownSymbol::Split.id()),
+            _ => return None,
+        })
+    }
+
+    fn validate_runtime_property_key(
+        &self,
+        key: &TypedPropertyKey,
+    ) -> Result<(), InterpreterError> {
+        if let TypedPropertyKey::Symbol(symbol) = key
+            && !self.symbol_state.contains(*symbol)
+        {
+            return Err(InterpreterError::TypeError {
+                expected: "resolved Symbol property key".to_string(),
+                got: format!("unresolved Symbol id {}", symbol.0),
+            });
+        }
+        Ok(())
+    }
+
+    fn validate_executable_property_key(
+        &self,
+        key: &RuntimePropertyKey,
+    ) -> Result<(), InterpreterError> {
+        if let RuntimePropertyKey::Symbol(symbol) = key
+            && !self.symbol_state.contains(*symbol)
+        {
+            return Err(InterpreterError::TypeError {
+                expected: "resolved Symbol property key".to_string(),
+                got: format!("unresolved Symbol id {}", symbol.0),
+            });
+        }
+        Ok(())
     }
 
     fn evaluate_module_ir3(
@@ -2665,12 +4812,11 @@ impl InterpreterCore {
             return Err(err);
         }
         let result = self.run_loop(module);
-        self.drain_microtasks();
+        let microtask_result = self.drain_microtasks(Some(module));
         self.restore_module_execution(snapshot);
         self.active_cjs_context = previous_cjs_context;
         match result {
-            Ok(_) => Ok(()),
-            Err(InterpreterError::Halted) => Ok(()),
+            Ok(_) | Err(InterpreterError::Halted) => microtask_result,
             Err(err) => Err(err),
         }
     }
@@ -2703,10 +4849,9 @@ impl InterpreterCore {
         }
         self.active_cjs_context = Some(cjs_context.clone());
         let result = self.run_loop(module);
-        self.drain_microtasks();
+        let microtask_result = self.drain_microtasks(Some(module));
         let eval_outcome = match result {
-            Ok(_) => Ok(()),
-            Err(InterpreterError::Halted) => Ok(()),
+            Ok(_) | Err(InterpreterError::Halted) => microtask_result,
             Err(err) => Err(err),
         };
         let finalize_outcome = if eval_outcome.is_ok() {
@@ -2729,9 +4874,18 @@ impl InterpreterCore {
     }
 
     fn register_module_export(&mut self, name: &str, value: Value) -> Result<(), InterpreterError> {
+        self.register_module_export_exact(JsString::from(name), value)
+    }
+
+    fn register_module_export_exact(
+        &mut self,
+        name: JsString,
+        value: Value,
+    ) -> Result<(), InterpreterError> {
+        let diagnostic_name = name.to_string();
         let Some(specifier) = self.current_module_specifier.clone() else {
             return Err(InterpreterError::ExportOutsideModule {
-                name: name.to_string(),
+                name: diagnostic_name,
             });
         };
         let namespace_object = {
@@ -2740,16 +4894,369 @@ impl InterpreterCore {
                 .modules
                 .get_mut(&specifier)
                 .ok_or_else(|| InterpreterError::ExportOutsideModule {
-                    name: name.to_string(),
+                    name: diagnostic_name.clone(),
                 })?;
-            record.exports.insert(name.to_string(), value.clone());
+            record.exports.insert(name.clone(), value.clone());
             record.namespace_object
         };
-        self.set_object_property(namespace_object, name.to_string(), value)?;
+        self.set_object_runtime_property(
+            namespace_object,
+            RuntimePropertyKey::String(name),
+            value,
+        )?;
         Ok(())
     }
 
-    fn complete_return(&mut self, return_val: Value) -> Result<Option<Value>, InterpreterError> {
+    fn enter_async_function_call(&mut self, setup: AsyncCallSetup) -> Result<(), InterpreterError> {
+        let AsyncCallSetup {
+            function_index,
+            function_entry,
+            closure_index,
+            captured_env,
+            arguments,
+            this_value,
+            this_label,
+            super_value,
+            super_label,
+            result_register,
+        } = setup;
+
+        let promise_handle = self.promise_store.create();
+        let setup_result = (|| -> Result<(), InterpreterError> {
+            let async_func_id = u32::try_from(self.async_functions.len()).map_err(|_| {
+                InterpreterError::TypeError {
+                    expected: "async function table capacity".into(),
+                    got: format!("exceeded u32::MAX ({})", self.async_functions.len()),
+                }
+            })?;
+            self.async_functions.push(AsyncFunctionObject {
+                function_index,
+                closure_index,
+                saved_ip: 0,
+                saved_registers: Vec::new(),
+                saved_register_labels: Vec::new(),
+                saved_register_base: 0,
+                phase: AsyncFunctionPhase::Executing,
+                result_promise: promise_handle.0,
+            });
+            self.write_reg(result_register, Value::Promise(promise_handle.0))?;
+
+            let scope_depth = self.scope_chain.depth();
+            let captured_env_bytes = captured_env
+                .as_ref()
+                .map(|env| Self::estimate_scope_chain_bytes(env))
+                .unwrap_or(0);
+            let saved_chain = if captured_env.is_some() {
+                Some(self.snapshot_scope_chain_with_temporary_budget(captured_env_bytes)?)
+            } else {
+                None
+            };
+
+            self.call_stack.push(CallFrame {
+                return_ip: self.ip + 1,
+                return_reg: None,
+                register_base: self.register_base,
+                function_index: Some(function_index),
+                this_value,
+                this_label,
+                new_target_value: Value::Undefined,
+                new_target_label: crate::ifc_artifacts::Label::Public,
+                super_value,
+                super_label,
+                construct_this: None,
+                saved_pending_exception: self.pending_exception.take(),
+                saved_pending_return: self.pending_return.take(),
+                saved_suspended_abrupt_depth: self.suspended_abrupt_completions.len(),
+                saved_finally_mode_depth: self.finally_frames.len(),
+                saved_scope_depth: scope_depth,
+                saved_scope_chain: saved_chain,
+                async_function_id: Some(async_func_id),
+            });
+
+            if let Some(env) = captured_env {
+                self.scope_chain.frames = env;
+            }
+            if let Err(err) = self.scope_chain.push(self.config.max_scope_depth) {
+                self.rollback_call_setup();
+                return Err(err);
+            }
+            if let Err(err) = self.sync_estimated_memory_bytes() {
+                self.rollback_call_setup();
+                return Err(err);
+            }
+
+            self.register_base += self.config.max_registers as usize;
+            let req_len = self.register_base + self.config.max_registers as usize;
+            self.clear_register_range(self.register_base, req_len);
+            for (index, (value, label)) in arguments.into_iter().enumerate() {
+                let register = index as u32;
+                if register < self.config.max_registers {
+                    self.write_reg_with_label(register, value, label)?;
+                }
+            }
+
+            self.ip = function_entry as usize;
+            Ok(())
+        })();
+
+        if let Err(error) = setup_result {
+            let rolled_back = self.promise_store.rollback_last_created(promise_handle);
+            debug_assert!(
+                rolled_back,
+                "failed async call setup must leave its fresh Promise rollbackable"
+            );
+            return Err(error);
+        }
+        Ok(())
+    }
+
+    fn suspend_async_function_for_await(
+        &mut self,
+        promise_handle: crate::promise_model::PromiseHandle,
+        result_register: u32,
+        await_label: crate::ifc_artifacts::Label,
+    ) -> Result<(), InterpreterError> {
+        let async_function_id = self
+            .call_stack
+            .last()
+            .and_then(|frame| frame.async_function_id)
+            .ok_or_else(|| InterpreterError::TypeError {
+                expected: "await only in async function".to_string(),
+                got: "await outside async function context".to_string(),
+            })?;
+
+        let async_function = self
+            .async_functions
+            .get(async_function_id as usize)
+            .ok_or_else(|| InterpreterError::TypeError {
+                expected: "valid async function".to_string(),
+                got: format!("async function #{async_function_id} not found"),
+            })?;
+        if async_function.phase != AsyncFunctionPhase::Executing {
+            return Err(InterpreterError::TypeError {
+                expected: "executing async function".to_string(),
+                got: format!("async function phase: {:?}", async_function.phase),
+            });
+        }
+
+        let saved_snapshot_bytes = self.registers[self.register_base..]
+            .iter()
+            .map(Self::estimate_value_bytes)
+            .sum::<u64>()
+            .saturating_add(
+                (self.register_base..self.registers.len())
+                    .map(|index| {
+                        self.register_labels
+                            .get(index)
+                            .map(Self::estimate_label_bytes)
+                            .unwrap_or_else(|| {
+                                Self::estimate_label_bytes(&crate::ifc_artifacts::Label::Public)
+                            })
+                    })
+                    .sum::<u64>(),
+            );
+        // The async object owns a second complete register/label file while
+        // the active frame remains installed. Preflight that physical clone
+        // before either vector allocates or the await reaction is registered.
+        self.check_temporary_memory_budget(saved_snapshot_bytes)?;
+        let saved_registers = self.registers[self.register_base..].to_vec();
+        let saved_register_labels =
+            self.register_labels_in_range(self.register_base, self.registers.len());
+        let result_promise = self
+            .promise_store
+            .then_for_await(promise_handle, await_label, &mut self.event_loop.microtasks)
+            .map_err(|error| InterpreterError::TypeError {
+                expected: "valid pending promise for await".to_string(),
+                got: error.to_string(),
+            })?;
+
+        let async_function = self
+            .async_functions
+            .get_mut(async_function_id as usize)
+            .expect("async function was validated before await registration");
+        async_function.saved_ip = self.ip + 1;
+        async_function.saved_registers = saved_registers;
+        async_function.saved_register_labels = saved_register_labels;
+        async_function.saved_register_base = self.register_base;
+        async_function.phase = AsyncFunctionPhase::SuspendedAwait;
+        self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
+
+        self.async_resumption_contexts.insert(
+            result_promise.0,
+            AsyncResumptionContext {
+                async_function_id,
+                result_register,
+            },
+        );
+        Ok(())
+    }
+
+    fn resume_async_function_after_await(
+        &mut self,
+        resumption_context: AsyncResumptionContext,
+        settled: Result<crate::object_model::JsValue, crate::object_model::JsValue>,
+        settlement_label: crate::ifc_artifacts::Label,
+        module: Option<&Ir3Module>,
+    ) -> Result<(), InterpreterError> {
+        let async_function_id = resumption_context.async_function_id;
+        let (saved_ip, saved_register_base, saved_registers, saved_register_labels) = {
+            let async_function = self
+                .async_functions
+                .get_mut(async_function_id as usize)
+                .ok_or_else(|| InterpreterError::TypeError {
+                    expected: "valid async function".to_string(),
+                    got: format!("async function #{async_function_id} not found"),
+                })?;
+            if async_function.phase != AsyncFunctionPhase::SuspendedAwait {
+                return Err(InterpreterError::TypeError {
+                    expected: "suspended async function".to_string(),
+                    got: format!("async function phase: {:?}", async_function.phase),
+                });
+            }
+            if async_function.saved_registers.len() != async_function.saved_register_labels.len() {
+                return Err(InterpreterError::TypeError {
+                    expected: "equal async register and label snapshot lengths".to_string(),
+                    got: format!(
+                        "{} values and {} labels",
+                        async_function.saved_registers.len(),
+                        async_function.saved_register_labels.len()
+                    ),
+                });
+            }
+
+            (
+                async_function.saved_ip,
+                async_function.saved_register_base,
+                std::mem::take(&mut async_function.saved_registers),
+                std::mem::take(&mut async_function.saved_register_labels),
+            )
+        };
+
+        self.ip = saved_ip;
+        self.register_base = saved_register_base;
+        self.restore_saved_register_range(
+            saved_register_base,
+            saved_registers,
+            saved_register_labels,
+        );
+        self.async_functions[async_function_id as usize].phase = AsyncFunctionPhase::Executing;
+        self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
+
+        match settled {
+            Ok(argument) => self.write_reg_with_label(
+                resumption_context.result_register,
+                Self::js_value_to_value(&argument),
+                settlement_label,
+            ),
+            Err(reason) => self.raise_resumed_await_rejection(
+                async_function_id,
+                Self::js_value_to_value(&reason),
+                settlement_label,
+                module,
+            ),
+        }
+    }
+
+    fn continue_resumed_async_function(
+        &mut self,
+        module: Option<&Ir3Module>,
+    ) -> Result<(), InterpreterError> {
+        let module = module.ok_or_else(|| InterpreterError::TypeError {
+            expected: "module context for async function resumption".to_string(),
+            got: "missing module context".to_string(),
+        })?;
+        match self.run_loop(module) {
+            Ok(_) | Err(InterpreterError::Halted) => Ok(()),
+            Err(error) => Err(error),
+        }
+    }
+
+    fn raise_resumed_await_rejection(
+        &mut self,
+        async_function_id: u32,
+        error_value: Value,
+        label: crate::ifc_artifacts::Label,
+        module: Option<&Ir3Module>,
+    ) -> Result<(), InterpreterError> {
+        let async_depth = self
+            .call_stack
+            .iter()
+            .rposition(|frame| frame.async_function_id == Some(async_function_id))
+            .map(|index| index + 1)
+            .ok_or_else(|| InterpreterError::TypeError {
+                expected: "active async call frame".to_string(),
+                got: format!("missing frame for async function #{async_function_id}"),
+            })?;
+
+        self.suspend_current_abrupt_completion();
+        self.pending_return = None;
+        self.pending_exception = Some(LabeledException {
+            value: error_value.clone(),
+            label: label.clone(),
+        });
+
+        if let Some(frame) = self.pop_exception_target_frame_at_or_above(async_depth) {
+            self.pending_finally_entry = (frame.finally_target == Some(frame.catch_target)
+                || module.is_some_and(|module| {
+                    matches!(
+                        module.instructions.get(frame.catch_target),
+                        Some(Ir3Instruction::EnterFinally)
+                    )
+                }))
+            .then_some(PendingFinallyEntry {
+                target: frame.catch_target,
+                mode: FinallyMode::Exception,
+            });
+            self.ip = frame.catch_target;
+            return Ok(());
+        }
+
+        self.pending_exception = None;
+        self.pending_finally_entry = None;
+        let result_promise = self
+            .async_functions
+            .get(async_function_id as usize)
+            .ok_or_else(|| InterpreterError::TypeError {
+                expected: "valid async function".to_string(),
+                got: format!("async function #{async_function_id} not found"),
+            })?
+            .result_promise;
+        self.reject_promise(
+            crate::promise_model::PromiseHandle(result_promise),
+            Self::value_to_js_value(&error_value),
+            label,
+        )?;
+        self.async_functions[async_function_id as usize].phase = AsyncFunctionPhase::Completed;
+
+        if self
+            .call_stack
+            .last()
+            .and_then(|frame| frame.async_function_id)
+            != Some(async_function_id)
+        {
+            return Err(InterpreterError::TypeError {
+                expected: "resumed async frame at top of call stack".to_string(),
+                got: format!("async function #{async_function_id} is not active"),
+            });
+        }
+        let _ = self.complete_return(Value::Undefined, crate::ifc_artifacts::Label::Public)?;
+        Ok(())
+    }
+
+    fn promise_rejection_from_error(error: &InterpreterError) -> crate::object_model::JsValue {
+        match error {
+            InterpreterError::UncaughtException { value } => {
+                crate::object_model::JsValue::Str(value.clone().into())
+            }
+            other => crate::object_model::JsValue::Str(other.to_string().into()),
+        }
+    }
+
+    fn complete_return(
+        &mut self,
+        return_val: Value,
+        return_label: crate::ifc_artifacts::Label,
+    ) -> Result<Option<LabeledReturn>, InterpreterError> {
         let current_depth = self.call_stack.len();
         // A function can return from inside an active try block before `EndTry`
         // executes. Those catch frames belong to the returning callee and must
@@ -2760,24 +5267,21 @@ impl InterpreterCore {
             self.register_base = frame.register_base;
             self.suspended_abrupt_completions
                 .truncate(frame.saved_suspended_abrupt_depth);
-            self.finally_modes.truncate(frame.saved_finally_mode_depth);
-            self.persist_closure_capture_updates(&frame);
+            self.finally_frames.truncate(frame.saved_finally_mode_depth);
             self.restore_scope_chain_for_frame(&frame);
             self.pending_exception = frame.saved_pending_exception;
             self.pending_return = frame.saved_pending_return;
             // ES2020 §9.2.2 step 13: if this is a constructor call and the
             // return value is not an object, use the allocated `this` object
             // instead.
-            let effective_val = if let Some(this_obj) = frame.construct_this {
-                match &return_val {
-                    Value::Object(_) => return_val,
-                    _ => this_obj,
+            let (effective_val, effective_label) = match &frame.construct_this {
+                Some(this_obj) if !return_val.is_object_like() => {
+                    (this_obj.clone(), frame.this_label.clone())
                 }
-            } else {
-                return_val
+                _ => (return_val, return_label),
             };
             if let Some(return_reg) = frame.return_reg {
-                self.write_reg(return_reg, effective_val)?;
+                self.write_reg_with_label(return_reg, effective_val, effective_label)?;
             }
             self.ip = frame.return_ip;
             self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
@@ -2786,38 +5290,19 @@ impl InterpreterCore {
             self.pending_exception = None;
             self.pending_return = None;
             self.suspended_abrupt_completions.clear();
-            self.finally_modes.clear();
+            self.finally_frames.clear();
+            self.pending_finally_entry = None;
             self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
-            Ok(Some(return_val))
-        }
-    }
-
-    fn persist_closure_capture_updates(&mut self, frame: &CallFrame) {
-        let Some(closure_id) = frame.closure_id else {
-            return;
-        };
-        let Some(previous_env) = self
-            .closures
-            .get(closure_id as usize)
-            .map(|closure| closure.captured_env.clone())
-        else {
-            return;
-        };
-        let captured_depth = frame
-            .captured_scope_depth
-            .min(self.scope_chain.frames.len());
-        let updated_env = self.scope_chain.frames[..captured_depth].to_vec();
-
-        for closure in &mut self.closures {
-            if closure.captured_env == previous_env {
-                closure.captured_env = updated_env.clone();
-            }
+            Ok(Some(LabeledReturn {
+                value: return_val,
+                label: return_label,
+            }))
         }
     }
 
     fn restore_scope_chain_for_frame(&mut self, frame: &CallFrame) {
-        // Restore scope chain. For closure calls, restore the full saved chain;
-        // for plain calls, just pop to the caller depth.
+        // Closure and caller snapshots share lexical binding cells, so a
+        // return restores only frame structure; no value merge is needed.
         if let Some(saved) = &frame.saved_scope_chain {
             self.scope_chain.frames = saved.clone();
         } else {
@@ -2827,15 +5312,17 @@ impl InterpreterCore {
         }
     }
 
-    fn unwind_call_stack_to(&mut self, target_depth: usize) -> (Option<Value>, Option<Value>) {
+    fn unwind_call_stack_to(
+        &mut self,
+        target_depth: usize,
+    ) -> (Option<LabeledException>, Option<LabeledReturn>) {
         let mut restored_pending_exception = None;
         let mut restored_pending_return = None;
         let mut restored_suspended_abrupt_depth = None;
         while self.call_stack.len() > target_depth {
             if let Some(frame) = self.call_stack.pop() {
-                self.persist_closure_capture_updates(&frame);
                 self.register_base = frame.register_base;
-                self.finally_modes.truncate(frame.saved_finally_mode_depth);
+                self.finally_frames.truncate(frame.saved_finally_mode_depth);
                 self.restore_scope_chain_for_frame(&frame);
                 restored_pending_exception = frame.saved_pending_exception;
                 restored_pending_return = frame.saved_pending_return;
@@ -2845,6 +5332,11 @@ impl InterpreterCore {
         if let Some(depth) = restored_suspended_abrupt_depth {
             self.suspended_abrupt_completions.truncate(depth);
         }
+        // A copy owned by the handler's frame is abandoned when control jumps
+        // to that handler. Copies owned by shallower callers remain suspended
+        // if the exception was caught inside an included getter.
+        self.copy_data_properties_states
+            .retain(|state| state.call_depth < target_depth);
         self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
         (restored_pending_exception, restored_pending_return)
     }
@@ -2861,17 +5353,184 @@ impl InterpreterCore {
     }
 
     fn pop_exception_target_frame(&mut self) -> Option<CatchFrame> {
+        self.pop_exception_target_frame_at_or_above(0)
+    }
+
+    fn pop_exception_target_frame_at_or_above(
+        &mut self,
+        minimum_call_depth: usize,
+    ) -> Option<CatchFrame> {
         let current_depth = self.call_stack.len();
         let idx = self
             .catch_frames
             .iter()
-            .rposition(|f| f.call_depth <= current_depth)?;
+            .rposition(|f| f.call_depth >= minimum_call_depth && f.call_depth <= current_depth)?;
         let frame = self.catch_frames[idx].clone();
         self.catch_frames.truncate(idx);
+        self.finally_frames.truncate(frame.finally_frame_depth);
         let (restored_pending_exception, restored_pending_return) =
             self.unwind_call_stack_to(frame.call_depth);
         self.suspend_abrupt_completion(restored_pending_exception, restored_pending_return);
         Some(frame)
+    }
+
+    fn has_exception_target_frame(&self) -> bool {
+        let current_depth = self.call_stack.len();
+        self.catch_frames
+            .iter()
+            .any(|frame| frame.call_depth <= current_depth)
+    }
+
+    /// Route a JavaScript runtime failure back through the caller's active
+    /// catch/finally frames. Explicit callback throws arrive with their exact
+    /// value re-armed in `pending_exception`; native errors are materialized as
+    /// small ordinary error objects for catch bindings.
+    fn route_javascript_error(
+        &mut self,
+        module: &Ir3Module,
+        error: InterpreterError,
+    ) -> Result<Option<InterpreterError>, InterpreterError> {
+        let thrown = if matches!(error, InterpreterError::UncaughtException { .. }) {
+            let Some(thrown) = self.pending_exception.take() else {
+                return Ok(Some(error));
+            };
+            thrown
+        } else if Self::is_js_catchable_error(&error) {
+            let name = match &error {
+                InterpreterError::RangeError { .. } => "RangeError",
+                InterpreterError::UninitializedBinding { .. } => "ReferenceError",
+                _ => "TypeError",
+            };
+            let object_id = self.alloc_object_with_prototype(None)?;
+            self.set_object_property(object_id, "name".to_string(), Value::str(name))?;
+            self.set_object_property(
+                object_id,
+                "message".to_string(),
+                Value::str(error.to_string()),
+            )?;
+            LabeledException {
+                value: Value::Object(object_id),
+                label: crate::ifc_artifacts::Label::Public,
+            }
+        } else {
+            return Ok(Some(error));
+        };
+
+        // A close failure replaces any Return/Break/Continue completion that
+        // brought execution to IteratorClose.
+        self.pending_return = None;
+        self.pending_finally_entry = None;
+        self.pending_exception = Some(thrown);
+        if let Some(frame) = self.pop_exception_target_frame() {
+            self.pending_finally_entry = (frame.finally_target == Some(frame.catch_target)
+                || matches!(
+                    module.instructions.get(frame.catch_target),
+                    Some(Ir3Instruction::EnterFinally)
+                ))
+            .then_some(PendingFinallyEntry {
+                target: frame.catch_target,
+                mode: FinallyMode::Exception,
+            });
+            self.ip = frame.catch_target;
+            Ok(None)
+        } else {
+            self.pending_exception = None;
+            self.pending_finally_entry = None;
+            self.finally_frames.clear();
+            self.discard_all_copy_data_properties_states();
+            Ok(Some(error))
+        }
+    }
+
+    /// Route an error raised while the bytecode loop is active. If a nested
+    /// generator call propagates an exact thrown value beyond every handler in
+    /// the current generator, keep that value armed in the isolated activation
+    /// so its caller can continue the same exception completion after restore.
+    fn route_run_loop_javascript_error(
+        &mut self,
+        module: &Ir3Module,
+        error: InterpreterError,
+        mode: RunLoopMode,
+    ) -> Result<Option<InterpreterError>, InterpreterError> {
+        let escaped_exception = (mode == RunLoopMode::Generator
+            && matches!(error, InterpreterError::UncaughtException { .. }))
+        .then(|| self.pending_exception.clone())
+        .flatten();
+        let routed = self.route_javascript_error(module, error)?;
+        if routed.is_some()
+            && let Some(exception) = escaped_exception
+        {
+            self.pending_exception = Some(exception);
+        }
+        Ok(routed)
+    }
+
+    fn store_scoped_binding(
+        &mut self,
+        module: &Ir3Module,
+        src: u32,
+        name_pool_index: u32,
+    ) -> Result<(), InterpreterError> {
+        let name = Self::metadata_pool_string(
+            module,
+            name_pool_index,
+            format!("__binding_{name_pool_index}"),
+        )?;
+        let val = self.read_reg(src)?;
+        let label = self.read_reg_label(src)?;
+        let mut previous = None;
+        if let Some((_, binding)) = self.scope_chain.resolve(&name) {
+            let previous_state = binding.snapshot_state()?;
+            if !previous_state.initialized {
+                return Err(InterpreterError::UninitializedBinding { name });
+            }
+            if binding.kind == BindingKind::Const {
+                return Err(InterpreterError::ConstAssignment { name });
+            }
+            previous = Some((binding.clone(), previous_state));
+            let mut state = binding.state_mut()?;
+            state.value = val;
+            state.label = label;
+        }
+        // Silently ignore stores to undeclared variables
+        // (strict mode would throw, but baseline is lenient).
+        if let Err(err) = self.sync_estimated_memory_bytes() {
+            if let Some((binding, old_state)) = previous {
+                binding.restore_state(old_state)?;
+            }
+            self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
+            return Err(err);
+        }
+        Ok(())
+    }
+
+    fn load_scoped_binding(
+        &self,
+        module: &Ir3Module,
+        name_pool_index: u32,
+    ) -> Result<(Value, crate::ifc_artifacts::Label), InterpreterError> {
+        let name = Self::metadata_pool_string(
+            module,
+            name_pool_index,
+            format!("__binding_{name_pool_index}"),
+        )?;
+        if let Some((_, binding)) = self.scope_chain.resolve(&name) {
+            let state = binding.state()?;
+            if !state.initialized {
+                return Err(InterpreterError::UninitializedBinding { name });
+            }
+            return Ok((state.value.clone(), state.label.clone()));
+        }
+        if let Some(context) = self.active_cjs_context.as_ref() {
+            let (filename, dirname) = self.cjs_filename_dirname(Some(&context.module_specifier));
+            let value = match name.as_str() {
+                "__filename" => filename,
+                "__dirname" => dirname,
+                _ => Value::Undefined,
+            };
+            return Ok((value, crate::ifc_artifacts::Label::Public));
+        }
+        Ok((Value::Undefined, crate::ifc_artifacts::Label::Public))
     }
 
     fn take_current_abrupt_completion(&mut self) -> Option<AbruptCompletion> {
@@ -2885,8 +5544,8 @@ impl InterpreterCore {
 
     fn suspend_abrupt_completion(
         &mut self,
-        pending_exception: Option<Value>,
-        pending_return: Option<Value>,
+        pending_exception: Option<LabeledException>,
+        pending_return: Option<LabeledReturn>,
     ) {
         debug_assert!(
             pending_exception.is_none() || pending_return.is_none(),
@@ -2941,6 +5600,7 @@ impl InterpreterCore {
             .rposition(|f| f.call_depth == current_depth && f.finally_target.is_some())?;
         let frame = self.catch_frames[idx].clone();
         self.catch_frames.truncate(idx);
+        self.finally_frames.truncate(frame.finally_frame_depth);
         frame.finally_target
     }
 
@@ -3155,18 +5815,53 @@ impl InterpreterCore {
         self.decision_receipts.verify_chain()
     }
 
-    fn run_pre_property_access_hook(
+    fn property_hook_compatibility_error(
+        error: HookPropertyKeyCompatibilityError,
+    ) -> InterpreterError {
+        InterpreterError::TypeError {
+            expected: "property key supported by the installed interpreter hook".to_string(),
+            got: error.to_string(),
+        }
+    }
+
+    /// Preserve fail-closed behavior in legacy-only internal property paths
+    /// that do not have a module-backed object target to present to a hook.
+    fn preflight_legacy_property_key_for_hook(
+        &self,
+        key: &RuntimePropertyKey,
+    ) -> Result<(), InterpreterError> {
+        if self.hook.is_none() {
+            return Ok(());
+        }
+        let hook_key = match key {
+            RuntimePropertyKey::String(key) => HookPropertyKey::String(key.clone()),
+            RuntimePropertyKey::Symbol(symbol) => HookPropertyKey::Symbol(*symbol),
+        };
+        hook_key
+            .as_legacy_str()
+            .map(|_| ())
+            .map_err(Self::property_hook_compatibility_error)
+    }
+
+    fn run_pre_runtime_property_access_hook(
         &self,
         module: &Ir3Module,
         target: ObjectId,
-        key: &str,
+        key: &RuntimePropertyKey,
     ) -> Result<(), InterpreterError> {
+        self.validate_executable_property_key(key)?;
         let Some(hook) = self.hook.as_ref() else {
             return Ok(());
         };
         let ctx = self.hook_context(module);
-        let property_key = key.to_string();
-        self.enforce_hook_action(hook.pre_property_access(&ctx, &target, &property_key))
+        let hook_key = match key {
+            RuntimePropertyKey::String(key) => HookPropertyKey::String(key.clone()),
+            RuntimePropertyKey::Symbol(symbol) => HookPropertyKey::Symbol(*symbol),
+        };
+        let action = hook
+            .pre_property_access_typed(&ctx, &target, &hook_key)
+            .map_err(Self::property_hook_compatibility_error)?;
+        self.enforce_hook_action(action)
     }
 
     fn run_pre_call_hook(
@@ -3184,6 +5879,22 @@ impl InterpreterCore {
         self.enforce_hook_action(hook.pre_call(&ctx, &function_ref, args))
     }
 
+    fn effective_call_depth(&self) -> usize {
+        self.temporarily_suspended_call_depth
+            .saturating_add(self.call_stack.len())
+    }
+
+    fn ensure_call_depth_available(&self) -> Result<(), InterpreterError> {
+        let depth = self.effective_call_depth();
+        if depth >= self.config.max_call_depth {
+            return Err(InterpreterError::StackOverflow {
+                depth,
+                max: self.config.max_call_depth,
+            });
+        }
+        Ok(())
+    }
+
     fn enter_function_call(
         &mut self,
         module: &Ir3Module,
@@ -3193,8 +5904,8 @@ impl InterpreterCore {
         return_ip: usize,
         return_reg: Option<u32>,
     ) -> Result<(), InterpreterError> {
-        let (func_idx, captured_env, closure_id) = match &callee_val {
-            Value::Function(idx) => (*idx, None, None),
+        let (func_idx, captured_env) = match &callee_val {
+            Value::Function(idx) => (*idx, None),
             Value::Closure(closure_id) => {
                 let closure = self.closures.get(*closure_id as usize).ok_or_else(|| {
                     InterpreterError::TypeError {
@@ -3205,7 +5916,6 @@ impl InterpreterCore {
                 (
                     closure.function_index,
                     Some(self.clone_scope_frames_with_budget(&closure.captured_env)?),
-                    Some(*closure_id),
                 )
             }
             _ => {
@@ -3222,73 +5932,82 @@ impl InterpreterCore {
                 table_size: module.function_table.len() as u32,
             },
         )?;
-        arg_vals.truncate(func.arity as usize);
-
-        if self.call_stack.len() >= self.config.max_call_depth {
-            return Err(InterpreterError::StackOverflow {
-                depth: self.call_stack.len(),
-                max: self.config.max_call_depth,
+        if func.rest_param_index.is_some() {
+            return Err(InterpreterError::TypeError {
+                expected: "accessor function without a rest parameter".to_string(),
+                got: "rest-parameter descriptor on getter/setter invocation".to_string(),
             });
         }
+        arg_vals.truncate(func.arity as usize);
+
+        self.ensure_call_depth_available()?;
 
         self.run_pre_call_hook(module, &callee_val, func_idx, &arg_vals)?;
 
-        let scope_depth = self.scope_chain.depth();
-        let captured_env_bytes = captured_env
-            .as_ref()
-            .map(|env| Self::estimate_scope_chain_bytes(env))
-            .unwrap_or(0);
-        let captured_scope_depth = captured_env.as_ref().map_or(0, Vec::len);
-        let saved_chain = if captured_env.is_some() {
-            Some(self.snapshot_scope_chain_with_temporary_budget(captured_env_bytes)?)
-        } else {
-            None
-        };
-        let super_value = self.method_super_value(&callee_val, &this_value)?;
-        self.call_stack.push(CallFrame {
-            return_ip,
-            return_reg,
-            register_base: self.register_base,
-            function_index: Some(func_idx),
-            this_value,
-            new_target_value: Value::Undefined,
-            super_value,
-            construct_this: None,
-            saved_pending_exception: self.pending_exception.take(),
-            saved_pending_return: self.pending_return.take(),
-            saved_suspended_abrupt_depth: self.suspended_abrupt_completions.len(),
-            saved_finally_mode_depth: self.finally_modes.len(),
-            saved_scope_depth: scope_depth,
-            saved_scope_chain: saved_chain,
-            closure_id,
-            captured_scope_depth,
-            async_function_id: None,
-        });
+        let setup_snapshot = self.snapshot_call_setup(None, false);
+        let setup_result = (|| -> Result<(), InterpreterError> {
+            let scope_depth = self.scope_chain.depth();
+            let captured_env_bytes = captured_env
+                .as_ref()
+                .map(|env| Self::estimate_scope_chain_bytes(env))
+                .unwrap_or(0);
+            let saved_chain = if captured_env.is_some() {
+                Some(self.snapshot_scope_chain_with_temporary_budget(captured_env_bytes)?)
+            } else {
+                None
+            };
+            let super_value = self.method_super_value(&callee_val, &this_value)?;
+            self.call_stack.push(CallFrame {
+                return_ip,
+                return_reg,
+                register_base: self.register_base,
+                function_index: Some(func_idx),
+                this_value,
+                this_label: crate::ifc_artifacts::Label::Public,
+                new_target_value: Value::Undefined,
+                new_target_label: crate::ifc_artifacts::Label::Public,
+                super_value,
+                super_label: crate::ifc_artifacts::Label::Public,
+                construct_this: None,
+                saved_pending_exception: self.pending_exception.take(),
+                saved_pending_return: self.pending_return.take(),
+                saved_suspended_abrupt_depth: self.suspended_abrupt_completions.len(),
+                saved_finally_mode_depth: self.finally_frames.len(),
+                saved_scope_depth: scope_depth,
+                saved_scope_chain: saved_chain,
+                async_function_id: None,
+            });
 
-        if let Some(env) = captured_env {
-            self.scope_chain.frames = env;
-        }
-        if let Err(err) = self.scope_chain.push(self.config.max_scope_depth) {
-            self.rollback_call_setup();
-            return Err(err);
-        }
-        if let Err(err) = self.sync_estimated_memory_bytes() {
-            self.rollback_call_setup();
-            return Err(err);
-        }
-
-        self.register_base += self.config.max_registers as usize;
-        let req_len = self.register_base + self.config.max_registers as usize;
-        self.clear_register_range(self.register_base, req_len);
-
-        for (i, val) in arg_vals.into_iter().enumerate() {
-            let reg = i as u32;
-            if reg < self.config.max_registers {
-                self.write_reg(reg, val)?;
+            if let Some(env) = captured_env {
+                self.scope_chain.frames = env;
             }
-        }
+            if let Err(err) = self.scope_chain.push(self.config.max_scope_depth) {
+                self.rollback_call_setup();
+                return Err(err);
+            }
+            if let Err(err) = self.sync_estimated_memory_bytes() {
+                self.rollback_call_setup();
+                return Err(err);
+            }
 
-        self.ip = func.entry as usize;
+            self.register_base += self.config.max_registers as usize;
+            let req_len = self.register_base + self.config.max_registers as usize;
+            self.clear_register_range(self.register_base, req_len);
+
+            for (i, val) in arg_vals.into_iter().enumerate() {
+                let reg = i as u32;
+                if reg < self.config.max_registers {
+                    self.write_reg(reg, val)?;
+                }
+            }
+
+            self.ip = func.entry as usize;
+            Ok(())
+        })();
+        if let Err(error) = setup_result {
+            self.restore_call_setup(setup_snapshot);
+            return Err(error);
+        }
         Ok(())
     }
 
@@ -3317,160 +6036,393 @@ impl InterpreterCore {
         self.enforce_hook_action(hook.pre_import(&ctx, specifier))
     }
 
-    /// Step a generator: resume from its saved state, run until Yield or
-    /// Return, then snapshot the state back. Returns the {value, done} object.
+    fn generator_result_object(
+        &mut self,
+        value: Value,
+        done: bool,
+    ) -> Result<Value, InterpreterError> {
+        let result_id = self.alloc_object_with_prototype(None)?;
+        self.set_object_property(result_id, "value".to_string(), value)?;
+        self.set_object_property(result_id, "done".to_string(), Value::Bool(done))?;
+        Ok(Value::Object(result_id))
+    }
+
+    fn prepare_generator_activation(
+        &mut self,
+        module: &Ir3Module,
+        setup: GeneratorCallSetup,
+    ) -> Result<GeneratorObject, InterpreterError> {
+        self.ensure_call_depth_available()?;
+
+        let mut scope_chain = ScopeChain {
+            frames: setup.captured_env,
+        };
+        let saved_scope_depth = scope_chain.depth();
+        scope_chain.push(self.config.max_scope_depth)?;
+
+        let max_registers = self.config.max_registers as usize;
+        let mut registers = vec![Value::Undefined; max_registers];
+        let mut register_labels = vec![crate::ifc_artifacts::Label::Public; max_registers];
+        for (index, (value, label)) in setup.arguments.into_iter().enumerate() {
+            if index >= max_registers {
+                break;
+            }
+            registers[index] = value;
+            register_labels[index] = label;
+        }
+
+        let caller_execution = self.take_module_execution();
+        let caller_bytes = Self::estimate_module_execution_bytes(&caller_execution);
+        let previous_suspended_bytes = self.temporarily_suspended_execution_bytes;
+        let previous_suspended_call_depth = self.temporarily_suspended_call_depth;
+        self.temporarily_suspended_execution_bytes =
+            previous_suspended_bytes.saturating_add(caller_bytes);
+        self.temporarily_suspended_call_depth =
+            previous_suspended_call_depth.saturating_add(caller_execution.call_stack.len());
+        let module_specifier = caller_execution.current_module_specifier.clone();
+        self.install_module_execution(ModuleExecutionSnapshot {
+            registers,
+            register_labels,
+            call_stack: vec![CallFrame {
+                return_ip: module.instructions.len(),
+                return_reg: None,
+                register_base: 0,
+                function_index: Some(setup.function_index),
+                this_value: setup.this_value,
+                this_label: setup.this_label,
+                new_target_value: Value::Undefined,
+                new_target_label: crate::ifc_artifacts::Label::Public,
+                super_value: setup.super_value,
+                super_label: setup.super_label,
+                construct_this: None,
+                saved_pending_exception: None,
+                saved_pending_return: None,
+                saved_suspended_abrupt_depth: 0,
+                saved_finally_mode_depth: 0,
+                saved_scope_depth,
+                saved_scope_chain: None,
+                async_function_id: None,
+            }],
+            ip: setup.function_entry as usize,
+            register_base: 0,
+            catch_frames: Vec::new(),
+            pending_exception: None,
+            pending_return: None,
+            suspended_abrupt_completions: Vec::new(),
+            finally_frames: Vec::new(),
+            pending_finally_entry: None,
+            copy_data_properties_states: Vec::new(),
+            scope_chain,
+            pending_captures: Vec::new(),
+            current_module_specifier: module_specifier,
+        });
+
+        // Historical core IR through 0.9 has no parameter/body boundary. Keep
+        // those explicitly supported artifacts readable by suspending at the
+        // function entry; they retain their historical first-next parameter
+        // timing. Newly lowered 0.10+ IR must reach the explicit marker.
+        let has_explicit_body_boundary = module.header.schema_version
+            >= crate::ir_contract::IrSchemaVersion {
+                major: 0,
+                minor: 10,
+                patch: 0,
+            };
+        let outcome = match self.sync_estimated_memory_bytes() {
+            Ok(_) if has_explicit_body_boundary => {
+                self.run_loop_with_mode(module, RunLoopMode::Generator)
+            }
+            Ok(_) => Ok(RunLoopExit::GeneratorBodyStart),
+            Err(error) => Err(error),
+        };
+        let activation = self.take_module_execution();
+        let escaped_exception = activation.pending_exception.clone();
+        self.temporarily_suspended_execution_bytes = previous_suspended_bytes;
+        self.temporarily_suspended_call_depth = previous_suspended_call_depth;
+        self.restore_module_execution(caller_execution);
+
+        match outcome {
+            Ok(RunLoopExit::GeneratorBodyStart) => Ok(GeneratorObject {
+                execution: Some(activation),
+                resume_dst: None,
+                phase: GeneratorPhase::SuspendedStart,
+            }),
+            Ok(RunLoopExit::GeneratorThrow {
+                exception,
+                description,
+            }) => {
+                self.pending_exception = Some(exception);
+                Err(InterpreterError::UncaughtException { value: description })
+            }
+            Err(error) => {
+                if matches!(error, InterpreterError::UncaughtException { .. })
+                    && let Some(exception) = escaped_exception
+                {
+                    self.pending_exception = Some(exception);
+                }
+                Err(error)
+            }
+            Ok(
+                RunLoopExit::GeneratorReturn { .. }
+                | RunLoopExit::GeneratorYield { .. }
+                | RunLoopExit::Value(_),
+            ) => Err(InterpreterError::TypeError {
+                expected: "generator parameter prologue followed by generator_body_start"
+                    .to_string(),
+                got: "generator body executed before its suspension boundary".to_string(),
+            }),
+        }
+    }
+
+    fn publish_generator(
+        &mut self,
+        dst: u32,
+        generator: GeneratorObject,
+    ) -> Result<u32, InterpreterError> {
+        let generator_id =
+            u32::try_from(self.generators.len()).map_err(|_| InterpreterError::TypeError {
+                expected: "generator table capacity".into(),
+                got: format!("exceeded u32::MAX ({})", self.generators.len()),
+            })?;
+        self.generators.push(generator);
+        if let Err(error) = self.sync_estimated_memory_bytes() {
+            self.generators.pop();
+            self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
+            return Err(error);
+        }
+        if let Err(error) = self.write_reg(dst, Value::Generator(generator_id)) {
+            self.generators.pop();
+            self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
+            return Err(error);
+        }
+        Ok(generator_id)
+    }
+
+    fn publish_async_generator(
+        &mut self,
+        dst: u32,
+        generator: AsyncGeneratorObject,
+    ) -> Result<u32, InterpreterError> {
+        let generator_id = u32::try_from(self.async_generators.len()).map_err(|_| {
+            InterpreterError::TypeError {
+                expected: "async generator table capacity".into(),
+                got: format!("exceeded u32::MAX ({})", self.async_generators.len()),
+            }
+        })?;
+        self.async_generators.push(generator);
+        if let Err(error) = self.sync_estimated_memory_bytes() {
+            self.async_generators.pop();
+            self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
+            return Err(error);
+        }
+        if let Err(error) = self.write_reg(dst, Value::AsyncGeneratorObject(generator_id)) {
+            self.async_generators.pop();
+            self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
+            return Err(error);
+        }
+        Ok(generator_id)
+    }
+
+    /// Step a generator: install its isolated activation, run until Yield or
+    /// Return, then transfer the activation back. Returns `{ value, done }`.
     fn generator_next(
         &mut self,
         module: &Ir3Module,
         gen_id: u32,
-        _arg: Value,
-    ) -> Result<Value, InterpreterError> {
-        let gobj = self.generators.get_mut(gen_id as usize).ok_or_else(|| {
-            InterpreterError::TypeError {
-                expected: "valid generator".into(),
-                got: format!("generator#{gen_id} not found"),
-            }
-        })?;
-
-        match gobj.phase {
-            GeneratorPhase::Completed => {
-                let result_id = self.alloc_object_with_prototype(None)?;
-                {
-                    self.set_object_property(result_id, "value".to_string(), Value::Undefined)?;
-                    self.set_object_property(result_id, "done".to_string(), Value::Bool(true))?;
+        argument: Value,
+        argument_label: crate::ifc_artifacts::Label,
+    ) -> Result<(Value, crate::ifc_artifacts::Label), InterpreterError> {
+        let phase = {
+            let generator = self.generators.get(gen_id as usize).ok_or_else(|| {
+                InterpreterError::TypeError {
+                    expected: "valid generator".into(),
+                    got: format!("generator#{gen_id} not found"),
                 }
-                return Ok(Value::Object(result_id));
+            })?;
+            match generator.phase {
+                GeneratorPhase::Completed => {
+                    return Ok((
+                        self.generator_result_object(Value::Undefined, true)?,
+                        crate::ifc_artifacts::Label::Public,
+                    ));
+                }
+                GeneratorPhase::Executing => {
+                    return Err(InterpreterError::TypeError {
+                        expected: "suspended generator".into(),
+                        got: "generator already executing".into(),
+                    });
+                }
+                GeneratorPhase::SuspendedStart | GeneratorPhase::SuspendedYield => {}
             }
-            GeneratorPhase::Executing => {
-                return Err(InterpreterError::TypeError {
-                    expected: "suspended generator".into(),
-                    got: "generator already executing".into(),
-                });
-            }
-            GeneratorPhase::SuspendedStart | GeneratorPhase::SuspendedYield => {}
-        }
-
-        let caller_ip = self.ip;
-        let caller_register_base = self.register_base;
-        let caller_scope = self.snapshot_scope_chain()?;
-        let caller_scope_bytes = Self::estimate_scope_chain_bytes(&caller_scope);
-
-        let (is_start, func_idx, closure_idx) = {
-            let gobj = &mut self.generators[gen_id as usize];
-            let is_start = gobj.phase == GeneratorPhase::SuspendedStart;
-            let func_idx = gobj.function_index;
-            let closure_idx = gobj.closure_index;
-            gobj.phase = GeneratorPhase::Executing;
-            (is_start, func_idx, closure_idx)
+            generator.phase
         };
 
-        if is_start {
-            let start_result = (|| -> Result<(), InterpreterError> {
-                let func = module.function_table.get(func_idx as usize).ok_or(
-                    InterpreterError::FunctionNotFound {
-                        index: func_idx,
-                        table_size: module.function_table.len() as u32,
-                    },
-                )?;
+        // Resuming installs one suspended generator frame on top of the
+        // synchronously active caller chain. Apply the same fail-closed depth
+        // check used by ordinary calls before moving either execution context.
+        self.ensure_call_depth_available()?;
 
-                if let Some(cid) = closure_idx {
-                    let closure = self.closures.get(cid as usize).ok_or_else(|| {
-                        InterpreterError::TypeError {
-                            expected: "valid closure".into(),
-                            got: format!("closure#{cid} not found"),
-                        }
-                    })?;
-                    self.scope_chain.frames = self.clone_scope_frames_with_temporary_budget(
-                        &closure.captured_env,
-                        caller_scope_bytes,
-                    )?;
-                }
-                self.scope_chain.push(self.config.max_scope_depth)?;
-                self.sync_estimated_memory_bytes()?;
-
-                self.register_base = self.registers.len();
-                let req_len = self.register_base + self.config.max_registers as usize;
-                self.clear_register_range(self.register_base, req_len);
-
-                self.ip = func.entry as usize;
-                Ok(())
-            })();
-
-            if let Err(err) = start_result {
-                self.ip = caller_ip;
-                self.register_base = caller_register_base;
-                self.scope_chain.frames = caller_scope;
-                let gobj = &mut self.generators[gen_id as usize];
-                gobj.phase = GeneratorPhase::SuspendedStart;
-                self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
-                return Err(err);
-            }
-        } else {
-            let (saved_ip, saved_regs, saved_labels, saved_base) = {
-                let gobj = &mut self.generators[gen_id as usize];
-                (
-                    gobj.saved_ip,
-                    std::mem::take(&mut gobj.saved_registers),
-                    std::mem::take(&mut gobj.saved_register_labels),
-                    gobj.saved_register_base,
-                )
-            };
-
-            self.ip = saved_ip;
-            self.register_base = saved_base;
-            self.restore_saved_register_range(saved_base, saved_regs, saved_labels);
+        let (value_count, label_count) = {
+            let activation = self.generators[gen_id as usize]
+                .execution
+                .as_ref()
+                .ok_or_else(|| InterpreterError::TypeError {
+                    expected: "suspended generator activation".into(),
+                    got: "generator has no saved execution context".into(),
+                })?;
+            (activation.registers.len(), activation.register_labels.len())
+        };
+        if value_count != label_count {
+            return Err(InterpreterError::TypeError {
+                expected: "generator snapshot with one IFC label per register".into(),
+                got: format!("values={value_count}, labels={label_count}"),
+            });
         }
 
-        let result = self.run_loop(module);
+        let (resume_dst, activation) = {
+            let generator = &mut self.generators[gen_id as usize];
+            let activation =
+                generator
+                    .execution
+                    .take()
+                    .ok_or_else(|| InterpreterError::TypeError {
+                        expected: "suspended generator activation".into(),
+                        got: "generator has no saved execution context".into(),
+                    })?;
+            let resume_dst = generator.resume_dst.take();
+            generator.phase = GeneratorPhase::Executing;
+            (resume_dst, activation)
+        };
 
-        match &result {
-            Ok(yielded_val) => {
-                let max_regs = self.config.max_registers as usize;
-                let saved_regs: Vec<Value> =
-                    self.registers[self.register_base..self.register_base + max_regs].to_vec();
-                let saved_labels = self
-                    .register_labels_in_range(self.register_base, self.register_base + max_regs);
+        let caller_execution = self.take_module_execution();
+        let caller_bytes = Self::estimate_module_execution_bytes(&caller_execution);
+        let previous_suspended_bytes = self.temporarily_suspended_execution_bytes;
+        let previous_suspended_call_depth = self.temporarily_suspended_call_depth;
+        self.temporarily_suspended_execution_bytes =
+            previous_suspended_bytes.saturating_add(caller_bytes);
+        self.temporarily_suspended_call_depth =
+            previous_suspended_call_depth.saturating_add(caller_execution.call_stack.len());
+        self.install_module_execution(activation);
 
-                let gobj = &mut self.generators[gen_id as usize];
-                gobj.saved_ip = self.ip;
-                gobj.saved_registers = saved_regs;
-                gobj.saved_register_labels = saved_labels;
-                gobj.saved_register_base = self.register_base;
-                gobj.phase = GeneratorPhase::SuspendedYield;
+        if let Err(error) = self.sync_estimated_memory_bytes() {
+            let activation = self.take_module_execution();
+            self.temporarily_suspended_execution_bytes = previous_suspended_bytes;
+            self.temporarily_suspended_call_depth = previous_suspended_call_depth;
+            self.restore_module_execution(caller_execution);
+            let generator = &mut self.generators[gen_id as usize];
+            generator.execution = Some(activation);
+            generator.resume_dst = resume_dst;
+            generator.phase = phase;
+            return Err(error);
+        }
 
-                self.ip = caller_ip;
-                self.register_base = caller_register_base;
-                self.scope_chain.frames = caller_scope;
+        if phase == GeneratorPhase::SuspendedYield
+            && let Some(resume_dst) = resume_dst
+            && let Err(error) = self.write_reg_with_label(resume_dst, argument, argument_label)
+        {
+            let activation = self.take_module_execution();
+            self.temporarily_suspended_execution_bytes = previous_suspended_bytes;
+            self.temporarily_suspended_call_depth = previous_suspended_call_depth;
+            self.restore_module_execution(caller_execution);
+            let generator = &mut self.generators[gen_id as usize];
+            generator.execution = Some(activation);
+            generator.resume_dst = Some(resume_dst);
+            generator.phase = phase;
+            self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
+            return Err(error);
+        }
+
+        let outcome = self.run_loop_with_mode(module, RunLoopMode::Generator);
+        let activation = self.take_module_execution();
+        let escaped_exception = activation.pending_exception.clone();
+        self.temporarily_suspended_execution_bytes = previous_suspended_bytes;
+        self.temporarily_suspended_call_depth = previous_suspended_call_depth;
+        self.restore_module_execution(caller_execution);
+
+        match outcome {
+            Ok(RunLoopExit::GeneratorYield {
+                result,
+                label,
+                resume_dst,
+            }) => {
+                let generator = &mut self.generators[gen_id as usize];
+                generator.execution = Some(activation);
+                generator.resume_dst = Some(resume_dst);
+                generator.phase = GeneratorPhase::SuspendedYield;
+                if let Err(error) = self.sync_estimated_memory_bytes() {
+                    let generator = &mut self.generators[gen_id as usize];
+                    generator.execution = None;
+                    generator.resume_dst = None;
+                    generator.phase = GeneratorPhase::Completed;
+                    self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
+                    return Err(error);
+                }
+                Ok((result, label))
+            }
+            Ok(RunLoopExit::GeneratorReturn { value, label }) => {
+                let generator = &mut self.generators[gen_id as usize];
+                generator.execution = None;
+                generator.resume_dst = None;
+                generator.phase = GeneratorPhase::Completed;
                 self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
-
-                Ok(yielded_val.clone())
+                Ok((self.generator_result_object(value, true)?, label))
+            }
+            Ok(RunLoopExit::Value(completion)) => {
+                let generator = &mut self.generators[gen_id as usize];
+                generator.execution = None;
+                generator.resume_dst = None;
+                generator.phase = GeneratorPhase::Completed;
+                self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
+                Ok((
+                    self.generator_result_object(completion.value, true)?,
+                    completion.label,
+                ))
+            }
+            Ok(RunLoopExit::GeneratorThrow {
+                exception,
+                description,
+            }) => {
+                let generator = &mut self.generators[gen_id as usize];
+                generator.execution = None;
+                generator.resume_dst = None;
+                generator.phase = GeneratorPhase::Completed;
+                self.pending_exception = Some(exception);
+                self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
+                Err(InterpreterError::UncaughtException { value: description })
+            }
+            Ok(RunLoopExit::GeneratorBodyStart) => {
+                let generator = &mut self.generators[gen_id as usize];
+                generator.execution = None;
+                generator.resume_dst = None;
+                generator.phase = GeneratorPhase::Completed;
+                self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
+                Err(InterpreterError::TypeError {
+                    expected: "generator body without a second initialization boundary".into(),
+                    got: "generator_body_start reached while resuming generator".into(),
+                })
             }
             Err(InterpreterError::Halted) => {
-                let gobj = &mut self.generators[gen_id as usize];
-                gobj.phase = GeneratorPhase::Completed;
-
-                self.ip = caller_ip;
-                self.register_base = caller_register_base;
-                self.scope_chain.frames = caller_scope;
+                let generator = &mut self.generators[gen_id as usize];
+                generator.execution = None;
+                generator.resume_dst = None;
+                generator.phase = GeneratorPhase::Completed;
                 self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
-
-                let result_id = self.alloc_object_with_prototype(None)?;
-                {
-                    self.set_object_property(result_id, "value".to_string(), Value::Undefined)?;
-                    self.set_object_property(result_id, "done".to_string(), Value::Bool(true))?;
-                }
-                Ok(Value::Object(result_id))
+                Ok((
+                    self.generator_result_object(Value::Undefined, true)?,
+                    crate::ifc_artifacts::Label::Public,
+                ))
             }
-            Err(_) => {
-                let gobj = &mut self.generators[gen_id as usize];
-                gobj.phase = GeneratorPhase::Completed;
-
-                self.ip = caller_ip;
-                self.register_base = caller_register_base;
-                self.scope_chain.frames = caller_scope;
+            Err(error) => {
+                let generator = &mut self.generators[gen_id as usize];
+                generator.execution = None;
+                generator.resume_dst = None;
+                generator.phase = GeneratorPhase::Completed;
+                if matches!(error, InterpreterError::UncaughtException { .. })
+                    && let Some(exception) = escaped_exception
+                {
+                    self.pending_exception = Some(exception);
+                }
                 self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
-
-                result
+                Err(error)
             }
         }
     }
@@ -3480,36 +6432,30 @@ impl InterpreterCore {
     #[allow(dead_code)]
     fn async_generator_next(
         &mut self,
-        _module: &Ir3Module,
+        module: &Ir3Module,
         gen_id: u32,
-        _arg: Value,
+        argument: Value,
+        argument_label: crate::ifc_artifacts::Label,
     ) -> Result<Value, InterpreterError> {
-        let async_gen = self
+        let generator_index = gen_id as usize;
+        let phase = self
             .async_generators
-            .get_mut(gen_id as usize)
+            .get(generator_index)
             .ok_or_else(|| InterpreterError::TypeError {
                 expected: "valid async generator".into(),
                 got: format!("async_generator#{gen_id} not found"),
-            })?;
+            })?
+            .phase;
 
-        match async_gen.phase {
+        match phase {
             AsyncGeneratorPhase::Completed => {
-                // Return a resolved Promise with {value: undefined, done: true}
                 let result_promise = self.promise_store.create().0;
-                let result_id = self.alloc_object_with_prototype(None)?;
-                {
-                    self.set_object_property(result_id, "value".to_string(), Value::Undefined)?;
-                    self.set_object_property(result_id, "done".to_string(), Value::Bool(true))?;
-                }
-                let js_val = crate::object_model::JsValue::Object(
-                    crate::object_model::ObjectHandle(result_id.0),
-                );
-                let label = crate::ifc_artifacts::Label::Public;
+                let result = self.generator_result_object(Value::Undefined, true)?;
                 self.promise_store
                     .fulfill(
                         crate::promise_model::PromiseHandle(result_promise),
-                        js_val,
-                        label,
+                        Self::value_to_js_value(&result),
+                        crate::ifc_artifacts::Label::Public,
                         &mut self.event_loop.microtasks,
                     )
                     .map_err(|e| InterpreterError::TypeError {
@@ -3529,207 +6475,211 @@ impl InterpreterCore {
             | AsyncGeneratorPhase::SuspendedAwait => {}
         }
 
-        // Save caller execution context
-        let caller_ip = self.ip;
-        let caller_register_base = self.register_base;
-        let caller_scope = self.snapshot_scope_chain()?;
-        let caller_scope_bytes = Self::estimate_scope_chain_bytes(&caller_scope);
-
-        // Create promise for the async generator result
-        let result_promise = self.promise_store.create().0;
-
-        let (is_start, func_idx, closure_idx) = {
-            let async_gen = &mut self.async_generators[gen_id as usize];
-            let is_start = async_gen.phase == AsyncGeneratorPhase::SuspendedStart;
-            let func_idx = async_gen.function_index;
-            let closure_idx = async_gen.closure_index;
-            async_gen.phase = AsyncGeneratorPhase::Executing;
-            (is_start, func_idx, closure_idx)
+        self.ensure_call_depth_available()?;
+        let (value_count, label_count) = {
+            let activation = self.async_generators[generator_index]
+                .execution
+                .as_ref()
+                .ok_or_else(|| InterpreterError::TypeError {
+                    expected: "suspended async generator activation".into(),
+                    got: "async generator has no saved execution context".into(),
+                })?;
+            (activation.registers.len(), activation.register_labels.len())
         };
-
-        // Set up execution context
-        if is_start {
-            let start_result = (|| -> Result<(), InterpreterError> {
-                let func = _module.function_table.get(func_idx as usize).ok_or(
-                    InterpreterError::FunctionNotFound {
-                        index: func_idx,
-                        table_size: _module.function_table.len() as u32,
-                    },
-                )?;
-
-                if let Some(cid) = closure_idx {
-                    let closure = self.closures.get(cid as usize).ok_or_else(|| {
-                        InterpreterError::TypeError {
-                            expected: "valid closure".into(),
-                            got: format!("closure#{cid} not found"),
-                        }
-                    })?;
-                    self.scope_chain.frames = self.clone_scope_frames_with_temporary_budget(
-                        &closure.captured_env,
-                        caller_scope_bytes,
-                    )?;
-                }
-                self.scope_chain.push(self.config.max_scope_depth)?;
-                self.sync_estimated_memory_bytes()?;
-
-                self.register_base = self.registers.len();
-                let req_len = self.register_base + self.config.max_registers as usize;
-                self.clear_register_range(self.register_base, req_len);
-
-                self.ip = func.entry as usize;
-                Ok(())
-            })();
-
-            if let Err(err) = start_result {
-                // Restore caller context on error
-                self.ip = caller_ip;
-                self.register_base = caller_register_base;
-                self.scope_chain.frames = caller_scope;
-                let async_gen = &mut self.async_generators[gen_id as usize];
-                async_gen.phase = AsyncGeneratorPhase::SuspendedStart;
-                self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
-
-                // Reject the promise with the error
-                let js_val = crate::object_model::JsValue::Str(format!("{err:?}"));
-                let label = crate::ifc_artifacts::Label::Public;
-                self.promise_store
-                    .reject(
-                        crate::promise_model::PromiseHandle(result_promise),
-                        js_val,
-                        label,
-                        &mut self.event_loop.microtasks,
-                    )
-                    .map_err(|e| InterpreterError::TypeError {
-                        expected: "promise rejection".into(),
-                        got: format!("failed to reject promise: {e:?}"),
-                    })?;
-                return Ok(Value::Promise(result_promise));
-            }
-        } else {
-            // Resume from saved state (SuspendedYield/SuspendedAwait)
-            let (saved_ip, saved_regs, saved_labels, saved_base) = {
-                let async_gen = &mut self.async_generators[gen_id as usize];
-                (
-                    async_gen.saved_ip,
-                    std::mem::take(&mut async_gen.saved_registers),
-                    std::mem::take(&mut async_gen.saved_register_labels),
-                    async_gen.saved_register_base,
-                )
-            };
-
-            self.ip = saved_ip;
-            self.register_base = saved_base;
-            self.restore_saved_register_range(saved_base, saved_regs, saved_labels);
+        if value_count != label_count {
+            return Err(InterpreterError::TypeError {
+                expected: "async generator snapshot with one IFC label per register".into(),
+                got: format!("values={value_count}, labels={label_count}"),
+            });
         }
 
-        // Execute until yield/return/throw
-        let execution_result = self.run_loop(_module);
-
-        // Handle execution result and fulfill promise accordingly
-        let promise_result = match &execution_result {
-            Ok(result_value)
-                if matches!(
-                    _module.instructions.get(self.ip),
-                    Some(Ir3Instruction::Return { .. })
-                ) =>
+        let result_promise = self.promise_store.create().0;
+        let (activation, resume_dst) =
             {
-                let async_gen = &mut self.async_generators[gen_id as usize];
-                async_gen.phase = AsyncGeneratorPhase::Completed;
+                let async_generator = &mut self.async_generators[generator_index];
+                let activation = async_generator.execution.take().ok_or_else(|| {
+                    InterpreterError::TypeError {
+                        expected: "suspended async generator activation".into(),
+                        got: "async generator has no saved execution context".into(),
+                    }
+                })?;
+                let resume_dst = async_generator.resume_dst.take();
+                async_generator.phase = AsyncGeneratorPhase::Executing;
+                (activation, resume_dst)
+            };
 
-                let result_id = self.alloc_object_with_prototype(None)?;
-                self.set_object_property(result_id, "value".to_string(), result_value.clone())?;
-                self.set_object_property(result_id, "done".to_string(), Value::Bool(true))?;
+        let caller_execution = self.take_module_execution();
+        let caller_bytes = Self::estimate_module_execution_bytes(&caller_execution);
+        let previous_suspended_bytes = self.temporarily_suspended_execution_bytes;
+        let previous_suspended_call_depth = self.temporarily_suspended_call_depth;
+        self.temporarily_suspended_execution_bytes =
+            previous_suspended_bytes.saturating_add(caller_bytes);
+        self.temporarily_suspended_call_depth =
+            previous_suspended_call_depth.saturating_add(caller_execution.call_stack.len());
+        self.install_module_execution(activation);
 
-                let js_val = crate::object_model::JsValue::Object(
-                    crate::object_model::ObjectHandle(result_id.0),
-                );
-                let label = crate::ifc_artifacts::Label::Public;
-                self.promise_store.fulfill(
-                    crate::promise_model::PromiseHandle(result_promise),
-                    js_val,
-                    label,
-                    &mut self.event_loop.microtasks,
-                )
+        let setup_result = if phase == AsyncGeneratorPhase::SuspendedYield
+            && let Some(resume_dst) = resume_dst
+        {
+            self.write_reg_with_label(resume_dst, argument, argument_label)
+        } else {
+            Ok(())
+        };
+        if let Err(error) = setup_result {
+            let activation = self.take_module_execution();
+            self.temporarily_suspended_execution_bytes = previous_suspended_bytes;
+            self.temporarily_suspended_call_depth = previous_suspended_call_depth;
+            self.restore_module_execution(caller_execution);
+            let async_generator = &mut self.async_generators[generator_index];
+            async_generator.execution = Some(activation);
+            async_generator.resume_dst = resume_dst;
+            async_generator.phase = phase;
+            self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
+            self.reject_promise(
+                crate::promise_model::PromiseHandle(result_promise),
+                crate::object_model::JsValue::Str(JsString::from(format!("{error:?}"))),
+                crate::ifc_artifacts::Label::Public,
+            )?;
+            return Ok(Value::Promise(result_promise));
+        }
+
+        let outcome = self.run_loop_with_mode(module, RunLoopMode::Generator);
+        let mut activation = self.take_module_execution();
+        let escaped_exception = activation.pending_exception.take();
+        self.temporarily_suspended_execution_bytes = previous_suspended_bytes;
+        self.temporarily_suspended_call_depth = previous_suspended_call_depth;
+        self.restore_module_execution(caller_execution);
+
+        let promise_handle = crate::promise_model::PromiseHandle(result_promise);
+        match outcome {
+            Ok(RunLoopExit::GeneratorYield {
+                result,
+                label,
+                resume_dst,
+            }) => {
+                let async_generator = &mut self.async_generators[generator_index];
+                async_generator.execution = Some(activation);
+                async_generator.resume_dst = Some(resume_dst);
+                async_generator.phase = AsyncGeneratorPhase::SuspendedYield;
+                self.sync_estimated_memory_bytes()?;
+                self.fulfill_promise(promise_handle, Self::value_to_js_value(&result), label)?;
             }
-            Ok(yield_result) => {
-                // Yield already returns the generator result object
-                // `{ value, done: false }`; promise-wrap it directly.
-                let max_regs = self.config.max_registers as usize;
-                let saved_regs: Vec<Value> =
-                    self.registers[self.register_base..self.register_base + max_regs].to_vec();
-                let saved_labels = self
-                    .register_labels_in_range(self.register_base, self.register_base + max_regs);
-
-                let async_gen = &mut self.async_generators[gen_id as usize];
-                async_gen.saved_ip = self.ip;
-                async_gen.saved_registers = saved_regs;
-                async_gen.saved_register_labels = saved_labels;
-                async_gen.saved_register_base = self.register_base;
-                async_gen.phase = AsyncGeneratorPhase::SuspendedYield;
-
-                let js_val = Self::value_to_js_value(yield_result);
-                let label = crate::ifc_artifacts::Label::Public;
-                self.promise_store.fulfill(
-                    crate::promise_model::PromiseHandle(result_promise),
-                    js_val,
-                    label,
-                    &mut self.event_loop.microtasks,
-                )
+            Ok(RunLoopExit::GeneratorReturn { value, label }) => {
+                let async_generator = &mut self.async_generators[generator_index];
+                async_generator.execution = None;
+                async_generator.resume_dst = None;
+                async_generator.phase = AsyncGeneratorPhase::Completed;
+                self.sync_estimated_memory_bytes()?;
+                let result = self.generator_result_object(value, true)?;
+                self.fulfill_promise(promise_handle, Self::value_to_js_value(&result), label)?;
+            }
+            Ok(RunLoopExit::GeneratorThrow { exception, .. }) => {
+                let async_generator = &mut self.async_generators[generator_index];
+                async_generator.execution = None;
+                async_generator.resume_dst = None;
+                async_generator.phase = AsyncGeneratorPhase::Completed;
+                self.sync_estimated_memory_bytes()?;
+                self.reject_promise(
+                    promise_handle,
+                    Self::value_to_js_value(&exception.value),
+                    exception.label,
+                )?;
+            }
+            Ok(RunLoopExit::GeneratorBodyStart) => {
+                let async_generator = &mut self.async_generators[generator_index];
+                async_generator.execution = None;
+                async_generator.resume_dst = None;
+                async_generator.phase = AsyncGeneratorPhase::Completed;
+                self.sync_estimated_memory_bytes()?;
+                self.reject_promise(
+                    promise_handle,
+                    crate::object_model::JsValue::Str(JsString::from(
+                        "unexpected async generator body boundary",
+                    )),
+                    crate::ifc_artifacts::Label::Public,
+                )?;
+            }
+            Ok(RunLoopExit::Value(completion)) => {
+                let async_generator = &mut self.async_generators[generator_index];
+                async_generator.execution = None;
+                async_generator.resume_dst = None;
+                async_generator.phase = AsyncGeneratorPhase::Completed;
+                self.sync_estimated_memory_bytes()?;
+                let result = self.generator_result_object(completion.value, true)?;
+                self.fulfill_promise(
+                    promise_handle,
+                    Self::value_to_js_value(&result),
+                    completion.label,
+                )?;
             }
             Err(InterpreterError::Halted) => {
-                // Generator completed
-                let async_gen = &mut self.async_generators[gen_id as usize];
-                async_gen.phase = AsyncGeneratorPhase::Completed;
-
-                // Create {value: undefined, done: true} object
-                let result_id = self.alloc_object_with_prototype(None)?;
-                self.set_object_property(result_id, "value".to_string(), Value::Undefined)?;
-                self.set_object_property(result_id, "done".to_string(), Value::Bool(true))?;
-
-                let js_val = crate::object_model::JsValue::Object(
-                    crate::object_model::ObjectHandle(result_id.0),
+                let async_generator = &mut self.async_generators[generator_index];
+                async_generator.execution = None;
+                async_generator.resume_dst = None;
+                async_generator.phase = AsyncGeneratorPhase::Completed;
+                self.sync_estimated_memory_bytes()?;
+                let result = self.generator_result_object(Value::Undefined, true)?;
+                self.fulfill_promise(
+                    promise_handle,
+                    Self::value_to_js_value(&result),
+                    crate::ifc_artifacts::Label::Public,
+                )?;
+            }
+            Err(error) => {
+                let async_generator = &mut self.async_generators[generator_index];
+                async_generator.execution = None;
+                async_generator.resume_dst = None;
+                async_generator.phase = AsyncGeneratorPhase::Completed;
+                self.sync_estimated_memory_bytes()?;
+                let (reason, label) = escaped_exception.map_or_else(
+                    || {
+                        (
+                            crate::object_model::JsValue::Str(JsString::from(format!("{error:?}"))),
+                            crate::ifc_artifacts::Label::Public,
+                        )
+                    },
+                    |exception| (Self::value_to_js_value(&exception.value), exception.label),
                 );
-                let label = crate::ifc_artifacts::Label::Public;
-                self.promise_store.fulfill(
-                    crate::promise_model::PromiseHandle(result_promise),
-                    js_val,
-                    label,
-                    &mut self.event_loop.microtasks,
-                )
+                self.reject_promise(promise_handle, reason, label)?;
             }
-            Err(err) => {
-                // Generator threw an error
-                let async_gen = &mut self.async_generators[gen_id as usize];
-                async_gen.phase = AsyncGeneratorPhase::Completed;
-
-                // Reject the promise with the error
-                let js_val = crate::object_model::JsValue::Str(format!("{err:?}"));
-                let label = crate::ifc_artifacts::Label::Public;
-                self.promise_store.reject(
-                    crate::promise_model::PromiseHandle(result_promise),
-                    js_val,
-                    label,
-                    &mut self.event_loop.microtasks,
-                )
-            }
-        };
-
-        // Restore caller execution context
-        self.ip = caller_ip;
-        self.register_base = caller_register_base;
-        self.scope_chain.frames = caller_scope;
-        self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
-
-        // Handle promise operation result
-        promise_result.map_err(|e| InterpreterError::TypeError {
-            expected: "promise operation".into(),
-            got: format!("failed promise operation: {e:?}"),
-        })?;
+        }
 
         Ok(Value::Promise(result_promise))
     }
 
+    fn run_loop_labeled(&mut self, module: &Ir3Module) -> Result<LabeledReturn, InterpreterError> {
+        match self.run_loop_with_mode(module, RunLoopMode::Normal)? {
+            RunLoopExit::Value(completion) => Ok(completion),
+            RunLoopExit::GeneratorReturn { value, label }
+            | RunLoopExit::GeneratorYield {
+                result: value,
+                label,
+                ..
+            } => Ok(LabeledReturn { value, label }),
+            RunLoopExit::GeneratorBodyStart => Err(InterpreterError::TypeError {
+                expected: "generator activation".to_string(),
+                got: "generator body boundary outside generator invocation".to_string(),
+            }),
+            RunLoopExit::GeneratorThrow {
+                exception,
+                description,
+            } => {
+                self.pending_exception = Some(exception);
+                Err(InterpreterError::UncaughtException { value: description })
+            }
+        }
+    }
+
     fn run_loop(&mut self, module: &Ir3Module) -> Result<Value, InterpreterError> {
+        self.run_loop_labeled(module)
+            .map(|completion| completion.value)
+    }
+
+    fn run_loop_with_mode(
+        &mut self,
+        module: &Ir3Module,
+        mode: RunLoopMode,
+    ) -> Result<RunLoopExit, InterpreterError> {
         // Initialize CheckpointGuard if cancellation token is provided
         let mut checkpoint_guard = if let Some(ref token) = self.config.cancellation_token {
             Some(CheckpointGuard::new(
@@ -3745,17 +6695,33 @@ impl InterpreterCore {
         } else {
             None
         };
-
         loop {
             if self.ip >= module.instructions.len() {
                 // Fell off the end of the instruction stream.
                 if !self.call_stack.is_empty() {
-                    if let Some(final_value) = self.complete_return(Value::Undefined)? {
-                        return Ok(final_value);
+                    let generator_root =
+                        mode == RunLoopMode::Generator && self.call_stack.len() == 1;
+                    if generator_root {
+                        let _ = self.complete_return(
+                            Value::Undefined,
+                            crate::ifc_artifacts::Label::Public,
+                        )?;
+                        return Ok(RunLoopExit::GeneratorReturn {
+                            value: Value::Undefined,
+                            label: crate::ifc_artifacts::Label::Public,
+                        });
+                    }
+                    if let Some(final_value) =
+                        self.complete_return(Value::Undefined, crate::ifc_artifacts::Label::Public)?
+                    {
+                        return Ok(RunLoopExit::Value(final_value));
                     }
                     continue;
                 } else {
-                    return self.read_reg(0);
+                    return Ok(RunLoopExit::Value(LabeledReturn {
+                        value: self.read_reg(0)?,
+                        label: self.read_reg_label(0)?,
+                    }));
                 }
             }
 
@@ -3889,9 +6855,18 @@ impl InterpreterCore {
                 }
                 Ir3Instruction::ForOfInit { src, dst } => {
                     let value = self.read_reg(src)?;
-                    let iterator = self.init_for_of_iterator(value)?;
-                    self.write_reg(dst, iterator)?;
-                    self.ip += 1;
+                    match self.init_for_of_iterator(Some(module), value) {
+                        Ok(iterator) => {
+                            self.write_reg(dst, iterator)?;
+                            self.ip += 1;
+                        }
+                        Err(error) => {
+                            match self.route_run_loop_javascript_error(module, error, mode)? {
+                                None => continue,
+                                Some(error) => return Err(error),
+                            }
+                        }
+                    }
                 }
                 Ir3Instruction::ForOfNext {
                     iterator,
@@ -3899,21 +6874,38 @@ impl InterpreterCore {
                     done_target,
                 } => {
                     let iterator = self.read_reg(iterator)?;
-                    if let Some(value) = self.advance_for_of_iterator(iterator)? {
-                        self.write_reg(value_dst, value)?;
-                        self.ip += 1;
-                    } else {
-                        self.ip = done_target as usize;
+                    match self.advance_for_of_iterator(Some(module), iterator) {
+                        Ok(Some(value)) => {
+                            self.write_reg(value_dst, value)?;
+                            self.ip += 1;
+                        }
+                        Ok(None) => {
+                            self.ip = done_target as usize;
+                        }
+                        Err(error) => {
+                            match self.route_run_loop_javascript_error(module, error, mode)? {
+                                None => continue,
+                                Some(error) => return Err(error),
+                            }
+                        }
                     }
                 }
                 Ir3Instruction::IteratorClose { iterator, reason } => {
                     let iterator = self.read_reg(iterator)?;
-                    self.close_iterator(iterator, reason)?;
-                    self.ip += 1;
+                    match self.close_iterator(module, iterator, reason) {
+                        Ok(()) => self.ip += 1,
+                        Err(error) => {
+                            match self.route_run_loop_javascript_error(module, error, mode)? {
+                                None => continue,
+                                Some(error) => return Err(error),
+                            }
+                        }
+                    }
                 }
                 Ir3Instruction::Move { dst, src } => {
                     let val = self.read_reg(src)?;
-                    self.write_reg(dst, val)?;
+                    let label = self.read_reg_label(src)?;
+                    self.write_reg_with_label(dst, val, label)?;
                     self.ip += 1;
                 }
                 Ir3Instruction::Jump { target } => {
@@ -3937,25 +6929,21 @@ impl InterpreterCore {
                 }
                 Ir3Instruction::Call { callee, args, dst } => {
                     let callee_val = self.read_reg(callee)?;
-
-                    // Generator .next() call: step the generator.
-                    if let Value::Generator(gen_id) = &callee_val {
-                        let gen_id = *gen_id;
-                        let arg = if args.count > 0 {
-                            self.read_reg(args.start)?
-                        } else {
-                            Value::Undefined
-                        };
-                        let result = self.generator_next(module, gen_id, arg)?;
-                        self.write_reg(dst, result)?;
-                        self.ip += 1;
-                        continue;
-                    }
+                    let callee_label = self.read_reg_label(callee)?;
 
                     if let Value::BuiltinFunction(builtin) = &callee_val {
-                        let result = self.dispatch_builtin_function(module, builtin, args)?;
-                        self.write_reg(dst, result)?;
-                        self.ip += 1;
+                        match self.dispatch_builtin_function(module, builtin, None, args) {
+                            Ok((result, result_label)) => {
+                                self.write_reg_with_label(dst, result, result_label)?;
+                                self.ip += 1;
+                            }
+                            Err(error) => {
+                                match self.route_run_loop_javascript_error(module, error, mode)? {
+                                    None => {}
+                                    Some(error) => return Err(error),
+                                }
+                            }
+                        }
                         continue;
                     }
 
@@ -3996,17 +6984,13 @@ impl InterpreterCore {
                                 table_size: module.function_table.len() as u32,
                             },
                         )?;
+                        self.validate_function_rest_param(func)?;
 
-                        if self.call_stack.len() >= self.config.max_call_depth {
-                            return Err(InterpreterError::StackOverflow {
-                                depth: self.call_stack.len(),
-                                max: self.config.max_call_depth,
-                            });
-                        }
+                        self.ensure_call_depth_available()?;
 
                         let mut arg_vals = Vec::new();
                         let mut arg_labels = Vec::new();
-                        for i in 0..args.count.min(func.arity) {
+                        for i in 0..args.count {
                             let reg = args.start.checked_add(i).ok_or(
                                 InterpreterError::RegisterOutOfBounds {
                                     register: args.start,
@@ -4016,139 +7000,191 @@ impl InterpreterCore {
                             arg_vals.push(self.read_reg(reg)?);
                             arg_labels.push(self.read_reg_label(reg)?);
                         }
+                        arg_vals.truncate(func.arity as usize);
+                        arg_labels.truncate(func.arity as usize);
+                        let setup_snapshot = self.snapshot_call_setup(Some(dst), false);
+                        let setup_result = (|| -> Result<(), InterpreterError> {
+                            self.apply_rest_param(
+                                module,
+                                &mut arg_vals,
+                                func.rest_param_index,
+                                func.arity,
+                                args,
+                            )?;
+                            self.apply_rest_param_labels(
+                                &mut arg_labels,
+                                func.rest_param_index,
+                                func.arity,
+                                args,
+                            )?;
+                            self.run_pre_call_hook(module, &callee_val, func_idx, &arg_vals)?;
 
-                        self.run_pre_call_hook(module, &callee_val, func_idx, &arg_vals)?;
-
-                        let promise_handle = self.promise_store.create();
-                        let async_func_id =
-                            u32::try_from(self.async_functions.len()).map_err(|_| {
-                                InterpreterError::TypeError {
-                                    expected: "async function table capacity".into(),
-                                    got: format!(
-                                        "exceeded u32::MAX ({})",
-                                        self.async_functions.len()
-                                    ),
-                                }
-                            })?;
-                        self.async_functions.push(AsyncFunctionObject {
-                            function_index: func_idx,
-                            closure_index: closure_id,
-                            saved_ip: 0,
-                            saved_registers: Vec::new(),
-                            saved_register_labels: Vec::new(),
-                            saved_register_base: 0,
-                            phase: AsyncFunctionPhase::Executing,
-                            result_promise: promise_handle.0,
-                        });
-                        self.write_reg(dst, Value::Promise(promise_handle.0))?;
-
-                        let scope_depth = self.scope_chain.depth();
-                        let captured_env_bytes = captured_env
-                            .as_ref()
-                            .map(|env| Self::estimate_scope_chain_bytes(env))
-                            .unwrap_or(0);
-                        let captured_scope_depth = captured_env.as_ref().map_or(0, Vec::len);
-                        let saved_chain =
-                            if captured_env.is_some() {
-                                Some(self.snapshot_scope_chain_with_temporary_budget(
-                                    captured_env_bytes,
-                                )?)
-                            } else {
-                                None
-                            };
-
-                        self.call_stack.push(CallFrame {
-                            return_ip: self.ip + 1,
-                            return_reg: None,
-                            register_base: self.register_base,
-                            function_index: Some(func_idx),
-                            this_value: Value::Undefined,
-                            new_target_value: Value::Undefined,
-                            super_value: Value::Undefined,
-                            construct_this: None,
-                            saved_pending_exception: self.pending_exception.take(),
-                            saved_pending_return: self.pending_return.take(),
-                            saved_suspended_abrupt_depth: self.suspended_abrupt_completions.len(),
-                            saved_finally_mode_depth: self.finally_modes.len(),
-                            saved_scope_depth: scope_depth,
-                            saved_scope_chain: saved_chain,
-                            closure_id,
-                            captured_scope_depth,
-                            async_function_id: Some(async_func_id),
-                        });
-
-                        if let Some(env) = captured_env {
-                            self.scope_chain.frames = env;
+                            self.enter_async_function_call(AsyncCallSetup {
+                                function_index: func_idx,
+                                function_entry: func.entry,
+                                closure_index: closure_id,
+                                captured_env,
+                                arguments: arg_vals.into_iter().zip(arg_labels).collect(),
+                                this_value: Value::Undefined,
+                                this_label: crate::ifc_artifacts::Label::Public,
+                                super_value: Value::Undefined,
+                                super_label: callee_label,
+                                result_register: dst,
+                            })
+                        })();
+                        if let Err(error) = setup_result {
+                            self.restore_call_setup(setup_snapshot);
+                            return Err(error);
                         }
-
-                        if let Err(err) = self.scope_chain.push(self.config.max_scope_depth) {
-                            self.rollback_call_setup();
-                            return Err(err);
-                        }
-                        if let Err(err) = self.sync_estimated_memory_bytes() {
-                            self.rollback_call_setup();
-                            return Err(err);
-                        }
-
-                        self.register_base += self.config.max_registers as usize;
-                        let req_len = self.register_base + self.config.max_registers as usize;
-                        self.clear_register_range(self.register_base, req_len);
-
-                        for (i, (val, label)) in arg_vals.into_iter().zip(arg_labels).enumerate() {
-                            let reg = i as u32;
-                            if reg < self.config.max_registers {
-                                self.write_reg_with_label(reg, val, label)?;
-                            }
-                        }
-
-                        self.ip = func.entry as usize;
                         continue;
                     }
 
-                    // Generator function call: create a suspended GeneratorObject.
-                    if let Value::GeneratorFunction(cid) = &callee_val {
-                        let gen_id = u32::try_from(self.generators.len()).map_err(|_| {
-                            InterpreterError::TypeError {
-                                expected: "generator table capacity".into(),
-                                got: format!("exceeded u32::MAX ({})", self.generators.len()),
+                    // Generator invocation initializes parameters immediately,
+                    // then suspends the isolated activation at the explicit
+                    // body boundary without running a body statement.
+                    if let Value::GeneratorFunction(_) = &callee_val {
+                        let func = module.function_table.get(func_idx as usize).ok_or(
+                            InterpreterError::FunctionNotFound {
+                                index: func_idx,
+                                table_size: module.function_table.len() as u32,
+                            },
+                        )?;
+                        self.validate_function_rest_param(func)?;
+                        let function_entry = func.entry;
+                        let mut argument_values = Vec::new();
+                        let mut argument_labels = Vec::new();
+                        for offset in 0..args.count {
+                            let reg = args.start.checked_add(offset).ok_or(
+                                InterpreterError::RegisterOutOfBounds {
+                                    register: args.start,
+                                    max: self.config.max_registers,
+                                },
+                            )?;
+                            argument_values.push(self.read_reg(reg)?);
+                            argument_labels.push(self.read_reg_label(reg)?);
+                        }
+                        argument_values.truncate(func.arity as usize);
+                        argument_labels.truncate(func.arity as usize);
+                        self.apply_rest_param(
+                            module,
+                            &mut argument_values,
+                            func.rest_param_index,
+                            func.arity,
+                            args,
+                        )?;
+                        self.apply_rest_param_labels(
+                            &mut argument_labels,
+                            func.rest_param_index,
+                            func.arity,
+                            args,
+                        )?;
+                        if let Err(error) =
+                            self.run_pre_call_hook(module, &callee_val, func_idx, &argument_values)
+                        {
+                            match self.route_run_loop_javascript_error(module, error, mode)? {
+                                None => continue,
+                                Some(error) => return Err(error),
                             }
-                        })?;
-                        self.generators.push(GeneratorObject {
-                            function_index: func_idx,
-                            closure_index: Some(*cid),
-                            saved_ip: 0,
-                            saved_registers: Vec::new(),
-                            saved_register_labels: Vec::new(),
-                            saved_register_base: 0,
-                            phase: GeneratorPhase::SuspendedStart,
-                        });
-                        self.write_reg(dst, Value::Generator(gen_id))?;
+                        }
+                        let super_value =
+                            self.function_super_value(&callee_val, IR_SUPER_PROTOTYPE_PROPERTY)?;
+                        let generator = match self.prepare_generator_activation(
+                            module,
+                            GeneratorCallSetup {
+                                function_index: func_idx,
+                                function_entry,
+                                captured_env: captured_env.unwrap_or_default(),
+                                arguments: argument_values
+                                    .into_iter()
+                                    .zip(argument_labels)
+                                    .collect(),
+                                this_value: Value::Undefined,
+                                this_label: crate::ifc_artifacts::Label::Public,
+                                super_value,
+                                super_label: callee_label.clone(),
+                            },
+                        ) {
+                            Ok(generator) => generator,
+                            Err(error) => {
+                                match self.route_run_loop_javascript_error(module, error, mode)? {
+                                    None => continue,
+                                    Some(error) => return Err(error),
+                                }
+                            }
+                        };
+                        if let Err(error) = self.publish_generator(dst, generator) {
+                            match self.route_run_loop_javascript_error(module, error, mode)? {
+                                None => continue,
+                                Some(error) => return Err(error),
+                            }
+                        }
                         self.ip += 1;
                         continue;
                     }
 
                     // Async generator function call: create a suspended AsyncGeneratorObject.
-                    if let Value::AsyncGeneratorFunction(cid) = &callee_val {
-                        let async_gen_id =
-                            u32::try_from(self.async_generators.len()).map_err(|_| {
-                                InterpreterError::TypeError {
-                                    expected: "async generator table capacity".into(),
-                                    got: format!(
-                                        "exceeded u32::MAX ({})",
-                                        self.async_generators.len()
-                                    ),
-                                }
-                            })?;
-                        self.async_generators.push(AsyncGeneratorObject {
-                            function_index: func_idx,
-                            closure_index: Some(*cid),
-                            saved_ip: 0,
-                            saved_registers: Vec::new(),
-                            saved_register_labels: Vec::new(),
-                            saved_register_base: 0,
-                            phase: AsyncGeneratorPhase::SuspendedStart,
-                        });
-                        self.write_reg(dst, Value::AsyncGeneratorObject(async_gen_id))?;
+                    if let Value::AsyncGeneratorFunction(_) = &callee_val {
+                        let func = module.function_table.get(func_idx as usize).ok_or(
+                            InterpreterError::FunctionNotFound {
+                                index: func_idx,
+                                table_size: module.function_table.len() as u32,
+                            },
+                        )?;
+                        self.validate_function_rest_param(func)?;
+                        let mut argument_values = Vec::new();
+                        let mut argument_labels = Vec::new();
+                        for offset in 0..args.count {
+                            let reg = args.start.checked_add(offset).ok_or(
+                                InterpreterError::RegisterOutOfBounds {
+                                    register: args.start,
+                                    max: self.config.max_registers,
+                                },
+                            )?;
+                            argument_values.push(self.read_reg(reg)?);
+                            argument_labels.push(self.read_reg_label(reg)?);
+                        }
+                        argument_values.truncate(func.arity as usize);
+                        argument_labels.truncate(func.arity as usize);
+                        self.apply_rest_param(
+                            module,
+                            &mut argument_values,
+                            func.rest_param_index,
+                            func.arity,
+                            args,
+                        )?;
+                        self.apply_rest_param_labels(
+                            &mut argument_labels,
+                            func.rest_param_index,
+                            func.arity,
+                            args,
+                        )?;
+                        self.run_pre_call_hook(module, &callee_val, func_idx, &argument_values)?;
+                        let super_value =
+                            self.function_super_value(&callee_val, IR_SUPER_PROTOTYPE_PROPERTY)?;
+                        let generator = self.prepare_generator_activation(
+                            module,
+                            GeneratorCallSetup {
+                                function_index: func_idx,
+                                function_entry: func.entry,
+                                captured_env: captured_env.unwrap_or_default(),
+                                arguments: argument_values
+                                    .into_iter()
+                                    .zip(argument_labels)
+                                    .collect(),
+                                this_value: Value::Undefined,
+                                this_label: crate::ifc_artifacts::Label::Public,
+                                super_value,
+                                super_label: callee_label.clone(),
+                            },
+                        )?;
+                        self.publish_async_generator(
+                            dst,
+                            AsyncGeneratorObject {
+                                execution: generator.execution,
+                                resume_dst: None,
+                                phase: AsyncGeneratorPhase::SuspendedStart,
+                            },
+                        )?;
                         self.ip += 1;
                         continue;
                     }
@@ -4166,6 +7202,14 @@ impl InterpreterCore {
                                 if let Some(builtin_cap) =
                                     self.map_function_index_to_builtin_capability(func_idx)
                                 {
+                                    if builtin_cap == "builtin:ObjectAssign" {
+                                        let entered_accessor =
+                                            self.execute_object_assign(module, args, dst)?;
+                                        if !entered_accessor {
+                                            self.ip += 1;
+                                        }
+                                        continue;
+                                    }
                                     // Dispatch as a builtin hostcall
                                     let result =
                                         self.dispatch_builtin_hostcall(&builtin_cap, args)?;
@@ -4180,16 +7224,13 @@ impl InterpreterCore {
                                     });
                                 }
                             };
+                            self.validate_function_rest_param(func)?;
 
-                            if self.call_stack.len() >= self.config.max_call_depth {
-                                return Err(InterpreterError::StackOverflow {
-                                    depth: self.call_stack.len(),
-                                    max: self.config.max_call_depth,
-                                });
-                            }
+                            self.ensure_call_depth_available()?;
 
                             let mut arg_vals = Vec::new();
-                            for i in 0..args.count.min(func.arity) {
+                            let mut arg_labels = Vec::new();
+                            for i in 0..args.count {
                                 let reg = args.start.checked_add(i).ok_or(
                                     InterpreterError::RegisterOutOfBounds {
                                         register: args.start,
@@ -4197,94 +7238,123 @@ impl InterpreterCore {
                                     },
                                 )?;
                                 arg_vals.push(self.read_reg(reg)?);
+                                arg_labels.push(self.read_reg_label(reg)?);
                             }
+                            arg_vals.truncate(func.arity as usize);
+                            arg_labels.truncate(func.arity as usize);
+                            let setup_snapshot = self.snapshot_call_setup(None, false);
+                            let setup_result = (|| -> Result<(), InterpreterError> {
+                                self.apply_rest_param(
+                                    module,
+                                    &mut arg_vals,
+                                    func.rest_param_index,
+                                    func.arity,
+                                    args,
+                                )?;
+                                self.apply_rest_param_labels(
+                                    &mut arg_labels,
+                                    func.rest_param_index,
+                                    func.arity,
+                                    args,
+                                )?;
+                                self.run_pre_call_hook(module, &callee_val, func_idx, &arg_vals)?;
 
-                            self.run_pre_call_hook(module, &callee_val, func_idx, &arg_vals)?;
+                                // Push frame. For closure calls, save the
+                                // entire caller scope chain so it can be
+                                // restored on return (the closure replaces
+                                // the chain with its captured environment).
+                                let scope_depth = self.scope_chain.depth();
+                                let captured_env_bytes = captured_env
+                                    .as_ref()
+                                    .map(|env| Self::estimate_scope_chain_bytes(env))
+                                    .unwrap_or(0);
+                                let saved_chain = if captured_env.is_some() {
+                                    Some(self.snapshot_scope_chain_with_temporary_budget(
+                                        captured_env_bytes,
+                                    )?)
+                                } else {
+                                    None
+                                };
+                                // Plain calls do not supply a receiver. Closures inherit the
+                                // defining frame's `this`; non-closure calls use `undefined`.
+                                let (frame_this, frame_this_label) = self.call_stack.last().map_or(
+                                    (Value::Undefined, crate::ifc_artifacts::Label::Public),
+                                    |frame| (frame.this_value.clone(), frame.this_label.clone()),
+                                );
+                                // Arrow closures inherit `this` from the defining frame.
+                                let (call_this, call_this_label) = if captured_env.is_some() {
+                                    (frame_this, frame_this_label)
+                                } else {
+                                    (Value::Undefined, crate::ifc_artifacts::Label::Public)
+                                };
+                                let super_value = self.function_super_value(
+                                    &callee_val,
+                                    IR_SUPER_PROTOTYPE_PROPERTY,
+                                )?;
 
-                            // Push frame. For closure calls, save the
-                            // entire caller scope chain so it can be
-                            // restored on return (the closure replaces
-                            // the chain with its captured environment).
-                            let scope_depth = self.scope_chain.depth();
-                            let captured_env_bytes = captured_env
-                                .as_ref()
-                                .map(|env| Self::estimate_scope_chain_bytes(env))
-                                .unwrap_or(0);
-                            let captured_scope_depth = captured_env.as_ref().map_or(0, Vec::len);
-                            let saved_chain = if captured_env.is_some() {
-                                Some(self.snapshot_scope_chain_with_temporary_budget(
-                                    captured_env_bytes,
-                                )?)
-                            } else {
-                                None
-                            };
-                            // Plain calls do not supply a receiver. Closures inherit the
-                            // defining frame's `this`; non-closure calls use `undefined`.
-                            let frame_this = self
-                                .call_stack
-                                .last()
-                                .map_or(Value::Undefined, |f| f.this_value.clone());
-                            // Arrow closures inherit `this` from the defining frame.
-                            let call_this = if captured_env.is_some() {
-                                frame_this
-                            } else {
-                                Value::Undefined
-                            };
-                            let super_value = self
-                                .function_super_value(&callee_val, IR_SUPER_PROTOTYPE_PROPERTY)?;
+                                self.call_stack.push(CallFrame {
+                                    return_ip: self.ip + 1,
+                                    return_reg: Some(dst),
+                                    register_base: self.register_base,
+                                    function_index: Some(func_idx),
+                                    this_value: call_this,
+                                    this_label: call_this_label,
+                                    new_target_value: Value::Undefined,
+                                    new_target_label: crate::ifc_artifacts::Label::Public,
+                                    super_value,
+                                    super_label: callee_label,
+                                    construct_this: None,
+                                    saved_pending_exception: self.pending_exception.take(),
+                                    saved_pending_return: self.pending_return.take(),
+                                    saved_suspended_abrupt_depth: self
+                                        .suspended_abrupt_completions
+                                        .len(),
+                                    saved_finally_mode_depth: self.finally_frames.len(),
+                                    saved_scope_depth: scope_depth,
+                                    saved_scope_chain: saved_chain,
+                                    async_function_id: None,
+                                });
 
-                            self.call_stack.push(CallFrame {
-                                return_ip: self.ip + 1,
-                                return_reg: Some(dst),
-                                register_base: self.register_base,
-                                function_index: Some(func_idx),
-                                this_value: call_this,
-                                new_target_value: Value::Undefined,
-                                super_value,
-                                construct_this: None,
-                                saved_pending_exception: self.pending_exception.take(),
-                                saved_pending_return: self.pending_return.take(),
-                                saved_suspended_abrupt_depth: self
-                                    .suspended_abrupt_completions
-                                    .len(),
-                                saved_finally_mode_depth: self.finally_modes.len(),
-                                saved_scope_depth: scope_depth,
-                                saved_scope_chain: saved_chain,
-                                closure_id,
-                                captured_scope_depth,
-                                async_function_id: None,
-                            });
-
-                            // If calling a closure, restore its captured environment.
-                            if let Some(env) = captured_env {
-                                self.scope_chain.frames = env;
-                            }
-
-                            // Push a fresh scope for the callee's locals.
-                            if let Err(err) = self.scope_chain.push(self.config.max_scope_depth) {
-                                self.rollback_call_setup();
-                                return Err(err);
-                            }
-                            if let Err(err) = self.sync_estimated_memory_bytes() {
-                                self.rollback_call_setup();
-                                return Err(err);
-                            }
-
-                            self.register_base += self.config.max_registers as usize;
-
-                            // Clear all registers in the new frame to prevent data leakage from previous calls
-                            let req_len = self.register_base + self.config.max_registers as usize;
-                            self.clear_register_range(self.register_base, req_len);
-
-                            // Copy arguments into registers for the callee.
-                            for (i, val) in arg_vals.into_iter().enumerate() {
-                                let reg = i as u32;
-                                if reg < self.config.max_registers {
-                                    self.write_reg(reg, val)?;
+                                // If calling a closure, restore its captured environment.
+                                if let Some(env) = captured_env {
+                                    self.scope_chain.frames = env;
                                 }
-                            }
 
-                            self.ip = func.entry as usize;
+                                // Push a fresh scope for the callee's locals.
+                                if let Err(err) = self.scope_chain.push(self.config.max_scope_depth)
+                                {
+                                    self.rollback_call_setup();
+                                    return Err(err);
+                                }
+                                if let Err(err) = self.sync_estimated_memory_bytes() {
+                                    self.rollback_call_setup();
+                                    return Err(err);
+                                }
+
+                                self.register_base += self.config.max_registers as usize;
+
+                                // Clear all registers in the new frame to prevent data leakage from previous calls
+                                let req_len =
+                                    self.register_base + self.config.max_registers as usize;
+                                self.clear_register_range(self.register_base, req_len);
+
+                                // Copy arguments into registers for the callee.
+                                for (i, (val, label)) in
+                                    arg_vals.into_iter().zip(arg_labels).enumerate()
+                                {
+                                    let reg = i as u32;
+                                    if reg < self.config.max_registers {
+                                        self.write_reg_with_label(reg, val, label)?;
+                                    }
+                                }
+
+                                self.ip = func.entry as usize;
+                                Ok(())
+                            })();
+                            if let Err(error) = setup_result {
+                                self.restore_call_setup(setup_snapshot);
+                                return Err(error);
+                            }
                         }
                         _ => {
                             return Err(InterpreterError::TypeError {
@@ -4301,18 +7371,37 @@ impl InterpreterCore {
                     dst,
                 } => {
                     let receiver_val = self.read_reg(receiver)?;
+                    let receiver_label = self.read_reg_label(receiver)?;
                     let callee_val = self.read_reg(callee)?;
+                    let callee_label = self.read_reg_label(callee)?;
 
                     if let Value::BuiltinFunction(builtin) = &callee_val {
-                        let result = self.dispatch_builtin_function(module, builtin, args)?;
-                        self.write_reg(dst, result)?;
-                        self.ip += 1;
+                        match self.dispatch_builtin_function(
+                            module,
+                            builtin,
+                            Some(&receiver_val),
+                            args,
+                        ) {
+                            Ok((result, result_label)) => {
+                                self.write_reg_with_label(dst, result, result_label)?;
+                                self.ip += 1;
+                            }
+                            Err(error) => {
+                                match self.route_run_loop_javascript_error(module, error, mode)? {
+                                    None => {}
+                                    Some(error) => return Err(error),
+                                }
+                            }
+                        }
                         continue;
                     }
 
                     let (func_idx, captured_env, closure_id) = match &callee_val {
                         Value::Function(idx) => (*idx, None, None),
-                        Value::Closure(closure_id) => {
+                        Value::Closure(closure_id)
+                        | Value::GeneratorFunction(closure_id)
+                        | Value::AsyncFunction(closure_id)
+                        | Value::AsyncGeneratorFunction(closure_id) => {
                             let closure =
                                 self.closures.get(*closure_id as usize).ok_or_else(|| {
                                     InterpreterError::TypeError {
@@ -4341,15 +7430,147 @@ impl InterpreterCore {
                         },
                     )?;
 
-                    if self.call_stack.len() >= self.config.max_call_depth {
-                        return Err(InterpreterError::StackOverflow {
-                            depth: self.call_stack.len(),
-                            max: self.config.max_call_depth,
-                        });
+                    // Method invocation preserves its receiver in the isolated
+                    // generator activation while defaults run synchronously.
+                    if let Value::GeneratorFunction(_) = &callee_val {
+                        self.validate_function_rest_param(func)?;
+                        let function_entry = func.entry;
+                        let mut argument_values = Vec::new();
+                        let mut argument_labels = Vec::new();
+                        for offset in 0..args.count {
+                            let reg = args.start.checked_add(offset).ok_or(
+                                InterpreterError::RegisterOutOfBounds {
+                                    register: args.start,
+                                    max: self.config.max_registers,
+                                },
+                            )?;
+                            argument_values.push(self.read_reg(reg)?);
+                            argument_labels.push(self.read_reg_label(reg)?);
+                        }
+                        argument_values.truncate(func.arity as usize);
+                        argument_labels.truncate(func.arity as usize);
+                        self.apply_rest_param(
+                            module,
+                            &mut argument_values,
+                            func.rest_param_index,
+                            func.arity,
+                            args,
+                        )?;
+                        self.apply_rest_param_labels(
+                            &mut argument_labels,
+                            func.rest_param_index,
+                            func.arity,
+                            args,
+                        )?;
+                        if let Err(error) =
+                            self.run_pre_call_hook(module, &callee_val, func_idx, &argument_values)
+                        {
+                            match self.route_run_loop_javascript_error(module, error, mode)? {
+                                None => continue,
+                                Some(error) => return Err(error),
+                            }
+                        }
+                        let super_value = self.method_super_value(&callee_val, &receiver_val)?;
+                        let generator = match self.prepare_generator_activation(
+                            module,
+                            GeneratorCallSetup {
+                                function_index: func_idx,
+                                function_entry,
+                                captured_env: captured_env.unwrap_or_default(),
+                                arguments: argument_values
+                                    .into_iter()
+                                    .zip(argument_labels)
+                                    .collect(),
+                                this_value: receiver_val.clone(),
+                                this_label: receiver_label.clone(),
+                                super_value,
+                                super_label: callee_label.clone(),
+                            },
+                        ) {
+                            Ok(generator) => generator,
+                            Err(error) => {
+                                match self.route_run_loop_javascript_error(module, error, mode)? {
+                                    None => continue,
+                                    Some(error) => return Err(error),
+                                }
+                            }
+                        };
+                        if let Err(error) = self.publish_generator(dst, generator) {
+                            match self.route_run_loop_javascript_error(module, error, mode)? {
+                                None => continue,
+                                Some(error) => return Err(error),
+                            }
+                        }
+                        self.ip += 1;
+                        continue;
                     }
 
+                    if let Value::AsyncGeneratorFunction(_) = &callee_val {
+                        self.validate_function_rest_param(func)?;
+                        let mut argument_values = Vec::new();
+                        let mut argument_labels = Vec::new();
+                        for offset in 0..args.count {
+                            let reg = args.start.checked_add(offset).ok_or(
+                                InterpreterError::RegisterOutOfBounds {
+                                    register: args.start,
+                                    max: self.config.max_registers,
+                                },
+                            )?;
+                            argument_values.push(self.read_reg(reg)?);
+                            argument_labels.push(self.read_reg_label(reg)?);
+                        }
+                        argument_values.truncate(func.arity as usize);
+                        argument_labels.truncate(func.arity as usize);
+                        self.apply_rest_param(
+                            module,
+                            &mut argument_values,
+                            func.rest_param_index,
+                            func.arity,
+                            args,
+                        )?;
+                        self.apply_rest_param_labels(
+                            &mut argument_labels,
+                            func.rest_param_index,
+                            func.arity,
+                            args,
+                        )?;
+                        self.run_pre_call_hook(module, &callee_val, func_idx, &argument_values)?;
+                        let super_value = self.method_super_value(&callee_val, &receiver_val)?;
+                        let generator = self.prepare_generator_activation(
+                            module,
+                            GeneratorCallSetup {
+                                function_index: func_idx,
+                                function_entry: func.entry,
+                                captured_env: captured_env.unwrap_or_default(),
+                                arguments: argument_values
+                                    .into_iter()
+                                    .zip(argument_labels)
+                                    .collect(),
+                                this_value: receiver_val.clone(),
+                                this_label: receiver_label.clone(),
+                                super_value,
+                                super_label: callee_label.clone(),
+                            },
+                        )?;
+                        self.publish_async_generator(
+                            dst,
+                            AsyncGeneratorObject {
+                                execution: generator.execution,
+                                resume_dst: None,
+                                phase: AsyncGeneratorPhase::SuspendedStart,
+                            },
+                        )?;
+                        self.ip += 1;
+                        continue;
+                    }
+
+                    self.validate_function_rest_param(func)?;
+
+                    self.ensure_call_depth_available()?;
+
                     let mut arg_vals = Vec::new();
-                    for i in 0..args.count.min(func.arity) {
+                    let mut arg_labels = Vec::new();
+                    for i in 0..args.count {
                         let reg = args.start.checked_add(i).ok_or(
                             InterpreterError::RegisterOutOfBounds {
                                 register: args.start,
@@ -4357,82 +7578,147 @@ impl InterpreterCore {
                             },
                         )?;
                         arg_vals.push(self.read_reg(reg)?);
+                        arg_labels.push(self.read_reg_label(reg)?);
                     }
+                    arg_vals.truncate(func.arity as usize);
+                    arg_labels.truncate(func.arity as usize);
+                    let setup_snapshot = self.snapshot_call_setup(Some(dst), false);
+                    let setup_result = (|| -> Result<bool, InterpreterError> {
+                        self.apply_rest_param(
+                            module,
+                            &mut arg_vals,
+                            func.rest_param_index,
+                            func.arity,
+                            args,
+                        )?;
+                        self.apply_rest_param_labels(
+                            &mut arg_labels,
+                            func.rest_param_index,
+                            func.arity,
+                            args,
+                        )?;
+                        self.run_pre_call_hook(module, &callee_val, func_idx, &arg_vals)?;
 
-                    self.run_pre_call_hook(module, &callee_val, func_idx, &arg_vals)?;
+                        let super_value = self.method_super_value(&callee_val, &receiver_val)?;
+                        if matches!(&callee_val, Value::AsyncFunction(_)) {
+                            self.enter_async_function_call(AsyncCallSetup {
+                                function_index: func_idx,
+                                function_entry: func.entry,
+                                closure_index: closure_id,
+                                captured_env,
+                                arguments: arg_vals.into_iter().zip(arg_labels).collect(),
+                                this_value: receiver_val,
+                                this_label: receiver_label,
+                                super_value,
+                                super_label: callee_label,
+                                result_register: dst,
+                            })?;
+                            return Ok(true);
+                        }
 
-                    let scope_depth = self.scope_chain.depth();
-                    let captured_env_bytes = captured_env
-                        .as_ref()
-                        .map(|env| Self::estimate_scope_chain_bytes(env))
-                        .unwrap_or(0);
-                    let captured_scope_depth = captured_env.as_ref().map_or(0, Vec::len);
-                    let saved_chain = if captured_env.is_some() {
-                        Some(self.snapshot_scope_chain_with_temporary_budget(captured_env_bytes)?)
-                    } else {
-                        None
-                    };
-                    let super_value = self.method_super_value(&callee_val, &receiver_val)?;
-                    self.call_stack.push(CallFrame {
-                        return_ip: self.ip + 1,
-                        return_reg: Some(dst),
-                        register_base: self.register_base,
-                        function_index: Some(func_idx),
-                        this_value: receiver_val,
-                        new_target_value: Value::Undefined,
-                        super_value,
-                        construct_this: None,
-                        saved_pending_exception: self.pending_exception.take(),
-                        saved_pending_return: self.pending_return.take(),
-                        saved_suspended_abrupt_depth: self.suspended_abrupt_completions.len(),
-                        saved_finally_mode_depth: self.finally_modes.len(),
-                        saved_scope_depth: scope_depth,
-                        saved_scope_chain: saved_chain,
-                        closure_id,
-                        captured_scope_depth,
-                        async_function_id: None,
-                    });
+                        let scope_depth = self.scope_chain.depth();
+                        let captured_env_bytes = captured_env
+                            .as_ref()
+                            .map(|env| Self::estimate_scope_chain_bytes(env))
+                            .unwrap_or(0);
+                        let saved_chain =
+                            if captured_env.is_some() {
+                                Some(self.snapshot_scope_chain_with_temporary_budget(
+                                    captured_env_bytes,
+                                )?)
+                            } else {
+                                None
+                            };
+                        self.call_stack.push(CallFrame {
+                            return_ip: self.ip + 1,
+                            return_reg: Some(dst),
+                            register_base: self.register_base,
+                            function_index: Some(func_idx),
+                            this_value: receiver_val,
+                            this_label: receiver_label,
+                            new_target_value: Value::Undefined,
+                            new_target_label: crate::ifc_artifacts::Label::Public,
+                            super_value,
+                            super_label: callee_label,
+                            construct_this: None,
+                            saved_pending_exception: self.pending_exception.take(),
+                            saved_pending_return: self.pending_return.take(),
+                            saved_suspended_abrupt_depth: self.suspended_abrupt_completions.len(),
+                            saved_finally_mode_depth: self.finally_frames.len(),
+                            saved_scope_depth: scope_depth,
+                            saved_scope_chain: saved_chain,
+                            async_function_id: None,
+                        });
 
-                    if let Some(env) = captured_env {
-                        self.scope_chain.frames = env;
-                    }
-                    if let Err(err) = self.scope_chain.push(self.config.max_scope_depth) {
-                        self.rollback_call_setup();
-                        return Err(err);
-                    }
-                    if let Err(err) = self.sync_estimated_memory_bytes() {
-                        self.rollback_call_setup();
-                        return Err(err);
-                    }
+                        if let Some(env) = captured_env {
+                            self.scope_chain.frames = env;
+                        }
+                        if let Err(err) = self.scope_chain.push(self.config.max_scope_depth) {
+                            self.rollback_call_setup();
+                            return Err(err);
+                        }
+                        if let Err(err) = self.sync_estimated_memory_bytes() {
+                            self.rollback_call_setup();
+                            return Err(err);
+                        }
 
-                    self.register_base += self.config.max_registers as usize;
-                    let req_len = self.register_base + self.config.max_registers as usize;
-                    self.clear_register_range(self.register_base, req_len);
+                        self.register_base += self.config.max_registers as usize;
+                        let req_len = self.register_base + self.config.max_registers as usize;
+                        self.clear_register_range(self.register_base, req_len);
 
-                    for (i, val) in arg_vals.into_iter().enumerate() {
-                        let reg = i as u32;
-                        if reg < self.config.max_registers {
-                            self.write_reg(reg, val)?;
+                        for (i, (val, label)) in arg_vals.into_iter().zip(arg_labels).enumerate() {
+                            let reg = i as u32;
+                            if reg < self.config.max_registers {
+                                self.write_reg_with_label(reg, val, label)?;
+                            }
+                        }
+
+                        self.ip = func.entry as usize;
+                        Ok(false)
+                    })();
+                    match setup_result {
+                        Ok(true) => continue,
+                        Ok(false) => {}
+                        Err(error) => {
+                            self.restore_call_setup(setup_snapshot);
+                            return Err(error);
                         }
                     }
-
-                    self.ip = func.entry as usize;
                 }
                 Ir3Instruction::Return { value } => {
                     let return_val = self.read_reg(value)?;
+                    let return_label = self.read_reg_label(value)?;
                     // A return from inside a finally overrides any in-flight
                     // exception, and a return from inside try/catch must still
                     // unwind through enclosing finally blocks before it can
                     // complete.
                     self.suspend_current_abrupt_completion();
                     self.pending_exception = None;
-                    self.pending_return = Some(return_val.clone());
+                    self.pending_return = Some(LabeledReturn {
+                        value: return_val.clone(),
+                        label: return_label.clone(),
+                    });
                     if let Some(finally_target) = self.pop_current_finally_target() {
+                        self.pending_finally_entry = Some(PendingFinallyEntry {
+                            target: finally_target,
+                            mode: FinallyMode::Return,
+                        });
                         self.ip = finally_target;
                     } else {
                         self.pending_return = None;
-                        if let Some(final_value) = self.complete_return(return_val)? {
-                            return Ok(final_value);
+                        let generator_root =
+                            mode == RunLoopMode::Generator && self.call_stack.len() == 1;
+                        if generator_root {
+                            let completed_value = return_val.clone();
+                            let completed_label = return_label.clone();
+                            let _ = self.complete_return(return_val, return_label)?;
+                            return Ok(RunLoopExit::GeneratorReturn {
+                                value: completed_value,
+                                label: completed_label,
+                            });
+                        }
+                        if let Some(final_value) = self.complete_return(return_val, return_label)? {
+                            return Ok(RunLoopExit::Value(final_value));
                         }
                     }
                 }
@@ -4443,8 +7729,19 @@ impl InterpreterCore {
                 } => {
                     // Promise hostcalls are always allowed (runtime-internal).
                     let is_promise_cap = capability.0.starts_with("promise:");
+                    let resuming_object_assign = capability.0 == "builtin:ObjectAssign"
+                        && self
+                            .copy_data_properties_states
+                            .last()
+                            .is_some_and(|state| {
+                                state.belongs_to(self.ip, self.register_base, self.call_stack.len())
+                                    && matches!(
+                                        state.write_mode,
+                                        CopyDataPropertiesWriteMode::Set { .. }
+                                    )
+                            });
 
-                    if !is_promise_cap {
+                    if !resuming_object_assign && !is_promise_cap {
                         // Map the CapabilityTag string to a typed RuntimeCapability.
                         // Tags that map to a RuntimeCapability are checked against
                         // the granted set.  Tags with no mapping are internal
@@ -4463,26 +7760,44 @@ impl InterpreterCore {
                         }
                     }
 
-                    self.emit_witness(
-                        WitnessEventKind::HostcallDispatched,
-                        Some(&format!("cap:{}", capability.0)),
-                    );
-                    self.emit_witness(
-                        WitnessEventKind::CapabilityChecked,
-                        Some(&format!("granted:{}", capability.0)),
-                    );
+                    if !resuming_object_assign {
+                        self.emit_witness(
+                            WitnessEventKind::HostcallDispatched,
+                            Some(&format!("cap:{}", capability.0)),
+                        );
+                        self.emit_witness(
+                            WitnessEventKind::CapabilityChecked,
+                            Some(&format!("granted:{}", capability.0)),
+                        );
 
-                    self.hostcall_decisions.push(HostcallDecisionRecord {
-                        seq: self.hostcall_decisions.len() as u64,
-                        capability: capability.clone(),
-                        allowed: true,
-                        instruction_index: self.ip as u32,
-                    });
+                        self.hostcall_decisions.push(HostcallDecisionRecord {
+                            seq: self.hostcall_decisions.len() as u64,
+                            capability: capability.clone(),
+                            allowed: true,
+                            instruction_index: self.ip as u32,
+                        });
+                    }
 
-                    // Dispatch promise hostcalls to the promise subsystem.
-                    let result = if is_promise_cap {
-                        self.dispatch_promise_hostcall(&capability.0, args)?
-                    } else if capability.0 == "module:require" {
+                    if capability.0 == "builtin:ObjectAssign" {
+                        let entered_accessor = self.execute_object_assign(module, args, dst)?;
+                        if !entered_accessor {
+                            self.ip += 1;
+                        }
+                        continue;
+                    }
+
+                    // Promise hostcalls return an explicit label for their
+                    // Promise-handle result.  Keep this separate from generic
+                    // hostcalls, whose current contract remains Public.
+                    if is_promise_cap {
+                        let (result, result_label) =
+                            self.dispatch_promise_hostcall(&capability.0, args)?;
+                        self.write_reg_with_label(dst, result, result_label)?;
+                        self.ip += 1;
+                        continue;
+                    }
+
+                    let result = if capability.0 == "module:require" {
                         let spec_val = if args.count > 0 {
                             self.read_reg(args.start)?
                         } else {
@@ -4514,7 +7829,7 @@ impl InterpreterCore {
                 }
                 Ir3Instruction::ImportModule { specifier, dst } => {
                     let spec_val = self.read_reg(specifier)?;
-                    let specifier_str = match spec_val {
+                    let specifier = match spec_val {
                         Value::Str(s) => s,
                         other => {
                             return Err(InterpreterError::ImportSpecifierNotString {
@@ -4522,7 +7837,7 @@ impl InterpreterCore {
                             });
                         }
                     };
-                    let namespace = self.import_module(module, &specifier_str)?;
+                    let namespace = self.import_module(module, &specifier)?;
                     self.write_reg(dst, namespace)?;
                     self.ip += 1;
                 }
@@ -4530,11 +7845,11 @@ impl InterpreterCore {
                     name_pool_index,
                     src,
                 } => {
-                    let name = module
-                        .constant_pool
-                        .get(name_pool_index as usize)
-                        .cloned()
-                        .unwrap_or_else(|| format!("__export_{name_pool_index}"));
+                    let name = Self::metadata_pool_string(
+                        module,
+                        name_pool_index,
+                        format!("__export_{name_pool_index}"),
+                    )?;
                     let value = self.read_reg(src)?;
                     self.register_module_export(&name, value)?;
                     self.ip += 1;
@@ -4542,21 +7857,77 @@ impl InterpreterCore {
                 Ir3Instruction::GetProperty { obj, key, dst } => {
                     let obj_val = self.read_reg(obj)?;
                     let key_val = self.read_reg(key)?;
-                    let key_str = Self::property_key(&key_val);
+                    let property_key = Self::executable_property_key(&key_val);
+                    self.validate_executable_property_key(&property_key)?;
 
                     let called_accessor = match &obj_val {
                         Value::Object(oid) => self.load_object_property_or_call_accessor(
                             module,
                             obj_val.clone(),
                             *oid,
-                            &key_str,
+                            &property_key,
                             dst,
                         )?,
+                        // String receivers expose `length` (UTF-16 code-unit
+                        // count) and the String.prototype methods wired for
+                        // bd-2vzgi; unknown keys yield `undefined` per ES
+                        // GetV semantics, matching the engine (bd-7zwar —
+                        // previously a fail-closed TypeError).
+                        Value::Str(text) => {
+                            self.preflight_legacy_property_key_for_hook(&property_key)?;
+                            match &property_key {
+                                RuntimePropertyKey::String(key) => {
+                                    match key
+                                        .as_str()
+                                        .and_then(|key| Self::string_property_value(text, key))
+                                    {
+                                        Some(value) => {
+                                            self.write_reg(dst, value)?;
+                                            false
+                                        }
+                                        None => {
+                                            self.write_reg(dst, Value::Undefined)?;
+                                            false
+                                        }
+                                    }
+                                }
+                                RuntimePropertyKey::Symbol(_) => {
+                                    self.write_reg(dst, Value::Undefined)?;
+                                    false
+                                }
+                            }
+                        }
+                        Value::Symbol(symbol) => {
+                            self.preflight_legacy_property_key_for_hook(&property_key)?;
+                            match self.symbol_property_value(*symbol, &property_key) {
+                                Some(value) => {
+                                    self.write_reg(dst, value)?;
+                                    false
+                                }
+                                None => {
+                                    self.write_reg(dst, Value::Undefined)?;
+                                    false
+                                }
+                            }
+                        }
+                        Value::Generator(_) => {
+                            self.preflight_legacy_property_key_for_hook(&property_key)?;
+                            let value = match &property_key {
+                                RuntimePropertyKey::String(key) if key.as_str() == Some("next") => {
+                                    Value::BuiltinFunction(BuiltinFunction::generator_next())
+                                }
+                                RuntimePropertyKey::String(_) | RuntimePropertyKey::Symbol(_) => {
+                                    Value::Undefined
+                                }
+                            };
+                            self.write_reg(dst, value)?;
+                            false
+                        }
                         _ if Self::function_object_key(&obj_val).is_some() => self
                             .load_function_like_property_or_call_accessor(
                                 module,
                                 obj_val.clone(),
-                                &key_str,
+                                &property_key,
                                 dst,
                             )?,
                         _ => {
@@ -4574,21 +7945,22 @@ impl InterpreterCore {
                     let obj_val = self.read_reg(obj)?;
                     let key_val = self.read_reg(key)?;
                     let set_val = self.read_reg(val)?;
-                    let key_str = Self::property_key(&key_val);
+                    let property_key = Self::executable_property_key(&key_val);
+                    self.validate_executable_property_key(&property_key)?;
 
                     let called_accessor = match &obj_val {
                         Value::Object(oid) => self.set_object_property_or_call_accessor(
                             module,
                             obj_val.clone(),
                             *oid,
-                            key_str,
+                            property_key.clone(),
                             set_val,
                         )?,
                         _ if Self::function_object_key(&obj_val).is_some() => self
                             .set_function_like_property_or_call_accessor(
                                 module,
                                 obj_val.clone(),
-                                &key_str,
+                                &property_key,
                                 set_val,
                             )?,
                         _ => {
@@ -4605,13 +7977,32 @@ impl InterpreterCore {
                 Ir3Instruction::DeleteProperty { obj, key, dst } => {
                     let obj_val = self.read_reg(obj)?;
                     let key_val = self.read_reg(key)?;
-                    let key_str = Self::property_key(&key_val);
+                    let property_key = Self::executable_property_key(&key_val);
+                    self.validate_executable_property_key(&property_key)?;
 
                     match obj_val {
                         Value::Object(oid) => {
-                            self.run_pre_property_access_hook(module, oid, &key_str)?;
-                            self.remove_object_property(oid, &key_str)?;
-                            self.mark_deleted_for_in_iterators(oid, &key_str);
+                            self.run_pre_runtime_property_access_hook(module, oid, &property_key)?;
+                            self.remove_object_runtime_property(oid, &property_key)?;
+                            if let RuntimePropertyKey::String(key) = &property_key {
+                                self.mark_deleted_for_in_iterators(oid, key);
+                            }
+                            self.write_reg(dst, Value::Bool(true))?;
+                        }
+                        function_like if Self::function_object_key(&function_like).is_some() => {
+                            if let Some(oid) = self.function_object_id(&function_like) {
+                                self.run_pre_runtime_property_access_hook(
+                                    module,
+                                    oid,
+                                    &property_key,
+                                )?;
+                                self.remove_object_runtime_property(oid, &property_key)?;
+                                if let RuntimePropertyKey::String(key) = &property_key {
+                                    self.mark_deleted_for_in_iterators(oid, key);
+                                }
+                            } else {
+                                self.preflight_legacy_property_key_for_hook(&property_key)?;
+                            }
                             self.write_reg(dst, Value::Bool(true))?;
                         }
                         _ => {
@@ -4645,9 +8036,12 @@ impl InterpreterCore {
                             .get(arr_id.0 as usize)
                             .map(|obj| {
                                 obj.properties.keys().fold(0u32, |current, key| {
+                                    // `n + 1` would overflow on a property key that
+                                    // parses to `u32::MAX` (e.g. "4294967295");
+                                    // saturate to match `array_like_length`.
                                     key.parse::<u32>()
                                         .ok()
-                                        .map_or(current, |n| current.max(n + 1))
+                                        .map_or(current, |n| current.max(n.saturating_add(1)))
                                 })
                             })
                             .unwrap_or(0);
@@ -4675,6 +8069,12 @@ impl InterpreterCore {
                             .heap
                             .get(arr_id.0 as usize)
                             .ok_or(InterpreterError::ObjectNotFound { id: arr_id.0 })?;
+                        if matches!(obj.properties.get("length"), Some(Value::Symbol(_))) {
+                            return Err(InterpreterError::TypeError {
+                                expected: "array length coercible to number".to_string(),
+                                got: "symbol".to_string(),
+                            });
+                        }
                         let length = obj
                             .properties
                             .get("length")
@@ -4735,20 +8135,32 @@ impl InterpreterCore {
                     // Spread iterable elements into an array
                     let arr_val = self.read_reg(array)?;
                     let iter_val = self.read_reg(iterable)?;
-                    if let (Value::Object(arr_id), Value::Object(iter_id)) = (arr_val, iter_val) {
-                        // Get elements from iterable (assume it's array-like)
-                        let elements: Vec<Value> = {
-                            if let Some(obj) = self.heap.get(iter_id.0 as usize) {
-                                let mut elems = Vec::new();
-                                let mut idx = 0u32;
-                                while let Some(val) = obj.properties.get(&idx.to_string()) {
-                                    elems.push(val.clone());
-                                    idx += 1;
+                    if let Value::Object(arr_id) = arr_val {
+                        // Get elements from the iterable: an array-like
+                        // object, or a string spread per code point with
+                        // lone surrogates preserved exactly (ES string
+                        // iteration; bd-7zwar, engine parity with bd-rdnhc —
+                        // previously a string iterable was silently skipped).
+                        let elements: Vec<Value> = match &iter_val {
+                            Value::Object(iter_id) => {
+                                if let Some(obj) = self.heap.get(iter_id.0 as usize) {
+                                    let mut elems = Vec::new();
+                                    let mut idx = 0u32;
+                                    while let Some(val) = obj.properties.get(&idx.to_string()) {
+                                        elems.push(val.clone());
+                                        idx += 1;
+                                    }
+                                    elems
+                                } else {
+                                    Vec::new()
                                 }
-                                elems
-                            } else {
-                                Vec::new()
                             }
+                            Value::Str(text) => text
+                                .code_point_elements()
+                                .into_iter()
+                                .map(Value::Str)
+                                .collect(),
+                            _ => Vec::new(),
                         };
                         // Push elements to target array
                         if self.heap.get(arr_id.0 as usize).is_some() {
@@ -4757,12 +8169,16 @@ impl InterpreterCore {
                                 .get(arr_id.0 as usize)
                                 .map(|obj| {
                                     obj.properties.keys().fold(0u32, |current, key| {
+                                        // `n + 1` would overflow on a property key
+                                        // that parses to `u32::MAX`; saturate to
+                                        // match `array_like_length`.
                                         key.parse::<u32>()
                                             .ok()
-                                            .map_or(current, |n| current.max(n + 1))
+                                            .map_or(current, |n| current.max(n.saturating_add(1)))
                                     })
                                 })
                                 .unwrap_or(0);
+                            let mut end_idx = next_idx;
                             for (offset, elem) in elements.into_iter().enumerate() {
                                 let offset = u32::try_from(offset).map_err(|_| {
                                     InterpreterError::TypeError {
@@ -4777,37 +8193,70 @@ impl InterpreterCore {
                                     }
                                 })?;
                                 self.set_object_property(arr_id, idx.to_string(), elem)?;
+                                end_idx = idx.saturating_add(1);
                             }
+                            // Maintain `length` like ArrayPush does (engine
+                            // parity; bd-7zwar — spread results previously
+                            // had no length property in this lane).
+                            self.set_object_property(
+                                arr_id,
+                                "length".to_string(),
+                                Value::Int(i64::from(end_idx)),
+                            )?;
                         }
                     }
                     self.ip += 1;
                 }
                 Ir3Instruction::SpreadIntoObject { target, source } => {
-                    // Spread source object properties into target
-                    let target_val = self.read_reg(target)?;
-                    let source_val = self.read_reg(source)?;
-                    if let (Value::Object(target_id), Value::Object(source_id)) =
-                        (target_val, source_val)
-                    {
-                        // Collect source properties
-                        let properties: Vec<(String, Value)> = {
-                            if let Some(obj) = self.heap.get(source_id.0 as usize) {
-                                obj.properties
-                                    .iter()
-                                    .map(|(k, v)| (k.clone(), v.clone()))
-                                    .collect()
-                            } else {
-                                Vec::new()
-                            }
-                        };
-                        // Copy to target
-                        if self.heap.get(target_id.0 as usize).is_some() {
-                            for (key, val) in properties {
-                                self.set_object_property(target_id, key, val)?;
-                            }
-                        }
+                    let state_was_active =
+                        self.copy_data_properties_states
+                            .last()
+                            .is_some_and(|state| {
+                                state.belongs_to(self.ip, self.register_base, self.call_stack.len())
+                            });
+                    let original_source = state_was_active.then(|| {
+                        self.copy_data_properties_states
+                            .last()
+                            .expect("active spread copy state should exist")
+                            .source
+                            .clone()
+                    });
+                    if !state_was_active && self.read_reg(source)?.is_nullish() {
+                        self.ip += 1;
+                        continue;
                     }
-                    self.ip += 1;
+                    let entered_getter = self.execute_copy_data_properties(
+                        module,
+                        target,
+                        source,
+                        RegRange { start: 0, count: 0 },
+                        source,
+                        CopyDataPropertiesWriteMode::CreateData,
+                    )?;
+                    if !entered_getter {
+                        if let Some(original_source) = original_source {
+                            self.write_reg(source, original_source)?;
+                        }
+                        self.ip += 1;
+                    }
+                }
+                Ir3Instruction::CopyDataProperties {
+                    target,
+                    source,
+                    excluded,
+                    value_dst,
+                } => {
+                    let entered_getter = self.execute_copy_data_properties(
+                        module,
+                        target,
+                        source,
+                        excluded,
+                        value_dst,
+                        CopyDataPropertiesWriteMode::CreateData,
+                    )?;
+                    if !entered_getter {
+                        self.ip += 1;
+                    }
                 }
                 Ir3Instruction::Mod { dst, lhs, rhs } => {
                     let result = self.eval_mod(lhs, rhs)?;
@@ -4841,7 +8290,7 @@ impl InterpreterCore {
                 }
                 Ir3Instruction::TypeOf { dst, src } => {
                     let val = self.read_reg(src)?;
-                    self.write_reg(dst, Value::Str(val.typeof_name().to_string()))?;
+                    self.write_reg(dst, Value::str(val.typeof_name()))?;
                     self.ip += 1;
                 }
                 Ir3Instruction::Void { dst, src } => {
@@ -4925,16 +8374,17 @@ impl InterpreterCore {
                     self.ip += 1;
                 }
                 Ir3Instruction::InOp { dst, lhs, rhs } => {
-                    let result = self.eval_in_operator(lhs, rhs)?;
+                    let result = self.eval_in_operator(module, lhs, rhs)?;
                     self.write_reg(dst, result)?;
                     self.ip += 1;
                 }
                 Ir3Instruction::Construct { callee, args, dst } => {
                     let callee_val = self.read_reg(callee)?;
+                    let callee_label = self.read_reg_label(callee)?;
 
                     // Resolve function index and optional captured environment.
-                    let (func_idx, captured_env, closure_id) = match &callee_val {
-                        Value::Function(idx) => (*idx, None, None),
+                    let (func_idx, captured_env) = match &callee_val {
+                        Value::Function(idx) => (*idx, None),
                         Value::Closure(closure_id) => {
                             let closure =
                                 self.closures.get(*closure_id as usize).ok_or_else(|| {
@@ -4946,7 +8396,6 @@ impl InterpreterCore {
                             (
                                 closure.function_index,
                                 Some(self.clone_scope_frames_with_budget(&closure.captured_env)?),
-                                Some(*closure_id),
                             )
                         }
                         _ => {
@@ -4965,24 +8414,13 @@ impl InterpreterCore {
                                     table_size: module.function_table.len() as u32,
                                 },
                             )?;
+                            self.validate_function_rest_param(func)?;
 
-                            if self.call_stack.len() >= self.config.max_call_depth {
-                                return Err(InterpreterError::StackOverflow {
-                                    depth: self.call_stack.len(),
-                                    max: self.config.max_call_depth,
-                                });
-                            }
-
-                            // Allocate the `this` object for the constructor.
-                            let prototype = self.ensure_function_prototype(func_idx)?;
-                            let this_id = self.alloc_object_with_prototype(Some(prototype))?;
-                            if let Some(this_obj) = self.heap.get_mut(this_id.0 as usize) {
-                                this_obj.constructor_function = Some(func_idx);
-                            }
-                            let this_val = Value::Object(this_id);
+                            self.ensure_call_depth_available()?;
 
                             let mut arg_vals = Vec::new();
-                            for i in 0..args.count.min(func.arity) {
+                            let mut arg_labels = Vec::new();
+                            for i in 0..args.count {
                                 let reg = args.start.checked_add(i).ok_or(
                                     InterpreterError::RegisterOutOfBounds {
                                         register: args.start,
@@ -4990,78 +8428,121 @@ impl InterpreterCore {
                                     },
                                 )?;
                                 arg_vals.push(self.read_reg(reg)?);
+                                arg_labels.push(self.read_reg_label(reg)?);
                             }
+                            arg_vals.truncate(func.arity as usize);
+                            arg_labels.truncate(func.arity as usize);
+                            let setup_snapshot = self.snapshot_call_setup(None, true);
+                            let setup_result = (|| -> Result<(), InterpreterError> {
+                                self.apply_rest_param(
+                                    module,
+                                    &mut arg_vals,
+                                    func.rest_param_index,
+                                    func.arity,
+                                    args,
+                                )?;
+                                self.apply_rest_param_labels(
+                                    &mut arg_labels,
+                                    func.rest_param_index,
+                                    func.arity,
+                                    args,
+                                )?;
 
-                            self.run_pre_call_hook(module, &callee_val, func_idx, &arg_vals)?;
-
-                            // Push constructor frame with `construct_this`.
-                            let scope_depth = self.scope_chain.depth();
-                            let captured_env_bytes = captured_env
-                                .as_ref()
-                                .map(|env| Self::estimate_scope_chain_bytes(env))
-                                .unwrap_or(0);
-                            let captured_scope_depth = captured_env.as_ref().map_or(0, Vec::len);
-                            let saved_chain = if captured_env.is_some() {
-                                Some(self.snapshot_scope_chain_with_temporary_budget(
-                                    captured_env_bytes,
-                                )?)
-                            } else {
-                                None
-                            };
-                            let super_value = self.function_metadata_property(
-                                &callee_val,
-                                IR_SUPER_CONSTRUCTOR_PROPERTY,
-                            )?;
-                            self.call_stack.push(CallFrame {
-                                return_ip: self.ip + 1,
-                                return_reg: Some(dst),
-                                register_base: self.register_base,
-                                function_index: Some(func_idx),
-                                this_value: this_val.clone(),
-                                new_target_value: callee_val.clone(),
-                                super_value,
-                                construct_this: Some(this_val.clone()),
-                                saved_pending_exception: self.pending_exception.take(),
-                                saved_pending_return: self.pending_return.take(),
-                                saved_suspended_abrupt_depth: self
-                                    .suspended_abrupt_completions
-                                    .len(),
-                                saved_finally_mode_depth: self.finally_modes.len(),
-                                saved_scope_depth: scope_depth,
-                                saved_scope_chain: saved_chain,
-                                closure_id,
-                                captured_scope_depth,
-                                async_function_id: None,
-                            });
-
-                            // If calling a closure, restore its captured environment.
-                            if let Some(env) = captured_env {
-                                self.scope_chain.frames = env;
-                            }
-                            if let Err(err) = self.scope_chain.push(self.config.max_scope_depth) {
-                                self.rollback_call_setup();
-                                return Err(err);
-                            }
-                            if let Err(err) = self.sync_estimated_memory_bytes() {
-                                self.rollback_call_setup();
-                                return Err(err);
-                            }
-
-                            self.register_base += self.config.max_registers as usize;
-                            let req_len = self.register_base + self.config.max_registers as usize;
-                            self.clear_register_range(self.register_base, req_len);
-
-                            // Register 0 = `this` for the constructor body.
-                            self.write_reg(0, this_val)?;
-                            // Arguments start at register 1.
-                            for (i, val) in arg_vals.into_iter().enumerate() {
-                                let reg = (i + 1) as u32;
-                                if reg < self.config.max_registers {
-                                    self.write_reg(reg, val)?;
+                                // Materializing the implicit rest Array is policy-
+                                // guarded. Allocate the constructor receiver only
+                                // after that guard succeeds so a denied rest
+                                // allocation leaves no constructor setup behind.
+                                let prototype = self
+                                    .function_prototype_for_value(&callee_val)?
+                                    .ok_or_else(|| InterpreterError::TypeError {
+                                        expected: "constructor function".to_string(),
+                                        got: callee_val.type_name().to_string(),
+                                    })?;
+                                let this_id = self.alloc_object_with_prototype(Some(prototype))?;
+                                if let Some(this_obj) = self.heap.get_mut(this_id.0 as usize) {
+                                    this_obj.constructor_function = Some(func_idx);
                                 }
-                            }
+                                let this_val = Value::Object(this_id);
+                                self.run_pre_call_hook(module, &callee_val, func_idx, &arg_vals)?;
 
-                            self.ip = func.entry as usize;
+                                // Push constructor frame with `construct_this`.
+                                let scope_depth = self.scope_chain.depth();
+                                let captured_env_bytes = captured_env
+                                    .as_ref()
+                                    .map(|env| Self::estimate_scope_chain_bytes(env))
+                                    .unwrap_or(0);
+                                let saved_chain = if captured_env.is_some() {
+                                    Some(self.snapshot_scope_chain_with_temporary_budget(
+                                        captured_env_bytes,
+                                    )?)
+                                } else {
+                                    None
+                                };
+                                let super_value = self.function_metadata_property(
+                                    &callee_val,
+                                    IR_SUPER_CONSTRUCTOR_PROPERTY,
+                                )?;
+                                self.call_stack.push(CallFrame {
+                                    return_ip: self.ip + 1,
+                                    return_reg: Some(dst),
+                                    register_base: self.register_base,
+                                    function_index: Some(func_idx),
+                                    this_value: this_val.clone(),
+                                    this_label: callee_label.clone(),
+                                    new_target_value: callee_val.clone(),
+                                    new_target_label: callee_label.clone(),
+                                    super_value,
+                                    super_label: callee_label,
+                                    construct_this: Some(this_val.clone()),
+                                    saved_pending_exception: self.pending_exception.take(),
+                                    saved_pending_return: self.pending_return.take(),
+                                    saved_suspended_abrupt_depth: self
+                                        .suspended_abrupt_completions
+                                        .len(),
+                                    saved_finally_mode_depth: self.finally_frames.len(),
+                                    saved_scope_depth: scope_depth,
+                                    saved_scope_chain: saved_chain,
+                                    async_function_id: None,
+                                });
+
+                                // If calling a closure, restore its captured environment.
+                                if let Some(env) = captured_env {
+                                    self.scope_chain.frames = env;
+                                }
+                                if let Err(err) = self.scope_chain.push(self.config.max_scope_depth)
+                                {
+                                    self.rollback_call_setup();
+                                    return Err(err);
+                                }
+                                if let Err(err) = self.sync_estimated_memory_bytes() {
+                                    self.rollback_call_setup();
+                                    return Err(err);
+                                }
+
+                                self.register_base += self.config.max_registers as usize;
+                                let req_len =
+                                    self.register_base + self.config.max_registers as usize;
+                                self.clear_register_range(self.register_base, req_len);
+
+                                // Parameters occupy r0..rN-1, matching deferred
+                                // function lowering. `this` is carried by the call
+                                // frame and recovered through `LoadThis`.
+                                for (i, (val, label)) in
+                                    arg_vals.into_iter().zip(arg_labels).enumerate()
+                                {
+                                    let reg = i as u32;
+                                    if reg < self.config.max_registers {
+                                        self.write_reg_with_label(reg, val, label)?;
+                                    }
+                                }
+
+                                self.ip = func.entry as usize;
+                                Ok(())
+                            })();
+                            if let Err(error) = setup_result {
+                                self.restore_call_setup(setup_snapshot);
+                                return Err(error);
+                            }
                         }
                         _ => {
                             return Err(InterpreterError::TypeError {
@@ -5072,7 +8553,9 @@ impl InterpreterCore {
                     }
                 }
                 Ir3Instruction::TemplateLiteral { parts, dst } => {
-                    let mut result = String::new();
+                    // Exact-unit concatenation so split surrogate halves heal
+                    // across template parts, matching engine semantics.
+                    let mut result = JsString::empty();
                     for i in 0..parts.count {
                         let reg = parts.start.checked_add(i).ok_or(
                             InterpreterError::RegisterOutOfBounds {
@@ -5083,15 +8566,22 @@ impl InterpreterCore {
                         let val = self.read_reg(reg)?;
                         let part_str = match val {
                             Value::Str(s) => s,
-                            Value::Int(n) => n.to_string(),
-                            Value::Float(f) => f.to_string(),
-                            Value::Bool(b) => (if b { "true" } else { "false" }).to_string(),
-                            Value::Null => "null".to_string(),
-                            Value::Undefined => "undefined".to_string(),
-                            Value::Object(_) | Value::Iterator(_) | Value::Generator(_) => {
-                                "[object Object]".to_string()
+                            Value::Symbol(_) => {
+                                return Err(InterpreterError::TypeError {
+                                    expected: "template substitution coercible to string"
+                                        .to_string(),
+                                    got: "symbol".to_string(),
+                                });
                             }
-                            Value::Promise(_) => "[object Promise]".to_string(),
+                            Value::Int(n) => JsString::from(n.to_string()),
+                            Value::Float(f) => JsString::from(f.to_string()),
+                            Value::Bool(b) => JsString::from(if b { "true" } else { "false" }),
+                            Value::Null => JsString::from("null"),
+                            Value::Undefined => JsString::from("undefined"),
+                            Value::Object(_) | Value::Iterator(_) | Value::Generator(_) => {
+                                JsString::from("[object Object]")
+                            }
+                            Value::Promise(_) => JsString::from("[object Promise]"),
                             Value::Function(_)
                             | Value::Closure(_)
                             | Value::GeneratorFunction(_)
@@ -5099,10 +8589,10 @@ impl InterpreterCore {
                             | Value::AsyncFunction(_)
                             | Value::AsyncFunctionObject(_)
                             | Value::AsyncGeneratorFunction(_)
-                            | Value::AsyncGeneratorObject(_) => "function".to_string(),
+                            | Value::AsyncGeneratorObject(_) => JsString::from("function"),
                         };
                         self.check_string_limit(result.len().saturating_add(part_str.len()))?;
-                        result.push_str(&part_str);
+                        result = result.concat(&part_str);
                     }
                     self.write_reg(dst, Value::Str(result))?;
                     self.ip += 1;
@@ -5111,27 +8601,32 @@ impl InterpreterCore {
                     return Err(InterpreterError::Halted);
                 }
                 Ir3Instruction::LoadThis { dst } => {
-                    let this_val = self
-                        .call_stack
-                        .last()
-                        .map_or(Value::Undefined, |f| f.this_value.clone());
-                    self.write_reg(dst, this_val)?;
+                    let (this_val, this_label) = self.call_stack.last().map_or(
+                        (Value::Undefined, crate::ifc_artifacts::Label::Public),
+                        |frame| (frame.this_value.clone(), frame.this_label.clone()),
+                    );
+                    self.write_reg_with_label(dst, this_val, this_label)?;
                     self.ip += 1;
                 }
                 Ir3Instruction::LoadNewTarget { dst } => {
-                    let new_target = self
-                        .call_stack
-                        .last()
-                        .map_or(Value::Undefined, |f| f.new_target_value.clone());
-                    self.write_reg(dst, new_target)?;
+                    let (new_target, new_target_label) = self.call_stack.last().map_or(
+                        (Value::Undefined, crate::ifc_artifacts::Label::Public),
+                        |frame| {
+                            (
+                                frame.new_target_value.clone(),
+                                frame.new_target_label.clone(),
+                            )
+                        },
+                    );
+                    self.write_reg_with_label(dst, new_target, new_target_label)?;
                     self.ip += 1;
                 }
                 Ir3Instruction::LoadSuper { dst } => {
-                    let super_val = self
-                        .call_stack
-                        .last()
-                        .map_or(Value::Undefined, |f| f.super_value.clone());
-                    self.write_reg(dst, super_val)?;
+                    let (super_value, super_label) = self.call_stack.last().map_or(
+                        (Value::Undefined, crate::ifc_artifacts::Label::Public),
+                        |frame| (frame.super_value.clone(), frame.super_label.clone()),
+                    );
+                    self.write_reg_with_label(dst, super_value, super_label)?;
                     self.ip += 1;
                 }
                 // ---------------------------------------------------------
@@ -5145,6 +8640,7 @@ impl InterpreterCore {
                         catch_target: catch_target as usize,
                         finally_target: finally_target.map(|t| t as usize),
                         call_depth: self.call_stack.len(),
+                        finally_frame_depth: self.finally_frames.len(),
                     });
                     self.ip += 1;
                 }
@@ -5155,95 +8651,174 @@ impl InterpreterCore {
                 }
                 Ir3Instruction::Throw { value } => {
                     let thrown = self.read_reg(value)?;
+                    let thrown_label = self.read_reg_label(value)?;
+                    let exception = LabeledException {
+                        value: thrown.clone(),
+                        label: thrown_label,
+                    };
                     self.suspend_current_abrupt_completion();
                     self.pending_return = None;
-                    self.pending_exception = Some(thrown.clone());
+                    self.pending_exception = Some(exception.clone());
                     // Walk the catch frame stack to find the nearest valid handler.
                     // Use rposition to find the topmost matching frame by index,
                     // then truncate to remove it and any frames above it — but
                     // NOT frames below it (which belong to outer try blocks).
                     if let Some(frame) = self.pop_exception_target_frame() {
+                        self.pending_finally_entry = (frame.finally_target
+                            == Some(frame.catch_target)
+                            || matches!(
+                                module.instructions.get(frame.catch_target),
+                                Some(Ir3Instruction::EnterFinally)
+                            ))
+                        .then_some(PendingFinallyEntry {
+                            target: frame.catch_target,
+                            mode: FinallyMode::Exception,
+                        });
                         self.ip = frame.catch_target;
                     } else {
                         // No catch handler found — uncaught exception.
                         self.suspended_abrupt_completions.clear();
                         let desc = match &thrown {
-                            Value::Str(s) => s.clone(),
+                            Value::Str(s) => s.to_string(),
                             Value::Int(n) => n.to_string(),
                             Value::Bool(b) => b.to_string(),
                             Value::Undefined => "undefined".to_string(),
                             Value::Null => "null".to_string(),
                             _ => "[object]".to_string(),
                         };
+                        self.pending_exception = None;
+                        self.pending_finally_entry = None;
+                        self.finally_frames.clear();
+                        self.discard_all_copy_data_properties_states();
+                        if mode == RunLoopMode::Generator {
+                            return Ok(RunLoopExit::GeneratorThrow {
+                                exception,
+                                description: desc,
+                            });
+                        }
                         return Err(InterpreterError::UncaughtException { value: desc });
                     }
                 }
                 Ir3Instruction::EnterCatch { dst } => {
                     // Load the pending exception into the catch binding register.
-                    let exception = self.pending_exception.take().unwrap_or(Value::Undefined);
+                    let exception = self.pending_exception.take().unwrap_or(LabeledException {
+                        value: Value::Undefined,
+                        label: crate::ifc_artifacts::Label::Public,
+                    });
                     self.restore_suspended_abrupt_completion();
-                    self.write_reg(dst, exception)?;
+                    self.write_reg_with_label(dst, exception.value, exception.label)?;
                     self.ip += 1;
                 }
                 Ir3Instruction::EnterFinally => {
-                    // Track whether we entered the finally block via normal
-                    // control flow, exception unwinding, or return unwinding.
-                    if self.pending_exception.is_some() {
-                        self.finally_modes.push(FinallyMode::Exception);
-                    } else if self.pending_return.is_some() {
-                        self.finally_modes.push(FinallyMode::Return);
+                    // Only the unwind edge that selected this target owns the
+                    // pending completion. Normal nested entry may observe an
+                    // outer pending completion without consuming it.
+                    let mode = if self
+                        .pending_finally_entry
+                        .as_ref()
+                        .is_some_and(|entry| entry.target == self.ip)
+                    {
+                        self.pending_finally_entry
+                            .take()
+                            .map_or(FinallyMode::Normal, |entry| entry.mode)
                     } else {
-                        self.finally_modes.push(FinallyMode::Normal);
-                    }
+                        FinallyMode::Normal
+                    };
+                    let completion = match mode {
+                        FinallyMode::Exception => self
+                            .pending_exception
+                            .take()
+                            .map(AbruptCompletion::Exception),
+                        FinallyMode::Return => {
+                            self.pending_return.take().map(AbruptCompletion::Return)
+                        }
+                        FinallyMode::Normal => None,
+                    };
+                    self.finally_frames.push(FinallyFrame { completion });
                     self.ip += 1;
                 }
                 Ir3Instruction::EndFinally => {
-                    let mode = self.finally_modes.pop().unwrap_or(FinallyMode::Normal);
-                    match mode {
-                        FinallyMode::Exception => {
-                            // Re-throw the pending exception after finally completes.
-                            if let Some(thrown) = self.pending_exception.clone() {
-                                let desc = match &thrown {
-                                    Value::Str(s) => s.clone(),
-                                    Value::Int(n) => n.to_string(),
-                                    Value::Bool(b) => b.to_string(),
-                                    Value::Undefined => "undefined".to_string(),
-                                    Value::Null => "null".to_string(),
-                                    _ => "[object]".to_string(),
-                                };
-                                // Look for another catch frame to propagate to.
-                                if let Some(frame) = self.pop_exception_target_frame() {
-                                    self.ip = frame.catch_target;
-                                } else {
-                                    self.suspended_abrupt_completions.clear();
-                                    return Err(InterpreterError::UncaughtException {
-                                        value: desc,
+                    match self.finally_frames.pop().and_then(|frame| frame.completion) {
+                        Some(AbruptCompletion::Exception(thrown)) => {
+                            self.pending_return = None;
+                            self.pending_exception = Some(thrown.clone());
+                            let desc = match &thrown.value {
+                                Value::Str(s) => s.to_string(),
+                                Value::Int(n) => n.to_string(),
+                                Value::Bool(b) => b.to_string(),
+                                Value::Undefined => "undefined".to_string(),
+                                Value::Null => "null".to_string(),
+                                _ => "[object]".to_string(),
+                            };
+                            // Look for another catch frame to propagate to.
+                            if let Some(frame) = self.pop_exception_target_frame() {
+                                self.pending_finally_entry = (frame.finally_target
+                                    == Some(frame.catch_target)
+                                    || matches!(
+                                        module.instructions.get(frame.catch_target),
+                                        Some(Ir3Instruction::EnterFinally)
+                                    ))
+                                .then_some(PendingFinallyEntry {
+                                    target: frame.catch_target,
+                                    mode: FinallyMode::Exception,
+                                });
+                                self.ip = frame.catch_target;
+                            } else {
+                                self.suspended_abrupt_completions.clear();
+                                self.pending_exception = None;
+                                self.pending_finally_entry = None;
+                                self.finally_frames.clear();
+                                self.discard_all_copy_data_properties_states();
+                                if mode == RunLoopMode::Generator {
+                                    return Ok(RunLoopExit::GeneratorThrow {
+                                        exception: thrown,
+                                        description: desc,
                                     });
                                 }
-                            } else {
-                                // Exception was consumed (shouldn't happen, but safe fallthrough).
-                                self.ip += 1;
+                                return Err(InterpreterError::UncaughtException { value: desc });
                             }
                         }
-                        FinallyMode::Return => {
-                            if let Some(return_val) = self.pending_return.take() {
-                                if let Some(finally_target) = self.pop_current_finally_target() {
-                                    self.pending_return = Some(return_val);
-                                    self.ip = finally_target;
-                                } else {
-                                    if let Some(final_value) = self.complete_return(return_val)? {
-                                        return Ok(final_value);
-                                    }
+                        Some(AbruptCompletion::Return(pending_return)) => {
+                            self.pending_exception = None;
+                            if let Some(finally_target) = self.pop_current_finally_target() {
+                                self.pending_return = Some(pending_return);
+                                self.pending_finally_entry = Some(PendingFinallyEntry {
+                                    target: finally_target,
+                                    mode: FinallyMode::Return,
+                                });
+                                self.ip = finally_target;
+                            } else {
+                                let generator_root =
+                                    mode == RunLoopMode::Generator && self.call_stack.len() == 1;
+                                if generator_root {
+                                    let completed_value = pending_return.value.clone();
+                                    let completed_label = pending_return.label.clone();
+                                    let _ = self.complete_return(
+                                        pending_return.value,
+                                        pending_return.label,
+                                    )?;
+                                    return Ok(RunLoopExit::GeneratorReturn {
+                                        value: completed_value,
+                                        label: completed_label,
+                                    });
                                 }
-                            } else {
-                                self.ip += 1;
+                                if let Some(final_value) = self
+                                    .complete_return(pending_return.value, pending_return.label)?
+                                {
+                                    return Ok(RunLoopExit::Value(final_value));
+                                }
                             }
                         }
-                        FinallyMode::Normal => {
+                        None => {
                             // Normal completion — just continue.
                             self.ip += 1;
                         }
                     }
+                }
+                Ir3Instruction::DiscardAbruptCompletion => {
+                    let _ = self.finally_frames.pop();
+                    self.restore_suspended_abrupt_completion();
+                    self.ip += 1;
                 }
 
                 // ���─ Closure / scope-chain instructions ────────────────
@@ -5269,19 +8844,53 @@ impl InterpreterCore {
                             got: format!("exceeded u32::MAX ({})", self.closures.len()),
                         }
                     })?;
+                    // Class constructors capture their private self name before
+                    // the destination register receives the new closure. Only
+                    // the constructor-specific marker is cyclically initialized:
+                    // descriptor-name matching would corrupt an unrelated outer
+                    // capture when a class method and that capture share a name.
+                    // The marker is materialized in the immediate capture frame;
+                    // ancestor frames can belong to an enclosing constructor.
+                    let mut self_capture_rollback = None;
+                    if let Some(frame) = captured_env.last() {
+                        for (name, binding) in &frame.bindings {
+                            if name.starts_with(CLASS_EXPRESSION_CONSTRUCTOR_SELF_CAPTURE_PREFIX)
+                                || name.starts_with(FUNCTION_EXPRESSION_SELF_CAPTURE_PREFIX)
+                            {
+                                let previous = binding.snapshot_state()?;
+                                {
+                                    let mut state = binding.state_mut()?;
+                                    state.value = Value::Closure(closure_id);
+                                    state.initialized = true;
+                                }
+                                self_capture_rollback = Some((binding.clone(), previous));
+                                break;
+                            }
+                        }
+                    }
                     self.closures.push(ClosureValue {
                         function_index,
                         captured_env,
                     });
                     if let Err(err) = self.sync_estimated_memory_bytes() {
                         self.closures.pop();
+                        if let Some((binding, previous)) = self_capture_rollback {
+                            binding.restore_state(previous)?;
+                        }
+                        self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
+                        return Err(err);
+                    }
+                    // Store the closure ID (not function_index) so Call can
+                    // look up the correct closure instance.
+                    if let Err(err) = self.write_reg(dst, Value::Closure(closure_id)) {
+                        self.closures.pop();
+                        if let Some((binding, previous)) = self_capture_rollback {
+                            binding.restore_state(previous)?;
+                        }
                         self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
                         return Err(err);
                     }
                     self.pending_captures.clear();
-                    // Store the closure ID (not function_index) so Call can
-                    // look up the correct closure instance.
-                    self.write_reg(dst, Value::Closure(closure_id))?;
                     self.ip += 1;
                 }
                 Ir3Instruction::CreateGenerator {
@@ -5301,17 +8910,42 @@ impl InterpreterCore {
                             got: format!("exceeded u32::MAX ({})", self.closures.len()),
                         }
                     })?;
+                    let mut self_capture_rollback = None;
+                    if let Some(frame) = captured_env.last() {
+                        for (name, binding) in &frame.bindings {
+                            if name.starts_with(FUNCTION_EXPRESSION_SELF_CAPTURE_PREFIX) {
+                                let previous = binding.snapshot_state()?;
+                                {
+                                    let mut state = binding.state_mut()?;
+                                    state.value = Value::GeneratorFunction(closure_id);
+                                    state.initialized = true;
+                                }
+                                self_capture_rollback = Some((binding.clone(), previous));
+                                break;
+                            }
+                        }
+                    }
                     self.closures.push(ClosureValue {
                         function_index,
                         captured_env,
                     });
                     if let Err(err) = self.sync_estimated_memory_bytes() {
                         self.closures.pop();
+                        if let Some((binding, previous)) = self_capture_rollback {
+                            binding.restore_state(previous)?;
+                        }
+                        self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
+                        return Err(err);
+                    }
+                    if let Err(err) = self.write_reg(dst, Value::GeneratorFunction(closure_id)) {
+                        self.closures.pop();
+                        if let Some((binding, previous)) = self_capture_rollback {
+                            binding.restore_state(previous)?;
+                        }
                         self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
                         return Err(err);
                     }
                     self.pending_captures.clear();
-                    self.write_reg(dst, Value::GeneratorFunction(closure_id))?;
                     self.ip += 1;
                 }
                 Ir3Instruction::CreateAsyncFunction {
@@ -5374,12 +9008,19 @@ impl InterpreterCore {
                     self.write_reg(dst, Value::AsyncGeneratorFunction(closure_id))?;
                     self.ip += 1;
                 }
+                Ir3Instruction::GeneratorBodyStart => {
+                    self.ip += 1;
+                    if mode == RunLoopMode::Generator {
+                        return Ok(RunLoopExit::GeneratorBodyStart);
+                    }
+                }
                 Ir3Instruction::Yield {
                     value,
                     delegate: _,
                     resume_dst,
                 } => {
                     let yielded = self.read_reg(value)?;
+                    let yielded_label = self.read_reg_label(value)?;
                     let result_id = self.alloc_object_with_prototype(None)?;
                     {
                         self.set_object_property(result_id, "value".to_string(), yielded)?;
@@ -5390,8 +9031,19 @@ impl InterpreterCore {
                         )?;
                     }
                     self.ip += 1;
+                    let result = Value::Object(result_id);
+                    if mode == RunLoopMode::Generator {
+                        return Ok(RunLoopExit::GeneratorYield {
+                            result,
+                            label: yielded_label,
+                            resume_dst,
+                        });
+                    }
                     self.write_reg(resume_dst, Value::Undefined)?;
-                    return Ok(Value::Object(result_id));
+                    return Ok(RunLoopExit::Value(LabeledReturn {
+                        value: result,
+                        label: yielded_label,
+                    }));
                 }
                 Ir3Instruction::AwaitValue { promise_reg } => {
                     let awaited_value = self.read_reg(promise_reg)?;
@@ -5404,7 +9056,7 @@ impl InterpreterCore {
                             // await non-promise: create a resolved promise with the value
                             let js_val = Self::value_to_js_value(&awaited_value);
                             let handle = self.promise_store.create();
-                            self.fulfill_promise(handle, js_val, awaited_label)?;
+                            self.fulfill_promise(handle, js_val, awaited_label.clone())?;
                             handle
                         }
                     };
@@ -5418,6 +9070,7 @@ impl InterpreterCore {
                     })?;
                     let promise_state = promise_record.state.clone();
                     let promise_label = promise_record.label.clone();
+                    let effective_label = awaited_label.join(&promise_label);
 
                     if promise_state.is_settled() {
                         // Promise already settled - continue execution synchronously
@@ -5427,7 +9080,7 @@ impl InterpreterCore {
                                 self.write_reg_with_label(
                                     promise_reg,
                                     result_value,
-                                    promise_label,
+                                    effective_label,
                                 )?;
                                 self.ip += 1;
                                 continue;
@@ -5452,16 +9105,21 @@ impl InterpreterCore {
                                         async_func.result_promise,
                                     );
                                     let js_reason = Self::value_to_js_value(&error_value);
-                                    self.reject_promise(promise_handle, js_reason, promise_label)?;
+                                    self.reject_promise(
+                                        promise_handle,
+                                        js_reason,
+                                        effective_label,
+                                    )?;
                                     if let Some(func) =
                                         self.async_functions.get_mut(async_func_id as usize)
                                     {
                                         func.phase = AsyncFunctionPhase::Completed;
                                     }
-                                    if let Some(final_value) =
-                                        self.complete_return(Value::Undefined)?
-                                    {
-                                        return Ok(final_value);
+                                    if let Some(final_value) = self.complete_return(
+                                        Value::Undefined,
+                                        crate::ifc_artifacts::Label::Public,
+                                    )? {
+                                        return Ok(RunLoopExit::Value(final_value));
                                     }
                                     continue;
                                 }
@@ -5474,53 +9132,15 @@ impl InterpreterCore {
                             }
                         }
                     } else {
-                        // Promise is pending - suspend the async function execution
-                        let current_frame =
-                            self.call_stack
-                                .last()
-                                .ok_or_else(|| InterpreterError::TypeError {
-                                    expected: "call frame during await".to_string(),
-                                    got: "no call frame found".to_string(),
-                                })?;
-
-                        let async_func_id = current_frame.async_function_id.ok_or_else(|| {
-                            InterpreterError::TypeError {
-                                expected: "await only in async function".to_string(),
-                                got: "await outside async function context".to_string(),
-                            }
-                        })?;
-
-                        let saved_registers = self.registers[self.register_base..].to_vec();
-                        let saved_register_labels =
-                            self.register_labels_in_range(self.register_base, self.registers.len());
-
-                        // Save the current execution state
-                        let async_func = self
-                            .async_functions
-                            .get_mut(async_func_id as usize)
-                            .ok_or_else(|| InterpreterError::TypeError {
-                                expected: "valid async function".to_string(),
-                                got: format!("async function #{async_func_id} not found"),
-                            })?;
-
-                        // Save state for when the promise resolves
-                        async_func.saved_ip = self.ip + 1; // Resume after the await instruction
-                        async_func.saved_registers = saved_registers;
-                        async_func.saved_register_labels = saved_register_labels;
-                        async_func.saved_register_base = self.register_base;
-                        async_func.phase = AsyncFunctionPhase::SuspendedAwait;
-
-                        // franken-core records the suspension state but does not own the
-                        // module-aware scheduler needed to resume pending awaits.
-                        return Err(InterpreterError::TypeError {
-                            expected: "settled promise for franken-core baseline await".to_string(),
-                            got: concat!(
-                                "pending promise await is explicitly unsupported by the ",
-                                "franken-core baseline interpreter; async frame is suspended ",
-                                "and result promise remains pending"
-                            )
-                            .to_string(),
-                        });
+                        self.suspend_async_function_for_await(
+                            promise_handle,
+                            promise_reg,
+                            effective_label,
+                        )?;
+                        return Ok(RunLoopExit::Value(LabeledReturn {
+                            value: Value::Undefined,
+                            label: crate::ifc_artifacts::Label::Public,
+                        }));
                     }
                 }
                 Ir3Instruction::AsyncReturn { value_reg } => {
@@ -5566,8 +9186,10 @@ impl InterpreterCore {
 
                     // Return from the async function without overwriting the
                     // caller register that already holds the result promise.
-                    if let Some(final_value) = self.complete_return(Value::Undefined)? {
-                        return Ok(final_value);
+                    if let Some(final_value) =
+                        self.complete_return(Value::Undefined, crate::ifc_artifacts::Label::Public)?
+                    {
+                        return Ok(RunLoopExit::Value(final_value));
                     }
                     continue;
                 }
@@ -5614,12 +9236,19 @@ impl InterpreterCore {
 
                     // Return from the async function without overwriting the
                     // caller register that already holds the result promise.
-                    if let Some(final_value) = self.complete_return(Value::Undefined)? {
-                        return Ok(final_value);
+                    if let Some(final_value) =
+                        self.complete_return(Value::Undefined, crate::ifc_artifacts::Label::Public)?
+                    {
+                        return Ok(RunLoopExit::Value(final_value));
                     }
                     continue;
                 }
                 Ir3Instruction::PushCapture { name_pool_index } => {
+                    let _ = Self::metadata_pool_string(
+                        module,
+                        name_pool_index,
+                        format!("__capture_{name_pool_index}"),
+                    )?;
                     self.pending_captures.push(name_pool_index);
                     self.ip += 1;
                 }
@@ -5647,11 +9276,11 @@ impl InterpreterCore {
                     name_pool_index,
                     kind,
                 } => {
-                    let name = module
-                        .constant_pool
-                        .get(name_pool_index as usize)
-                        .cloned()
-                        .unwrap_or_else(|| format!("__binding_{name_pool_index}"));
+                    let name = Self::metadata_pool_string(
+                        module,
+                        name_pool_index,
+                        format!("__binding_{name_pool_index}"),
+                    )?;
                     let binding_kind = BindingKind::from_u8(kind);
                     let replaced = self
                         .scope_chain
@@ -5672,90 +9301,63 @@ impl InterpreterCore {
                 Ir3Instruction::LoadScoped {
                     dst,
                     name_pool_index,
-                } => {
-                    let name = module
-                        .constant_pool
-                        .get(name_pool_index as usize)
-                        .cloned()
-                        .unwrap_or_else(|| format!("__binding_{name_pool_index}"));
-                    let val = if let Some((_, binding)) = self.scope_chain.resolve(&name) {
-                        if !binding.initialized {
-                            return Err(InterpreterError::UninitializedBinding {
-                                name: name.clone(),
-                            });
+                } => match self.load_scoped_binding(module, name_pool_index) {
+                    Ok((value, label)) => {
+                        self.write_reg_with_label(dst, value, label)?;
+                        self.ip += 1;
+                    }
+                    Err(error)
+                        if matches!(&error, InterpreterError::UninitializedBinding { .. })
+                            && self.has_exception_target_frame() =>
+                    {
+                        match self.route_run_loop_javascript_error(module, error, mode)? {
+                            None => continue,
+                            Some(error) => return Err(error),
                         }
-                        binding.value.clone()
-                    } else if let Some(context) = self.active_cjs_context.as_ref() {
-                        let (filename, dirname) =
-                            self.cjs_filename_dirname(Some(&context.module_specifier));
-                        match name.as_str() {
-                            "__filename" => filename,
-                            "__dirname" => dirname,
-                            _ => Value::Undefined,
-                        }
-                    } else {
-                        Value::Undefined
-                    };
-                    self.write_reg(dst, val)?;
-                    self.ip += 1;
-                }
+                    }
+                    Err(error) => return Err(error),
+                },
                 Ir3Instruction::StoreScoped {
                     src,
                     name_pool_index,
-                } => {
-                    let name = module
-                        .constant_pool
-                        .get(name_pool_index as usize)
-                        .cloned()
-                        .unwrap_or_else(|| format!("__binding_{name_pool_index}"));
-                    let val = self.read_reg(src)?;
-                    let mut previous = None;
-                    if let Some(binding) = self.scope_chain.resolve_mut(&name) {
-                        if !binding.initialized {
-                            return Err(InterpreterError::UninitializedBinding {
-                                name: name.clone(),
-                            });
+                } => match self.store_scoped_binding(module, src, name_pool_index) {
+                    Ok(()) => self.ip += 1,
+                    Err(error)
+                        if matches!(
+                            &error,
+                            InterpreterError::UninitializedBinding { .. }
+                                | InterpreterError::ConstAssignment { .. }
+                        ) && self.has_exception_target_frame() =>
+                    {
+                        match self.route_run_loop_javascript_error(module, error, mode)? {
+                            None => continue,
+                            Some(error) => return Err(error),
                         }
-                        if binding.kind == BindingKind::Const {
-                            return Err(InterpreterError::ConstAssignment { name: name.clone() });
-                        }
-                        previous = Some(binding.clone());
-                        binding.value = val;
                     }
-                    // Silently ignore stores to undeclared variables
-                    // (strict mode would throw, but baseline is lenient).
-                    if let Err(err) = self.sync_estimated_memory_bytes() {
-                        if let Some(old_binding) = previous
-                            && let Some(binding) = self.scope_chain.resolve_mut(&name)
-                        {
-                            *binding = old_binding;
-                        }
-                        self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
-                        return Err(err);
-                    }
-                    self.ip += 1;
-                }
+                    Err(error) => return Err(error),
+                },
                 Ir3Instruction::InitBinding {
                     name_pool_index,
                     src,
                 } => {
-                    let name = module
-                        .constant_pool
-                        .get(name_pool_index as usize)
-                        .cloned()
-                        .unwrap_or_else(|| format!("__binding_{name_pool_index}"));
+                    let name = Self::metadata_pool_string(
+                        module,
+                        name_pool_index,
+                        format!("__binding_{name_pool_index}"),
+                    )?;
                     let val = self.read_reg(src)?;
+                    let label = self.read_reg_label(src)?;
                     let mut previous = None;
-                    if let Some(binding) = self.scope_chain.resolve_mut(&name) {
-                        previous = Some(binding.clone());
-                        binding.value = val;
-                        binding.initialized = true;
+                    if let Some((_, binding)) = self.scope_chain.resolve(&name) {
+                        previous = Some((binding.clone(), binding.snapshot_state()?));
+                        let mut state = binding.state_mut()?;
+                        state.value = val;
+                        state.label = label;
+                        state.initialized = true;
                     }
                     if let Err(err) = self.sync_estimated_memory_bytes() {
-                        if let Some(old_binding) = previous
-                            && let Some(binding) = self.scope_chain.resolve_mut(&name)
-                        {
-                            *binding = old_binding;
+                        if let Some((binding, old_state)) = previous {
+                            binding.restore_state(old_state)?;
                         }
                         self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
                         return Err(err);
@@ -5805,13 +9407,22 @@ impl InterpreterCore {
             (Value::Float(x), Value::Int(y)) => {
                 Ok(Value::Float(Float64::new(x.inner() + *y as f64)))
             }
-            // String concatenation
+            // String concatenation over exact code units: a trailing high
+            // surrogate heals against a leading low surrogate (bd-2vzgi),
+            // e.g. s.charAt(1) + s.charAt(2) === "😀" for s = "a😀b".
             (Value::Str(x), Value::Str(y)) => {
                 self.check_string_limit(x.len().saturating_add(y.len()))?;
-                Ok(Value::Str(format!("{x}{y}")))
+                Ok(Value::Str(x.concat(y)))
             }
             (Value::Str(x), other) => {
                 let other_str = match other {
+                    Value::Symbol(_) => {
+                        return Err(InterpreterError::TypeError {
+                            expected: "string concatenation operand coercible to string"
+                                .to_string(),
+                            got: "symbol".to_string(),
+                        });
+                    }
                     Value::Object(_) | Value::Iterator(_) | Value::Generator(_) => {
                         "[object Object]".to_string()
                     }
@@ -5823,10 +9434,17 @@ impl InterpreterCore {
                     _ => other.to_string(),
                 };
                 self.check_string_limit(x.len().saturating_add(other_str.len()))?;
-                Ok(Value::Str(format!("{x}{other_str}")))
+                Ok(Value::Str(x.concat(&JsString::from(other_str))))
             }
             (other, Value::Str(y)) => {
                 let other_str = match other {
+                    Value::Symbol(_) => {
+                        return Err(InterpreterError::TypeError {
+                            expected: "string concatenation operand coercible to string"
+                                .to_string(),
+                            got: "symbol".to_string(),
+                        });
+                    }
                     Value::Object(_) | Value::Iterator(_) | Value::Generator(_) => {
                         "[object Object]".to_string()
                     }
@@ -5838,7 +9456,7 @@ impl InterpreterCore {
                     _ => other.to_string(),
                 };
                 self.check_string_limit(other_str.len().saturating_add(y.len()))?;
-                Ok(Value::Str(format!("{other_str}{y}")))
+                Ok(Value::Str(JsString::from(other_str).concat(y)))
             }
             _ => {
                 // JS coercion: non-string primitives coerce to number for +.
@@ -6064,29 +9682,34 @@ impl InterpreterCore {
         }
     }
 
+    /// ECMAScript `ToInt32` for a floating-point operand (ECMA-262 §7.1.6):
+    /// truncate toward zero, reduce modulo 2^32, and reinterpret the low 32
+    /// bits as signed. Rust's `f64 as i32` cast *saturates* (since 1.45), so
+    /// every operand whose magnitude exceeds 2^31 would collapse to
+    /// `i32::MAX` — wrong for JS bitwise/shift semantics, which require
+    /// modular wrapping (e.g. `(3000000000.5) | 0` is `-1294967296`, not
+    /// `2147483647`). NaN and ±Infinity map to 0. `f64 % 2^32` via
+    /// `rem_euclid` is exact (IEEE `fmod` is exact), so this is precise for
+    /// every finite input, including magnitudes past 2^53.
+    fn js_to_int32(value: f64) -> i32 {
+        if !value.is_finite() {
+            return 0;
+        }
+        (value.trunc().rem_euclid(4_294_967_296.0) as u32) as i32
+    }
+
     fn eval_bit_not(&self, src: u32) -> Result<Value, InterpreterError> {
         let value = self.read_reg(src)?;
         // JS bitwise ops: ToInt32 conversion
         let number = match &value {
             Value::Int(n) => *n as i32,
-            Value::Float(f) => {
-                let v = f.inner();
-                if v.is_nan() || v.is_infinite() {
-                    0
-                } else {
-                    v as i32
-                }
-            }
+            Value::Float(f) => Self::js_to_int32(f.inner()),
             _ => {
                 let n = Self::coerce_to_float(&value).ok_or(InterpreterError::TypeError {
                     expected: "number-coercible primitive".to_string(),
                     got: value.type_name().to_string(),
                 })?;
-                if n.is_nan() || n.is_infinite() {
-                    0
-                } else {
-                    n as i32
-                }
+                Self::js_to_int32(n)
             }
         };
         Ok(Value::Int((!number) as i64))
@@ -6096,9 +9719,12 @@ impl InterpreterCore {
         let a = self.read_reg(lhs)?;
         let b = self.read_reg(rhs)?;
 
-        // String comparison
+        // String comparison: lexicographic over exact UTF-16 code units per
+        // ES2020 7.2.13 IsLessThan, matching the engine seam upgraded by
+        // bd-rdnhc (bd-7zwar; previously the derived code-point/byte order,
+        // which disagrees for astral content and projects lone surrogates).
         if let (Value::Str(x), Value::Str(y)) = (&a, &b) {
-            let ordering = x.cmp(y);
+            let ordering = x.utf16_cmp(y);
             let result = match op {
                 "<" => ordering == Ordering::Less,
                 "<=" => matches!(ordering, Ordering::Less | Ordering::Equal),
@@ -6185,28 +9811,18 @@ impl InterpreterCore {
         let a = self.read_reg(lhs)?;
         let b = self.read_reg(rhs)?;
 
-        // JS ToInt32: convert to float then truncate
+        // JS ToInt32: truncate toward zero then reduce modulo 2^32 (wrapping,
+        // not saturating — see `js_to_int32`).
         let to_i32 = |v: &Value| -> Result<i32, InterpreterError> {
             match v {
                 Value::Int(n) => Ok(*n as i32),
-                Value::Float(f) => {
-                    let fv = f.inner();
-                    if fv.is_nan() || fv.is_infinite() {
-                        Ok(0)
-                    } else {
-                        Ok(fv as i32)
-                    }
-                }
+                Value::Float(f) => Ok(Self::js_to_int32(f.inner())),
                 _ => {
                     let n = Self::coerce_to_float(v).ok_or(InterpreterError::TypeError {
                         expected: "number".to_string(),
                         got: v.type_name().to_string(),
                     })?;
-                    if n.is_nan() || n.is_infinite() {
-                        Ok(0)
-                    } else {
-                        Ok(n as i32)
-                    }
+                    Ok(Self::js_to_int32(n))
                 }
             }
         };
@@ -6235,35 +9851,53 @@ impl InterpreterCore {
     fn eval_instanceof(&mut self, lhs: u32, rhs: u32) -> Result<Value, InterpreterError> {
         let candidate = self.read_reg(lhs)?;
         let constructor = self.read_reg(rhs)?;
-        let func_idx = match constructor {
-            Value::Function(func_idx) => func_idx,
-            other => {
-                return Err(InterpreterError::TypeError {
-                    expected: "function".to_string(),
-                    got: other.type_name().to_string(),
-                });
-            }
-        };
+        let prototype = self
+            .function_prototype_for_value(&constructor)?
+            .ok_or_else(|| InterpreterError::TypeError {
+                expected: "function".to_string(),
+                got: constructor.type_name().to_string(),
+            })?;
 
         let Value::Object(object_id) = candidate else {
             return Ok(Value::Bool(false));
         };
 
-        let prototype = self.ensure_function_prototype(func_idx)?;
         Ok(Value::Bool(
             self.prototype_chain_contains(object_id, prototype)?,
         ))
     }
 
-    fn eval_in_operator(&self, lhs: u32, rhs: u32) -> Result<Value, InterpreterError> {
-        let key = Self::property_key(&self.read_reg(lhs)?);
+    fn eval_in_operator(
+        &self,
+        module: &Ir3Module,
+        lhs: u32,
+        rhs: u32,
+    ) -> Result<Value, InterpreterError> {
+        let key = Self::executable_property_key(&self.read_reg(lhs)?);
+        self.validate_executable_property_key(&key)?;
         let target = self.read_reg(rhs)?;
         match target {
             Value::Object(object_id) => {
                 self.heap
                     .get(object_id.0 as usize)
                     .ok_or(InterpreterError::ObjectNotFound { id: object_id.0 })?;
-                Ok(Value::Bool(self.prototype_chain_has_key(object_id, &key)?))
+                self.run_pre_runtime_property_access_hook(module, object_id, &key)?;
+                Ok(Value::Bool(
+                    self.prototype_chain_has_runtime_key(object_id, &key)?,
+                ))
+            }
+            function_like if Self::function_object_key(&function_like).is_some() => {
+                let Some(object_id) = self.function_object_id(&function_like) else {
+                    self.preflight_legacy_property_key_for_hook(&key)?;
+                    return Ok(Value::Bool(false));
+                };
+                self.heap
+                    .get(object_id.0 as usize)
+                    .ok_or(InterpreterError::ObjectNotFound { id: object_id.0 })?;
+                self.run_pre_runtime_property_access_hook(module, object_id, &key)?;
+                Ok(Value::Bool(
+                    self.prototype_chain_has_runtime_key(object_id, &key)?,
+                ))
             }
             other => Err(InterpreterError::TypeError {
                 expected: "object".to_string(),
@@ -6320,60 +9954,407 @@ impl InterpreterCore {
         }
     }
 
-    fn init_for_of_iterator(&mut self, value: Value) -> Result<Value, InterpreterError> {
-        let values = self.collect_for_of_values(&value)?;
+    fn init_for_of_iterator(
+        &mut self,
+        module: Option<&Ir3Module>,
+        value: Value,
+    ) -> Result<Value, InterpreterError> {
+        if matches!(value, Value::Iterator(_)) {
+            return Ok(value);
+        }
+
+        let mut iterator_object = None;
+        let mut next_method = None;
+        let values = if let (Some(module), Value::Object(iterable_object)) = (module, &value) {
+            let iterator_key = RuntimePropertyKey::Symbol(WellKnownSymbol::Iterator.id());
+            match self.prototype_chain_lookup_runtime_property(*iterable_object, &iterator_key)? {
+                None => self.collect_for_of_values(&value)?,
+                Some(property) => {
+                    let method_completion = self.read_runtime_property_inline(
+                        module,
+                        Value::Object(*iterable_object),
+                        Some(property),
+                    )?;
+                    let method = self.complete_inline_call(method_completion)?;
+                    if !Self::is_sync_callable(&method) {
+                        return Err(InterpreterError::TypeError {
+                            expected: "callable Symbol.iterator method".to_string(),
+                            got: method.type_name().to_string(),
+                        });
+                    }
+                    let iterator_completion = self.invoke_inline_method_call(
+                        module,
+                        method,
+                        Value::Object(*iterable_object),
+                    )?;
+                    let iterator = self.complete_inline_call(iterator_completion)?;
+                    match iterator {
+                        Value::Iterator(_) => return Ok(iterator),
+                        Value::Object(object_id) => {
+                            let next_property = self.prototype_chain_lookup_runtime_property(
+                                object_id,
+                                &RuntimePropertyKey::String(JsString::from("next")),
+                            )?;
+                            let next_completion = self.read_runtime_property_inline(
+                                module,
+                                Value::Object(object_id),
+                                next_property,
+                            )?;
+                            let next = self.complete_inline_call(next_completion)?;
+                            if !Self::is_sync_callable(&next) {
+                                return Err(InterpreterError::TypeError {
+                                    expected: "callable iterator.next".to_string(),
+                                    got: next.type_name().to_string(),
+                                });
+                            }
+                            iterator_object = Some(object_id);
+                            next_method = Some(next);
+                            Vec::new()
+                        }
+                        other => {
+                            return Err(InterpreterError::TypeError {
+                                expected: "object returned by Symbol.iterator".to_string(),
+                                got: other.type_name().to_string(),
+                            });
+                        }
+                    }
+                }
+            }
+        } else {
+            self.collect_for_of_values(&value)?
+        };
         let handle = self.alloc_iterator(RuntimeIteratorState::ForOf(RuntimeForOfState {
             values,
+            iterator_object,
+            next_method,
             next_index: 0,
             done: false,
             closed: false,
+            return_called: false,
         }))?;
         Ok(Value::Iterator(handle))
     }
 
     fn advance_for_of_iterator(
         &mut self,
+        module: Option<&Ir3Module>,
         iterator: Value,
     ) -> Result<Option<Value>, InterpreterError> {
         let handle = self.expect_iterator_handle(iterator)?;
-        match self.iterator_state_mut(handle)? {
+        let custom_step = match self.iterator_state_mut(handle)? {
             RuntimeIteratorState::ForOf(state) => {
                 if state.closed || state.done {
                     state.done = true;
                     return Ok(None);
                 }
-                if let Some(value) = state.values.get(state.next_index).cloned() {
+                if let Some(next_method) = state.next_method.clone() {
+                    let object_id =
+                        state
+                            .iterator_object
+                            .ok_or_else(|| InterpreterError::TypeError {
+                                expected: "custom iterator receiver".to_string(),
+                                got: "missing iterator object".to_string(),
+                            })?;
+                    Some((object_id, next_method))
+                } else if let Some(value) = state.values.get(state.next_index).cloned() {
                     state.next_index += 1;
-                    Ok(Some(value))
+                    return Ok(Some(value));
                 } else {
                     state.done = true;
-                    Ok(None)
+                    return Ok(None);
                 }
             }
-            RuntimeIteratorState::ForIn(_) => Err(InterpreterError::TypeError {
-                expected: "for..of iterator".to_string(),
-                got: "for..in iterator".to_string(),
-            }),
+            RuntimeIteratorState::ForIn(_) => {
+                return Err(InterpreterError::TypeError {
+                    expected: "for..of iterator".to_string(),
+                    got: "for..in iterator".to_string(),
+                });
+            }
+        };
+
+        let (iterator_object, next_method) =
+            custom_step.expect("custom for-of state selected a next method");
+        let module = module.ok_or_else(|| InterpreterError::TypeError {
+            expected: "module-backed custom iterator.next".to_string(),
+            got: "missing module context".to_string(),
+        })?;
+        let result_completion =
+            self.invoke_inline_method_call(module, next_method, Value::Object(iterator_object))?;
+        let result = self.complete_inline_call(result_completion)?;
+        let Value::Object(result_object) = result else {
+            return Err(InterpreterError::TypeError {
+                expected: "iterator result object".to_string(),
+                got: result.type_name().to_string(),
+            });
+        };
+        let done_property = self.prototype_chain_lookup_runtime_property(
+            result_object,
+            &RuntimePropertyKey::String(JsString::from("done")),
+        )?;
+        let done_completion =
+            self.read_runtime_property_inline(module, Value::Object(result_object), done_property)?;
+        let done = self.complete_inline_call(done_completion)?;
+        if done.is_truthy() {
+            if let RuntimeIteratorState::ForOf(state) = self.iterator_state_mut(handle)? {
+                state.done = true;
+            }
+            return Ok(None);
         }
+        let value_property = self.prototype_chain_lookup_runtime_property(
+            result_object,
+            &RuntimePropertyKey::String(JsString::from("value")),
+        )?;
+        let value_completion = self.read_runtime_property_inline(
+            module,
+            Value::Object(result_object),
+            value_property,
+        )?;
+        let value = self.complete_inline_call(value_completion)?;
+        Ok(Some(value))
     }
 
     fn close_iterator(
         &mut self,
+        module: &Ir3Module,
         iterator: Value,
-        _reason: IteratorCloseReason,
+        reason: IteratorCloseReason,
     ) -> Result<(), InterpreterError> {
         let handle = self.expect_iterator_handle(iterator)?;
-        match self.iterator_state_mut(handle)? {
+        let iterator_object = match self.iterator_state_mut(handle)? {
             RuntimeIteratorState::ForIn(state) => {
                 state.closed = true;
                 state.done = true;
+                None
             }
             RuntimeIteratorState::ForOf(state) => {
                 state.closed = true;
                 state.done = true;
+                if state.return_called {
+                    return Ok(());
+                }
+                state.iterator_object
             }
+        };
+
+        let Some(iterator_object) = iterator_object else {
+            return Ok(());
+        };
+        let return_property = self.prototype_chain_lookup_runtime_property(
+            iterator_object,
+            &RuntimePropertyKey::String(JsString::from("return")),
+        )?;
+        let return_method = match self.read_runtime_property_inline(
+            module,
+            Value::Object(iterator_object),
+            return_property,
+        ) {
+            Ok(InlineCallCompletion::Value(value)) => value,
+            Ok(InlineCallCompletion::Throw(thrown)) => {
+                if reason == IteratorCloseReason::Throw {
+                    return Ok(());
+                }
+                return Err(self.rearm_inline_throw(thrown));
+            }
+            Err(error)
+                if reason == IteratorCloseReason::Throw && Self::is_js_catchable_error(&error) =>
+            {
+                return Ok(());
+            }
+            Err(error) => return Err(error),
+        };
+        if return_method.is_nullish() {
+            return Ok(());
+        }
+        if !Self::is_sync_callable(&return_method) {
+            if reason == IteratorCloseReason::Throw {
+                return Ok(());
+            }
+            return Err(InterpreterError::TypeError {
+                expected: "callable iterator.return".to_string(),
+                got: return_method.type_name().to_string(),
+            });
+        }
+        if let RuntimeIteratorState::ForOf(state) = self.iterator_state_mut(handle)? {
+            state.return_called = true;
+        }
+
+        let close_value = match self.invoke_inline_method_call(
+            module,
+            return_method,
+            Value::Object(iterator_object),
+        ) {
+            Ok(InlineCallCompletion::Value(value)) => value,
+            Ok(InlineCallCompletion::Throw(thrown)) => {
+                if reason == IteratorCloseReason::Throw {
+                    return Ok(());
+                }
+                return Err(self.rearm_inline_throw(thrown));
+            }
+            Err(error)
+                if reason == IteratorCloseReason::Throw && Self::is_js_catchable_error(&error) =>
+            {
+                return Ok(());
+            }
+            Err(error) => return Err(error),
+        };
+        if !close_value.is_object_like() {
+            if reason == IteratorCloseReason::Throw {
+                return Ok(());
+            }
+            return Err(InterpreterError::TypeError {
+                expected: "iterator return method to return an object".to_string(),
+                got: close_value.type_name().to_string(),
+            });
         }
         Ok(())
+    }
+
+    fn is_sync_callable(value: &Value) -> bool {
+        matches!(
+            value,
+            Value::Function(_)
+                | Value::Closure(_)
+                | Value::GeneratorFunction(_)
+                | Value::AsyncFunction(_)
+                | Value::AsyncGeneratorFunction(_)
+                | Value::BuiltinFunction(_)
+        )
+    }
+
+    fn is_js_catchable_error(error: &InterpreterError) -> bool {
+        matches!(
+            error,
+            InterpreterError::TypeError { .. }
+                | InterpreterError::RangeError { .. }
+                | InterpreterError::UninitializedBinding { .. }
+                | InterpreterError::ConstAssignment { .. }
+                | InterpreterError::UncaughtException { .. }
+        )
+    }
+
+    fn read_runtime_property_inline(
+        &mut self,
+        module: &Ir3Module,
+        receiver: Value,
+        property: Option<RuntimeProperty>,
+    ) -> Result<InlineCallCompletion, InterpreterError> {
+        match property {
+            Some(RuntimeProperty::Data(value)) => Ok(InlineCallCompletion::Value(value)),
+            Some(RuntimeProperty::Accessor(accessor)) => match accessor.get {
+                Some(getter) => self.invoke_inline_method_call(module, getter, receiver),
+                None => Ok(InlineCallCompletion::Value(Value::Undefined)),
+            },
+            None => Ok(InlineCallCompletion::Value(Value::Undefined)),
+        }
+    }
+
+    fn complete_inline_call(
+        &mut self,
+        completion: InlineCallCompletion,
+    ) -> Result<Value, InterpreterError> {
+        match completion {
+            InlineCallCompletion::Value(value) => Ok(value),
+            InlineCallCompletion::Throw(thrown) => Err(self.rearm_inline_throw(thrown)),
+        }
+    }
+
+    fn rearm_inline_throw(&mut self, thrown: LabeledException) -> InterpreterError {
+        let description = Self::exception_description(&thrown.value);
+        self.pending_return = None;
+        self.pending_exception = Some(thrown);
+        InterpreterError::UncaughtException { value: description }
+    }
+
+    fn exception_description(value: &Value) -> String {
+        match value {
+            Value::Str(text) => text.to_string(),
+            Value::Int(value) => value.to_string(),
+            Value::Bool(value) => value.to_string(),
+            Value::Undefined => "undefined".to_string(),
+            Value::Null => "null".to_string(),
+            _ => "[object]".to_string(),
+        }
+    }
+
+    /// Execute a no-argument method without disturbing the caller's active
+    /// abrupt-completion/finally state. A synthetic catch records explicit
+    /// JavaScript throws as data so their exact value can be re-armed after
+    /// restoring the caller snapshot.
+    fn invoke_inline_method_call(
+        &mut self,
+        module: &Ir3Module,
+        callee: Value,
+        receiver: Value,
+    ) -> Result<InlineCallCompletion, InterpreterError> {
+        let mut wrapper = module.clone();
+        let wrapper_start = wrapper.instructions.len();
+        let catch_target = u32::try_from(wrapper_start.saturating_add(6)).map_err(|_| {
+            InterpreterError::InstructionOutOfBounds {
+                ip: wrapper_start,
+                count: wrapper.instructions.len(),
+            }
+        })?;
+        wrapper.instructions.push(Ir3Instruction::LoadBool {
+            dst: 2,
+            value: false,
+        });
+        wrapper.instructions.push(Ir3Instruction::BeginTry {
+            catch_target,
+            finally_target: None,
+        });
+        wrapper.instructions.push(Ir3Instruction::CallMethod {
+            receiver: 0,
+            callee: 1,
+            args: RegRange { start: 2, count: 0 },
+            dst: 0,
+        });
+        wrapper.instructions.push(Ir3Instruction::EndTry);
+        wrapper.instructions.push(Ir3Instruction::LoadBool {
+            dst: 2,
+            value: true,
+        });
+        wrapper
+            .instructions
+            .push(Ir3Instruction::Return { value: 0 });
+        wrapper
+            .instructions
+            .push(Ir3Instruction::EnterCatch { dst: 0 });
+        wrapper
+            .instructions
+            .push(Ir3Instruction::Return { value: 0 });
+
+        let snapshot = self.snapshot_module_execution();
+        let saved_active_cjs_context = self.active_cjs_context.clone();
+        let result = (|| -> Result<InlineCallCompletion, InterpreterError> {
+            self.registers.clear();
+            self.register_labels.clear();
+            self.clear_register_range(0, self.config.max_registers as usize);
+            self.call_stack.clear();
+            self.ip = wrapper_start;
+            self.register_base = 0;
+            self.catch_frames.clear();
+            self.pending_exception = None;
+            self.pending_return = None;
+            self.suspended_abrupt_completions.clear();
+            self.finally_frames.clear();
+            self.pending_finally_entry = None;
+            self.copy_data_properties_states.clear();
+            self.pending_captures.clear();
+            self.current_module_specifier = Some(module.header.source_label.clone());
+            self.sync_estimated_memory_bytes()?;
+            self.write_reg(0, receiver)?;
+            self.write_reg(1, callee)?;
+            let value = self.run_loop(&wrapper)?;
+            let label = self.read_reg_label(0)?;
+            Ok(if matches!(self.read_reg(2)?, Value::Bool(true)) {
+                InlineCallCompletion::Value(value)
+            } else {
+                InlineCallCompletion::Throw(LabeledException { value, label })
+            })
+        })();
+        self.restore_module_execution(snapshot);
+        self.active_cjs_context = saved_active_cjs_context;
+        result
     }
 
     fn prototype_chain_contains(
@@ -6408,19 +10389,49 @@ impl InterpreterCore {
         Ok(false)
     }
 
-    fn decode_accessor_definition_key(key: &str) -> Option<(AccessorKind, String)> {
-        key.strip_prefix(IR_ACCESSOR_GET_PREFIX)
-            .map(|name| (AccessorKind::Get, name.to_string()))
-            .or_else(|| {
-                key.strip_prefix(IR_ACCESSOR_SET_PREFIX)
-                    .map(|name| (AccessorKind::Set, name.to_string()))
-            })
+    fn decode_accessor_definition_key(key: &JsString) -> Option<(AccessorKind, JsString)> {
+        let units = key.code_units_vec();
+        for (prefix, kind) in [
+            (IR_ACCESSOR_GET_PREFIX, AccessorKind::Get),
+            (IR_ACCESSOR_SET_PREFIX, AccessorKind::Set),
+        ] {
+            let prefix = prefix.encode_utf16().collect::<Vec<_>>();
+            if units.starts_with(&prefix) {
+                return Some((kind, JsString::from_code_units(&units[prefix.len()..])));
+            }
+        }
+        None
     }
 
     fn prototype_chain_lookup_property(
         &self,
         object_id: ObjectId,
         key: &str,
+    ) -> Result<Option<RuntimeProperty>, InterpreterError> {
+        self.prototype_chain_lookup_typed_property(
+            object_id,
+            &TypedPropertyKey::String(key.to_string()),
+        )
+    }
+
+    fn prototype_chain_lookup_typed_property(
+        &self,
+        object_id: ObjectId,
+        key: &TypedPropertyKey,
+    ) -> Result<Option<RuntimeProperty>, InterpreterError> {
+        let key = match key {
+            TypedPropertyKey::String(key) => {
+                RuntimePropertyKey::String(JsString::from(key.as_str()))
+            }
+            TypedPropertyKey::Symbol(symbol) => RuntimePropertyKey::Symbol(*symbol),
+        };
+        self.prototype_chain_lookup_runtime_property(object_id, &key)
+    }
+
+    fn prototype_chain_lookup_runtime_property(
+        &self,
+        object_id: ObjectId,
+        key: &RuntimePropertyKey,
     ) -> Result<Option<RuntimeProperty>, InterpreterError> {
         let mut current = Some(object_id);
         let mut depth = 0u32;
@@ -6434,11 +10445,30 @@ impl InterpreterCore {
                 .heap
                 .get(id.0 as usize)
                 .ok_or(InterpreterError::ObjectNotFound { id: id.0 })?;
-            if let Some(accessor) = object.accessors.get(key) {
-                return Ok(Some(RuntimeProperty::Accessor(accessor.clone())));
-            }
-            if let Some(val) = object.properties.get(key) {
-                return Ok(Some(RuntimeProperty::Data(val.clone())));
+            match key {
+                RuntimePropertyKey::String(key) => {
+                    if let Some(accessor) = object.exact_accessor(key) {
+                        return Ok(Some(RuntimeProperty::Accessor(accessor)));
+                    }
+                    if let Some(val) = object.properties.get_exact(key) {
+                        return Ok(Some(RuntimeProperty::Data(val.clone())));
+                    }
+                }
+                RuntimePropertyKey::Symbol(symbol) => {
+                    if let Some(property) = object.properties.baseline_symbol_property(*symbol) {
+                        return Ok(Some(match property {
+                            BaselineSymbolProperty::Data(value) => {
+                                RuntimeProperty::Data(value.clone())
+                            }
+                            BaselineSymbolProperty::Accessor { get, set } => {
+                                RuntimeProperty::Accessor(AccessorProperty {
+                                    get: get.clone(),
+                                    set: set.clone(),
+                                })
+                            }
+                        }));
+                    }
+                }
             }
             current = object.prototype;
             depth += 1;
@@ -6459,6 +10489,392 @@ impl InterpreterCore {
         match property {
             RuntimeProperty::Data(value) => Ok(value),
             RuntimeProperty::Accessor(accessor) => Ok(accessor.get.unwrap_or(Value::Undefined)),
+        }
+    }
+
+    fn copy_data_properties_object_id(&self, source: &Value) -> Option<ObjectId> {
+        match source {
+            Value::Object(object_id) => Some(*object_id),
+            _ => self.function_object_id(source),
+        }
+    }
+
+    fn copy_data_properties_keys(
+        &self,
+        source: &Value,
+    ) -> Result<Vec<RuntimePropertyKey>, InterpreterError> {
+        match source {
+            Value::Undefined | Value::Null => Err(InterpreterError::TypeError {
+                expected: "object-coercible object-rest source".to_string(),
+                got: source.type_name().to_string(),
+            }),
+            Value::Str(text) => Ok((0..text.utf16_len())
+                .map(|index| RuntimePropertyKey::String(JsString::from(index.to_string())))
+                .collect()),
+            _ => {
+                let Some(object_id) = self.copy_data_properties_object_id(source) else {
+                    // Boolean and number wrappers have no enumerable own
+                    // properties in the baseline carrier. Other exotic
+                    // object-like values likewise expose no ordinary own-key
+                    // storage here.
+                    return Ok(Vec::new());
+                };
+                let object = self
+                    .heap
+                    .get(object_id.0 as usize)
+                    .ok_or(InterpreterError::ObjectNotFound { id: object_id.0 })?;
+                Ok(object
+                    .own_runtime_property_keys()
+                    .into_iter()
+                    // Array length is a non-enumerable own data property. The
+                    // current baseline descriptor carrier has no general
+                    // enumerable bit yet, so preserve this shipped invariant
+                    // explicitly for array-backed objects.
+                    .filter(|key| {
+                        !(object.is_array
+                            && matches!(key, RuntimePropertyKey::String(key) if key.as_str() == Some("length")))
+                    })
+                    .collect())
+            }
+        }
+    }
+
+    fn copy_data_properties_own_property(
+        &self,
+        source: &Value,
+        key: &RuntimePropertyKey,
+        string_units: Option<&[u16]>,
+    ) -> Result<Option<RuntimeProperty>, InterpreterError> {
+        if let Some(units) = string_units {
+            let RuntimePropertyKey::String(key) = key else {
+                return Ok(None);
+            };
+            let Some(key) = key.as_str() else {
+                return Ok(None);
+            };
+            let Ok(index) = key.parse::<usize>() else {
+                return Ok(None);
+            };
+            return Ok(units.get(index).copied().map(|unit| {
+                RuntimeProperty::Data(Value::Str(JsString::from_code_units(&[unit])))
+            }));
+        }
+
+        let Some(object_id) = self.copy_data_properties_object_id(source) else {
+            return Ok(None);
+        };
+        let object = self
+            .heap
+            .get(object_id.0 as usize)
+            .ok_or(InterpreterError::ObjectNotFound { id: object_id.0 })?;
+        if object.is_array
+            && matches!(key, RuntimePropertyKey::String(key) if key.as_str() == Some("length"))
+        {
+            return Ok(None);
+        }
+        Ok(match key {
+            RuntimePropertyKey::String(key) => {
+                if let Some(accessor) = object.exact_accessor(key) {
+                    Some(RuntimeProperty::Accessor(accessor))
+                } else {
+                    object
+                        .properties
+                        .get_exact(key)
+                        .cloned()
+                        .map(RuntimeProperty::Data)
+                }
+            }
+            RuntimePropertyKey::Symbol(symbol) => object
+                .properties
+                .baseline_symbol_property(*symbol)
+                .map(|property| match property {
+                    BaselineSymbolProperty::Data(value) => RuntimeProperty::Data(value.clone()),
+                    BaselineSymbolProperty::Accessor { get, set } => {
+                        RuntimeProperty::Accessor(AccessorProperty {
+                            get: get.clone(),
+                            set: set.clone(),
+                        })
+                    }
+                }),
+        })
+    }
+
+    fn discard_copy_data_properties_state(&mut self, state_index: usize) {
+        if state_index < self.copy_data_properties_states.len() {
+            self.copy_data_properties_states.remove(state_index);
+        }
+        self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
+    }
+
+    fn discard_all_copy_data_properties_states(&mut self) {
+        self.copy_data_properties_states.clear();
+        self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
+    }
+
+    /// Apply one copied value according to the operation's target-write
+    /// semantics. Object rest/spread use CreateDataProperty; Object.assign
+    /// uses Set and therefore may suspend in a target setter.
+    fn write_copied_property(
+        &mut self,
+        module: &Ir3Module,
+        state_index: usize,
+        key: RuntimePropertyKey,
+        value: Value,
+    ) -> Result<bool, InterpreterError> {
+        let target_id = self.copy_data_properties_states[state_index].target_id;
+        let write_mode = self.copy_data_properties_states[state_index]
+            .write_mode
+            .clone();
+        let CopyDataPropertiesWriteMode::Set {
+            target_receiver, ..
+        } = write_mode
+        else {
+            self.set_plain_data_runtime_property(target_id, key, value)?;
+            return Ok(false);
+        };
+
+        self.run_pre_runtime_property_access_hook(module, target_id, &key)?;
+        if matches!(&key, RuntimePropertyKey::String(key) if key.as_str() == Some("__proto__")) {
+            let prototype = match value {
+                Value::Object(id) => Some(id),
+                Value::Null => None,
+                _ => return Ok(false),
+            };
+            self.heap
+                .get_mut(target_id.0 as usize)
+                .ok_or(InterpreterError::ObjectNotFound { id: target_id.0 })?
+                .prototype = prototype;
+            self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
+            return Ok(false);
+        }
+
+        match self.prototype_chain_lookup_runtime_property(target_id, &key)? {
+            Some(RuntimeProperty::Accessor(accessor)) => {
+                let Some(setter) = accessor.set else {
+                    return Err(InterpreterError::TypeError {
+                        expected: "writable Object.assign target property".to_string(),
+                        got: match key {
+                            RuntimePropertyKey::String(key) => key.to_string(),
+                            RuntimePropertyKey::Symbol(symbol) => {
+                                format!("Symbol({})", symbol.0)
+                            }
+                        },
+                    });
+                };
+                self.copy_data_properties_states[state_index].awaiting =
+                    Some(CopyDataPropertiesAwaiting::Setter);
+                self.sync_estimated_memory_bytes()?;
+                self.enter_function_call(
+                    module,
+                    setter,
+                    target_receiver,
+                    vec![value],
+                    self.ip,
+                    None,
+                )?;
+                Ok(true)
+            }
+            _ => {
+                self.set_object_runtime_property(target_id, key, value)?;
+                Ok(false)
+            }
+        }
+    }
+
+    /// Execute or resume one typed own-property copy. Returns `true` when
+    /// control entered a getter or setter; that call returns to this same
+    /// instruction and, for getters, writes `value_dst`.
+    fn execute_copy_data_properties(
+        &mut self,
+        module: &Ir3Module,
+        target: u32,
+        source: u32,
+        excluded: RegRange,
+        value_dst: u32,
+        write_mode: CopyDataPropertiesWriteMode,
+    ) -> Result<bool, InterpreterError> {
+        let instruction_ip = self.ip;
+        let register_base = self.register_base;
+        let call_depth = self.call_stack.len();
+        let state_index = if self
+            .copy_data_properties_states
+            .last()
+            .is_some_and(|state| state.belongs_to(instruction_ip, register_base, call_depth))
+        {
+            self.copy_data_properties_states.len() - 1
+        } else {
+            let target_id = match &write_mode {
+                CopyDataPropertiesWriteMode::CreateData => {
+                    let target_value = self.read_reg(target)?;
+                    let Value::Object(target_id) = target_value else {
+                        return Err(InterpreterError::TypeError {
+                            expected: "object CopyDataProperties target".to_string(),
+                            got: target_value.type_name().to_string(),
+                        });
+                    };
+                    self.heap
+                        .get(target_id.0 as usize)
+                        .ok_or(InterpreterError::ObjectNotFound { id: target_id.0 })?;
+                    target_id
+                }
+                CopyDataPropertiesWriteMode::Set {
+                    target_receiver, ..
+                } => match target_receiver {
+                    Value::Object(target_id) => {
+                        self.heap
+                            .get(target_id.0 as usize)
+                            .ok_or(InterpreterError::ObjectNotFound { id: target_id.0 })?;
+                        *target_id
+                    }
+                    function_like if Self::function_object_key(function_like).is_some() => self
+                        .ensure_function_object(function_like)?
+                        .expect("function-like assign target should have an object carrier"),
+                    other => {
+                        return Err(InterpreterError::TypeError {
+                            expected: "object Object.assign target".to_string(),
+                            got: other.type_name().to_string(),
+                        });
+                    }
+                },
+            };
+            let source_value = self.read_reg(source)?;
+            let keys = self.copy_data_properties_keys(&source_value)?;
+            let string_units = match &source_value {
+                Value::Str(text) => Some(text.code_units_vec()),
+                _ => None,
+            };
+            let mut excluded_keys = BTreeSet::new();
+            for offset in 0..excluded.count {
+                let register = excluded.start.checked_add(offset).ok_or(
+                    InterpreterError::RegisterOutOfBounds {
+                        register: excluded.start,
+                        max: self.config.max_registers,
+                    },
+                )?;
+                excluded_keys.insert(Self::executable_property_key(&self.read_reg(register)?));
+            }
+            let state = CopyDataPropertiesState {
+                instruction_ip,
+                register_base,
+                call_depth,
+                target_id,
+                source: source_value,
+                string_units,
+                keys,
+                excluded: excluded_keys,
+                next_index: 0,
+                write_mode,
+                awaiting: None,
+            };
+            self.check_temporary_memory_budget(Self::estimate_copy_data_properties_state_bytes(
+                &state,
+            ))?;
+            self.copy_data_properties_states.push(state);
+            if let Err(err) = self.sync_estimated_memory_bytes() {
+                self.copy_data_properties_states.pop();
+                self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
+                return Err(err);
+            }
+            self.copy_data_properties_states.len() - 1
+        };
+
+        if let Some(CopyDataPropertiesAwaiting::Getter(key)) = self.copy_data_properties_states
+            [state_index]
+            .awaiting
+            .take()
+        {
+            let value = match self.read_reg(value_dst) {
+                Ok(value) => value,
+                Err(err) => {
+                    self.discard_copy_data_properties_state(state_index);
+                    return Err(err);
+                }
+            };
+            match self.write_copied_property(module, state_index, key, value) {
+                Ok(true) => return Ok(true),
+                Ok(false) => {}
+                Err(err) => {
+                    self.discard_copy_data_properties_state(state_index);
+                    return Err(err);
+                }
+            }
+        }
+
+        loop {
+            let Some(key) = ({
+                let state = &mut self.copy_data_properties_states[state_index];
+                let key = state.keys.get(state.next_index).cloned();
+                if key.is_some() {
+                    state.next_index = state.next_index.saturating_add(1);
+                }
+                key
+            }) else {
+                self.discard_copy_data_properties_state(state_index);
+                return Ok(false);
+            };
+
+            if self.copy_data_properties_states[state_index]
+                .excluded
+                .contains(&key)
+            {
+                continue;
+            }
+
+            let source_value = self.copy_data_properties_states[state_index].source.clone();
+            let string_units = self.copy_data_properties_states[state_index]
+                .string_units
+                .as_deref();
+            let property =
+                match self.copy_data_properties_own_property(&source_value, &key, string_units) {
+                    Ok(property) => property,
+                    Err(err) => {
+                        self.discard_copy_data_properties_state(state_index);
+                        return Err(err);
+                    }
+                };
+            let value = match property {
+                None => continue,
+                Some(RuntimeProperty::Data(value)) => value,
+                Some(RuntimeProperty::Accessor(accessor)) => {
+                    let Some(getter) = accessor.get else {
+                        match self.write_copied_property(module, state_index, key, Value::Undefined)
+                        {
+                            Ok(true) => return Ok(true),
+                            Ok(false) => continue,
+                            Err(err) => {
+                                self.discard_copy_data_properties_state(state_index);
+                                return Err(err);
+                            }
+                        }
+                    };
+                    self.copy_data_properties_states[state_index].awaiting =
+                        Some(CopyDataPropertiesAwaiting::Getter(key));
+                    if let Err(err) = self.sync_estimated_memory_bytes() {
+                        self.discard_copy_data_properties_state(state_index);
+                        return Err(err);
+                    }
+                    if let Err(err) = self.enter_function_call(
+                        module,
+                        getter,
+                        source_value,
+                        Vec::new(),
+                        self.ip,
+                        Some(value_dst),
+                    ) {
+                        self.discard_copy_data_properties_state(state_index);
+                        return Err(err);
+                    }
+                    return Ok(true);
+                }
+            };
+            match self.write_copied_property(module, state_index, key, value) {
+                Ok(true) => return Ok(true),
+                Ok(false) => {}
+                Err(err) => {
+                    self.discard_copy_data_properties_state(state_index);
+                    return Err(err);
+                }
+            }
         }
     }
 
@@ -6502,11 +10918,11 @@ impl InterpreterCore {
         module: &Ir3Module,
         receiver: Value,
         object_id: ObjectId,
-        key: &str,
+        key: &RuntimePropertyKey,
         dst: u32,
     ) -> Result<bool, InterpreterError> {
-        self.run_pre_property_access_hook(module, object_id, key)?;
-        let property = self.prototype_chain_lookup_property(object_id, key)?;
+        self.run_pre_runtime_property_access_hook(module, object_id, key)?;
+        let property = self.prototype_chain_lookup_runtime_property(object_id, key)?;
         self.load_runtime_property(module, receiver, property, dst)
     }
 
@@ -6515,11 +10931,11 @@ impl InterpreterCore {
         module: &Ir3Module,
         receiver: Value,
         object_id: ObjectId,
-        key: String,
+        key: RuntimePropertyKey,
         value: Value,
     ) -> Result<bool, InterpreterError> {
-        self.run_pre_property_access_hook(module, object_id, &key)?;
-        if key == "__proto__" {
+        self.run_pre_runtime_property_access_hook(module, object_id, &key)?;
+        if matches!(&key, RuntimePropertyKey::String(key) if key.as_str() == Some("__proto__")) {
             let prototype = match value {
                 Value::Object(id) => Some(id),
                 Value::Null => None,
@@ -6534,7 +10950,7 @@ impl InterpreterCore {
             self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
             return Ok(false);
         }
-        match self.prototype_chain_lookup_property(object_id, &key)? {
+        match self.prototype_chain_lookup_runtime_property(object_id, &key)? {
             Some(RuntimeProperty::Accessor(accessor)) => {
                 if let Some(setter) = accessor.set {
                     self.enter_function_call(
@@ -6551,7 +10967,7 @@ impl InterpreterCore {
                 }
             }
             _ => {
-                self.set_object_property(object_id, key, value)?;
+                self.set_object_runtime_property(object_id, key, value)?;
                 Ok(false)
             }
         }
@@ -6561,17 +10977,33 @@ impl InterpreterCore {
         &mut self,
         module: &Ir3Module,
         receiver: Value,
-        key: &str,
+        key: &RuntimePropertyKey,
         dst: u32,
     ) -> Result<bool, InterpreterError> {
-        if let Some(object_id) = self.function_object_id(&receiver) {
-            self.run_pre_property_access_hook(module, object_id, key)?;
-            if let Some(property) = self.prototype_chain_lookup_property(object_id, key)? {
-                return self.load_runtime_property(module, receiver, Some(property), dst);
-            }
+        if let (
+            Value::BuiltinFunction(BuiltinFunction {
+                kind: BuiltinFunctionKind::Symbol,
+                ..
+            }),
+            RuntimePropertyKey::String(key),
+        ) = (&receiver, key)
+            && let Some(key) = key.as_str()
+            && let Some(value) = Self::symbol_constructor_property_value(key)
+        {
+            self.write_reg(dst, value)?;
+            return Ok(false);
         }
 
-        if key == "prototype"
+        if let Some(object_id) = self.function_object_id(&receiver) {
+            self.run_pre_runtime_property_access_hook(module, object_id, key)?;
+            if let Some(property) = self.prototype_chain_lookup_runtime_property(object_id, key)? {
+                return self.load_runtime_property(module, receiver, Some(property), dst);
+            }
+        } else {
+            self.preflight_legacy_property_key_for_hook(key)?;
+        }
+
+        if matches!(key, RuntimePropertyKey::String(key) if key.as_str() == Some("prototype"))
             && let Some(prototype) = self.function_prototype_for_value(&receiver)?
         {
             self.write_reg(dst, Value::Object(prototype))?;
@@ -6586,9 +11018,12 @@ impl InterpreterCore {
         &mut self,
         module: &Ir3Module,
         receiver: Value,
-        key: &str,
+        key: &RuntimePropertyKey,
         value: Value,
     ) -> Result<bool, InterpreterError> {
+        if self.function_object_id(&receiver).is_none() {
+            self.preflight_legacy_property_key_for_hook(key)?;
+        }
         let Some(object_id) = self.ensure_function_object(&receiver)? else {
             return Err(InterpreterError::TypeError {
                 expected: "function".to_string(),
@@ -6599,23 +11034,38 @@ impl InterpreterCore {
             module,
             receiver.clone(),
             object_id,
-            key.to_string(),
+            key.clone(),
             value.clone(),
         )?;
         if !called
-            && key == "prototype"
+            && matches!(key, RuntimePropertyKey::String(key) if key.as_str() == Some("prototype"))
             && let Value::Object(prototype) = value
-            && let Some(func_idx) = self.function_index_for_value(&receiver)?
+            && let Some(function_key) = self.function_prototype_key_for_value(&receiver)?
         {
-            self.function_prototypes.insert(func_idx, prototype);
+            self.function_prototypes.insert(function_key, prototype);
         }
         Ok(called)
     }
 
-    fn prototype_chain_has_key(
+    #[cfg(test)]
+    fn prototype_chain_has_typed_key(
         &self,
         object_id: ObjectId,
-        key: &str,
+        key: &TypedPropertyKey,
+    ) -> Result<bool, InterpreterError> {
+        let key = match key {
+            TypedPropertyKey::String(key) => {
+                RuntimePropertyKey::String(JsString::from(key.as_str()))
+            }
+            TypedPropertyKey::Symbol(symbol) => RuntimePropertyKey::Symbol(*symbol),
+        };
+        self.prototype_chain_has_runtime_key(object_id, &key)
+    }
+
+    fn prototype_chain_has_runtime_key(
+        &self,
+        object_id: ObjectId,
+        key: &RuntimePropertyKey,
     ) -> Result<bool, InterpreterError> {
         let mut current = Some(object_id);
         let mut depth = 0u32;
@@ -6629,7 +11079,7 @@ impl InterpreterCore {
                 .heap
                 .get(id.0 as usize)
                 .ok_or(InterpreterError::ObjectNotFound { id: id.0 })?;
-            if object.properties.contains_key(key) || object.accessors.contains_key(key) {
+            if object.contains_own_runtime_property(key) {
                 return Ok(true);
             }
             current = object.prototype;
@@ -6651,11 +11101,12 @@ impl InterpreterCore {
             Value::Int(n) => crate::object_model::JsValue::Int(*n),
             Value::Float(f) => crate::object_model::JsValue::Float(f.inner().to_bits()),
             Value::Str(s) => crate::object_model::JsValue::Str(s.clone()),
+            Value::Symbol(symbol) => crate::object_model::JsValue::Symbol(*symbol),
             Value::Object(id) => {
                 crate::object_model::JsValue::Object(crate::object_model::ObjectHandle(id.0))
             }
             Value::Function(idx) => crate::object_model::JsValue::Function(*idx),
-            _ => crate::object_model::JsValue::Str(val.to_string()),
+            _ => crate::object_model::JsValue::Str(JsString::from(val.to_string())),
         }
     }
 
@@ -6673,23 +11124,58 @@ impl InterpreterCore {
             }
             crate::object_model::JsValue::Object(handle) => Value::Object(ObjectId(handle.0)),
             crate::object_model::JsValue::Function(idx) => Value::Function(*idx),
-            crate::object_model::JsValue::Symbol(sym) => Value::Str(format!("Symbol({})", sym.0)),
+            crate::object_model::JsValue::Symbol(sym) => Value::Symbol(*sym),
         }
+    }
+
+    fn promise_hostcall_argument(
+        &self,
+        args: RegRange,
+        index: u32,
+    ) -> Result<(Value, crate::ifc_artifacts::Label), InterpreterError> {
+        if index >= args.count {
+            return Ok((Value::Undefined, crate::ifc_artifacts::Label::Public));
+        }
+        let register =
+            args.start
+                .checked_add(index)
+                .ok_or(InterpreterError::RegisterOutOfBounds {
+                    register: args.start,
+                    max: self.config.max_registers,
+                })?;
+        Ok((self.read_reg(register)?, self.read_reg_label(register)?))
+    }
+
+    fn promise_hostcall_registration_label(
+        &self,
+        args: RegRange,
+    ) -> Result<crate::ifc_artifacts::Label, InterpreterError> {
+        let mut label = crate::ifc_artifacts::Label::Public;
+        for index in 0..args.count {
+            let (_, argument_label) = self.promise_hostcall_argument(args, index)?;
+            label = label.join(&argument_label);
+        }
+        Ok(label)
     }
 
     fn collect_promise_combinator_inputs(
         &self,
         args: RegRange,
-    ) -> Result<Vec<Value>, InterpreterError> {
+    ) -> Result<Vec<(Value, crate::ifc_artifacts::Label)>, InterpreterError> {
         if args.count == 0 {
             return Ok(Vec::new());
         }
         let first = self.read_reg(args.start)?;
+        let first_label = self.read_reg_label(args.start)?;
         if args.count == 1 {
             if let Value::Object(id) = first {
-                return Ok(self.read_array_like_values(id));
+                return Ok(self
+                    .read_array_like_values(id)
+                    .into_iter()
+                    .map(|value| (value, first_label.clone()))
+                    .collect());
             }
-            return Ok(vec![first]);
+            return Ok(vec![(first, first_label)]);
         }
         let mut values = Vec::with_capacity(args.count as usize);
         for i in 0..args.count {
@@ -6700,7 +11186,7 @@ impl InterpreterCore {
                     register: args.start,
                     max: self.config.max_registers,
                 })?;
-            values.push(self.read_reg(reg)?);
+            values.push((self.read_reg(reg)?, self.read_reg_label(reg)?));
         }
         Ok(values)
     }
@@ -6710,6 +11196,12 @@ impl InterpreterCore {
             .heap
             .get(obj_id.0 as usize)
             .ok_or(InterpreterError::ObjectNotFound { id: obj_id.0 })?;
+        if matches!(object.properties.get("length"), Some(Value::Symbol(_))) {
+            return Err(InterpreterError::TypeError {
+                expected: "array-like length coercible to number".to_string(),
+                got: "symbol".to_string(),
+            });
+        }
         if let Some(Value::Int(length)) = object.properties.get("length") {
             return Ok(u32::try_from((*length).max(0)).unwrap_or(u32::MAX));
         }
@@ -6758,6 +11250,105 @@ impl InterpreterCore {
         Ok(id)
     }
 
+    /// Replace a declared rest-parameter slot with an Array containing every
+    /// trailing argument. Fixed parameters retain their positional values and
+    /// an omitted rest tail becomes an empty Array.
+    fn apply_rest_param(
+        &mut self,
+        module: &Ir3Module,
+        arg_vals: &mut Vec<Value>,
+        rest_param_index: Option<u32>,
+        arity: u32,
+        args: RegRange,
+    ) -> Result<(), InterpreterError> {
+        let Some(rest_index) = rest_param_index else {
+            return Ok(());
+        };
+        self.validate_rest_param_index(rest_index, arity)?;
+
+        let mut elements = Vec::new();
+        for offset in rest_index..args.count {
+            let reg =
+                args.start
+                    .checked_add(offset)
+                    .ok_or(InterpreterError::RegisterOutOfBounds {
+                        register: args.start,
+                        max: self.config.max_registers,
+                    })?;
+            elements.push(self.read_reg(reg)?);
+        }
+        self.run_pre_allocation_hook(module, AllocKind::Array, elements.len())?;
+        let array_id = self.alloc_array_from_values(&elements)?;
+        let rest_slot = rest_index as usize;
+        if arg_vals.len() <= rest_slot {
+            arg_vals.resize(rest_slot + 1, Value::Undefined);
+        }
+        arg_vals.truncate(rest_slot + 1);
+        arg_vals[rest_slot] = Value::Object(array_id);
+        Ok(())
+    }
+
+    /// Label-file twin of [`Self::apply_rest_param`]. The rest Array depends
+    /// on every trailing argument, so its register receives their lattice join.
+    fn apply_rest_param_labels(
+        &self,
+        arg_labels: &mut Vec<crate::ifc_artifacts::Label>,
+        rest_param_index: Option<u32>,
+        arity: u32,
+        args: RegRange,
+    ) -> Result<(), InterpreterError> {
+        let Some(rest_index) = rest_param_index else {
+            return Ok(());
+        };
+        self.validate_rest_param_index(rest_index, arity)?;
+
+        let mut rest_label = crate::ifc_artifacts::Label::Public;
+        for offset in rest_index..args.count {
+            let reg =
+                args.start
+                    .checked_add(offset)
+                    .ok_or(InterpreterError::RegisterOutOfBounds {
+                        register: args.start,
+                        max: self.config.max_registers,
+                    })?;
+            rest_label = rest_label.join(&self.read_reg_label(reg)?);
+        }
+        let rest_slot = rest_index as usize;
+        if arg_labels.len() <= rest_slot {
+            arg_labels.resize(rest_slot + 1, crate::ifc_artifacts::Label::Public);
+        }
+        arg_labels.truncate(rest_slot + 1);
+        arg_labels[rest_slot] = rest_label;
+        Ok(())
+    }
+
+    fn validate_rest_param_index(
+        &self,
+        rest_index: u32,
+        arity: u32,
+    ) -> Result<(), InterpreterError> {
+        if rest_index.checked_add(1) == Some(arity) && rest_index < self.config.max_registers {
+            return Ok(());
+        }
+        Err(InterpreterError::TypeError {
+            expected: format!(
+                "final rest parameter index for arity {arity} below register limit {}",
+                self.config.max_registers
+            ),
+            got: rest_index.to_string(),
+        })
+    }
+
+    fn validate_function_rest_param(
+        &self,
+        function: &Ir3FunctionDesc,
+    ) -> Result<(), InterpreterError> {
+        if let Some(rest_index) = function.rest_param_index {
+            self.validate_rest_param_index(rest_index, function.arity)?;
+        }
+        Ok(())
+    }
+
     fn alloc_object_with_properties(
         &mut self,
         props: &[(&str, Value)],
@@ -6794,7 +11385,7 @@ impl InterpreterCore {
                         value: crate::object_model::JsValue::Undefined,
                     });
             let value = Self::js_value_to_value(&outcome.value);
-            let mut props = vec![("status", Value::Str(outcome.status.clone()))];
+            let mut props = vec![("status", Value::str(outcome.status.clone()))];
             if outcome.status == "fulfilled" {
                 props.push(("value", value));
             } else {
@@ -6821,11 +11412,80 @@ impl InterpreterCore {
         Ok(Self::value_to_js_value(&Value::Object(error_id)))
     }
 
-    fn register_combinator(&mut self, state: PromiseCombinatorState) -> u64 {
+    fn register_combinator(
+        &mut self,
+        state: LabeledPromiseCombinatorState,
+    ) -> Result<u64, InterpreterError> {
+        let retained_label_bytes = Self::estimate_label_bytes(&state.accumulated_label);
+        self.check_temporary_memory_budget(retained_label_bytes)?;
         let id = self.next_promise_combinator_id;
         self.next_promise_combinator_id = self.next_promise_combinator_id.saturating_add(1);
         self.promise_combinators.insert(id, state);
-        id
+        self.estimated_memory_bytes = self
+            .estimated_memory_bytes
+            .saturating_add(retained_label_bytes);
+        Ok(id)
+    }
+
+    fn join_promise_combinator_label(
+        &mut self,
+        combinator_id: u64,
+        label: &crate::ifc_artifacts::Label,
+    ) -> Result<(), InterpreterError> {
+        let Some(state) = self.promise_combinators.get(&combinator_id) else {
+            return Ok(());
+        };
+        let previous_bytes = Self::estimate_label_bytes(&state.accumulated_label);
+        let winner = if state.accumulated_label.level() >= label.level() {
+            &state.accumulated_label
+        } else {
+            label
+        };
+        let next_bytes = Self::estimate_label_bytes(winner);
+        // Joining clones the dominant Custom label before the old accumulator
+        // is released. Charge that physical peak as well as the retained
+        // replacement so a one-byte-short ceiling fails atomically.
+        self.check_temporary_memory_budget(next_bytes)?;
+        let joined = state.accumulated_label.join(label);
+        let requested_bytes = self
+            .estimated_memory_bytes
+            .saturating_sub(previous_bytes)
+            .saturating_add(next_bytes);
+        if requested_bytes > self.config.max_total_memory_bytes {
+            return Err(self.memory_budget_error(requested_bytes, self.heap_object_count_u32()));
+        }
+        self.promise_combinators
+            .get_mut(&combinator_id)
+            .expect("combinator remained present across label preflight")
+            .accumulated_label = joined;
+        self.estimated_memory_bytes = requested_bytes;
+        Ok(())
+    }
+
+    fn clone_promise_combinator_label_with_budget(
+        &self,
+        combinator_id: u64,
+    ) -> Result<Option<crate::ifc_artifacts::Label>, InterpreterError> {
+        let Some(label) = self
+            .promise_combinators
+            .get(&combinator_id)
+            .map(|state| &state.accumulated_label)
+        else {
+            return Ok(None);
+        };
+        self.check_temporary_memory_budget(Self::estimate_label_bytes(label))?;
+        Ok(Some(label.clone()))
+    }
+
+    fn remove_promise_combinator(
+        &mut self,
+        combinator_id: u64,
+    ) -> Option<LabeledPromiseCombinatorState> {
+        let state = self.promise_combinators.remove(&combinator_id)?;
+        self.estimated_memory_bytes = self
+            .estimated_memory_bytes
+            .saturating_sub(Self::estimate_label_bytes(&state.accumulated_label));
+        Some(state)
     }
 
     fn add_combinator_watcher(
@@ -6934,8 +11594,9 @@ impl InterpreterCore {
         }
 
         let mut resolution: Option<ResolutionData> = None;
+        self.join_promise_combinator_label(combinator_id, &label)?;
         if let Some(state) = self.promise_combinators.get_mut(&combinator_id) {
-            match state {
+            match &mut state.tracker {
                 PromiseCombinatorState::All(tracker) => {
                     if tracker.settled {
                         return Ok(());
@@ -6974,6 +11635,9 @@ impl InterpreterCore {
         }
 
         if let Some(resolution) = resolution {
+            let resolution_label = self
+                .clone_promise_combinator_label_with_budget(combinator_id)?
+                .unwrap_or(label);
             let (handle, value) = match resolution {
                 ResolutionData::Fulfill(handle, value) => (handle, value),
                 ResolutionData::FulfillAll(handle, values) => {
@@ -6985,8 +11649,8 @@ impl InterpreterCore {
                     (handle, value)
                 }
             };
-            self.fulfill_promise(handle, value, label)?;
-            self.promise_combinators.remove(&combinator_id);
+            self.fulfill_promise(handle, value, resolution_label)?;
+            self.remove_promise_combinator(combinator_id);
         }
         Ok(())
     }
@@ -7015,8 +11679,9 @@ impl InterpreterCore {
         }
 
         let mut resolution: Option<ResolutionData> = None;
+        self.join_promise_combinator_label(combinator_id, &label)?;
         if let Some(state) = self.promise_combinators.get_mut(&combinator_id) {
-            match state {
+            match &mut state.tracker {
                 PromiseCombinatorState::All(tracker) => {
                     if tracker.settled {
                         return Ok(());
@@ -7053,20 +11718,23 @@ impl InterpreterCore {
         }
 
         if let Some(resolution) = resolution {
+            let resolution_label = self
+                .clone_promise_combinator_label_with_budget(combinator_id)?
+                .unwrap_or(label);
             match resolution {
                 ResolutionData::FulfillAllSettled(handle, outcomes, total) => {
                     let value = self.build_promise_all_settled_result(outcomes, total)?;
-                    self.fulfill_promise(handle, value, label)?;
+                    self.fulfill_promise(handle, value, resolution_label)?;
                 }
                 ResolutionData::Reject(handle, reason) => {
-                    self.reject_promise(handle, reason, label)?;
+                    self.reject_promise(handle, reason, resolution_label)?;
                 }
                 ResolutionData::RejectAny(handle, errors) => {
                     let aggregate = self.build_aggregate_error(errors)?;
-                    self.reject_promise(handle, aggregate, label)?;
+                    self.reject_promise(handle, aggregate, resolution_label)?;
                 }
             }
-            self.promise_combinators.remove(&combinator_id);
+            self.remove_promise_combinator(combinator_id);
         }
         Ok(())
     }
@@ -7075,25 +11743,38 @@ impl InterpreterCore {
         &mut self,
         kind: PromiseCombinatorKind,
         args: RegRange,
-    ) -> Result<Value, InterpreterError> {
-        let label = crate::ifc_artifacts::Label::Public;
+    ) -> Result<(Value, crate::ifc_artifacts::Label), InterpreterError> {
         let inputs = self.collect_promise_combinator_inputs(args)?;
+        let mut accumulated_label = self.promise_hostcall_registration_label(args)?;
+        for (input, input_label) in &inputs {
+            accumulated_label = accumulated_label.join(input_label);
+            if let Value::Promise(handle) = input {
+                let record = self
+                    .promise_store
+                    .get(crate::promise_model::PromiseHandle(*handle))
+                    .map_err(|e| InterpreterError::TypeError {
+                        expected: "promise".to_string(),
+                        got: e.to_string(),
+                    })?;
+                accumulated_label = accumulated_label.join(&record.label);
+            }
+        }
         let total = inputs.len() as u32;
         let result_promise = self.promise_store.create();
 
         match kind {
             PromiseCombinatorKind::All | PromiseCombinatorKind::AllSettled if total == 0 => {
                 let empty = self.build_promise_all_result(Vec::new())?;
-                self.fulfill_promise(result_promise, empty, label)?;
-                return Ok(Value::Promise(result_promise.0));
+                self.fulfill_promise(result_promise, empty, accumulated_label.clone())?;
+                return Ok((Value::Promise(result_promise.0), accumulated_label));
             }
             PromiseCombinatorKind::Any if total == 0 => {
                 let aggregate = self.build_aggregate_error(Vec::new())?;
-                self.reject_promise(result_promise, aggregate, label)?;
-                return Ok(Value::Promise(result_promise.0));
+                self.reject_promise(result_promise, aggregate, accumulated_label.clone())?;
+                return Ok((Value::Promise(result_promise.0), accumulated_label));
             }
             PromiseCombinatorKind::Race if total == 0 => {
-                return Ok(Value::Promise(result_promise.0));
+                return Ok((Value::Promise(result_promise.0), accumulated_label));
             }
             _ => {}
         }
@@ -7133,9 +11814,32 @@ impl InterpreterCore {
             }
         };
 
-        let combinator_id = self.register_combinator(state);
+        let retained_label_bytes = Self::estimate_label_bytes(&accumulated_label);
+        if let Err(error) = self.check_temporary_memory_budget(retained_label_bytes) {
+            let rolled_back = self.promise_store.rollback_last_created(result_promise);
+            debug_assert!(
+                rolled_back,
+                "fresh aggregate Promise must remain rollbackable"
+            );
+            return Err(error);
+        }
+        let combinator_state = LabeledPromiseCombinatorState {
+            tracker: state,
+            accumulated_label: accumulated_label.clone(),
+        };
+        let combinator_id = match self.register_combinator(combinator_state) {
+            Ok(combinator_id) => combinator_id,
+            Err(error) => {
+                let rolled_back = self.promise_store.rollback_last_created(result_promise);
+                debug_assert!(
+                    rolled_back,
+                    "fresh aggregate Promise must remain rollbackable"
+                );
+                return Err(error);
+            }
+        };
 
-        for (index, input) in inputs.into_iter().enumerate() {
+        for (index, (input, input_label)) in inputs.into_iter().enumerate() {
             if !self.promise_combinators.contains_key(&combinator_id) {
                 break;
             }
@@ -7179,17 +11883,12 @@ impl InterpreterCore {
                 }
                 other => {
                     let js_val = Self::value_to_js_value(&other);
-                    self.update_combinator_fulfillment(
-                        combinator_id,
-                        index,
-                        js_val,
-                        label.clone(),
-                    )?;
+                    self.update_combinator_fulfillment(combinator_id, index, js_val, input_label)?;
                 }
             }
         }
 
-        Ok(Value::Promise(result_promise.0))
+        Ok((Value::Promise(result_promise.0), accumulated_label))
     }
 
     /// Dispatch a `promise:*` hostcall to the internal promise subsystem.
@@ -7214,94 +11913,63 @@ impl InterpreterCore {
         &mut self,
         cap: &str,
         args: RegRange,
-    ) -> Result<Value, InterpreterError> {
-        let label = crate::ifc_artifacts::Label::Public;
+    ) -> Result<(Value, crate::ifc_artifacts::Label), InterpreterError> {
         match cap {
             "promise:constructor" => {
                 // Create a new pending promise and return its handle.
                 let handle = self.promise_store.create();
-                Ok(Value::Promise(handle.0))
+                Ok((
+                    Value::Promise(handle.0),
+                    crate::ifc_artifacts::Label::Public,
+                ))
             }
             "promise:resolve" => {
                 // If arg0 is a Promise, resolve it with arg1.
                 // Otherwise create a pre-resolved promise with arg0 as the value.
-                let arg0 = if args.count > 0 {
-                    self.read_reg(args.start)?
-                } else {
-                    Value::Undefined
-                };
+                let (arg0, arg0_label) = self.promise_hostcall_argument(args, 0)?;
                 match arg0 {
                     Value::Promise(h) => {
                         // Resolve the existing promise with the given value.
-                        let val = if args.count > 1 {
-                            let reg = args.start.checked_add(1).ok_or(
-                                InterpreterError::RegisterOutOfBounds {
-                                    register: args.start,
-                                    max: self.config.max_registers,
-                                },
-                            )?;
-                            self.read_reg(reg)?
-                        } else {
-                            Value::Undefined
-                        };
+                        let (val, value_label) = self.promise_hostcall_argument(args, 1)?;
                         let js_val = Self::value_to_js_value(&val);
                         let handle = crate::promise_model::PromiseHandle(h);
-                        self.fulfill_promise(handle, js_val, label.clone())?;
-                        Ok(Value::Promise(h))
+                        let settlement_label = arg0_label.join(&value_label);
+                        self.fulfill_promise(handle, js_val, settlement_label.clone())?;
+                        Ok((Value::Promise(h), settlement_label))
                     }
                     _ => {
                         // Promise.resolve(value) — create a pre-resolved promise.
                         let js_val = Self::value_to_js_value(&arg0);
                         let handle = self.promise_store.create();
-                        self.fulfill_promise(handle, js_val, label.clone())?;
-                        Ok(Value::Promise(handle.0))
+                        self.fulfill_promise(handle, js_val, arg0_label.clone())?;
+                        Ok((Value::Promise(handle.0), arg0_label))
                     }
                 }
             }
             "promise:reject" => {
-                let arg0 = if args.count > 0 {
-                    self.read_reg(args.start)?
-                } else {
-                    Value::Undefined
-                };
+                let (arg0, arg0_label) = self.promise_hostcall_argument(args, 0)?;
                 match arg0 {
                     Value::Promise(h) => {
-                        let reason = if args.count > 1 {
-                            let reg = args.start.checked_add(1).ok_or(
-                                InterpreterError::RegisterOutOfBounds {
-                                    register: args.start,
-                                    max: self.config.max_registers,
-                                },
-                            )?;
-                            self.read_reg(reg)?
-                        } else {
-                            Value::Undefined
-                        };
+                        let (reason, reason_label) = self.promise_hostcall_argument(args, 1)?;
                         let js_reason = Self::value_to_js_value(&reason);
                         let handle = crate::promise_model::PromiseHandle(h);
-                        self.reject_promise(handle, js_reason, label.clone())?;
-                        Ok(Value::Promise(h))
+                        let settlement_label = arg0_label.join(&reason_label);
+                        self.reject_promise(handle, js_reason, settlement_label.clone())?;
+                        Ok((Value::Promise(h), settlement_label))
                     }
                     _ => {
                         // Promise.reject(reason) — create a pre-rejected promise.
                         let js_reason = Self::value_to_js_value(&arg0);
                         let handle = self.promise_store.create();
-                        self.reject_promise(handle, js_reason, label.clone())?;
-                        Ok(Value::Promise(handle.0))
+                        self.reject_promise(handle, js_reason, arg0_label.clone())?;
+                        Ok((Value::Promise(handle.0), arg0_label))
                     }
                 }
             }
             "promise:then" => {
                 // arg0 = promise handle, arg1 = onFulfilled (optional),
                 // arg2 = onRejected (optional).
-                let arg0 = if args.count > 0 {
-                    self.read_reg(args.start)?
-                } else {
-                    return Err(InterpreterError::TypeError {
-                        expected: "promise".to_string(),
-                        got: "undefined".to_string(),
-                    });
-                };
+                let (arg0, _) = self.promise_hostcall_argument(args, 0)?;
                 let handle = match arg0 {
                     Value::Promise(h) => crate::promise_model::PromiseHandle(h),
                     _ => {
@@ -7311,27 +11979,27 @@ impl InterpreterCore {
                         });
                     }
                 };
+                let registration_label = self.promise_hostcall_registration_label(args)?;
                 // In the baseline interpreter, .then() callbacks are simplified:
                 // we register reactions with no closure handlers (identity propagation).
                 let result = self
                     .promise_store
-                    .then(handle, None, None, label, &mut self.event_loop.microtasks)
+                    .then(
+                        handle,
+                        None,
+                        None,
+                        registration_label.clone(),
+                        &mut self.event_loop.microtasks,
+                    )
                     .map_err(|e| InterpreterError::TypeError {
                         expected: "valid promise handle".to_string(),
                         got: e.to_string(),
                     })?;
-                Ok(Value::Promise(result.0))
+                Ok((Value::Promise(result.0), registration_label))
             }
             "promise:catch" => {
                 // Sugar for .then(undefined, onRejected).
-                let arg0 = if args.count > 0 {
-                    self.read_reg(args.start)?
-                } else {
-                    return Err(InterpreterError::TypeError {
-                        expected: "promise".to_string(),
-                        got: "undefined".to_string(),
-                    });
-                };
+                let (arg0, _) = self.promise_hostcall_argument(args, 0)?;
                 let handle = match arg0 {
                     Value::Promise(h) => crate::promise_model::PromiseHandle(h),
                     _ => {
@@ -7341,25 +12009,25 @@ impl InterpreterCore {
                         });
                     }
                 };
+                let registration_label = self.promise_hostcall_registration_label(args)?;
                 let result = self
                     .promise_store
-                    .then(handle, None, None, label, &mut self.event_loop.microtasks)
+                    .then(
+                        handle,
+                        None,
+                        None,
+                        registration_label.clone(),
+                        &mut self.event_loop.microtasks,
+                    )
                     .map_err(|e| InterpreterError::TypeError {
                         expected: "valid promise handle".to_string(),
                         got: e.to_string(),
                     })?;
-                Ok(Value::Promise(result.0))
+                Ok((Value::Promise(result.0), registration_label))
             }
             "promise:finally" => {
                 // Similar to .then(handler, handler) for finally semantics.
-                let arg0 = if args.count > 0 {
-                    self.read_reg(args.start)?
-                } else {
-                    return Err(InterpreterError::TypeError {
-                        expected: "promise".to_string(),
-                        got: "undefined".to_string(),
-                    });
-                };
+                let (arg0, _) = self.promise_hostcall_argument(args, 0)?;
                 let handle = match arg0 {
                     Value::Promise(h) => crate::promise_model::PromiseHandle(h),
                     _ => {
@@ -7369,14 +12037,21 @@ impl InterpreterCore {
                         });
                     }
                 };
+                let registration_label = self.promise_hostcall_registration_label(args)?;
                 let result = self
                     .promise_store
-                    .then(handle, None, None, label, &mut self.event_loop.microtasks)
+                    .then(
+                        handle,
+                        None,
+                        None,
+                        registration_label.clone(),
+                        &mut self.event_loop.microtasks,
+                    )
                     .map_err(|e| InterpreterError::TypeError {
                         expected: "valid promise handle".to_string(),
                         got: e.to_string(),
                     })?;
-                Ok(Value::Promise(result.0))
+                Ok((Value::Promise(result.0), registration_label))
             }
             "promise:all" => self.dispatch_promise_combinator(PromiseCombinatorKind::All, args),
             "promise:race" => self.dispatch_promise_combinator(PromiseCombinatorKind::Race, args),
@@ -7386,7 +12061,7 @@ impl InterpreterCore {
             "promise:any" => self.dispatch_promise_combinator(PromiseCombinatorKind::Any, args),
             _ => {
                 // Unknown promise sub-capability — return undefined.
-                Ok(Value::Undefined)
+                Ok((Value::Undefined, crate::ifc_artifacts::Label::Public))
             }
         }
     }
@@ -7414,7 +12089,7 @@ impl InterpreterCore {
             }
 
             // Phase 2: Drain all microtasks enqueued during macrotask execution
-            self.drain_microtasks();
+            self.drain_microtasks(Some(module))?;
         }
 
         Ok(())
@@ -7466,67 +12141,95 @@ impl InterpreterCore {
                     got: format!("closure#{closure_id} not found"),
                 })?;
         let func_idx = closure.function_index;
-        let captured_env = self.clone_scope_frames_with_budget(&closure.captured_env)?;
         let func = module.function_table.get(func_idx as usize).ok_or(
             InterpreterError::FunctionNotFound {
                 index: func_idx,
                 table_size: module.function_table.len() as u32,
             },
         )?;
+        self.validate_function_rest_param(func)?;
+        let captured_env = self.clone_scope_frames_with_budget(&closure.captured_env)?;
 
-        if self.call_stack.len() >= self.config.max_call_depth {
-            return Err(InterpreterError::StackOverflow {
-                depth: self.call_stack.len(),
-                max: self.config.max_call_depth,
-            });
-        }
+        self.ensure_call_depth_available()?;
 
         let callee = Value::Closure(closure_id);
-        self.run_pre_call_hook(module, &callee, func_idx, &[])?;
-
+        let mut arg_vals = Vec::new();
+        let mut arg_labels = Vec::new();
+        let empty_args = RegRange { start: 0, count: 0 };
         let initial_call_depth = self.call_stack.len();
         let saved_ip = self.ip;
         let saved_return_reg = self.read_reg(0).unwrap_or(Value::Undefined);
-        let scope_depth = self.scope_chain.depth();
-        let captured_env_bytes = Self::estimate_scope_chain_bytes(&captured_env);
-        let captured_scope_depth = captured_env.len();
-        let saved_chain = self.snapshot_scope_chain_with_temporary_budget(captured_env_bytes)?;
+        let setup_snapshot = self.snapshot_call_setup(None, false);
+        let setup_result = (|| -> Result<(), InterpreterError> {
+            self.apply_rest_param(
+                module,
+                &mut arg_vals,
+                func.rest_param_index,
+                func.arity,
+                empty_args,
+            )?;
+            self.apply_rest_param_labels(
+                &mut arg_labels,
+                func.rest_param_index,
+                func.arity,
+                empty_args,
+            )?;
+            self.run_pre_call_hook(module, &callee, func_idx, &arg_vals)?;
 
-        self.call_stack.push(CallFrame {
-            return_ip: module.instructions.len(),
-            return_reg: Some(0),
-            register_base: self.register_base,
-            function_index: Some(func_idx),
-            this_value: Value::Undefined,
-            new_target_value: Value::Undefined,
-            super_value: self.function_super_value(&callee, IR_SUPER_PROTOTYPE_PROPERTY)?,
-            construct_this: None,
-            saved_pending_exception: self.pending_exception.take(),
-            saved_pending_return: self.pending_return.take(),
-            saved_suspended_abrupt_depth: self.suspended_abrupt_completions.len(),
-            saved_finally_mode_depth: self.finally_modes.len(),
-            saved_scope_depth: scope_depth,
-            saved_scope_chain: Some(saved_chain),
-            closure_id: Some(closure_id),
-            captured_scope_depth,
-            async_function_id: None,
-        });
+            let scope_depth = self.scope_chain.depth();
+            let captured_env_bytes = Self::estimate_scope_chain_bytes(&captured_env);
+            let saved_chain =
+                self.snapshot_scope_chain_with_temporary_budget(captured_env_bytes)?;
 
-        self.scope_chain.frames = captured_env;
-        if let Err(err) = self.scope_chain.push(self.config.max_scope_depth) {
-            self.rollback_call_setup();
-            return Err(err);
+            self.call_stack.push(CallFrame {
+                return_ip: module.instructions.len(),
+                return_reg: Some(0),
+                register_base: self.register_base,
+                function_index: Some(func_idx),
+                this_value: Value::Undefined,
+                this_label: crate::ifc_artifacts::Label::Public,
+                new_target_value: Value::Undefined,
+                new_target_label: crate::ifc_artifacts::Label::Public,
+                super_value: self.function_super_value(&callee, IR_SUPER_PROTOTYPE_PROPERTY)?,
+                super_label: crate::ifc_artifacts::Label::Public,
+                construct_this: None,
+                saved_pending_exception: self.pending_exception.take(),
+                saved_pending_return: self.pending_return.take(),
+                saved_suspended_abrupt_depth: self.suspended_abrupt_completions.len(),
+                saved_finally_mode_depth: self.finally_frames.len(),
+                saved_scope_depth: scope_depth,
+                saved_scope_chain: Some(saved_chain),
+                async_function_id: None,
+            });
+
+            self.scope_chain.frames = captured_env;
+            if let Err(err) = self.scope_chain.push(self.config.max_scope_depth) {
+                self.rollback_call_setup();
+                return Err(err);
+            }
+            if let Err(err) = self.sync_estimated_memory_bytes() {
+                self.rollback_call_setup();
+                return Err(err);
+            }
+
+            self.register_base += self.config.max_registers as usize;
+            let req_len = self.register_base + self.config.max_registers as usize;
+            self.clear_register_range(self.register_base, req_len);
+            for (index, (value, label)) in arg_vals.into_iter().zip(arg_labels).enumerate() {
+                let reg = index as u32;
+                if reg < self.config.max_registers {
+                    self.write_reg_with_label(reg, value, label)?;
+                }
+            }
+
+            self.ip = func.entry as usize;
+            Ok(())
+        })();
+        if let Err(error) = setup_result {
+            self.restore_call_setup(setup_snapshot);
+            return Err(error);
         }
-        if let Err(err) = self.sync_estimated_memory_bytes() {
-            self.rollback_call_setup();
-            return Err(err);
-        }
 
-        self.register_base += self.config.max_registers as usize;
-        let req_len = self.register_base + self.config.max_registers as usize;
-        self.clear_register_range(self.register_base, req_len);
-
-        self.ip = func.entry as usize;
         let result = self.run_loop(module);
         if self.call_stack.len() > initial_call_depth {
             let (restored_pending_exception, restored_pending_return) =
@@ -7548,33 +12251,73 @@ impl InterpreterCore {
     /// Each microtask may enqueue additional microtasks; the drain continues
     /// until the queue is empty, matching ES2020 semantics (microtask checkpoint).
     /// A safety bound prevents infinite loops from pathological promise chains.
-    fn drain_microtasks(&mut self) {
+    fn drain_microtasks(&mut self, module: Option<&Ir3Module>) -> Result<(), InterpreterError> {
         let max_drain = 10_000u32;
         let mut drained = 0u32;
-        let label = crate::ifc_artifacts::Label::Public;
 
-        while let Some(task) = self.event_loop.microtasks.dequeue() {
-            drained += 1;
-            if drained >= max_drain {
+        while drained < max_drain {
+            let Some(task) = self.event_loop.microtasks.dequeue() else {
                 break;
-            }
+            };
+            drained += 1;
             match task {
                 crate::promise_model::Microtask::PromiseReaction {
-                    handler: _,
+                    handler,
                     argument,
                     result_promise,
                     label: task_label,
                 } => {
-                    // With no closure handler, the identity transform propagates
-                    // the argument to the result promise as a fulfillment value.
-                    let _ = self.fulfill_promise(result_promise, argument, task_label);
+                    if handler.is_none()
+                        && let Some(resumption_context) =
+                            self.async_resumption_contexts.remove(&result_promise.0)
+                    {
+                        if let Err(error) = self
+                            .resume_async_function_after_await(
+                                resumption_context,
+                                Ok(argument),
+                                task_label.clone(),
+                                module,
+                            )
+                            .and_then(|()| self.continue_resumed_async_function(module))
+                        {
+                            self.reject_promise(
+                                result_promise,
+                                Self::promise_rejection_from_error(&error),
+                                task_label,
+                            )?;
+                        }
+                    } else {
+                        // The core baseline does not execute user closure handles in
+                        // Promise jobs yet. Preserve its existing identity behavior.
+                        self.fulfill_promise(result_promise, argument, task_label)?;
+                    }
                 }
                 crate::promise_model::Microtask::PromiseRejection {
                     reason,
                     result_promise,
                     label: task_label,
                 } => {
-                    let _ = self.reject_promise(result_promise, reason, task_label);
+                    if let Some(resumption_context) =
+                        self.async_resumption_contexts.remove(&result_promise.0)
+                    {
+                        if let Err(error) = self
+                            .resume_async_function_after_await(
+                                resumption_context,
+                                Err(reason),
+                                task_label.clone(),
+                                module,
+                            )
+                            .and_then(|()| self.continue_resumed_async_function(module))
+                        {
+                            self.reject_promise(
+                                result_promise,
+                                Self::promise_rejection_from_error(&error),
+                                task_label,
+                            )?;
+                        }
+                    } else {
+                        self.reject_promise(result_promise, reason, task_label)?;
+                    }
                 }
                 crate::promise_model::Microtask::ResolveThenable {
                     promise,
@@ -7585,22 +12328,24 @@ impl InterpreterCore {
                     // Simplified: resolve with undefined (full thenable
                     // unwrapping requires closure execution which is a
                     // follow-up bead).
-                    let _ = self.fulfill_promise(
+                    self.fulfill_promise(
                         promise,
                         crate::object_model::JsValue::Undefined,
-                        label.clone(),
-                    );
+                        crate::ifc_artifacts::Label::Public,
+                    )?;
                 }
             }
         }
         self.event_loop.microtasks.compact();
+        Ok(())
     }
 
-    fn property_key(value: &Value) -> String {
+    fn executable_property_key(value: &Value) -> RuntimePropertyKey {
         match value {
-            Value::Str(s) => s.clone(),
-            Value::Int(n) => n.to_string(),
-            _ => value.to_string(),
+            Value::Symbol(symbol) => RuntimePropertyKey::Symbol(*symbol),
+            Value::Str(text) => RuntimePropertyKey::String(text.clone()),
+            Value::Int(number) => RuntimePropertyKey::String(JsString::from(number.to_string())),
+            _ => RuntimePropertyKey::String(JsString::from(value.to_string())),
         }
     }
 
@@ -7629,6 +12374,7 @@ impl InterpreterCore {
                 }
             }
             Value::Undefined
+            | Value::Symbol(_)
             | Value::Object(_)
             | Value::Function(_)
             | Value::Closure(_)
@@ -7666,6 +12412,7 @@ impl InterpreterCore {
                 }
             }
             Value::Undefined => Some(f64::NAN),
+            Value::Symbol(_) => None,
             Value::Object(_)
             | Value::Function(_)
             | Value::Closure(_)
@@ -7681,6 +12428,19 @@ impl InterpreterCore {
         }
     }
 
+    fn reject_symbol_numeric_coercion(
+        value: &Value,
+        expected: &str,
+    ) -> Result<(), InterpreterError> {
+        if matches!(value, Value::Symbol(_)) {
+            return Err(InterpreterError::TypeError {
+                expected: expected.to_string(),
+                got: "symbol".to_string(),
+            });
+        }
+        Ok(())
+    }
+
     fn abstract_eq_values(a: &Value, b: &Value) -> bool {
         match (a, b) {
             (Value::Undefined, Value::Undefined)
@@ -7688,6 +12448,7 @@ impl InterpreterCore {
             | (Value::Bool(_), Value::Bool(_))
             | (Value::Int(_), Value::Int(_))
             | (Value::Str(_), Value::Str(_))
+            | (Value::Symbol(_), Value::Symbol(_))
             | (Value::Object(_), Value::Object(_))
             | (Value::Function(_), Value::Function(_))
             | (Value::Closure(_), Value::Closure(_))
@@ -7716,6 +12477,7 @@ impl InterpreterCore {
             // to numbers, strings, or booleans via numeric coercion.
             (Value::Null, _) | (_, Value::Null) => false,
             (Value::Undefined, _) | (_, Value::Undefined) => false,
+            (Value::Symbol(_), _) | (_, Value::Symbol(_)) => false,
             _ => match (Self::coerce_to_float(a), Self::coerce_to_float(b)) {
                 (Some(lhs), Some(rhs)) => {
                     if lhs.is_nan() || rhs.is_nan() {
@@ -7751,12 +12513,14 @@ impl InterpreterCore {
             "number:isNaN" => {
                 // Global isNaN: coerces argument to number, then checks NaN
                 // isNaN(undefined) = true, isNaN("hello") = true
+                Self::reject_symbol_numeric_coercion(&arg0, "number-coercible primitive")?;
                 let number = Self::coerce_to_float(&arg0).unwrap_or(f64::NAN);
                 Ok(Value::Bool(number.is_nan()))
             }
             "number:isFinite" => {
                 // Global isFinite: coerces argument to number, then checks finite
                 // isFinite(undefined) = false, isFinite("123") = true
+                Self::reject_symbol_numeric_coercion(&arg0, "number-coercible primitive")?;
                 let number = Self::coerce_to_float(&arg0).unwrap_or(f64::NAN);
                 Ok(Value::Bool(number.is_finite()))
             }
@@ -7903,6 +12667,12 @@ impl InterpreterCore {
                 let delay_ms = match delay_val {
                     Value::Int(i) => i.max(0) as u64,
                     Value::Float(f) => f.0.max(0.0) as u64,
+                    Value::Symbol(_) => {
+                        return Err(InterpreterError::TypeError {
+                            expected: "timer delay coercible to number".to_string(),
+                            got: "symbol".to_string(),
+                        });
+                    }
                     _ => 0,
                 };
 
@@ -7959,6 +12729,12 @@ impl InterpreterCore {
                 let delay_ms = match delay_val {
                     Value::Int(i) => i.max(0) as u64,
                     Value::Float(f) => f.0.max(0.0) as u64,
+                    Value::Symbol(_) => {
+                        return Err(InterpreterError::TypeError {
+                            expected: "timer delay coercible to number".to_string(),
+                            got: "symbol".to_string(),
+                        });
+                    }
                     _ => 0,
                 };
 
@@ -8012,12 +12788,124 @@ impl InterpreterCore {
         }
     }
 
+    /// Quote one exact JavaScript string as a JSON token. Unpaired UTF-16
+    /// surrogates remain distinguishable as `\uXXXX` escapes.
+    fn json_quote_js_string(text: &JsString) -> String {
+        let mut out = String::with_capacity(text.len().saturating_add(2));
+        out.push('"');
+        for decoded in char::decode_utf16(text.encode_utf16()) {
+            match decoded {
+                Ok('"') => out.push_str("\\\""),
+                Ok('\\') => out.push_str("\\\\"),
+                Ok('\u{0008}') => out.push_str("\\b"),
+                Ok('\u{000c}') => out.push_str("\\f"),
+                Ok('\n') => out.push_str("\\n"),
+                Ok('\r') => out.push_str("\\r"),
+                Ok('\t') => out.push_str("\\t"),
+                Ok(ch) if ch <= '\u{001f}' => out.push_str(&format!("\\u{:04x}", ch as u32)),
+                Ok(ch) => out.push(ch),
+                Err(err) => out.push_str(&format!("\\u{:04x}", err.unpaired_surrogate())),
+            }
+        }
+        out.push('"');
+        out
+    }
+
+    /// Recursively serialize the baseline JSON value surface. `None` means
+    /// the value is omitted (or becomes `null` in an array). Object member
+    /// names are traversed as exact UTF-16 keys, never through the UTF-8
+    /// compatibility projection.
+    fn json_stringify_value(&self, value: &Value, visited: &mut Vec<ObjectId>) -> Option<String> {
+        let rendered = match value {
+            Value::Undefined | Value::Symbol(_) => return None,
+            Value::Null => "null".to_string(),
+            Value::Bool(value) => value.to_string(),
+            Value::Int(value) => value.to_string(),
+            Value::Float(value) => {
+                let value = value.inner();
+                if value.is_finite() {
+                    value.to_string()
+                } else {
+                    "null".to_string()
+                }
+            }
+            Value::Str(text) => Self::json_quote_js_string(text),
+            Value::Object(object_id) => {
+                if visited.contains(object_id) {
+                    return None;
+                }
+                let object = self.heap.get(object_id.0 as usize).cloned()?;
+                visited.push(*object_id);
+                let rendered = if object.is_array {
+                    let length = object
+                        .properties
+                        .get("length")
+                        .and_then(|value| match value {
+                            Value::Int(length) if *length >= 0 => Some(*length as usize),
+                            _ => None,
+                        })
+                        .unwrap_or(0);
+                    let items = (0..length)
+                        .map(|index| {
+                            object
+                                .properties
+                                .get(&index.to_string())
+                                .and_then(|value| self.json_stringify_value(value, visited))
+                                .unwrap_or_else(|| "null".to_string())
+                        })
+                        .collect::<Vec<_>>();
+                    format!("[{}]", items.join(","))
+                } else {
+                    let mut members = Vec::new();
+                    for key in object.own_exact_property_keys() {
+                        if key.as_str().is_some_and(|key| key.starts_with("__")) {
+                            continue;
+                        }
+                        let Some(value) = object.properties.get_exact(&key) else {
+                            continue;
+                        };
+                        if let Some(value) = self.json_stringify_value(value, visited) {
+                            members.push(format!("{}:{value}", Self::json_quote_js_string(&key)));
+                        }
+                    }
+                    format!("{{{}}}", members.join(","))
+                };
+                visited.pop();
+                rendered
+            }
+            Value::Function(_)
+            | Value::Closure(_)
+            | Value::GeneratorFunction(_)
+            | Value::AsyncFunction(_)
+            | Value::AsyncGeneratorFunction(_)
+            | Value::BuiltinFunction(_) => return None,
+            Value::Iterator(_)
+            | Value::Generator(_)
+            | Value::AsyncFunctionObject(_)
+            | Value::AsyncGeneratorObject(_)
+            | Value::Promise(_) => "{}".to_string(),
+        };
+        Some(rendered)
+    }
+
     fn dispatch_builtin_hostcall(
         &mut self,
         cap: &str,
         args: RegRange,
     ) -> Result<Value, InterpreterError> {
         match cap {
+            "builtin:ReferenceError" | "builtin:TypeError" => {
+                let message = self
+                    .optional_arg(args, 0)?
+                    .map_or_else(String::new, |value| self.value_to_string(&value));
+                let name = cap.strip_prefix("builtin:").unwrap_or(cap);
+                let object_id = self.alloc_object_with_properties(&[
+                    ("name", Value::str(name)),
+                    ("message", Value::str(message)),
+                ])?;
+                Ok(Value::Object(object_id))
+            }
+
             // Array methods
             "builtin:ArrayPrototypePush" => {
                 let this = self.required_arg(args, 0, "array object")?;
@@ -8037,21 +12925,50 @@ impl InterpreterCore {
                 Ok(Value::Int(i64::from(new_len)))
             }
             "builtin:ArrayIsArray" => {
-                let Some(arg) = self.optional_arg(args, 0)? else {
-                    return Ok(Value::Bool(false));
-                };
-                match arg {
-                    Value::Object(object_id) => {
-                        let is_array = self
-                            .heap
-                            .get(object_id.0 as usize)
-                            .ok_or(InterpreterError::ObjectNotFound { id: object_id.0 })?
-                            .is_array;
-                        Ok(Value::Bool(is_array))
-                    }
-                    _ => Ok(Value::Bool(false)),
-                }
+                let arg = self.optional_arg(args, 0)?;
+                self.array_is_array_value(arg)
             }
+            "builtin:ArrayIsArrayFunction" => {
+                Ok(Value::BuiltinFunction(BuiltinFunction::array_is_array()))
+            }
+            "builtin:SymbolFunction" => Ok(Value::BuiltinFunction(BuiltinFunction::symbol(
+                BuiltinFunctionKind::Symbol,
+            ))),
+            "builtin:SymbolFor" => {
+                let value = self.optional_arg(args, 0)?.unwrap_or(Value::Undefined);
+                let key = self.symbol_registry_key_argument(value)?;
+                self.intern_global_symbol(key).map(Value::Symbol)
+            }
+            "builtin:SymbolKeyFor" => {
+                let value = self.optional_arg(args, 0)?.unwrap_or(Value::Undefined);
+                let Value::Symbol(symbol) = value else {
+                    return Err(InterpreterError::TypeError {
+                        expected: "Symbol".to_string(),
+                        got: value.type_name().to_string(),
+                    });
+                };
+                Ok(self
+                    .symbol_state
+                    .key_for(symbol)
+                    .cloned()
+                    .map(Value::Str)
+                    .unwrap_or(Value::Undefined))
+            }
+            "builtin:SymbolIterator" => Ok(Value::Symbol(WellKnownSymbol::Iterator.id())),
+            "builtin:SymbolToPrimitive" => Ok(Value::Symbol(WellKnownSymbol::ToPrimitive.id())),
+            "builtin:SymbolHasInstance" => Ok(Value::Symbol(WellKnownSymbol::HasInstance.id())),
+            "builtin:SymbolToStringTag" => Ok(Value::Symbol(WellKnownSymbol::ToStringTag.id())),
+            "builtin:SymbolSpecies" => Ok(Value::Symbol(WellKnownSymbol::Species.id())),
+            "builtin:SymbolIsConcatSpreadable" => {
+                Ok(Value::Symbol(WellKnownSymbol::IsConcatSpreadable.id()))
+            }
+            "builtin:SymbolUnscopables" => Ok(Value::Symbol(WellKnownSymbol::Unscopables.id())),
+            "builtin:SymbolAsyncIterator" => Ok(Value::Symbol(WellKnownSymbol::AsyncIterator.id())),
+            "builtin:SymbolMatch" => Ok(Value::Symbol(WellKnownSymbol::Match.id())),
+            "builtin:SymbolMatchAll" => Ok(Value::Symbol(WellKnownSymbol::MatchAll.id())),
+            "builtin:SymbolReplace" => Ok(Value::Symbol(WellKnownSymbol::Replace.id())),
+            "builtin:SymbolSearch" => Ok(Value::Symbol(WellKnownSymbol::Search.id())),
+            "builtin:SymbolSplit" => Ok(Value::Symbol(WellKnownSymbol::Split.id())),
             "builtin:ArrayPrototypePop" => {
                 let this = self.required_arg(args, 0, "array object")?;
                 let array_id = self.expect_object(this, "array object")?;
@@ -8091,37 +13008,236 @@ impl InterpreterCore {
                         .get(object_id.0 as usize)
                         .ok_or(InterpreterError::ObjectNotFound { id: object_id.0 })?;
                     keys.into_iter()
-                        .filter_map(|key| object.properties.get(&key).cloned())
+                        .filter_map(|key| object.properties.get_exact(&key).cloned())
                         .collect::<Vec<_>>()
                 };
                 Ok(Value::Object(self.alloc_array_from_values(&values)?))
             }
+            "builtin:ObjectEntries" => {
+                let this = self.required_arg(args, 0, "object")?;
+                let object_id = self.expect_object(this, "object")?;
+                let keys = self.own_enumerable_keys(object_id)?;
+                let entries = {
+                    let object = self
+                        .heap
+                        .get(object_id.0 as usize)
+                        .ok_or(InterpreterError::ObjectNotFound { id: object_id.0 })?;
+                    keys.into_iter()
+                        .filter_map(|key| {
+                            object
+                                .properties
+                                .get_exact(&key)
+                                .cloned()
+                                .map(|value| (key, value))
+                        })
+                        .collect::<Vec<_>>()
+                };
+                let mut values = Vec::with_capacity(entries.len());
+                for (key, value) in entries {
+                    let entry = self.alloc_array_from_values(&[Value::Str(key), value])?;
+                    values.push(Value::Object(entry));
+                }
+                Ok(Value::Object(self.alloc_array_from_values(&values)?))
+            }
+            "builtin:ObjectGetOwnPropertyNames" => {
+                let this = self.required_arg(args, 0, "object")?;
+                let object_id = self.expect_object(this, "object")?;
+                let object = self
+                    .heap
+                    .get(object_id.0 as usize)
+                    .ok_or(InterpreterError::ObjectNotFound { id: object_id.0 })?;
+                let values = object
+                    .own_exact_property_keys()
+                    .into_iter()
+                    .map(Value::Str)
+                    .collect::<Vec<_>>();
+                Ok(Value::Object(self.alloc_array_from_values(&values)?))
+            }
+            "builtin:ObjectGetOwnPropertySymbols" => {
+                let this = self.required_arg(args, 0, "object")?;
+                let values = self
+                    .object_like_storage_id(&this, "object")?
+                    .map(|object_id| {
+                        self.heap[object_id.0 as usize]
+                            .properties
+                            .baseline_symbol_key_order()
+                            .iter()
+                            .copied()
+                            .map(Value::Symbol)
+                            .collect::<Vec<_>>()
+                    })
+                    .unwrap_or_default();
+                Ok(Value::Object(self.alloc_array_from_values(&values)?))
+            }
+            "builtin:ReflectOwnKeys" => {
+                let this = self.required_arg(args, 0, "object")?;
+                let values = self
+                    .object_like_storage_id(&this, "object")?
+                    .map(|object_id| {
+                        self.heap[object_id.0 as usize]
+                            .own_runtime_property_keys()
+                            .into_iter()
+                            .map(|key| match key {
+                                RuntimePropertyKey::String(key) => Value::Str(key),
+                                RuntimePropertyKey::Symbol(symbol) => Value::Symbol(symbol),
+                            })
+                            .collect::<Vec<_>>()
+                    })
+                    .unwrap_or_default();
+                Ok(Value::Object(self.alloc_array_from_values(&values)?))
+            }
+            "builtin:ObjectAssign" => self.object_assign(args),
 
-            // String methods
+            // String methods (hostcall convention: receiver in args[0],
+            // index in args[1]; shared impls with the BuiltinFunction
+            // method-call seam so the two paths cannot drift).
             "builtin:StringPrototypeCharAt" => {
                 let receiver = self.required_arg(args, 0, "string")?;
-                let text = match receiver {
-                    Value::Str(text) => text,
-                    other => self.value_to_string(&other),
+                let text = match &receiver {
+                    Value::Str(text) => text.clone(),
+                    other => JsString::from(self.value_to_string(other)),
                 };
-                let index = match self.optional_arg(args, 1)? {
-                    Some(Value::Int(index)) if index >= 0 => usize::try_from(index).ok(),
-                    Some(Value::Float(index)) => {
-                        let index = index.inner();
-                        if index.is_finite() && index >= 0.0 {
-                            Some(index.trunc() as usize)
-                        } else {
-                            Some(0)
+                let index = self.optional_arg(args, 1)?;
+                Self::string_char_at_value(&text, index.as_ref())
+            }
+            "builtin:StringPrototypeCharCodeAt" => {
+                let receiver = self.required_arg(args, 0, "string")?;
+                let text = match &receiver {
+                    Value::Str(text) => text.clone(),
+                    other => JsString::from(self.value_to_string(other)),
+                };
+                let index = self.optional_arg(args, 1)?;
+                Self::string_char_code_at_value(&text, index.as_ref())
+            }
+            "builtin:StringPrototypeCodePointAt" => {
+                let receiver = self.required_arg(args, 0, "string")?;
+                let text = match &receiver {
+                    Value::Str(text) => text.clone(),
+                    other => JsString::from(self.value_to_string(other)),
+                };
+                let index = self.optional_arg(args, 1)?;
+                Self::string_code_point_at_value(&text, index.as_ref())
+            }
+            "builtin:StringPrototypeAt" => {
+                let receiver = self.required_arg(args, 0, "string")?;
+                let text = match &receiver {
+                    Value::Str(text) => text.clone(),
+                    other => JsString::from(self.value_to_string(other)),
+                };
+                let index = self.optional_arg(args, 1)?;
+                Self::string_at_value(&text, index.as_ref())
+            }
+            "builtin:StringPrototypeIsWellFormed" => {
+                let receiver = self.required_arg(args, 0, "string")?;
+                let text = match &receiver {
+                    Value::Str(text) => text.clone(),
+                    other => JsString::from(self.value_to_string(other)),
+                };
+                Ok(Self::string_is_well_formed_value(&text))
+            }
+            "builtin:StringPrototypeToWellFormed" => {
+                let receiver = self.required_arg(args, 0, "string")?;
+                let text = match &receiver {
+                    Value::Str(text) => text.clone(),
+                    other => JsString::from(self.value_to_string(other)),
+                };
+                Ok(Self::string_to_well_formed_value(&text))
+            }
+            "builtin:StringFromCharCode" => {
+                // String.fromCharCode(...codeUnits): ToUint16 per argument;
+                // a surrogate unit stays a real lone surrogate, and adjacent
+                // high+low units heal into the supplementary code point when
+                // from_code_units normalizes (engine bd-neika parity).
+                let mut units: Vec<u16> = Vec::with_capacity(args.count as usize);
+                for i in 0..args.count {
+                    let reg =
+                        args.start
+                            .checked_add(i)
+                            .ok_or(InterpreterError::RegisterOutOfBounds {
+                                register: args.start,
+                                max: self.config.max_registers,
+                            })?;
+                    let unit = match self.read_reg(reg)? {
+                        Value::Int(n) => n as u32,
+                        Value::Float(f) => {
+                            let v = f.inner();
+                            if v.is_finite() {
+                                v.trunc().rem_euclid(4_294_967_296.0) as u32
+                            } else {
+                                0
+                            }
                         }
+                        Value::Symbol(_) => {
+                            return Err(InterpreterError::TypeError {
+                                expected: "String.fromCharCode argument coercible to number"
+                                    .to_string(),
+                                got: "symbol".to_string(),
+                            });
+                        }
+                        _ => 0,
+                    };
+                    units.push((unit & 0xFFFF) as u16);
+                }
+                Ok(Value::Str(JsString::from_code_units(&units)))
+            }
+            "builtin:StringFromCodePoint" => {
+                // String.fromCodePoint(...codePoints): each argument must be
+                // an integral code point in 0..=0x10FFFF (RangeError
+                // otherwise); surrogate code points are accepted and yield a
+                // real lone-surrogate unit, supplementary code points encode
+                // as their UTF-16 pair. Mirrors the engine arm exactly for
+                // oracle parity (bd-7zwar).
+                let mut units: Vec<u16> = Vec::with_capacity(args.count as usize);
+                for i in 0..args.count {
+                    let reg =
+                        args.start
+                            .checked_add(i)
+                            .ok_or(InterpreterError::RegisterOutOfBounds {
+                                register: args.start,
+                                max: self.config.max_registers,
+                            })?;
+                    let code_point_number = match self.read_reg(reg)? {
+                        Value::Int(n) => n as f64,
+                        Value::Float(f) => f.inner(),
+                        Value::Bool(true) => 1.0,
+                        Value::Bool(false) | Value::Null => 0.0,
+                        Value::Str(s) => {
+                            let trimmed = s.trim();
+                            if trimmed.is_empty() {
+                                0.0
+                            } else {
+                                trimmed.parse::<f64>().unwrap_or(f64::NAN)
+                            }
+                        }
+                        Value::Symbol(_) => {
+                            return Err(InterpreterError::TypeError {
+                                expected: "String.fromCodePoint argument coercible to number"
+                                    .to_string(),
+                                got: "symbol".to_string(),
+                            });
+                        }
+                        _ => f64::NAN,
+                    };
+                    if !code_point_number.is_finite()
+                        || code_point_number.fract() != 0.0
+                        || !(0.0..=0x10FFFF as f64).contains(&code_point_number)
+                    {
+                        return Err(InterpreterError::RangeError {
+                            message: format!(
+                                "String.fromCodePoint invalid code point: {code_point_number}"
+                            ),
+                        });
                     }
-                    Some(Value::Undefined | Value::Null) | None => Some(0),
-                    _ => Some(0),
-                };
-                let ch = index
-                    .and_then(|index| text.chars().nth(index))
-                    .map(|ch| ch.to_string())
-                    .unwrap_or_default();
-                Ok(Value::Str(ch))
+                    let code_point = code_point_number as u32;
+                    if code_point < 0x10000 {
+                        units.push(code_point as u16);
+                    } else {
+                        let offset = code_point - 0x10000;
+                        units.push(0xD800 + (offset >> 10) as u16);
+                        units.push(0xDC00 + (offset & 0x3FF) as u16);
+                    }
+                }
+                Ok(Value::Str(JsString::from_code_units(&units)))
             }
 
             // Math methods
@@ -8130,8 +13246,13 @@ impl InterpreterCore {
                 if args.count > 0 {
                     let arg = self.read_reg(args.start)?;
                     match arg {
+                        Value::Int(i64::MIN) => Ok(Value::Float(Float64::new(-(i64::MIN as f64)))),
                         Value::Int(n) => Ok(Value::Int(n.abs())),
                         Value::Float(f) => Ok(Value::Float(Float64::new(f.inner().abs()))),
+                        Value::Symbol(_) => Err(InterpreterError::TypeError {
+                            expected: "Math.abs argument coercible to number".to_string(),
+                            got: "symbol".to_string(),
+                        }),
                         _ => Ok(Value::Float(Float64::new(f64::NAN))),
                     }
                 } else {
@@ -8141,48 +13262,306 @@ impl InterpreterCore {
 
             // JSON methods
             "builtin:JsonStringify" => {
-                // JSON.stringify implementation - converts value to JSON string
                 if args.count == 0 {
-                    return Ok(Value::Str("undefined".to_string()));
+                    return Ok(Value::str("undefined"));
                 }
-
                 let value = self.read_reg(args.start)?;
-                let json_str = match value {
-                    Value::Undefined => "undefined".to_string(),
-                    Value::Null => "null".to_string(),
-                    Value::Bool(b) => {
-                        if b {
-                            "true".to_string()
-                        } else {
-                            "false".to_string()
-                        }
-                    }
-                    Value::Int(n) => n.to_string(),
-                    Value::Float(f) => {
-                        let val = f.inner();
-                        if val.is_nan() || val.is_infinite() {
-                            "null".to_string()
-                        } else {
-                            val.to_string()
-                        }
-                    }
-                    Value::Str(s) => {
-                        format!("\"{}\"", s.replace('"', "\\\"").replace('\\', "\\\\"))
-                    }
-                    Value::Object(_) => "{}".to_string(), // Basic object stringification
-                    Value::Function(_) => "undefined".to_string(),
-                    Value::Closure(_) => "undefined".to_string(),
-                    Value::Iterator(_) => "{}".to_string(),
-                    Value::GeneratorFunction(_) => "undefined".to_string(),
-                    Value::Promise(_) => "{}".to_string(),
-                    Value::Generator(_) => "{}".to_string(),
-                    Value::AsyncFunction(_) => "undefined".to_string(),
-                    Value::AsyncFunctionObject(_) => "{}".to_string(),
-                    Value::AsyncGeneratorFunction(_) => "undefined".to_string(),
-                    Value::AsyncGeneratorObject(_) => "{}".to_string(),
-                    Value::BuiltinFunction(_) => "undefined".to_string(),
+                let json_str = self
+                    .json_stringify_value(&value, &mut Vec::new())
+                    .unwrap_or_else(|| "undefined".to_string());
+                Ok(Value::str(json_str))
+            }
+            "builtin:JsonParse" => {
+                // Full recursive JSON values over exact UTF-16 input units,
+                // including raw lone surrogates (bd-y3yxl) and units contributed
+                // by `\uXXXX` escapes (bd-zql4d). Invalid JSON and non-string
+                // inputs preserve core's existing simplified posture by yielding
+                // undefined instead of a SyntaxError.
+                if args.count == 0 {
+                    return Ok(Value::Undefined);
+                }
+                let json_str = match self.read_reg(args.start)? {
+                    Value::Str(text) => text,
+                    _ => return Ok(Value::Undefined),
                 };
-                Ok(Value::Str(json_str))
+                let units = json_str.code_units_vec();
+                let mut pos = 0usize;
+                let heap_checkpoint = self.heap.len();
+                let memory_checkpoint = self.estimated_memory_bytes;
+                Self::json_skip_ws(&units, &mut pos);
+                match self.json_parse_value(&units, &mut pos, 0) {
+                    Ok(Some(value)) => {
+                        Self::json_skip_ws(&units, &mut pos);
+                        if pos == units.len() {
+                            Ok(value)
+                        } else {
+                            self.rollback_json_parse(heap_checkpoint, memory_checkpoint);
+                            Ok(Value::Undefined)
+                        }
+                    }
+                    Ok(None) => {
+                        self.rollback_json_parse(heap_checkpoint, memory_checkpoint);
+                        Ok(Value::Undefined)
+                    }
+                    Err(err) => {
+                        self.rollback_json_parse(heap_checkpoint, memory_checkpoint);
+                        Err(err)
+                    }
+                }
+            }
+
+            // Node `path` builtins (bd-tu0c3): pure-compute posix semantics
+            // (plus the win32 join/basename/isAbsolute subset), dispatched
+            // from the lowering's path-module member-call interception. No
+            // host effect. Argument-validation failures surface as core's
+            // plain `InterpreterError::TypeError` (core has no error-object
+            // prototype machinery; the engine twin throws the JS-catchable
+            // ERR_INVALID_ARG_TYPE TypeError object).
+            "builtin:PathJoin" => {
+                let parts = self.path_string_args(args, "paths")?;
+                Ok(Value::str(node_path_posix_join(&parts)))
+            }
+            "builtin:PathResolve" => {
+                let parts = self.path_resolve_args(args)?;
+                Ok(Value::str(node_path_posix_resolve(&parts)))
+            }
+            "builtin:PathNormalize" => {
+                let path = self.path_string_arg(args, 0, "path")?;
+                Ok(Value::str(node_path_posix_normalize(&path)))
+            }
+            "builtin:PathBasename" => {
+                let path = self.path_string_arg(args, 0, "path")?;
+                let ext = self.path_optional_string_arg(args, 1, "ext")?;
+                Ok(Value::str(node_path_basename_impl(
+                    &path,
+                    ext.as_deref(),
+                    &['/'],
+                    false,
+                )))
+            }
+            "builtin:PathDirname" => {
+                let path = self.path_string_arg(args, 0, "path")?;
+                Ok(Value::str(node_path_posix_dirname(&path)))
+            }
+            "builtin:PathExtname" => {
+                let path = self.path_string_arg(args, 0, "path")?;
+                Ok(Value::str(node_path_posix_extname(&path)))
+            }
+            "builtin:PathIsAbsolute" => {
+                let path = self.path_string_arg(args, 0, "path")?;
+                Ok(Value::Bool(path.starts_with('/')))
+            }
+            "builtin:PathRelative" => {
+                let from = self.path_string_arg(args, 0, "from")?;
+                let to = self.path_string_arg(args, 1, "to")?;
+                Ok(Value::str(node_path_posix_relative(&from, &to)))
+            }
+            "builtin:PathParse" => {
+                let path = self.path_string_arg(args, 0, "path")?;
+                let parsed = node_path_posix_parse(&path);
+                let object_id = self.alloc_object_with_properties(&[
+                    ("root", Value::str(parsed.root)),
+                    ("dir", Value::str(parsed.dir)),
+                    ("base", Value::str(parsed.base)),
+                    ("ext", Value::str(parsed.ext)),
+                    ("name", Value::str(parsed.name)),
+                ])?;
+                Ok(Value::Object(object_id))
+            }
+            "builtin:PathFormat" => {
+                let value = self.optional_arg(args, 0)?.unwrap_or(Value::Undefined);
+                let Value::Object(object_id) = value else {
+                    return Err(InterpreterError::TypeError {
+                        expected: "object `pathObject` argument for path.format".to_string(),
+                        got: value.type_name().to_string(),
+                    });
+                };
+                let root = self.path_format_object_property(object_id, "root");
+                let dir = self.path_format_object_property(object_id, "dir");
+                let base = self.path_format_object_property(object_id, "base");
+                let name = self.path_format_object_property(object_id, "name");
+                let ext = self.path_format_object_property(object_id, "ext");
+                Ok(Value::str(node_path_posix_format(
+                    &root, &dir, &base, &name, &ext,
+                )))
+            }
+            "builtin:PathWin32Join" => {
+                let parts = self.path_string_args(args, "paths")?;
+                Ok(Value::str(node_path_win32_join(&parts)))
+            }
+            "builtin:PathWin32Basename" => {
+                let path = self.path_string_arg(args, 0, "path")?;
+                let ext = self.path_optional_string_arg(args, 1, "ext")?;
+                Ok(Value::str(node_path_basename_impl(
+                    &path,
+                    ext.as_deref(),
+                    &['/', '\\'],
+                    true,
+                )))
+            }
+            "builtin:PathWin32IsAbsolute" => {
+                let path = self.path_string_arg(args, 0, "path")?;
+                Ok(Value::Bool(node_path_win32_is_absolute(&path)))
+            }
+
+            // Node `querystring` builtins (bd-qmy52): pure-compute parse/
+            // stringify/escape/unescape, dispatched from the lowering's
+            // querystring-module member-call interception. No host effect;
+            // semantics pinned against bun 1.3.14. Mirror of the engine arms.
+            "builtin:QuerystringParse" => {
+                let input = self.optional_arg(args, 0)?.unwrap_or(Value::Undefined);
+                // Node: a non-string (or empty) input yields an empty object.
+                let Value::Str(input) = input else {
+                    return Ok(Value::Object(self.alloc_object_with_properties(&[])?));
+                };
+                let sep = self.qs_separator_arg(args, 1, "&")?;
+                let eq = self.qs_separator_arg(args, 2, "=")?;
+                let max_pairs = self.qs_max_pairs_arg(args, 3)?;
+                let entries = node_qs_parse(input.as_ref(), &sep, &eq, max_pairs);
+                // Node returns a null-prototype object; engine objects already
+                // allocate without a prototype. Single-value keys are scalars,
+                // repeated keys are real engine arrays.
+                let object_id = self.alloc_object_with_properties(&[])?;
+                for (key, values) in entries {
+                    let value = if values.len() == 1 {
+                        Value::str(values.into_iter().next().unwrap_or_default())
+                    } else {
+                        let elements: Vec<Value> = values.into_iter().map(Value::str).collect();
+                        Value::Object(self.alloc_array_from_values(&elements)?)
+                    };
+                    self.set_object_property(object_id, key, value)?;
+                }
+                Ok(Value::Object(object_id))
+            }
+            "builtin:QuerystringStringify" => {
+                let sep = self.qs_separator_arg(args, 1, "&")?;
+                let eq = self.qs_separator_arg(args, 2, "=")?;
+                let value = self.optional_arg(args, 0)?.unwrap_or(Value::Undefined);
+                // Node: only a non-null object stringifies; every other input
+                // (undefined, null, primitives) is ''.
+                let Value::Object(object_id) = value else {
+                    return Ok(Value::str(""));
+                };
+                Ok(Value::str(self.qs_stringify_object(object_id, &sep, &eq)?))
+            }
+            "builtin:QuerystringEscape" => {
+                // Node coerces the argument with String() before escaping
+                // (bun: qs.escape(42) is '42').
+                let value = self.optional_arg(args, 0)?.unwrap_or(Value::Undefined);
+                let coerced = match value {
+                    Value::Str(s) => s,
+                    other => JsString::from(self.value_to_string(&other)),
+                };
+                Ok(Value::str(node_qs_escape_js(&coerced)?))
+            }
+            "builtin:QuerystringUnescape" => {
+                let value = self.optional_arg(args, 0)?.unwrap_or(Value::Undefined);
+                let coerced = match &value {
+                    Value::Str(s) => s.to_string(),
+                    other => self.value_to_string(other),
+                };
+                Ok(Value::str(node_qs_unescape(&coerced)))
+            }
+
+            // Node `os` builtins (bd-qmy52): FIXED deterministic engine-
+            // contained values (see the NODE_OS_* constants block) — no
+            // ambient authority, nothing reads the real host.
+            // getPriority/setPriority validate arguments like Node; core
+            // surfaces the failures as its plain TypeError/RangeError
+            // variants (the engine twin throws JS-catchable error objects).
+            "builtin:OsPlatform" => Ok(Value::str(NODE_OS_PLATFORM)),
+            "builtin:OsArch" => Ok(Value::str("x64")),
+            "builtin:OsType" => Ok(Value::str("Linux")),
+            "builtin:OsEndianness" => Ok(Value::str("LE")),
+            "builtin:OsMachine" => Ok(Value::str("x86_64")),
+            "builtin:OsRelease" => Ok(Value::str(NODE_OS_RELEASE)),
+            "builtin:OsVersion" => Ok(Value::str(NODE_OS_VERSION)),
+            "builtin:OsHomedir" => Ok(Value::str("/home")),
+            "builtin:OsTmpdir" => Ok(Value::str("/tmp")),
+            "builtin:OsHostname" => Ok(Value::str("localhost")),
+            "builtin:OsUptime" => Ok(Value::Float(Float64::new(1.0))),
+            "builtin:OsTotalmem" => Ok(Value::Int(NODE_OS_TOTALMEM_BYTES)),
+            "builtin:OsFreemem" => Ok(Value::Int(NODE_OS_FREEMEM_BYTES)),
+            "builtin:OsAvailableParallelism" => Ok(Value::Int(1)),
+            "builtin:OsLoadavg" => {
+                // Fixed idle load; length 3 like Node.
+                let zero = Value::Float(Float64::new(0.0));
+                let array_id = self.alloc_array_from_values(&[zero.clone(), zero.clone(), zero])?;
+                Ok(Value::Object(array_id))
+            }
+            "builtin:OsCpus" => {
+                // One fixed virtual CPU: non-empty, fully-typed shape.
+                let times_id = self.alloc_object_with_properties(&[
+                    ("user", Value::Int(0)),
+                    ("nice", Value::Int(0)),
+                    ("sys", Value::Int(0)),
+                    ("idle", Value::Int(0)),
+                    ("irq", Value::Int(0)),
+                ])?;
+                let cpu_id = self.alloc_object_with_properties(&[
+                    ("model", Value::str("franken-virtual")),
+                    ("speed", Value::Int(1000)),
+                    ("times", Value::Object(times_id)),
+                ])?;
+                let array_id = self.alloc_array_from_values(&[Value::Object(cpu_id)])?;
+                Ok(Value::Object(array_id))
+            }
+            "builtin:OsNetworkInterfaces" => {
+                // The engine exposes NO network shape: an empty interfaces
+                // map (a valid Node shape).
+                Ok(Value::Object(self.alloc_object_with_properties(&[])?))
+            }
+            "builtin:OsUserInfo" => {
+                let object_id = self.alloc_object_with_properties(&[
+                    ("username", Value::str("franken")),
+                    ("uid", Value::Int(0)),
+                    ("gid", Value::Int(0)),
+                    ("shell", Value::str("/bin/sh")),
+                    ("homedir", Value::str("/home")),
+                ])?;
+                Ok(Value::Object(object_id))
+            }
+            "builtin:OsGetPriority" => {
+                // Node: `getPriority(pid = 0)` — an absent/undefined pid takes
+                // the default; anything else validates as an int32. The fixed
+                // priority is 0 (PRIORITY_NORMAL) for every pid.
+                if let Some(pid) = self.optional_arg(args, 0)?
+                    && !matches!(pid, Value::Undefined)
+                {
+                    self.os_validate_int32(&pid, "pid", i64::from(i32::MIN), i64::from(i32::MAX))?;
+                }
+                Ok(Value::Int(0))
+            }
+            "builtin:OsSetPriority" => {
+                // Node: `setPriority([pid, ]priority)` — when `priority` is
+                // undefined the single-argument form applies (priority := pid,
+                // pid := 0). pid validates as an int32 first, then priority as
+                // an integer in [-20, 19]. The engine accepts valid values and
+                // does nothing (no host process to re-prioritize); returns
+                // undefined.
+                let first = self.optional_arg(args, 0)?.unwrap_or(Value::Undefined);
+                let second = self.optional_arg(args, 1)?.unwrap_or(Value::Undefined);
+                let (pid, priority) = if matches!(second, Value::Undefined) {
+                    (Value::Int(0), first)
+                } else {
+                    (first, second)
+                };
+                self.os_validate_int32(&pid, "pid", i64::from(i32::MIN), i64::from(i32::MAX))?;
+                self.os_validate_int32(&priority, "priority", -20, 19)?;
+                Ok(Value::Undefined)
+            }
+            "builtin:OsConstants" => {
+                // `os.constants` — the nested { signals, errno, priority }
+                // object (real POSIX numbers; see the NODE_OS_* tables).
+                let signals = self.alloc_os_constant_group(NODE_OS_SIGNALS)?;
+                let errno = self.alloc_os_constant_group(NODE_OS_ERRNO)?;
+                let priority = self.alloc_os_constant_group(NODE_OS_PRIORITY)?;
+                let object_id = self.alloc_object_with_properties(&[
+                    ("signals", signals),
+                    ("errno", errno),
+                    ("priority", priority),
+                ])?;
+                Ok(Value::Object(object_id))
             }
 
             _ => {
@@ -8190,6 +13569,297 @@ impl InterpreterCore {
                 Ok(Value::Undefined)
             }
         }
+    }
+
+    /// bd-tu0c3: read ALL hostcall args as strings for a variadic path builtin
+    /// (join), failing on the first non-string (Node validates every join
+    /// argument, including `undefined`).
+    fn path_string_args(
+        &self,
+        args: RegRange,
+        arg_name: &str,
+    ) -> Result<Vec<String>, InterpreterError> {
+        let mut parts = Vec::with_capacity(args.count as usize);
+        for offset in 0..args.count {
+            match self.read_arg(args, offset)? {
+                Value::Str(s) => parts.push(s.to_string()),
+                other => {
+                    return Err(InterpreterError::TypeError {
+                        expected: format!("string `{arg_name}[{offset}]` path argument"),
+                        got: other.type_name().to_string(),
+                    });
+                }
+            }
+        }
+        Ok(parts)
+    }
+
+    /// bd-tu0c3: collect `path.resolve` arguments with Node's LAZY right-to-
+    /// left validation: segments are validated (string-required) from the last
+    /// argument backwards and collection STOPS at the first absolute segment —
+    /// arguments to its left are never inspected (Node: `resolve(7, '/a')` is
+    /// `'/a'`, not a TypeError). Returned in left-to-right order for
+    /// [`node_path_posix_resolve`].
+    fn path_resolve_args(&self, args: RegRange) -> Result<Vec<String>, InterpreterError> {
+        let mut collected: Vec<String> = Vec::with_capacity(args.count as usize);
+        let mut offset = args.count;
+        while offset > 0 {
+            offset -= 1;
+            let value = self.read_arg(args, offset)?;
+            let Value::Str(s) = value else {
+                return Err(InterpreterError::TypeError {
+                    expected: format!("string `paths[{offset}]` path argument"),
+                    got: value.type_name().to_string(),
+                });
+            };
+            let segment = s.to_string();
+            let is_absolute = segment.starts_with('/');
+            collected.push(segment);
+            if is_absolute {
+                break;
+            }
+        }
+        collected.reverse();
+        Ok(collected)
+    }
+
+    /// bd-tu0c3: required string argument of a path builtin at `offset`
+    /// (missing arguments read as `undefined`, which fails validation exactly
+    /// like Node).
+    fn path_string_arg(
+        &self,
+        args: RegRange,
+        offset: u32,
+        arg_name: &str,
+    ) -> Result<String, InterpreterError> {
+        let value = self.optional_arg(args, offset)?.unwrap_or(Value::Undefined);
+        match value {
+            Value::Str(s) => Ok(s.to_string()),
+            other => Err(InterpreterError::TypeError {
+                expected: format!("string `{arg_name}` path argument"),
+                got: other.type_name().to_string(),
+            }),
+        }
+    }
+
+    /// bd-tu0c3: optional string argument of a path builtin at `offset`
+    /// (`basename`'s `ext`): absent or `undefined` is accepted as `None`, any
+    /// other non-string fails (Node validates `ext` only when it is not
+    /// `undefined`).
+    fn path_optional_string_arg(
+        &self,
+        args: RegRange,
+        offset: u32,
+        arg_name: &str,
+    ) -> Result<Option<String>, InterpreterError> {
+        match self.optional_arg(args, offset)? {
+            None | Some(Value::Undefined) => Ok(None),
+            Some(Value::Str(s)) => Ok(Some(s.to_string())),
+            Some(other) => Err(InterpreterError::TypeError {
+                expected: format!("string `{arg_name}` path argument"),
+                got: other.type_name().to_string(),
+            }),
+        }
+    }
+
+    /// bd-tu0c3: read an own string-ish property of the `path.format` path
+    /// object; absent/`undefined` reads as `''`, other values are coerced with
+    /// the standard stringification (Node coerces via template literals).
+    /// Own-property only (no prototype walk).
+    fn path_format_object_property(&self, object_id: ObjectId, key: &str) -> String {
+        match self
+            .heap
+            .get(object_id.0 as usize)
+            .and_then(|object| object.properties.get(key).cloned())
+        {
+            None | Some(Value::Undefined) => String::new(),
+            Some(Value::Str(s)) => s.to_string(),
+            Some(other) => self.value_to_string(&other),
+        }
+    }
+
+    /// bd-qmy52: optional custom separator argument for querystring
+    /// parse/stringify. Node treats any FALSY value (`undefined`, `null`,
+    /// `''`, `0`, `false`, `NaN`) as "use the default" and stringifies
+    /// everything else (`String(sep)`).
+    fn qs_separator_arg(
+        &self,
+        args: RegRange,
+        offset: u32,
+        default: &str,
+    ) -> Result<String, InterpreterError> {
+        let value = self.optional_arg(args, offset)?.unwrap_or(Value::Undefined);
+        if !value.is_truthy() {
+            return Ok(default.to_string());
+        }
+        Ok(self.value_to_string(&value))
+    }
+
+    /// bd-qmy52: `options.maxKeys` for `querystring.parse`. Default 1000
+    /// pairs; a number that is `<= 0`, `Infinity`, `NaN`, or non-integer
+    /// disables the limit (Node's `--pairs === 0` countdown never reaches 0
+    /// for those); a non-number `maxKeys` (or no/non-object options) keeps the
+    /// default. Own-property read only, like the other options bags.
+    fn qs_max_pairs_arg(
+        &self,
+        args: RegRange,
+        offset: u32,
+    ) -> Result<Option<u64>, InterpreterError> {
+        const DEFAULT_MAX_PAIRS: u64 = 1000;
+        let Some(Value::Object(options_id)) = self.optional_arg(args, offset)? else {
+            return Ok(Some(DEFAULT_MAX_PAIRS));
+        };
+        let max_keys = self
+            .heap
+            .get(options_id.0 as usize)
+            .and_then(|object| object.properties.get("maxKeys").cloned());
+        Ok(match max_keys {
+            Some(Value::Int(n)) => {
+                if n > 0 {
+                    Some(n as u64)
+                } else {
+                    None
+                }
+            }
+            Some(Value::Float(f)) => {
+                let v = f.inner();
+                if v.is_finite() && v > 0.0 && v.fract() == 0.0 {
+                    Some(v as u64)
+                } else {
+                    None
+                }
+            }
+            _ => Some(DEFAULT_MAX_PAIRS),
+        })
+    }
+
+    /// bd-qmy52: Node's `stringifyPrimitive` for `querystring.stringify`
+    /// values and array elements: strings pass through, finite numbers
+    /// stringify, booleans map to `true`/`false`, and EVERYTHING else
+    /// (undefined, null, NaN, Infinity, objects, functions) becomes `''`.
+    /// (Core's `Value` has no BigInt variant; the engine twin also
+    /// stringifies bigints.)
+    fn qs_stringify_primitive(&self, value: &Value) -> JsString {
+        match value {
+            Value::Str(s) => s.clone(),
+            Value::Int(n) => JsString::from(n.to_string()),
+            Value::Float(f) if f.inner().is_finite() => JsString::from(self.value_to_string(value)),
+            Value::Bool(b) => JsString::from(if *b { "true" } else { "false" }),
+            _ => JsString::from(""),
+        }
+    }
+
+    /// bd-qmy52: `querystring.stringify` body over a heap object: own
+    /// properties in ECMAScript `Object.keys` order (canonical array indices
+    /// numerically first, then other strings by creation order), array values expand to
+    /// repeated `key=element` pairs (an EMPTY array contributes nothing, bun:
+    /// `stringify({e: [], f: 'y'})` is `'f=y'`), other values stringify via
+    /// [`Self::qs_stringify_primitive`]; keys and values escape with
+    /// [`node_qs_escape`]. An array receiver's `length` property is skipped
+    /// (approximates its non-enumerability).
+    fn qs_stringify_object(
+        &self,
+        object_id: ObjectId,
+        sep: &str,
+        eq: &str,
+    ) -> Result<String, InterpreterError> {
+        let entries: Vec<(JsString, Value)> = self
+            .heap
+            .get(object_id.0 as usize)
+            .map(|object| {
+                object
+                    .own_exact_property_keys()
+                    .into_iter()
+                    .filter(|key| !(object.is_array && key.as_str() == Some("length")))
+                    .filter_map(|key| {
+                        object
+                            .properties
+                            .get_exact(&key)
+                            .cloned()
+                            .map(|value| (key, value))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        let mut pieces: Vec<String> = Vec::new();
+        for (key, value) in entries {
+            let key_prefix = format!("{}{eq}", node_qs_escape_js(&key)?);
+            if let Value::Object(id) = value
+                && self
+                    .heap
+                    .get(id.0 as usize)
+                    .is_some_and(|object| object.is_array)
+            {
+                for element in self.read_array_like_values(id) {
+                    pieces.push(format!(
+                        "{key_prefix}{}",
+                        node_qs_escape_js(&self.qs_stringify_primitive(&element))?
+                    ));
+                }
+                continue;
+            }
+            pieces.push(format!(
+                "{key_prefix}{}",
+                node_qs_escape_js(&self.qs_stringify_primitive(&value))?
+            ));
+        }
+        Ok(pieces.join(sep))
+    }
+
+    /// bd-qmy52: Node `validateInt32`-shaped check for the os builtins
+    /// (`getPriority`/`setPriority` pids and priorities). Core has no
+    /// error-object prototype machinery: a non-number surfaces as core's
+    /// plain `InterpreterError::TypeError` and a non-integer/out-of-range
+    /// number as `InterpreterError::RangeError` (the engine twin throws the
+    /// JS-catchable ERR_INVALID_ARG_TYPE / ERR_OUT_OF_RANGE error objects).
+    fn os_validate_int32(
+        &self,
+        value: &Value,
+        arg_name: &str,
+        lo: i64,
+        hi: i64,
+    ) -> Result<i64, InterpreterError> {
+        let number = match value {
+            Value::Int(n) => *n as f64,
+            Value::Float(f) => f.inner(),
+            other => {
+                return Err(InterpreterError::TypeError {
+                    expected: format!("number `{arg_name}` argument"),
+                    got: other.type_name().to_string(),
+                });
+            }
+        };
+        if !number.is_finite() || number.fract() != 0.0 {
+            return Err(InterpreterError::RangeError {
+                message: format!(
+                    "The value of \"{arg_name}\" is out of range. It must be an integer. Received {}",
+                    self.value_to_string(value)
+                ),
+            });
+        }
+        let integer = number as i64;
+        if integer < lo || integer > hi {
+            return Err(InterpreterError::RangeError {
+                message: format!(
+                    "The value of \"{arg_name}\" is out of range. It must be >= {lo} && <= {hi}. Received {}",
+                    self.value_to_string(value)
+                ),
+            });
+        }
+        Ok(integer)
+    }
+
+    /// bd-qmy52: allocate one flat `{ NAME: number, … }` group of the
+    /// `os.constants` object.
+    fn alloc_os_constant_group(
+        &mut self,
+        entries: &[(&str, i64)],
+    ) -> Result<Value, InterpreterError> {
+        let props: Vec<(&str, Value)> = entries
+            .iter()
+            .map(|(name, number)| (*name, Value::Int(*number)))
+            .collect();
+        Ok(Value::Object(self.alloc_object_with_properties(&props)?))
     }
 
     fn optional_arg(&self, args: RegRange, offset: u32) -> Result<Option<Value>, InterpreterError> {
@@ -8238,17 +13908,183 @@ impl InterpreterCore {
         }
     }
 
-    fn own_enumerable_keys(&self, object_id: ObjectId) -> Result<Vec<String>, InterpreterError> {
+    /// Resolve the heap carrier shared by ordinary objects and function-like
+    /// values. A function with no user-defined properties has no allocated
+    /// sidecar yet, so callers observe an empty own-key set without forcing an
+    /// allocation.
+    fn object_like_storage_id(
+        &self,
+        value: &Value,
+        expected: &str,
+    ) -> Result<Option<ObjectId>, InterpreterError> {
+        let object_id = match value {
+            Value::Object(object_id) => Some(*object_id),
+            function_like if Self::function_object_key(function_like).is_some() => {
+                self.function_object_id(function_like)
+            }
+            other => {
+                return Err(InterpreterError::TypeError {
+                    expected: expected.to_string(),
+                    got: other.type_name().to_string(),
+                });
+            }
+        };
+        if let Some(object_id) = object_id {
+            self.heap
+                .get(object_id.0 as usize)
+                .ok_or(InterpreterError::ObjectNotFound { id: object_id.0 })?;
+        }
+        Ok(object_id)
+    }
+
+    fn own_enumerable_keys(&self, object_id: ObjectId) -> Result<Vec<JsString>, InterpreterError> {
         let object = self
             .heap
             .get(object_id.0 as usize)
             .ok_or(InterpreterError::ObjectNotFound { id: object_id.0 })?;
         Ok(object
-            .properties
-            .keys()
-            .filter(|key| !(object.is_array && key.as_str() == "length"))
-            .cloned()
+            .own_exact_property_keys()
+            .into_iter()
+            .filter(|key| !(object.is_array && key.as_str() == Some("length")))
             .collect())
+    }
+
+    /// Execute or resume the source-facing `Object.assign` HostCall. It uses
+    /// the same typed key snapshot/descriptor recheck machinery as object
+    /// spread, but writes with ordinary Set semantics and can therefore pause
+    /// in either a source getter or a target setter.
+    fn execute_object_assign(
+        &mut self,
+        module: &Ir3Module,
+        args: RegRange,
+        dst: u32,
+    ) -> Result<bool, InterpreterError> {
+        let active = self.copy_data_properties_states.last().and_then(|state| {
+            if !state.belongs_to(self.ip, self.register_base, self.call_stack.len()) {
+                return None;
+            }
+            match &state.write_mode {
+                CopyDataPropertiesWriteMode::Set {
+                    target_receiver,
+                    source_arg_offset,
+                } => Some((*source_arg_offset, target_receiver.clone())),
+                CopyDataPropertiesWriteMode::CreateData => None,
+            }
+        });
+
+        let (mut source_offset, target_value) = if let Some(active) = active {
+            active
+        } else {
+            let target_value = self.required_arg(args, 0, "object Object.assign target")?;
+            match &target_value {
+                Value::Object(object_id) => {
+                    self.heap
+                        .get(object_id.0 as usize)
+                        .ok_or(InterpreterError::ObjectNotFound { id: object_id.0 })?;
+                }
+                function_like if Self::function_object_key(function_like).is_some() => {}
+                other => {
+                    return Err(InterpreterError::TypeError {
+                        expected: "object Object.assign target".to_string(),
+                        got: other.type_name().to_string(),
+                    });
+                }
+            }
+            (1, target_value)
+        };
+
+        while source_offset < args.count {
+            let source_reg = args.start.checked_add(source_offset).ok_or(
+                InterpreterError::RegisterOutOfBounds {
+                    register: args.start,
+                    max: self.config.max_registers,
+                },
+            )?;
+            let state_is_active = self
+                .copy_data_properties_states
+                .last()
+                .is_some_and(|state| {
+                    state.belongs_to(self.ip, self.register_base, self.call_stack.len())
+                });
+            if !state_is_active && self.read_reg(source_reg)?.is_nullish() {
+                source_offset = source_offset.saturating_add(1);
+                continue;
+            }
+            let entered_accessor = self.execute_copy_data_properties(
+                module,
+                args.start,
+                source_reg,
+                RegRange { start: 0, count: 0 },
+                dst,
+                CopyDataPropertiesWriteMode::Set {
+                    target_receiver: target_value.clone(),
+                    source_arg_offset: source_offset,
+                },
+            )?;
+            if entered_accessor {
+                return Ok(true);
+            }
+            source_offset = source_offset.saturating_add(1);
+        }
+
+        self.write_reg(dst, target_value)?;
+        Ok(false)
+    }
+
+    fn object_assign(&mut self, args: RegRange) -> Result<Value, InterpreterError> {
+        let target_value = self.required_arg(args, 0, "object")?;
+        let target_id = match &target_value {
+            Value::Object(object_id) => self.expect_object(Value::Object(*object_id), "object")?,
+            function_like if Self::function_object_key(function_like).is_some() => self
+                .ensure_function_object(function_like)?
+                .expect("function-like value should allocate an object carrier"),
+            other => {
+                return Err(InterpreterError::TypeError {
+                    expected: "object".to_string(),
+                    got: other.type_name().to_string(),
+                });
+            }
+        };
+        for offset in 1..args.count {
+            let source = self.read_arg(args, offset)?;
+            if source.is_nullish() {
+                continue;
+            }
+            let Some(source_id) = self.copy_data_properties_object_id(&source) else {
+                continue;
+            };
+            self.heap
+                .get(source_id.0 as usize)
+                .ok_or(InterpreterError::ObjectNotFound { id: source_id.0 })?;
+            let properties = {
+                let object = self
+                    .heap
+                    .get(source_id.0 as usize)
+                    .ok_or(InterpreterError::ObjectNotFound { id: source_id.0 })?;
+                object
+                    .own_runtime_property_keys()
+                    .into_iter()
+                    .filter_map(|key| match &key {
+                        RuntimePropertyKey::String(string_key) => object
+                            .properties
+                            .get_exact(string_key)
+                            .cloned()
+                            .map(|value| (key, value)),
+                        RuntimePropertyKey::Symbol(symbol) => object
+                            .properties
+                            .baseline_symbol_property(*symbol)
+                            .and_then(|property| match property {
+                                BaselineSymbolProperty::Data(value) => Some((key, value.clone())),
+                                BaselineSymbolProperty::Accessor { .. } => None,
+                            }),
+                    })
+                    .collect::<Vec<_>>()
+            };
+            for (key, value) in properties {
+                self.set_object_runtime_property(target_id, key, value)?;
+            }
+        }
+        Ok(target_value)
     }
 
     /// Map a function index to a builtin capability string if it corresponds to a builtin.
@@ -8290,6 +14126,19 @@ impl InterpreterCore {
         }
     }
 
+    fn symbol_description(&self, id: SymbolId) -> Option<JsString> {
+        well_known_symbol_description(id)
+            .map(JsString::from)
+            .or_else(|| self.symbol_state.description(id).cloned())
+    }
+
+    fn symbol_display_string(&self, id: SymbolId) -> String {
+        self.symbol_description(id).map_or_else(
+            || "Symbol()".to_string(),
+            |description| format!("Symbol({description})"),
+        )
+    }
+
     /// Convert a Value to a string representation for console output.
     fn value_to_string(&self, value: &Value) -> String {
         match value {
@@ -8313,7 +14162,8 @@ impl InterpreterCore {
                     format!("{v}")
                 }
             }
-            Value::Str(s) => s.clone(),
+            Value::Str(s) => s.to_string(),
+            Value::Symbol(id) => self.symbol_display_string(*id),
             Value::Object(id) => {
                 // Try to get a simple string representation
                 if let Some(_obj) = self.heap.get(id.0 as usize) {
@@ -8461,11 +14311,55 @@ impl InterpreterCore {
         MEMORY_ESTIMATE_STRING_BASE_BYTES.saturating_add(text.len() as u64)
     }
 
+    fn estimate_js_string_bytes(text: &JsString) -> u64 {
+        let projected = Self::estimate_string_bytes(text.as_utf8_projection());
+        if text.is_well_formed() {
+            projected
+        } else {
+            projected.saturating_add((text.utf16_len() as u64).saturating_mul(2))
+        }
+    }
+
     fn estimate_value_bytes(value: &Value) -> u64 {
         match value {
-            Value::Str(text) => Self::estimate_string_bytes(text),
+            Value::Str(text) => Self::estimate_js_string_bytes(text),
             _ => 0,
         }
+    }
+
+    fn estimate_property_key_bytes(key: &RuntimePropertyKey) -> u64 {
+        match key {
+            RuntimePropertyKey::String(key) => Self::estimate_js_string_bytes(key),
+            RuntimePropertyKey::Symbol(_) => std::mem::size_of::<SymbolId>() as u64,
+        }
+    }
+
+    fn estimate_symbol_state_bytes(state: &RuntimeSymbolState) -> u64 {
+        state.symbols.values().fold(0u64, |total, record| {
+            total
+                .saturating_add(MEMORY_ESTIMATE_MAP_ENTRY_BYTES)
+                .saturating_add(
+                    record
+                        .description
+                        .as_ref()
+                        .map(Self::estimate_js_string_bytes)
+                        .unwrap_or(0),
+                )
+                .saturating_add(
+                    record
+                        .registry_key
+                        .as_ref()
+                        .map(Self::estimate_js_string_bytes)
+                        .unwrap_or(0),
+                )
+        })
+    }
+
+    fn estimate_label_bytes(label: &crate::ifc_artifacts::Label) -> u64 {
+        MEMORY_ESTIMATE_LABEL_BASE_BYTES.saturating_add(match label {
+            crate::ifc_artifacts::Label::Custom { name, .. } => name.len() as u64,
+            _ => 0,
+        })
     }
 
     fn estimate_scope_frame_bytes(frame: &ScopeFrame) -> u64 {
@@ -8473,9 +14367,17 @@ impl InterpreterCore {
             .bindings
             .iter()
             .map(|(name, binding)| {
+                let state_bytes = binding
+                    .state
+                    .try_borrow()
+                    .map(|state| {
+                        Self::estimate_value_bytes(&state.value)
+                            .saturating_add(Self::estimate_label_bytes(&state.label))
+                    })
+                    .unwrap_or(u64::MAX);
                 MEMORY_ESTIMATE_SCOPE_BINDING_BASE_BYTES
                     .saturating_add(Self::estimate_string_bytes(name))
-                    .saturating_add(Self::estimate_value_bytes(&binding.value))
+                    .saturating_add(state_bytes)
             })
             .sum::<u64>();
         MEMORY_ESTIMATE_SCOPE_FRAME_BASE_BYTES.saturating_add(bindings)
@@ -8491,7 +14393,11 @@ impl InterpreterCore {
     fn estimate_call_frame_bytes(frame: &CallFrame) -> u64 {
         MEMORY_ESTIMATE_CALL_FRAME_BASE_BYTES
             .saturating_add(Self::estimate_value_bytes(&frame.this_value))
+            .saturating_add(Self::estimate_label_bytes(&frame.this_label))
             .saturating_add(Self::estimate_value_bytes(&frame.new_target_value))
+            .saturating_add(Self::estimate_label_bytes(&frame.new_target_label))
+            .saturating_add(Self::estimate_value_bytes(&frame.super_value))
+            .saturating_add(Self::estimate_label_bytes(&frame.super_label))
             .saturating_add(
                 frame
                     .construct_this
@@ -8503,14 +14409,14 @@ impl InterpreterCore {
                 frame
                     .saved_pending_exception
                     .as_ref()
-                    .map(Self::estimate_value_bytes)
+                    .map(Self::estimate_labeled_exception_bytes)
                     .unwrap_or(0),
             )
             .saturating_add(
                 frame
                     .saved_pending_return
                     .as_ref()
-                    .map(Self::estimate_value_bytes)
+                    .map(Self::estimate_labeled_return_bytes)
                     .unwrap_or(0),
             )
             .saturating_add(
@@ -8524,38 +14430,114 @@ impl InterpreterCore {
     fn estimate_heap_object_bytes(object: &HeapObject) -> u64 {
         let properties = object
             .properties
-            .iter()
+            .well_formed_data_entries()
             .map(|(key, value)| {
                 MEMORY_ESTIMATE_MAP_ENTRY_BYTES
                     .saturating_add(Self::estimate_string_bytes(key))
+                    // OrderedStringMap owns a second key for its ES-order
+                    // index/vector spine in addition to the lookup-map key.
+                    .saturating_add(Self::estimate_string_bytes(key))
                     .saturating_add(Self::estimate_value_bytes(value))
             })
+            .chain(
+                object
+                    .properties
+                    .exact_only_data_entries()
+                    .map(|(key, value)| {
+                        MEMORY_ESTIMATE_MAP_ENTRY_BYTES
+                            .saturating_add(Self::estimate_js_string_bytes(key))
+                            .saturating_add(Self::estimate_js_string_bytes(key))
+                            .saturating_add(Self::estimate_value_bytes(value))
+                    }),
+            )
             .sum::<u64>();
-        let accessors = object
-            .accessors
-            .iter()
-            .map(|(key, accessor)| {
-                MEMORY_ESTIMATE_MAP_ENTRY_BYTES
-                    .saturating_add(Self::estimate_string_bytes(key))
-                    .saturating_add(
-                        accessor
-                            .get
-                            .as_ref()
-                            .map(Self::estimate_value_bytes)
-                            .unwrap_or(0),
-                    )
-                    .saturating_add(
-                        accessor
-                            .set
-                            .as_ref()
-                            .map(Self::estimate_value_bytes)
-                            .unwrap_or(0),
-                    )
+        let exact_data_order_well_formed_copies = object
+            .properties
+            .exact_string_insertion_order()
+            .map(|order| {
+                order
+                    .iter()
+                    .filter(|key| key.is_well_formed())
+                    .map(Self::estimate_js_string_bytes)
+                    .sum::<u64>()
+            })
+            .unwrap_or(0);
+        let accessors =
+            object
+                .accessors
+                .iter()
+                .map(|(key, accessor)| {
+                    MEMORY_ESTIMATE_MAP_ENTRY_BYTES
+                        .saturating_add(Self::estimate_string_bytes(key))
+                        .saturating_add(
+                            accessor
+                                .get
+                                .as_ref()
+                                .map(Self::estimate_value_bytes)
+                                .unwrap_or(0),
+                        )
+                        .saturating_add(
+                            accessor
+                                .set
+                                .as_ref()
+                                .map(Self::estimate_value_bytes)
+                                .unwrap_or(0),
+                        )
+                })
+                .chain(object.properties.baseline_exact_string_accessors().map(
+                    |(key, accessor)| {
+                        MEMORY_ESTIMATE_MAP_ENTRY_BYTES
+                            .saturating_add(Self::estimate_js_string_bytes(key))
+                            .saturating_add(
+                                accessor
+                                    .get
+                                    .as_ref()
+                                    .map(Self::estimate_value_bytes)
+                                    .unwrap_or(0),
+                            )
+                            .saturating_add(
+                                accessor
+                                    .set
+                                    .as_ref()
+                                    .map(Self::estimate_value_bytes)
+                                    .unwrap_or(0),
+                            )
+                    },
+                ))
+                .sum::<u64>();
+        let own_string_key_order = object
+            .properties
+            .baseline_string_key_order()
+            .map(|order| {
+                order
+                    .iter()
+                    .map(Self::estimate_js_string_bytes)
+                    .sum::<u64>()
+            })
+            .unwrap_or(0);
+        let symbol_properties = object
+            .properties
+            .baseline_symbol_properties()
+            .map(|(_, property)| {
+                MEMORY_ESTIMATE_MAP_ENTRY_BYTES.saturating_add(match property {
+                    BaselineSymbolProperty::Data(value) => Self::estimate_value_bytes(value),
+                    BaselineSymbolProperty::Accessor { get, set } => get
+                        .as_ref()
+                        .map(Self::estimate_value_bytes)
+                        .unwrap_or(0)
+                        .saturating_add(set.as_ref().map(Self::estimate_value_bytes).unwrap_or(0)),
+                })
             })
             .sum::<u64>();
+        let symbol_order = (object.properties.baseline_symbol_key_order().len() as u64)
+            .saturating_mul(std::mem::size_of::<SymbolId>() as u64);
         MEMORY_ESTIMATE_HEAP_OBJECT_BASE_BYTES
             .saturating_add(properties)
+            .saturating_add(exact_data_order_well_formed_copies)
             .saturating_add(accessors)
+            .saturating_add(own_string_key_order)
+            .saturating_add(symbol_properties)
+            .saturating_add(symbol_order)
     }
 
     fn estimate_iterator_bytes(iterator: &RuntimeIteratorState) -> u64 {
@@ -8564,7 +14546,7 @@ impl InterpreterCore {
                 let keys = state
                     .keys
                     .iter()
-                    .map(|key| Self::estimate_string_bytes(key))
+                    .map(Self::estimate_js_string_bytes)
                     .sum::<u64>();
                 MEMORY_ESTIMATE_ITERATOR_BASE_BYTES.saturating_add(keys)
             }
@@ -8579,13 +14561,181 @@ impl InterpreterCore {
         }
     }
 
-    fn estimate_generator_bytes(generator: &GeneratorObject) -> u64 {
-        let registers = generator
+    fn estimate_copy_data_properties_state_bytes(state: &CopyDataPropertiesState) -> u64 {
+        let keys = state
+            .keys
+            .iter()
+            .map(Self::estimate_property_key_bytes)
+            .sum::<u64>();
+        let excluded = state
+            .excluded
+            .iter()
+            .map(Self::estimate_property_key_bytes)
+            .sum::<u64>();
+        let awaiting_key = match state.awaiting.as_ref() {
+            Some(CopyDataPropertiesAwaiting::Getter(key)) => Self::estimate_property_key_bytes(key),
+            Some(CopyDataPropertiesAwaiting::Setter) | None => 0,
+        };
+        let write_mode = match &state.write_mode {
+            CopyDataPropertiesWriteMode::CreateData => 0,
+            CopyDataPropertiesWriteMode::Set {
+                target_receiver, ..
+            } => Self::estimate_value_bytes(target_receiver),
+        };
+        MEMORY_ESTIMATE_COPY_DATA_PROPERTIES_STATE_BASE_BYTES
+            .saturating_add(Self::estimate_value_bytes(&state.source))
+            .saturating_add(
+                state
+                    .string_units
+                    .as_ref()
+                    .map_or(0, |units| (units.len() as u64).saturating_mul(2)),
+            )
+            .saturating_add(keys)
+            .saturating_add(excluded)
+            .saturating_add(awaiting_key)
+            .saturating_add(write_mode)
+    }
+
+    fn estimate_labeled_exception_bytes(exception: &LabeledException) -> u64 {
+        Self::estimate_value_bytes(&exception.value)
+            .saturating_add(Self::estimate_label_bytes(&exception.label))
+    }
+
+    fn estimate_labeled_return_bytes(return_value: &LabeledReturn) -> u64 {
+        Self::estimate_value_bytes(&return_value.value)
+            .saturating_add(Self::estimate_label_bytes(&return_value.label))
+    }
+
+    fn estimate_abrupt_completion_bytes(completion: &AbruptCompletion) -> u64 {
+        match completion {
+            AbruptCompletion::Exception(exception) => {
+                Self::estimate_labeled_exception_bytes(exception)
+            }
+            AbruptCompletion::Return(return_value) => {
+                Self::estimate_labeled_return_bytes(return_value)
+            }
+        }
+    }
+
+    fn estimate_async_function_snapshot_bytes(function: &AsyncFunctionObject) -> u64 {
+        function
             .saved_registers
             .iter()
             .map(Self::estimate_value_bytes)
-            .sum::<u64>();
-        MEMORY_ESTIMATE_GENERATOR_BASE_BYTES.saturating_add(registers)
+            .sum::<u64>()
+            .saturating_add(
+                function
+                    .saved_register_labels
+                    .iter()
+                    .map(Self::estimate_label_bytes)
+                    .sum::<u64>(),
+            )
+    }
+
+    fn async_function_snapshots_memory_bytes(&self) -> u64 {
+        self.async_functions
+            .iter()
+            .map(Self::estimate_async_function_snapshot_bytes)
+            .sum::<u64>()
+    }
+
+    fn promise_combinator_labels_memory_bytes(&self) -> u64 {
+        self.promise_combinators
+            .values()
+            .map(|state| Self::estimate_label_bytes(&state.accumulated_label))
+            .sum::<u64>()
+    }
+
+    fn estimate_module_execution_bytes(execution: &ModuleExecutionSnapshot) -> u64 {
+        execution
+            .registers
+            .iter()
+            .map(Self::estimate_value_bytes)
+            .sum::<u64>()
+            .saturating_add(
+                execution
+                    .register_labels
+                    .iter()
+                    .map(Self::estimate_label_bytes)
+                    .sum::<u64>(),
+            )
+            .saturating_add(
+                execution
+                    .call_stack
+                    .iter()
+                    .map(Self::estimate_call_frame_bytes)
+                    .sum::<u64>(),
+            )
+            .saturating_add(Self::estimate_scope_chain_bytes(
+                &execution.scope_chain.frames,
+            ))
+            .saturating_add(
+                execution
+                    .copy_data_properties_states
+                    .iter()
+                    .map(Self::estimate_copy_data_properties_state_bytes)
+                    .sum::<u64>(),
+            )
+            .saturating_add(
+                execution
+                    .pending_exception
+                    .as_ref()
+                    .map(Self::estimate_labeled_exception_bytes)
+                    .unwrap_or(0),
+            )
+            .saturating_add(
+                execution
+                    .pending_return
+                    .as_ref()
+                    .map(Self::estimate_labeled_return_bytes)
+                    .unwrap_or(0),
+            )
+            .saturating_add(
+                execution
+                    .suspended_abrupt_completions
+                    .iter()
+                    .map(Self::estimate_abrupt_completion_bytes)
+                    .sum::<u64>(),
+            )
+            .saturating_add(
+                execution
+                    .finally_frames
+                    .iter()
+                    .filter_map(|frame| frame.completion.as_ref())
+                    .map(Self::estimate_abrupt_completion_bytes)
+                    .sum::<u64>(),
+            )
+            .saturating_add(
+                (execution.pending_captures.len() as u64)
+                    .saturating_mul(std::mem::size_of::<u32>() as u64),
+            )
+            .saturating_add(
+                execution
+                    .current_module_specifier
+                    .as_ref()
+                    .map(|specifier| Self::estimate_string_bytes(specifier))
+                    .unwrap_or(0),
+            )
+    }
+
+    fn estimate_generator_bytes(generator: &GeneratorObject) -> u64 {
+        MEMORY_ESTIMATE_GENERATOR_BASE_BYTES.saturating_add(
+            generator
+                .execution
+                .as_ref()
+                .map(Self::estimate_module_execution_bytes)
+                .unwrap_or(0),
+        )
+    }
+
+    fn estimate_async_generator_bytes(generator: &AsyncGeneratorObject) -> u64 {
+        MEMORY_ESTIMATE_GENERATOR_BASE_BYTES.saturating_add(
+            generator
+                .execution
+                .as_ref()
+                .map(Self::estimate_module_execution_bytes)
+                .unwrap_or(0),
+        )
     }
 
     fn heap_object_count_u32(&self) -> u32 {
@@ -8606,14 +14756,27 @@ impl InterpreterCore {
     }
 
     fn recompute_estimated_memory_bytes(&self) -> u64 {
-        self.heap
-            .iter()
-            .map(Self::estimate_heap_object_bytes)
-            .sum::<u64>()
+        Self::estimate_symbol_state_bytes(&self.symbol_state)
+            .saturating_add(
+                self.heap
+                    .iter()
+                    .map(Self::estimate_heap_object_bytes)
+                    .sum::<u64>(),
+            )
             .saturating_add(
                 self.registers
                     .iter()
                     .map(Self::estimate_value_bytes)
+                    .sum::<u64>(),
+            )
+            // Keep the installed execution-context estimate symmetric with
+            // estimate_module_execution_bytes. Generator activation swaps can
+            // then move a context between active and suspended storage without
+            // creating an unaccounted transient.
+            .saturating_add(
+                self.register_labels
+                    .iter()
+                    .map(Self::estimate_label_bytes)
                     .sum::<u64>(),
             )
             .saturating_add(Self::estimate_scope_chain_bytes(&self.scope_chain.frames))
@@ -8639,11 +14802,61 @@ impl InterpreterCore {
                     .sum::<u64>(),
             )
             .saturating_add(
+                self.copy_data_properties_states
+                    .iter()
+                    .map(Self::estimate_copy_data_properties_state_bytes)
+                    .sum::<u64>(),
+            )
+            .saturating_add(
+                self.pending_exception
+                    .as_ref()
+                    .map(Self::estimate_labeled_exception_bytes)
+                    .unwrap_or(0),
+            )
+            .saturating_add(
+                self.pending_return
+                    .as_ref()
+                    .map(Self::estimate_labeled_return_bytes)
+                    .unwrap_or(0),
+            )
+            .saturating_add(
+                self.suspended_abrupt_completions
+                    .iter()
+                    .map(Self::estimate_abrupt_completion_bytes)
+                    .sum::<u64>(),
+            )
+            .saturating_add(
+                self.finally_frames
+                    .iter()
+                    .filter_map(|frame| frame.completion.as_ref())
+                    .map(Self::estimate_abrupt_completion_bytes)
+                    .sum::<u64>(),
+            )
+            .saturating_add(
+                (self.pending_captures.len() as u64)
+                    .saturating_mul(std::mem::size_of::<u32>() as u64),
+            )
+            .saturating_add(
+                self.current_module_specifier
+                    .as_ref()
+                    .map(|specifier| Self::estimate_string_bytes(specifier))
+                    .unwrap_or(0),
+            )
+            .saturating_add(
                 self.generators
                     .iter()
                     .map(Self::estimate_generator_bytes)
                     .sum::<u64>(),
             )
+            .saturating_add(
+                self.async_generators
+                    .iter()
+                    .map(Self::estimate_async_generator_bytes)
+                    .sum::<u64>(),
+            )
+            .saturating_add(self.async_function_snapshots_memory_bytes())
+            .saturating_add(self.promise_combinator_labels_memory_bytes())
+            .saturating_add(self.temporarily_suspended_execution_bytes)
     }
 
     fn sync_estimated_memory_bytes(&mut self) -> Result<u64, InterpreterError> {
@@ -8696,13 +14909,126 @@ impl InterpreterCore {
         Ok(self.scope_chain.snapshot())
     }
 
+    fn snapshot_call_setup(
+        &self,
+        result_register: Option<u32>,
+        capture_function_prototypes: bool,
+    ) -> CallSetupSnapshot {
+        let frame_width = self.config.max_registers as usize;
+        let callee_register_start = self.register_base.saturating_add(frame_width);
+        let callee_register_end = callee_register_start.saturating_add(frame_width);
+        let saved_register_end = callee_register_end.min(self.registers.len());
+        let saved_label_end = callee_register_end.min(self.register_labels.len());
+        let callee_registers = if callee_register_start < saved_register_end {
+            self.registers[callee_register_start..saved_register_end].to_vec()
+        } else {
+            Vec::new()
+        };
+        let callee_register_labels = if callee_register_start < saved_label_end {
+            self.register_labels[callee_register_start..saved_label_end].to_vec()
+        } else {
+            Vec::new()
+        };
+        let result_register = result_register
+            .filter(|register| *register < self.config.max_registers)
+            .map(|register| {
+                let index = self.register_base.saturating_add(register as usize);
+                CallSetupRegisterSlotSnapshot {
+                    index,
+                    value: self.registers.get(index).cloned(),
+                    label: self.register_labels.get(index).cloned(),
+                }
+            });
+
+        CallSetupSnapshot {
+            heap_len: self.heap.len(),
+            function_prototypes: capture_function_prototypes
+                .then(|| self.function_prototypes.clone()),
+            call_stack_depth: self.call_stack.len(),
+            register_base: self.register_base,
+            ip: self.ip,
+            registers_len: self.registers.len(),
+            register_labels_len: self.register_labels.len(),
+            callee_register_start,
+            callee_registers,
+            callee_register_labels,
+            result_register,
+            async_functions_len: self.async_functions.len(),
+            profiling_memory_stats: self
+                .profiling_data
+                .as_ref()
+                .map(crate::profiling::Profiler::memory_stats_snapshot),
+            estimated_memory_bytes: self.estimated_memory_bytes,
+        }
+    }
+
+    fn restore_call_setup(&mut self, snapshot: CallSetupSnapshot) {
+        while self.call_stack.len() > snapshot.call_stack_depth {
+            self.rollback_call_setup();
+        }
+        debug_assert_eq!(self.call_stack.len(), snapshot.call_stack_depth);
+        self.register_base = snapshot.register_base;
+        self.ip = snapshot.ip;
+
+        if self.registers.len() < snapshot.registers_len {
+            self.registers
+                .resize(snapshot.registers_len, Value::Undefined);
+        }
+        if !snapshot.callee_registers.is_empty() {
+            let end = snapshot
+                .callee_register_start
+                .saturating_add(snapshot.callee_registers.len());
+            self.registers[snapshot.callee_register_start..end]
+                .clone_from_slice(&snapshot.callee_registers);
+        }
+        self.registers.truncate(snapshot.registers_len);
+
+        if self.register_labels.len() < snapshot.register_labels_len {
+            self.register_labels.resize(
+                snapshot.register_labels_len,
+                crate::ifc_artifacts::Label::Public,
+            );
+        }
+        if !snapshot.callee_register_labels.is_empty() {
+            let end = snapshot
+                .callee_register_start
+                .saturating_add(snapshot.callee_register_labels.len());
+            self.register_labels[snapshot.callee_register_start..end]
+                .clone_from_slice(&snapshot.callee_register_labels);
+        }
+        self.register_labels.truncate(snapshot.register_labels_len);
+
+        if let Some(result_register) = snapshot.result_register {
+            if let Some(value) = result_register.value {
+                self.registers[result_register.index] = value;
+            }
+            if let Some(label) = result_register.label {
+                self.register_labels[result_register.index] = label;
+            }
+        }
+
+        self.async_functions.truncate(snapshot.async_functions_len);
+        self.heap.truncate(snapshot.heap_len);
+        if let Some(function_prototypes) = snapshot.function_prototypes {
+            self.function_prototypes = function_prototypes;
+        }
+        if let (Some(profiler), Some(memory_stats)) =
+            (&mut self.profiling_data, snapshot.profiling_memory_stats)
+        {
+            profiler.restore_memory_stats(memory_stats);
+        }
+
+        self.estimated_memory_bytes = snapshot.estimated_memory_bytes;
+    }
+
     fn rollback_call_setup(&mut self) {
         if let Some(frame) = self.call_stack.pop() {
+            self.register_base = frame.register_base;
             self.pending_exception = frame.saved_pending_exception;
             self.pending_return = frame.saved_pending_return;
             self.suspended_abrupt_completions
                 .truncate(frame.saved_suspended_abrupt_depth);
-            self.finally_modes.truncate(frame.saved_finally_mode_depth);
+            self.finally_frames.truncate(frame.saved_finally_mode_depth);
             if let Some(saved) = frame.saved_scope_chain {
                 self.scope_chain.frames = saved;
             } else {
@@ -8826,7 +15152,7 @@ impl InterpreterCore {
             .ok_or(InterpreterError::IteratorNotFound { handle })
     }
 
-    fn collect_for_in_keys(&self, object_id: ObjectId) -> Result<Vec<String>, InterpreterError> {
+    fn collect_for_in_keys(&self, object_id: ObjectId) -> Result<Vec<JsString>, InterpreterError> {
         let mut keys = Vec::new();
         let mut seen = BTreeSet::new();
         let mut visited = BTreeSet::new();
@@ -8841,14 +15167,9 @@ impl InterpreterCore {
                 .heap
                 .get(id.0 as usize)
                 .ok_or(InterpreterError::ObjectNotFound { id: id.0 })?;
-            for key in object.properties.keys() {
+            for key in object.own_exact_property_keys() {
                 if seen.insert(key.clone()) {
-                    keys.push(key.clone());
-                }
-            }
-            for key in object.accessors.keys() {
-                if seen.insert(key.clone()) {
-                    keys.push(key.clone());
+                    keys.push(key);
                 }
             }
             current = object.prototype;
@@ -8860,7 +15181,15 @@ impl InterpreterCore {
 
     fn collect_for_of_values(&self, iterable: &Value) -> Result<Vec<Value>, InterpreterError> {
         match iterable {
-            Value::Str(text) => Ok(text.chars().map(|ch| Value::Str(ch.to_string())).collect()),
+            // ES string iteration yields one element per code point, with an
+            // unpaired surrogate preserved as its own single-unit element
+            // (bd-7zwar, engine parity with bd-rdnhc; previously iterated the
+            // U+FFFD projection).
+            Value::Str(text) => Ok(text
+                .code_point_elements()
+                .into_iter()
+                .map(Value::Str)
+                .collect()),
             Value::Object(object_id) => {
                 let object = self
                     .heap
@@ -8890,12 +15219,12 @@ impl InterpreterCore {
         }
     }
 
-    fn mark_deleted_for_in_iterators(&mut self, object_id: ObjectId, key: &str) {
+    fn mark_deleted_for_in_iterators(&mut self, object_id: ObjectId, key: &JsString) {
         for iterator in &mut self.iterators {
             if let RuntimeIteratorState::ForIn(state) = iterator
                 && state.object_id == object_id
             {
-                state.deleted_keys.insert(key.to_string());
+                state.deleted_keys.insert(key.clone());
             }
         }
     }
@@ -8906,24 +15235,100 @@ impl InterpreterCore {
         key: String,
         value: Value,
     ) -> Result<(), InterpreterError> {
-        let (previous_data, previous_accessor, property_key) = {
+        self.set_object_runtime_property(
+            object_id,
+            RuntimePropertyKey::String(JsString::from(key)),
+            value,
+        )
+    }
+
+    #[cfg(test)]
+    fn set_object_typed_property(
+        &mut self,
+        object_id: ObjectId,
+        key: TypedPropertyKey,
+        value: Value,
+    ) -> Result<(), InterpreterError> {
+        self.validate_runtime_property_key(&key)?;
+        let key = match key {
+            TypedPropertyKey::String(key) => RuntimePropertyKey::String(JsString::from(key)),
+            TypedPropertyKey::Symbol(symbol) => RuntimePropertyKey::Symbol(symbol),
+        };
+        self.set_object_runtime_property(object_id, key, value)
+    }
+
+    fn set_object_runtime_property(
+        &mut self,
+        object_id: ObjectId,
+        key: RuntimePropertyKey,
+        value: Value,
+    ) -> Result<(), InterpreterError> {
+        self.validate_executable_property_key(&key)?;
+        match key {
+            RuntimePropertyKey::String(key) => {
+                self.set_object_string_property(object_id, key, value)
+            }
+            RuntimePropertyKey::Symbol(symbol) => {
+                self.set_symbol_property(object_id, symbol, BaselineSymbolProperty::Data(value))
+            }
+        }
+    }
+
+    fn set_object_string_property(
+        &mut self,
+        object_id: ObjectId,
+        key: JsString,
+        value: Value,
+    ) -> Result<(), InterpreterError> {
+        let (
+            previous_data,
+            previous_data_position,
+            previous_accessor,
+            property_key,
+            order_rollback,
+        ) = {
             let object = self
                 .heap
                 .get_mut(object_id.0 as usize)
                 .ok_or(InterpreterError::ObjectNotFound { id: object_id.0 })?;
             if let Some((kind, property_key)) = Self::decode_accessor_definition_key(&key) {
-                let previous_data = object.properties.remove(&property_key);
-                let previous_accessor = object.accessors.get(&property_key).cloned();
-                let accessor = object.accessors.entry(property_key.clone()).or_default();
+                let existed = object.contains_own_runtime_property(&RuntimePropertyKey::String(
+                    property_key.clone(),
+                ));
+                let order_rollback = object.record_property_definition(&property_key, existed);
+                let previous_data_position = object
+                    .properties
+                    .exact_string_insertion_position(&property_key);
+                let previous_data = object
+                    .properties
+                    .remove_exact_preserving_baseline_order(&property_key);
+                let previous_accessor = object.exact_accessor(&property_key);
+                let mut accessor = previous_accessor.clone().unwrap_or_default();
                 match kind {
                     AccessorKind::Get => accessor.get = Some(value),
                     AccessorKind::Set => accessor.set = Some(value),
                 }
-                (previous_data, previous_accessor, property_key)
+                object.insert_exact_accessor(property_key.clone(), accessor);
+                (
+                    previous_data,
+                    previous_data_position,
+                    previous_accessor,
+                    property_key,
+                    order_rollback,
+                )
             } else {
-                let previous_accessor = object.accessors.remove(&key);
-                let previous_data = object.properties.insert(key.clone(), value);
-                (previous_data, previous_accessor, key.clone())
+                let existed =
+                    object.contains_own_runtime_property(&RuntimePropertyKey::String(key.clone()));
+                let order_rollback = object.record_property_definition(&key, existed);
+                let previous_accessor = object.remove_exact_accessor(&key);
+                let previous_data = object.properties.insert_exact(key.clone(), value);
+                (
+                    previous_data,
+                    None,
+                    previous_accessor,
+                    key.clone(),
+                    order_rollback,
+                )
             }
         };
         if let Err(err) = self.sync_estimated_memory_bytes() {
@@ -8932,16 +15337,140 @@ impl InterpreterCore {
                 .get_mut(object_id.0 as usize)
                 .ok_or(InterpreterError::ObjectNotFound { id: object_id.0 })?;
             if let Some(previous) = previous_data {
-                object.properties.insert(property_key.clone(), previous);
+                if let Some(position) = previous_data_position {
+                    object.properties.insert_exact_at_string_position(
+                        property_key.clone(),
+                        previous,
+                        position,
+                    );
+                } else {
+                    object
+                        .properties
+                        .insert_exact(property_key.clone(), previous);
+                }
             } else {
-                object.properties.remove(&property_key);
+                object
+                    .properties
+                    .remove_exact_preserving_baseline_order(&property_key);
             }
             if let Some(previous) = previous_accessor {
-                object.accessors.insert(property_key.clone(), previous);
+                object.insert_exact_accessor(property_key.clone(), previous);
             } else {
-                object.accessors.remove(&property_key);
+                object.remove_exact_accessor(&property_key);
             }
+            object.rollback_property_definition_order(&property_key, order_rollback);
             self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
+            return Err(err);
+        }
+        Ok(())
+    }
+
+    /// Insert an ordinary own data property without interpreting the private
+    /// accessor-definition prefixes used by IR class lowering. External data
+    /// formats such as JSON must preserve those strings as literal keys.
+    fn set_plain_data_property(
+        &mut self,
+        object_id: ObjectId,
+        key: String,
+        value: Value,
+    ) -> Result<(), InterpreterError> {
+        self.set_plain_data_runtime_property(
+            object_id,
+            RuntimePropertyKey::String(JsString::from(key)),
+            value,
+        )
+    }
+
+    fn set_plain_data_runtime_property(
+        &mut self,
+        object_id: ObjectId,
+        key: RuntimePropertyKey,
+        value: Value,
+    ) -> Result<(), InterpreterError> {
+        self.validate_executable_property_key(&key)?;
+        let RuntimePropertyKey::String(key) = key else {
+            let RuntimePropertyKey::Symbol(symbol) = key else {
+                unreachable!();
+            };
+            return self.set_symbol_property(
+                object_id,
+                symbol,
+                BaselineSymbolProperty::Data(value),
+            );
+        };
+        let (previous_data, previous_accessor, order_rollback) = {
+            let object = self
+                .heap
+                .get_mut(object_id.0 as usize)
+                .ok_or(InterpreterError::ObjectNotFound { id: object_id.0 })?;
+            let existed =
+                object.contains_own_runtime_property(&RuntimePropertyKey::String(key.clone()));
+            let order_rollback = object.record_property_definition(&key, existed);
+            let previous_accessor = object.remove_exact_accessor(&key);
+            let previous_data = object.properties.insert_exact(key.clone(), value);
+            (previous_data, previous_accessor, order_rollback)
+        };
+        if let Err(err) = self.sync_estimated_memory_bytes() {
+            let object = self
+                .heap
+                .get_mut(object_id.0 as usize)
+                .ok_or(InterpreterError::ObjectNotFound { id: object_id.0 })?;
+            if let Some(previous) = previous_data {
+                object.properties.insert_exact(key.clone(), previous);
+            } else {
+                object
+                    .properties
+                    .remove_exact_preserving_baseline_order(&key);
+            }
+            if let Some(previous) = previous_accessor {
+                object.insert_exact_accessor(key.clone(), previous);
+            } else {
+                object.remove_exact_accessor(&key);
+            }
+            object.rollback_property_definition_order(&key, order_rollback);
+            self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
+            return Err(err);
+        }
+        Ok(())
+    }
+
+    fn set_symbol_property(
+        &mut self,
+        object_id: ObjectId,
+        symbol: SymbolId,
+        property: BaselineSymbolProperty<Value>,
+    ) -> Result<(), InterpreterError> {
+        self.validate_runtime_property_key(&TypedPropertyKey::Symbol(symbol))?;
+        let previous_memory = self.estimated_memory_bytes;
+        let (previous, previous_position) = {
+            let object = self
+                .heap
+                .get_mut(object_id.0 as usize)
+                .ok_or(InterpreterError::ObjectNotFound { id: object_id.0 })?;
+            let previous_position = object
+                .properties
+                .baseline_symbol_key_order()
+                .iter()
+                .position(|candidate| *candidate == symbol);
+            let previous = object
+                .properties
+                .insert_baseline_symbol_property(symbol, property);
+            (previous, previous_position)
+        };
+        if let Err(err) = self.sync_estimated_memory_bytes() {
+            let object = self
+                .heap
+                .get_mut(object_id.0 as usize)
+                .ok_or(InterpreterError::ObjectNotFound { id: object_id.0 })?;
+            object.properties.remove_baseline_symbol_property(symbol);
+            if let Some(previous) = previous {
+                object.properties.restore_baseline_symbol_property(
+                    symbol,
+                    previous,
+                    previous_position.unwrap_or(0),
+                );
+            }
+            self.estimated_memory_bytes = previous_memory;
             return Err(err);
         }
         Ok(())
@@ -8952,28 +15481,70 @@ impl InterpreterCore {
         object_id: ObjectId,
         key: &str,
     ) -> Result<bool, InterpreterError> {
-        let removed = self
-            .heap
-            .get_mut(object_id.0 as usize)
-            .ok_or(InterpreterError::ObjectNotFound { id: object_id.0 })?
-            .properties
-            .remove(key);
-        let removed_accessor = self
-            .heap
-            .get_mut(object_id.0 as usize)
-            .ok_or(InterpreterError::ObjectNotFound { id: object_id.0 })?
-            .accessors
-            .remove(key);
-        self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
-        Ok(removed.is_some() || removed_accessor.is_some())
+        self.remove_object_runtime_property(
+            object_id,
+            &RuntimePropertyKey::String(JsString::from(key)),
+        )
     }
 
+    fn remove_object_runtime_property(
+        &mut self,
+        object_id: ObjectId,
+        key: &RuntimePropertyKey,
+    ) -> Result<bool, InterpreterError> {
+        self.validate_executable_property_key(key)?;
+        let object = self
+            .heap
+            .get_mut(object_id.0 as usize)
+            .ok_or(InterpreterError::ObjectNotFound { id: object_id.0 })?;
+        let removed = match key {
+            RuntimePropertyKey::String(key) => {
+                let removed = object.properties.remove_exact(key);
+                let removed_accessor = object.remove_exact_accessor(key);
+                if removed.is_some() || removed_accessor.is_some() {
+                    object.forget_property_order(key);
+                }
+                removed.is_some() || removed_accessor.is_some()
+            }
+            RuntimePropertyKey::Symbol(symbol) => object
+                .properties
+                .remove_baseline_symbol_property(*symbol)
+                .is_some(),
+        };
+        self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
+        Ok(removed)
+    }
+
+    #[cfg(test)]
+    fn remove_object_typed_property(
+        &mut self,
+        object_id: ObjectId,
+        key: &TypedPropertyKey,
+    ) -> Result<bool, InterpreterError> {
+        self.validate_runtime_property_key(key)?;
+        let key = match key {
+            TypedPropertyKey::String(key) => {
+                RuntimePropertyKey::String(JsString::from(key.as_str()))
+            }
+            TypedPropertyKey::Symbol(symbol) => RuntimePropertyKey::Symbol(*symbol),
+        };
+        self.remove_object_runtime_property(object_id, &key)
+    }
+
+    #[cfg(test)]
     fn ensure_function_prototype(&mut self, func_idx: u32) -> Result<ObjectId, InterpreterError> {
-        if let Some(existing) = self.function_prototypes.get(&func_idx) {
+        self.ensure_function_prototype_for_key(FunctionObjectKey::Function(func_idx))
+    }
+
+    fn ensure_function_prototype_for_key(
+        &mut self,
+        function_key: FunctionObjectKey,
+    ) -> Result<ObjectId, InterpreterError> {
+        if let Some(existing) = self.function_prototypes.get(&function_key) {
             Ok(*existing)
         } else {
             let prototype = self.alloc_object_with_prototype(None)?;
-            self.function_prototypes.insert(func_idx, prototype);
+            self.function_prototypes.insert(function_key, prototype);
             Ok(prototype)
         }
     }
@@ -8982,22 +15553,27 @@ impl InterpreterCore {
         match value {
             Value::Function(idx) => Some(FunctionObjectKey::Function(*idx)),
             Value::Closure(closure_id) => Some(FunctionObjectKey::Closure(*closure_id)),
+            Value::BuiltinFunction(builtin) => Some(FunctionObjectKey::Builtin(builtin.kind)),
             _ => None,
         }
     }
 
-    fn function_index_for_value(&self, value: &Value) -> Result<Option<u32>, InterpreterError> {
+    fn function_prototype_key_for_value(
+        &self,
+        value: &Value,
+    ) -> Result<Option<FunctionObjectKey>, InterpreterError> {
         match value {
-            Value::Function(idx) => Ok(Some(*idx)),
+            Value::Function(idx) => Ok(Some(FunctionObjectKey::Function(*idx))),
             Value::Closure(closure_id) => {
-                let closure = self.closures.get(*closure_id as usize).ok_or_else(|| {
+                self.closures.get(*closure_id as usize).ok_or_else(|| {
                     InterpreterError::TypeError {
                         expected: "valid closure".to_string(),
                         got: format!("closure#{closure_id} not found"),
                     }
                 })?;
-                Ok(Some(closure.function_index))
+                Ok(Some(FunctionObjectKey::Closure(*closure_id)))
             }
+            Value::BuiltinFunction(builtin) => Ok(Some(FunctionObjectKey::Builtin(builtin.kind))),
             _ => Ok(None),
         }
     }
@@ -9094,10 +15670,247 @@ impl InterpreterCore {
         &mut self,
         value: &Value,
     ) -> Result<Option<ObjectId>, InterpreterError> {
-        let Some(func_idx) = self.function_index_for_value(value)? else {
+        let Some(function_key) = self.function_prototype_key_for_value(value)? else {
             return Ok(None);
         };
-        self.ensure_function_prototype(func_idx).map(Some)
+        self.ensure_function_prototype_for_key(function_key)
+            .map(Some)
+    }
+
+    // -- JSON.parse recursive-descent parser (bd-zql4d) --------------------
+
+    fn json_skip_ws(units: &[u16], pos: &mut usize) {
+        while matches!(units.get(*pos), Some(0x20 | 0x09 | 0x0A | 0x0D)) {
+            *pos += 1;
+        }
+    }
+
+    /// Parse a JSON string token directly over exact UTF-16 code units. Both
+    /// raw units and `\uXXXX` escapes remain exact: paired surrogates heal into
+    /// one scalar, while a lone surrogate remains representable in [`JsString`].
+    fn json_parse_string(units: &[u16], pos: &mut usize) -> Option<JsString> {
+        if units.get(*pos) != Some(&0x22) {
+            return None;
+        }
+        *pos += 1;
+        let mut parsed = Vec::new();
+        while let Some(&unit) = units.get(*pos) {
+            *pos += 1;
+            match unit {
+                0x22 => return Some(JsString::from_code_units(&parsed)),
+                0x5C => {
+                    let &escaped = units.get(*pos)?;
+                    *pos += 1;
+                    match escaped {
+                        0x22 => parsed.push(0x22),
+                        0x5C => parsed.push(0x5C),
+                        0x2F => parsed.push(0x2F),
+                        0x62 => parsed.push(0x08),
+                        0x66 => parsed.push(0x0C),
+                        0x6E => parsed.push(0x0A),
+                        0x72 => parsed.push(0x0D),
+                        0x74 => parsed.push(0x09),
+                        0x75 => {
+                            if *pos + 4 > units.len() {
+                                return None;
+                            }
+                            let mut code = 0u16;
+                            for &digit in &units[*pos..*pos + 4] {
+                                let nibble = match digit {
+                                    0x30..=0x39 => digit - 0x30,
+                                    0x41..=0x46 => digit - 0x41 + 10,
+                                    0x61..=0x66 => digit - 0x61 + 10,
+                                    _ => return None,
+                                };
+                                code = (code << 4) | nibble;
+                            }
+                            *pos += 4;
+                            parsed.push(code);
+                        }
+                        _ => return None,
+                    }
+                }
+                0x00..=0x1F => return None,
+                _ => parsed.push(unit),
+            }
+        }
+        None
+    }
+
+    fn json_parse_number(units: &[u16], pos: &mut usize) -> Option<Value> {
+        let start = *pos;
+        if units.get(*pos) == Some(&0x2D) {
+            *pos += 1;
+        }
+        match units.get(*pos) {
+            Some(0x30) => {
+                *pos += 1;
+                // JSON does not allow a leading zero before another digit.
+                if matches!(units.get(*pos), Some(0x30..=0x39)) {
+                    return None;
+                }
+            }
+            Some(0x31..=0x39) => {
+                *pos += 1;
+                while matches!(units.get(*pos), Some(0x30..=0x39)) {
+                    *pos += 1;
+                }
+            }
+            _ => return None,
+        }
+        let mut is_float = false;
+        if units.get(*pos) == Some(&0x2E) {
+            is_float = true;
+            *pos += 1;
+            let fraction_start = *pos;
+            while matches!(units.get(*pos), Some(0x30..=0x39)) {
+                *pos += 1;
+            }
+            if *pos == fraction_start {
+                return None;
+            }
+        }
+        if matches!(units.get(*pos), Some(0x65 | 0x45)) {
+            is_float = true;
+            *pos += 1;
+            if matches!(units.get(*pos), Some(0x2B | 0x2D)) {
+                *pos += 1;
+            }
+            let exponent_start = *pos;
+            while matches!(units.get(*pos), Some(0x30..=0x39)) {
+                *pos += 1;
+            }
+            if *pos == exponent_start {
+                return None;
+            }
+        }
+        let token = String::from_utf16(&units[start..*pos]).ok()?;
+        if token == "-0" {
+            return Some(Value::Float(Float64::new(-0.0)));
+        }
+        if !is_float && let Ok(value) = token.parse::<i64>() {
+            return Some(Value::Int(value));
+        }
+        token
+            .parse::<f64>()
+            .ok()
+            .map(|value| Value::Float(Float64::new(value)))
+    }
+
+    fn json_parse_value(
+        &mut self,
+        units: &[u16],
+        pos: &mut usize,
+        depth: usize,
+    ) -> Result<Option<Value>, InterpreterError> {
+        if depth > 200 {
+            return Ok(None);
+        }
+        Self::json_skip_ws(units, pos);
+        let Some(&unit) = units.get(*pos) else {
+            return Ok(None);
+        };
+        match unit {
+            0x7B => self.json_parse_object(units, pos, depth),
+            0x5B => self.json_parse_array(units, pos, depth),
+            0x22 => Ok(Self::json_parse_string(units, pos).map(Value::str)),
+            0x74 if units[*pos..].starts_with(&[0x74, 0x72, 0x75, 0x65]) => {
+                *pos += 4;
+                Ok(Some(Value::Bool(true)))
+            }
+            0x66 if units[*pos..].starts_with(&[0x66, 0x61, 0x6C, 0x73, 0x65]) => {
+                *pos += 5;
+                Ok(Some(Value::Bool(false)))
+            }
+            0x6E if units[*pos..].starts_with(&[0x6E, 0x75, 0x6C, 0x6C]) => {
+                *pos += 4;
+                Ok(Some(Value::Null))
+            }
+            0x2D | 0x30..=0x39 => Ok(Self::json_parse_number(units, pos)),
+            _ => Ok(None),
+        }
+    }
+
+    fn json_parse_object(
+        &mut self,
+        units: &[u16],
+        pos: &mut usize,
+        depth: usize,
+    ) -> Result<Option<Value>, InterpreterError> {
+        *pos += 1;
+        let object_id = self.alloc_object_with_prototype(None)?;
+        Self::json_skip_ws(units, pos);
+        if units.get(*pos) == Some(&0x7D) {
+            *pos += 1;
+            return Ok(Some(Value::Object(object_id)));
+        }
+        loop {
+            Self::json_skip_ws(units, pos);
+            let Some(key) = Self::json_parse_string(units, pos) else {
+                return Ok(None);
+            };
+            Self::json_skip_ws(units, pos);
+            if units.get(*pos) != Some(&0x3A) {
+                return Ok(None);
+            }
+            *pos += 1;
+            let Some(value) = self.json_parse_value(units, pos, depth + 1)? else {
+                return Ok(None);
+            };
+            self.set_plain_data_property(object_id, key.to_string(), value)?;
+            Self::json_skip_ws(units, pos);
+            match units.get(*pos) {
+                Some(0x2C) => *pos += 1,
+                Some(0x7D) => {
+                    *pos += 1;
+                    return Ok(Some(Value::Object(object_id)));
+                }
+                _ => return Ok(None),
+            }
+        }
+    }
+
+    fn json_parse_array(
+        &mut self,
+        units: &[u16],
+        pos: &mut usize,
+        depth: usize,
+    ) -> Result<Option<Value>, InterpreterError> {
+        *pos += 1;
+        let array_id = self.alloc_array_with_prototype(None)?;
+        Self::json_skip_ws(units, pos);
+        if units.get(*pos) == Some(&0x5D) {
+            *pos += 1;
+            self.set_plain_data_property(array_id, "length".to_string(), Value::Int(0))?;
+            return Ok(Some(Value::Object(array_id)));
+        }
+        let mut length = 0u32;
+        loop {
+            let Some(value) = self.json_parse_value(units, pos, depth + 1)? else {
+                return Ok(None);
+            };
+            self.set_plain_data_property(array_id, length.to_string(), value)?;
+            length = length.saturating_add(1);
+            Self::json_skip_ws(units, pos);
+            match units.get(*pos) {
+                Some(0x2C) => *pos += 1,
+                Some(0x5D) => {
+                    *pos += 1;
+                    self.set_plain_data_property(
+                        array_id,
+                        "length".to_string(),
+                        Value::Int(i64::from(length)),
+                    )?;
+                    return Ok(Some(Value::Object(array_id)));
+                }
+                _ => return Ok(None),
+            }
+        }
+    }
+
+    fn rollback_json_parse(&mut self, heap_len: usize, estimated_memory_bytes: u64) {
+        self.heap.truncate(heap_len);
+        self.estimated_memory_bytes = estimated_memory_bytes;
     }
 
     /// Get the number of objects on the heap.
@@ -9201,7 +16014,13 @@ impl QuickJsLane {
                 let requested_hook_action =
                     requested_hook_action_from_error(action.as_str(), reason.clone())
                         .ok_or(InterpreterError::ContainmentActionRequested { action, reason })?;
-                core.take_execution_result(Value::Undefined, Some(requested_hook_action))
+                core.take_execution_result(
+                    LabeledReturn {
+                        value: Value::Undefined,
+                        label: crate::ifc_artifacts::Label::Public,
+                    },
+                    Some(requested_hook_action),
+                )
             }
             Err(err) => return Err(err),
         };
@@ -9269,7 +16088,13 @@ impl V8Lane {
                 let requested_hook_action =
                     requested_hook_action_from_error(action.as_str(), reason.clone())
                         .ok_or(InterpreterError::ContainmentActionRequested { action, reason })?;
-                core.take_execution_result(Value::Undefined, Some(requested_hook_action))
+                core.take_execution_result(
+                    LabeledReturn {
+                        value: Value::Undefined,
+                        label: crate::ifc_artifacts::Label::Public,
+                    },
+                    Some(requested_hook_action),
+                )
             }
             Err(err) => return Err(err),
         };
@@ -9299,6 +16124,778 @@ fn requested_hook_action_from_error(action: &str, reason: Option<String>) -> Opt
         _ => None,
     }
 }
+
+// ---------------------------------------------------------------------------
+// Node `path` builtin semantics (bd-tu0c3)
+//
+// Pure-compute string algorithms backing the `builtin:Path*` hostcalls emitted
+// by the lowering pipeline's path-module interception. Posix semantics follow
+// Node's `path.posix` implementation (the default `path` on linux IS posix);
+// the win32 helpers cover the small separator-sensitive subset the lowering
+// recognizes (join/basename/isAbsolute). Mirror of the canonical copy in
+// `franken-engine/src/baseline_interpreter.rs` — keep the two in lockstep.
+// ---------------------------------------------------------------------------
+
+/// Resolve `.`/`..` segments of `path`: splits on `separators`, drops empty
+/// and `.` segments, pops a stack entry for `..` (keeping leading `..`s only
+/// when `allow_above_root`, i.e. for relative paths), then joins with `sep`.
+/// Shared by normalize/join/resolve for both separator families.
+fn node_path_normalize_segments(
+    path: &str,
+    allow_above_root: bool,
+    sep: char,
+    separators: &[char],
+) -> String {
+    let mut stack: Vec<&str> = Vec::new();
+    for segment in path.split(|c: char| separators.contains(&c)) {
+        if segment.is_empty() || segment == "." {
+            continue;
+        }
+        if segment == ".." {
+            match stack.last() {
+                Some(&last) if last != ".." => {
+                    stack.pop();
+                }
+                _ => {
+                    if allow_above_root {
+                        stack.push("..");
+                    }
+                }
+            }
+        } else {
+            stack.push(segment);
+        }
+    }
+    let mut out = String::new();
+    for (index, segment) in stack.iter().enumerate() {
+        if index > 0 {
+            out.push(sep);
+        }
+        out.push_str(segment);
+    }
+    out
+}
+
+/// Node `path.posix.normalize`: dot-segment resolution, `//` collapse,
+/// trailing-slash preservation; `''` -> `'.'`; leading `..` preserved for
+/// relative paths and dropped above an absolute root.
+fn node_path_posix_normalize(path: &str) -> String {
+    if path.is_empty() {
+        return ".".to_string();
+    }
+    let is_absolute = path.starts_with('/');
+    let trailing_separator = path.ends_with('/');
+    let mut normalized = node_path_normalize_segments(path, !is_absolute, '/', &['/']);
+    if normalized.is_empty() {
+        if is_absolute {
+            return "/".to_string();
+        }
+        return if trailing_separator {
+            "./".to_string()
+        } else {
+            ".".to_string()
+        };
+    }
+    if trailing_separator {
+        normalized.push('/');
+    }
+    if is_absolute {
+        format!("/{normalized}")
+    } else {
+        normalized
+    }
+}
+
+/// Node `path.posix.join`: empty segments dropped, joined with `/`, then
+/// normalized; no segments (or all empty) -> `'.'`.
+fn node_path_posix_join(parts: &[String]) -> String {
+    let mut joined = String::new();
+    for part in parts {
+        if part.is_empty() {
+            continue;
+        }
+        if !joined.is_empty() {
+            joined.push('/');
+        }
+        joined.push_str(part);
+    }
+    if joined.is_empty() {
+        return ".".to_string();
+    }
+    node_path_posix_normalize(&joined)
+}
+
+/// Node `path.posix.resolve` over pre-validated string segments: right-to-left
+/// until an absolute segment wins, then normalize. The engine has NO ambient
+/// cwd, so a FIXED synthetic cwd `"/"` is prefixed when no segment is absolute
+/// — any consistent absolute base is behaviorally correct for pure-compute
+/// resolution (the compat corpus asserts predicates over resolve()'s output,
+/// never a host cwd value). The result never has a trailing slash unless it is
+/// the root itself.
+fn node_path_posix_resolve(parts: &[String]) -> String {
+    let mut resolved = String::new();
+    let mut resolved_absolute = false;
+    let mut index = parts.len() as i64 - 1;
+    while index >= -1 && !resolved_absolute {
+        let segment: &str = if index >= 0 {
+            parts[index as usize].as_str()
+        } else {
+            // Synthetic cwd (see doc comment above).
+            "/"
+        };
+        index -= 1;
+        if segment.is_empty() {
+            continue;
+        }
+        resolved = format!("{segment}/{resolved}");
+        resolved_absolute = segment.starts_with('/');
+    }
+    let normalized = node_path_normalize_segments(&resolved, !resolved_absolute, '/', &['/']);
+    if resolved_absolute {
+        format!("/{normalized}")
+    } else if normalized.is_empty() {
+        ".".to_string()
+    } else {
+        normalized
+    }
+}
+
+/// Node `basename` shared across separator families: trailing separators
+/// trimmed, last component returned, and `ext` stripped only when it is a
+/// proper suffix strictly shorter than the basename (Node keeps `basename ==
+/// ext` intact). `skip_win32_drive` skips a leading `X:` drive prefix (win32).
+fn node_path_basename_impl(
+    path: &str,
+    ext: Option<&str>,
+    separators: &[char],
+    skip_win32_drive: bool,
+) -> String {
+    let mut p = path;
+    if skip_win32_drive && p.len() >= 2 {
+        let bytes = p.as_bytes();
+        if bytes[0].is_ascii_alphabetic() && bytes[1] == b':' {
+            p = &p[2..];
+        }
+    }
+    let trimmed = p.trim_end_matches(|c: char| separators.contains(&c));
+    let base = match trimmed.rfind(|c: char| separators.contains(&c)) {
+        Some(index) => &trimmed[index + 1..],
+        None => trimmed,
+    };
+    if let Some(ext) = ext
+        && !ext.is_empty()
+        && base.len() > ext.len()
+        && base.ends_with(ext)
+    {
+        return base[..base.len() - ext.len()].to_string();
+    }
+    base.to_string()
+}
+
+/// Node `path.posix.dirname`: no trailing slash in the result, `'/'` -> `'/'`,
+/// bare name -> `'.'`. Direct port of Node's end-scan (byte comparisons are
+/// against ASCII `/`, so scanning UTF-8 bytes is boundary-safe).
+fn node_path_posix_dirname(path: &str) -> String {
+    if path.is_empty() {
+        return ".".to_string();
+    }
+    let bytes = path.as_bytes();
+    let has_root = bytes[0] == b'/';
+    let mut end: i64 = -1;
+    let mut matched_slash = true;
+    let mut index = bytes.len() as i64 - 1;
+    while index >= 1 {
+        if bytes[index as usize] == b'/' {
+            if !matched_slash {
+                end = index;
+                break;
+            }
+        } else {
+            matched_slash = false;
+        }
+        index -= 1;
+    }
+    if end == -1 {
+        return if has_root {
+            "/".to_string()
+        } else {
+            ".".to_string()
+        };
+    }
+    if has_root && end == 1 {
+        return "//".to_string();
+    }
+    path[..end as usize].to_string()
+}
+
+/// Node `path.posix.extname`: the last `.`-suffix of the final component, with
+/// Node's exact dotfile rules (`.bashrc` -> `''`, `file.` -> `'.'`, `..` ->
+/// `''`). Direct port of Node's single-pass backward scan.
+fn node_path_posix_extname(path: &str) -> String {
+    let bytes = path.as_bytes();
+    let mut start_dot: i64 = -1;
+    let mut start_part: i64 = 0;
+    let mut end: i64 = -1;
+    let mut matched_slash = true;
+    // Track the state of characters (if any) we see before our first dot and
+    // after any path separator we find (Node's `preDotState`).
+    let mut pre_dot_state: i64 = 0;
+    let mut index = bytes.len() as i64 - 1;
+    while index >= 0 {
+        let code = bytes[index as usize];
+        if code == b'/' {
+            // Reached a path separator that was not part of a set of trailing
+            // separators at the end of the string: stop.
+            if !matched_slash {
+                start_part = index + 1;
+                break;
+            }
+            index -= 1;
+            continue;
+        }
+        if end == -1 {
+            // First non-separator from the end marks the end of the extension.
+            matched_slash = false;
+            end = index + 1;
+        }
+        if code == b'.' {
+            if start_dot == -1 {
+                start_dot = index;
+            } else if pre_dot_state != 1 {
+                pre_dot_state = 1;
+            }
+        } else if start_dot != -1 {
+            // A non-dot character before the dot marks a real name part.
+            pre_dot_state = -1;
+        }
+        index -= 1;
+    }
+    if start_dot == -1
+        || end == -1
+        // The dot(s) were the first character(s) of the component (dotfile) …
+        || pre_dot_state == 0
+        // … or the component is exactly `..`.
+        || (pre_dot_state == 1 && start_dot == end - 1 && start_dot == start_part + 1)
+    {
+        return String::new();
+    }
+    path[start_dot as usize..end as usize].to_string()
+}
+
+/// Node `path.posix.relative` over resolved paths (same synthetic cwd as
+/// [`node_path_posix_resolve`]): common-prefix segments dropped, `..` per
+/// remaining `from` segment, then the remaining `to` segments.
+fn node_path_posix_relative(from: &str, to: &str) -> String {
+    let from_resolved = node_path_posix_resolve(std::slice::from_ref(&from.to_string()));
+    let to_resolved = node_path_posix_resolve(std::slice::from_ref(&to.to_string()));
+    if from_resolved == to_resolved {
+        return String::new();
+    }
+    let from_segments: Vec<&str> = from_resolved.split('/').filter(|s| !s.is_empty()).collect();
+    let to_segments: Vec<&str> = to_resolved.split('/').filter(|s| !s.is_empty()).collect();
+    let mut common = 0usize;
+    while common < from_segments.len()
+        && common < to_segments.len()
+        && from_segments[common] == to_segments[common]
+    {
+        common += 1;
+    }
+    let mut out_segments: Vec<&str> =
+        std::iter::repeat_n("..", from_segments.len() - common).collect();
+    out_segments.extend_from_slice(&to_segments[common..]);
+    out_segments.join("/")
+}
+
+/// The `{ root, dir, base, ext, name }` decomposition of
+/// [`node_path_posix_parse`].
+struct NodePathParsed {
+    root: String,
+    dir: String,
+    base: String,
+    ext: String,
+    name: String,
+}
+
+/// Node `path.posix.parse`: root/dir/base/ext/name decomposition. `base` uses
+/// the basename rules (trailing slashes trimmed), `ext`/`name` use the extname
+/// dotfile rules over `base`, `dir` is everything before the final component
+/// (root for a root-only path, `''` for a bare name).
+fn node_path_posix_parse(path: &str) -> NodePathParsed {
+    if path.is_empty() {
+        return NodePathParsed {
+            root: String::new(),
+            dir: String::new(),
+            base: String::new(),
+            ext: String::new(),
+            name: String::new(),
+        };
+    }
+    let root = if path.starts_with('/') { "/" } else { "" };
+    let base = node_path_basename_impl(path, None, &['/'], false);
+    let ext = node_path_posix_extname(&base);
+    let name = base[..base.len() - ext.len()].to_string();
+    let trimmed = path.trim_end_matches('/');
+    let dir = match trimmed.rfind('/') {
+        Some(0) => "/".to_string(),
+        Some(index) => trimmed[..index].to_string(),
+        None => root.to_string(),
+    };
+    NodePathParsed {
+        root: root.to_string(),
+        dir,
+        base,
+        ext,
+        name,
+    }
+}
+
+/// Node `path.posix.format`: `dir`+`base` win over `root`+`name`+`ext`
+/// (`base` wins over `name`+`ext`; an extension without a leading dot gets
+/// one). Empty-string properties count as absent, matching JS truthiness in
+/// Node's `_format`.
+fn node_path_posix_format(root: &str, dir: &str, base: &str, name: &str, ext: &str) -> String {
+    let dir_part = if dir.is_empty() { root } else { dir };
+    let formatted_ext = if ext.is_empty() {
+        String::new()
+    } else if ext.starts_with('.') {
+        ext.to_string()
+    } else {
+        format!(".{ext}")
+    };
+    let base_part = if base.is_empty() {
+        format!("{name}{formatted_ext}")
+    } else {
+        base.to_string()
+    };
+    if dir_part.is_empty() {
+        return base_part;
+    }
+    if dir_part == root {
+        format!("{dir_part}{base_part}")
+    } else {
+        format!("{dir_part}/{base_part}")
+    }
+}
+
+/// Node `path.win32.isAbsolute`: a leading separator (either kind, incl. UNC)
+/// or a drive letter followed by `:` and a separator.
+fn node_path_win32_is_absolute(path: &str) -> bool {
+    let bytes = path.as_bytes();
+    if bytes.is_empty() {
+        return false;
+    }
+    if bytes[0] == b'/' || bytes[0] == b'\\' {
+        return true;
+    }
+    bytes.len() > 2
+        && bytes[0].is_ascii_alphabetic()
+        && bytes[1] == b':'
+        && (bytes[2] == b'/' || bytes[2] == b'\\')
+}
+
+/// Node `path.win32.normalize`: both separators accepted, output uses `\`.
+/// Handles drive-letter roots (`C:\`, drive-relative `C:x`), UNC roots
+/// (`\\server\share`), and bare separator roots; `\\?\`-style device
+/// namespaces are not modeled (outside the recognized corpus surface).
+fn node_path_win32_normalize(path: &str) -> String {
+    if path.is_empty() {
+        return ".".to_string();
+    }
+    let bytes = path.as_bytes();
+    let is_sep = |b: u8| b == b'/' || b == b'\\';
+    let mut device = String::new();
+    let mut is_absolute = false;
+    let mut root_len = 0usize;
+    if bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':' {
+        device.push(bytes[0] as char);
+        device.push(':');
+        root_len = 2;
+        if bytes.len() > 2 && is_sep(bytes[2]) {
+            is_absolute = true;
+            root_len = 3;
+        }
+    } else if is_sep(bytes[0]) {
+        is_absolute = true;
+        root_len = 1;
+        if bytes.len() > 1 && is_sep(bytes[1]) {
+            // Candidate UNC root: `\\server\share`.
+            let mut cursor = 2usize;
+            let server_start = cursor;
+            while cursor < bytes.len() && !is_sep(bytes[cursor]) {
+                cursor += 1;
+            }
+            if cursor > server_start && cursor < bytes.len() {
+                let server_end = cursor;
+                while cursor < bytes.len() && is_sep(bytes[cursor]) {
+                    cursor += 1;
+                }
+                let share_start = cursor;
+                while cursor < bytes.len() && !is_sep(bytes[cursor]) {
+                    cursor += 1;
+                }
+                if cursor > share_start {
+                    device = format!(
+                        "\\\\{}\\{}",
+                        &path[server_start..server_end],
+                        &path[share_start..cursor]
+                    );
+                    root_len = cursor;
+                }
+            }
+        }
+    }
+    let tail = &path[root_len..];
+    let trailing_separator = tail.ends_with(['/', '\\']);
+    let mut normalized = node_path_normalize_segments(tail, !is_absolute, '\\', &['/', '\\']);
+    if normalized.is_empty() && !is_absolute {
+        normalized.push('.');
+    }
+    if trailing_separator {
+        normalized.push('\\');
+    }
+    if is_absolute {
+        format!("{device}\\{normalized}")
+    } else {
+        format!("{device}{normalized}")
+    }
+}
+
+/// Node `path.win32.join`: empty segments dropped, joined with `\`, Node's
+/// UNC-safety heuristic applied (a joined result must not ACCIDENTALLY read as
+/// UNC unless the first part already matched a UNC root), then win32
+/// normalization.
+fn node_path_win32_join(parts: &[String]) -> String {
+    let mut joined = String::new();
+    let mut first_part: Option<&str> = None;
+    for part in parts {
+        if part.is_empty() {
+            continue;
+        }
+        if joined.is_empty() {
+            first_part = Some(part.as_str());
+            joined.push_str(part);
+        } else {
+            joined.push('\\');
+            joined.push_str(part);
+        }
+    }
+    if joined.is_empty() {
+        return ".".to_string();
+    }
+    let is_sep = |b: u8| b == b'/' || b == b'\\';
+    let first_bytes = first_part.unwrap_or("").as_bytes();
+    let mut needs_replace = true;
+    let mut slash_count = 0usize;
+    if !first_bytes.is_empty() && is_sep(first_bytes[0]) {
+        slash_count += 1;
+        if first_bytes.len() > 1 && is_sep(first_bytes[1]) {
+            slash_count += 1;
+            if first_bytes.len() > 2 {
+                if is_sep(first_bytes[2]) {
+                    slash_count += 1;
+                } else {
+                    // The first part matched a UNC root (`\\server`); keep it.
+                    needs_replace = false;
+                }
+            }
+        }
+    }
+    if needs_replace {
+        let joined_bytes = joined.as_bytes();
+        while slash_count < joined_bytes.len() && is_sep(joined_bytes[slash_count]) {
+            slash_count += 1;
+        }
+        if slash_count >= 2 {
+            joined = format!("\\{}", &joined[slash_count..]);
+        }
+    }
+    node_path_win32_normalize(&joined)
+}
+
+// ---------------------------------------------------------------------------
+// Node `querystring` builtin semantics (bd-qmy52)
+//
+// Pure-compute string algorithms backing the `builtin:Querystring*` hostcalls
+// emitted by the lowering pipeline's querystring-module interception. Escape/
+// unescape/parse edge behaviors are pinned against bun 1.3.14 (Node-compatible
+// reference). Mirror of the canonical copy in
+// `franken-engine/src/baseline_interpreter.rs` — keep the two in lockstep.
+// ---------------------------------------------------------------------------
+
+/// Characters Node's `querystring.escape` leaves literal (the `noEscape`
+/// table): ASCII alphanumerics plus `- . _ ~ ! ' ( ) *`. Everything else —
+/// including space and `+` — percent-encodes.
+fn qs_is_unescaped_char(c: char) -> bool {
+    c.is_ascii_alphanumeric() || matches!(c, '-' | '.' | '_' | '~' | '!' | '\'' | '(' | ')' | '*')
+}
+
+/// Node `querystring.escape`: percent-encode every char outside the noEscape
+/// set as uppercase-hex UTF-8 bytes (bun: space -> `%20`, `+` -> `%2B`,
+/// `é` -> `%C3%A9`, `中` -> `%E4%B8%AD`).
+fn node_qs_escape(input: &str) -> String {
+    const HEX_UPPER: &[u8; 16] = b"0123456789ABCDEF";
+    let mut out = String::with_capacity(input.len());
+    let mut utf8_buf = [0u8; 4];
+    for c in input.chars() {
+        if qs_is_unescaped_char(c) {
+            out.push(c);
+        } else {
+            for byte in c.encode_utf8(&mut utf8_buf).as_bytes() {
+                out.push('%');
+                out.push(char::from(HEX_UPPER[(byte >> 4) as usize]));
+                out.push(char::from(HEX_UPPER[(byte & 0x0f) as usize]));
+            }
+        }
+    }
+    out
+}
+
+/// Exact-string entry point for `querystring.escape`/`stringify`. Node rejects
+/// a component containing an unpaired UTF-16 surrogate instead of silently
+/// replacing that unit before percent-encoding it.
+fn node_qs_escape_js(input: &JsString) -> Result<String, InterpreterError> {
+    let Some(input) = input.as_str() else {
+        return Err(InterpreterError::TypeError {
+            expected: "well-formed querystring component".to_string(),
+            got: "string containing an unpaired UTF-16 surrogate".to_string(),
+        });
+    };
+    Ok(node_qs_escape(input))
+}
+
+/// Hex digit value of an ASCII byte (Node's `isHexTable` accepts both cases).
+fn qs_hex_digit_value(byte: u8) -> Option<u8> {
+    (byte as char).to_digit(16).map(|digit| digit as u8)
+}
+
+/// Strict percent-decode matching the `decodeURIComponent` accept set Node's
+/// `querystring.unescape` tries first: every `%` must be followed by two hex
+/// digits and the decoded byte sequence must be valid UTF-8; `+` is NOT
+/// decoded. `None` on any violation (the caller falls back to the lenient
+/// `unescapeBuffer` semantics).
+fn qs_strict_percent_decode(input: &str) -> Option<String> {
+    let bytes = input.as_bytes();
+    let mut out: Vec<u8> = Vec::with_capacity(bytes.len());
+    let mut index = 0usize;
+    while index < bytes.len() {
+        if bytes[index] == b'%' {
+            let hi = qs_hex_digit_value(*bytes.get(index + 1)?)?;
+            let lo = qs_hex_digit_value(*bytes.get(index + 2)?)?;
+            out.push((hi << 4) | lo);
+            index += 3;
+        } else {
+            out.push(bytes[index]);
+            index += 1;
+        }
+    }
+    String::from_utf8(out).ok()
+}
+
+/// Lenient fallback matching Node's `unescapeBuffer`: valid `%XX` pairs decode
+/// byte-wise, malformed `%` sequences stay literal, and the byte buffer is
+/// decoded as UTF-8 with U+FFFD replacement (bun: `qs.unescape('%FF')` is
+/// `'\u{FFFD}'`, `qs.unescape('a%2')` is `'a%2'`).
+fn qs_lenient_unescape(input: &str) -> String {
+    let bytes = input.as_bytes();
+    let mut out: Vec<u8> = Vec::with_capacity(bytes.len());
+    let mut index = 0usize;
+    while index < bytes.len() {
+        if bytes[index] == b'%'
+            && let (Some(hi), Some(lo)) = (
+                bytes.get(index + 1).copied().and_then(qs_hex_digit_value),
+                bytes.get(index + 2).copied().and_then(qs_hex_digit_value),
+            )
+        {
+            out.push((hi << 4) | lo);
+            index += 3;
+        } else {
+            out.push(bytes[index]);
+            index += 1;
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+/// Node `querystring.unescape`: try the strict `decodeURIComponent`-shaped
+/// decode first, fall back to the lenient `unescapeBuffer` semantics on any
+/// malformed input. `+` never decodes to space here — only `parse`'s component
+/// handling does that (bun: `qs.unescape('x+y')` is `'x+y'`).
+fn node_qs_unescape(input: &str) -> String {
+    match qs_strict_percent_decode(input) {
+        Some(decoded) => decoded,
+        None => qs_lenient_unescape(input),
+    }
+}
+
+/// True when `raw` contains at least one complete valid `%XX` escape — Node's
+/// parse routes a key/value through the decoder only when its scanner saw a
+/// full valid escape (`keyEncoded`/`valEncoded`), so `'a%2'` stays literal.
+fn qs_component_looks_encoded(raw: &str) -> bool {
+    raw.as_bytes().windows(3).any(|window| {
+        window[0] == b'%'
+            && qs_hex_digit_value(window[1]).is_some()
+            && qs_hex_digit_value(window[2]).is_some()
+    })
+}
+
+/// Decode one `parse` component: `+` becomes space FIRST (Node's `plusChar`
+/// substitution precedes decoding), then the unescape pass runs only when the
+/// raw component contained a complete valid `%XX` escape.
+fn qs_parse_component(raw: &str) -> String {
+    let plussed = raw.replace('+', " ");
+    if qs_component_looks_encoded(raw) {
+        node_qs_unescape(&plussed)
+    } else {
+        plussed
+    }
+}
+
+/// Node `querystring.parse` over a pre-validated input string: split on `sep`,
+/// the FIRST `eq` in a segment splits key/value (a key without `eq` maps to
+/// `''`), `max_pairs` slots (default 1000, `None` = unlimited) are consumed by
+/// stored pairs AND by empty segments between separators (bun:
+/// `parse('&a=1', null, null, { maxKeys: 1 })` is `{}` but a TRAILING empty
+/// segment is a no-op: `parse('a=1&')` is `{ a: '1' }`), and repeated keys
+/// collect into arrays. Returns entries in first-seen key order with per-key
+/// value order preserved; keys with one value are scalars at allocation.
+fn node_qs_parse(
+    input: &str,
+    sep: &str,
+    eq: &str,
+    max_pairs: Option<u64>,
+) -> Vec<(String, Vec<String>)> {
+    let mut entries: Vec<(String, Vec<String>)> = Vec::new();
+    if input.is_empty() {
+        return entries;
+    }
+    // A truthy custom separator can stringify to '' (e.g. `[]`); Node's
+    // char-code matcher then never matches, i.e. no splitting occurs. Same
+    // for an empty `eq`: the whole segment becomes the key.
+    let segments: Vec<&str> = if sep.is_empty() {
+        vec![input]
+    } else {
+        input.split(sep).collect()
+    };
+    let last_index = segments.len() - 1;
+    let mut remaining = max_pairs;
+    for (index, segment) in segments.iter().enumerate() {
+        if segment.is_empty() {
+            // Empty segment BETWEEN separators: consumes a pair slot without
+            // storing anything (Node decrements `pairs`); trailing is a no-op.
+            if index < last_index
+                && let Some(slots) = remaining.as_mut()
+            {
+                *slots -= 1;
+                if *slots == 0 {
+                    return entries;
+                }
+            }
+            continue;
+        }
+        let (raw_key, raw_value) = if eq.is_empty() {
+            (*segment, None)
+        } else {
+            match segment.find(eq) {
+                Some(pos) => (&segment[..pos], Some(&segment[pos + eq.len()..])),
+                None => (*segment, None),
+            }
+        };
+        let key = qs_parse_component(raw_key);
+        let value = raw_value.map(qs_parse_component).unwrap_or_default();
+        match entries.iter_mut().find(|(existing, _)| *existing == key) {
+            Some((_, values)) => values.push(value),
+            None => entries.push((key, vec![value])),
+        }
+        if let Some(slots) = remaining.as_mut() {
+            *slots -= 1;
+            if *slots == 0 {
+                return entries;
+            }
+        }
+    }
+    entries
+}
+
+// ---------------------------------------------------------------------------
+// Node `os` builtin fixed values (bd-qmy52)
+//
+// The engine has NO ambient authority: the `builtin:Os*` hostcalls return
+// FIXED, deterministic, linux-shaped engine-contained values (they never read
+// the real host). The compat corpus asserts types and predicates, not host
+// facts, so any internally-consistent value set is behaviorally correct.
+// Mirror of the canonical copy in
+// `franken-engine/src/baseline_interpreter.rs` — keep the two in lockstep.
+// ---------------------------------------------------------------------------
+
+/// `os.platform()` — fixed linux value.
+const NODE_OS_PLATFORM: &str = "linux";
+/// `os.release()` — fixed plausible kernel release string.
+const NODE_OS_RELEASE: &str = "6.0.0-franken";
+/// `os.version()` — fixed plausible kernel version string.
+const NODE_OS_VERSION: &str = "#1 SMP PREEMPT_DYNAMIC franken";
+/// `os.totalmem()` — fixed 16 GiB.
+const NODE_OS_TOTALMEM_BYTES: i64 = 17_179_869_184;
+/// `os.freemem()` — fixed 8 GiB (strictly below [`NODE_OS_TOTALMEM_BYTES`]).
+const NODE_OS_FREEMEM_BYTES: i64 = 8_589_934_592;
+
+/// POSIX signal numbers for `os.constants.signals` (linux, x86-64 numbering).
+const NODE_OS_SIGNALS: &[(&str, i64)] = &[
+    ("SIGHUP", 1),
+    ("SIGINT", 2),
+    ("SIGQUIT", 3),
+    ("SIGILL", 4),
+    ("SIGTRAP", 5),
+    ("SIGABRT", 6),
+    ("SIGBUS", 7),
+    ("SIGFPE", 8),
+    ("SIGKILL", 9),
+    ("SIGUSR1", 10),
+    ("SIGSEGV", 11),
+    ("SIGUSR2", 12),
+    ("SIGPIPE", 13),
+    ("SIGALRM", 14),
+    ("SIGTERM", 15),
+    ("SIGCHLD", 17),
+    ("SIGCONT", 18),
+    ("SIGSTOP", 19),
+    ("SIGTSTP", 20),
+];
+
+/// POSIX errno numbers for `os.constants.errno` (linux).
+const NODE_OS_ERRNO: &[(&str, i64)] = &[
+    ("EPERM", 1),
+    ("ENOENT", 2),
+    ("ESRCH", 3),
+    ("EINTR", 4),
+    ("EIO", 5),
+    ("EBADF", 9),
+    ("EAGAIN", 11),
+    ("ENOMEM", 12),
+    ("EACCES", 13),
+    ("EFAULT", 14),
+    ("EBUSY", 16),
+    ("EEXIST", 17),
+    ("ENOTDIR", 20),
+    ("EISDIR", 21),
+    ("EINVAL", 22),
+    ("ENFILE", 23),
+    ("EMFILE", 24),
+    ("ENOSPC", 28),
+    ("ESPIPE", 29),
+    ("EROFS", 30),
+    ("EPIPE", 32),
+    ("ERANGE", 34),
+];
+
+/// `os.constants.priority` values (Node's uv priority constants).
+const NODE_OS_PRIORITY: &[(&str, i64)] = &[
+    ("PRIORITY_LOW", 19),
+    ("PRIORITY_BELOW_NORMAL", 10),
+    ("PRIORITY_NORMAL", 0),
+    ("PRIORITY_ABOVE_NORMAL", -7),
+    ("PRIORITY_HIGH", -14),
+    ("PRIORITY_HIGHEST", -20),
+];
 
 // ---------------------------------------------------------------------------
 // LaneRouter — policy-directed routing
@@ -9558,7 +17155,7 @@ mod tests {
     use super::*;
     use crate::ast::{Expression, Statement};
     use crate::ir_contract::{
-        CapabilityTag, Ir3FunctionDesc, IrHeader, IrLevel, IrSchemaVersion, RegRange,
+        CapabilityTag, Ir3FunctionDesc, IrHeader, IrLevel, IrSchemaVersion, Reg, RegRange,
     };
     use crate::parser::Es2020Parser;
     use std::sync::{Arc, Mutex};
@@ -9583,7 +17180,7 @@ mod tests {
 
     fn test_module_with_pool(instructions: Vec<Ir3Instruction>, pool: Vec<String>) -> Ir3Module {
         let mut m = test_module(instructions);
-        m.constant_pool = pool;
+        m.constant_pool = pool.into_iter().map(Into::into).collect();
         m
     }
 
@@ -9642,6 +17239,1668 @@ mod tests {
         InterpreterCore::new(test_quickjs_config(), "test-trace")
     }
 
+    fn custom_for_of_handle_for_close(core: &mut InterpreterCore, object: ObjectId) -> Value {
+        let handle = core
+            .alloc_iterator(RuntimeIteratorState::ForOf(RuntimeForOfState {
+                values: Vec::new(),
+                iterator_object: Some(object),
+                next_method: None,
+                next_index: 0,
+                done: false,
+                closed: false,
+                return_called: false,
+            }))
+            .expect("custom iterator handle");
+        Value::Iterator(handle)
+    }
+
+    fn lower_symbol_source_bd_n8eta_4_3(source: &str) -> Ir3Module {
+        let tree = CanonicalEs2020Parser
+            .parse(source, ParseGoal::Script)
+            .expect("Symbol regression source should parse");
+        lower_ir0_to_ir3(
+            &Ir0Module::from_syntax_tree(tree, "bd_n8eta_4_3.js"),
+            &LoweringContext::new(
+                "trace-bd-n8eta-4-3",
+                "decision-bd-n8eta-4-3",
+                "policy-bd-n8eta-4-3",
+            ),
+        )
+        .expect("Symbol regression source should lower")
+        .ir3
+    }
+
+    fn exact_accessor_definition_key(prefix: &str, name: &JsString) -> JsString {
+        let mut units = prefix.encode_utf16().collect::<Vec<_>>();
+        units.extend(name.encode_utf16());
+        JsString::from_code_units(&units)
+    }
+
+    #[test]
+    fn symbol_value_and_heap_wire_are_typed_and_backward_readable_bd_n8eta_4_3() {
+        assert_eq!(
+            serde_json::to_string(&Value::Symbol(SymbolId(14))).unwrap(),
+            r#"{"Symbol":14}"#
+        );
+
+        let legacy = HeapObject::new();
+        let legacy_wire = serde_json::to_string(&legacy).unwrap();
+        assert!(!legacy_wire.contains("symbol_properties"));
+        assert_eq!(
+            serde_json::to_string(&serde_json::from_str::<HeapObject>(&legacy_wire).unwrap())
+                .unwrap(),
+            legacy_wire
+        );
+
+        let mut object = HeapObject::new();
+        object.properties.insert_baseline_symbol_property(
+            SymbolId(14),
+            BaselineSymbolProperty::Data(Value::Int(2)),
+        );
+        object.properties.insert_baseline_symbol_property(
+            SymbolId(15),
+            BaselineSymbolProperty::Accessor {
+                get: None,
+                set: Some(Value::Function(7)),
+            },
+        );
+        assert_ne!(legacy.properties, object.properties);
+        let wire = serde_json::to_string(&object).unwrap();
+        assert!(wire.ends_with(
+            r#","symbol_properties":[{"symbol_id":14,"kind":"data","value":{"Int":2}},{"symbol_id":15,"kind":"accessor","get":null,"set":{"Function":7}}]}"#
+        ));
+        assert_eq!(serde_json::from_str::<HeapObject>(&wire).unwrap(), object);
+    }
+
+    #[test]
+    fn symbol_heap_wire_rejects_malformed_records_bd_n8eta_4_3() {
+        let malformed = [
+            r#"{"properties":{},"prototype":null,"constructor_function":null,"is_array":false,"symbol_properties":[{"symbol_id":0,"kind":"data","value":{"Int":1}}]}"#,
+            r#"{"properties":{},"prototype":null,"constructor_function":null,"is_array":false,"symbol_properties":[{"symbol_id":14,"kind":"data","value":{"Int":1}},{"symbol_id":14,"kind":"data","value":{"Int":2}}]}"#,
+            r#"{"properties":{},"prototype":null,"constructor_function":null,"is_array":false,"symbol_properties":[{"symbol_id":14,"kind":"data","value":{"Int":1},"get":null}]}"#,
+            r#"{"properties":{},"prototype":null,"constructor_function":null,"is_array":false,"symbol_properties":[{"symbol_id":14,"kind":"accessor","get":null}]}"#,
+            r#"{"properties":{},"prototype":null,"constructor_function":null,"is_array":false,"symbol_properties":[{"symbol_id":14,"kind":"mystery","value":{"Int":1}}]}"#,
+            r#"{"properties":{},"prototype":null,"constructor_function":null,"is_array":false,"symbol_properties":[{"symbol_id":14,"kind":"data","value":{"Int":1},"extra":true}]}"#,
+        ];
+        for wire in malformed {
+            assert!(
+                serde_json::from_str::<HeapObject>(wire).is_err(),
+                "malformed Symbol property unexpectedly decoded: {wire}"
+            );
+        }
+    }
+
+    #[test]
+    fn symbol_state_wire_rejects_noncanonical_identity_records_bd_n8eta_4_3() {
+        let malformed = [
+            r#"{"well_known_schema":"wrong","next_symbol_id":14,"symbols":[]}"#,
+            r#"{"well_known_schema":"es2020-symbol-ids-1-13-v1","next_symbol_id":14,"symbols":[{"symbol_id":13,"kind":"private","description":null}]}"#,
+            r#"{"well_known_schema":"es2020-symbol-ids-1-13-v1","next_symbol_id":15,"symbols":[{"symbol_id":14,"kind":"private"}]}"#,
+            r#"{"well_known_schema":"es2020-symbol-ids-1-13-v1","next_symbol_id":15,"symbols":[{"symbol_id":14,"kind":"private","description":null,"registry_key":"x"}]}"#,
+            r#"{"well_known_schema":"es2020-symbol-ids-1-13-v1","next_symbol_id":15,"symbols":[{"symbol_id":14,"kind":"global","description":"x","registry_key":null}]}"#,
+            r#"{"well_known_schema":"es2020-symbol-ids-1-13-v1","next_symbol_id":15,"symbols":[{"symbol_id":14,"kind":"global","description":"x","registry_key":"y"}]}"#,
+            r#"{"well_known_schema":"es2020-symbol-ids-1-13-v1","next_symbol_id":16,"symbols":[{"symbol_id":14,"kind":"private","description":null},{"symbol_id":15,"kind":"private","description":null,"extra":true}]}"#,
+        ];
+        for wire in malformed {
+            assert!(
+                serde_json::from_str::<RuntimeSymbolState>(wire).is_err(),
+                "malformed Symbol state unexpectedly decoded: {wire}"
+            );
+        }
+    }
+
+    #[test]
+    fn typed_symbol_properties_stay_distinct_ordered_and_prototyped_bd_n8eta_4_3() {
+        let mut core = quickjs_test_core();
+        let first = core
+            .allocate_private_symbol(Some(JsString::from("first")))
+            .unwrap();
+        let second = core
+            .allocate_private_symbol(Some(JsString::from("second")))
+            .unwrap();
+        let prototype = core.alloc_object_with_prototype(None).unwrap();
+        let object = core.alloc_object_with_prototype(Some(prototype)).unwrap();
+
+        core.set_object_property(object, "2".to_string(), Value::Int(2))
+            .unwrap();
+        core.set_object_property(object, "a".to_string(), Value::Int(1))
+            .unwrap();
+        core.set_object_property(object, "Symbol(14)".to_string(), Value::Int(9))
+            .unwrap();
+        core.set_object_typed_property(object, TypedPropertyKey::Symbol(first), Value::Int(7))
+            .unwrap();
+        core.set_object_typed_property(prototype, TypedPropertyKey::Symbol(second), Value::Int(8))
+            .unwrap();
+
+        assert_eq!(
+            core.prototype_chain_lookup_typed_property(object, &TypedPropertyKey::Symbol(first))
+                .unwrap(),
+            Some(RuntimeProperty::Data(Value::Int(7)))
+        );
+        assert_eq!(
+            core.prototype_chain_lookup_typed_property(object, &TypedPropertyKey::Symbol(second))
+                .unwrap(),
+            Some(RuntimeProperty::Data(Value::Int(8)))
+        );
+        assert!(
+            core.prototype_chain_has_typed_key(object, &TypedPropertyKey::Symbol(second))
+                .unwrap()
+        );
+        assert_eq!(
+            core.heap[object.0 as usize].own_typed_property_keys(),
+            vec![
+                TypedPropertyKey::String("2".to_string()),
+                TypedPropertyKey::String("a".to_string()),
+                TypedPropertyKey::String("Symbol(14)".to_string()),
+                TypedPropertyKey::Symbol(first),
+            ]
+        );
+
+        core.set_symbol_property(
+            object,
+            first,
+            BaselineSymbolProperty::Accessor {
+                get: Some(Value::Function(3)),
+                set: None,
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            core.heap[object.0 as usize]
+                .properties
+                .baseline_symbol_key_order(),
+            &[first]
+        );
+        core.set_object_typed_property(object, TypedPropertyKey::Symbol(first), Value::Int(7))
+            .unwrap();
+
+        core.remove_object_typed_property(object, &TypedPropertyKey::Symbol(first))
+            .unwrap();
+        core.set_object_typed_property(object, TypedPropertyKey::Symbol(second), Value::Int(10))
+            .unwrap();
+        core.set_object_typed_property(object, TypedPropertyKey::Symbol(first), Value::Int(11))
+            .unwrap();
+        assert_eq!(
+            core.heap[object.0 as usize]
+                .properties
+                .baseline_symbol_key_order(),
+            &[second, first]
+        );
+    }
+
+    #[test]
+    fn exact_string_data_accessors_symbols_and_wire_coexist_bd_b12xs_4() {
+        let mut core = quickjs_test_core();
+        let object = core.alloc_object_with_prototype(None).unwrap();
+        let d800 = JsString::from_code_units(&[0xD800]);
+        let d801 = JsString::from_code_units(&[0xD801]);
+        let replacement = JsString::from("\u{FFFD}");
+        let symbol = core
+            .allocate_private_symbol(Some(JsString::from("exact-mixed")))
+            .unwrap();
+
+        core.set_object_property(object, "2".to_string(), Value::Int(2))
+            .unwrap();
+        core.set_object_runtime_property(
+            object,
+            RuntimePropertyKey::String(d800.clone()),
+            Value::Int(8),
+        )
+        .unwrap();
+        core.set_object_runtime_property(
+            object,
+            RuntimePropertyKey::String(replacement.clone()),
+            Value::Int(0xFFFD),
+        )
+        .unwrap();
+        core.set_object_string_property(
+            object,
+            exact_accessor_definition_key(IR_ACCESSOR_GET_PREFIX, &d801),
+            Value::Function(7),
+        )
+        .unwrap();
+        core.set_object_runtime_property(
+            object,
+            RuntimePropertyKey::Symbol(symbol),
+            Value::Int(14),
+        )
+        .unwrap();
+
+        assert_eq!(
+            core.heap[object.0 as usize].own_runtime_property_keys(),
+            vec![
+                RuntimePropertyKey::String(JsString::from("2")),
+                RuntimePropertyKey::String(d800.clone()),
+                RuntimePropertyKey::String(replacement.clone()),
+                RuntimePropertyKey::String(d801.clone()),
+                RuntimePropertyKey::Symbol(symbol),
+            ]
+        );
+        assert_eq!(
+            core.prototype_chain_lookup_runtime_property(
+                object,
+                &RuntimePropertyKey::String(d801.clone()),
+            )
+            .unwrap(),
+            Some(RuntimeProperty::Accessor(AccessorProperty {
+                get: Some(Value::Function(7)),
+                set: None,
+            }))
+        );
+
+        let accessor_wire = serde_json::to_value(&core.heap[object.0 as usize]).unwrap();
+        assert!(accessor_wire["properties"].is_array());
+        assert!(accessor_wire["accessors"].is_array());
+        assert!(accessor_wire["own_string_key_order"].is_array());
+        assert!(accessor_wire["symbol_properties"].is_array());
+        let restored: HeapObject = serde_json::from_value(accessor_wire.clone()).unwrap();
+        assert_eq!(restored, core.heap[object.0 as usize]);
+
+        let mut duplicate_accessor = accessor_wire.clone();
+        duplicate_accessor["accessors"] = serde_json::to_value(vec![
+            (
+                d801.clone(),
+                AccessorProperty {
+                    get: Some(Value::Function(7)),
+                    set: None,
+                },
+            ),
+            (
+                d801.clone(),
+                AccessorProperty {
+                    get: None,
+                    set: Some(Value::Function(8)),
+                },
+            ),
+        ])
+        .unwrap();
+        assert!(serde_json::from_value::<HeapObject>(duplicate_accessor).is_err());
+        let mut data_accessor_collision = accessor_wire.clone();
+        data_accessor_collision["accessors"] = serde_json::to_value(vec![(
+            d800.clone(),
+            AccessorProperty {
+                get: Some(Value::Function(9)),
+                set: None,
+            },
+        )])
+        .unwrap();
+        assert!(serde_json::from_value::<HeapObject>(data_accessor_collision).is_err());
+        let mut missing_order = accessor_wire;
+        missing_order
+            .as_object_mut()
+            .unwrap()
+            .remove("own_string_key_order");
+        assert!(serde_json::from_value::<HeapObject>(missing_order).is_err());
+
+        core.set_plain_data_runtime_property(
+            object,
+            RuntimePropertyKey::String(d801.clone()),
+            Value::Int(9),
+        )
+        .unwrap();
+        assert_eq!(
+            core.heap[object.0 as usize].own_runtime_property_keys(),
+            vec![
+                RuntimePropertyKey::String(JsString::from("2")),
+                RuntimePropertyKey::String(d800.clone()),
+                RuntimePropertyKey::String(replacement.clone()),
+                RuntimePropertyKey::String(d801.clone()),
+                RuntimePropertyKey::Symbol(symbol),
+            ]
+        );
+
+        let data_wire = serde_json::to_value(&core.heap[object.0 as usize]).unwrap();
+        assert!(data_wire["properties"].is_array());
+        let restored: HeapObject = serde_json::from_value(data_wire).unwrap();
+        assert_eq!(restored, core.heap[object.0 as usize]);
+
+        assert!(
+            core.remove_object_runtime_property(object, &RuntimePropertyKey::String(d800.clone()),)
+                .unwrap()
+        );
+        core.set_object_runtime_property(
+            object,
+            RuntimePropertyKey::String(d800.clone()),
+            Value::Int(18),
+        )
+        .unwrap();
+        assert_eq!(
+            core.heap[object.0 as usize].own_runtime_property_keys(),
+            vec![
+                RuntimePropertyKey::String(JsString::from("2")),
+                RuntimePropertyKey::String(replacement),
+                RuntimePropertyKey::String(d801),
+                RuntimePropertyKey::String(d800),
+                RuntimePropertyKey::Symbol(symbol),
+            ]
+        );
+
+        let seed = core.capture_execution_seed();
+        let seed_wire = serde_json::to_string(&seed).unwrap();
+        let restored_seed: ExecutionSeed = serde_json::from_str(&seed_wire).unwrap();
+        assert_eq!(restored_seed, seed);
+    }
+
+    #[test]
+    fn public_exact_property_insertion_roundtrips_heap_bd_b12xs_4() {
+        let d800 = JsString::from_code_units(&[0xD800]);
+        let mut object = HeapObject::new();
+        object.properties.insert_exact(d800.clone(), Value::Int(8));
+
+        let wire = serde_json::to_string(&object).unwrap();
+        assert!(wire.contains("$wtf16"));
+        let restored: HeapObject = serde_json::from_str(&wire).unwrap();
+        assert_eq!(restored, object);
+        assert_eq!(restored.properties.get_exact(&d800), Some(&Value::Int(8)));
+    }
+
+    #[test]
+    fn iterator_close_calls_object_return_once_and_preserves_heap_effects_bd_t9n3s() {
+        let module = test_module_with_pool_and_functions(
+            vec![
+                Ir3Instruction::LoadThis { dst: 0 },
+                Ir3Instruction::LoadStr {
+                    dst: 1,
+                    pool_index: 0,
+                },
+                Ir3Instruction::GetProperty {
+                    obj: 0,
+                    key: 1,
+                    dst: 2,
+                },
+                Ir3Instruction::LoadInt { dst: 3, value: 1 },
+                Ir3Instruction::Add {
+                    dst: 2,
+                    lhs: 2,
+                    rhs: 3,
+                },
+                Ir3Instruction::SetProperty {
+                    obj: 0,
+                    key: 1,
+                    val: 2,
+                },
+                Ir3Instruction::Return { value: 0 },
+            ],
+            vec!["closeCount".to_string()],
+            vec![Ir3FunctionDesc {
+                entry: 0,
+                arity: 0,
+                frame_size: 4,
+                name: Some("iterator_return".to_string()),
+                is_generator: false,
+                rest_param_index: None,
+            }],
+        );
+        let mut core = quickjs_test_core();
+        let iterable = core.alloc_object_with_prototype(None).unwrap();
+        core.set_object_property(iterable, "0".to_string(), Value::Int(7))
+            .unwrap();
+        core.set_object_property(iterable, "closeCount".to_string(), Value::Int(0))
+            .unwrap();
+        core.set_object_property(iterable, "return".to_string(), Value::Function(0))
+            .unwrap();
+        let iterator = custom_for_of_handle_for_close(&mut core, iterable);
+
+        core.close_iterator(&module, iterator.clone(), IteratorCloseReason::Break)
+            .unwrap();
+        core.close_iterator(&module, iterator, IteratorCloseReason::Return)
+            .unwrap();
+
+        assert_eq!(
+            core.prototype_chain_get(iterable, "closeCount").unwrap(),
+            Value::Int(1)
+        );
+    }
+
+    #[test]
+    fn iterator_close_validates_return_result_except_for_throw_bd_t9n3s() {
+        let module = test_module_with_functions(
+            vec![
+                Ir3Instruction::LoadInt { dst: 0, value: 7 },
+                Ir3Instruction::Return { value: 0 },
+            ],
+            vec![Ir3FunctionDesc {
+                entry: 0,
+                arity: 0,
+                frame_size: 1,
+                name: Some("primitive_iterator_return".to_string()),
+                is_generator: false,
+                rest_param_index: None,
+            }],
+        );
+
+        for (reason, should_fail) in [
+            (IteratorCloseReason::Break, true),
+            (IteratorCloseReason::Continue, true),
+            (IteratorCloseReason::Return, true),
+            (IteratorCloseReason::Throw, false),
+        ] {
+            let mut core = quickjs_test_core();
+            let iterable = core.alloc_object_with_prototype(None).unwrap();
+            core.set_object_property(iterable, "0".to_string(), Value::Int(1))
+                .unwrap();
+            core.set_object_property(iterable, "return".to_string(), Value::Function(0))
+                .unwrap();
+            let iterator = custom_for_of_handle_for_close(&mut core, iterable);
+
+            let result = core.close_iterator(&module, iterator, reason);
+            if should_fail {
+                assert!(matches!(result, Err(InterpreterError::TypeError { .. })));
+            } else {
+                result.expect("an in-flight throw must outrank a primitive close result");
+            }
+        }
+    }
+
+    #[test]
+    fn iterator_close_throw_precedence_restores_original_completion_bd_t9n3s() {
+        let module = test_module_with_pool_and_functions(
+            vec![
+                Ir3Instruction::LoadStr {
+                    dst: 0,
+                    pool_index: 0,
+                },
+                Ir3Instruction::Throw { value: 0 },
+            ],
+            vec!["close failure".to_string()],
+            vec![Ir3FunctionDesc {
+                entry: 0,
+                arity: 0,
+                frame_size: 1,
+                name: Some("throwing_iterator_return".to_string()),
+                is_generator: false,
+                rest_param_index: None,
+            }],
+        );
+
+        let mut break_core = quickjs_test_core();
+        let break_iterable = break_core.alloc_object_with_prototype(None).unwrap();
+        break_core
+            .set_object_property(break_iterable, "0".to_string(), Value::Int(1))
+            .unwrap();
+        break_core
+            .set_object_property(break_iterable, "return".to_string(), Value::Function(0))
+            .unwrap();
+        let break_iterator = custom_for_of_handle_for_close(&mut break_core, break_iterable);
+        assert!(matches!(
+            break_core.close_iterator(&module, break_iterator, IteratorCloseReason::Break),
+            Err(InterpreterError::UncaughtException { value }) if value == "close failure"
+        ));
+
+        let mut throw_core = quickjs_test_core();
+        let throw_iterable = throw_core.alloc_object_with_prototype(None).unwrap();
+        throw_core
+            .set_object_property(throw_iterable, "0".to_string(), Value::Int(1))
+            .unwrap();
+        throw_core
+            .set_object_property(throw_iterable, "return".to_string(), Value::Function(0))
+            .unwrap();
+        let throw_iterator = custom_for_of_handle_for_close(&mut throw_core, throw_iterable);
+        let original = LabeledException {
+            value: Value::str("original failure"),
+            label: crate::ifc_artifacts::Label::Secret,
+        };
+        throw_core.pending_exception = Some(original.clone());
+
+        throw_core
+            .close_iterator(&module, throw_iterator, IteratorCloseReason::Throw)
+            .expect("an in-flight throw must outrank a failing close hook");
+        assert_eq!(throw_core.pending_exception, Some(original));
+    }
+
+    #[test]
+    fn exact_string_key_consumers_preserve_identity_bd_b12xs_6() {
+        let mut core = quickjs_test_core();
+        let object = core.alloc_object_with_prototype(None).unwrap();
+        let d800 = JsString::from_code_units(&[0xD800]);
+        let d801 = JsString::from_code_units(&[0xD801]);
+        let replacement = JsString::from("\u{FFFD}");
+        let expected_keys = vec![d800.clone(), d801.clone(), replacement.clone()];
+        for (key, value) in expected_keys.iter().cloned().zip([8, 9, 10]) {
+            core.set_object_runtime_property(
+                object,
+                RuntimePropertyKey::String(key),
+                Value::Int(value),
+            )
+            .unwrap();
+        }
+
+        assert_eq!(core.own_enumerable_keys(object).unwrap(), expected_keys);
+        assert_eq!(core.collect_for_in_keys(object).unwrap(), expected_keys);
+
+        let iteration_object = core.alloc_object_with_prototype(None).unwrap();
+        for (key, value) in expected_keys.iter().cloned().zip([8, 9, 10]) {
+            core.set_object_runtime_property(
+                iteration_object,
+                RuntimePropertyKey::String(key),
+                Value::Int(value),
+            )
+            .unwrap();
+        }
+        let iterator = core
+            .init_for_in_iterator(Value::Object(iteration_object))
+            .unwrap();
+        assert_eq!(
+            core.advance_for_in_iterator(iterator.clone()).unwrap(),
+            Some(Value::Str(d800.clone()))
+        );
+        core.registers[20] = Value::Object(iteration_object);
+        core.registers[21] = Value::Str(d801.clone());
+        assert_eq!(
+            core.run_loop(&test_module(vec![
+                Ir3Instruction::DeleteProperty {
+                    obj: 20,
+                    key: 21,
+                    dst: 22,
+                },
+                Ir3Instruction::Return { value: 22 },
+            ]))
+            .unwrap(),
+            Value::Bool(true)
+        );
+        assert_eq!(
+            core.advance_for_in_iterator(iterator.clone()).unwrap(),
+            Some(Value::Str(replacement.clone()))
+        );
+        assert_eq!(core.advance_for_in_iterator(iterator).unwrap(), None);
+
+        core.registers[0] = Value::Object(object);
+        let keys = core
+            .dispatch_builtin_hostcall("builtin:ObjectKeys", RegRange { start: 0, count: 1 })
+            .unwrap();
+        let Value::Object(keys) = keys else {
+            panic!("Object.keys must return an array");
+        };
+        assert_eq!(
+            core.read_array_like_values(keys),
+            expected_keys
+                .iter()
+                .cloned()
+                .map(Value::Str)
+                .collect::<Vec<_>>()
+        );
+
+        let values = core
+            .dispatch_builtin_hostcall("builtin:ObjectValues", RegRange { start: 0, count: 1 })
+            .unwrap();
+        let Value::Object(values) = values else {
+            panic!("Object.values must return an array");
+        };
+        assert_eq!(
+            core.read_array_like_values(values),
+            vec![Value::Int(8), Value::Int(9), Value::Int(10)]
+        );
+
+        let entries = core
+            .dispatch_builtin_hostcall("builtin:ObjectEntries", RegRange { start: 0, count: 1 })
+            .unwrap();
+        let Value::Object(entries) = entries else {
+            panic!("Object.entries must return an array");
+        };
+        let entry_values = core
+            .read_array_like_values(entries)
+            .into_iter()
+            .map(|entry| {
+                let Value::Object(entry) = entry else {
+                    panic!("Object.entries member must be an array");
+                };
+                core.read_array_like_values(entry)
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            entry_values,
+            vec![
+                vec![Value::Str(d800.clone()), Value::Int(8)],
+                vec![Value::Str(d801.clone()), Value::Int(9)],
+                vec![Value::Str(replacement.clone()), Value::Int(10)],
+            ]
+        );
+
+        for builtin in [
+            "builtin:ObjectGetOwnPropertyNames",
+            "builtin:ReflectOwnKeys",
+        ] {
+            let reflected = core
+                .dispatch_builtin_hostcall(builtin, RegRange { start: 0, count: 1 })
+                .unwrap();
+            let Value::Object(reflected) = reflected else {
+                panic!("{builtin} must return an array");
+            };
+            assert_eq!(
+                core.read_array_like_values(reflected),
+                expected_keys
+                    .iter()
+                    .cloned()
+                    .map(Value::Str)
+                    .collect::<Vec<_>>()
+            );
+        }
+
+        let target = core.alloc_object_with_prototype(None).unwrap();
+        core.registers[0] = Value::Object(target);
+        core.registers[1] = Value::Object(object);
+        assert_eq!(
+            core.dispatch_builtin_hostcall("builtin:ObjectAssign", RegRange { start: 0, count: 2 })
+                .unwrap(),
+            Value::Object(target)
+        );
+        assert_eq!(
+            core.heap[target.0 as usize].own_exact_property_keys(),
+            expected_keys
+        );
+
+        let spread_target = core.alloc_object_with_prototype(None).unwrap();
+        core.registers[1] = Value::Object(spread_target);
+        core.registers[2] = Value::Object(object);
+        core.execute(&test_module(vec![
+            Ir3Instruction::CopyDataProperties {
+                target: 1,
+                source: 2,
+                excluded: RegRange { start: 3, count: 0 },
+                value_dst: 4,
+            },
+            Ir3Instruction::Halt,
+        ]))
+        .unwrap();
+        assert_eq!(
+            core.heap[spread_target.0 as usize].own_exact_property_keys(),
+            expected_keys
+        );
+
+        let spread_instruction_target = core.alloc_object_with_prototype(None).unwrap();
+        core.registers[1] = Value::Object(spread_instruction_target);
+        core.registers[2] = Value::Object(object);
+        core.execute(&test_module(vec![
+            Ir3Instruction::SpreadIntoObject {
+                target: 1,
+                source: 2,
+            },
+            Ir3Instruction::Halt,
+        ]))
+        .unwrap();
+        assert_eq!(
+            core.heap[spread_instruction_target.0 as usize].own_exact_property_keys(),
+            expected_keys
+        );
+
+        let assign_target = core.alloc_object_with_prototype(None).unwrap();
+        core.registers[1] = Value::Object(assign_target);
+        core.registers[2] = Value::Object(object);
+        core.execute(&test_module(vec![
+            Ir3Instruction::HostCall {
+                capability: CapabilityTag("builtin:ObjectAssign".to_string()),
+                args: RegRange { start: 1, count: 2 },
+                dst: 0,
+            },
+            Ir3Instruction::Halt,
+        ]))
+        .unwrap();
+        assert_eq!(
+            core.heap[assign_target.0 as usize].own_exact_property_keys(),
+            expected_keys
+        );
+
+        core.registers[0] = Value::Object(object);
+        assert_eq!(
+            core.dispatch_builtin_hostcall(
+                "builtin:JsonStringify",
+                RegRange { start: 0, count: 1 }
+            )
+            .unwrap(),
+            Value::str(r#"{"\ud800":8,"\ud801":9,"�":10}"#)
+        );
+        assert!(matches!(
+            core.qs_stringify_object(object, "&", "="),
+            Err(InterpreterError::TypeError { .. })
+        ));
+        assert_eq!(node_qs_escape_js(&replacement).unwrap(), "%EF%BF%BD");
+        assert!(matches!(
+            node_qs_escape_js(&d800),
+            Err(InterpreterError::TypeError { .. })
+        ));
+    }
+
+    #[test]
+    fn commonjs_finalization_keeps_exact_named_exports_bd_b12xs_6() {
+        let mut core = quickjs_test_core();
+        let specifier = "fixture.cjs".to_string();
+        let namespace_object = core.alloc_object_with_prototype(None).unwrap();
+        let exports_object = core.alloc_object_with_prototype(None).unwrap();
+        let module_object = core.alloc_object_with_prototype(None).unwrap();
+        let d800 = JsString::from_code_units(&[0xD800]);
+        let d801 = JsString::from_code_units(&[0xD801]);
+        let replacement = JsString::from("\u{FFFD}");
+        for (key, value) in [
+            (d800.clone(), 8),
+            (d801.clone(), 9),
+            (replacement.clone(), 10),
+        ] {
+            core.set_object_runtime_property(
+                exports_object,
+                RuntimePropertyKey::String(key),
+                Value::Int(value),
+            )
+            .unwrap();
+        }
+        core.set_object_property(
+            module_object,
+            "exports".to_string(),
+            Value::Object(exports_object),
+        )
+        .unwrap();
+        core.module_state.modules.insert(
+            specifier.clone(),
+            ModuleRuntimeRecord {
+                status: ModuleRuntimeStatus::Evaluating,
+                namespace_object,
+                exports: BTreeMap::new(),
+                cjs_module_object: Some(module_object),
+            },
+        );
+        core.current_module_specifier = Some(specifier.clone());
+        core.finalize_cjs_exports(&CjsModuleContext {
+            module_object,
+            exports_object,
+            module_specifier: specifier.clone(),
+        })
+        .unwrap();
+
+        let record = core.module_state.modules.get(&specifier).unwrap();
+        for (key, value) in [(d800, 8), (d801, 9), (replacement, 10)] {
+            assert_eq!(record.exports.get(&key), Some(&Value::Int(value)));
+            assert_eq!(
+                core.heap[namespace_object.0 as usize]
+                    .properties
+                    .get_exact(&key),
+                Some(&Value::Int(value))
+            );
+        }
+    }
+
+    fn execute_captured_commonjs_source(source: &str) -> (Value, CjsModuleContext) {
+        let tree = CanonicalEs2020Parser
+            .parse(source, ParseGoal::Script)
+            .expect("captured CommonJS binding source should parse");
+        let ir0 = Ir0Module::from_syntax_tree(tree, "/tmp/captured-module.cjs");
+        let module = lower_ir0_to_ir3(
+            &ir0,
+            &LoweringContext::new("cjs-capture", "cjs-capture", "cjs-capture"),
+        )
+        .expect("captured CommonJS binding source should lower")
+        .ir3;
+        let mut core = quickjs_test_core();
+        let context = core
+            .init_cjs_environment(&module, "/tmp/captured-module.cjs", None)
+            .expect("CommonJS environment should initialize");
+        core.active_cjs_context = Some(context.clone());
+        let value = core
+            .run_loop(&module)
+            .expect("captured CommonJS binding should execute");
+        (value, context)
+    }
+
+    #[test]
+    fn commonjs_binding_captured_by_function_reuses_injected_scope_cell() {
+        let (value, context) =
+            execute_captured_commonjs_source("function read(){ return module; } read();");
+        assert_eq!(value, Value::Object(context.module_object));
+    }
+
+    #[test]
+    fn commonjs_closure_reads_prior_exports_reassignment_from_shared_cell() {
+        let (value, _) = execute_captured_commonjs_source(
+            "exports = 7; function read(){ return exports; } read();",
+        );
+        assert_eq!(value, Value::Int(7));
+    }
+
+    #[test]
+    fn commonjs_closure_module_reassignment_survives_return() {
+        let (value, _) =
+            execute_captured_commonjs_source("function set(){ module = 7; } set(); module;");
+        assert_eq!(value, Value::Int(7));
+    }
+
+    #[test]
+    fn dynamic_exact_string_get_set_delete_in_and_prototype_bd_b12xs_4() {
+        let mut core = quickjs_test_core();
+        let prototype = core.alloc_object_with_prototype(None).unwrap();
+        let object = core.alloc_object_with_prototype(Some(prototype)).unwrap();
+        let d800 = JsString::from_code_units(&[0xD800]);
+        let d801 = JsString::from_code_units(&[0xD801]);
+        let replacement = JsString::from("\u{FFFD}");
+        core.set_object_runtime_property(
+            prototype,
+            RuntimePropertyKey::String(d801.clone()),
+            Value::Int(80),
+        )
+        .unwrap();
+
+        core.registers[1] = Value::Object(object);
+        core.registers[2] = Value::Str(d800.clone());
+        core.registers[3] = Value::Int(8);
+        core.registers[4] = Value::Str(d801.clone());
+        core.registers[5] = Value::Int(9);
+        core.registers[6] = Value::Str(replacement.clone());
+        core.registers[7] = Value::Int(0xFFFD);
+        core.execute(&test_module(vec![
+            Ir3Instruction::SetProperty {
+                obj: 1,
+                key: 2,
+                val: 3,
+            },
+            Ir3Instruction::SetProperty {
+                obj: 1,
+                key: 4,
+                val: 5,
+            },
+            Ir3Instruction::SetProperty {
+                obj: 1,
+                key: 6,
+                val: 7,
+            },
+            Ir3Instruction::GetProperty {
+                obj: 1,
+                key: 2,
+                dst: 8,
+            },
+            Ir3Instruction::GetProperty {
+                obj: 1,
+                key: 4,
+                dst: 9,
+            },
+            Ir3Instruction::GetProperty {
+                obj: 1,
+                key: 6,
+                dst: 10,
+            },
+            Ir3Instruction::DeleteProperty {
+                obj: 1,
+                key: 4,
+                dst: 11,
+            },
+            Ir3Instruction::GetProperty {
+                obj: 1,
+                key: 4,
+                dst: 12,
+            },
+            Ir3Instruction::InOp {
+                dst: 13,
+                lhs: 4,
+                rhs: 1,
+            },
+            Ir3Instruction::DeleteProperty {
+                obj: 1,
+                key: 2,
+                dst: 14,
+            },
+            Ir3Instruction::InOp {
+                dst: 15,
+                lhs: 2,
+                rhs: 1,
+            },
+            Ir3Instruction::Halt,
+        ]))
+        .unwrap();
+
+        assert_eq!(core.registers[8], Value::Int(8));
+        assert_eq!(core.registers[9], Value::Int(9));
+        assert_eq!(core.registers[10], Value::Int(0xFFFD));
+        assert_eq!(core.registers[11], Value::Bool(true));
+        assert_eq!(core.registers[12], Value::Int(80));
+        assert_eq!(core.registers[13], Value::Bool(true));
+        assert_eq!(core.registers[14], Value::Bool(true));
+        assert_eq!(core.registers[15], Value::Bool(false));
+        assert_eq!(
+            core.heap[object.0 as usize]
+                .properties
+                .get_exact(&replacement),
+            Some(&Value::Int(0xFFFD))
+        );
+        assert_eq!(
+            core.heap[prototype.0 as usize].properties.get_exact(&d801),
+            Some(&Value::Int(80))
+        );
+    }
+
+    #[test]
+    fn function_like_dynamic_exact_property_roundtrip_bd_b12xs_4() {
+        let mut core = quickjs_test_core();
+        let d800 = JsString::from_code_units(&[0xD800]);
+        core.registers[1] = Value::Function(0);
+        core.registers[2] = Value::Str(d800);
+        core.registers[3] = Value::Int(8);
+        core.execute(&test_module(vec![
+            Ir3Instruction::SetProperty {
+                obj: 1,
+                key: 2,
+                val: 3,
+            },
+            Ir3Instruction::GetProperty {
+                obj: 1,
+                key: 2,
+                dst: 4,
+            },
+            Ir3Instruction::InOp {
+                dst: 5,
+                lhs: 2,
+                rhs: 1,
+            },
+            Ir3Instruction::DeleteProperty {
+                obj: 1,
+                key: 2,
+                dst: 6,
+            },
+            Ir3Instruction::InOp {
+                dst: 7,
+                lhs: 2,
+                rhs: 1,
+            },
+            Ir3Instruction::Halt,
+        ]))
+        .unwrap();
+
+        assert_eq!(core.registers[4], Value::Int(8));
+        assert_eq!(core.registers[5], Value::Bool(true));
+        assert_eq!(core.registers[6], Value::Bool(true));
+        assert_eq!(core.registers[7], Value::Bool(false));
+    }
+
+    #[test]
+    fn reexecution_restores_exact_heap_seed_bd_b12xs_4() {
+        let mut core = quickjs_test_core();
+        let object = core.alloc_object_with_prototype(None).unwrap();
+        let d800 = JsString::from_code_units(&[0xD800]);
+        core.registers[1] = Value::Object(object);
+        core.registers[2] = Value::Str(d800.clone());
+        core.registers[3] = Value::Int(8);
+        let module = test_module(vec![
+            Ir3Instruction::InOp {
+                dst: 0,
+                lhs: 2,
+                rhs: 1,
+            },
+            Ir3Instruction::SetProperty {
+                obj: 1,
+                key: 2,
+                val: 3,
+            },
+            Ir3Instruction::Halt,
+        ]);
+
+        let first = core.execute(&module).unwrap();
+        assert_eq!(first.value, Value::Bool(false));
+        assert_eq!(
+            core.heap[object.0 as usize].properties.get_exact(&d800),
+            Some(&Value::Int(8))
+        );
+        let second = core.execute(&module).unwrap();
+        assert_eq!(second.value, Value::Bool(false));
+        assert_eq!(
+            core.heap[object.0 as usize].properties.get_exact(&d800),
+            Some(&Value::Int(8))
+        );
+    }
+
+    #[test]
+    fn symbol_seed_wire_restore_and_registry_are_atomic_bd_n8eta_4_3() {
+        let mut core = quickjs_test_core();
+        let private = core
+            .allocate_private_symbol(Some(JsString::from("private")))
+            .unwrap();
+        let global = core.intern_global_symbol(JsString::from("shared")).unwrap();
+        core.write_reg(0, Value::Symbol(private)).unwrap();
+        core.write_reg(1, Value::Symbol(global)).unwrap();
+        let seed = core.capture_execution_seed();
+        let wire = serde_json::to_string(&seed).unwrap();
+        assert!(wire.contains(r#""well_known_schema":"es2020-symbol-ids-1-13-v1""#));
+        assert!(wire.contains(r#""next_symbol_id":16"#));
+        let decoded: ExecutionSeed = serde_json::from_str(&wire).unwrap();
+        assert_eq!(decoded, seed);
+
+        let later = core.allocate_private_symbol(None).unwrap();
+        assert_eq!(later, SymbolId(16));
+        core.reset_execution_state_from_seed(&decoded).unwrap();
+        assert_eq!(
+            core.symbol_state.key_for(global),
+            Some(&JsString::from("shared"))
+        );
+        assert_eq!(core.allocate_private_symbol(None).unwrap(), SymbolId(16));
+
+        let default_wire = serde_json::to_string(
+            &InterpreterCore::new(test_quickjs_config(), "default-symbol-state")
+                .capture_execution_seed(),
+        )
+        .unwrap();
+        assert!(!default_wire.contains("symbol_state"));
+    }
+
+    #[test]
+    fn exact_only_values_participate_in_symbol_seed_validation_bd_b12xs_4() {
+        let mut core = quickjs_test_core();
+        let symbol = core
+            .allocate_private_symbol(Some(JsString::from("exact-seed")))
+            .unwrap();
+        let object = core.alloc_object_with_prototype(None).unwrap();
+        let d800 = JsString::from_code_units(&[0xD800]);
+        let d801 = JsString::from_code_units(&[0xD801]);
+        core.set_object_runtime_property(
+            object,
+            RuntimePropertyKey::String(d800.clone()),
+            Value::Symbol(symbol),
+        )
+        .unwrap();
+        core.set_object_string_property(
+            object,
+            exact_accessor_definition_key(IR_ACCESSOR_GET_PREFIX, &d801),
+            Value::Symbol(symbol),
+        )
+        .unwrap();
+
+        let seed = core.capture_execution_seed();
+        let wire = serde_json::to_string(&seed).unwrap();
+        assert!(wire.contains("symbol_state"));
+        let decoded: ExecutionSeed = serde_json::from_str(&wire).unwrap();
+        assert_eq!(decoded, seed);
+        core.reset_execution_state_from_seed(&decoded).unwrap();
+        assert_eq!(core.capture_execution_seed(), seed);
+
+        let stable = core.capture_execution_seed();
+        let mut unresolved_data = seed.clone();
+        *unresolved_data.heap[object.0 as usize]
+            .properties
+            .get_exact_mut(&d800)
+            .unwrap() = Value::Symbol(SymbolId(999));
+        assert!(
+            serde_json::from_value::<ExecutionSeed>(
+                serde_json::to_value(&unresolved_data).unwrap()
+            )
+            .is_err()
+        );
+        assert!(
+            core.reset_execution_state_from_seed(&unresolved_data)
+                .is_err()
+        );
+        assert_eq!(core.capture_execution_seed(), stable);
+
+        let mut unresolved_accessor = seed;
+        unresolved_accessor.heap[object.0 as usize].insert_exact_accessor(
+            d801,
+            AccessorProperty {
+                get: Some(Value::Symbol(SymbolId(999))),
+                set: None,
+            },
+        );
+        assert!(
+            serde_json::from_value::<ExecutionSeed>(
+                serde_json::to_value(&unresolved_accessor).unwrap()
+            )
+            .is_err()
+        );
+        assert!(
+            core.reset_execution_state_from_seed(&unresolved_accessor)
+                .is_err()
+        );
+        assert_eq!(core.capture_execution_seed(), stable);
+    }
+
+    #[test]
+    fn whole_seed_rejects_unresolved_dynamic_symbol_ids_bd_n8eta_4_3() {
+        let default_seed = InterpreterCore::new(test_quickjs_config(), "invalid-symbol-seed")
+            .capture_execution_seed();
+        let mut wire = serde_json::to_value(&default_seed).unwrap();
+        wire["registers"][0] = serde_json::json!({"Symbol": 14});
+        assert!(serde_json::from_value::<ExecutionSeed>(wire).is_err());
+
+        let mut missing_state_wire = serde_json::to_value(&default_seed).unwrap();
+        missing_state_wire["registers"][0] = serde_json::json!({"Symbol": 1});
+        assert!(missing_state_wire.get("symbol_state").is_none());
+        assert!(serde_json::from_value::<ExecutionSeed>(missing_state_wire).is_err());
+
+        let mut null_state_wire = serde_json::to_value(&default_seed).unwrap();
+        null_state_wire["symbol_state"] = serde_json::Value::Null;
+        assert!(serde_json::from_value::<ExecutionSeed>(null_state_wire).is_err());
+    }
+
+    #[test]
+    fn eager_seed_rejects_unresolved_symbols_atomically_bd_n8eta_4_3() {
+        let mut core = quickjs_test_core();
+        let before = core.capture_execution_seed();
+        let mut eager_seed = core.capture_execution_seed_eager_for_test();
+        eager_seed.registers[0] = Value::Symbol(SymbolId(999));
+
+        assert!(matches!(
+            core.reset_execution_state_from_seed_eager_for_test(&eager_seed),
+            Err(InterpreterError::TypeError { .. })
+        ));
+        assert_eq!(core.capture_execution_seed(), before);
+    }
+
+    #[test]
+    fn symbol_allocation_and_property_budget_failures_roll_back_bd_n8eta_4_3() {
+        let mut allocation_core = quickjs_test_core();
+        allocation_core.config.max_total_memory_bytes = 1;
+        assert!(matches!(
+            allocation_core.allocate_private_symbol(Some(JsString::from("too-large"))),
+            Err(InterpreterError::MemoryBudgetExceeded { .. })
+        ));
+        assert!(allocation_core.symbol_state.is_default());
+        assert_eq!(allocation_core.estimated_memory_bytes(), 0);
+
+        let mut property_core = quickjs_test_core();
+        let symbol = property_core.allocate_private_symbol(None).unwrap();
+        let object = property_core.alloc_object_with_prototype(None).unwrap();
+        let baseline_memory = property_core.estimated_memory_bytes();
+        property_core.config.max_total_memory_bytes = baseline_memory + 1;
+        assert!(matches!(
+            property_core.set_object_typed_property(
+                object,
+                TypedPropertyKey::Symbol(symbol),
+                Value::str("x".repeat(512)),
+            ),
+            Err(InterpreterError::MemoryBudgetExceeded { .. })
+        ));
+        assert!(
+            property_core.heap[object.0 as usize]
+                .properties
+                .baseline_symbol_key_order()
+                .is_empty()
+        );
+        assert_eq!(property_core.estimated_memory_bytes(), baseline_memory);
+    }
+
+    #[test]
+    fn implicit_symbol_string_concatenation_fails_closed_bd_n8eta_4_3() {
+        let mut core = quickjs_test_core();
+        core.registers.resize(2, Value::Undefined);
+        core.registers[0] = Value::str("prefix");
+        core.registers[1] = Value::Symbol(WellKnownSymbol::Iterator.id());
+
+        for (lhs, rhs) in [(0, 1), (1, 0)] {
+            assert!(matches!(
+                core.eval_add(lhs, rhs),
+                Err(InterpreterError::TypeError { ref got, .. }) if got == "symbol"
+            ));
+        }
+    }
+
+    #[test]
+    fn implicit_symbol_numeric_coercions_fail_closed_bd_n8eta_4_3() {
+        let mut core = quickjs_test_core();
+        core.registers.resize(2, Value::Undefined);
+        core.registers[0] = Value::Symbol(WellKnownSymbol::Iterator.id());
+        core.registers[1] = Value::Int(1);
+
+        let results = [
+            core.eval_add(0, 1),
+            core.eval_arith(0, 1, "sub"),
+            core.eval_arith(0, 1, "mul"),
+            core.eval_div(0, 1),
+            core.eval_mod(0, 1),
+            core.eval_exp(0, 1),
+            core.eval_unary_plus(0),
+            core.eval_unary_neg(0),
+            core.eval_bit_not(0),
+            core.eval_relational(0, 1, "<"),
+            core.eval_bitwise(0, 1, "|"),
+        ];
+        assert!(
+            results
+                .into_iter()
+                .all(|result| matches!(result, Err(InterpreterError::TypeError { .. })))
+        );
+    }
+
+    #[test]
+    fn symbol_legacy_numeric_coercion_sinks_fail_closed_bd_n8eta_4_3() {
+        let mut core = quickjs_test_core();
+        let symbol = Value::Symbol(WellKnownSymbol::Iterator.id());
+        core.registers[0] = Value::Int(65);
+        core.registers[1] = symbol.clone();
+
+        for capability in ["number:isNaN", "number:isFinite"] {
+            assert!(matches!(
+                core.dispatch_number_hostcall(capability, RegRange { start: 1, count: 1 }),
+                Err(InterpreterError::TypeError { .. })
+            ));
+        }
+        for capability in [
+            "number:Number.isNaN",
+            "number:Number.isFinite",
+            "number:Number.isInteger",
+            "number:Number.isSafeInteger",
+        ] {
+            assert_eq!(
+                core.dispatch_number_hostcall(capability, RegRange { start: 1, count: 1 })
+                    .unwrap(),
+                Value::Bool(false)
+            );
+        }
+
+        let text = JsString::from("abc");
+        assert!(InterpreterCore::string_char_at_value(&text, Some(&symbol)).is_err());
+        assert!(InterpreterCore::string_char_code_at_value(&text, Some(&symbol)).is_err());
+        assert!(InterpreterCore::string_code_point_at_value(&text, Some(&symbol)).is_err());
+        assert!(InterpreterCore::string_at_value(&text, Some(&symbol)).is_err());
+
+        for capability in ["builtin:StringFromCharCode", "builtin:StringFromCodePoint"] {
+            assert!(matches!(
+                core.dispatch_builtin_hostcall(capability, RegRange { start: 0, count: 2 }),
+                Err(InterpreterError::TypeError { .. })
+            ));
+        }
+        assert!(matches!(
+            core.dispatch_builtin_hostcall("builtin:MathAbs", RegRange { start: 1, count: 1 }),
+            Err(InterpreterError::TypeError { .. })
+        ));
+        for capability in ["timer:setTimeout", "timer:setInterval"] {
+            assert!(matches!(
+                core.dispatch_timer_hostcall(capability, RegRange { start: 0, count: 2 }),
+                Err(InterpreterError::TypeError { .. })
+            ));
+        }
+        assert_eq!(
+            core.dispatch_timer_hostcall("timer:clearTimeout", RegRange { start: 1, count: 1 })
+                .unwrap(),
+            Value::Undefined
+        );
+
+        let array_like = core.alloc_object_with_prototype(None).unwrap();
+        core.set_plain_data_property(array_like, "length".into(), symbol)
+            .unwrap();
+        assert!(matches!(
+            core.array_like_length(array_like),
+            Err(InterpreterError::TypeError { .. })
+        ));
+        core.registers[1] = Value::Object(array_like);
+        core.registers[2] = Value::Int(0);
+        assert!(matches!(
+            core.execute(&test_module(vec![
+                Ir3Instruction::ArraySlice {
+                    array: 1,
+                    start: 2,
+                    dst: 0,
+                },
+                Ir3Instruction::Halt,
+            ])),
+            Err(InterpreterError::TypeError { .. })
+        ));
+    }
+
+    #[test]
+    fn symbol_source_identity_keys_and_reflection_match_both_lanes_bd_n8eta_4_3() {
+        let module = lower_symbol_source_bd_n8eta_4_3(
+            "const first = Symbol('same');\
+             const second = Symbol('same');\
+             const global = Symbol.for('shared');\
+             const key = Symbol('key');\
+             const object = { [key]: 7, 'Symbol(17)': 9 };\
+             object[key] = 8;\
+             const setWorked = object[key] === 8;\
+             delete object[key];\
+             const deleteWorked = !(key in object);\
+             object[key] = 7;\
+             const spread = { ...object };\
+             const assigned = Object.assign({}, object);\
+             (typeof Symbol === 'function' && typeof first === 'symbol' && first !== second &&\
+              first.description === 'same' && first.toString() === 'Symbol(same)' &&\
+              Symbol().description === undefined &&\
+              global === Symbol.for('shared') && Symbol.keyFor(global) === 'shared' &&\
+              Symbol.keyFor(first) === undefined && Symbol.keyFor(Symbol.iterator) === undefined &&\
+              setWorked && deleteWorked && object[key] === 7 && object['Symbol(17)'] === 9 &&\
+              key in object && spread[key] === 7 && assigned[key] === 7 &&\
+              Object.keys(object).length === 1 &&\
+              Object.getOwnPropertySymbols(object)[0] === key &&\
+              Reflect.ownKeys(object).length === 2) ? 1 : 0;",
+        );
+        assert_eq!(quickjs_execute(&module).unwrap().value, Value::Int(1));
+        assert_eq!(v8_execute(&module).unwrap().value, Value::Int(1));
+    }
+
+    #[test]
+    fn function_like_symbol_own_keys_match_both_lanes_bd_n8eta_4_3() {
+        let cases = [
+            (
+                "get-set-in",
+                "const s=Symbol(); function f(){} f[s]=9; (s in f && f[s]===9)?1:0;",
+            ),
+            (
+                "reflection",
+                "const s=Symbol(); function f(){} f[s]=9; (Object.getOwnPropertySymbols(f)[0]===s && Reflect.ownKeys(f).length===1)?1:0;",
+            ),
+            (
+                "spread",
+                "const s=Symbol(); function f(){} f[s]=9; const copy={...f}; copy[s]===9?1:0;",
+            ),
+            (
+                "assign",
+                "const s=Symbol(); function f(){} f[s]=9; const copy=Object.assign({},f); copy[s]===9?1:0;",
+            ),
+            (
+                "delete",
+                "const s=Symbol(); function f(){} f[s]=9; (delete f[s] && !(s in f))?1:0;",
+            ),
+        ];
+        for (name, source) in cases {
+            let module = lower_symbol_source_bd_n8eta_4_3(source);
+            assert_eq!(
+                quickjs_execute(&module)
+                    .unwrap_or_else(|error| panic!("QuickJsLane {name}: {error}"))
+                    .value,
+                Value::Int(1),
+                "QuickJsLane {name}"
+            );
+            assert_eq!(
+                v8_execute(&module)
+                    .unwrap_or_else(|error| panic!("V8Lane {name}: {error}"))
+                    .value,
+                Value::Int(1),
+                "V8Lane {name}"
+            );
+        }
+    }
+
+    #[test]
+    fn symbol_accessor_spread_resumes_getter_and_defines_data_bd_n8eta_4_3() {
+        let mut core = quickjs_test_core();
+        let symbol = core
+            .allocate_private_symbol(Some(JsString::from("spread")))
+            .unwrap();
+        let target = core.alloc_object_with_prototype(None).unwrap();
+        let source = core.alloc_object_with_prototype(None).unwrap();
+        core.set_plain_data_property(source, "calls".into(), Value::Int(0))
+            .unwrap();
+        core.set_plain_data_property(source, "marker".into(), Value::Int(41))
+            .unwrap();
+        core.set_symbol_property(
+            source,
+            symbol,
+            BaselineSymbolProperty::Accessor {
+                get: Some(Value::Function(0)),
+                set: None,
+            },
+        )
+        .unwrap();
+        core.registers[1] = Value::Object(target);
+        core.registers[2] = Value::Object(source);
+
+        let result = core
+            .execute(&test_module_with_pool_and_functions(
+                vec![
+                    Ir3Instruction::SpreadIntoObject {
+                        target: 1,
+                        source: 2,
+                    },
+                    Ir3Instruction::Move { dst: 0, src: 1 },
+                    Ir3Instruction::Halt,
+                    Ir3Instruction::LoadThis { dst: 0 },
+                    Ir3Instruction::LoadStr {
+                        dst: 1,
+                        pool_index: 0,
+                    },
+                    Ir3Instruction::GetProperty {
+                        obj: 0,
+                        key: 1,
+                        dst: 2,
+                    },
+                    Ir3Instruction::LoadInt { dst: 3, value: 1 },
+                    Ir3Instruction::Add {
+                        dst: 4,
+                        lhs: 2,
+                        rhs: 3,
+                    },
+                    Ir3Instruction::SetProperty {
+                        obj: 0,
+                        key: 1,
+                        val: 4,
+                    },
+                    Ir3Instruction::LoadStr {
+                        dst: 5,
+                        pool_index: 1,
+                    },
+                    Ir3Instruction::GetProperty {
+                        obj: 0,
+                        key: 5,
+                        dst: 6,
+                    },
+                    Ir3Instruction::Return { value: 6 },
+                ],
+                vec!["calls".to_string(), "marker".to_string()],
+                vec![class_test_function(3, "symbol_spread_getter")],
+            ))
+            .unwrap();
+
+        assert_eq!(result.value, Value::Object(target));
+        assert_eq!(core.registers[2], Value::Object(source));
+        assert_eq!(
+            core.heap[source.0 as usize].properties.get("calls"),
+            Some(&Value::Int(1))
+        );
+        assert!(matches!(
+            core.heap[target.0 as usize]
+                .properties
+                .baseline_symbol_property(symbol),
+            Some(BaselineSymbolProperty::Data(Value::Int(41)))
+        ));
+        assert!(core.copy_data_properties_states.is_empty());
+    }
+
+    #[test]
+    fn symbol_accessor_object_assign_runs_getter_then_setter_once_bd_n8eta_4_3() {
+        let mut core = quickjs_test_core();
+        let symbol = core
+            .allocate_private_symbol(Some(JsString::from("assign")))
+            .unwrap();
+        let target = core.alloc_object_with_prototype(None).unwrap();
+        let source = core.alloc_object_with_prototype(None).unwrap();
+        let later_source = core.alloc_object_with_prototype(None).unwrap();
+        core.set_plain_data_property(source, "getterCalls".into(), Value::Int(0))
+            .unwrap();
+        core.set_plain_data_property(source, "marker".into(), Value::Int(41))
+            .unwrap();
+        core.set_plain_data_property(target, "setterCalls".into(), Value::Int(0))
+            .unwrap();
+        core.set_plain_data_property(target, "received".into(), Value::Int(0))
+            .unwrap();
+        core.set_plain_data_property(later_source, "after".into(), Value::Int(2))
+            .unwrap();
+        core.set_symbol_property(
+            source,
+            symbol,
+            BaselineSymbolProperty::Accessor {
+                get: Some(Value::Function(0)),
+                set: None,
+            },
+        )
+        .unwrap();
+        core.set_symbol_property(
+            target,
+            symbol,
+            BaselineSymbolProperty::Accessor {
+                get: None,
+                set: Some(Value::Function(1)),
+            },
+        )
+        .unwrap();
+        core.registers[1] = Value::Object(target);
+        core.registers[2] = Value::Object(source);
+        core.registers[3] = Value::Object(later_source);
+
+        let result = core
+            .execute(&test_module_with_pool_and_functions(
+                vec![
+                    Ir3Instruction::HostCall {
+                        capability: CapabilityTag("builtin:ObjectAssign".to_string()),
+                        args: RegRange { start: 1, count: 3 },
+                        dst: 0,
+                    },
+                    Ir3Instruction::Halt,
+                    Ir3Instruction::LoadThis { dst: 0 },
+                    Ir3Instruction::LoadStr {
+                        dst: 1,
+                        pool_index: 0,
+                    },
+                    Ir3Instruction::GetProperty {
+                        obj: 0,
+                        key: 1,
+                        dst: 2,
+                    },
+                    Ir3Instruction::LoadInt { dst: 3, value: 1 },
+                    Ir3Instruction::Add {
+                        dst: 4,
+                        lhs: 2,
+                        rhs: 3,
+                    },
+                    Ir3Instruction::SetProperty {
+                        obj: 0,
+                        key: 1,
+                        val: 4,
+                    },
+                    Ir3Instruction::LoadStr {
+                        dst: 5,
+                        pool_index: 1,
+                    },
+                    Ir3Instruction::GetProperty {
+                        obj: 0,
+                        key: 5,
+                        dst: 6,
+                    },
+                    Ir3Instruction::Return { value: 6 },
+                    Ir3Instruction::LoadThis { dst: 2 },
+                    Ir3Instruction::LoadStr {
+                        dst: 1,
+                        pool_index: 2,
+                    },
+                    Ir3Instruction::GetProperty {
+                        obj: 2,
+                        key: 1,
+                        dst: 3,
+                    },
+                    Ir3Instruction::LoadInt { dst: 4, value: 1 },
+                    Ir3Instruction::Add {
+                        dst: 5,
+                        lhs: 3,
+                        rhs: 4,
+                    },
+                    Ir3Instruction::SetProperty {
+                        obj: 2,
+                        key: 1,
+                        val: 5,
+                    },
+                    Ir3Instruction::LoadStr {
+                        dst: 6,
+                        pool_index: 3,
+                    },
+                    Ir3Instruction::SetProperty {
+                        obj: 2,
+                        key: 6,
+                        val: 0,
+                    },
+                    Ir3Instruction::Return { value: 0 },
+                ],
+                vec![
+                    "getterCalls".to_string(),
+                    "marker".to_string(),
+                    "setterCalls".to_string(),
+                    "received".to_string(),
+                ],
+                vec![
+                    class_test_function(2, "symbol_assign_getter"),
+                    Ir3FunctionDesc {
+                        entry: 11,
+                        arity: 1,
+                        frame_size: 7,
+                        name: Some("symbol_assign_setter".to_string()),
+                        is_generator: false,
+                        rest_param_index: None,
+                    },
+                ],
+            ))
+            .unwrap();
+
+        assert_eq!(result.value, Value::Object(target));
+        assert_eq!(
+            core.heap[source.0 as usize].properties.get("getterCalls"),
+            Some(&Value::Int(1))
+        );
+        assert_eq!(
+            core.heap[target.0 as usize].properties.get("setterCalls"),
+            Some(&Value::Int(1))
+        );
+        assert_eq!(
+            core.heap[target.0 as usize].properties.get("received"),
+            Some(&Value::Int(41))
+        );
+        assert_eq!(
+            core.heap[target.0 as usize].properties.get("after"),
+            Some(&Value::Int(2))
+        );
+        assert!(matches!(
+            core.heap[target.0 as usize]
+                .properties
+                .baseline_symbol_property(symbol),
+            Some(BaselineSymbolProperty::Accessor { .. })
+        ));
+        assert_eq!(result.hostcall_decisions.len(), 1);
+        assert!(core.copy_data_properties_states.is_empty());
+    }
+
+    #[test]
+    fn symbol_object_assign_rejections_clear_continuations_bd_n8eta_4_3() {
+        for throwing_setter in [false, true] {
+            let mut core = quickjs_test_core();
+            let symbol = core.allocate_private_symbol(None).unwrap();
+            let target = core.alloc_object_with_prototype(None).unwrap();
+            let source = core.alloc_object_with_prototype(None).unwrap();
+            core.set_symbol_property(source, symbol, BaselineSymbolProperty::Data(Value::Int(7)))
+                .unwrap();
+            core.set_symbol_property(
+                target,
+                symbol,
+                BaselineSymbolProperty::Accessor {
+                    get: None,
+                    set: throwing_setter.then_some(Value::Function(0)),
+                },
+            )
+            .unwrap();
+            core.registers[1] = Value::Object(target);
+            core.registers[2] = Value::Object(source);
+
+            let module = test_module_with_pool_and_functions(
+                vec![
+                    Ir3Instruction::HostCall {
+                        capability: CapabilityTag("builtin:ObjectAssign".to_string()),
+                        args: RegRange { start: 1, count: 2 },
+                        dst: 0,
+                    },
+                    Ir3Instruction::Halt,
+                    Ir3Instruction::LoadStr {
+                        dst: 0,
+                        pool_index: 0,
+                    },
+                    Ir3Instruction::Throw { value: 0 },
+                ],
+                vec!["setter failed".to_string()],
+                vec![Ir3FunctionDesc {
+                    entry: 2,
+                    arity: 1,
+                    frame_size: 1,
+                    name: Some("throwing_symbol_assign_setter".to_string()),
+                    is_generator: false,
+                    rest_param_index: None,
+                }],
+            );
+            assert!(core.execute(&module).is_err());
+            assert!(core.copy_data_properties_states.is_empty());
+            assert!(matches!(
+                core.heap[target.0 as usize]
+                    .properties
+                    .baseline_symbol_property(symbol),
+                Some(BaselineSymbolProperty::Accessor { .. })
+            ));
+        }
+    }
+
     fn class_test_function(entry: u32, name: &str) -> Ir3FunctionDesc {
         Ir3FunctionDesc {
             entry,
@@ -9649,6 +18908,7 @@ mod tests {
             frame_size: 4,
             name: Some(name.to_string()),
             is_generator: false,
+            rest_param_index: None,
         }
     }
 
@@ -9883,6 +19143,13 @@ mod tests {
             }
         }
 
+        fn with_call_action(action: HookAction) -> Self {
+            Self {
+                call_action: action,
+                ..Self::allow_all()
+            }
+        }
+
         fn records(&self) -> Vec<HookRecord> {
             self.records.lock().unwrap().clone()
         }
@@ -9954,6 +19221,60 @@ mod tests {
         }
     }
 
+    #[derive(Debug, Default)]
+    struct TypedRecordingHook {
+        keys: Mutex<Vec<HookPropertyKey>>,
+    }
+
+    impl TypedRecordingHook {
+        fn keys(&self) -> Vec<HookPropertyKey> {
+            self.keys.lock().unwrap().clone()
+        }
+    }
+
+    impl InterpreterHook for TypedRecordingHook {
+        fn pre_property_access(
+            &self,
+            _ctx: &HookContext,
+            _target: &ObjectRef,
+            _key: &PropertyKey,
+        ) -> HookAction {
+            panic!("typed property hook must not route through the legacy string callback")
+        }
+
+        fn pre_property_access_typed(
+            &self,
+            _ctx: &HookContext,
+            _target: &ObjectRef,
+            key: &HookPropertyKey,
+        ) -> Result<HookAction, HookPropertyKeyCompatibilityError> {
+            self.keys.lock().unwrap().push(key.clone());
+            Ok(HookAction::Allow)
+        }
+
+        fn pre_call(
+            &self,
+            _ctx: &HookContext,
+            _callee: &FunctionRef,
+            _args: &[Value],
+        ) -> HookAction {
+            HookAction::Allow
+        }
+
+        fn pre_allocation(
+            &self,
+            _ctx: &HookContext,
+            _kind: AllocKind,
+            _size_hint: usize,
+        ) -> HookAction {
+            HookAction::Allow
+        }
+
+        fn pre_import(&self, _ctx: &HookContext, _specifier: &str) -> HookAction {
+            HookAction::Allow
+        }
+    }
+
     #[test]
     fn interpreter_hook_called_on_property_access() {
         let hook = Arc::new(RecordingHook::allow_all());
@@ -9968,7 +19289,7 @@ mod tests {
             .properties
             .insert("secret".to_string(), Value::Int(99));
         core.registers[1] = Value::Object(oid);
-        core.registers[2] = Value::Str("secret".to_string());
+        core.registers[2] = Value::str("secret");
 
         let result = core
             .execute(&test_module(vec![
@@ -9997,12 +19318,316 @@ mod tests {
     }
 
     #[test]
+    fn typed_property_hook_default_adapter_is_lossless_bd_n8eta_4_4() {
+        let hook = RecordingHook::allow_all();
+        let ctx = HookContext {
+            extension_id: "typed-adapter".to_string(),
+            instruction_count: 3,
+            current_ip: 2,
+        };
+        let target = ObjectId(7);
+
+        assert_eq!(
+            hook.pre_property_access_typed(
+                &ctx,
+                &target,
+                &HookPropertyKey::String(JsString::from("ordinary")),
+            ),
+            Ok(HookAction::Allow)
+        );
+        assert!(matches!(
+            hook.pre_property_access_typed(
+                &ctx,
+                &target,
+                &HookPropertyKey::String(JsString::from_code_units(&[0xD800])),
+            ),
+            Err(HookPropertyKeyCompatibilityError::NonWellFormedString)
+        ));
+        assert!(matches!(
+            hook.pre_property_access_typed(&ctx, &target, &HookPropertyKey::Symbol(SymbolId(14)),),
+            Err(HookPropertyKeyCompatibilityError::Symbol)
+        ));
+        assert!(matches!(
+            hook.records().as_slice(),
+            [HookRecord::Property { key, .. }] if key == "ordinary"
+        ));
+
+        let exact = HookPropertyKey::String(JsString::from_code_units(&[0xD801]));
+        let wire = serde_json::to_string(&exact).expect("typed hook key should serialize");
+        assert_eq!(
+            serde_json::from_str::<HookPropertyKey>(&wire)
+                .expect("typed hook key should deserialize"),
+            exact
+        );
+        assert_eq!(
+            serde_json::to_string(&HookPropertyKey::Symbol(SymbolId(14)))
+                .expect("Symbol hook key should serialize"),
+            r#"{"Symbol":14}"#
+        );
+    }
+
+    #[test]
+    fn typed_property_hook_preserves_runtime_key_identity_bd_n8eta_4_4() {
+        let mut core = quickjs_test_core();
+        let object = core.alloc_object_with_prototype(None).unwrap();
+        let symbol = core
+            .allocate_private_symbol(Some(JsString::from("hook-key")))
+            .expect("Symbol allocation should succeed");
+        let symbol_diagnostic_string = JsString::from(format!("~pk~s:{}", symbol.0));
+        let exact = JsString::from_code_units(&[0xD800]);
+
+        for (key, value) in [
+            (RuntimePropertyKey::Symbol(symbol), Value::Int(41)),
+            (
+                RuntimePropertyKey::String(symbol_diagnostic_string.clone()),
+                Value::Int(42),
+            ),
+            (RuntimePropertyKey::String(exact.clone()), Value::Int(43)),
+        ] {
+            core.set_object_runtime_property(object, key, value)
+                .expect("typed test property should fit");
+        }
+
+        let legacy_hook = Arc::new(RecordingHook::allow_all());
+        core.set_hook(legacy_hook.clone());
+        core.registers[1] = Value::Object(object);
+        core.registers[2] = Value::Symbol(symbol);
+        let heap_before =
+            serde_json::to_string(&core.heap).expect("legacy hook heap should serialize");
+        assert!(matches!(
+            core.run_loop(&test_module(vec![Ir3Instruction::GetProperty {
+                obj: 1,
+                key: 2,
+                dst: 5,
+            }])),
+            Err(InterpreterError::TypeError { .. })
+        ));
+        assert!(
+            legacy_hook
+                .records_without_startup_module_record()
+                .is_empty()
+        );
+        assert_eq!(
+            serde_json::to_string(&core.heap)
+                .expect("legacy hook heap should serialize after rejection"),
+            heap_before
+        );
+
+        core.ip = 0;
+        let hook = Arc::new(TypedRecordingHook::default());
+        core.set_hook(hook.clone());
+        core.registers[2] = Value::Symbol(SymbolId(u32::MAX));
+        assert!(matches!(
+            core.run_loop(&test_module(vec![Ir3Instruction::GetProperty {
+                obj: 1,
+                key: 2,
+                dst: 5,
+            }])),
+            Err(InterpreterError::TypeError { got, .. })
+                if got.contains("unresolved Symbol id")
+        ));
+        assert!(
+            hook.keys().is_empty(),
+            "typed hook must not observe unresolved Symbol identity"
+        );
+
+        core.ip = 0;
+        core.registers[2] = Value::Symbol(symbol);
+        core.registers[3] = Value::Str(symbol_diagnostic_string.clone());
+        core.registers[4] = Value::Str(exact.clone());
+        core.registers[9] = Value::Int(99);
+        assert!(matches!(
+            core.run_loop(&test_module(vec![
+                Ir3Instruction::GetProperty {
+                    obj: 1,
+                    key: 2,
+                    dst: 5,
+                },
+                Ir3Instruction::GetProperty {
+                    obj: 1,
+                    key: 3,
+                    dst: 6,
+                },
+                Ir3Instruction::GetProperty {
+                    obj: 1,
+                    key: 4,
+                    dst: 7,
+                },
+                Ir3Instruction::InOp {
+                    dst: 8,
+                    lhs: 2,
+                    rhs: 1,
+                },
+                Ir3Instruction::SetProperty {
+                    obj: 1,
+                    key: 2,
+                    val: 9,
+                },
+                Ir3Instruction::GetProperty {
+                    obj: 1,
+                    key: 2,
+                    dst: 10,
+                },
+                Ir3Instruction::DeleteProperty {
+                    obj: 1,
+                    key: 2,
+                    dst: 11,
+                },
+                Ir3Instruction::Halt,
+            ])),
+            Err(InterpreterError::Halted)
+        ));
+
+        assert_eq!(core.read_reg(5), Ok(Value::Int(41)));
+        assert_eq!(core.read_reg(6), Ok(Value::Int(42)));
+        assert_eq!(core.read_reg(7), Ok(Value::Int(43)));
+        assert_eq!(core.read_reg(8), Ok(Value::Bool(true)));
+        assert_eq!(core.read_reg(10), Ok(Value::Int(99)));
+        assert_eq!(core.read_reg(11), Ok(Value::Bool(true)));
+        assert_eq!(
+            hook.keys(),
+            vec![
+                HookPropertyKey::Symbol(symbol),
+                HookPropertyKey::String(symbol_diagnostic_string),
+                HookPropertyKey::String(exact),
+                HookPropertyKey::Symbol(symbol),
+                HookPropertyKey::Symbol(symbol),
+                HookPropertyKey::Symbol(symbol),
+                HookPropertyKey::Symbol(symbol),
+            ]
+        );
+    }
+
+    #[test]
+    fn exact_keys_respect_legacy_string_callback_boundary_bd_b12xs_4() {
+        let d800 = JsString::from_code_units(&[0xD800]);
+        let module = test_module(Vec::new());
+
+        let mut unhooked = quickjs_test_core();
+        let unhooked_object = unhooked.alloc_object_with_prototype(None).unwrap();
+        unhooked
+            .set_object_property_or_call_accessor(
+                &module,
+                Value::Object(unhooked_object),
+                unhooked_object,
+                RuntimePropertyKey::String(d800.clone()),
+                Value::Int(8),
+            )
+            .unwrap();
+        assert_eq!(
+            unhooked
+                .prototype_chain_lookup_runtime_property(
+                    unhooked_object,
+                    &RuntimePropertyKey::String(d800.clone()),
+                )
+                .unwrap(),
+            Some(RuntimeProperty::Data(Value::Int(8)))
+        );
+
+        let hook = Arc::new(RecordingHook::allow_all());
+        let mut core = quickjs_test_core();
+        let object = core.alloc_object_with_prototype(None).unwrap();
+        core.set_hook(hook.clone());
+        let heap_before = serde_json::to_string(&core.heap).unwrap();
+        let memory_before = core.estimated_memory_bytes();
+
+        let error = core
+            .set_object_property_or_call_accessor(
+                &module,
+                Value::Object(object),
+                object,
+                RuntimePropertyKey::String(d800.clone()),
+                Value::Int(8),
+            )
+            .unwrap_err();
+        assert!(matches!(error, InterpreterError::TypeError { .. }));
+        assert!(hook.records().is_empty());
+        assert_eq!(serde_json::to_string(&core.heap).unwrap(), heap_before);
+        assert_eq!(core.estimated_memory_bytes(), memory_before);
+
+        assert!(matches!(
+            core.load_object_property_or_call_accessor(
+                &module,
+                Value::Object(object),
+                object,
+                &RuntimePropertyKey::String(d800.clone()),
+                0,
+            ),
+            Err(InterpreterError::TypeError { .. })
+        ));
+        assert!(hook.records().is_empty());
+        assert_eq!(serde_json::to_string(&core.heap).unwrap(), heap_before);
+
+        core.registers[1] = Value::Str(d800.clone());
+        core.registers[2] = Value::Object(object);
+        assert!(matches!(
+            core.eval_in_operator(&module, 1, 2),
+            Err(InterpreterError::TypeError { .. })
+        ));
+        assert!(hook.records().is_empty());
+        assert_eq!(serde_json::to_string(&core.heap).unwrap(), heap_before);
+
+        let function_objects_before = core.function_objects.clone();
+        assert!(matches!(
+            core.set_function_like_property_or_call_accessor(
+                &module,
+                Value::Function(0),
+                &RuntimePropertyKey::String(d800),
+                Value::Int(9),
+            ),
+            Err(InterpreterError::TypeError { .. })
+        ));
+        assert!(hook.records().is_empty());
+        assert_eq!(core.function_objects, function_objects_before);
+        assert_eq!(serde_json::to_string(&core.heap).unwrap(), heap_before);
+        assert_eq!(core.estimated_memory_bytes(), memory_before);
+
+        core.set_object_property_or_call_accessor(
+            &module,
+            Value::Object(object),
+            object,
+            RuntimePropertyKey::String(JsString::from("\u{FFFD}")),
+            Value::Int(0xFFFD),
+        )
+        .unwrap();
+        assert_eq!(hook.records().len(), 1);
+        assert!(matches!(
+            &hook.records()[0],
+            HookRecord::Property { key, .. } if key == "\u{FFFD}"
+        ));
+
+        let primitive_hook = Arc::new(RecordingHook::allow_all());
+        let mut primitive_core = quickjs_test_core();
+        primitive_core.set_hook(primitive_hook.clone());
+        primitive_core.registers[1] = Value::str("receiver");
+        primitive_core.registers[2] = Value::Str(JsString::from_code_units(&[0xD800]));
+        assert!(matches!(
+            primitive_core.execute(&test_module(vec![
+                Ir3Instruction::GetProperty {
+                    obj: 1,
+                    key: 2,
+                    dst: 3,
+                },
+                Ir3Instruction::Halt,
+            ])),
+            Err(InterpreterError::TypeError { .. })
+        ));
+        assert!(
+            primitive_hook
+                .records_without_startup_module_record()
+                .is_empty()
+        );
+        assert_eq!(primitive_core.registers[3], Value::Undefined);
+    }
+
+    #[test]
     fn interpreter_hook_called_on_call() {
         let hook = Arc::new(RecordingHook::allow_all());
         let config = test_quickjs_config();
         let mut core = InterpreterCore::new(config, "test-trace");
         core.set_hook(hook.clone());
         core.registers[1] = Value::Int(5);
+        core.registers[2] = Value::Int(99);
         core.registers[3] = Value::Function(0);
 
         let result = core
@@ -10010,7 +19635,7 @@ mod tests {
                 vec![
                     Ir3Instruction::Call {
                         callee: 3,
-                        args: RegRange { start: 1, count: 1 },
+                        args: RegRange { start: 1, count: 2 },
                         dst: 0,
                     },
                     Ir3Instruction::Halt,
@@ -10022,6 +19647,7 @@ mod tests {
                     frame_size: 2,
                     name: Some("identity".to_string()),
                     is_generator: false,
+                    rest_param_index: None,
                 }],
             ))
             .unwrap();
@@ -10070,6 +19696,7 @@ mod tests {
                     frame_size: 1,
                     name: Some("return_this".to_string()),
                     is_generator: false,
+                    rest_param_index: None,
                 }],
             ))
             .unwrap();
@@ -10100,6 +19727,7 @@ mod tests {
                     frame_size: 1,
                     name: Some("return_this".to_string()),
                     is_generator: false,
+                    rest_param_index: None,
                 }],
             ))
             .unwrap();
@@ -10159,6 +19787,7 @@ mod tests {
                     frame_size: 1,
                     name: Some("closure_target".to_string()),
                     is_generator: false,
+                    rest_param_index: None,
                 }],
             ))
             .unwrap();
@@ -10187,7 +19816,7 @@ mod tests {
 
         let oid = core.alloc_object_with_prototype(None).unwrap();
         core.registers[1] = Value::Object(oid);
-        core.registers[2] = Value::Str("key".to_string());
+        core.registers[2] = Value::str("key");
         core.registers[3] = Value::Int(7);
 
         let result = core
@@ -10233,7 +19862,7 @@ mod tests {
     }
 
     #[test]
-    fn lane_execute_with_hook_preserves_requested_containment_in_result() {
+    fn lane_execute_with_hook_preserves_requested_containment_in_result_bd_ur3tk_17() {
         let hook = Arc::new(RecordingHook::with_allocation_action(
             HookAction::Terminate("policy denied object allocation".to_string()),
         ));
@@ -10253,6 +19882,7 @@ mod tests {
             ))
         );
         assert_eq!(result.value, Value::Undefined);
+        assert_eq!(result.completion_label, crate::ifc_artifacts::Label::Public);
         assert_eq!(result.instructions_executed, 0);
     }
 
@@ -10265,7 +19895,7 @@ mod tests {
             .properties
             .insert("stable".to_string(), Value::Int(12));
         core.registers[1] = Value::Object(oid);
-        core.registers[2] = Value::Str("stable".to_string());
+        core.registers[2] = Value::str("stable");
 
         let result = core
             .execute(&test_module(vec![
@@ -10364,7 +19994,76 @@ mod tests {
             vec!["hello".to_string()],
         );
         let result = quickjs_execute(&m).unwrap();
-        assert_eq!(result.value, Value::Str("hello".to_string()));
+        assert_eq!(result.value, Value::str("hello"));
+    }
+
+    #[test]
+    fn load_str_preserves_lone_surrogate_constant_bd_vltnh() {
+        let exact = JsString::from_code_units(&[0xD800]);
+        let mut module = test_module(vec![
+            Ir3Instruction::LoadStr {
+                dst: 0,
+                pool_index: 0,
+            },
+            Ir3Instruction::Halt,
+        ]);
+        module.constant_pool.push(exact.clone());
+
+        let result = quickjs_execute(&module).unwrap();
+        assert_eq!(result.value, Value::Str(exact));
+    }
+
+    #[test]
+    fn metadata_pool_consumers_reject_lone_surrogate_entries_bd_vltnh() {
+        for instruction in [
+            Ir3Instruction::PushCapture { name_pool_index: 0 },
+            Ir3Instruction::DeclareBinding {
+                name_pool_index: 0,
+                kind: BindingKind::Let as u8,
+            },
+        ] {
+            let mut module = test_module(vec![instruction, Ir3Instruction::Halt]);
+            module
+                .constant_pool
+                .push(JsString::from_code_units(&[0xD800]));
+
+            let error = quickjs_execute(&module).unwrap_err();
+            assert!(matches!(error, InterpreterError::TypeError { .. }));
+        }
+    }
+
+    #[test]
+    fn filesystem_module_boundary_rejects_distinct_lone_surrogates_bd_lfq44() {
+        let ordinary = JsString::from("./fixture.js");
+        assert_eq!(
+            InterpreterCore::filesystem_module_specifier(&ordinary).unwrap(),
+            "./fixture.js"
+        );
+
+        let d800 = JsString::from_code_units(&[0xD800]);
+        let dc00 = JsString::from_code_units(&[0xDC00]);
+        assert_ne!(d800, dc00);
+        assert_eq!(d800.as_utf8_projection(), dc00.as_utf8_projection());
+
+        for exact in [d800, dc00] {
+            let error = InterpreterCore::filesystem_module_specifier(&exact).unwrap_err();
+            assert!(matches!(error, InterpreterError::TypeError { .. }));
+
+            let mut module = test_module(vec![
+                Ir3Instruction::LoadStr {
+                    dst: 0,
+                    pool_index: 0,
+                },
+                Ir3Instruction::ImportModule {
+                    specifier: 0,
+                    dst: 1,
+                },
+                Ir3Instruction::Halt,
+            ]);
+            module.constant_pool.push(exact);
+            let error = quickjs_execute(&module).unwrap_err();
+            assert!(matches!(error, InterpreterError::TypeError { .. }));
+        }
     }
 
     #[test]
@@ -10442,7 +20141,7 @@ mod tests {
             vec!["hello".to_string(), " world".to_string()],
         );
         let result = quickjs_execute(&m).unwrap();
-        assert_eq!(result.value, Value::Str("hello world".to_string()));
+        assert_eq!(result.value, Value::str("hello world"));
     }
 
     #[test]
@@ -10608,6 +20307,7 @@ mod tests {
                 frame_size: 3,
                 name: Some("add_ten".to_string()),
                 is_generator: false,
+                rest_param_index: None,
             }],
         );
 
@@ -10619,6 +20319,2455 @@ mod tests {
         core.registers[1] = Value::Int(5);
         let result = core.execute(&m).unwrap();
         assert_eq!(result.value, Value::Int(15));
+    }
+
+    #[test]
+    fn plain_call_secret_argument_returns_secret_bd_ur3tk_6() {
+        let module = test_module_with_functions(
+            vec![
+                Ir3Instruction::Call {
+                    callee: 0,
+                    args: RegRange { start: 1, count: 1 },
+                    dst: 2,
+                },
+                Ir3Instruction::Return { value: 2 },
+                Ir3Instruction::Return { value: 0 },
+            ],
+            vec![Ir3FunctionDesc {
+                entry: 2,
+                arity: 1,
+                frame_size: 1,
+                name: Some("identity".to_string()),
+                is_generator: false,
+                rest_param_index: None,
+            }],
+        );
+        let mut core = quickjs_test_core();
+        core.registers[0] = Value::Function(0);
+        core.write_reg_with_label(
+            1,
+            Value::str("secret-argument"),
+            crate::ifc_artifacts::Label::Secret,
+        )
+        .expect("secret argument should be writable");
+
+        assert_eq!(
+            core.run_loop(&module).expect("identity call should return"),
+            Value::str("secret-argument")
+        );
+        assert_eq!(
+            core.read_reg_label(2).expect("caller return label"),
+            crate::ifc_artifacts::Label::Secret
+        );
+    }
+
+    #[test]
+    fn plain_call_label_frames_do_not_alias_bd_ur3tk_6() {
+        let module = test_module_with_functions(
+            vec![
+                Ir3Instruction::Call {
+                    callee: 0,
+                    args: RegRange { start: 0, count: 0 },
+                    dst: 1,
+                },
+                Ir3Instruction::Return { value: 1 },
+                Ir3Instruction::Return { value: 7 },
+            ],
+            vec![Ir3FunctionDesc {
+                entry: 2,
+                arity: 0,
+                frame_size: 8,
+                name: Some("return_fresh_r7".to_string()),
+                is_generator: false,
+                rest_param_index: None,
+            }],
+        );
+        let mut core = quickjs_test_core();
+        core.registers[0] = Value::Function(0);
+        core.write_reg_with_label(
+            7,
+            Value::str("caller-only"),
+            crate::ifc_artifacts::Label::Confidential,
+        )
+        .expect("caller label should be writable");
+        core.write_reg_with_label(
+            1,
+            Value::str("stale-destination"),
+            crate::ifc_artifacts::Label::Secret,
+        )
+        .expect("stale destination should be writable");
+
+        assert_eq!(
+            core.run_loop(&module)
+                .expect("fresh callee frame should return"),
+            Value::Undefined
+        );
+        assert_eq!(
+            core.read_reg_label(1).expect("public return label"),
+            crate::ifc_artifacts::Label::Public
+        );
+        assert_eq!(
+            core.read_reg_label(7).expect("preserved caller label"),
+            crate::ifc_artifacts::Label::Confidential
+        );
+    }
+
+    #[test]
+    fn nested_plain_calls_preserve_labels_across_two_frames_bd_ur3tk_6() {
+        let module = test_module_with_functions(
+            vec![
+                Ir3Instruction::Call {
+                    callee: 0,
+                    args: RegRange { start: 1, count: 2 },
+                    dst: 3,
+                },
+                Ir3Instruction::Return { value: 3 },
+                Ir3Instruction::Call {
+                    callee: 0,
+                    args: RegRange { start: 1, count: 1 },
+                    dst: 2,
+                },
+                Ir3Instruction::Return { value: 2 },
+                Ir3Instruction::Return { value: 0 },
+            ],
+            vec![
+                Ir3FunctionDesc {
+                    entry: 2,
+                    arity: 2,
+                    frame_size: 3,
+                    name: Some("outer_identity".to_string()),
+                    is_generator: false,
+                    rest_param_index: None,
+                },
+                Ir3FunctionDesc {
+                    entry: 4,
+                    arity: 1,
+                    frame_size: 1,
+                    name: Some("inner_identity".to_string()),
+                    is_generator: false,
+                    rest_param_index: None,
+                },
+            ],
+        );
+        let mut core = quickjs_test_core();
+        core.registers[0] = Value::Function(0);
+        core.registers[1] = Value::Function(1);
+        core.write_reg_with_label(
+            2,
+            Value::str("nested-secret"),
+            crate::ifc_artifacts::Label::Secret,
+        )
+        .expect("nested argument should be writable");
+
+        assert_eq!(
+            core.run_loop(&module).expect("nested calls should return"),
+            Value::str("nested-secret")
+        );
+        assert_eq!(
+            core.read_reg_label(3).expect("nested return label"),
+            crate::ifc_artifacts::Label::Secret
+        );
+    }
+
+    #[test]
+    fn call_method_load_this_preserves_receiver_label_bd_ur3tk_6() {
+        let module = test_module_with_functions(
+            vec![
+                Ir3Instruction::CallMethod {
+                    receiver: 0,
+                    callee: 1,
+                    args: RegRange { start: 2, count: 0 },
+                    dst: 2,
+                },
+                Ir3Instruction::Return { value: 2 },
+                Ir3Instruction::LoadThis { dst: 0 },
+                Ir3Instruction::Return { value: 0 },
+            ],
+            vec![Ir3FunctionDesc {
+                entry: 2,
+                arity: 0,
+                frame_size: 1,
+                name: Some("return_this".to_string()),
+                is_generator: false,
+                rest_param_index: None,
+            }],
+        );
+        let mut core = quickjs_test_core();
+        core.write_reg_with_label(
+            0,
+            Value::str("secret-receiver"),
+            crate::ifc_artifacts::Label::Secret,
+        )
+        .expect("receiver should be writable");
+        core.registers[1] = Value::Function(0);
+
+        assert_eq!(
+            core.run_loop(&module).expect("method should return this"),
+            Value::str("secret-receiver")
+        );
+        assert_eq!(
+            core.read_reg_label(2).expect("method return label"),
+            crate::ifc_artifacts::Label::Secret
+        );
+    }
+
+    #[test]
+    fn call_method_argument_preserves_label_bd_ur3tk_6() {
+        let module = test_module_with_functions(
+            vec![
+                Ir3Instruction::CallMethod {
+                    receiver: 0,
+                    callee: 1,
+                    args: RegRange { start: 2, count: 1 },
+                    dst: 3,
+                },
+                Ir3Instruction::Return { value: 3 },
+                Ir3Instruction::Return { value: 0 },
+            ],
+            vec![Ir3FunctionDesc {
+                entry: 2,
+                arity: 1,
+                frame_size: 1,
+                name: Some("return_argument".to_string()),
+                is_generator: false,
+                rest_param_index: None,
+            }],
+        );
+        let mut core = quickjs_test_core();
+        core.registers[0] = Value::str("public-receiver");
+        core.registers[1] = Value::Function(0);
+        core.write_reg_with_label(
+            2,
+            Value::str("secret-argument"),
+            crate::ifc_artifacts::Label::Secret,
+        )
+        .expect("argument should be writable");
+
+        assert_eq!(
+            core.run_loop(&module)
+                .expect("method should return argument"),
+            Value::str("secret-argument")
+        );
+        assert_eq!(
+            core.read_reg_label(3).expect("method result label"),
+            crate::ifc_artifacts::Label::Secret
+        );
+    }
+
+    #[test]
+    fn nested_frame_move_preserves_argument_and_return_label_bd_ur3tk_11() {
+        let module = test_module_with_functions(
+            vec![
+                Ir3Instruction::Call {
+                    callee: 0,
+                    args: RegRange { start: 1, count: 1 },
+                    dst: 2,
+                },
+                Ir3Instruction::Return { value: 2 },
+                Ir3Instruction::Move { dst: 1, src: 0 },
+                Ir3Instruction::Return { value: 1 },
+            ],
+            vec![Ir3FunctionDesc {
+                entry: 2,
+                arity: 1,
+                frame_size: 2,
+                name: Some("move_identity".to_string()),
+                is_generator: false,
+                rest_param_index: None,
+            }],
+        );
+        let mut core = quickjs_test_core();
+        core.registers[0] = Value::Function(0);
+        core.write_reg_with_label(
+            1,
+            Value::str("secret-through-move"),
+            crate::ifc_artifacts::Label::Secret,
+        )
+        .expect("secret argument should be writable");
+
+        assert_eq!(
+            core.run_loop(&module).expect("Move identity should return"),
+            Value::str("secret-through-move")
+        );
+        assert_eq!(
+            core.read_reg_label(2).expect("caller Move return label"),
+            crate::ifc_artifacts::Label::Secret
+        );
+    }
+
+    #[test]
+    fn move_is_self_safe_and_overwrites_destination_label_bd_ur3tk_11() {
+        let module = test_module(vec![
+            Ir3Instruction::Move { dst: 0, src: 0 },
+            Ir3Instruction::Move { dst: 1, src: 2 },
+            Ir3Instruction::Return { value: 1 },
+        ]);
+        let mut core = quickjs_test_core();
+        core.write_reg_with_label(
+            0,
+            Value::str("self-secret"),
+            crate::ifc_artifacts::Label::Secret,
+        )
+        .expect("self-Move source should be writable");
+        core.write_reg_with_label(
+            1,
+            Value::str("stale-secret"),
+            crate::ifc_artifacts::Label::Secret,
+        )
+        .expect("destination should be writable");
+        core.registers[2] = Value::str("public-source");
+
+        assert_eq!(
+            core.run_loop(&module).expect("Move sequence should return"),
+            Value::str("public-source")
+        );
+        assert_eq!(
+            core.read_reg_label(0).expect("self-Move label"),
+            crate::ifc_artifacts::Label::Secret
+        );
+        assert_eq!(
+            core.read_reg_label(1)
+                .expect("overwritten destination label"),
+            crate::ifc_artifacts::Label::Public
+        );
+    }
+
+    #[test]
+    fn scoped_binding_init_store_and_load_preserve_labels_bd_ur3tk_11() {
+        let module = test_module_with_pool(
+            vec![
+                Ir3Instruction::DeclareBinding {
+                    name_pool_index: 0,
+                    kind: BindingKind::Let as u8,
+                },
+                Ir3Instruction::InitBinding {
+                    name_pool_index: 0,
+                    src: 0,
+                },
+                Ir3Instruction::LoadScoped {
+                    dst: 1,
+                    name_pool_index: 0,
+                },
+                Ir3Instruction::DeclareBinding {
+                    name_pool_index: 1,
+                    kind: BindingKind::Var as u8,
+                },
+                Ir3Instruction::StoreScoped {
+                    src: 2,
+                    name_pool_index: 1,
+                },
+                Ir3Instruction::LoadScoped {
+                    dst: 3,
+                    name_pool_index: 1,
+                },
+                Ir3Instruction::StoreScoped {
+                    src: 4,
+                    name_pool_index: 1,
+                },
+                Ir3Instruction::LoadScoped {
+                    dst: 5,
+                    name_pool_index: 1,
+                },
+                Ir3Instruction::Return { value: 3 },
+            ],
+            vec!["initialized".to_string(), "stored".to_string()],
+        );
+        let mut core = quickjs_test_core();
+        core.write_reg_with_label(
+            0,
+            Value::str("initialized-secret"),
+            crate::ifc_artifacts::Label::Secret,
+        )
+        .expect("InitBinding source should be writable");
+        core.write_reg_with_label(
+            2,
+            Value::str("stored-confidential"),
+            crate::ifc_artifacts::Label::Confidential,
+        )
+        .expect("StoreScoped source should be writable");
+        core.registers[4] = Value::str("public-overwrite");
+
+        assert_eq!(
+            core.run_loop(&module)
+                .expect("scope transfers should return"),
+            Value::str("stored-confidential")
+        );
+        assert_eq!(
+            core.read_reg_label(1).expect("initialized binding label"),
+            crate::ifc_artifacts::Label::Secret
+        );
+        assert_eq!(
+            core.read_reg_label(3).expect("stored binding label"),
+            crate::ifc_artifacts::Label::Confidential
+        );
+        assert_eq!(
+            core.read_reg_label(5).expect("overwritten binding label"),
+            crate::ifc_artifacts::Label::Public
+        );
+    }
+
+    #[test]
+    fn caught_const_store_scoped_error_is_type_error_bd_dp12f() {
+        let module = test_module_with_pool(
+            vec![
+                Ir3Instruction::LoadInt { dst: 0, value: 1 },
+                Ir3Instruction::DeclareBinding {
+                    name_pool_index: 0,
+                    kind: BindingKind::Const as u8,
+                },
+                Ir3Instruction::InitBinding {
+                    name_pool_index: 0,
+                    src: 0,
+                },
+                Ir3Instruction::LoadInt { dst: 1, value: 2 },
+                Ir3Instruction::BeginTry {
+                    catch_target: 7,
+                    finally_target: None,
+                },
+                Ir3Instruction::StoreScoped {
+                    src: 1,
+                    name_pool_index: 0,
+                },
+                Ir3Instruction::EndTry,
+                Ir3Instruction::EnterCatch { dst: 2 },
+                Ir3Instruction::Return { value: 2 },
+            ],
+            vec!["fixed".to_string()],
+        );
+        let mut core = quickjs_test_core();
+
+        let caught = core
+            .run_loop(&module)
+            .expect("const assignment should enter the active catch");
+        let Value::Object(error_id) = caught else {
+            panic!("expected materialized TypeError object, got {caught:?}");
+        };
+        assert_eq!(
+            core.heap[error_id.0 as usize].properties.get("name"),
+            Some(&Value::str("TypeError"))
+        );
+        let (_, binding) = core
+            .scope_chain
+            .resolve("fixed")
+            .expect("const binding should remain present");
+        assert_eq!(binding.value().unwrap(), Value::Int(1));
+    }
+
+    #[test]
+    fn caught_uninitialized_store_scoped_error_is_reference_error_bd_dp12f() {
+        let module = test_module_with_pool(
+            vec![
+                Ir3Instruction::DeclareBinding {
+                    name_pool_index: 0,
+                    kind: BindingKind::Let as u8,
+                },
+                Ir3Instruction::LoadInt { dst: 0, value: 2 },
+                Ir3Instruction::BeginTry {
+                    catch_target: 5,
+                    finally_target: None,
+                },
+                Ir3Instruction::StoreScoped {
+                    src: 0,
+                    name_pool_index: 0,
+                },
+                Ir3Instruction::EndTry,
+                Ir3Instruction::EnterCatch { dst: 1 },
+                Ir3Instruction::Return { value: 1 },
+            ],
+            vec!["future".to_string()],
+        );
+        let mut core = quickjs_test_core();
+
+        let caught = core
+            .run_loop(&module)
+            .expect("TDZ assignment should enter the active catch");
+        let Value::Object(error_id) = caught else {
+            panic!("expected materialized ReferenceError object, got {caught:?}");
+        };
+        assert_eq!(
+            core.heap[error_id.0 as usize].properties.get("name"),
+            Some(&Value::str("ReferenceError"))
+        );
+        let (_, binding) = core
+            .scope_chain
+            .resolve("future")
+            .expect("TDZ binding should remain present");
+        assert!(!binding.state().unwrap().initialized);
+    }
+
+    #[test]
+    fn caught_uninitialized_load_scoped_error_is_reference_error_bd_mfcww() {
+        let module = test_module_with_pool(
+            vec![
+                Ir3Instruction::LoadInt { dst: 0, value: 41 },
+                Ir3Instruction::DeclareBinding {
+                    name_pool_index: 0,
+                    kind: BindingKind::Let as u8,
+                },
+                Ir3Instruction::BeginTry {
+                    catch_target: 5,
+                    finally_target: None,
+                },
+                Ir3Instruction::LoadScoped {
+                    dst: 0,
+                    name_pool_index: 0,
+                },
+                Ir3Instruction::EndTry,
+                Ir3Instruction::EnterCatch { dst: 1 },
+                Ir3Instruction::Halt,
+            ],
+            vec!["future".to_string()],
+        );
+        let mut core = quickjs_test_core();
+
+        let halted = core
+            .run_loop(&module)
+            .expect_err("test should stop immediately after entering catch");
+        assert_eq!(halted, InterpreterError::Halted);
+        let caught = core.registers[1].clone();
+        let Value::Object(error_id) = caught else {
+            panic!("expected materialized ReferenceError object, got {caught:?}");
+        };
+        assert_eq!(
+            core.heap[error_id.0 as usize].properties.get("name"),
+            Some(&Value::str("ReferenceError"))
+        );
+        assert_eq!(core.registers[0], Value::Int(41));
+        let (_, binding) = core
+            .scope_chain
+            .resolve("future")
+            .expect("TDZ binding should remain present");
+        assert!(!binding.state().unwrap().initialized);
+        assert!(core.catch_frames.is_empty());
+        assert!(core.pending_exception.is_none());
+        assert!(core.pending_return.is_none());
+        assert!(core.pending_finally_entry.is_none());
+        assert!(core.finally_frames.is_empty());
+        assert!(core.suspended_abrupt_completions.is_empty());
+    }
+
+    #[test]
+    fn uncaught_uninitialized_load_scoped_preserves_native_error_and_state_bd_mfcww() {
+        let module = test_module_with_pool(
+            vec![
+                Ir3Instruction::LoadInt { dst: 0, value: 41 },
+                Ir3Instruction::DeclareBinding {
+                    name_pool_index: 0,
+                    kind: BindingKind::Let as u8,
+                },
+                Ir3Instruction::LoadScoped {
+                    dst: 0,
+                    name_pool_index: 0,
+                },
+            ],
+            vec!["future".to_string()],
+        );
+        let mut core = quickjs_test_core();
+        let heap_len_before = core.heap.len();
+
+        let error = core
+            .run_loop(&module)
+            .expect_err("uncaught TDZ read should remain a native error");
+        assert_eq!(
+            error,
+            InterpreterError::UninitializedBinding {
+                name: "future".to_string()
+            }
+        );
+        assert_eq!(core.heap.len(), heap_len_before);
+        assert_eq!(core.registers[0], Value::Int(41));
+        let (_, binding) = core
+            .scope_chain
+            .resolve("future")
+            .expect("TDZ binding should remain present");
+        assert!(!binding.state().unwrap().initialized);
+    }
+
+    #[test]
+    fn uncaught_const_store_scoped_preserves_native_error_and_heap_bd_dp12f() {
+        let module = test_module_with_pool(
+            vec![
+                Ir3Instruction::LoadInt { dst: 0, value: 1 },
+                Ir3Instruction::DeclareBinding {
+                    name_pool_index: 0,
+                    kind: BindingKind::Const as u8,
+                },
+                Ir3Instruction::InitBinding {
+                    name_pool_index: 0,
+                    src: 0,
+                },
+                Ir3Instruction::LoadInt { dst: 1, value: 2 },
+                Ir3Instruction::StoreScoped {
+                    src: 1,
+                    name_pool_index: 0,
+                },
+            ],
+            vec!["fixed".to_string()],
+        );
+        let mut core = quickjs_test_core();
+        let heap_len_before = core.heap.len();
+
+        let error = core
+            .run_loop(&module)
+            .expect_err("uncaught const assignment should remain a native error");
+        assert_eq!(
+            error,
+            InterpreterError::ConstAssignment {
+                name: "fixed".to_string()
+            }
+        );
+        assert_eq!(core.heap.len(), heap_len_before);
+        let (_, binding) = core
+            .scope_chain
+            .resolve("fixed")
+            .expect("const binding should remain present");
+        assert_eq!(binding.value().unwrap(), Value::Int(1));
+    }
+
+    #[test]
+    fn return_label_survives_finally_nested_call_bd_ur3tk_2() {
+        let module = test_module_with_functions(
+            vec![
+                Ir3Instruction::Call {
+                    callee: 0,
+                    args: RegRange { start: 1, count: 2 },
+                    dst: 3,
+                },
+                Ir3Instruction::Return { value: 3 },
+                Ir3Instruction::BeginTry {
+                    catch_target: 4,
+                    finally_target: Some(4),
+                },
+                Ir3Instruction::Return { value: 0 },
+                Ir3Instruction::EnterFinally,
+                Ir3Instruction::Call {
+                    callee: 1,
+                    args: RegRange { start: 0, count: 0 },
+                    dst: 2,
+                },
+                Ir3Instruction::EndFinally,
+                Ir3Instruction::Return { value: 0 },
+            ],
+            vec![
+                Ir3FunctionDesc {
+                    entry: 2,
+                    arity: 2,
+                    frame_size: 3,
+                    name: Some("return_through_finally".to_string()),
+                    is_generator: false,
+                    rest_param_index: None,
+                },
+                Ir3FunctionDesc {
+                    entry: 7,
+                    arity: 0,
+                    frame_size: 1,
+                    name: Some("finally_helper".to_string()),
+                    is_generator: false,
+                    rest_param_index: None,
+                },
+            ],
+        );
+        let mut core = quickjs_test_core();
+        core.registers[0] = Value::Function(0);
+        core.write_reg_with_label(
+            1,
+            Value::str("secret-through-finally"),
+            crate::ifc_artifacts::Label::Secret,
+        )
+        .expect("secret return argument should be writable");
+        core.registers[2] = Value::Function(1);
+
+        assert_eq!(
+            core.run_loop(&module)
+                .expect("finally return should survive nested helper call"),
+            Value::str("secret-through-finally")
+        );
+        assert_eq!(
+            core.read_reg_label(3).expect("caller return label"),
+            crate::ifc_artifacts::Label::Secret
+        );
+    }
+
+    #[test]
+    fn nested_finally_return_override_keeps_new_label_bd_ur3tk_2() {
+        let module = test_module_with_functions(
+            vec![
+                Ir3Instruction::Call {
+                    callee: 0,
+                    args: RegRange { start: 1, count: 2 },
+                    dst: 3,
+                },
+                Ir3Instruction::Return { value: 3 },
+                Ir3Instruction::BeginTry {
+                    catch_target: 8,
+                    finally_target: Some(8),
+                },
+                Ir3Instruction::BeginTry {
+                    catch_target: 5,
+                    finally_target: Some(5),
+                },
+                Ir3Instruction::Return { value: 1 },
+                Ir3Instruction::EnterFinally,
+                Ir3Instruction::Return { value: 0 },
+                Ir3Instruction::EndFinally,
+                Ir3Instruction::EnterFinally,
+                Ir3Instruction::EndFinally,
+            ],
+            vec![Ir3FunctionDesc {
+                entry: 2,
+                arity: 2,
+                frame_size: 2,
+                name: Some("nested_finally_override".to_string()),
+                is_generator: false,
+                rest_param_index: None,
+            }],
+        );
+        let mut core = quickjs_test_core();
+        core.registers[0] = Value::Function(0);
+        core.write_reg_with_label(
+            1,
+            Value::str("secret-override"),
+            crate::ifc_artifacts::Label::Secret,
+        )
+        .expect("secret overriding return should be writable");
+        core.registers[2] = Value::str("public-initial-return");
+
+        assert_eq!(
+            core.run_loop(&module)
+                .expect("inner finally return should override outer completion"),
+            Value::str("secret-override")
+        );
+        assert_eq!(
+            core.read_reg_label(3).expect("overriding return label"),
+            crate::ifc_artifacts::Label::Secret
+        );
+    }
+
+    #[test]
+    fn caught_throw_restores_suspended_return_label_bd_ur3tk_2() {
+        let module = test_module_with_functions(
+            vec![
+                Ir3Instruction::Call {
+                    callee: 0,
+                    args: RegRange { start: 1, count: 2 },
+                    dst: 3,
+                },
+                Ir3Instruction::Return { value: 3 },
+                Ir3Instruction::BeginTry {
+                    catch_target: 4,
+                    finally_target: Some(4),
+                },
+                Ir3Instruction::Return { value: 0 },
+                Ir3Instruction::EnterFinally,
+                Ir3Instruction::BeginTry {
+                    catch_target: 7,
+                    finally_target: None,
+                },
+                Ir3Instruction::Throw { value: 1 },
+                Ir3Instruction::EnterCatch { dst: 2 },
+                Ir3Instruction::EndFinally,
+            ],
+            vec![Ir3FunctionDesc {
+                entry: 2,
+                arity: 2,
+                frame_size: 3,
+                name: Some("caught_throw_during_finally".to_string()),
+                is_generator: false,
+                rest_param_index: None,
+            }],
+        );
+        let mut core = quickjs_test_core();
+        core.registers[0] = Value::Function(0);
+        core.write_reg_with_label(
+            1,
+            Value::str("secret-suspended-return"),
+            crate::ifc_artifacts::Label::Secret,
+        )
+        .expect("secret pending return should be writable");
+        core.registers[2] = Value::str("public-local-throw");
+
+        assert_eq!(
+            core.run_loop(&module)
+                .expect("caught throw should restore the suspended return"),
+            Value::str("secret-suspended-return")
+        );
+        assert_eq!(
+            core.read_reg_label(3)
+                .expect("restored suspended return label"),
+            crate::ifc_artifacts::Label::Secret
+        );
+    }
+
+    #[test]
+    fn module_snapshot_round_trips_labeled_returns_bd_ur3tk_2() {
+        let mut core = quickjs_test_core();
+        let pending = LabeledReturn {
+            value: Value::str("pending"),
+            label: crate::ifc_artifacts::Label::Secret,
+        };
+        let suspended = LabeledReturn {
+            value: Value::str("suspended"),
+            label: crate::ifc_artifacts::Label::Custom {
+                name: "tenant-return".to_string(),
+                level: 4,
+            },
+        };
+        core.pending_return = Some(pending.clone());
+        core.suspended_abrupt_completions
+            .push(AbruptCompletion::Return(suspended.clone()));
+        let snapshot = core.snapshot_module_execution();
+
+        core.pending_return = None;
+        core.suspended_abrupt_completions.clear();
+        core.restore_module_execution(snapshot);
+
+        assert_eq!(core.pending_return, Some(pending));
+        assert!(matches!(
+            core.suspended_abrupt_completions.as_slice(),
+            [AbruptCompletion::Return(restored)] if restored == &suspended
+        ));
+    }
+
+    #[test]
+    fn throw_to_catch_preserves_exact_label_bd_ur3tk_14() {
+        let module = test_module(vec![
+            Ir3Instruction::BeginTry {
+                catch_target: 2,
+                finally_target: None,
+            },
+            Ir3Instruction::Throw { value: 0 },
+            Ir3Instruction::EnterCatch { dst: 1 },
+            Ir3Instruction::Halt,
+        ]);
+        let mut core = quickjs_test_core();
+        core.write_reg_with_label(
+            0,
+            Value::str("secret-exception"),
+            crate::ifc_artifacts::Label::Secret,
+        )
+        .expect("thrown value should be writable");
+        core.write_reg_with_label(
+            1,
+            Value::str("stale-catch-value"),
+            crate::ifc_artifacts::Label::TopSecret,
+        )
+        .expect("catch destination should be seedable");
+
+        core.execute(&module)
+            .expect("throw should enter the catch handler");
+
+        assert_eq!(core.registers[1], Value::str("secret-exception"));
+        assert_eq!(
+            core.read_reg_label(1).expect("catch label should exist"),
+            crate::ifc_artifacts::Label::Secret,
+            "catch binding receives the thrown label rather than Public or a stale label"
+        );
+    }
+
+    #[test]
+    fn nested_catch_call_and_finally_restore_exception_label_bd_ur3tk_14() {
+        let module = test_module_with_functions(
+            vec![
+                Ir3Instruction::BeginTry {
+                    catch_target: 3,
+                    finally_target: None,
+                },
+                Ir3Instruction::Call {
+                    callee: 0,
+                    args: RegRange { start: 1, count: 3 },
+                    dst: 4,
+                },
+                Ir3Instruction::Halt,
+                Ir3Instruction::EnterCatch { dst: 5 },
+                Ir3Instruction::Halt,
+                Ir3Instruction::BeginTry {
+                    catch_target: 8,
+                    finally_target: Some(8),
+                },
+                Ir3Instruction::Throw { value: 0 },
+                Ir3Instruction::Halt,
+                Ir3Instruction::EnterFinally,
+                Ir3Instruction::BeginTry {
+                    catch_target: 11,
+                    finally_target: None,
+                },
+                Ir3Instruction::Throw { value: 1 },
+                Ir3Instruction::EnterCatch { dst: 3 },
+                Ir3Instruction::Call {
+                    callee: 2,
+                    args: RegRange { start: 4, count: 0 },
+                    dst: 3,
+                },
+                Ir3Instruction::EndFinally,
+                Ir3Instruction::LoadInt { dst: 0, value: 7 },
+                Ir3Instruction::Return { value: 0 },
+            ],
+            vec![
+                Ir3FunctionDesc {
+                    entry: 5,
+                    arity: 3,
+                    frame_size: 4,
+                    name: Some("exception_through_finally".to_string()),
+                    is_generator: false,
+                    rest_param_index: None,
+                },
+                Ir3FunctionDesc {
+                    entry: 14,
+                    arity: 0,
+                    frame_size: 1,
+                    name: Some("helper_while_exception_pending".to_string()),
+                    is_generator: false,
+                    rest_param_index: None,
+                },
+            ],
+        );
+        let mut core = quickjs_test_core();
+        core.registers[0] = Value::Function(0);
+        core.write_reg_with_label(
+            1,
+            Value::str("outer-secret-exception"),
+            crate::ifc_artifacts::Label::Secret,
+        )
+        .expect("outer exception argument should be writable");
+        core.registers[2] = Value::str("inner-public-exception");
+        core.registers[3] = Value::Function(1);
+
+        core.execute(&module)
+            .expect("outer caller should catch the exception after finally");
+
+        assert_eq!(core.registers[5], Value::str("outer-secret-exception"));
+        assert_eq!(
+            core.read_reg_label(5)
+                .expect("caller catch label should exist"),
+            crate::ifc_artifacts::Label::Secret,
+            "inner catch consumption and helper call must restore the outer exception label"
+        );
+    }
+
+    #[test]
+    fn module_snapshot_round_trips_labeled_exceptions_bd_ur3tk_14() {
+        let mut core = quickjs_test_core();
+        let pending = LabeledException {
+            value: Value::str("pending-exception"),
+            label: crate::ifc_artifacts::Label::Secret,
+        };
+        let suspended = LabeledException {
+            value: Value::str("suspended-exception"),
+            label: crate::ifc_artifacts::Label::Custom {
+                name: "tenant-exception".to_string(),
+                level: 4,
+            },
+        };
+        core.pending_exception = Some(pending.clone());
+        core.suspended_abrupt_completions
+            .push(AbruptCompletion::Exception(suspended.clone()));
+        let snapshot = core.snapshot_module_execution();
+
+        core.pending_exception = None;
+        core.suspended_abrupt_completions.clear();
+        core.restore_module_execution(snapshot);
+
+        assert_eq!(core.pending_exception, Some(pending));
+        assert!(matches!(
+            core.suspended_abrupt_completions.as_slice(),
+            [AbruptCompletion::Exception(restored)] if restored == &suspended
+        ));
+    }
+
+    #[test]
+    fn discard_abrupt_completion_preserves_outer_frame_label_bd_kfxwe() {
+        let module = test_module(vec![Ir3Instruction::DiscardAbruptCompletion]);
+        let mut core = quickjs_test_core();
+        let outer = LabeledException {
+            value: Value::str("outer"),
+            label: crate::ifc_artifacts::Label::Secret,
+        };
+        core.finally_frames.push(FinallyFrame {
+            completion: Some(AbruptCompletion::Exception(outer.clone())),
+        });
+        core.finally_frames.push(FinallyFrame {
+            completion: Some(AbruptCompletion::Exception(LabeledException {
+                value: Value::str("inner"),
+                label: crate::ifc_artifacts::Label::Public,
+            })),
+        });
+        let snapshot = core.snapshot_module_execution();
+        core.finally_frames.clear();
+        core.restore_module_execution(snapshot);
+
+        core.run_loop(&module)
+            .expect("discard should resume after the local finally completion");
+
+        assert!(core.pending_exception.is_none());
+        assert!(core.pending_return.is_none());
+        assert_eq!(core.finally_frames.len(), 1);
+        match &core.finally_frames[0].completion {
+            Some(AbruptCompletion::Exception(restored)) => assert_eq!(restored, &outer),
+            other => panic!("expected outer exception frame, got {other:?}"),
+        }
+        assert!(core.suspended_abrupt_completions.is_empty());
+
+        let mut normal_nested_core = quickjs_test_core();
+        let outer_normal_entry = LabeledException {
+            value: Value::str("outer-normal-entry"),
+            label: crate::ifc_artifacts::Label::TopSecret,
+        };
+        normal_nested_core.finally_frames.push(FinallyFrame {
+            completion: Some(AbruptCompletion::Exception(outer_normal_entry.clone())),
+        });
+        normal_nested_core
+            .finally_frames
+            .push(FinallyFrame { completion: None });
+
+        normal_nested_core
+            .run_loop(&module)
+            .expect("normal nested finally must not discard an outer completion");
+
+        assert!(normal_nested_core.pending_exception.is_none());
+        assert_eq!(normal_nested_core.finally_frames.len(), 1);
+        match &normal_nested_core.finally_frames[0].completion {
+            Some(AbruptCompletion::Exception(restored)) => {
+                assert_eq!(restored, &outer_normal_entry);
+            }
+            other => panic!("expected preserved outer normal-entry frame, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn finally_entry_survives_budget_boundary_and_snapshot_bd_kfxwe() {
+        let module = test_module(vec![
+            Ir3Instruction::LoadInt { dst: 0, value: 7 },
+            Ir3Instruction::BeginTry {
+                catch_target: 3,
+                finally_target: Some(3),
+            },
+            Ir3Instruction::Return { value: 0 },
+            Ir3Instruction::EnterFinally,
+            Ir3Instruction::EndFinally,
+        ]);
+        let mut core = quickjs_test_core();
+        core.config.instruction_budget = 3;
+
+        assert!(matches!(
+            core.run_loop(&module),
+            Err(InterpreterError::BudgetExhausted {
+                executed: 3,
+                budget: 3,
+            })
+        ));
+        assert_eq!(core.ip, 3);
+        assert_eq!(
+            core.pending_finally_entry,
+            Some(PendingFinallyEntry {
+                target: 3,
+                mode: FinallyMode::Return,
+            })
+        );
+
+        let snapshot = core.snapshot_module_execution();
+        core.pending_finally_entry = None;
+        core.restore_module_execution(snapshot);
+        core.config.instruction_budget = 10;
+
+        assert_eq!(
+            core.run_loop(&module)
+                .expect("resumed finally must complete the pending return"),
+            Value::Int(7)
+        );
+        assert!(core.pending_return.is_none());
+        assert!(core.pending_finally_entry.is_none());
+        assert!(core.finally_frames.is_empty());
+    }
+
+    #[test]
+    fn finally_entry_survives_cancellation_boundary_bd_kfxwe() {
+        let module = test_module(vec![
+            Ir3Instruction::BeginTry {
+                catch_target: 2,
+                finally_target: Some(2),
+            },
+            Ir3Instruction::Throw { value: 0 },
+            Ir3Instruction::EnterFinally,
+            Ir3Instruction::EndFinally,
+        ]);
+        let token = CancellationToken::new();
+        token.cancel();
+        let mut config = test_quickjs_config();
+        config.cancellation_token = Some(token.clone());
+        config.checkpoint_density = 3;
+        let mut core = InterpreterCore::new(config, "bd-kfxwe-cancel");
+        core.write_reg_with_label(0, Value::str("boom"), crate::ifc_artifacts::Label::Secret)
+            .expect("throw value should fit in r0");
+
+        assert_eq!(core.run_loop(&module), Err(InterpreterError::Cancelled));
+        assert_eq!(core.ip, 2);
+        assert_eq!(
+            core.pending_finally_entry,
+            Some(PendingFinallyEntry {
+                target: 2,
+                mode: FinallyMode::Exception,
+            })
+        );
+
+        token.reset();
+        assert_eq!(
+            core.run_loop(&module),
+            Err(InterpreterError::UncaughtException {
+                value: "boom".to_string(),
+            })
+        );
+        assert!(core.pending_exception.is_none());
+        assert!(core.pending_finally_entry.is_none());
+        assert!(core.finally_frames.is_empty());
+    }
+
+    fn execute_exception_source_with_core_bd_kfxwe(source: &str) -> (Value, InterpreterCore) {
+        let tree = CanonicalEs2020Parser
+            .parse(source, ParseGoal::Script)
+            .expect("finally ownership regression source should parse");
+        let ir0 = Ir0Module::from_syntax_tree(tree, "bd_kfxwe_runtime.js");
+        let module = lower_ir0_to_ir3(
+            &ir0,
+            &LoweringContext::new(
+                "trace-bd-kfxwe-runtime",
+                "decision-bd-kfxwe-runtime",
+                "policy-bd-kfxwe-runtime",
+            ),
+        )
+        .expect("finally ownership regression source should lower")
+        .ir3;
+        let mut config = InterpreterConfig::quickjs_defaults();
+        config.granted_capabilities = std::collections::BTreeSet::from([
+            RuntimeCapability::VmDispatch,
+            RuntimeCapability::HeapAllocate,
+        ]);
+        let mut core = InterpreterCore::new(config, "bd-kfxwe-runtime");
+        let value = core
+            .execute(&module)
+            .expect("finally ownership regression should execute")
+            .value;
+        (value, core)
+    }
+
+    #[test]
+    fn escaped_finally_completion_records_are_balanced_bd_kfxwe() {
+        let (value, core) = execute_exception_source_with_core_bd_kfxwe(
+            "function f(){ try { return \"outer\"; } finally { try { try { return \"inner\"; } finally { throw \"new\"; } } catch(e) {} } } f();",
+        );
+
+        assert_eq!(value, Value::str("outer"));
+        assert!(core.pending_exception.is_none());
+        assert!(core.pending_return.is_none());
+        assert!(core.pending_finally_entry.is_none());
+        assert!(core.finally_frames.is_empty());
+        assert!(core.suspended_abrupt_completions.is_empty());
+    }
+
+    #[test]
+    fn uncaught_throw_from_finally_clears_completion_records_bd_kfxwe() {
+        let module = test_module(vec![
+            Ir3Instruction::LoadInt { dst: 0, value: 1 },
+            Ir3Instruction::BeginTry {
+                catch_target: 3,
+                finally_target: Some(3),
+            },
+            Ir3Instruction::Return { value: 0 },
+            Ir3Instruction::EnterFinally,
+            Ir3Instruction::Throw { value: 1 },
+        ]);
+        let mut core = quickjs_test_core();
+        core.write_reg_with_label(1, Value::str("new"), crate::ifc_artifacts::Label::Secret)
+            .expect("throw value should fit in r1");
+
+        assert_eq!(
+            core.run_loop(&module),
+            Err(InterpreterError::UncaughtException {
+                value: "new".to_string(),
+            })
+        );
+        assert!(core.pending_exception.is_none());
+        assert!(core.pending_return.is_none());
+        assert!(core.pending_finally_entry.is_none());
+        assert!(core.finally_frames.is_empty());
+        assert!(core.suspended_abrupt_completions.is_empty());
+    }
+
+    fn constructor_descriptor_bd_ur3tk_4(
+        entry: u32,
+        arity: u32,
+        frame_size: u32,
+    ) -> Ir3FunctionDesc {
+        Ir3FunctionDesc {
+            entry,
+            arity,
+            frame_size,
+            name: Some("labeled_constructor".to_string()),
+            is_generator: false,
+            rest_param_index: None,
+        }
+    }
+
+    #[test]
+    fn constructor_this_and_implicit_result_use_only_callee_label_bd_ur3tk_4() {
+        for return_explicit_this in [true, false] {
+            let mut instructions = vec![
+                Ir3Instruction::Construct {
+                    callee: 0,
+                    args: RegRange { start: 1, count: 1 },
+                    dst: 2,
+                },
+                Ir3Instruction::Halt,
+            ];
+            if return_explicit_this {
+                instructions.extend([
+                    Ir3Instruction::LoadThis { dst: 1 },
+                    Ir3Instruction::Return { value: 1 },
+                ]);
+            } else {
+                instructions.push(Ir3Instruction::Return { value: 0 });
+            }
+            let module = test_module_with_functions(
+                instructions,
+                vec![constructor_descriptor_bd_ur3tk_4(2, 1, 2)],
+            );
+            let mut core = quickjs_test_core();
+            core.write_reg_with_label(0, Value::Function(0), crate::ifc_artifacts::Label::Secret)
+                .expect("constructor should be writable");
+            core.write_reg_with_label(1, Value::Int(99), crate::ifc_artifacts::Label::TopSecret)
+                .expect("constructor argument should be writable");
+
+            core.execute(&module)
+                .expect("labeled constructor should execute");
+
+            assert!(matches!(core.registers[2], Value::Object(_)));
+            assert_eq!(
+                core.read_reg_label(2)
+                    .expect("constructed result label should exist"),
+                crate::ifc_artifacts::Label::Secret,
+                "constructor this provenance comes from the callee, not an ignored or discarded argument (return_explicit_this={return_explicit_this})"
+            );
+        }
+    }
+
+    #[test]
+    fn constructor_explicit_object_return_keeps_argument_label_bd_ur3tk_4() {
+        let module = test_module_with_functions(
+            vec![
+                Ir3Instruction::Construct {
+                    callee: 0,
+                    args: RegRange { start: 1, count: 1 },
+                    dst: 2,
+                },
+                Ir3Instruction::Halt,
+                Ir3Instruction::Return { value: 0 },
+            ],
+            vec![constructor_descriptor_bd_ur3tk_4(2, 1, 1)],
+        );
+        let mut core = quickjs_test_core();
+        let explicit_object = core
+            .alloc_object_with_prototype(None)
+            .expect("explicit object should allocate");
+        core.write_reg_with_label(0, Value::Function(0), crate::ifc_artifacts::Label::Secret)
+            .expect("constructor should be writable");
+        core.write_reg_with_label(
+            1,
+            Value::Object(explicit_object),
+            crate::ifc_artifacts::Label::Confidential,
+        )
+        .expect("explicit object argument should be writable");
+
+        core.execute(&module)
+            .expect("explicit object constructor should execute");
+
+        assert_eq!(core.registers[2], Value::Object(explicit_object));
+        assert_eq!(
+            core.read_reg_label(2).expect("explicit result label"),
+            crate::ifc_artifacts::Label::Confidential,
+            "an explicit object return keeps its own label instead of the constructor label"
+        );
+    }
+
+    #[test]
+    fn constructor_new_target_throw_preserves_callee_label_bd_ur3tk_4() {
+        let module = test_module_with_functions(
+            vec![
+                Ir3Instruction::BeginTry {
+                    catch_target: 3,
+                    finally_target: None,
+                },
+                Ir3Instruction::Construct {
+                    callee: 0,
+                    args: RegRange { start: 1, count: 0 },
+                    dst: 2,
+                },
+                Ir3Instruction::Halt,
+                Ir3Instruction::EnterCatch { dst: 3 },
+                Ir3Instruction::Halt,
+                Ir3Instruction::LoadNewTarget { dst: 0 },
+                Ir3Instruction::Throw { value: 0 },
+            ],
+            vec![constructor_descriptor_bd_ur3tk_4(5, 0, 1)],
+        );
+        let mut core = quickjs_test_core();
+        core.write_reg_with_label(0, Value::Function(0), crate::ifc_artifacts::Label::Secret)
+            .expect("constructor should be writable");
+
+        core.execute(&module)
+            .expect("caller should catch the thrown new.target");
+
+        assert_eq!(core.registers[3], Value::Function(0));
+        assert_eq!(
+            core.read_reg_label(3).expect("new.target catch label"),
+            crate::ifc_artifacts::Label::Secret
+        );
+    }
+
+    #[test]
+    fn constructor_super_value_preserves_callee_label_bd_ur3tk_4() {
+        let module = test_module_with_functions(
+            vec![
+                Ir3Instruction::Construct {
+                    callee: 0,
+                    args: RegRange { start: 1, count: 0 },
+                    dst: 2,
+                },
+                Ir3Instruction::Halt,
+                Ir3Instruction::LoadSuper { dst: 0 },
+                Ir3Instruction::Return { value: 0 },
+            ],
+            vec![constructor_descriptor_bd_ur3tk_4(2, 0, 1)],
+        );
+        let mut core = quickjs_test_core();
+        let super_object = core
+            .alloc_object_with_prototype(None)
+            .expect("super object should allocate");
+        let constructor = Value::Function(0);
+        let function_object = core
+            .ensure_function_object(&constructor)
+            .expect("function metadata object should allocate")
+            .expect("Function should have metadata storage");
+        core.set_object_property(
+            function_object,
+            IR_SUPER_CONSTRUCTOR_PROPERTY.to_string(),
+            Value::Object(super_object),
+        )
+        .expect("super metadata should be writable");
+        core.write_reg_with_label(0, constructor, crate::ifc_artifacts::Label::Secret)
+            .expect("constructor should be writable");
+
+        core.execute(&module)
+            .expect("constructor should return its super metadata object");
+
+        assert_eq!(core.registers[2], Value::Object(super_object));
+        assert_eq!(
+            core.read_reg_label(2).expect("super result label"),
+            crate::ifc_artifacts::Label::Secret
+        );
+    }
+
+    #[test]
+    fn plain_call_super_metadata_uses_only_callee_label_bd_ur3tk_20() {
+        let module = test_module_with_functions(
+            vec![
+                Ir3Instruction::Call {
+                    callee: 0,
+                    args: RegRange { start: 1, count: 1 },
+                    dst: 2,
+                },
+                Ir3Instruction::Halt,
+                Ir3Instruction::LoadSuper { dst: 1 },
+                Ir3Instruction::Return { value: 1 },
+            ],
+            vec![Ir3FunctionDesc {
+                entry: 2,
+                arity: 1,
+                frame_size: 2,
+                name: Some("plain_super_reader".to_string()),
+                is_generator: false,
+                rest_param_index: None,
+            }],
+        );
+        let mut core = quickjs_test_core();
+        let super_object = core
+            .alloc_object_with_prototype(None)
+            .expect("super object should allocate");
+        let callee = Value::Function(0);
+        let function_object = core
+            .ensure_function_object(&callee)
+            .expect("function metadata object should allocate")
+            .expect("Function should have metadata storage");
+        core.set_object_property(
+            function_object,
+            IR_SUPER_PROTOTYPE_PROPERTY.to_string(),
+            Value::Object(super_object),
+        )
+        .expect("super metadata should be writable");
+        core.write_reg_with_label(0, callee, crate::ifc_artifacts::Label::Secret)
+            .expect("callee should be writable");
+        core.write_reg_with_label(1, Value::Int(41), crate::ifc_artifacts::Label::TopSecret)
+            .expect("argument should be writable");
+
+        core.execute(&module).expect("plain call should execute");
+
+        assert_eq!(core.registers[2], Value::Object(super_object));
+        assert_eq!(
+            core.read_reg_label(2).expect("plain super result label"),
+            crate::ifc_artifacts::Label::Secret,
+            "super provenance comes from the callee without overjoining its argument"
+        );
+    }
+
+    #[test]
+    fn call_method_super_metadata_uses_only_callee_label_bd_ur3tk_20() {
+        let module = test_module_with_functions(
+            vec![
+                Ir3Instruction::CallMethod {
+                    receiver: 0,
+                    callee: 1,
+                    args: RegRange { start: 2, count: 1 },
+                    dst: 3,
+                },
+                Ir3Instruction::Halt,
+                Ir3Instruction::LoadSuper { dst: 1 },
+                Ir3Instruction::Return { value: 1 },
+            ],
+            vec![Ir3FunctionDesc {
+                entry: 2,
+                arity: 1,
+                frame_size: 2,
+                name: Some("method_super_reader".to_string()),
+                is_generator: false,
+                rest_param_index: None,
+            }],
+        );
+        let mut core = quickjs_test_core();
+        let super_object = core
+            .alloc_object_with_prototype(None)
+            .expect("super object should allocate");
+        let callee = Value::Function(0);
+        let function_object = core
+            .ensure_function_object(&callee)
+            .expect("function metadata object should allocate")
+            .expect("Function should have metadata storage");
+        core.set_object_property(
+            function_object,
+            IR_SUPER_PROTOTYPE_PROPERTY.to_string(),
+            Value::Object(super_object),
+        )
+        .expect("super metadata should be writable");
+        core.write_reg_with_label(
+            0,
+            Value::str("receiver"),
+            crate::ifc_artifacts::Label::Confidential,
+        )
+        .expect("receiver should be writable");
+        core.write_reg_with_label(1, callee, crate::ifc_artifacts::Label::Secret)
+            .expect("callee should be writable");
+        core.write_reg_with_label(2, Value::Int(42), crate::ifc_artifacts::Label::TopSecret)
+            .expect("argument should be writable");
+
+        core.execute(&module).expect("method call should execute");
+
+        assert_eq!(core.registers[3], Value::Object(super_object));
+        assert_eq!(
+            core.read_reg_label(3).expect("method super result label"),
+            crate::ifc_artifacts::Label::Secret,
+            "super provenance comes from the callee without overjoining its argument"
+        );
+    }
+
+    fn lower_source_and_find_unresolved_argument_seed_bd_ur3tk_11(
+        source: &str,
+    ) -> (Ir3Module, Reg) {
+        let tree = CanonicalEs2020Parser
+            .parse(source, ParseGoal::Script)
+            .expect("value-transfer regression source should parse");
+        let ir0 = Ir0Module::from_syntax_tree(tree, "bd_ur3tk_11.js");
+        let output = lower_ir0_to_ir3(
+            &ir0,
+            &LoweringContext::new(
+                "trace-bd-ur3tk-11",
+                "decision-bd-ur3tk-11",
+                "policy-bd-ur3tk-11",
+            ),
+        )
+        .expect("value-transfer regression source should lower");
+        let module = output.ir3;
+        let main_end = module
+            .instructions
+            .iter()
+            .position(|instruction| matches!(instruction, Ir3Instruction::Halt))
+            .expect("lowered main block should terminate with Halt");
+        let (call_index, mut seed_reg) = module.instructions[..main_end]
+            .iter()
+            .enumerate()
+            .find_map(|(index, instruction)| match instruction {
+                Ir3Instruction::Call { args, .. } if args.count == 1 => Some((index, args.start)),
+                _ => None,
+            })
+            .expect("source should contain one top-level single-argument call");
+
+        // Ordinary source lowering moves an unresolved input through one or
+        // more fresh temporaries before packing the call range. Walk that
+        // exact Move chain back to the unwritten backing register so the test
+        // can inject a labeled external input without introducing a new IR
+        // source-label opcode.
+        let mut search_end = call_index;
+        let mut traced_move_count = 0_u32;
+        while let Some((index, source_reg)) = module.instructions[..search_end]
+            .iter()
+            .enumerate()
+            .rev()
+            .find_map(|(index, instruction)| match instruction {
+                Ir3Instruction::Move { dst, src } if *dst == seed_reg => Some((index, *src)),
+                _ => None,
+            })
+        {
+            seed_reg = source_reg;
+            search_end = index;
+            traced_move_count = traced_move_count.saturating_add(1);
+        }
+        assert!(
+            traced_move_count >= 2,
+            "seed tracing should cross the unresolved-binding load and call-range packing moves"
+        );
+
+        // Pin the monotonic-allocation assumption behind the white-box seed:
+        // the terminal unresolved binding register must not be produced by an
+        // earlier instruction. Canonical IR names synchronous destinations
+        // `dst` or `value_dst`; the two suspended-result forms use
+        // `resume_dst` and `promise_reg`. Checking all four avoids duplicating
+        // the instruction enum's large match here.
+        assert!(
+            module.instructions[..call_index].iter().all(|instruction| {
+                let crate::deterministic_serde::CanonicalValue::Map(fields) =
+                    instruction.canonical_value()
+                else {
+                    unreachable!("IR3 instructions canonicalize to maps");
+                };
+                ["dst", "value_dst", "resume_dst", "promise_reg"]
+                    .iter()
+                    .all(|field| {
+                        !matches!(
+                            fields.get(*field),
+                            Some(crate::deterministic_serde::CanonicalValue::U64(destination))
+                                if *destination == u64::from(seed_reg)
+                        )
+                    })
+            }),
+            "terminal unresolved input r{seed_reg} must have no earlier writer"
+        );
+
+        (module, seed_reg)
+    }
+
+    fn assert_source_transfer_preserves_secret_bd_ur3tk_11(source: &str) {
+        let (module, seed_reg) = lower_source_and_find_unresolved_argument_seed_bd_ur3tk_11(source);
+        let mut core = quickjs_test_core();
+        core.write_reg_with_label(
+            seed_reg,
+            Value::str("source-secret"),
+            crate::ifc_artifacts::Label::Secret,
+        )
+        .expect("unresolved source input should be seedable");
+
+        let result = core
+            .execute(&module)
+            .expect("source-lowered value transfers should execute");
+        assert_eq!(result.value, Value::str("source-secret"));
+        assert_eq!(result.completion_label, crate::ifc_artifacts::Label::Secret);
+    }
+
+    #[test]
+    fn direct_top_level_return_exposes_secret_completion_label_bd_ur3tk_17() {
+        let module = test_module(vec![Ir3Instruction::Return { value: 0 }]);
+        let mut core = quickjs_test_core();
+        core.write_reg_with_label(
+            0,
+            Value::str("direct-secret"),
+            crate::ifc_artifacts::Label::Secret,
+        )
+        .expect("secret completion should be seedable");
+
+        let result = core
+            .execute(&module)
+            .expect("direct top-level return should execute");
+        assert_eq!(result.value, Value::str("direct-secret"));
+        assert_eq!(result.completion_label, crate::ifc_artifacts::Label::Secret);
+    }
+
+    #[test]
+    fn halt_exposes_secret_register_completion_label_bd_ur3tk_17() {
+        let module = test_module(vec![Ir3Instruction::Halt]);
+        let mut core = quickjs_test_core();
+        core.write_reg_with_label(
+            0,
+            Value::str("halt-secret"),
+            crate::ifc_artifacts::Label::Secret,
+        )
+        .expect("secret halt completion should be seedable");
+
+        let result = core.execute(&module).expect("halt should execute");
+        assert_eq!(result.value, Value::str("halt-secret"));
+        assert_eq!(result.completion_label, crate::ifc_artifacts::Label::Secret);
+    }
+
+    #[test]
+    fn fallthrough_exposes_secret_register_completion_label_bd_ur3tk_17() {
+        let module = test_module(Vec::new());
+        let mut core = quickjs_test_core();
+        core.write_reg_with_label(
+            0,
+            Value::str("fallthrough-secret"),
+            crate::ifc_artifacts::Label::Secret,
+        )
+        .expect("secret fallthrough completion should be seedable");
+
+        let result = core.execute(&module).expect("fallthrough should execute");
+        assert_eq!(result.value, Value::str("fallthrough-secret"));
+        assert_eq!(result.completion_label, crate::ifc_artifacts::Label::Secret);
+    }
+
+    #[test]
+    fn finally_unwound_top_level_return_exposes_secret_completion_label_bd_ur3tk_17() {
+        let module = test_module(vec![
+            Ir3Instruction::BeginTry {
+                catch_target: 2,
+                finally_target: Some(2),
+            },
+            Ir3Instruction::Return { value: 0 },
+            Ir3Instruction::EnterFinally,
+            Ir3Instruction::EndFinally,
+        ]);
+        let mut core = quickjs_test_core();
+        core.write_reg_with_label(
+            0,
+            Value::str("finally-secret"),
+            crate::ifc_artifacts::Label::Secret,
+        )
+        .expect("secret pending return should be seedable");
+
+        let result = core
+            .execute(&module)
+            .expect("finally-unwound top-level return should execute");
+        assert_eq!(result.value, Value::str("finally-secret"));
+        assert_eq!(result.completion_label, crate::ifc_artifacts::Label::Secret);
+    }
+
+    #[test]
+    fn both_lane_wrappers_expose_completion_label_bd_ur3tk_17() {
+        let module = test_module(vec![
+            Ir3Instruction::LoadInt { dst: 0, value: 17 },
+            Ir3Instruction::Return { value: 0 },
+        ]);
+
+        for result in [
+            quickjs_execute(&module).expect("QuickJsLane should execute"),
+            v8_execute(&module).expect("V8Lane should execute"),
+        ] {
+            assert_eq!(result.value, Value::Int(17));
+            assert_eq!(result.completion_label, crate::ifc_artifacts::Label::Public);
+        }
+    }
+
+    #[test]
+    fn source_local_moves_preserve_secret_to_completion_bd_ur3tk_11() {
+        assert_source_transfer_preserves_secret_bd_ur3tk_11(
+            "function identity(value) { return value; } identity(secret_input);",
+        );
+    }
+
+    #[test]
+    fn captured_parameter_preserves_secret_through_scope_bd_ur3tk_11() {
+        assert_source_transfer_preserves_secret_bd_ur3tk_11(
+            "function outer(value) { return function inner() { return value; }; }\
+             outer(secret_input)();",
+        );
+    }
+
+    #[test]
+    fn captured_local_preserves_secret_through_scope_bd_ur3tk_11() {
+        assert_source_transfer_preserves_secret_bd_ur3tk_11(
+            "function outer(value) {\
+               let local = value;\
+               return function inner() { return local; };\
+             }\
+             outer(secret_input)();",
+        );
+    }
+
+    #[test]
+    fn destructuring_default_preserves_secret_through_moves_bd_ur3tk_11() {
+        assert_source_transfer_preserves_secret_bd_ur3tk_11(
+            "function unpack(value) {\
+               let { missing = value } = {};\
+               return missing;\
+             }\
+             unpack(secret_input);",
+        );
+    }
+
+    #[derive(Debug, Clone, Copy)]
+    enum TransactionalCallKindBdUr3tk12 {
+        Call,
+        AsyncCall,
+        CallMethod,
+        AsyncCallMethod,
+        Construct,
+    }
+
+    impl TransactionalCallKindBdUr3tk12 {
+        fn is_async(self) -> bool {
+            matches!(self, Self::AsyncCall | Self::AsyncCallMethod)
+        }
+
+        fn is_method(self) -> bool {
+            matches!(self, Self::CallMethod | Self::AsyncCallMethod)
+        }
+    }
+
+    #[derive(Debug)]
+    struct CallSetupStateBdUr3tk12 {
+        execution_seed: ExecutionSeed,
+        promise_store: serde_json::Value,
+        active_timers: serde_json::Value,
+        next_timer_id: u32,
+        async_functions_len: usize,
+        closures_len: usize,
+        call_stack_len: usize,
+        scope_depth: usize,
+        register_base: usize,
+        ip: usize,
+        pending_exception: Option<LabeledException>,
+        pending_return: Option<LabeledReturn>,
+        profiling_memory_stats: Option<serde_json::Value>,
+        estimated_memory_bytes: u64,
+    }
+
+    fn capture_call_setup_state_bd_ur3tk_12(core: &InterpreterCore) -> CallSetupStateBdUr3tk12 {
+        CallSetupStateBdUr3tk12 {
+            execution_seed: core.capture_execution_seed(),
+            promise_store: serde_json::to_value(&core.promise_store)
+                .expect("PromiseStore should serialize for replay comparison"),
+            active_timers: serde_json::to_value(&core.active_timers)
+                .expect("active timers should serialize for replay comparison"),
+            next_timer_id: core.next_timer_id,
+            async_functions_len: core.async_functions.len(),
+            closures_len: core.closures.len(),
+            call_stack_len: core.call_stack.len(),
+            scope_depth: core.scope_chain.depth(),
+            register_base: core.register_base,
+            ip: core.ip,
+            pending_exception: core.pending_exception.clone(),
+            pending_return: core.pending_return.clone(),
+            profiling_memory_stats: core.profiling_data.as_ref().map(|profiler| {
+                serde_json::to_value(profiler.memory_stats_snapshot())
+                    .expect("profiling memory statistics should serialize")
+            }),
+            estimated_memory_bytes: core.estimated_memory_bytes,
+        }
+    }
+
+    fn assert_call_setup_state_bd_ur3tk_12(
+        core: &InterpreterCore,
+        expected: &CallSetupStateBdUr3tk12,
+    ) {
+        assert_eq!(core.capture_execution_seed(), expected.execution_seed);
+        assert_eq!(
+            serde_json::to_value(&core.promise_store)
+                .expect("PromiseStore should serialize after refusal"),
+            expected.promise_store
+        );
+        assert_eq!(
+            serde_json::to_value(&core.active_timers)
+                .expect("active timers should serialize after refusal"),
+            expected.active_timers
+        );
+        assert_eq!(core.next_timer_id, expected.next_timer_id);
+        assert_eq!(core.async_functions.len(), expected.async_functions_len);
+        assert_eq!(core.closures.len(), expected.closures_len);
+        assert_eq!(core.call_stack.len(), expected.call_stack_len);
+        assert_eq!(core.scope_chain.depth(), expected.scope_depth);
+        assert_eq!(core.register_base, expected.register_base);
+        assert_eq!(core.ip, expected.ip);
+        assert_eq!(core.pending_exception, expected.pending_exception);
+        assert_eq!(core.pending_return, expected.pending_return);
+        assert_eq!(
+            core.profiling_data.as_ref().map(|profiler| {
+                serde_json::to_value(profiler.memory_stats_snapshot())
+                    .expect("profiling memory statistics should serialize after refusal")
+            }),
+            expected.profiling_memory_stats
+        );
+        assert_eq!(core.estimated_memory_bytes, expected.estimated_memory_bytes);
+        assert_eq!(
+            core.estimated_memory_bytes,
+            core.recompute_estimated_memory_bytes(),
+            "rollback must leave eager and recomputed accounting equal"
+        );
+    }
+
+    fn transactional_call_module_bd_ur3tk_12(kind: TransactionalCallKindBdUr3tk12) -> Ir3Module {
+        let call = match kind {
+            TransactionalCallKindBdUr3tk12::Call | TransactionalCallKindBdUr3tk12::AsyncCall => {
+                Ir3Instruction::Call {
+                    callee: 0,
+                    args: RegRange { start: 1, count: 2 },
+                    dst: 4,
+                }
+            }
+            TransactionalCallKindBdUr3tk12::CallMethod
+            | TransactionalCallKindBdUr3tk12::AsyncCallMethod => Ir3Instruction::CallMethod {
+                receiver: 5,
+                callee: 0,
+                args: RegRange { start: 1, count: 2 },
+                dst: 4,
+            },
+            TransactionalCallKindBdUr3tk12::Construct => Ir3Instruction::Construct {
+                callee: 0,
+                args: RegRange { start: 1, count: 2 },
+                dst: 4,
+            },
+        };
+        let body_return = if kind.is_async() {
+            Ir3Instruction::AsyncReturn { value_reg: 0 }
+        } else {
+            Ir3Instruction::Return { value: 0 }
+        };
+        test_module_with_functions(
+            vec![call, Ir3Instruction::Halt, body_return],
+            vec![Ir3FunctionDesc {
+                entry: 2,
+                arity: 2,
+                frame_size: 2,
+                name: Some(format!("transactional_{kind:?}_bd_ur3tk_12")),
+                is_generator: false,
+                rest_param_index: Some(1),
+            }],
+        )
+    }
+
+    fn transactional_call_core_bd_ur3tk_12(
+        kind: TransactionalCallKindBdUr3tk12,
+        max_scope_depth: u32,
+    ) -> InterpreterCore {
+        let mut config = test_quickjs_config();
+        config.max_scope_depth = max_scope_depth;
+        let mut core = InterpreterCore::new(config, format!("transactional-{kind:?}"));
+        core.enable_profiling(crate::profiling::ProfilingConfig::default());
+        if kind.is_async() {
+            core.closures.push(ClosureValue {
+                function_index: 0,
+                captured_env: core.scope_chain.snapshot(),
+            });
+            core.registers[0] = Value::AsyncFunction(0);
+        } else {
+            core.registers[0] = Value::Function(0);
+        }
+        core.registers[1] = Value::Int(10);
+        core.registers[2] = Value::str("rest-tail");
+        core.registers[4] = Value::str("destination-sentinel");
+        core.register_labels[4] = crate::ifc_artifacts::Label::Secret;
+        if kind.is_method() {
+            core.registers[5] = Value::str("receiver");
+            core.register_labels[5] = crate::ifc_artifacts::Label::Confidential;
+        }
+        core.pending_return = Some(LabeledReturn {
+            value: Value::str("pending-return"),
+            label: crate::ifc_artifacts::Label::TopSecret,
+        });
+        core.sync_estimated_memory_bytes()
+            .expect("seed call state should fit its initial budget");
+        core
+    }
+
+    fn assert_materialized_rest_hook_records_bd_ur3tk_12(hook: &RecordingHook) {
+        let records = hook.records_without_startup_module_record();
+        assert_eq!(records.len(), 2);
+        assert!(matches!(
+            records.first(),
+            Some(HookRecord::Allocation {
+                kind: AllocKind::Array,
+                size_hint: 1,
+                ..
+            })
+        ));
+        let Some(HookRecord::Call { args, .. }) = records.get(1) else {
+            panic!("pre-call hook must observe the materialized rest carrier");
+        };
+        assert_eq!(args.first(), Some(&Value::Int(10)));
+        assert!(matches!(args.get(1), Some(Value::Object(_))));
+    }
+
+    #[test]
+    fn denied_implicit_call_setup_is_transactional_bd_ur3tk_12() {
+        for kind in [
+            TransactionalCallKindBdUr3tk12::Call,
+            TransactionalCallKindBdUr3tk12::AsyncCall,
+            TransactionalCallKindBdUr3tk12::CallMethod,
+            TransactionalCallKindBdUr3tk12::AsyncCallMethod,
+            TransactionalCallKindBdUr3tk12::Construct,
+        ] {
+            let module = transactional_call_module_bd_ur3tk_12(kind);
+            let hook = Arc::new(RecordingHook::with_call_action(HookAction::Terminate(
+                format!("{kind:?} denied"),
+            )));
+            let mut core = transactional_call_core_bd_ur3tk_12(kind, 100);
+            core.set_hook(hook.clone());
+            let before = capture_call_setup_state_bd_ur3tk_12(&core);
+
+            let error = core
+                .run_loop(&module)
+                .expect_err("pre-call denial must refuse the entire setup transaction");
+
+            assert!(matches!(
+                error,
+                InterpreterError::ContainmentActionRequested { action, .. }
+                    if action == "terminate"
+            ));
+            assert_call_setup_state_bd_ur3tk_12(&core, &before);
+            assert_materialized_rest_hook_records_bd_ur3tk_12(&hook);
+        }
+    }
+
+    #[test]
+    fn scope_refused_call_setup_is_transactional_bd_ur3tk_12() {
+        for kind in [
+            TransactionalCallKindBdUr3tk12::Call,
+            TransactionalCallKindBdUr3tk12::AsyncCall,
+            TransactionalCallKindBdUr3tk12::CallMethod,
+            TransactionalCallKindBdUr3tk12::AsyncCallMethod,
+            TransactionalCallKindBdUr3tk12::Construct,
+        ] {
+            let module = transactional_call_module_bd_ur3tk_12(kind);
+            let hook = Arc::new(RecordingHook::allow_all());
+            let mut core = transactional_call_core_bd_ur3tk_12(kind, 1);
+            core.set_hook(hook.clone());
+            let before = capture_call_setup_state_bd_ur3tk_12(&core);
+
+            let error = core
+                .run_loop(&module)
+                .expect_err("callee scope refusal must roll back the entire setup");
+
+            assert!(matches!(error, InterpreterError::ScopeDepthExceeded { .. }));
+            assert_call_setup_state_bd_ur3tk_12(&core, &before);
+            assert_materialized_rest_hook_records_bd_ur3tk_12(&hook);
+        }
+    }
+
+    fn async_memory_failure_module_bd_ur3tk_12(method: bool) -> Ir3Module {
+        let call = if method {
+            Ir3Instruction::CallMethod {
+                receiver: 5,
+                callee: 0,
+                args: RegRange { start: 1, count: 1 },
+                dst: 4,
+            }
+        } else {
+            Ir3Instruction::Call {
+                callee: 0,
+                args: RegRange { start: 1, count: 1 },
+                dst: 4,
+            }
+        };
+        test_module_with_functions(
+            vec![
+                call,
+                Ir3Instruction::Halt,
+                Ir3Instruction::AsyncReturn { value_reg: 0 },
+            ],
+            vec![Ir3FunctionDesc {
+                entry: 2,
+                arity: 1,
+                frame_size: 1,
+                name: Some(format!("async_memory_failure_method_{method}_bd_ur3tk_12")),
+                is_generator: false,
+                rest_param_index: None,
+            }],
+        )
+    }
+
+    fn async_memory_failure_core_bd_ur3tk_12(method: bool) -> InterpreterCore {
+        let mut core = InterpreterCore::new(
+            test_quickjs_config(),
+            format!("async-memory-failure-method-{method}"),
+        );
+        core.closures.push(ClosureValue {
+            function_index: 0,
+            captured_env: core.scope_chain.snapshot(),
+        });
+        core.registers[0] = Value::AsyncFunction(0);
+        core.registers[1] = Value::str("duplicated-argument".repeat(64));
+        core.registers[4] = Value::str("destination-sentinel");
+        core.register_labels[4] = crate::ifc_artifacts::Label::Secret;
+        if method {
+            core.registers[5] = Value::str("method-receiver");
+            core.register_labels[5] = crate::ifc_artifacts::Label::Confidential;
+        }
+        core.sync_estimated_memory_bytes()
+            .expect("seed async call state should fit");
+        core
+    }
+
+    fn async_scope_sync_ceiling_bd_ur3tk_12(method: bool) -> u64 {
+        let mut calibration = async_memory_failure_core_bd_ur3tk_12(method);
+        let captured_env = calibration.scope_chain.snapshot();
+        calibration
+            .enter_async_function_call(AsyncCallSetup {
+                function_index: 0,
+                function_entry: 2,
+                closure_index: Some(0),
+                captured_env: Some(captured_env),
+                arguments: Vec::new(),
+                this_value: if method {
+                    Value::str("method-receiver")
+                } else {
+                    Value::Undefined
+                },
+                this_label: if method {
+                    crate::ifc_artifacts::Label::Confidential
+                } else {
+                    crate::ifc_artifacts::Label::Public
+                },
+                super_value: Value::Undefined,
+                super_label: crate::ifc_artifacts::Label::Public,
+                result_register: 4,
+            })
+            .expect("unbounded calibration setup should reach the argument-copy boundary");
+        calibration.estimated_memory_bytes
+    }
+
+    #[test]
+    fn async_memory_and_argument_refusals_restore_plain_and_method_setup_bd_ur3tk_12() {
+        for method in [false, true] {
+            let module = async_memory_failure_module_bd_ur3tk_12(method);
+            let scope_sync_ceiling = async_scope_sync_ceiling_bd_ur3tk_12(method);
+
+            let mut scope_refused = async_memory_failure_core_bd_ur3tk_12(method);
+            scope_refused.config.max_total_memory_bytes = scope_sync_ceiling.saturating_sub(1);
+            let before_scope = capture_call_setup_state_bd_ur3tk_12(&scope_refused);
+            let scope_error = scope_refused
+                .run_loop(&module)
+                .expect_err("one byte below the frame/scope estimate must refuse setup");
+            assert!(matches!(
+                scope_error,
+                InterpreterError::MemoryBudgetExceeded { .. }
+            ));
+            assert_call_setup_state_bd_ur3tk_12(&scope_refused, &before_scope);
+
+            let mut argument_refused = async_memory_failure_core_bd_ur3tk_12(method);
+            argument_refused.config.max_total_memory_bytes = scope_sync_ceiling;
+            let before_argument = capture_call_setup_state_bd_ur3tk_12(&argument_refused);
+            let argument_error = argument_refused.run_loop(&module).expect_err(
+                "argument copy must refuse after frame/scope setup reaches its ceiling",
+            );
+            assert!(matches!(
+                argument_error,
+                InterpreterError::MemoryBudgetExceeded { .. }
+            ));
+            assert_call_setup_state_bd_ur3tk_12(&argument_refused, &before_argument);
+        }
+    }
+
+    #[test]
+    fn timer_callback_refusals_restore_rest_and_frame_setup_bd_ur3tk_12() {
+        for (call_action, max_scope_depth) in [
+            (
+                HookAction::Terminate("timer callback denied".to_string()),
+                100,
+            ),
+            (HookAction::Allow, 1),
+        ] {
+            let module = test_module_with_functions(
+                vec![Ir3Instruction::Halt],
+                vec![Ir3FunctionDesc {
+                    entry: 0,
+                    arity: 1,
+                    frame_size: 1,
+                    name: Some("transactional_timer_callback_bd_ur3tk_12".to_string()),
+                    is_generator: false,
+                    rest_param_index: Some(0),
+                }],
+            );
+            let mut config = test_quickjs_config();
+            config.max_scope_depth = max_scope_depth;
+            let mut core = InterpreterCore::new(config, "transactional-timer-callback");
+            core.enable_profiling(crate::profiling::ProfilingConfig::default());
+            core.closures.push(ClosureValue {
+                function_index: 0,
+                captured_env: core.scope_chain.snapshot(),
+            });
+            core.sync_estimated_memory_bytes()
+                .expect("seed timer callback state should fit");
+            let hook = Arc::new(RecordingHook::with_call_action(call_action.clone()));
+            core.set_hook(hook.clone());
+            let before = capture_call_setup_state_bd_ur3tk_12(&core);
+
+            let error = core
+                .execute_timer_closure(&module, 0)
+                .expect_err("timer callback setup refusal must remain transactional");
+
+            match call_action {
+                HookAction::Terminate(_) => assert!(matches!(
+                    error,
+                    InterpreterError::ContainmentActionRequested { action, .. }
+                        if action == "terminate"
+                )),
+                HookAction::Allow => {
+                    assert!(matches!(error, InterpreterError::ScopeDepthExceeded { .. }))
+                }
+                _ => unreachable!("test matrix uses only termination and scope refusal"),
+            }
+            assert_call_setup_state_bd_ur3tk_12(&core, &before);
+            let records = hook.records_without_startup_module_record();
+            assert!(matches!(
+                records.as_slice(),
+                [
+                    HookRecord::Allocation {
+                        kind: AllocKind::Array,
+                        size_hint: 0,
+                        ..
+                    },
+                    HookRecord::Call { args, .. }
+                ] if matches!(args.first(), Some(Value::Object(_)))
+            ));
+        }
+    }
+
+    fn assert_rest_array_result_bd_ur3tk_9(
+        core: &InterpreterCore,
+        result: Value,
+        destination: Reg,
+    ) {
+        let Value::Object(array_id) = result else {
+            panic!("rest parameter should return an Array object");
+        };
+        assert_eq!(
+            core.read_array_like_values(array_id),
+            vec![Value::Int(20), Value::Int(30)]
+        );
+        assert_eq!(
+            core.read_reg_label(destination)
+                .expect("rest return label should remain readable"),
+            crate::ifc_artifacts::Label::Secret
+        );
+    }
+
+    fn rest_return_descriptor_bd_ur3tk_9() -> Ir3FunctionDesc {
+        Ir3FunctionDesc {
+            entry: 2,
+            arity: 2,
+            frame_size: 2,
+            name: Some("return_rest".to_string()),
+            is_generator: false,
+            rest_param_index: Some(1),
+        }
+    }
+
+    #[test]
+    fn plain_call_rest_joins_only_trailing_argument_labels_bd_ur3tk_9() {
+        let module = test_module_with_functions(
+            vec![
+                Ir3Instruction::Call {
+                    callee: 0,
+                    args: RegRange { start: 1, count: 3 },
+                    dst: 4,
+                },
+                Ir3Instruction::Return { value: 4 },
+                Ir3Instruction::Return { value: 1 },
+            ],
+            vec![rest_return_descriptor_bd_ur3tk_9()],
+        );
+        let mut core = quickjs_test_core();
+        core.registers[0] = Value::Function(0);
+        core.write_reg_with_label(1, Value::Int(10), crate::ifc_artifacts::Label::TopSecret)
+            .expect("fixed argument should be writable");
+        core.write_reg_with_label(2, Value::Int(20), crate::ifc_artifacts::Label::Confidential)
+            .expect("first rest argument should be writable");
+        core.write_reg_with_label(3, Value::Int(30), crate::ifc_artifacts::Label::Secret)
+            .expect("second rest argument should be writable");
+
+        let result = core.run_loop(&module).expect("rest call should return");
+        assert_rest_array_result_bd_ur3tk_9(&core, result, 4);
+    }
+
+    #[test]
+    fn method_call_rest_joins_trailing_argument_labels_bd_ur3tk_9() {
+        let module = test_module_with_functions(
+            vec![
+                Ir3Instruction::CallMethod {
+                    receiver: 0,
+                    callee: 1,
+                    args: RegRange { start: 2, count: 3 },
+                    dst: 5,
+                },
+                Ir3Instruction::Return { value: 5 },
+                Ir3Instruction::Return { value: 1 },
+            ],
+            vec![rest_return_descriptor_bd_ur3tk_9()],
+        );
+        let mut core = quickjs_test_core();
+        core.registers[0] = Value::str("receiver");
+        core.registers[1] = Value::Function(0);
+        core.write_reg_with_label(2, Value::Int(10), crate::ifc_artifacts::Label::TopSecret)
+            .expect("fixed argument should be writable");
+        core.write_reg_with_label(3, Value::Int(20), crate::ifc_artifacts::Label::Confidential)
+            .expect("first rest argument should be writable");
+        core.write_reg_with_label(4, Value::Int(30), crate::ifc_artifacts::Label::Secret)
+            .expect("second rest argument should be writable");
+
+        let result = core.run_loop(&module).expect("rest method should return");
+        assert_rest_array_result_bd_ur3tk_9(&core, result, 5);
+    }
+
+    #[test]
+    fn constructor_rest_uses_r0_formal_abi_and_joins_labels_bd_ur3tk_9() {
+        let module = test_module_with_functions(
+            vec![
+                Ir3Instruction::Construct {
+                    callee: 0,
+                    args: RegRange { start: 1, count: 3 },
+                    dst: 4,
+                },
+                Ir3Instruction::Return { value: 4 },
+                Ir3Instruction::Return { value: 1 },
+            ],
+            vec![rest_return_descriptor_bd_ur3tk_9()],
+        );
+        let mut core = quickjs_test_core();
+        core.registers[0] = Value::Function(0);
+        core.write_reg_with_label(1, Value::Int(10), crate::ifc_artifacts::Label::TopSecret)
+            .expect("fixed argument should be writable");
+        core.write_reg_with_label(2, Value::Int(20), crate::ifc_artifacts::Label::Confidential)
+            .expect("first rest argument should be writable");
+        core.write_reg_with_label(3, Value::Int(30), crate::ifc_artifacts::Label::Secret)
+            .expect("second rest argument should be writable");
+
+        let result = core
+            .run_loop(&module)
+            .expect("rest constructor should return its explicit Array");
+        assert_rest_array_result_bd_ur3tk_9(&core, result, 4);
+    }
+
+    #[test]
+    fn empty_rest_materializes_empty_public_array_bd_ur3tk_9() {
+        let module = test_module_with_functions(
+            vec![
+                Ir3Instruction::Call {
+                    callee: 0,
+                    args: RegRange { start: 1, count: 1 },
+                    dst: 2,
+                },
+                Ir3Instruction::Return { value: 2 },
+                Ir3Instruction::Return { value: 1 },
+            ],
+            vec![rest_return_descriptor_bd_ur3tk_9()],
+        );
+        let mut core = quickjs_test_core();
+        core.registers[0] = Value::Function(0);
+        core.write_reg_with_label(1, Value::Int(10), crate::ifc_artifacts::Label::TopSecret)
+            .expect("fixed argument should be writable");
+
+        let result = core.run_loop(&module).expect("empty rest should return");
+        let Value::Object(array_id) = result else {
+            panic!("empty rest parameter should return an Array object");
+        };
+        assert!(core.read_array_like_values(array_id).is_empty());
+        assert_eq!(
+            core.read_reg_label(2).expect("empty rest result label"),
+            crate::ifc_artifacts::Label::Public
+        );
+    }
+
+    #[test]
+    fn malformed_nonfinal_rest_descriptor_is_rejected_bd_ur3tk_9() {
+        let module = test_module_with_functions(
+            vec![
+                Ir3Instruction::Call {
+                    callee: 0,
+                    args: RegRange { start: 1, count: 3 },
+                    dst: 4,
+                },
+                Ir3Instruction::Return { value: 4 },
+                Ir3Instruction::Return { value: 1 },
+            ],
+            vec![Ir3FunctionDesc {
+                entry: 2,
+                arity: 3,
+                frame_size: 3,
+                name: Some("malformed_rest".to_string()),
+                is_generator: false,
+                rest_param_index: Some(1),
+            }],
+        );
+        let mut core = quickjs_test_core();
+        core.registers[0] = Value::Function(0);
+
+        let error = core
+            .run_loop(&module)
+            .expect_err("non-final rest metadata must fail closed");
+        assert!(matches!(error, InterpreterError::TypeError { .. }));
+    }
+
+    #[test]
+    fn malformed_constructor_rest_is_rejected_before_allocation_bd_ur3tk_9() {
+        let module = test_module_with_functions(
+            vec![
+                Ir3Instruction::Construct {
+                    callee: 0,
+                    args: RegRange { start: 1, count: 3 },
+                    dst: 4,
+                },
+                Ir3Instruction::Return { value: 4 },
+                Ir3Instruction::Return { value: 1 },
+            ],
+            vec![Ir3FunctionDesc {
+                entry: 2,
+                arity: 3,
+                frame_size: 3,
+                name: Some("malformed_constructor_rest".to_string()),
+                is_generator: false,
+                rest_param_index: Some(1),
+            }],
+        );
+        let mut core = quickjs_test_core();
+        core.registers[0] = Value::Function(0);
+        let heap_len = core.heap.len();
+        let estimated_memory_bytes = core.estimated_memory_bytes;
+        let function_prototypes = core.function_prototypes.clone();
+
+        core.run_loop(&module)
+            .expect_err("malformed constructor metadata must fail before setup");
+        assert_eq!(core.heap.len(), heap_len);
+        assert_eq!(core.estimated_memory_bytes, estimated_memory_bytes);
+        assert_eq!(core.function_prototypes, function_prototypes);
+    }
+
+    #[test]
+    fn rest_policy_hooks_observe_guarded_materialized_carrier_bd_ur3tk_9() {
+        let module = test_module_with_functions(
+            vec![
+                Ir3Instruction::Call {
+                    callee: 0,
+                    args: RegRange { start: 1, count: 3 },
+                    dst: 4,
+                },
+                Ir3Instruction::Return { value: 4 },
+                Ir3Instruction::Return { value: 1 },
+            ],
+            vec![rest_return_descriptor_bd_ur3tk_9()],
+        );
+        let hook = Arc::new(RecordingHook::allow_all());
+        let mut core = quickjs_test_core();
+        core.set_hook(hook.clone());
+        core.registers[0] = Value::Function(0);
+        core.registers[1] = Value::Int(10);
+        core.registers[2] = Value::Int(20);
+        core.registers[3] = Value::Int(30);
+
+        core.run_loop(&module)
+            .expect("guarded rest call should execute");
+        let records = hook.records_without_startup_module_record();
+        assert_eq!(records.len(), 2);
+        assert!(matches!(
+            records.first(),
+            Some(HookRecord::Allocation {
+                kind: AllocKind::Array,
+                size_hint: 2,
+                ..
+            })
+        ));
+        let HookRecord::Call { args, .. } = &records[1] else {
+            panic!("pre-call hook must run after rest allocation");
+        };
+        assert_eq!(args.first(), Some(&Value::Int(10)));
+        let Some(Value::Object(rest_array)) = args.get(1) else {
+            panic!("pre-call hook must receive the materialized rest Array");
+        };
+        assert_eq!(
+            core.read_array_like_values(*rest_array),
+            vec![Value::Int(20), Value::Int(30)]
+        );
+    }
+
+    #[test]
+    fn denied_rest_allocation_leaves_heap_unchanged_bd_ur3tk_9() {
+        let module = test_module_with_functions(
+            vec![
+                Ir3Instruction::Call {
+                    callee: 0,
+                    args: RegRange { start: 1, count: 2 },
+                    dst: 3,
+                },
+                Ir3Instruction::Return { value: 3 },
+                Ir3Instruction::Return { value: 1 },
+            ],
+            vec![rest_return_descriptor_bd_ur3tk_9()],
+        );
+        let hook = Arc::new(RecordingHook::with_allocation_action(
+            HookAction::Terminate("rest allocation denied".to_string()),
+        ));
+        let mut core = quickjs_test_core();
+        core.set_hook(hook.clone());
+        core.registers[0] = Value::Function(0);
+        core.registers[1] = Value::Int(10);
+        core.registers[2] = Value::Int(20);
+        let heap_len = core.heap.len();
+        let estimated_memory_bytes = core.estimated_memory_bytes;
+
+        core.run_loop(&module)
+            .expect_err("allocation policy must deny the implicit rest Array");
+        assert_eq!(core.heap.len(), heap_len);
+        assert_eq!(core.estimated_memory_bytes, estimated_memory_bytes);
+        assert!(matches!(
+            hook.records_without_startup_module_record().as_slice(),
+            [HookRecord::Allocation {
+                kind: AllocKind::Array,
+                size_hint: 1,
+                ..
+            }]
+        ));
+    }
+
+    #[test]
+    fn denied_constructor_rest_allocation_leaves_setup_unchanged_bd_ur3tk_9() {
+        let module = test_module_with_functions(
+            vec![
+                Ir3Instruction::Construct {
+                    callee: 0,
+                    args: RegRange { start: 1, count: 2 },
+                    dst: 3,
+                },
+                Ir3Instruction::Return { value: 3 },
+                Ir3Instruction::Return { value: 1 },
+            ],
+            vec![rest_return_descriptor_bd_ur3tk_9()],
+        );
+        let hook = Arc::new(RecordingHook::with_allocation_action(
+            HookAction::Terminate("constructor rest allocation denied".to_string()),
+        ));
+        let mut core = quickjs_test_core();
+        core.set_hook(hook.clone());
+        core.registers[0] = Value::Function(0);
+        core.registers[1] = Value::Int(10);
+        core.registers[2] = Value::Int(20);
+        let heap_len = core.heap.len();
+        let estimated_memory_bytes = core.estimated_memory_bytes;
+        let function_prototypes = core.function_prototypes.clone();
+
+        core.run_loop(&module)
+            .expect_err("rest allocation policy must deny constructor setup");
+        assert_eq!(core.heap.len(), heap_len);
+        assert_eq!(core.estimated_memory_bytes, estimated_memory_bytes);
+        assert_eq!(core.function_prototypes, function_prototypes);
+        assert!(matches!(
+            hook.records_without_startup_module_record().as_slice(),
+            [HookRecord::Allocation {
+                kind: AllocKind::Array,
+                size_hint: 1,
+                ..
+            }]
+        ));
     }
 
     #[test]
@@ -10645,6 +22794,7 @@ mod tests {
                 frame_size: 3,
                 name: Some("add_ten".to_string()),
                 is_generator: false,
+                rest_param_index: None,
             }],
         );
 
@@ -10679,6 +22829,7 @@ mod tests {
                 frame_size: 1,
                 name: Some("recurse".to_string()),
                 is_generator: false,
+                rest_param_index: None,
             }],
         );
 
@@ -10789,6 +22940,690 @@ mod tests {
     }
 
     #[test]
+    fn promise_resolve_wrapper_preserves_source_label_bd_ur3tk_13() {
+        let module = test_module(vec![
+            Ir3Instruction::HostCall {
+                capability: CapabilityTag("promise:resolve".to_string()),
+                args: RegRange { start: 0, count: 1 },
+                dst: 1,
+            },
+            Ir3Instruction::Halt,
+        ]);
+        let mut core = quickjs_test_core();
+        core.write_reg_with_label(
+            0,
+            Value::str("secret-resolution"),
+            crate::ifc_artifacts::Label::Secret,
+        )
+        .expect("resolution source should be writable");
+
+        core.execute(&module)
+            .expect("Promise.resolve hostcall should execute");
+
+        let Value::Promise(handle) = core.registers[1] else {
+            panic!("Promise.resolve should return a Promise handle");
+        };
+        assert_eq!(
+            core.read_reg_label(1).expect("result label should exist"),
+            crate::ifc_artifacts::Label::Secret
+        );
+        let record = core
+            .promise_store
+            .get(crate::promise_model::PromiseHandle(handle))
+            .expect("resolved Promise should exist");
+        assert_eq!(record.label, crate::ifc_artifacts::Label::Secret);
+    }
+
+    #[test]
+    fn promise_existing_reject_joins_target_and_reason_labels_bd_ur3tk_13() {
+        let module = test_module(vec![
+            Ir3Instruction::HostCall {
+                capability: CapabilityTag("promise:reject".to_string()),
+                args: RegRange { start: 0, count: 2 },
+                dst: 2,
+            },
+            Ir3Instruction::Halt,
+        ]);
+        let cases = [
+            (
+                crate::ifc_artifacts::Label::Secret,
+                crate::ifc_artifacts::Label::Custom {
+                    name: "tenant-rejection".to_string(),
+                    level: 2,
+                },
+                "target-dominant",
+            ),
+            (
+                crate::ifc_artifacts::Label::Public,
+                crate::ifc_artifacts::Label::Secret,
+                "reason-dominant",
+            ),
+        ];
+
+        for (target_label, reason_label, reason) in cases {
+            let expected_label = target_label.join(&reason_label);
+            let mut core = quickjs_test_core();
+            let target = core.promise_store.create();
+            core.write_reg_with_label(0, Value::Promise(target.0), target_label)
+                .expect("target Promise should be writable");
+            core.write_reg_with_label(1, Value::str(reason), reason_label)
+                .expect("rejection reason should be writable");
+
+            core.execute(&module)
+                .expect("existing-target Promise.reject hostcall should execute");
+
+            assert_eq!(core.registers[2], Value::Promise(target.0));
+            assert_eq!(
+                core.read_reg_label(2).expect("result label should exist"),
+                expected_label,
+                "returned handle joins the target-handle and reason labels"
+            );
+            let record = core
+                .promise_store
+                .get(target)
+                .expect("rejected Promise should exist");
+            assert_eq!(
+                record.label, expected_label,
+                "settlement joins target-reference and reason provenance"
+            );
+            assert!(matches!(
+                &record.state,
+                crate::promise_model::PromiseState::Rejected(
+                    crate::object_model::JsValue::Str(value)
+                ) if value == reason
+            ));
+        }
+    }
+
+    #[test]
+    fn pending_promise_reactions_preserve_registration_labels_bd_ur3tk_13() {
+        let custom = crate::ifc_artifacts::Label::Custom {
+            name: "tenant-reaction".to_string(),
+            level: 4,
+        };
+        let cases = [
+            (
+                "promise:then",
+                3,
+                crate::ifc_artifacts::Label::Public,
+                crate::ifc_artifacts::Label::Public,
+                crate::ifc_artifacts::Label::Secret,
+                crate::ifc_artifacts::Label::Secret,
+            ),
+            (
+                "promise:catch",
+                2,
+                crate::ifc_artifacts::Label::Public,
+                custom.clone(),
+                crate::ifc_artifacts::Label::Public,
+                custom,
+            ),
+            (
+                "promise:finally",
+                2,
+                crate::ifc_artifacts::Label::Secret,
+                crate::ifc_artifacts::Label::Public,
+                crate::ifc_artifacts::Label::Public,
+                crate::ifc_artifacts::Label::Secret,
+            ),
+        ];
+
+        for (capability, count, source_label, handler_label, reject_label, expected_label) in cases
+        {
+            let module = test_module(vec![
+                Ir3Instruction::HostCall {
+                    capability: CapabilityTag(capability.to_string()),
+                    args: RegRange { start: 0, count },
+                    dst: 3,
+                },
+                Ir3Instruction::Halt,
+            ]);
+            let mut core = quickjs_test_core();
+            let source = core.promise_store.create();
+            core.write_reg_with_label(0, Value::Promise(source.0), source_label)
+                .expect("source Promise should be writable");
+            core.write_reg_with_label(1, Value::Undefined, handler_label)
+                .expect("fulfillment handler slot should be writable");
+            core.write_reg_with_label(2, Value::Undefined, reject_label)
+                .expect("rejection handler slot should be writable");
+
+            core.execute(&module)
+                .expect("Promise reaction hostcall should execute");
+
+            let Value::Promise(result_handle) = core.registers[3] else {
+                panic!("{capability} should return a Promise handle");
+            };
+            assert_eq!(
+                core.read_reg_label(3).expect("result label should exist"),
+                expected_label,
+                "{capability} result handle carries registration provenance"
+            );
+            core.fulfill_promise(
+                source,
+                crate::object_model::JsValue::Int(7),
+                crate::ifc_artifacts::Label::Public,
+            )
+            .expect("source Promise should fulfill");
+            core.drain_microtasks(None)
+                .expect("Promise reaction microtasks should drain");
+            let result = core
+                .promise_store
+                .get(crate::promise_model::PromiseHandle(result_handle))
+                .expect("reaction result Promise should exist");
+            assert_eq!(
+                result.label, expected_label,
+                "{capability} result settlement joins registration provenance"
+            );
+        }
+    }
+
+    fn promise_combinator_module_bd_ur3tk_19(
+        capability: &str,
+        args: RegRange,
+        dst: Reg,
+    ) -> Ir3Module {
+        test_module(vec![
+            Ir3Instruction::HostCall {
+                capability: CapabilityTag(capability.to_string()),
+                args,
+                dst,
+            },
+            Ir3Instruction::Halt,
+        ])
+    }
+
+    fn execute_promise_combinator_bd_ur3tk_19(
+        core: &mut InterpreterCore,
+        capability: &str,
+        args: RegRange,
+        dst: Reg,
+    ) -> crate::promise_model::PromiseHandle {
+        core.execute(&promise_combinator_module_bd_ur3tk_19(
+            capability, args, dst,
+        ))
+        .unwrap_or_else(|error| panic!("{capability} should execute: {error}"));
+        let Value::Promise(handle) = core.registers[dst as usize] else {
+            panic!("{capability} should return a Promise handle");
+        };
+        crate::promise_model::PromiseHandle(handle)
+    }
+
+    #[test]
+    fn combinators_join_direct_inputs_in_both_orders_bd_ur3tk_19() {
+        for capability in [
+            "promise:all",
+            "promise:allSettled",
+            "promise:race",
+            "promise:any",
+        ] {
+            for secret_first in [true, false] {
+                let mut core = quickjs_test_core();
+                let (first_label, second_label) = if secret_first {
+                    (
+                        crate::ifc_artifacts::Label::Secret,
+                        crate::ifc_artifacts::Label::Public,
+                    )
+                } else {
+                    (
+                        crate::ifc_artifacts::Label::Public,
+                        crate::ifc_artifacts::Label::Secret,
+                    )
+                };
+                core.write_reg_with_label(0, Value::Int(10), first_label)
+                    .expect("first input should be writable");
+                core.write_reg_with_label(1, Value::Int(20), second_label)
+                    .expect("second input should be writable");
+
+                let result = execute_promise_combinator_bd_ur3tk_19(
+                    &mut core,
+                    capability,
+                    RegRange { start: 0, count: 2 },
+                    2,
+                );
+
+                assert_eq!(
+                    core.read_reg_label(2).expect("result label should exist"),
+                    crate::ifc_artifacts::Label::Secret,
+                    "{capability} returned handle must join every direct input (secret_first={secret_first})"
+                );
+                let record = core
+                    .promise_store
+                    .get(result)
+                    .expect("aggregate Promise should exist");
+                assert_eq!(
+                    record.label,
+                    crate::ifc_artifacts::Label::Secret,
+                    "{capability} settlement must be independent of input order (secret_first={secret_first})"
+                );
+                assert!(record.state.is_settled());
+            }
+        }
+    }
+
+    #[test]
+    fn combinators_join_already_settled_promise_labels_bd_ur3tk_19() {
+        for capability in [
+            "promise:all",
+            "promise:allSettled",
+            "promise:race",
+            "promise:any",
+        ] {
+            for secret_first in [true, false] {
+                let mut core = quickjs_test_core();
+                let first = core.promise_store.create();
+                let second = core.promise_store.create();
+                let (first_label, second_label) = if secret_first {
+                    (
+                        crate::ifc_artifacts::Label::Secret,
+                        crate::ifc_artifacts::Label::Public,
+                    )
+                } else {
+                    (
+                        crate::ifc_artifacts::Label::Public,
+                        crate::ifc_artifacts::Label::Secret,
+                    )
+                };
+                core.fulfill_promise(first, crate::object_model::JsValue::Int(10), first_label)
+                    .expect("first Promise should fulfill");
+                core.fulfill_promise(second, crate::object_model::JsValue::Int(20), second_label)
+                    .expect("second Promise should fulfill");
+                core.registers[0] = Value::Promise(first.0);
+                core.registers[1] = Value::Promise(second.0);
+
+                let result = execute_promise_combinator_bd_ur3tk_19(
+                    &mut core,
+                    capability,
+                    RegRange { start: 0, count: 2 },
+                    2,
+                );
+
+                assert_eq!(
+                    core.read_reg_label(2).expect("result label should exist"),
+                    crate::ifc_artifacts::Label::Secret,
+                    "{capability} handle must include known settlement provenance (secret_first={secret_first})"
+                );
+                let record = core
+                    .promise_store
+                    .get(result)
+                    .expect("aggregate Promise should exist");
+                assert_eq!(record.label, crate::ifc_artifacts::Label::Secret);
+            }
+        }
+    }
+
+    #[test]
+    fn combinator_array_inputs_inherit_iterable_carrier_label_bd_ur3tk_19() {
+        let mut core = quickjs_test_core();
+        let settled = core.promise_store.create();
+        core.fulfill_promise(
+            settled,
+            crate::object_model::JsValue::Int(20),
+            crate::ifc_artifacts::Label::Public,
+        )
+        .expect("nested Promise should fulfill");
+        let inputs = core
+            .alloc_array_from_values(&[Value::Int(10), Value::Promise(settled.0)])
+            .expect("input array should allocate");
+        core.write_reg_with_label(
+            0,
+            Value::Object(inputs),
+            crate::ifc_artifacts::Label::Secret,
+        )
+        .expect("input array carrier should be writable");
+
+        let result = execute_promise_combinator_bd_ur3tk_19(
+            &mut core,
+            "promise:all",
+            RegRange { start: 0, count: 1 },
+            1,
+        );
+
+        assert_eq!(
+            core.read_reg_label(1).expect("result label should exist"),
+            crate::ifc_artifacts::Label::Secret
+        );
+        let record = core
+            .promise_store
+            .get(result)
+            .expect("Promise.all aggregate should exist");
+        assert_eq!(record.label, crate::ifc_artifacts::Label::Secret);
+    }
+
+    #[test]
+    fn pending_all_variants_join_settlements_in_both_orders_bd_ur3tk_19() {
+        for capability in ["promise:all", "promise:allSettled"] {
+            for secret_first in [true, false] {
+                let mut core = quickjs_test_core();
+                let first = core.promise_store.create();
+                let second = core.promise_store.create();
+                core.write_reg_with_label(
+                    0,
+                    Value::Promise(first.0),
+                    crate::ifc_artifacts::Label::Public,
+                )
+                .expect("first pending Promise should be writable");
+                core.write_reg_with_label(
+                    1,
+                    Value::Promise(second.0),
+                    crate::ifc_artifacts::Label::Public,
+                )
+                .expect("second pending Promise should be writable");
+                let result = execute_promise_combinator_bd_ur3tk_19(
+                    &mut core,
+                    capability,
+                    RegRange { start: 0, count: 2 },
+                    2,
+                );
+
+                if capability == "promise:all" {
+                    let (first_label, second_label) = if secret_first {
+                        (
+                            crate::ifc_artifacts::Label::Secret,
+                            crate::ifc_artifacts::Label::Public,
+                        )
+                    } else {
+                        (
+                            crate::ifc_artifacts::Label::Public,
+                            crate::ifc_artifacts::Label::Secret,
+                        )
+                    };
+                    core.fulfill_promise(first, crate::object_model::JsValue::Int(10), first_label)
+                        .expect("first Promise should fulfill");
+                    core.fulfill_promise(
+                        second,
+                        crate::object_model::JsValue::Int(20),
+                        second_label,
+                    )
+                    .expect("second Promise should fulfill");
+                } else if secret_first {
+                    core.reject_promise(
+                        first,
+                        crate::object_model::JsValue::Str("secret-first".into()),
+                        crate::ifc_artifacts::Label::Secret,
+                    )
+                    .expect("first Promise should reject");
+                    core.fulfill_promise(
+                        second,
+                        crate::object_model::JsValue::Int(20),
+                        crate::ifc_artifacts::Label::Public,
+                    )
+                    .expect("second Promise should fulfill");
+                } else {
+                    core.fulfill_promise(
+                        first,
+                        crate::object_model::JsValue::Int(10),
+                        crate::ifc_artifacts::Label::Public,
+                    )
+                    .expect("first Promise should fulfill");
+                    core.reject_promise(
+                        second,
+                        crate::object_model::JsValue::Str("secret-last".into()),
+                        crate::ifc_artifacts::Label::Secret,
+                    )
+                    .expect("second Promise should reject");
+                }
+
+                let record = core
+                    .promise_store
+                    .get(result)
+                    .expect("aggregate Promise should exist");
+                assert_eq!(
+                    record.label,
+                    crate::ifc_artifacts::Label::Secret,
+                    "{capability} must retain the earlier settlement label (secret_first={secret_first})"
+                );
+                assert!(matches!(
+                    &record.state,
+                    crate::promise_model::PromiseState::Fulfilled(_)
+                ));
+            }
+        }
+    }
+
+    #[test]
+    fn promise_any_rejections_join_labels_in_both_orders_bd_ur3tk_19() {
+        for secret_first in [true, false] {
+            let mut core = quickjs_test_core();
+            let first = core.promise_store.create();
+            let second = core.promise_store.create();
+            core.registers[0] = Value::Promise(first.0);
+            core.registers[1] = Value::Promise(second.0);
+            let result = execute_promise_combinator_bd_ur3tk_19(
+                &mut core,
+                "promise:any",
+                RegRange { start: 0, count: 2 },
+                2,
+            );
+            let (first_label, second_label) = if secret_first {
+                (
+                    crate::ifc_artifacts::Label::Secret,
+                    crate::ifc_artifacts::Label::Public,
+                )
+            } else {
+                (
+                    crate::ifc_artifacts::Label::Public,
+                    crate::ifc_artifacts::Label::Secret,
+                )
+            };
+            core.reject_promise(
+                first,
+                crate::object_model::JsValue::Str("first".into()),
+                first_label,
+            )
+            .expect("first Promise should reject");
+            core.reject_promise(
+                second,
+                crate::object_model::JsValue::Str("second".into()),
+                second_label,
+            )
+            .expect("second Promise should reject");
+
+            let record = core
+                .promise_store
+                .get(result)
+                .expect("Promise.any aggregate should exist");
+            assert_eq!(
+                record.label,
+                crate::ifc_artifacts::Label::Secret,
+                "Promise.any AggregateError label must not depend on rejection order"
+            );
+            assert!(matches!(
+                &record.state,
+                crate::promise_model::PromiseState::Rejected(_)
+            ));
+        }
+    }
+
+    #[test]
+    fn combinator_cross_branch_short_circuits_retain_prior_label_bd_ur3tk_19() {
+        for capability in ["promise:all", "promise:any"] {
+            let mut core = quickjs_test_core();
+            let first = core.promise_store.create();
+            let second = core.promise_store.create();
+            core.registers[0] = Value::Promise(first.0);
+            core.registers[1] = Value::Promise(second.0);
+            let result = execute_promise_combinator_bd_ur3tk_19(
+                &mut core,
+                capability,
+                RegRange { start: 0, count: 2 },
+                2,
+            );
+
+            if capability == "promise:all" {
+                core.fulfill_promise(
+                    first,
+                    crate::object_model::JsValue::Int(10),
+                    crate::ifc_artifacts::Label::Secret,
+                )
+                .expect("first Promise should fulfill");
+                core.reject_promise(
+                    second,
+                    crate::object_model::JsValue::Str("public-rejection".into()),
+                    crate::ifc_artifacts::Label::Public,
+                )
+                .expect("second Promise should reject");
+            } else {
+                core.reject_promise(
+                    first,
+                    crate::object_model::JsValue::Str("secret-rejection".into()),
+                    crate::ifc_artifacts::Label::Secret,
+                )
+                .expect("first Promise should reject");
+                core.fulfill_promise(
+                    second,
+                    crate::object_model::JsValue::Int(20),
+                    crate::ifc_artifacts::Label::Public,
+                )
+                .expect("second Promise should fulfill");
+            }
+
+            let record = core
+                .promise_store
+                .get(result)
+                .expect("aggregate Promise should exist");
+            assert_eq!(
+                record.label,
+                crate::ifc_artifacts::Label::Secret,
+                "{capability} must retain a prior Secret settlement when a Public input short-circuits"
+            );
+            assert_eq!(
+                matches!(
+                    &record.state,
+                    crate::promise_model::PromiseState::Rejected(_)
+                ),
+                capability == "promise:all"
+            );
+        }
+    }
+
+    #[test]
+    fn combinator_short_circuits_join_all_input_references_bd_ur3tk_19() {
+        for (capability, reject_winner) in [
+            ("promise:all", true),
+            ("promise:race", false),
+            ("promise:race", true),
+            ("promise:any", false),
+        ] {
+            let mut core = quickjs_test_core();
+            let winner = core.promise_store.create();
+            let pending = core.promise_store.create();
+            core.write_reg_with_label(
+                0,
+                Value::Promise(winner.0),
+                crate::ifc_artifacts::Label::Public,
+            )
+            .expect("winner should be writable");
+            core.write_reg_with_label(
+                1,
+                Value::Promise(pending.0),
+                crate::ifc_artifacts::Label::Secret,
+            )
+            .expect("pending competitor should be writable");
+            let result = execute_promise_combinator_bd_ur3tk_19(
+                &mut core,
+                capability,
+                RegRange { start: 0, count: 2 },
+                2,
+            );
+            assert_eq!(
+                core.read_reg_label(2).expect("result label should exist"),
+                crate::ifc_artifacts::Label::Secret,
+                "{capability} returned handle must include every input reference"
+            );
+
+            if reject_winner {
+                core.reject_promise(
+                    winner,
+                    crate::object_model::JsValue::Str("public-winner".into()),
+                    crate::ifc_artifacts::Label::Public,
+                )
+                .expect("winner should reject");
+            } else {
+                core.fulfill_promise(
+                    winner,
+                    crate::object_model::JsValue::Int(7),
+                    crate::ifc_artifacts::Label::Public,
+                )
+                .expect("winner should fulfill");
+            }
+
+            let record = core
+                .promise_store
+                .get(result)
+                .expect("short-circuit aggregate should exist");
+            assert_eq!(
+                record.label,
+                crate::ifc_artifacts::Label::Secret,
+                "{capability} winner must retain the pending competitor reference label"
+            );
+            assert!(record.state.is_settled());
+        }
+    }
+
+    #[test]
+    fn empty_combinators_preserve_carrier_labels_bd_ur3tk_19() {
+        for capability in [
+            "promise:all",
+            "promise:allSettled",
+            "promise:race",
+            "promise:any",
+        ] {
+            let mut core = quickjs_test_core();
+            let result = execute_promise_combinator_bd_ur3tk_19(
+                &mut core,
+                capability,
+                RegRange { start: 0, count: 0 },
+                0,
+            );
+            assert_eq!(
+                core.read_reg_label(0)
+                    .expect("empty result label should exist"),
+                crate::ifc_artifacts::Label::Public
+            );
+            let record = core
+                .promise_store
+                .get(result)
+                .expect("empty aggregate should exist");
+            assert_eq!(record.label, crate::ifc_artifacts::Label::Public);
+            assert_eq!(
+                record.state.is_settled(),
+                capability != "promise:race",
+                "only an empty Promise.race remains pending"
+            );
+
+            let mut core = quickjs_test_core();
+            let empty_array = core
+                .alloc_array_from_values(&[])
+                .expect("empty array should allocate");
+            core.write_reg_with_label(
+                0,
+                Value::Object(empty_array),
+                crate::ifc_artifacts::Label::Secret,
+            )
+            .expect("empty array carrier should be writable");
+            let result = execute_promise_combinator_bd_ur3tk_19(
+                &mut core,
+                capability,
+                RegRange { start: 0, count: 1 },
+                1,
+            );
+            assert_eq!(
+                core.read_reg_label(1)
+                    .expect("empty result label should exist"),
+                crate::ifc_artifacts::Label::Secret,
+                "{capability} must preserve a labeled empty iterable carrier"
+            );
+            let record = core
+                .promise_store
+                .get(result)
+                .expect("empty aggregate should exist");
+            if capability != "promise:race" {
+                assert_eq!(record.label, crate::ifc_artifacts::Label::Secret);
+            }
+        }
+    }
+
+    #[test]
     fn builtin_array_is_array_uses_explicit_array_metadata() {
         let array = quickjs_execute(&test_module(vec![
             Ir3Instruction::NewArray { dst: 4 },
@@ -10862,12 +23697,58 @@ mod tests {
     }
 
     #[test]
+    fn array_push_does_not_overflow_on_u32_max_index_key() {
+        // Regression (bd-qsz8t): a property key that parses to `u32::MAX`
+        // ("4294967295") fed the `ArrayPush` sparse-length fold a `n + 1`,
+        // overflowing u32 — a debug-build panic / release-build wrap. The fold
+        // now saturates (matching `array_like_length`), so the op completes
+        // instead of crashing on this adversarial key.
+        let module = test_module_with_pool(
+            vec![
+                Ir3Instruction::NewArray { dst: 1 },
+                Ir3Instruction::LoadStr {
+                    dst: 3,
+                    pool_index: 0,
+                },
+                Ir3Instruction::LoadInt { dst: 4, value: 1 },
+                Ir3Instruction::SetProperty {
+                    obj: 1,
+                    key: 3,
+                    val: 4,
+                },
+                Ir3Instruction::LoadInt { dst: 2, value: 42 },
+                Ir3Instruction::ArrayPush {
+                    array: 1,
+                    element: 2,
+                },
+                Ir3Instruction::Move { dst: 0, src: 1 },
+                Ir3Instruction::Halt,
+            ],
+            vec!["4294967295".to_string()],
+        );
+        let mut core = quickjs_test_core();
+        // The load-bearing assertion: this must not panic on the u32::MAX
+        // sparse-fold (it did before the fix in debug builds).
+        let result = core
+            .execute(&module)
+            .expect("array push must not overflow on a u32::MAX index key");
+        let arr_id = object_id_from_value(&result.value, "array push result");
+        // Saturating fold yields next_idx == u32::MAX, so the push writes at
+        // that index, overwriting the pathological key with the pushed value.
+        assert_eq!(
+            core.heap[arr_id.0 as usize].properties.get("4294967295"),
+            Some(&Value::Int(42)),
+            "push must have completed and written the element"
+        );
+    }
+
+    #[test]
     fn builtin_array_push_and_pop_mutate_receiver_length() {
         let mut core = quickjs_test_core();
         let array_id = core.alloc_array_with_prototype(None).unwrap();
         core.registers[0] = Value::Object(array_id);
         core.registers[1] = Value::Int(7);
-        core.registers[2] = Value::Str("x".to_string());
+        core.registers[2] = Value::str("x");
 
         let pushed = core
             .dispatch_builtin_hostcall(
@@ -10882,7 +23763,7 @@ mod tests {
         );
         assert_eq!(
             core.heap[array_id.0 as usize].properties.get("1"),
-            Some(&Value::Str("x".to_string()))
+            Some(&Value::str("x"))
         );
         assert_eq!(
             core.heap[array_id.0 as usize].properties.get("length"),
@@ -10892,7 +23773,7 @@ mod tests {
         let popped = core
             .dispatch_builtin_hostcall("builtin:ArrayPrototypePop", RegRange { start: 0, count: 1 })
             .unwrap();
-        assert_eq!(popped, Value::Str("x".to_string()));
+        assert_eq!(popped, Value::str("x"));
         assert_eq!(
             core.heap[array_id.0 as usize].properties.get("length"),
             Some(&Value::Int(1))
@@ -10920,7 +23801,7 @@ mod tests {
         assert!(core.heap[keys_id.0 as usize].is_array);
         assert_eq!(
             core.read_array_like_values(keys_id),
-            vec![Value::Str("a".to_string()), Value::Str("b".to_string())]
+            vec![Value::str("b"), Value::str("a")]
         );
 
         let values = core
@@ -10933,14 +23814,767 @@ mod tests {
         assert!(core.heap[values_id.0 as usize].is_array);
         assert_eq!(
             core.read_array_like_values(values_id),
-            vec![Value::Int(1), Value::Int(2)]
+            vec![Value::Int(2), Value::Int(1)]
         );
+    }
+
+    #[test]
+    fn baseline_data_property_consumers_use_es_own_key_order() {
+        let mut core = quickjs_test_core();
+        let object_id = core.alloc_object_with_prototype(None).unwrap();
+        for (key, value) in [
+            ("b", 1),
+            ("10", 2),
+            ("2", 3),
+            ("01", 4),
+            ("4294967295", 5),
+            ("0", 6),
+            ("a", 7),
+            ("4294967294", 9),
+        ] {
+            core.set_object_property(object_id, key.to_string(), Value::Int(value))
+                .unwrap();
+        }
+        core.set_object_property(object_id, "b".to_string(), Value::Int(8))
+            .unwrap();
+        assert!(core.remove_object_property(object_id, "b").unwrap());
+        core.set_object_property(object_id, "b".to_string(), Value::Int(8))
+            .unwrap();
+
+        let expected_strings = [
+            "0".to_string(),
+            "2".to_string(),
+            "10".to_string(),
+            "4294967294".to_string(),
+            "01".to_string(),
+            "4294967295".to_string(),
+            "a".to_string(),
+            "b".to_string(),
+        ];
+        let expected_keys = expected_strings
+            .iter()
+            .map(|key| JsString::from(key.as_str()))
+            .collect::<Vec<_>>();
+        assert_eq!(core.own_enumerable_keys(object_id).unwrap(), expected_keys);
+        assert_eq!(core.collect_for_in_keys(object_id).unwrap(), expected_keys);
+        assert_eq!(
+            core.qs_stringify_object(object_id, "&", "=").unwrap(),
+            "0=6&2=3&10=2&4294967294=9&01=4&4294967295=5&a=7&b=8"
+        );
+    }
+
+    #[test]
+    fn mixed_data_accessor_consumers_use_one_es_own_key_order() {
+        let mut core = quickjs_test_core();
+        let object_id = core.alloc_object_with_prototype(None).unwrap();
+        core.set_object_property(object_id, "z".to_string(), Value::Int(1))
+            .unwrap();
+        core.set_object_property(
+            object_id,
+            format!("{IR_ACCESSOR_GET_PREFIX}x"),
+            Value::Function(1),
+        )
+        .unwrap();
+        core.set_object_property(
+            object_id,
+            format!("{IR_ACCESSOR_GET_PREFIX}10"),
+            Value::Function(2),
+        )
+        .unwrap();
+        core.set_object_property(object_id, "2".to_string(), Value::Int(2))
+            .unwrap();
+        core.set_object_property(
+            object_id,
+            format!("{IR_ACCESSOR_GET_PREFIX}1"),
+            Value::Function(3),
+        )
+        .unwrap();
+        core.set_object_property(object_id, "4294967295".to_string(), Value::Int(5))
+            .unwrap();
+        core.set_object_property(
+            object_id,
+            format!("{IR_ACCESSOR_GET_PREFIX}4294967294"),
+            Value::Function(4),
+        )
+        .unwrap();
+        core.set_object_property(object_id, "a".to_string(), Value::Int(6))
+            .unwrap();
+
+        let expected_strings = vec![
+            "1".to_string(),
+            "2".to_string(),
+            "10".to_string(),
+            "4294967294".to_string(),
+            "z".to_string(),
+            "x".to_string(),
+            "4294967295".to_string(),
+            "a".to_string(),
+        ];
+        assert_eq!(
+            core.heap[object_id.0 as usize].own_property_keys(),
+            expected_strings
+        );
+        let expected = expected_strings
+            .iter()
+            .map(|key| JsString::from(key.as_str()))
+            .collect::<Vec<_>>();
+        assert_eq!(core.own_enumerable_keys(object_id).unwrap(), expected);
+        assert_eq!(core.collect_for_in_keys(object_id).unwrap(), expected);
+
+        core.registers[4] = Value::Object(object_id);
+        let keys = core
+            .dispatch_builtin_hostcall("builtin:ObjectKeys", RegRange { start: 4, count: 1 })
+            .unwrap();
+        let Value::Object(keys_id) = keys else {
+            panic!("Object.keys should return an array object");
+        };
+        assert_eq!(
+            core.read_array_like_values(keys_id),
+            expected.into_iter().map(Value::Str).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn descriptor_kind_conversions_preserve_creation_position() {
+        let mut core = quickjs_test_core();
+        let object_id = core.alloc_object_with_prototype(None).unwrap();
+        for (key, value) in [("a", 1), ("b", 2), ("c", 3)] {
+            core.set_object_property(object_id, key.to_string(), Value::Int(value))
+                .unwrap();
+        }
+        let expected = vec!["a".to_string(), "b".to_string(), "c".to_string()];
+
+        core.set_object_property(
+            object_id,
+            format!("{IR_ACCESSOR_GET_PREFIX}b"),
+            Value::Function(1),
+        )
+        .unwrap();
+        assert_eq!(
+            core.heap[object_id.0 as usize].own_property_keys(),
+            expected
+        );
+        assert!(!core.heap[object_id.0 as usize].properties.contains_key("b"));
+        assert!(core.heap[object_id.0 as usize].accessors.contains_key("b"));
+
+        core.set_object_property(
+            object_id,
+            format!("{IR_ACCESSOR_SET_PREFIX}b"),
+            Value::Function(2),
+        )
+        .unwrap();
+        assert_eq!(
+            core.heap[object_id.0 as usize].own_property_keys(),
+            expected
+        );
+
+        core.set_plain_data_property(object_id, "b".to_string(), Value::Int(4))
+            .unwrap();
+        assert_eq!(
+            core.heap[object_id.0 as usize].own_property_keys(),
+            expected
+        );
+        assert_eq!(
+            core.heap[object_id.0 as usize].properties.get("b"),
+            Some(&Value::Int(4))
+        );
+        assert!(!core.heap[object_id.0 as usize].accessors.contains_key("b"));
+        assert_eq!(
+            core.qs_stringify_object(object_id, "&", "=").unwrap(),
+            "a=1&b=4&c=3"
+        );
+    }
+
+    #[test]
+    fn deleted_accessor_recreation_appends_ordinary_key() {
+        let mut core = quickjs_test_core();
+        let object_id = core.alloc_object_with_prototype(None).unwrap();
+        core.set_object_property(object_id, "a".to_string(), Value::Int(1))
+            .unwrap();
+        core.set_object_property(
+            object_id,
+            format!("{IR_ACCESSOR_GET_PREFIX}x"),
+            Value::Function(1),
+        )
+        .unwrap();
+        core.set_object_property(object_id, "b".to_string(), Value::Int(2))
+            .unwrap();
+
+        assert!(core.remove_object_property(object_id, "x").unwrap());
+        core.set_object_property(
+            object_id,
+            format!("{IR_ACCESSOR_GET_PREFIX}x"),
+            Value::Function(2),
+        )
+        .unwrap();
+        assert_eq!(
+            core.heap[object_id.0 as usize].own_property_keys(),
+            vec!["a".to_string(), "b".to_string(), "x".to_string()]
+        );
+    }
+
+    #[test]
+    fn heap_object_mixed_order_serde_roundtrip_and_legacy_fallback() {
+        let mut core = quickjs_test_core();
+        let object_id = core.alloc_object_with_prototype(None).unwrap();
+        core.set_object_property(object_id, "a".to_string(), Value::Int(1))
+            .unwrap();
+        core.set_object_property(
+            object_id,
+            format!("{IR_ACCESSOR_GET_PREFIX}x"),
+            Value::Function(1),
+        )
+        .unwrap();
+        core.set_object_property(object_id, "b".to_string(), Value::Int(2))
+            .unwrap();
+
+        let encoded = serde_json::to_value(&core.heap[object_id.0 as usize]).unwrap();
+        assert!(encoded["properties"].is_object());
+        assert_eq!(
+            encoded["own_string_key_order"],
+            serde_json::json!(["a", "x", "b"])
+        );
+        let restored: HeapObject = serde_json::from_value(encoded.clone()).unwrap();
+        assert_eq!(
+            restored.own_property_keys(),
+            vec!["a".to_string(), "x".to_string(), "b".to_string()]
+        );
+        let standalone_properties: OrderedStringMap<Value> =
+            serde_json::from_value(serde_json::to_value(&restored.properties).unwrap()).unwrap();
+        assert_eq!(standalone_properties, restored.properties);
+
+        let mut data_only = HeapObject::new();
+        data_only
+            .properties
+            .insert("only".to_string(), Value::Int(1));
+        let legacy_data_only = data_only.clone();
+        let _ = data_only.record_property_definition(&JsString::from("only"), true);
+        assert_eq!(
+            data_only.own_property_keys(),
+            legacy_data_only.own_property_keys()
+        );
+        assert_ne!(data_only, legacy_data_only);
+
+        let mut legacy_encoded = encoded.clone();
+        legacy_encoded
+            .as_object_mut()
+            .unwrap()
+            .remove("own_string_key_order");
+        let legacy: HeapObject = serde_json::from_value(legacy_encoded).unwrap();
+        assert_eq!(
+            legacy.own_property_keys(),
+            vec!["a".to_string(), "b".to_string(), "x".to_string()]
+        );
+        assert_ne!(restored, legacy);
+
+        let mut duplicate_order = encoded;
+        duplicate_order["own_string_key_order"] = serde_json::json!(["a", "x", "x"]);
+        assert!(serde_json::from_value::<HeapObject>(duplicate_order).is_err());
+
+        let mut incomplete_order = serde_json::to_value(&restored).unwrap();
+        incomplete_order["own_string_key_order"] = serde_json::json!(["a", "x"]);
+        assert!(serde_json::from_value::<HeapObject>(incomplete_order).is_err());
+
+        let mut public_field_mutation = restored.clone();
+        public_field_mutation.accessors.insert(
+            "y".to_string(),
+            AccessorProperty {
+                get: Some(Value::Function(2)),
+                set: None,
+            },
+        );
+        let normalized = serde_json::to_value(&public_field_mutation).unwrap();
+        assert_eq!(
+            normalized["own_string_key_order"],
+            serde_json::json!(["a", "x", "b", "y"])
+        );
+        let normalized_roundtrip: HeapObject = serde_json::from_value(normalized).unwrap();
+        assert_eq!(normalized_roundtrip, public_field_mutation);
+        assert_eq!(
+            normalized_roundtrip.own_property_keys(),
+            vec![
+                "a".to_string(),
+                "x".to_string(),
+                "b".to_string(),
+                "y".to_string()
+            ]
+        );
+
+        let mut mutation_core = quickjs_test_core();
+        let mutation_id = mutation_core.alloc_object_with_prototype(None).unwrap();
+        mutation_core.heap[mutation_id.0 as usize] = public_field_mutation;
+        mutation_core.estimated_memory_bytes = mutation_core.recompute_estimated_memory_bytes();
+        mutation_core
+            .set_object_property(mutation_id, "c".to_string(), Value::Int(3))
+            .unwrap();
+        assert_eq!(
+            mutation_core.heap[mutation_id.0 as usize].own_property_keys(),
+            vec![
+                "a".to_string(),
+                "x".to_string(),
+                "b".to_string(),
+                "y".to_string(),
+                "c".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn public_accessor_order_normalization_rolls_back_exact_hidden_state() {
+        let mut core = quickjs_test_core();
+        let object_id = core.alloc_object_with_prototype(None).unwrap();
+        core.set_object_property(object_id, "a".to_string(), Value::Int(1))
+            .unwrap();
+        core.set_object_property(
+            object_id,
+            format!("{IR_ACCESSOR_GET_PREFIX}x"),
+            Value::Function(1),
+        )
+        .unwrap();
+        core.set_object_property(object_id, "b".to_string(), Value::Int(2))
+            .unwrap();
+        core.heap[object_id.0 as usize].accessors.insert(
+            "y".to_string(),
+            AccessorProperty {
+                get: Some(Value::Function(2)),
+                set: None,
+            },
+        );
+        core.estimated_memory_bytes = core.recompute_estimated_memory_bytes();
+
+        let raw_order_before = core.heap[object_id.0 as usize]
+            .properties
+            .baseline_string_key_order()
+            .unwrap()
+            .to_vec();
+        let memory_before = core.estimated_memory_bytes();
+        core.config.max_total_memory_bytes = memory_before;
+        let error = core
+            .set_object_property(object_id, "c".to_string(), Value::str("x".repeat(512)))
+            .unwrap_err();
+
+        assert!(matches!(
+            error,
+            InterpreterError::MemoryBudgetExceeded { .. }
+        ));
+        assert_eq!(
+            core.heap[object_id.0 as usize]
+                .properties
+                .baseline_string_key_order(),
+            Some(raw_order_before.as_slice())
+        );
+        assert_eq!(
+            core.heap[object_id.0 as usize].own_property_keys(),
+            vec![
+                "a".to_string(),
+                "x".to_string(),
+                "b".to_string(),
+                "y".to_string()
+            ]
+        );
+        assert_eq!(core.estimated_memory_bytes(), memory_before);
+    }
+
+    #[test]
+    fn legacy_heap_order_normalizes_before_a_new_property_appends() {
+        let legacy_json = serde_json::json!({
+            "properties": {"a": Value::Int(1), "b": Value::Int(2)},
+            "accessors": {"x": {"get": Value::Function(1), "set": null}},
+            "prototype": null,
+            "constructor_function": null,
+            "is_array": false
+        });
+        let legacy: HeapObject = serde_json::from_value(legacy_json).unwrap();
+        let mut core = quickjs_test_core();
+        let object_id = core.alloc_object_with_prototype(None).unwrap();
+        core.heap[object_id.0 as usize] = legacy;
+        core.estimated_memory_bytes = core.recompute_estimated_memory_bytes();
+
+        let original_memory_limit = core.config.max_total_memory_bytes;
+        let memory_before = core.estimated_memory_bytes();
+        core.config.max_total_memory_bytes = memory_before;
+        let error = core
+            .set_object_property(object_id, "c".to_string(), Value::str("x".repeat(512)))
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            InterpreterError::MemoryBudgetExceeded { .. }
+        ));
+        assert!(
+            core.heap[object_id.0 as usize]
+                .properties
+                .baseline_string_key_order()
+                .is_none()
+        );
+        assert_eq!(core.estimated_memory_bytes(), memory_before);
+        core.config.max_total_memory_bytes = original_memory_limit;
+
+        core.set_object_property(object_id, "c".to_string(), Value::Int(3))
+            .unwrap();
+        assert_eq!(
+            core.heap[object_id.0 as usize].own_property_keys(),
+            vec![
+                "a".to_string(),
+                "b".to_string(),
+                "x".to_string(),
+                "c".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn write_heap_slot_records_ordinary_key_order() {
+        let mut core = quickjs_test_core();
+        core.write_heap_slot(0, Value::Int(1));
+        core.set_object_property(
+            ObjectId(0),
+            format!("{IR_ACCESSOR_GET_PREFIX}x"),
+            Value::Function(1),
+        )
+        .unwrap();
+        assert_eq!(
+            core.heap[0].own_property_keys(),
+            vec!["value".to_string(), "x".to_string()]
+        );
+    }
+
+    #[test]
+    fn mixed_property_order_survives_execution_seed_restore() {
+        let mut core = quickjs_test_core();
+        let object_id = core.alloc_object_with_prototype(None).unwrap();
+        core.set_object_property(object_id, "a".to_string(), Value::Int(1))
+            .unwrap();
+        core.set_object_property(
+            object_id,
+            format!("{IR_ACCESSOR_GET_PREFIX}x"),
+            Value::Function(1),
+        )
+        .unwrap();
+        core.set_object_property(object_id, "b".to_string(), Value::Int(2))
+            .unwrap();
+        let seed = core.capture_execution_seed();
+
+        assert!(core.remove_object_property(object_id, "x").unwrap());
+        core.set_object_property(
+            object_id,
+            format!("{IR_ACCESSOR_GET_PREFIX}x"),
+            Value::Function(2),
+        )
+        .unwrap();
+        assert_eq!(
+            core.heap[object_id.0 as usize].own_property_keys(),
+            vec!["a".to_string(), "b".to_string(), "x".to_string()]
+        );
+
+        core.reset_execution_state_from_seed(&seed)
+            .expect("captured seed must remain valid");
+        assert_eq!(
+            core.heap[object_id.0 as usize].own_property_keys(),
+            vec!["a".to_string(), "x".to_string(), "b".to_string()]
+        );
+    }
+
+    #[test]
+    fn legacy_order_materialization_charges_each_sidecar_string() {
+        let legacy_json = serde_json::json!({
+            "properties": {"a": Value::Int(1), "b": Value::Int(2)},
+            "accessors": {"x": {"get": Value::Function(1), "set": null}},
+            "prototype": null,
+            "constructor_function": null,
+            "is_array": false
+        });
+        let legacy: HeapObject = serde_json::from_value(legacy_json).unwrap();
+        let mut core = quickjs_test_core();
+        let object_id = core.alloc_object_with_prototype(None).unwrap();
+        core.heap[object_id.0 as usize] = legacy;
+        core.estimated_memory_bytes = core.recompute_estimated_memory_bytes();
+        let memory_before = core.estimated_memory_bytes();
+
+        core.set_object_property(object_id, "a".to_string(), Value::Int(1))
+            .unwrap();
+        let expected_delta = ["a", "b", "x"]
+            .into_iter()
+            .map(InterpreterCore::estimate_string_bytes)
+            .sum::<u64>();
+        assert_eq!(
+            core.estimated_memory_bytes() - memory_before,
+            expected_delta
+        );
+    }
+
+    #[test]
+    fn failed_accessor_conversion_restores_data_property_order() {
+        let mut core = quickjs_test_core();
+        let object_id = core.alloc_object_with_prototype(None).unwrap();
+        core.set_object_property(object_id, "a".to_string(), Value::Int(1))
+            .unwrap();
+        core.set_object_property(object_id, "b".to_string(), Value::Int(2))
+            .unwrap();
+        let object_before = core.heap[object_id.0 as usize].clone();
+        let wire_before = serde_json::to_string(&object_before).unwrap();
+        let memory_before = core.estimated_memory_bytes();
+        core.config.max_total_memory_bytes = memory_before;
+
+        let error = core
+            .set_object_property(
+                object_id,
+                format!("{IR_ACCESSOR_GET_PREFIX}a"),
+                Value::str("x".repeat(512)),
+            )
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            InterpreterError::MemoryBudgetExceeded { .. }
+        ));
+        assert_eq!(
+            core.own_enumerable_keys(object_id).unwrap(),
+            vec![JsString::from("a"), JsString::from("b")]
+        );
+        assert_eq!(
+            core.heap[object_id.0 as usize].properties.get("a"),
+            Some(&Value::Int(1))
+        );
+        assert!(!core.heap[object_id.0 as usize].accessors.contains_key("a"));
+        assert_eq!(core.heap[object_id.0 as usize], object_before);
+        assert_eq!(
+            serde_json::to_string(&core.heap[object_id.0 as usize]).unwrap(),
+            wire_before
+        );
+        assert_eq!(core.estimated_memory_bytes(), memory_before);
+    }
+
+    #[test]
+    fn failed_accessor_to_data_conversion_restores_kind_order_and_memory() {
+        let mut core = quickjs_test_core();
+        let object_id = core.alloc_object_with_prototype(None).unwrap();
+        core.set_object_property(object_id, "a".to_string(), Value::Int(1))
+            .unwrap();
+        core.set_object_property(
+            object_id,
+            format!("{IR_ACCESSOR_GET_PREFIX}x"),
+            Value::Function(1),
+        )
+        .unwrap();
+        core.set_object_property(object_id, "b".to_string(), Value::Int(2))
+            .unwrap();
+        let memory_before = core.estimated_memory_bytes();
+        core.config.max_total_memory_bytes = memory_before;
+
+        let error = core
+            .set_plain_data_property(object_id, "x".to_string(), Value::str("x".repeat(512)))
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            InterpreterError::MemoryBudgetExceeded { .. }
+        ));
+        assert_eq!(
+            core.heap[object_id.0 as usize].own_property_keys(),
+            vec!["a".to_string(), "x".to_string(), "b".to_string()]
+        );
+        assert!(!core.heap[object_id.0 as usize].properties.contains_key("x"));
+        assert_eq!(
+            core.heap[object_id.0 as usize]
+                .accessors
+                .get("x")
+                .and_then(|accessor| accessor.get.as_ref()),
+            Some(&Value::Function(1))
+        );
+        assert_eq!(core.estimated_memory_bytes(), memory_before);
+    }
+
+    #[test]
+    fn failed_exact_descriptor_conversions_restore_wire_and_memory_bd_b12xs_4() {
+        let mut core = quickjs_test_core();
+        let object = core.alloc_object_with_prototype(None).unwrap();
+        let d800 = JsString::from_code_units(&[0xD800]);
+        let d801 = JsString::from_code_units(&[0xD801]);
+        core.set_object_runtime_property(
+            object,
+            RuntimePropertyKey::String(d800.clone()),
+            Value::Int(8),
+        )
+        .unwrap();
+        core.set_object_string_property(
+            object,
+            exact_accessor_definition_key(IR_ACCESSOR_GET_PREFIX, &d801),
+            Value::Function(1),
+        )
+        .unwrap();
+
+        let object_before = serde_json::to_string(&core.heap[object.0 as usize]).unwrap();
+        let memory_before = core.estimated_memory_bytes();
+        core.config.max_total_memory_bytes = memory_before;
+
+        let error = core
+            .set_object_string_property(
+                object,
+                exact_accessor_definition_key(IR_ACCESSOR_GET_PREFIX, &d800),
+                Value::str("x".repeat(512)),
+            )
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            InterpreterError::MemoryBudgetExceeded { .. }
+        ));
+        assert_eq!(
+            serde_json::to_string(&core.heap[object.0 as usize]).unwrap(),
+            object_before
+        );
+        assert_eq!(core.estimated_memory_bytes(), memory_before);
+
+        let error = core
+            .set_plain_data_runtime_property(
+                object,
+                RuntimePropertyKey::String(d801),
+                Value::str("y".repeat(512)),
+            )
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            InterpreterError::MemoryBudgetExceeded { .. }
+        ));
+        assert_eq!(
+            serde_json::to_string(&core.heap[object.0 as usize]).unwrap(),
+            object_before
+        );
+        assert_eq!(core.estimated_memory_bytes(), memory_before);
+    }
+
+    #[test]
+    fn exact_data_and_accessor_memory_deltas_are_charged_bd_b12xs_4() {
+        let mut core = quickjs_test_core();
+        let object = core.alloc_object_with_prototype(None).unwrap();
+        let d800 = JsString::from_code_units(&[0xD800]);
+        let key_bytes = InterpreterCore::estimate_js_string_bytes(&d800);
+        core.sync_estimated_memory_bytes().unwrap();
+        let empty_memory = core.estimated_memory_bytes();
+
+        core.set_object_runtime_property(
+            object,
+            RuntimePropertyKey::String(d800.clone()),
+            Value::Int(8),
+        )
+        .unwrap();
+        assert_eq!(
+            core.estimated_memory_bytes() - empty_memory,
+            MEMORY_ESTIMATE_MAP_ENTRY_BYTES + key_bytes * 3
+        );
+
+        core.set_object_string_property(
+            object,
+            exact_accessor_definition_key(IR_ACCESSOR_GET_PREFIX, &d800),
+            Value::Function(1),
+        )
+        .unwrap();
+        assert_eq!(
+            core.estimated_memory_bytes() - empty_memory,
+            MEMORY_ESTIMATE_MAP_ENTRY_BYTES + key_bytes * 2
+        );
+    }
+
+    #[test]
+    fn failed_new_property_restores_existing_sidecar_and_memory() {
+        let mut core = quickjs_test_core();
+        let object_id = core.alloc_object_with_prototype(None).unwrap();
+        core.set_object_property(object_id, "a".to_string(), Value::Int(1))
+            .unwrap();
+        let object_before = serde_json::to_value(&core.heap[object_id.0 as usize]).unwrap();
+        let memory_before = core.estimated_memory_bytes();
+        core.config.max_total_memory_bytes = memory_before;
+
+        let error = core
+            .set_object_property(object_id, "b".to_string(), Value::str("x".repeat(512)))
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            InterpreterError::MemoryBudgetExceeded { .. }
+        ));
+        assert_eq!(
+            serde_json::to_value(&core.heap[object_id.0 as usize]).unwrap(),
+            object_before
+        );
+        assert_eq!(core.estimated_memory_bytes(), memory_before);
+    }
+
+    #[test]
+    fn builtin_json_parse_rolls_back_late_invalid_allocations() {
+        let mut core = quickjs_test_core();
+        core.registers[4] = Value::str(r#"{"a":[1,2]} trailing"#);
+        let heap_before = core.heap_size();
+        let memory_before = core.estimated_memory_bytes();
+
+        let result = core
+            .dispatch_builtin_hostcall("builtin:JsonParse", RegRange { start: 4, count: 1 })
+            .unwrap();
+
+        assert_eq!(result, Value::Undefined);
+        assert_eq!(core.heap_size(), heap_before);
+        assert_eq!(core.estimated_memory_bytes(), memory_before);
+    }
+
+    #[test]
+    fn builtin_json_parse_preserves_raw_lone_surrogate_units() {
+        let mut core = quickjs_test_core();
+        for expected in [vec![0xD800], vec![0xDC00], vec![0xD83D, 0xDE00]] {
+            let mut json = vec![0x22];
+            json.extend_from_slice(&expected);
+            json.push(0x22);
+            core.registers[4] = Value::Str(JsString::from_code_units(&json));
+
+            let result = core
+                .dispatch_builtin_hostcall("builtin:JsonParse", RegRange { start: 4, count: 1 })
+                .unwrap();
+
+            let Value::Str(parsed) = result else {
+                panic!("JSON.parse should return the parsed string");
+            };
+            assert_eq!(parsed.code_units_vec(), expected);
+        }
+
+        let mut nested = "{\"value\":\"".encode_utf16().collect::<Vec<_>>();
+        nested.push(0xD800);
+        nested.extend("\"}".encode_utf16());
+        core.registers[4] = Value::Str(JsString::from_code_units(&nested));
+        let nested_result = core
+            .dispatch_builtin_hostcall("builtin:JsonParse", RegRange { start: 4, count: 1 })
+            .unwrap();
+        let Value::Object(nested_id) = nested_result else {
+            panic!("JSON.parse should allocate the nested object");
+        };
+        let Some(Value::Str(nested_value)) =
+            core.heap[nested_id.0 as usize].properties.get("value")
+        else {
+            panic!("nested JSON string should be stored as a data property");
+        };
+        assert_eq!(nested_value.code_units_vec(), vec![0xD800]);
+
+        core.registers[4] = Value::Str(JsString::from_code_units(&[0x22, 0x1F, 0x22]));
+        assert_eq!(
+            core.dispatch_builtin_hostcall("builtin:JsonParse", RegRange { start: 4, count: 1 })
+                .unwrap(),
+            Value::Undefined,
+            "raw JSON control units must remain invalid"
+        );
+    }
+
+    #[test]
+    fn builtin_math_abs_promotes_i64_minimum_magnitude_to_float() {
+        let mut core = quickjs_test_core();
+        core.registers[4] = Value::Int(i64::MIN);
+
+        let result = core
+            .dispatch_builtin_hostcall("builtin:MathAbs", RegRange { start: 4, count: 1 })
+            .unwrap();
+        let Value::Float(result) = result else {
+            panic!("Math.abs(i64::MIN) must promote the positive magnitude to Float");
+        };
+        assert_eq!(result.inner(), -(i64::MIN as f64));
     }
 
     #[test]
     fn builtin_string_char_at_uses_receiver_and_optional_index() {
         let mut core = quickjs_test_core();
-        core.registers[4] = Value::Str("hello".to_string());
+        core.registers[4] = Value::str("hello");
         core.registers[5] = Value::Int(1);
 
         let explicit = core
@@ -10949,7 +24583,7 @@ mod tests {
                 RegRange { start: 4, count: 2 },
             )
             .unwrap();
-        assert_eq!(explicit, Value::Str("e".to_string()));
+        assert_eq!(explicit, Value::str("e"));
 
         core.registers[4] = Value::Int(42);
         let default_index = core
@@ -10958,7 +24592,7 @@ mod tests {
                 RegRange { start: 4, count: 1 },
             )
             .unwrap();
-        assert_eq!(default_index, Value::Str("4".to_string()));
+        assert_eq!(default_index, Value::str("4"));
 
         core.registers[5] = Value::Int(99);
         let out_of_range = core
@@ -10967,7 +24601,31 @@ mod tests {
                 RegRange { start: 4, count: 2 },
             )
             .unwrap();
-        assert_eq!(out_of_range, Value::Str(String::new()));
+        assert_eq!(out_of_range, Value::Str(JsString::empty()));
+    }
+
+    #[test]
+    fn string_receiver_index_properties_preserve_exact_utf16_units_bd_pel1v() {
+        let text = JsString::from_code_units(&[0x0061, 0xD83D, 0xDE00, 0xD800]);
+
+        for (key, expected_unit) in [("0", 0x0061), ("1", 0xD83D), ("2", 0xDE00), ("3", 0xD800)] {
+            let Some(Value::Str(value)) = InterpreterCore::string_property_value(&text, key) else {
+                panic!("canonical in-range string index {key} must produce a string value");
+            };
+            assert_eq!(value.code_units_vec(), vec![expected_unit]);
+        }
+
+        assert_eq!(
+            InterpreterCore::string_property_value(&text, "length"),
+            Some(Value::Int(4))
+        );
+        for key in ["4", "01", "-1", "1.0", "4294967295"] {
+            assert_eq!(
+                InterpreterCore::string_property_value(&text, key),
+                None,
+                "non-canonical or out-of-range key {key} must stay absent"
+            );
+        }
     }
 
     // -----------------------------------------------------------------------
@@ -11137,12 +24795,12 @@ mod tests {
         assert!(!Value::Null.is_truthy());
         assert!(!Value::Bool(false).is_truthy());
         assert!(!Value::Int(0).is_truthy());
-        assert!(!Value::Str(String::new()).is_truthy());
+        assert!(!Value::Str(JsString::empty()).is_truthy());
 
         assert!(Value::Bool(true).is_truthy());
         assert!(Value::Int(1).is_truthy());
         assert!(Value::Int(-1).is_truthy());
-        assert!(Value::Str("x".to_string()).is_truthy());
+        assert!(Value::str("x").is_truthy());
         assert!(Value::Object(ObjectId(0)).is_truthy());
         assert!(Value::Function(0).is_truthy());
     }
@@ -11157,7 +24815,7 @@ mod tests {
         assert_eq!(Value::Null.to_string(), "null");
         assert_eq!(Value::Bool(true).to_string(), "true");
         assert_eq!(Value::Int(42).to_string(), "42");
-        assert_eq!(Value::Str("hi".to_string()).to_string(), "hi");
+        assert_eq!(Value::str("hi").to_string(), "hi");
     }
 
     // -----------------------------------------------------------------------
@@ -11230,13 +24888,75 @@ mod tests {
             Value::Null,
             Value::Bool(true),
             Value::Int(42),
-            Value::Str("hello".to_string()),
+            Value::str("hello"),
             Value::Object(ObjectId(7)),
             Value::Function(3),
         ] {
             let json = serde_json::to_string(&val).unwrap();
             let deser: Value = serde_json::from_str(&json).unwrap();
             assert_eq!(val, deser);
+        }
+    }
+
+    #[test]
+    fn historical_value_wire_bytes_survive_the_0_2_api_migration() {
+        let cases = [
+            (Value::Undefined, r#""Undefined""#.to_string()),
+            (Value::Null, r#""Null""#.to_string()),
+            (Value::Bool(true), r#"{"Bool":true}"#.to_string()),
+            (Value::Int(42), r#"{"Int":42}"#.to_string()),
+            (
+                Value::Float(Float64::new(1.5)),
+                r#"{"Float":4609434218613702656}"#.to_string(),
+            ),
+            (Value::str("hello"), r#"{"Str":"hello"}"#.to_string()),
+            (
+                Value::Str(JsString::from_code_units(&[0xD800])),
+                r#"{"Str":{"$wtf16":[55296]}}"#.to_string(),
+            ),
+            (Value::Object(ObjectId(7)), r#"{"Object":7}"#.to_string()),
+            (Value::Function(3), r#"{"Function":3}"#.to_string()),
+            (Value::Closure(4), r#"{"Closure":4}"#.to_string()),
+            (Value::Iterator(5), r#"{"Iterator":5}"#.to_string()),
+            (
+                Value::GeneratorFunction(6),
+                r#"{"GeneratorFunction":6}"#.to_string(),
+            ),
+            (Value::Generator(7), r#"{"Generator":7}"#.to_string()),
+            (
+                Value::AsyncFunction(8),
+                r#"{"AsyncFunction":8}"#.to_string(),
+            ),
+            (
+                Value::AsyncFunctionObject(9),
+                r#"{"AsyncFunctionObject":9}"#.to_string(),
+            ),
+            (
+                Value::AsyncGeneratorFunction(10),
+                r#"{"AsyncGeneratorFunction":10}"#.to_string(),
+            ),
+            (
+                Value::AsyncGeneratorObject(11),
+                r#"{"AsyncGeneratorObject":11}"#.to_string(),
+            ),
+            (Value::Promise(12), r#"{"Promise":12}"#.to_string()),
+            (
+                Value::BuiltinFunction(BuiltinFunction {
+                    kind: BuiltinFunctionKind::Require,
+                    module_specifier: "node:path".to_string(),
+                }),
+                r#"{"BuiltinFunction":{"kind":"require","module_specifier":"node:path"}}"#
+                    .to_string(),
+            ),
+        ];
+
+        for (value, historical_wire) in cases {
+            let encoded = serde_json::to_string(&value).unwrap();
+            assert_eq!(encoded, historical_wire);
+
+            let decoded: Value = serde_json::from_str(&historical_wire).unwrap();
+            assert_eq!(decoded, value);
+            assert_eq!(serde_json::to_string(&decoded).unwrap(), historical_wire);
         }
     }
 
@@ -11376,7 +25096,7 @@ mod tests {
             vec!["answer: ".to_string()],
         );
         let result = quickjs_execute(&m).unwrap();
-        assert_eq!(result.value, Value::Str("answer: 42".to_string()));
+        assert_eq!(result.value, Value::str("answer: 42"));
     }
 
     #[test]
@@ -11385,8 +25105,8 @@ mod tests {
         assert!(Value::Null < Value::Bool(false));
         assert!(Value::Bool(false) < Value::Bool(true));
         assert!(Value::Bool(true) < Value::Int(0));
-        assert!(Value::Int(0) < Value::Str(String::new()));
-        assert!(Value::Str(String::new()) < Value::Object(ObjectId(0)));
+        assert!(Value::Int(0) < Value::Str(JsString::empty()));
+        assert!(Value::Str(JsString::empty()) < Value::Object(ObjectId(0)));
         assert!(Value::Object(ObjectId(0)) < Value::Function(0));
     }
 
@@ -11472,7 +25192,7 @@ mod tests {
             Value::Bool(false),
             Value::Int(0),
             Value::Int(-1),
-            Value::Str("hello".to_string()),
+            Value::str("hello"),
             Value::Object(ObjectId(0)),
             Value::Function(0),
         ];
@@ -11570,7 +25290,7 @@ mod tests {
         assert_eq!(Value::Null.type_name(), "null");
         assert_eq!(Value::Bool(true).type_name(), "boolean");
         assert_eq!(Value::Int(0).type_name(), "number");
-        assert_eq!(Value::Str(String::new()).type_name(), "string");
+        assert_eq!(Value::Str(JsString::empty()).type_name(), "string");
         assert_eq!(Value::Object(ObjectId(0)).type_name(), "object");
         assert_eq!(Value::Function(0).type_name(), "function");
         assert_eq!(
@@ -11588,8 +25308,8 @@ mod tests {
         assert!(!Value::Int(0).is_truthy());
         assert!(Value::Int(1).is_truthy());
         assert!(Value::Int(-1).is_truthy());
-        assert!(!Value::Str(String::new()).is_truthy());
-        assert!(Value::Str("x".to_string()).is_truthy());
+        assert!(!Value::Str(JsString::empty()).is_truthy());
+        assert!(Value::str("x").is_truthy());
         assert!(Value::Object(ObjectId(0)).is_truthy());
         assert!(Value::Function(0).is_truthy());
         assert!(Value::BuiltinFunction(BuiltinFunction::require("/tmp/entry.cjs")).is_truthy());
@@ -11815,7 +25535,7 @@ mod tests {
         let before = core.estimated_memory_bytes();
         core.heap[oid.0 as usize]
             .properties
-            .insert("payload".to_string(), Value::Str("hello world".to_string()));
+            .insert("payload".to_string(), Value::str("hello world"));
         core.sync_estimated_memory_bytes().unwrap();
         assert!(core.estimated_memory_bytes() > before);
     }
@@ -11926,11 +25646,12 @@ mod tests {
         core.scope_chain.push(core.config.max_scope_depth).unwrap();
         core.scope_chain.current_mut().bindings.insert(
             "payload".to_string(),
-            ScopeBinding {
-                value: Value::Str("x".repeat(128)),
-                kind: BindingKind::Var,
-                initialized: true,
-            },
+            ScopeBinding::with_state(
+                BindingKind::Var,
+                Value::str("x".repeat(128)),
+                crate::ifc_artifacts::Label::Public,
+                true,
+            ),
         );
         core.sync_estimated_memory_bytes().unwrap();
         let snapshot_bytes = InterpreterCore::estimate_scope_chain_bytes(&core.scope_chain.frames);
@@ -11948,11 +25669,12 @@ mod tests {
         let mut core = InterpreterCore::new(config, "temporary-scope-clone-budget");
         core.scope_chain.current_mut().bindings.insert(
             "payload".to_string(),
-            ScopeBinding {
-                value: Value::Str("x".repeat(128)),
-                kind: BindingKind::Var,
-                initialized: true,
-            },
+            ScopeBinding::with_state(
+                BindingKind::Var,
+                Value::str("x".repeat(128)),
+                crate::ifc_artifacts::Label::Public,
+                true,
+            ),
         );
         core.sync_estimated_memory_bytes().unwrap();
 
@@ -11969,92 +25691,854 @@ mod tests {
     }
 
     #[test]
-    fn generator_start_budget_failure_preserves_suspended_start_phase() {
-        let payload = "x".repeat(128);
-        let mut module = test_module_with_pool(
-            vec![
-                Ir3Instruction::LoadStr {
-                    dst: 0,
-                    pool_index: 1,
+    fn async_saved_label_snapshot_refuses_one_short_and_releases_bd_ur3tk_8() {
+        let mut core = quickjs_test_core();
+        core.write_reg_with_label(
+            1,
+            Value::Int(41),
+            crate::ifc_artifacts::Label::Custom {
+                name: "async-snapshot-label".repeat(23),
+                level: 3,
+            },
+        )
+        .expect("custom-labeled async register");
+        core.async_functions.push(AsyncFunctionObject {
+            function_index: 0,
+            closure_index: None,
+            saved_ip: 0,
+            saved_registers: Vec::new(),
+            saved_register_labels: Vec::new(),
+            saved_register_base: 0,
+            phase: AsyncFunctionPhase::Executing,
+            result_promise: 0,
+        });
+        core.call_stack.push(CallFrame {
+            return_ip: 0,
+            return_reg: None,
+            register_base: 0,
+            function_index: Some(0),
+            this_value: Value::Undefined,
+            this_label: crate::ifc_artifacts::Label::Public,
+            new_target_value: Value::Undefined,
+            new_target_label: crate::ifc_artifacts::Label::Public,
+            super_value: Value::Undefined,
+            super_label: crate::ifc_artifacts::Label::Public,
+            construct_this: None,
+            saved_pending_exception: None,
+            saved_pending_return: None,
+            saved_suspended_abrupt_depth: 0,
+            saved_finally_mode_depth: 0,
+            saved_scope_depth: core.scope_chain.depth(),
+            saved_scope_chain: None,
+            async_function_id: Some(0),
+        });
+        let awaited = core.promise_store.create();
+        let baseline = core
+            .sync_estimated_memory_bytes()
+            .expect("async snapshot baseline");
+        let snapshot_bytes = core
+            .registers
+            .iter()
+            .map(InterpreterCore::estimate_value_bytes)
+            .sum::<u64>()
+            .saturating_add(
+                core.register_labels
+                    .iter()
+                    .map(InterpreterCore::estimate_label_bytes)
+                    .sum::<u64>(),
+            );
+        let promise_count = core.promise_store.len();
+
+        core.config.max_total_memory_bytes = baseline + snapshot_bytes - 1;
+        let error = core
+            .suspend_async_function_for_await(awaited, 0, crate::ifc_artifacts::Label::Public)
+            .expect_err("one-byte-short async label snapshot must fail before cloning");
+        assert!(matches!(
+            error,
+            InterpreterError::MemoryBudgetExceeded { .. }
+        ));
+        assert_eq!(core.promise_store.len(), promise_count);
+        assert!(core.async_resumption_contexts.is_empty());
+        assert_eq!(core.async_functions[0].phase, AsyncFunctionPhase::Executing);
+        assert!(core.async_functions[0].saved_registers.is_empty());
+        assert!(core.async_functions[0].saved_register_labels.is_empty());
+        assert_eq!(core.estimated_memory_bytes(), baseline);
+
+        core.config.max_total_memory_bytes = baseline + snapshot_bytes;
+        core.suspend_async_function_for_await(awaited, 0, crate::ifc_artifacts::Label::Public)
+            .expect("exact async label snapshot ceiling");
+        assert_eq!(
+            core.async_functions[0].phase,
+            AsyncFunctionPhase::SuspendedAwait
+        );
+        assert_eq!(core.estimated_memory_bytes(), baseline + snapshot_bytes);
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+        assert!(matches!(
+            core.async_functions[0].saved_register_labels.get(1),
+            Some(crate::ifc_artifacts::Label::Custom { level: 3, .. })
+        ));
+
+        let (_, context) = core
+            .async_resumption_contexts
+            .pop_first()
+            .expect("await registration should publish one resumption context");
+        core.resume_async_function_after_await(
+            context,
+            Ok(crate::object_model::JsValue::Int(9)),
+            crate::ifc_artifacts::Label::Public,
+            None,
+        )
+        .expect("resuming should move the saved label file back without cloning it");
+        assert!(core.async_functions[0].saved_registers.is_empty());
+        assert!(core.async_functions[0].saved_register_labels.is_empty());
+        assert_eq!(core.estimated_memory_bytes(), baseline);
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+    }
+
+    #[test]
+    fn promise_combinator_label_refuses_clone_peak_and_releases_bd_ur3tk_8() {
+        let mut core = quickjs_test_core();
+        let baseline = core
+            .sync_estimated_memory_bytes()
+            .expect("promise-combinator label baseline");
+        let initial_label = crate::ifc_artifacts::Label::Custom {
+            name: "aggregate-input-label".repeat(19),
+            level: 2,
+        };
+        let initial_bytes = InterpreterCore::estimate_label_bytes(&initial_label);
+        let state = || LabeledPromiseCombinatorState {
+            tracker: PromiseCombinatorState::Race(crate::promise_model::PromiseRaceTracker {
+                result_promise: crate::promise_model::PromiseHandle(0),
+                settled: false,
+            }),
+            accumulated_label: initial_label.clone(),
+        };
+
+        core.config.max_total_memory_bytes = baseline + initial_bytes - 1;
+        let error = core
+            .register_combinator(state())
+            .expect_err("one-byte-short accumulator must not publish");
+        assert!(matches!(
+            error,
+            InterpreterError::MemoryBudgetExceeded { .. }
+        ));
+        assert!(core.promise_combinators.is_empty());
+        assert_eq!(core.next_promise_combinator_id, 0);
+        assert_eq!(core.estimated_memory_bytes(), baseline);
+
+        core.config.max_total_memory_bytes = baseline + initial_bytes;
+        let combinator_id = core
+            .register_combinator(state())
+            .expect("exact accumulator ceiling");
+        assert_eq!(core.estimated_memory_bytes(), baseline + initial_bytes);
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+
+        let dominant_label = crate::ifc_artifacts::Label::Custom {
+            name: "dominant-aggregate-label".repeat(29),
+            level: 4,
+        };
+        let dominant_bytes = InterpreterCore::estimate_label_bytes(&dominant_label);
+        let before_join = core.estimated_memory_bytes();
+        core.config.max_total_memory_bytes = before_join + dominant_bytes - 1;
+        let error = core
+            .join_promise_combinator_label(combinator_id, &dominant_label)
+            .expect_err("one-byte-short dominant-label clone peak must fail atomically");
+        assert!(matches!(
+            error,
+            InterpreterError::MemoryBudgetExceeded { .. }
+        ));
+        assert_eq!(
+            core.promise_combinators[&combinator_id].accumulated_label,
+            initial_label
+        );
+        assert_eq!(core.estimated_memory_bytes(), before_join);
+
+        core.config.max_total_memory_bytes = before_join + dominant_bytes;
+        core.join_promise_combinator_label(combinator_id, &dominant_label)
+            .expect("exact dominant-label clone peak");
+        assert_eq!(
+            core.promise_combinators[&combinator_id].accumulated_label,
+            dominant_label
+        );
+        assert_eq!(core.estimated_memory_bytes(), baseline + dominant_bytes);
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+
+        core.remove_promise_combinator(combinator_id)
+            .expect("registered combinator should be removable");
+        assert_eq!(core.estimated_memory_bytes(), baseline);
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+    }
+
+    #[test]
+    fn custom_scope_label_is_accounted_and_store_rolls_back_bd_ur3tk_11() {
+        let config = InterpreterConfig::quickjs_defaults();
+        let mut core = InterpreterCore::new(config, "custom-scope-label-budget");
+        core.scope_chain.current_mut().bindings.insert(
+            "payload".to_string(),
+            ScopeBinding::with_state(
+                BindingKind::Var,
+                Value::Undefined,
+                crate::ifc_artifacts::Label::Public,
+                true,
+            ),
+        );
+        core.sync_estimated_memory_bytes().unwrap();
+        let custom_name = "tenant-sensitive".repeat(32);
+        core.write_reg_with_label(
+            0,
+            Value::Int(7),
+            crate::ifc_artifacts::Label::Custom {
+                name: custom_name.clone(),
+                level: 3,
+            },
+        )
+        .expect("custom-labeled source should be writable before tightening the budget");
+        core.config.max_total_memory_bytes = core
+            .estimated_memory_bytes()
+            .saturating_add(custom_name.len() as u64)
+            .saturating_sub(1);
+        let module = test_module_with_pool(
+            vec![Ir3Instruction::StoreScoped {
+                src: 0,
+                name_pool_index: 0,
+            }],
+            vec!["payload".to_string()],
+        );
+
+        let error = core
+            .run_loop(&module)
+            .expect_err("custom scope label must respect the memory budget");
+        assert!(matches!(
+            error,
+            InterpreterError::MemoryBudgetExceeded { .. }
+        ));
+        let (_, binding) = core
+            .scope_chain
+            .resolve("payload")
+            .expect("failed StoreScoped should restore the binding");
+        let state = binding.state().unwrap();
+        assert_eq!(state.value, Value::Undefined);
+        assert_eq!(state.label, crate::ifc_artifacts::Label::Public);
+    }
+
+    #[test]
+    fn failed_closure_publication_restores_shared_self_capture_cell_bd_wqbac() {
+        for (marker_name, create_instruction) in [
+            (
+                format!("{CLASS_EXPRESSION_CONSTRUCTOR_SELF_CAPTURE_PREFIX}7\0Self"),
+                Ir3Instruction::CreateClosure {
+                    dst: 1,
+                    function_index: 0,
+                    capture_count: 1,
                 },
-                Ir3Instruction::DeclareBinding {
-                    name_pool_index: 0,
-                    kind: 0,
+            ),
+            (
+                format!("{FUNCTION_EXPRESSION_SELF_CAPTURE_PREFIX}7\0self"),
+                Ir3Instruction::CreateClosure {
+                    dst: 1,
+                    function_index: 0,
+                    capture_count: 1,
                 },
-                Ir3Instruction::StoreScoped {
-                    src: 0,
-                    name_pool_index: 0,
-                },
+            ),
+            (
+                format!("{FUNCTION_EXPRESSION_SELF_CAPTURE_PREFIX}8\0generatorSelf"),
                 Ir3Instruction::CreateGenerator {
                     dst: 1,
                     function_index: 0,
-                    capture_count: 0,
+                    capture_count: 1,
                 },
-                Ir3Instruction::Call {
-                    dst: 0,
-                    callee: 1,
-                    args: RegRange {
-                        start: 10,
-                        count: 0,
-                    },
-                },
-                Ir3Instruction::Halt,
-                Ir3Instruction::LoadScoped {
-                    dst: 0,
-                    name_pool_index: 0,
-                },
-                Ir3Instruction::Yield {
-                    value: 0,
-                    delegate: false,
-                    resume_dst: 1,
-                },
-                Ir3Instruction::Return { value: 0 },
-            ],
-            vec!["payload".to_string(), payload.clone()],
+            ),
+        ] {
+            let mut config = test_quickjs_config();
+            config.max_registers = 1;
+            let mut core = InterpreterCore::new(config, "shared-self-publication-rollback");
+            let marker = ScopeBinding::with_state(
+                BindingKind::Const,
+                Value::Int(41),
+                crate::ifc_artifacts::Label::Public,
+                true,
+            );
+            core.scope_chain
+                .current_mut()
+                .bindings
+                .insert(marker_name, marker.clone());
+            core.pending_captures.push(7);
+            core.sync_estimated_memory_bytes().unwrap();
+            let module = test_module(vec![create_instruction, Ir3Instruction::Halt]);
+
+            let error = core
+                .execute(&module)
+                .expect_err("out-of-range destination must reject closure publication");
+            assert!(matches!(
+                error,
+                InterpreterError::RegisterOutOfBounds {
+                    register: 1,
+                    max: 1
+                }
+            ));
+            assert!(core.closures.is_empty());
+            assert_eq!(core.pending_captures, vec![7]);
+            let state = marker.state().unwrap();
+            assert_eq!(state.value, Value::Int(41));
+            assert!(state.initialized);
+            drop(state);
+            assert_eq!(
+                core.estimated_memory_bytes(),
+                core.recompute_estimated_memory_bytes()
+            );
+        }
+    }
+
+    #[test]
+    fn generator_publication_initializes_named_expression_self_capture_bd_wqbac() {
+        let mut core = quickjs_test_core();
+        let marker_name = format!("{FUNCTION_EXPRESSION_SELF_CAPTURE_PREFIX}8\0generatorSelf");
+        let marker = ScopeBinding::new(BindingKind::Const);
+        core.scope_chain
+            .current_mut()
+            .bindings
+            .insert(marker_name, marker.clone());
+        core.sync_estimated_memory_bytes().unwrap();
+        let module = test_module(vec![
+            Ir3Instruction::CreateGenerator {
+                dst: 0,
+                function_index: 0,
+                capture_count: 1,
+            },
+            Ir3Instruction::Halt,
+        ]);
+
+        let result = core.execute(&module).expect("generator publication");
+        assert_eq!(result.value, Value::GeneratorFunction(0));
+        let state = marker.state().unwrap();
+        assert_eq!(state.value, Value::GeneratorFunction(0));
+        assert!(state.initialized);
+    }
+
+    #[test]
+    fn failed_cjs_binding_injection_restores_existing_shared_cell() {
+        let mut core = quickjs_test_core();
+        let module_binding = ScopeBinding::with_state(
+            BindingKind::Var,
+            Value::Int(17),
+            crate::ifc_artifacts::Label::Public,
+            true,
         );
-        module.function_table.push(Ir3FunctionDesc {
-            entry: 6,
-            arity: 0,
-            frame_size: 4,
-            name: Some("capturing_generator".to_string()),
-            is_generator: true,
+        core.scope_chain
+            .current_mut()
+            .bindings
+            .insert("module".to_string(), module_binding.clone());
+        core.sync_estimated_memory_bytes().unwrap();
+        core.config.max_total_memory_bytes = core.estimated_memory_bytes();
+
+        let error = core
+            .insert_cjs_bindings(ObjectId(10), ObjectId(11), Some("/tmp/example.cjs"), false)
+            .expect_err("new CJS bindings must exceed a zero-headroom memory budget");
+        assert!(matches!(
+            error,
+            InterpreterError::MemoryBudgetExceeded { .. }
+        ));
+        assert_eq!(module_binding.value().unwrap(), Value::Int(17));
+        for name in ["require", "exports", "__filename", "__dirname"] {
+            assert!(core.scope_chain.resolve(name).is_none());
+        }
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+    }
+
+    #[test]
+    fn generator_invocation_budget_failure_restores_caller_and_publishes_no_ghost_bd_093id() {
+        let module = test_module(vec![
+            Ir3Instruction::GeneratorBodyStart,
+            Ir3Instruction::LoadInt { dst: 0, value: 7 },
+            Ir3Instruction::Yield {
+                value: 0,
+                delegate: false,
+                resume_dst: 1,
+            },
+            Ir3Instruction::Return { value: 0 },
+        ]);
+        let mut core = InterpreterCore::new(test_quickjs_config(), "generator-invocation-budget");
+        core.scope_chain.current_mut().bindings.insert(
+            "payload".to_string(),
+            ScopeBinding::with_state(
+                BindingKind::Var,
+                Value::str("x".repeat(128)),
+                crate::ifc_artifacts::Label::Public,
+                true,
+            ),
+        );
+        let captured_env = core.scope_chain.snapshot();
+        core.closures.push(ClosureValue {
+            function_index: 0,
+            captured_env: captured_env.clone(),
         });
-
-        let mut core = InterpreterCore::new(test_quickjs_config(), "generator");
-        let result = core.execute(&module).unwrap();
-        assert_eq!(result.value, Value::Generator(0));
-
-        let clone_bytes =
-            InterpreterCore::estimate_scope_chain_bytes(&core.closures[0].captured_env);
-        core.scope_chain.frames = vec![ScopeFrame::new()];
+        core.ip = 3;
+        core.write_reg(0, Value::Int(41)).unwrap();
         core.sync_estimated_memory_bytes().unwrap();
         let baseline_memory = core.estimated_memory_bytes();
-        core.config.max_total_memory_bytes = baseline_memory
-            .saturating_add(clone_bytes)
-            .saturating_sub(1);
+        core.config.max_total_memory_bytes = baseline_memory;
 
-        let err = core
-            .generator_next(&module, 0, Value::Undefined)
-            .unwrap_err();
-        assert!(matches!(err, InterpreterError::MemoryBudgetExceeded { .. }));
-        assert_eq!(core.generators[0].phase, GeneratorPhase::SuspendedStart);
+        let error = core
+            .prepare_generator_activation(
+                &module,
+                GeneratorCallSetup {
+                    function_index: 0,
+                    function_entry: 0,
+                    captured_env,
+                    arguments: Vec::new(),
+                    this_value: Value::Undefined,
+                    this_label: crate::ifc_artifacts::Label::Public,
+                    super_value: Value::Undefined,
+                    super_label: crate::ifc_artifacts::Label::Public,
+                },
+            )
+            .expect_err("zero headroom must reject the isolated generator activation");
+
+        assert!(matches!(
+            error,
+            InterpreterError::MemoryBudgetExceeded { .. }
+        ));
+        assert!(core.generators.is_empty());
+        assert_eq!(core.ip, 3);
+        assert_eq!(core.read_reg(0).unwrap(), Value::Int(41));
+        assert!(core.scope_chain.resolve("payload").is_some());
+        assert_eq!(core.temporarily_suspended_execution_bytes, 0);
+        assert_eq!(core.temporarily_suspended_call_depth, 0);
         assert_eq!(core.estimated_memory_bytes(), baseline_memory);
+    }
 
-        core.config.max_total_memory_bytes = u64::MAX;
-        let yielded = core.generator_next(&module, 0, Value::Undefined).unwrap();
-        assert_eq!(core.generators[0].phase, GeneratorPhase::SuspendedYield);
+    #[test]
+    fn generator_resume_rejects_at_active_call_depth_limit_bd_093id() {
+        let module = test_module(vec![
+            Ir3Instruction::GeneratorBodyStart,
+            Ir3Instruction::LoadInt { dst: 0, value: 7 },
+            Ir3Instruction::Yield {
+                value: 0,
+                delegate: false,
+                resume_dst: 1,
+            },
+            Ir3Instruction::Return { value: 0 },
+        ]);
+        let mut config = test_quickjs_config();
+        config.max_call_depth = 2;
+        let mut core = InterpreterCore::new(config, "generator-resume-depth");
+        let captured_env = core.scope_chain.snapshot();
+        let generator = core
+            .prepare_generator_activation(
+                &module,
+                GeneratorCallSetup {
+                    function_index: 0,
+                    function_entry: 0,
+                    captured_env,
+                    arguments: Vec::new(),
+                    this_value: Value::Undefined,
+                    this_label: crate::ifc_artifacts::Label::Public,
+                    super_value: Value::Undefined,
+                    super_label: crate::ifc_artifacts::Label::Public,
+                },
+            )
+            .expect("generator activation should suspend at its body boundary");
+        let generator_frame = generator
+            .execution
+            .as_ref()
+            .expect("suspended generator should own its activation")
+            .call_stack[0]
+            .clone();
+        core.generators.push(generator);
+        core.call_stack = vec![generator_frame; core.config.max_call_depth];
 
+        let error = core
+            .generator_next(
+                &module,
+                0,
+                Value::Undefined,
+                crate::ifc_artifacts::Label::Public,
+            )
+            .expect_err("resume at the active depth limit must fail closed");
+        assert_eq!(error, InterpreterError::StackOverflow { depth: 2, max: 2 });
+        assert_eq!(core.generators[0].phase, GeneratorPhase::SuspendedStart);
+        assert!(core.generators[0].execution.is_some());
+    }
+
+    #[test]
+    fn generator_resume_context_swap_preserves_memory_accounting_bd_093id() {
+        let module = test_module(vec![
+            Ir3Instruction::GeneratorBodyStart,
+            Ir3Instruction::LoadInt { dst: 0, value: 7 },
+            Ir3Instruction::Yield {
+                value: 0,
+                delegate: false,
+                resume_dst: 1,
+            },
+            Ir3Instruction::Return { value: 0 },
+        ]);
+        let mut core = InterpreterCore::new(test_quickjs_config(), "generator-resume-memory");
+        let captured_env = core.scope_chain.snapshot();
+        let generator = core
+            .prepare_generator_activation(
+                &module,
+                GeneratorCallSetup {
+                    function_index: 0,
+                    function_entry: 0,
+                    captured_env,
+                    arguments: Vec::new(),
+                    this_value: Value::Undefined,
+                    this_label: crate::ifc_artifacts::Label::Public,
+                    super_value: Value::Undefined,
+                    super_label: crate::ifc_artifacts::Label::Public,
+                },
+            )
+            .expect("generator activation should suspend at its body boundary");
+        core.generators.push(generator);
+        core.current_module_specifier = Some("m".repeat(64 * 1024));
+        let baseline = core
+            .sync_estimated_memory_bytes()
+            .expect("caller and generator activation should fit initially");
+        core.config.max_total_memory_bytes = baseline.saturating_add(16 * 1024);
+
+        let (yielded, _) = core
+            .generator_next(
+                &module,
+                0,
+                Value::Undefined,
+                crate::ifc_artifacts::Label::Public,
+            )
+            .expect("moving a fully accounted caller must not create a phantom overage");
         let Value::Object(result_id) = yielded else {
-            panic!("expected generator.next() to return a result object");
+            panic!("expected generator result object");
         };
-        let result_object = &core.heap[result_id.0 as usize];
         assert_eq!(
-            result_object.properties.get("done"),
-            Some(&Value::Bool(false))
+            core.heap[result_id.0 as usize].properties.get("value"),
+            Some(&Value::Int(7))
         );
         assert_eq!(
-            result_object.properties.get("value"),
-            Some(&Value::Str(payload))
+            core.current_module_specifier.as_ref().map(String::len),
+            Some(64 * 1024)
+        );
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+    }
+
+    #[test]
+    fn generator_value_and_resume_labels_are_isolated_bd_ur3tk_5() {
+        let module = test_module(vec![
+            Ir3Instruction::GeneratorBodyStart,
+            Ir3Instruction::Yield {
+                value: 0,
+                delegate: false,
+                resume_dst: 1,
+            },
+            Ir3Instruction::Return { value: 1 },
+        ]);
+        let mut core = InterpreterCore::new(test_quickjs_config(), "generator-label-isolation");
+        core.write_reg_with_label(5, Value::Int(99), crate::ifc_artifacts::Label::TopSecret)
+            .expect("caller sentinel should be writable");
+
+        for (value, label) in [
+            (Value::Int(11), crate::ifc_artifacts::Label::Secret),
+            (Value::Int(22), crate::ifc_artifacts::Label::Internal),
+        ] {
+            let generator = core
+                .prepare_generator_activation(
+                    &module,
+                    GeneratorCallSetup {
+                        function_index: 0,
+                        function_entry: 0,
+                        captured_env: core.scope_chain.snapshot(),
+                        arguments: vec![(value, label)],
+                        this_value: Value::Undefined,
+                        this_label: crate::ifc_artifacts::Label::Public,
+                        super_value: Value::Undefined,
+                        super_label: crate::ifc_artifacts::Label::Public,
+                    },
+                )
+                .expect("generator activation should suspend at its body boundary");
+            core.generators.push(generator);
+        }
+
+        let (_, first_label) = core
+            .generator_next(
+                &module,
+                0,
+                Value::Undefined,
+                crate::ifc_artifacts::Label::Public,
+            )
+            .expect("first generator should yield");
+        let (_, second_label) = core
+            .generator_next(
+                &module,
+                1,
+                Value::Undefined,
+                crate::ifc_artifacts::Label::Public,
+            )
+            .expect("second generator should yield independently");
+        assert_eq!(first_label, crate::ifc_artifacts::Label::Secret);
+        assert_eq!(second_label, crate::ifc_artifacts::Label::Internal);
+
+        let (_, return_label) = core
+            .generator_next(
+                &module,
+                0,
+                Value::Int(33),
+                crate::ifc_artifacts::Label::Confidential,
+            )
+            .expect("resume argument should become the first generator's return value");
+        assert_eq!(return_label, crate::ifc_artifacts::Label::Confidential);
+        assert_eq!(
+            core.read_reg_label(5).expect("caller label should survive"),
+            crate::ifc_artifacts::Label::TopSecret
+        );
+        assert_eq!(
+            core.generators[1]
+                .execution
+                .as_ref()
+                .expect("second generator should remain suspended")
+                .register_labels[0],
+            crate::ifc_artifacts::Label::Internal
+        );
+    }
+
+    #[test]
+    fn generator_rejects_mismatched_value_and_label_snapshot_bd_ur3tk_5() {
+        let module = test_module(vec![
+            Ir3Instruction::GeneratorBodyStart,
+            Ir3Instruction::Return { value: 0 },
+        ]);
+        let mut core = InterpreterCore::new(test_quickjs_config(), "generator-label-shape");
+        let mut generator = core
+            .prepare_generator_activation(
+                &module,
+                GeneratorCallSetup {
+                    function_index: 0,
+                    function_entry: 0,
+                    captured_env: core.scope_chain.snapshot(),
+                    arguments: Vec::new(),
+                    this_value: Value::Undefined,
+                    this_label: crate::ifc_artifacts::Label::Public,
+                    super_value: Value::Undefined,
+                    super_label: crate::ifc_artifacts::Label::Public,
+                },
+            )
+            .expect("generator activation should reach its body boundary");
+        generator
+            .execution
+            .as_mut()
+            .expect("prepared generator activation")
+            .register_labels
+            .pop();
+        core.generators.push(generator);
+
+        let error = core
+            .generator_next(
+                &module,
+                0,
+                Value::Undefined,
+                crate::ifc_artifacts::Label::Public,
+            )
+            .expect_err("a missing register label must fail closed");
+        assert!(matches!(
+            error,
+            InterpreterError::TypeError { expected, got }
+                if expected.contains("one IFC label per register")
+                    && got.contains("values=")
+                    && got.contains("labels=")
+        ));
+        assert_eq!(core.generators[0].phase, GeneratorPhase::SuspendedStart);
+        assert!(core.generators[0].execution.is_some());
+    }
+
+    #[test]
+    fn generator_return_completion_survives_finally_yield_bd_ur3tk_5() {
+        let module = test_module(vec![
+            Ir3Instruction::GeneratorBodyStart,
+            Ir3Instruction::BeginTry {
+                catch_target: 3,
+                finally_target: Some(3),
+            },
+            Ir3Instruction::Return { value: 0 },
+            Ir3Instruction::EnterFinally,
+            Ir3Instruction::Yield {
+                value: 0,
+                delegate: false,
+                resume_dst: 1,
+            },
+            Ir3Instruction::EndFinally,
+        ]);
+        let mut core = InterpreterCore::new(test_quickjs_config(), "generator-finally-snapshot");
+        let generator = core
+            .prepare_generator_activation(
+                &module,
+                GeneratorCallSetup {
+                    function_index: 0,
+                    function_entry: 0,
+                    captured_env: core.scope_chain.snapshot(),
+                    arguments: vec![(Value::Int(7), crate::ifc_artifacts::Label::Secret)],
+                    this_value: Value::Undefined,
+                    this_label: crate::ifc_artifacts::Label::Public,
+                    super_value: Value::Undefined,
+                    super_label: crate::ifc_artifacts::Label::Public,
+                },
+            )
+            .expect("generator activation should suspend at its body boundary");
+        core.generators.push(generator);
+
+        let (_, yield_label) = core
+            .generator_next(
+                &module,
+                0,
+                Value::Undefined,
+                crate::ifc_artifacts::Label::Public,
+            )
+            .expect("finally should yield before completing the pending return");
+        assert_eq!(yield_label, crate::ifc_artifacts::Label::Secret);
+        let suspended = core.generators[0]
+            .execution
+            .as_ref()
+            .expect("yield should preserve the generator activation");
+        assert!(matches!(
+            suspended.finally_frames.last(),
+            Some(FinallyFrame {
+                completion: Some(AbruptCompletion::Return(LabeledReturn {
+                    value: Value::Int(7),
+                    label: crate::ifc_artifacts::Label::Secret,
+                })),
+            })
+        ));
+
+        let (_, return_label) = core
+            .generator_next(
+                &module,
+                0,
+                Value::Undefined,
+                crate::ifc_artifacts::Label::Public,
+            )
+            .expect("resuming after the yield should complete the original return");
+        assert_eq!(return_label, crate::ifc_artifacts::Label::Secret);
+        assert_eq!(core.generators[0].phase, GeneratorPhase::Completed);
+    }
+
+    fn markerless_generator_module_bd_093id() -> Ir3Module {
+        let mut module = test_module(vec![
+            Ir3Instruction::LoadInt { dst: 2, value: 7 },
+            Ir3Instruction::CreateGenerator {
+                dst: 0,
+                function_index: 0,
+                capture_count: 0,
+            },
+            Ir3Instruction::Call {
+                callee: 0,
+                args: RegRange { start: 2, count: 1 },
+                dst: 1,
+            },
+            Ir3Instruction::Move { dst: 0, src: 1 },
+            Ir3Instruction::Halt,
+            Ir3Instruction::Yield {
+                value: 0,
+                delegate: false,
+                resume_dst: 1,
+            },
+            Ir3Instruction::Return { value: 0 },
+        ]);
+        module.function_table.push(Ir3FunctionDesc {
+            entry: 5,
+            arity: 1,
+            frame_size: 2,
+            name: Some("legacy_generator".to_string()),
+            is_generator: true,
+            rest_param_index: None,
+        });
+        module
+    }
+
+    #[test]
+    fn current_generator_ir_without_body_boundary_rejects_before_execution_bd_093id() {
+        let module = markerless_generator_module_bd_093id();
+        let mut core = InterpreterCore::new(test_quickjs_config(), "current-generator-wire");
+        let error = core
+            .execute(&module)
+            .expect_err("current markerless generator IR must fail structurally");
+        assert!(matches!(
+            error,
+            InterpreterError::TypeError { expected, got }
+                if expected.contains("structurally valid core IR3")
+                    && got.contains("IR_INVALID_GENERATOR_BOUNDARY")
+        ));
+        assert!(core.generators.is_empty());
+    }
+
+    #[test]
+    fn execution_rejects_unsupported_ir_schema_before_dispatch_bd_093id() {
+        let mut module = test_module(vec![Ir3Instruction::Halt]);
+        module.header.schema_version = crate::ir_contract::IrSchemaVersion {
+            major: 0,
+            minor: crate::ir_contract::IrSchemaVersion::CURRENT.minor + 1,
+            patch: 0,
+        };
+        let mut core = InterpreterCore::new(test_quickjs_config(), "future-core-ir");
+        let error = core
+            .execute(&module)
+            .expect_err("future IR must reject before interpreter dispatch");
+        assert!(matches!(
+            error,
+            InterpreterError::TypeError { expected, got }
+                if expected.contains("supported")
+                    && got.contains("IR_SCHEMA_VERSION_MISMATCH")
+        ));
+        assert_eq!(core.instructions_executed, 0);
+    }
+
+    #[test]
+    fn legacy_generator_ir_without_body_boundary_retains_first_next_start_bd_093id() {
+        let mut module = markerless_generator_module_bd_093id();
+        module.header.schema_version = crate::ir_contract::IrSchemaVersion {
+            major: 0,
+            minor: 9,
+            patch: 0,
+        };
+
+        let mut core = InterpreterCore::new(test_quickjs_config(), "legacy-generator-wire");
+        let invocation = core.execute(&module).expect("legacy generator invocation");
+        assert_eq!(invocation.value, Value::Generator(0));
+        assert_eq!(core.generators[0].phase, GeneratorPhase::SuspendedStart);
+
+        let (yielded, _) = core
+            .generator_next(
+                &module,
+                0,
+                Value::Undefined,
+                crate::ifc_artifacts::Label::Public,
+            )
+            .expect("legacy generator should start at its first next call");
+        let Value::Object(result_id) = yielded else {
+            panic!("expected legacy generator result object");
+        };
+        assert_eq!(
+            core.heap[result_id.0 as usize].properties.get("value"),
+            Some(&Value::Int(7))
+        );
+        assert_eq!(
+            core.heap[result_id.0 as usize].properties.get("done"),
+            Some(&Value::Bool(false))
         );
     }
 
@@ -12123,6 +26607,7 @@ mod tests {
             frame_size: 4,
             name: Some("increment".to_string()),
             is_generator: false,
+            rest_param_index: None,
         });
 
         let result = quickjs_execute(&module).unwrap();
@@ -12158,11 +26643,12 @@ mod tests {
             let binding_value = format!("value{}", i);
             core.scope_chain.current_mut().bindings.insert(
                 binding_name.clone(),
-                ScopeBinding {
-                    value: Value::Str(binding_value.clone()),
-                    kind: BindingKind::Var,
-                    initialized: true,
-                },
+                ScopeBinding::with_state(
+                    BindingKind::Var,
+                    Value::str(binding_value.clone()),
+                    crate::ifc_artifacts::Label::Public,
+                    true,
+                ),
             );
         }
 
@@ -12177,7 +26663,7 @@ mod tests {
             let binding_name = format!("var{}", level);
             let expected_value = format!("value{}", level);
             if let Some(binding) = frame.bindings.get(&binding_name) {
-                assert_eq!(binding.value, Value::Str(expected_value));
+                assert_eq!(binding.value().unwrap(), Value::str(expected_value));
             } else {
                 panic!("Missing binding {} at scope level {}", binding_name, level);
             }
@@ -12692,6 +27178,7 @@ mod tests {
                     frame_size: 1,
                     name: Some("Foo".to_string()),
                     is_generator: false,
+                    rest_param_index: None,
                 }],
             ))
             .unwrap();
@@ -12702,7 +27189,7 @@ mod tests {
         };
         let prototype_id = *core
             .function_prototypes
-            .get(&0)
+            .get(&FunctionObjectKey::Function(0))
             .expect("constructor prototype should be allocated");
         let instance = core
             .heap
@@ -12756,6 +27243,7 @@ mod tests {
                         frame_size: 1,
                         name: Some("Foo".to_string()),
                         is_generator: false,
+                        rest_param_index: None,
                     },
                     Ir3FunctionDesc {
                         entry: 6,
@@ -12763,6 +27251,7 @@ mod tests {
                         frame_size: 1,
                         name: Some("method".to_string()),
                         is_generator: false,
+                        rest_param_index: None,
                     },
                 ],
             ))
@@ -12927,6 +27416,69 @@ mod tests {
         assert_eq!(result.value, Value::Int(7));
     }
 
+    /// bd-snlhk: the IR3 lowering used to reconstruct the closure free-var
+    /// binding_id -> name map by zipping body first-appearance order against
+    /// the alphabetical `free_vars` list, silently swapping captured bindings
+    /// whenever first-use order diverged from alphabetical order. The fix
+    /// carries `free_var_ids` from IR1, paired index-wise with `free_vars`.
+    /// Two free vars first-used in REVERSE alphabetical order: the old
+    /// heuristic computed alpha - zebra = -7 instead of zebra - alpha = 7.
+    #[test]
+    fn closure_free_vars_bind_correct_names_non_alphabetical_first_use() {
+        let tree = CanonicalEs2020Parser
+            .parse(
+                "let zebra = 9;\nlet alpha = 2;\nfunction f() { return zebra - alpha; }\nf();",
+                ParseGoal::Script,
+            )
+            .expect("free-var source should parse");
+        let ir0 = Ir0Module::from_syntax_tree(tree, "free-var-order-test.js");
+        let ctx = LoweringContext::new(
+            "trace-free-var-order",
+            "decision-free-var-order",
+            "policy-free-var-order",
+        );
+        let output = lower_ir0_to_ir3(&ir0, &ctx).expect("free-var closure should lower");
+
+        let mut core = quickjs_test_core();
+        let result = core
+            .execute(&output.ir3)
+            .expect("free-var closure should execute");
+        assert_eq!(
+            result.value,
+            Value::Int(7),
+            "zebra - alpha must bind each free var to its own value (bd-snlhk)"
+        );
+    }
+
+    /// bd-snlhk: three captured `let`s where every wrong permutation of the
+    /// (name -> value) binding yields a result different from 100 - 10 - 1.
+    #[test]
+    fn closure_free_vars_bind_three_captured_lets_exactly() {
+        let tree = CanonicalEs2020Parser
+            .parse(
+                "let cherry = 100;\nlet banana = 10;\nlet apple = 1;\nfunction g() { return cherry - banana - apple; }\ng();",
+                ParseGoal::Script,
+            )
+            .expect("three-free-var source should parse");
+        let ir0 = Ir0Module::from_syntax_tree(tree, "free-var-three-test.js");
+        let ctx = LoweringContext::new(
+            "trace-free-var-three",
+            "decision-free-var-three",
+            "policy-free-var-three",
+        );
+        let output = lower_ir0_to_ir3(&ir0, &ctx).expect("three-free-var closure should lower");
+
+        let mut core = quickjs_test_core();
+        let result = core
+            .execute(&output.ir3)
+            .expect("three-free-var closure should execute");
+        assert_eq!(
+            result.value,
+            Value::Int(89),
+            "cherry - banana - apple must be 89 under exact binding (bd-snlhk)"
+        );
+    }
+
     #[test]
     fn static_method_on_constructor() {
         let tree = CanonicalEs2020Parser
@@ -13048,6 +27600,536 @@ mod tests {
     }
 
     #[test]
+    fn copy_data_properties_rejects_nullish_and_boxes_empty_primitives_bd_f1ixz() {
+        for source in [Value::Null, Value::Undefined] {
+            let mut core = quickjs_test_core();
+            let target = core.alloc_object_with_prototype(None).unwrap();
+            core.registers[1] = Value::Object(target);
+            core.registers[2] = source;
+            let error = core
+                .execute(&test_module(vec![
+                    Ir3Instruction::CopyDataProperties {
+                        target: 1,
+                        source: 2,
+                        excluded: RegRange { start: 3, count: 0 },
+                        value_dst: 4,
+                    },
+                    Ir3Instruction::Halt,
+                ]))
+                .unwrap_err();
+            assert!(matches!(error, InterpreterError::TypeError { .. }));
+            assert!(core.copy_data_properties_states.is_empty());
+        }
+
+        for source in [Value::Null, Value::Undefined] {
+            let mut spread = quickjs_test_core();
+            let spread_target = spread.alloc_object_with_prototype(None).unwrap();
+            spread.registers[1] = Value::Object(spread_target);
+            spread.registers[2] = source;
+            let result = spread
+                .execute(&test_module(vec![
+                    Ir3Instruction::SpreadIntoObject {
+                        target: 1,
+                        source: 2,
+                    },
+                    Ir3Instruction::Move { dst: 0, src: 1 },
+                    Ir3Instruction::Halt,
+                ]))
+                .unwrap();
+            assert_eq!(result.value, Value::Object(spread_target));
+            assert!(
+                spread.heap[spread_target.0 as usize]
+                    .own_property_keys()
+                    .is_empty()
+            );
+        }
+
+        for source in [
+            Value::Bool(true),
+            Value::Int(7),
+            Value::Float(Float64::new(1.5)),
+        ] {
+            let mut core = quickjs_test_core();
+            let target = core.alloc_object_with_prototype(None).unwrap();
+            core.registers[1] = Value::Object(target);
+            core.registers[2] = source;
+            core.execute(&test_module(vec![
+                Ir3Instruction::CopyDataProperties {
+                    target: 1,
+                    source: 2,
+                    excluded: RegRange { start: 3, count: 0 },
+                    value_dst: 4,
+                },
+                Ir3Instruction::Halt,
+            ]))
+            .unwrap();
+            assert!(core.heap[target.0 as usize].own_property_keys().is_empty());
+            assert!(core.copy_data_properties_states.is_empty());
+        }
+    }
+
+    #[test]
+    fn copy_data_properties_copies_exact_string_units_after_exclusion_bd_f1ixz() {
+        let mut core = quickjs_test_core();
+        let target = core.alloc_object_with_prototype(None).unwrap();
+        core.registers[1] = Value::Object(target);
+        core.registers[2] = Value::Str(JsString::from_code_units(&[0xD83D, 0xDE00, 0xD800]));
+        core.registers[3] = Value::str("1");
+
+        core.execute(&test_module(vec![
+            Ir3Instruction::CopyDataProperties {
+                target: 1,
+                source: 2,
+                excluded: RegRange { start: 3, count: 1 },
+                value_dst: 4,
+            },
+            Ir3Instruction::Halt,
+        ]))
+        .unwrap();
+
+        let object = &core.heap[target.0 as usize];
+        assert_eq!(object.own_property_keys(), vec!["0", "2"]);
+        for (key, expected_unit) in [("0", 0xD83D), ("2", 0xD800)] {
+            let Some(Value::Str(value)) = object.properties.get(key) else {
+                panic!("string index {key} should be copied as a data property");
+            };
+            assert_eq!(value.code_units_vec(), vec![expected_unit]);
+        }
+        assert!(core.copy_data_properties_states.is_empty());
+    }
+
+    #[test]
+    fn copy_data_properties_omits_array_length_and_uses_plain_data_writes_bd_f1ixz() {
+        let mut core = quickjs_test_core();
+        let target = core.alloc_object_with_prototype(None).unwrap();
+        let source = core.alloc_array_with_prototype(None).unwrap();
+        core.set_plain_data_property(source, "0".into(), Value::Int(1))
+            .unwrap();
+        core.set_plain_data_property(source, "length".into(), Value::Int(1))
+            .unwrap();
+        core.set_plain_data_property(source, "custom".into(), Value::Int(2))
+            .unwrap();
+        let prototype_value = core.alloc_object_with_prototype(None).unwrap();
+        core.set_plain_data_property(source, "__proto__".into(), Value::Object(prototype_value))
+            .unwrap();
+        let prefixed_key = format!("{IR_ACCESSOR_GET_PREFIX}literal");
+        core.set_plain_data_property(source, prefixed_key.clone(), Value::Int(3))
+            .unwrap();
+        core.registers[1] = Value::Object(target);
+        core.registers[2] = Value::Object(source);
+
+        core.execute(&test_module(vec![
+            Ir3Instruction::CopyDataProperties {
+                target: 1,
+                source: 2,
+                excluded: RegRange { start: 3, count: 0 },
+                value_dst: 4,
+            },
+            Ir3Instruction::Halt,
+        ]))
+        .unwrap();
+
+        let object = &core.heap[target.0 as usize];
+        assert_eq!(
+            object.own_property_keys(),
+            vec!["0", "custom", "__proto__", prefixed_key.as_str()]
+        );
+        assert!(!object.properties.contains_key("length"));
+        assert_eq!(object.prototype, None);
+        assert_eq!(
+            object.properties.get("__proto__"),
+            Some(&Value::Object(prototype_value))
+        );
+        assert_eq!(object.properties.get(&prefixed_key), Some(&Value::Int(3)));
+        assert!(object.accessors.is_empty());
+    }
+
+    #[test]
+    fn copy_data_properties_resumes_included_getter_with_source_receiver_bd_f1ixz() {
+        let mut core = quickjs_test_core();
+        let target = core.alloc_object_with_prototype(None).unwrap();
+        let source = core.alloc_object_with_prototype(None).unwrap();
+        core.set_plain_data_property(source, "calls".into(), Value::Int(0))
+            .unwrap();
+        core.set_plain_data_property(source, "marker".into(), Value::Int(41))
+            .unwrap();
+        core.set_object_property(
+            source,
+            format!("{IR_ACCESSOR_GET_PREFIX}included"),
+            Value::Function(0),
+        )
+        .unwrap();
+        core.set_object_property(
+            source,
+            format!("{IR_ACCESSOR_SET_PREFIX}setter_only"),
+            Value::Function(0),
+        )
+        .unwrap();
+        // An invalid getter is a useful tripwire: exclusion must happen before
+        // the property read, so this value must never be invoked.
+        core.set_object_property(
+            source,
+            format!("{IR_ACCESSOR_GET_PREFIX}excluded"),
+            Value::Function(99),
+        )
+        .unwrap();
+        core.registers[1] = Value::Object(target);
+        core.registers[2] = Value::Object(source);
+        core.registers[3] = Value::str("excluded");
+
+        let result = core
+            .execute(&test_module_with_pool_and_functions(
+                vec![
+                    Ir3Instruction::CopyDataProperties {
+                        target: 1,
+                        source: 2,
+                        excluded: RegRange { start: 3, count: 1 },
+                        value_dst: 4,
+                    },
+                    Ir3Instruction::Move { dst: 0, src: 1 },
+                    Ir3Instruction::Halt,
+                    Ir3Instruction::LoadThis { dst: 0 },
+                    Ir3Instruction::LoadStr {
+                        dst: 1,
+                        pool_index: 0,
+                    },
+                    Ir3Instruction::GetProperty {
+                        obj: 0,
+                        key: 1,
+                        dst: 2,
+                    },
+                    Ir3Instruction::LoadInt { dst: 3, value: 1 },
+                    Ir3Instruction::Add {
+                        dst: 4,
+                        lhs: 2,
+                        rhs: 3,
+                    },
+                    Ir3Instruction::SetProperty {
+                        obj: 0,
+                        key: 1,
+                        val: 4,
+                    },
+                    Ir3Instruction::LoadStr {
+                        dst: 5,
+                        pool_index: 1,
+                    },
+                    Ir3Instruction::GetProperty {
+                        obj: 0,
+                        key: 5,
+                        dst: 6,
+                    },
+                    Ir3Instruction::Return { value: 6 },
+                ],
+                vec!["calls".to_string(), "marker".to_string()],
+                vec![Ir3FunctionDesc {
+                    entry: 3,
+                    arity: 0,
+                    frame_size: 8,
+                    name: Some("included_getter".to_string()),
+                    is_generator: false,
+                    rest_param_index: None,
+                }],
+            ))
+            .unwrap();
+
+        assert_eq!(result.value, Value::Object(target));
+        let object = &core.heap[target.0 as usize];
+        assert_eq!(object.properties.get("marker"), Some(&Value::Int(41)));
+        assert_eq!(object.properties.get("included"), Some(&Value::Int(41)));
+        assert_eq!(
+            object.properties.get("setter_only"),
+            Some(&Value::Undefined)
+        );
+        assert!(!object.contains_own_property("excluded"));
+        assert!(object.accessors.is_empty());
+        assert_eq!(
+            core.heap[source.0 as usize].properties.get("calls"),
+            Some(&Value::Int(1))
+        );
+        assert!(core.copy_data_properties_states.is_empty());
+    }
+
+    #[test]
+    fn copy_data_properties_snapshots_keys_and_rechecks_descriptors_bd_f1ixz() {
+        let mut core = quickjs_test_core();
+        let target = core.alloc_object_with_prototype(None).unwrap();
+        let source = core.alloc_object_with_prototype(None).unwrap();
+        core.set_object_property(
+            source,
+            format!("{IR_ACCESSOR_GET_PREFIX}a"),
+            Value::Function(0),
+        )
+        .unwrap();
+        core.set_plain_data_property(source, "b".into(), Value::Int(2))
+            .unwrap();
+        core.registers[1] = Value::Object(target);
+        core.registers[2] = Value::Object(source);
+
+        core.execute(&test_module_with_pool_and_functions(
+            vec![
+                Ir3Instruction::CopyDataProperties {
+                    target: 1,
+                    source: 2,
+                    excluded: RegRange { start: 3, count: 0 },
+                    value_dst: 4,
+                },
+                Ir3Instruction::Halt,
+                Ir3Instruction::LoadThis { dst: 0 },
+                Ir3Instruction::LoadStr {
+                    dst: 1,
+                    pool_index: 0,
+                },
+                Ir3Instruction::DeleteProperty {
+                    obj: 0,
+                    key: 1,
+                    dst: 2,
+                },
+                Ir3Instruction::LoadStr {
+                    dst: 3,
+                    pool_index: 1,
+                },
+                Ir3Instruction::LoadInt { dst: 4, value: 3 },
+                Ir3Instruction::SetProperty {
+                    obj: 0,
+                    key: 3,
+                    val: 4,
+                },
+                Ir3Instruction::LoadInt { dst: 5, value: 1 },
+                Ir3Instruction::Return { value: 5 },
+            ],
+            vec!["b".to_string(), "c".to_string()],
+            vec![class_test_function(2, "mutating_getter")],
+        ))
+        .unwrap();
+
+        let object = &core.heap[target.0 as usize];
+        assert_eq!(object.own_property_keys(), vec!["a"]);
+        assert_eq!(object.properties.get("a"), Some(&Value::Int(1)));
+        assert!(!object.contains_own_property("b"));
+        assert!(!object.contains_own_property("c"));
+        assert_eq!(
+            core.heap[source.0 as usize].properties.get("c"),
+            Some(&Value::Int(3))
+        );
+        assert!(core.copy_data_properties_states.is_empty());
+    }
+
+    #[test]
+    fn copy_data_properties_nested_state_and_throw_cleanup_bd_f1ixz() {
+        let mut nested = quickjs_test_core();
+        let outer_target = nested.alloc_object_with_prototype(None).unwrap();
+        let outer_source = nested.alloc_object_with_prototype(None).unwrap();
+        let inner_target = nested.alloc_object_with_prototype(None).unwrap();
+        let inner_source = nested.alloc_object_with_prototype(None).unwrap();
+        nested
+            .set_plain_data_property(inner_source, "v".into(), Value::Int(9))
+            .unwrap();
+        nested
+            .set_plain_data_property(
+                outer_source,
+                "innerTarget".into(),
+                Value::Object(inner_target),
+            )
+            .unwrap();
+        nested
+            .set_plain_data_property(
+                outer_source,
+                "innerSource".into(),
+                Value::Object(inner_source),
+            )
+            .unwrap();
+        nested
+            .set_object_property(
+                outer_source,
+                format!("{IR_ACCESSOR_GET_PREFIX}outer"),
+                Value::Function(0),
+            )
+            .unwrap();
+        nested.registers[1] = Value::Object(outer_target);
+        nested.registers[2] = Value::Object(outer_source);
+        nested.registers[3] = Value::str("innerTarget");
+        nested.registers[4] = Value::str("innerSource");
+        nested
+            .execute(&test_module_with_pool_and_functions(
+                vec![
+                    Ir3Instruction::CopyDataProperties {
+                        target: 1,
+                        source: 2,
+                        excluded: RegRange { start: 3, count: 2 },
+                        value_dst: 5,
+                    },
+                    Ir3Instruction::Halt,
+                    Ir3Instruction::LoadThis { dst: 0 },
+                    Ir3Instruction::LoadStr {
+                        dst: 1,
+                        pool_index: 0,
+                    },
+                    Ir3Instruction::GetProperty {
+                        obj: 0,
+                        key: 1,
+                        dst: 2,
+                    },
+                    Ir3Instruction::LoadStr {
+                        dst: 3,
+                        pool_index: 1,
+                    },
+                    Ir3Instruction::GetProperty {
+                        obj: 0,
+                        key: 3,
+                        dst: 4,
+                    },
+                    Ir3Instruction::CopyDataProperties {
+                        target: 2,
+                        source: 4,
+                        excluded: RegRange { start: 8, count: 0 },
+                        value_dst: 5,
+                    },
+                    Ir3Instruction::LoadStr {
+                        dst: 6,
+                        pool_index: 2,
+                    },
+                    Ir3Instruction::GetProperty {
+                        obj: 2,
+                        key: 6,
+                        dst: 7,
+                    },
+                    Ir3Instruction::Return { value: 7 },
+                ],
+                vec![
+                    "innerTarget".to_string(),
+                    "innerSource".to_string(),
+                    "v".to_string(),
+                ],
+                vec![class_test_function(2, "nested_copy_getter")],
+            ))
+            .unwrap();
+        assert_eq!(
+            nested.heap[outer_target.0 as usize].properties.get("outer"),
+            Some(&Value::Int(9))
+        );
+        assert_eq!(
+            nested.heap[inner_target.0 as usize].properties.get("v"),
+            Some(&Value::Int(9))
+        );
+        assert!(nested.copy_data_properties_states.is_empty());
+
+        let mut throwing = quickjs_test_core();
+        let target = throwing.alloc_object_with_prototype(None).unwrap();
+        let source = throwing.alloc_object_with_prototype(None).unwrap();
+        throwing
+            .set_object_property(
+                source,
+                format!("{IR_ACCESSOR_GET_PREFIX}boom"),
+                Value::Function(0),
+            )
+            .unwrap();
+        throwing.registers[1] = Value::Object(target);
+        throwing.registers[2] = Value::Object(source);
+        let result = throwing
+            .execute(&test_module_with_pool_and_functions(
+                vec![
+                    Ir3Instruction::BeginTry {
+                        catch_target: 3,
+                        finally_target: None,
+                    },
+                    Ir3Instruction::CopyDataProperties {
+                        target: 1,
+                        source: 2,
+                        excluded: RegRange { start: 7, count: 0 },
+                        value_dst: 4,
+                    },
+                    Ir3Instruction::EndTry,
+                    Ir3Instruction::EnterCatch { dst: 6 },
+                    Ir3Instruction::LoadStr {
+                        dst: 7,
+                        pool_index: 1,
+                    },
+                    Ir3Instruction::SetProperty {
+                        obj: 1,
+                        key: 7,
+                        val: 6,
+                    },
+                    Ir3Instruction::Move { dst: 0, src: 1 },
+                    Ir3Instruction::Halt,
+                    Ir3Instruction::LoadStr {
+                        dst: 0,
+                        pool_index: 0,
+                    },
+                    Ir3Instruction::Throw { value: 0 },
+                ],
+                vec!["boom".to_string(), "caught".to_string()],
+                vec![class_test_function(8, "throwing_getter")],
+            ))
+            .unwrap();
+        assert_eq!(result.value, Value::Object(target));
+        assert_eq!(
+            throwing.heap[target.0 as usize].properties.get("caught"),
+            Some(&Value::str("boom"))
+        );
+        assert!(throwing.copy_data_properties_states.is_empty());
+    }
+
+    #[test]
+    fn copy_data_properties_state_is_budgeted_and_cleaned_on_failure_bd_f1ixz() {
+        let mut core = quickjs_test_core();
+        let target = core.alloc_object_with_prototype(None).unwrap();
+        let source = core.alloc_object_with_prototype(None).unwrap();
+        for index in 0..8 {
+            core.set_plain_data_property(
+                source,
+                format!("long-copy-key-{index}-{}", "x".repeat(32)),
+                Value::Int(index),
+            )
+            .unwrap();
+        }
+        core.registers[1] = Value::Object(target);
+        core.registers[2] = Value::Object(source);
+        core.sync_estimated_memory_bytes().unwrap();
+        let baseline_memory = core.estimated_memory_bytes();
+        let probe_state = CopyDataPropertiesState {
+            instruction_ip: 0,
+            register_base: 0,
+            call_depth: 0,
+            target_id: target,
+            source: Value::Object(source),
+            string_units: None,
+            keys: core
+                .copy_data_properties_keys(&Value::Object(source))
+                .unwrap(),
+            excluded: BTreeSet::new(),
+            next_index: 0,
+            write_mode: CopyDataPropertiesWriteMode::CreateData,
+            awaiting: None,
+        };
+        let state_bytes = InterpreterCore::estimate_copy_data_properties_state_bytes(&probe_state);
+        core.config.max_total_memory_bytes = baseline_memory
+            .saturating_add(state_bytes)
+            .saturating_sub(1);
+
+        let error = core
+            .execute(&test_module(vec![
+                Ir3Instruction::CopyDataProperties {
+                    target: 1,
+                    source: 2,
+                    excluded: RegRange { start: 3, count: 0 },
+                    value_dst: 4,
+                },
+                Ir3Instruction::Halt,
+            ]))
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            InterpreterError::MemoryBudgetExceeded { .. }
+        ));
+        assert!(core.copy_data_properties_states.is_empty());
+        assert!(core.heap[target.0 as usize].own_property_keys().is_empty());
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+    }
+
+    #[test]
     fn class_expression() {
         let parser = CanonicalEs2020Parser;
         let tree = parser
@@ -13088,6 +28170,266 @@ mod tests {
             .expect("class expression constructor and prototype method should execute");
 
         assert_eq!(result.value, Value::Int(1));
+    }
+
+    fn execute_class_expression_source_bd_va13y(source: &str) -> Value {
+        let tree = CanonicalEs2020Parser
+            .parse(source, ParseGoal::Script)
+            .expect("bd-va13y class expression source should parse");
+        let ir0 = Ir0Module::from_syntax_tree(tree, "bd-va13y-class-expression.js");
+        let output = lower_ir0_to_ir3(
+            &ir0,
+            &LoweringContext::new("trace-bd-va13y", "decision-bd-va13y", "policy-bd-va13y"),
+        )
+        .expect("bd-va13y class expression source should lower");
+        quickjs_test_core()
+            .execute(&output.ir3)
+            .expect("bd-va13y class expression source should execute")
+            .value
+    }
+
+    fn complete_constructor_return_bd_ptu9m(return_value: Value) -> Value {
+        let mut core = quickjs_test_core();
+        let allocated_this = Value::Object(
+            core.alloc_object_with_prototype(None)
+                .expect("constructor receiver allocation should fit"),
+        );
+        core.call_stack.push(CallFrame {
+            return_ip: 1,
+            return_reg: Some(0),
+            register_base: 0,
+            function_index: None,
+            this_value: allocated_this.clone(),
+            this_label: crate::ifc_artifacts::Label::Public,
+            new_target_value: Value::Function(0),
+            new_target_label: crate::ifc_artifacts::Label::Public,
+            super_value: Value::Undefined,
+            super_label: crate::ifc_artifacts::Label::Public,
+            construct_this: Some(allocated_this),
+            saved_pending_exception: None,
+            saved_pending_return: None,
+            saved_suspended_abrupt_depth: 0,
+            saved_finally_mode_depth: 0,
+            saved_scope_depth: core.scope_chain.depth(),
+            saved_scope_chain: None,
+            async_function_id: None,
+        });
+        core.complete_return(return_value, crate::ifc_artifacts::Label::Public)
+            .expect("constructor return should complete");
+        core.read_reg(0).expect("constructor result register")
+    }
+
+    #[test]
+    fn constructor_preserves_explicit_object_like_returns_bd_ptu9m() {
+        for (case, return_value) in [
+            ("object", Value::Object(ObjectId(u32::MAX))),
+            ("function", Value::Function(11)),
+            ("closure", Value::Closure(12)),
+            ("iterator", Value::Iterator(13)),
+            ("generator function", Value::GeneratorFunction(14)),
+            ("generator", Value::Generator(15)),
+            ("async function", Value::AsyncFunction(16)),
+            ("async function object", Value::AsyncFunctionObject(17)),
+            (
+                "async generator function",
+                Value::AsyncGeneratorFunction(18),
+            ),
+            ("async generator object", Value::AsyncGeneratorObject(19)),
+            ("promise", Value::Promise(20)),
+            (
+                "builtin function",
+                Value::BuiltinFunction(BuiltinFunction::array_is_array()),
+            ),
+        ] {
+            assert_eq!(
+                complete_constructor_return_bd_ptu9m(return_value.clone()),
+                return_value,
+                "constructor must preserve an explicit {case} return",
+            );
+        }
+    }
+
+    #[test]
+    fn constructor_preserves_captured_callable_return_bd_it65u() {
+        assert_eq!(
+            execute_class_expression_source_bd_va13y(
+                "let value = function(){ return 7; }; \
+                 function ReturnValue(){ return value; } \
+                 new ReturnValue() === value;"
+            ),
+            Value::Bool(true),
+        );
+    }
+
+    #[test]
+    fn constructor_preserves_builtin_return_bd_ptu9m() {
+        assert_eq!(
+            execute_class_expression_source_bd_va13y(
+                "let value = Array.isArray; \
+                 function ReturnValue(){ return value; } \
+                 new ReturnValue() === value;"
+            ),
+            Value::Bool(true),
+        );
+    }
+
+    #[test]
+    fn constructor_preserves_generator_return_bd_ptu9m() {
+        assert_eq!(
+            execute_class_expression_source_bd_va13y(
+                "function* make(){ yield 1; } let value = make(); \
+                 function ReturnValue(){ return value; } \
+                 new ReturnValue() === value;"
+            ),
+            Value::Bool(true),
+        );
+    }
+
+    #[test]
+    fn constructor_primitive_return_keeps_allocated_instance_bd_ptu9m() {
+        assert_eq!(
+            execute_class_expression_source_bd_va13y(
+                "function KeepThis(){ this.value = 4; return 7; } \
+                 let instance = new KeepThis(); instance.value === 4;"
+            ),
+            Value::Bool(true)
+        );
+    }
+
+    #[test]
+    fn named_class_expression_constructor_and_method_share_private_self_bd_va13y() {
+        assert_eq!(
+            execute_class_expression_source_bd_va13y(
+                "let C = class Inner { \
+                     constructor(){ this.ctor = Inner; } \
+                     method(){ return Inner; } \
+                 }; \
+                 let D = C; C = 0; let value = new D(); \
+                 value.ctor === D && value.method() === D;"
+            ),
+            Value::Bool(true)
+        );
+    }
+
+    #[test]
+    fn named_class_expression_nested_method_closure_keeps_self_bd_va13y() {
+        assert_eq!(
+            execute_class_expression_source_bd_va13y(
+                "let C = class Inner { self(){ return () => Inner; } }; \
+                 let D = C; C = 0; new D().self()() === D;"
+            ),
+            Value::Bool(true)
+        );
+    }
+
+    #[test]
+    fn named_class_expression_nested_constructor_closure_keeps_self_bd_va13y() {
+        assert_eq!(
+            execute_class_expression_source_bd_va13y(
+                "let C = class Inner { constructor(){ this.self = () => Inner; } }; \
+                 let D = C; C = 0; new D().self() === D;"
+            ),
+            Value::Bool(true)
+        );
+    }
+
+    #[test]
+    fn named_class_expression_shadows_outer_but_not_params_or_locals_bd_va13y() {
+        assert_eq!(
+            execute_class_expression_source_bd_va13y(
+                "let Inner = 7; \
+                 let C = class Inner { \
+                     parameter(Inner){ return Inner; } \
+                     local(){ let Inner = 9; return Inner; } \
+                     self(){ return Inner; } \
+                 }; \
+                 let value = new C(); \
+                 value.parameter(8) === 8 && value.local() === 9 && \
+                 value.self() === C && Inner === 7;"
+            ),
+            Value::Bool(true)
+        );
+    }
+
+    #[test]
+    fn duplicate_named_class_expressions_keep_distinct_self_cells_bd_va13y() {
+        assert_eq!(
+            execute_class_expression_source_bd_va13y(
+                "let A = class Inner { method(){ return Inner; } }; \
+                 let B = class Inner { method(){ return Inner; } }; \
+                 new A().method() === A && new B().method() === B;"
+            ),
+            Value::Bool(true)
+        );
+    }
+
+    #[test]
+    fn nested_factory_class_expression_shares_constructor_and_method_self_bd_va13y() {
+        assert_eq!(
+            execute_class_expression_source_bd_va13y(
+                "function make(){ \
+                     return class Inner { \
+                         constructor(){ this.ctor = Inner; } \
+                         method(){ return Inner; } \
+                     }; \
+                 } \
+                 let C = make(); let D = make(); \
+                 let c = new C(); let d = new D(); \
+                 (c.ctor === C ? 1 : 0) + \
+                 (c.method() === C ? 2 : 0) + \
+                 (d.ctor === D ? 4 : 0) + \
+                 (d.method() === D ? 8 : 0) + \
+                 (C !== D ? 16 : 0) + \
+                 (c instanceof C ? 32 : 0) + \
+                 (d instanceof D ? 64 : 0) + \
+                 (!(c instanceof D) ? 128 : 0) + \
+                 (!(d instanceof C) ? 256 : 0);"
+            ),
+            Value::Int(511)
+        );
+    }
+
+    #[test]
+    fn class_method_name_does_not_overwrite_same_named_outer_capture_bd_va13y() {
+        assert_eq!(
+            execute_class_expression_source_bd_va13y(
+                "let method = 7; \
+                 let C = class Inner { method(){ return method; } }; \
+                 new C().method();"
+            ),
+            Value::Int(7)
+        );
+    }
+
+    #[test]
+    fn named_class_expression_self_does_not_leak_bd_va13y() {
+        assert_eq!(
+            execute_class_expression_source_bd_va13y("let C = class Inner {}; typeof Inner;"),
+            Value::str("undefined")
+        );
+    }
+
+    #[test]
+    fn anonymous_class_has_no_synthetic_self_binding_bd_va13y() {
+        assert_eq!(
+            execute_class_expression_source_bd_va13y(
+                "let C = class { \
+                     constructor(){ \
+                         try { anonymous; } catch (error) { this.kind = error.name; } \
+                     } \
+                 }; \
+                 new C().kind;"
+            ),
+            Value::str("ReferenceError")
+        );
+        assert_eq!(
+            execute_class_expression_source_bd_va13y(
+                "let anonymous = 9; \
+                 let C = class { method(){ return anonymous; } }; \
+                 new C().method();"
+            ),
+            Value::Int(9)
+        );
     }
 
     #[test]
@@ -13151,7 +28493,7 @@ mod tests {
             .execute(&output.ir3)
             .expect("new.target should execute through constructor frames");
 
-        assert_eq!(result.value, Value::Str("function".to_string()));
+        assert_eq!(result.value, Value::str("function"));
     }
 
     #[test]
@@ -13213,6 +28555,7 @@ mod tests {
             frame_size: 1,
             name: Some(name.to_string()),
             is_generator: false,
+            rest_param_index: None,
         }
     }
 
@@ -13281,6 +28624,52 @@ mod tests {
                 .iter()
                 .any(|event| event.kind == WitnessEventKind::HostcallDispatched)
         );
+    }
+
+    #[test]
+    fn timer_callback_materializes_empty_rest_array_bd_ur3tk_9() {
+        let top_level = vec![
+            Ir3Instruction::CreateClosure {
+                dst: 0,
+                function_index: 0,
+                capture_count: 0,
+            },
+            Ir3Instruction::LoadInt { dst: 1, value: 0 },
+            timer_hostcall("timer:setTimeout", RegRange { start: 0, count: 2 }, 2),
+            Ir3Instruction::Halt,
+        ];
+        let callback_entry = top_level.len() as u32;
+        let mut instructions = top_level;
+        instructions.extend([
+            Ir3Instruction::LoadStr {
+                dst: 1,
+                pool_index: 0,
+            },
+            Ir3Instruction::GetProperty {
+                obj: 0,
+                key: 1,
+                dst: 2,
+            },
+            timer_hostcall("console:log", RegRange { start: 2, count: 1 }, 3),
+            Ir3Instruction::Return { value: 3 },
+        ]);
+        let module = test_module_with_pool_and_functions(
+            instructions,
+            vec!["length".to_string()],
+            vec![Ir3FunctionDesc {
+                entry: callback_entry,
+                arity: 1,
+                frame_size: 4,
+                name: Some("rest_timer_callback".to_string()),
+                is_generator: false,
+                rest_param_index: Some(0),
+            }],
+        );
+
+        let mut core = quickjs_test_core();
+        let result = core.execute(&module).expect("rest timer should execute");
+        assert_eq!(result.console_output.len(), 1);
+        assert_eq!(result.console_output[0].message, "0");
     }
 
     #[test]
@@ -13785,6 +29174,68 @@ mod tests {
         use super::containment_tests::test_interpreter;
         use super::*;
 
+        fn pending_async_module(
+            mut body: Vec<Ir3Instruction>,
+            arity: u32,
+            frame_size: u32,
+        ) -> Ir3Module {
+            let mut instructions = vec![
+                Ir3Instruction::CreateAsyncFunction {
+                    dst: 0,
+                    function_index: 0,
+                    capture_count: 0,
+                },
+                Ir3Instruction::Call {
+                    callee: 0,
+                    args: RegRange {
+                        start: 10,
+                        count: arity,
+                    },
+                    dst: 1,
+                },
+                Ir3Instruction::Halt,
+            ];
+            instructions.append(&mut body);
+            test_module_with_functions(
+                instructions,
+                vec![Ir3FunctionDesc {
+                    entry: 3,
+                    arity,
+                    frame_size,
+                    name: Some("pending_async_bd_ur3tk_15".to_string()),
+                    is_generator: false,
+                    rest_param_index: None,
+                }],
+            )
+        }
+
+        fn prepared_async_generator(
+            core: &mut InterpreterCore,
+            module: &Ir3Module,
+            arguments: Vec<(Value, crate::ifc_artifacts::Label)>,
+        ) -> AsyncGeneratorObject {
+            let generator = core
+                .prepare_generator_activation(
+                    module,
+                    GeneratorCallSetup {
+                        function_index: 0,
+                        function_entry: 0,
+                        captured_env: core.scope_chain.snapshot(),
+                        arguments,
+                        this_value: Value::Undefined,
+                        this_label: crate::ifc_artifacts::Label::Public,
+                        super_value: Value::Undefined,
+                        super_label: crate::ifc_artifacts::Label::Public,
+                    },
+                )
+                .expect("async generator activation should reach its body boundary");
+            AsyncGeneratorObject {
+                execution: generator.execution,
+                resume_dst: None,
+                phase: AsyncGeneratorPhase::SuspendedStart,
+            }
+        }
+
         #[test]
         fn create_async_function_stores_closure_reference_without_executor_state() {
             let mut core = InterpreterCore::new(test_quickjs_config(), "async-function-create");
@@ -13804,6 +29255,7 @@ mod tests {
                     frame_size: 1,
                     name: Some("test_async".to_string()),
                     is_generator: false,
+                    rest_param_index: None,
                 }],
             );
 
@@ -13841,6 +29293,7 @@ mod tests {
                     frame_size: 1,
                     name: Some("test_async".to_string()),
                     is_generator: false,
+                    rest_param_index: None,
                 }],
             );
 
@@ -13898,9 +29351,10 @@ mod tests {
                     frame_size: 1,
                     name: Some("throw_async".to_string()),
                     is_generator: false,
+                    rest_param_index: None,
                 }],
             );
-            module.constant_pool.push("boom".to_string());
+            module.constant_pool.push("boom".into());
 
             core.execute(&module)
                 .expect("async throw should reject its promise without aborting");
@@ -13952,6 +29406,7 @@ mod tests {
                     frame_size: 1,
                     name: Some("await_async".to_string()),
                     is_generator: false,
+                    rest_param_index: None,
                 }],
             );
             let handle = core.promise_store.create();
@@ -14016,6 +29471,7 @@ mod tests {
                     frame_size: 1,
                     name: Some("await_secret_async".to_string()),
                     is_generator: false,
+                    rest_param_index: None,
                 }],
             );
             let handle = core.promise_store.create();
@@ -14049,6 +29505,499 @@ mod tests {
         }
 
         #[test]
+        fn async_await_joins_handle_and_settlement_labels_bd_ur3tk_3() {
+            let mut core = InterpreterCore::new(test_quickjs_config(), "async-await-handle-label");
+            let module = test_module_with_functions(
+                vec![
+                    Ir3Instruction::CreateAsyncFunction {
+                        dst: 0,
+                        function_index: 0,
+                        capture_count: 0,
+                    },
+                    Ir3Instruction::Call {
+                        callee: 0,
+                        args: RegRange {
+                            start: 10,
+                            count: 1,
+                        },
+                        dst: 1,
+                    },
+                    Ir3Instruction::Halt,
+                    Ir3Instruction::AwaitValue { promise_reg: 0 },
+                    Ir3Instruction::AsyncReturn { value_reg: 0 },
+                ],
+                vec![Ir3FunctionDesc {
+                    entry: 3,
+                    arity: 1,
+                    frame_size: 1,
+                    name: Some("await_labeled_handle".to_string()),
+                    is_generator: false,
+                    rest_param_index: None,
+                }],
+            );
+            let handle = core.promise_store.create();
+            core.promise_store
+                .fulfill(
+                    handle,
+                    crate::object_model::JsValue::Str("public-payload".into()),
+                    crate::ifc_artifacts::Label::Public,
+                    &mut core.event_loop.microtasks,
+                )
+                .expect("seed promise should be fulfillable");
+            core.write_reg_with_label(
+                10,
+                Value::Promise(handle.0),
+                crate::ifc_artifacts::Label::Secret,
+            )
+            .expect("Promise handle should accept its external label");
+
+            core.execute(&module)
+                .expect("settled await should preserve the handle label");
+
+            let Value::Promise(result_handle) = core.registers[1] else {
+                panic!("async call should leave its result Promise");
+            };
+            let record = core
+                .promise_store
+                .get(crate::promise_model::PromiseHandle(result_handle))
+                .expect("result Promise exists");
+            assert_eq!(record.label, crate::ifc_artifacts::Label::Secret);
+            assert!(matches!(
+                &record.state,
+                crate::promise_model::PromiseState::Fulfilled(crate::object_model::JsValue::Str(
+                    value
+                )) if value == "public-payload"
+            ));
+        }
+
+        #[test]
+        fn async_rejected_await_joins_handle_label_bd_ur3tk_3() {
+            let mut core =
+                InterpreterCore::new(test_quickjs_config(), "async-rejected-handle-label");
+            let module = test_module_with_functions(
+                vec![
+                    Ir3Instruction::CreateAsyncFunction {
+                        dst: 0,
+                        function_index: 0,
+                        capture_count: 0,
+                    },
+                    Ir3Instruction::Call {
+                        callee: 0,
+                        args: RegRange {
+                            start: 10,
+                            count: 1,
+                        },
+                        dst: 1,
+                    },
+                    Ir3Instruction::Halt,
+                    Ir3Instruction::AwaitValue { promise_reg: 0 },
+                    Ir3Instruction::AsyncReturn { value_reg: 0 },
+                ],
+                vec![Ir3FunctionDesc {
+                    entry: 3,
+                    arity: 1,
+                    frame_size: 1,
+                    name: Some("await_labeled_rejection".to_string()),
+                    is_generator: false,
+                    rest_param_index: None,
+                }],
+            );
+            let handle = core.promise_store.create();
+            core.promise_store
+                .reject(
+                    handle,
+                    crate::object_model::JsValue::Str("public-reason".into()),
+                    crate::ifc_artifacts::Label::Public,
+                    &mut core.event_loop.microtasks,
+                )
+                .expect("seed promise should be rejectable");
+            core.write_reg_with_label(
+                10,
+                Value::Promise(handle.0),
+                crate::ifc_artifacts::Label::Secret,
+            )
+            .expect("rejected Promise handle should accept its external label");
+
+            core.execute(&module)
+                .expect("rejected settled await should reject the result Promise");
+
+            let Value::Promise(result_handle) = core.registers[1] else {
+                panic!("async call should leave its result Promise");
+            };
+            let record = core
+                .promise_store
+                .get(crate::promise_model::PromiseHandle(result_handle))
+                .expect("result Promise exists");
+            assert_eq!(record.label, crate::ifc_artifacts::Label::Secret);
+            assert!(matches!(
+                &record.state,
+                crate::promise_model::PromiseState::Rejected(crate::object_model::JsValue::Str(
+                    value
+                )) if value == "public-reason"
+            ));
+        }
+
+        #[test]
+        fn async_method_preserves_receiver_label_bd_ur3tk_3() {
+            let mut core = InterpreterCore::new(test_quickjs_config(), "async-method-receiver");
+            let module = test_module_with_functions(
+                vec![
+                    Ir3Instruction::CreateAsyncFunction {
+                        dst: 0,
+                        function_index: 0,
+                        capture_count: 0,
+                    },
+                    Ir3Instruction::CallMethod {
+                        receiver: 2,
+                        callee: 0,
+                        args: RegRange {
+                            start: 10,
+                            count: 0,
+                        },
+                        dst: 1,
+                    },
+                    Ir3Instruction::Halt,
+                    Ir3Instruction::LoadThis { dst: 0 },
+                    Ir3Instruction::AsyncReturn { value_reg: 0 },
+                ],
+                vec![Ir3FunctionDesc {
+                    entry: 3,
+                    arity: 0,
+                    frame_size: 1,
+                    name: Some("async_method_this".to_string()),
+                    is_generator: false,
+                    rest_param_index: None,
+                }],
+            );
+            core.write_reg_with_label(
+                2,
+                Value::str("secret-receiver"),
+                crate::ifc_artifacts::Label::Secret,
+            )
+            .expect("receiver should be writable");
+
+            core.execute(&module)
+                .expect("async method should dispatch and resolve");
+
+            let Value::Promise(result_handle) = core.registers[1] else {
+                panic!("async method should leave its result Promise");
+            };
+            let record = core
+                .promise_store
+                .get(crate::promise_model::PromiseHandle(result_handle))
+                .expect("result Promise exists");
+            assert_eq!(record.label, crate::ifc_artifacts::Label::Secret);
+            assert!(matches!(
+                &record.state,
+                crate::promise_model::PromiseState::Fulfilled(crate::object_model::JsValue::Str(
+                    value
+                )) if value == "secret-receiver"
+            ));
+        }
+
+        #[test]
+        fn async_method_preserves_argument_label_bd_ur3tk_3() {
+            let mut core = InterpreterCore::new(test_quickjs_config(), "async-method-argument");
+            let module = test_module_with_functions(
+                vec![
+                    Ir3Instruction::CreateAsyncFunction {
+                        dst: 0,
+                        function_index: 0,
+                        capture_count: 0,
+                    },
+                    Ir3Instruction::CallMethod {
+                        receiver: 2,
+                        callee: 0,
+                        args: RegRange {
+                            start: 10,
+                            count: 1,
+                        },
+                        dst: 1,
+                    },
+                    Ir3Instruction::Halt,
+                    Ir3Instruction::AsyncReturn { value_reg: 0 },
+                ],
+                vec![Ir3FunctionDesc {
+                    entry: 3,
+                    arity: 1,
+                    frame_size: 1,
+                    name: Some("async_method_argument".to_string()),
+                    is_generator: false,
+                    rest_param_index: None,
+                }],
+            );
+            core.registers[2] = Value::str("public-receiver");
+            core.write_reg_with_label(
+                10,
+                Value::str("secret-argument"),
+                crate::ifc_artifacts::Label::Secret,
+            )
+            .expect("method argument should be writable");
+
+            core.execute(&module)
+                .expect("async method should preserve argument labels");
+
+            let Value::Promise(result_handle) = core.registers[1] else {
+                panic!("async method should leave its result Promise");
+            };
+            let record = core
+                .promise_store
+                .get(crate::promise_model::PromiseHandle(result_handle))
+                .expect("result Promise exists");
+            assert_eq!(record.label, crate::ifc_artifacts::Label::Secret);
+            assert!(matches!(
+                &record.state,
+                crate::promise_model::PromiseState::Fulfilled(crate::object_model::JsValue::Str(
+                    value
+                )) if value == "secret-argument"
+            ));
+        }
+
+        #[test]
+        fn async_direct_return_preserves_argument_label_bd_ur3tk_3() {
+            let mut core = InterpreterCore::new(test_quickjs_config(), "async-direct-return-label");
+            let module = test_module_with_functions(
+                vec![
+                    Ir3Instruction::CreateAsyncFunction {
+                        dst: 0,
+                        function_index: 0,
+                        capture_count: 0,
+                    },
+                    Ir3Instruction::Call {
+                        callee: 0,
+                        args: RegRange {
+                            start: 10,
+                            count: 1,
+                        },
+                        dst: 1,
+                    },
+                    Ir3Instruction::Halt,
+                    Ir3Instruction::AsyncReturn { value_reg: 0 },
+                ],
+                vec![Ir3FunctionDesc {
+                    entry: 3,
+                    arity: 1,
+                    frame_size: 1,
+                    name: Some("direct_async_return".to_string()),
+                    is_generator: false,
+                    rest_param_index: None,
+                }],
+            );
+            core.write_reg_with_label(
+                10,
+                Value::str("secret-return"),
+                crate::ifc_artifacts::Label::Secret,
+            )
+            .expect("async argument should be writable");
+
+            core.execute(&module)
+                .expect("direct async return should resolve");
+
+            let Value::Promise(result_handle) = core.registers[1] else {
+                panic!("async call should leave its result Promise");
+            };
+            let record = core
+                .promise_store
+                .get(crate::promise_model::PromiseHandle(result_handle))
+                .expect("result Promise exists");
+            assert_eq!(record.label, crate::ifc_artifacts::Label::Secret);
+        }
+
+        #[test]
+        fn async_direct_throw_preserves_argument_label_bd_ur3tk_3() {
+            let mut core = InterpreterCore::new(test_quickjs_config(), "async-direct-throw-label");
+            let module = test_module_with_functions(
+                vec![
+                    Ir3Instruction::CreateAsyncFunction {
+                        dst: 0,
+                        function_index: 0,
+                        capture_count: 0,
+                    },
+                    Ir3Instruction::Call {
+                        callee: 0,
+                        args: RegRange {
+                            start: 10,
+                            count: 1,
+                        },
+                        dst: 1,
+                    },
+                    Ir3Instruction::Halt,
+                    Ir3Instruction::AsyncThrow { error_reg: 0 },
+                ],
+                vec![Ir3FunctionDesc {
+                    entry: 3,
+                    arity: 1,
+                    frame_size: 1,
+                    name: Some("direct_async_throw".to_string()),
+                    is_generator: false,
+                    rest_param_index: None,
+                }],
+            );
+            core.write_reg_with_label(
+                10,
+                Value::str("secret-rejection"),
+                crate::ifc_artifacts::Label::Secret,
+            )
+            .expect("async rejection argument should be writable");
+
+            core.execute(&module)
+                .expect("direct async throw should reject its Promise");
+
+            let Value::Promise(result_handle) = core.registers[1] else {
+                panic!("async call should leave its result Promise");
+            };
+            let record = core
+                .promise_store
+                .get(crate::promise_model::PromiseHandle(result_handle))
+                .expect("result Promise exists");
+            assert_eq!(record.label, crate::ifc_artifacts::Label::Secret);
+            assert!(matches!(
+                &record.state,
+                crate::promise_model::PromiseState::Rejected(crate::object_model::JsValue::Str(
+                    value
+                )) if value == "secret-rejection"
+            ));
+        }
+
+        #[test]
+        fn async_plain_call_super_uses_only_callee_label_bd_ur3tk_20() {
+            let mut core = InterpreterCore::new(test_quickjs_config(), "async-plain-super-label");
+            let module = test_module_with_functions(
+                vec![
+                    Ir3Instruction::Call {
+                        callee: 0,
+                        args: RegRange {
+                            start: 10,
+                            count: 1,
+                        },
+                        dst: 1,
+                    },
+                    Ir3Instruction::Halt,
+                    Ir3Instruction::LoadSuper { dst: 0 },
+                    Ir3Instruction::AsyncReturn { value_reg: 0 },
+                ],
+                vec![Ir3FunctionDesc {
+                    entry: 2,
+                    arity: 1,
+                    frame_size: 1,
+                    name: Some("async_plain_super_reader".to_string()),
+                    is_generator: false,
+                    rest_param_index: None,
+                }],
+            );
+            let captured_env = core.scope_chain.snapshot();
+            core.closures.push(ClosureValue {
+                function_index: 0,
+                captured_env,
+            });
+            core.write_reg_with_label(
+                0,
+                Value::AsyncFunction(0),
+                crate::ifc_artifacts::Label::Secret,
+            )
+            .expect("async callee should be writable");
+            core.write_reg_with_label(10, Value::Int(43), crate::ifc_artifacts::Label::TopSecret)
+                .expect("async argument should be writable");
+
+            core.execute(&module)
+                .expect("async plain call should resolve");
+
+            let Value::Promise(result_handle) = core.registers[1] else {
+                panic!("async plain call should leave its result Promise");
+            };
+            let record = core
+                .promise_store
+                .get(crate::promise_model::PromiseHandle(result_handle))
+                .expect("result Promise exists");
+            assert_eq!(record.label, crate::ifc_artifacts::Label::Secret);
+            assert!(matches!(
+                &record.state,
+                crate::promise_model::PromiseState::Fulfilled(
+                    crate::object_model::JsValue::Undefined
+                )
+            ));
+        }
+
+        #[test]
+        fn async_method_super_uses_only_callee_label_bd_ur3tk_20() {
+            let mut core = InterpreterCore::new(test_quickjs_config(), "async-method-super-label");
+            let module = test_module_with_functions(
+                vec![
+                    Ir3Instruction::CallMethod {
+                        receiver: 2,
+                        callee: 0,
+                        args: RegRange {
+                            start: 10,
+                            count: 1,
+                        },
+                        dst: 1,
+                    },
+                    Ir3Instruction::Halt,
+                    Ir3Instruction::LoadSuper { dst: 1 },
+                    Ir3Instruction::AsyncReturn { value_reg: 1 },
+                ],
+                vec![Ir3FunctionDesc {
+                    entry: 2,
+                    arity: 1,
+                    frame_size: 2,
+                    name: Some("async_method_super_reader".to_string()),
+                    is_generator: false,
+                    rest_param_index: None,
+                }],
+            );
+            let parent_prototype = core
+                .alloc_object_with_prototype(None)
+                .expect("parent prototype should allocate");
+            let method_prototype = core
+                .alloc_object_with_prototype(Some(parent_prototype))
+                .expect("method prototype should allocate");
+            let receiver = core
+                .alloc_object_with_prototype(Some(method_prototype))
+                .expect("receiver should allocate");
+            let captured_env = core.scope_chain.snapshot();
+            core.closures.push(ClosureValue {
+                function_index: 0,
+                captured_env,
+            });
+            core.write_reg_with_label(
+                0,
+                Value::AsyncFunction(0),
+                crate::ifc_artifacts::Label::Secret,
+            )
+            .expect("async method should be writable");
+            core.write_reg_with_label(
+                2,
+                Value::Object(receiver),
+                crate::ifc_artifacts::Label::TopSecret,
+            )
+            .expect("receiver should be writable");
+            core.write_reg_with_label(
+                10,
+                Value::Int(44),
+                crate::ifc_artifacts::Label::Confidential,
+            )
+            .expect("method argument should be writable");
+
+            core.execute(&module)
+                .expect("async method call should resolve");
+
+            let Value::Promise(result_handle) = core.registers[1] else {
+                panic!("async method call should leave its result Promise");
+            };
+            let record = core
+                .promise_store
+                .get(crate::promise_model::PromiseHandle(result_handle))
+                .expect("result Promise exists");
+            assert_eq!(record.label, crate::ifc_artifacts::Label::Secret);
+            assert!(matches!(
+                &record.state,
+                crate::promise_model::PromiseState::Fulfilled(
+                    crate::object_model::JsValue::Object(handle)
+                ) if handle.0 == parent_prototype.0
+            ));
+        }
+
+        #[test]
         fn async_function_awaits_labeled_non_promise_without_downgrade() {
             let mut core =
                 InterpreterCore::new(test_quickjs_config(), "async-function-await-non-promise");
@@ -14077,6 +30026,7 @@ mod tests {
                     frame_size: 1,
                     name: Some("await_labeled_value_async".to_string()),
                     is_generator: false,
+                    rest_param_index: None,
                 }],
             );
             core.write_reg_with_label(
@@ -14106,59 +30056,280 @@ mod tests {
         }
 
         #[test]
-        fn async_function_pending_await_uses_explicit_unsupported_contract() {
-            let mut core = InterpreterCore::new(test_quickjs_config(), "async-function-pending");
-            let module = test_module_with_functions(
+        fn pending_await_fulfillment_restores_values_and_labels_bd_ur3tk_15() {
+            let mut core =
+                InterpreterCore::new(test_quickjs_config(), "pending-await-fulfillment-labels");
+            let module = pending_async_module(
                 vec![
-                    Ir3Instruction::CreateAsyncFunction {
-                        dst: 0,
-                        function_index: 0,
-                        capture_count: 0,
-                    },
-                    Ir3Instruction::Call {
-                        callee: 0,
-                        args: RegRange {
-                            start: 10,
-                            count: 1,
-                        },
-                        dst: 1,
-                    },
-                    Ir3Instruction::Halt,
                     Ir3Instruction::AwaitValue { promise_reg: 0 },
                     Ir3Instruction::AsyncReturn { value_reg: 0 },
                 ],
-                vec![Ir3FunctionDesc {
-                    entry: 3,
-                    arity: 1,
-                    frame_size: 1,
-                    name: Some("pending_async".to_string()),
-                    is_generator: false,
-                }],
+                2,
+                2,
             );
-            let handle = core.promise_store.create();
-            core.registers[10] = Value::Promise(handle.0);
+            let awaited = core.promise_store.create();
+            core.write_reg_with_label(
+                10,
+                Value::Promise(awaited.0),
+                crate::ifc_artifacts::Label::Secret,
+            )
+            .expect("awaited handle should be writable");
+            core.write_reg_with_label(
+                11,
+                Value::Int(40),
+                crate::ifc_artifacts::Label::Confidential,
+            )
+            .expect("unrelated local should be writable");
 
-            let err = core
+            let suspended = core
                 .execute(&module)
-                .expect_err("pending await should use an explicit franken-core contract");
-            assert!(
-                format!("{err:?}").contains("pending promise await is explicitly unsupported"),
-                "unexpected error: {err:?}"
-            );
+                .expect("pending await should suspend without aborting");
+            assert_eq!(suspended.value, Value::Undefined);
             assert!(matches!(
                 core.async_functions[0].phase,
                 AsyncFunctionPhase::SuspendedAwait
             ));
+            assert_eq!(core.async_resumption_contexts.len(), 1);
             let Value::Promise(result_handle) = core.registers[1] else {
-                panic!("async call should leave result promise before failing closed");
+                panic!("async call should publish its result Promise before suspension");
             };
+
+            let active_base = core.register_base;
+            core.registers[active_base + 1] = Value::Int(999);
+            core.register_labels[active_base + 1] = crate::ifc_artifacts::Label::Public;
+
+            core.fulfill_promise(
+                awaited,
+                crate::object_model::JsValue::Int(2),
+                crate::ifc_artifacts::Label::Public,
+            )
+            .expect("awaited Promise should fulfill");
+            core.drain_microtasks(Some(&module))
+                .expect("fulfillment should resume the async activation");
+
             let record = core
                 .promise_store
                 .get(crate::promise_model::PromiseHandle(result_handle))
                 .expect("result promise exists");
+            assert_eq!(record.label, crate::ifc_artifacts::Label::Secret);
             assert!(matches!(
                 &record.state,
-                crate::promise_model::PromiseState::Pending
+                crate::promise_model::PromiseState::Fulfilled(crate::object_model::JsValue::Int(2))
+            ));
+            assert_eq!(core.registers[active_base + 1], Value::Int(40));
+            assert_eq!(
+                core.register_labels[active_base + 1],
+                crate::ifc_artifacts::Label::Confidential,
+                "the saved unrelated local label must replace intervening live-frame corruption"
+            );
+            assert!(matches!(
+                core.async_functions[0].phase,
+                AsyncFunctionPhase::Completed
+            ));
+            assert!(core.async_resumption_contexts.is_empty());
+            assert!(core.event_loop.microtasks.is_empty());
+            assert_eq!(core.register_base, 0);
+        }
+
+        #[test]
+        fn pending_await_rejection_joins_handle_and_settlement_labels_bd_ur3tk_15() {
+            let mut core =
+                InterpreterCore::new(test_quickjs_config(), "pending-await-rejection-labels");
+            let module = pending_async_module(
+                vec![
+                    Ir3Instruction::AwaitValue { promise_reg: 0 },
+                    Ir3Instruction::AsyncReturn { value_reg: 0 },
+                ],
+                1,
+                1,
+            );
+            let awaited = core.promise_store.create();
+            core.write_reg_with_label(
+                10,
+                Value::Promise(awaited.0),
+                crate::ifc_artifacts::Label::Confidential,
+            )
+            .expect("awaited handle should be writable");
+
+            core.execute(&module)
+                .expect("pending await should suspend without aborting");
+            let Value::Promise(result_handle) = core.registers[1] else {
+                panic!("async call should publish its result Promise");
+            };
+
+            core.reject_promise(
+                awaited,
+                crate::object_model::JsValue::Str("boom".into()),
+                crate::ifc_artifacts::Label::Secret,
+            )
+            .expect("awaited Promise should reject");
+            core.drain_microtasks(Some(&module))
+                .expect("rejection should resume the async activation");
+
+            let record = core
+                .promise_store
+                .get(crate::promise_model::PromiseHandle(result_handle))
+                .expect("result Promise exists");
+            assert_eq!(record.label, crate::ifc_artifacts::Label::Secret);
+            assert!(matches!(
+                &record.state,
+                crate::promise_model::PromiseState::Rejected(
+                    crate::object_model::JsValue::Str(reason)
+                ) if reason == "boom"
+            ));
+            assert!(
+                !core.promise_store.unhandled_rejections().contains(&awaited),
+                "internal await rejection registration must mark its source handled"
+            );
+        }
+
+        #[test]
+        fn pending_await_rejection_resumes_async_catch_with_label_bd_ur3tk_15() {
+            let mut core = InterpreterCore::new(test_quickjs_config(), "pending-await-catch-label");
+            let module = pending_async_module(
+                vec![
+                    Ir3Instruction::BeginTry {
+                        catch_target: 7,
+                        finally_target: None,
+                    },
+                    Ir3Instruction::AwaitValue { promise_reg: 0 },
+                    Ir3Instruction::EndTry,
+                    Ir3Instruction::AsyncReturn { value_reg: 0 },
+                    Ir3Instruction::EnterCatch { dst: 1 },
+                    Ir3Instruction::AsyncReturn { value_reg: 1 },
+                ],
+                1,
+                2,
+            );
+            let awaited = core.promise_store.create();
+            core.write_reg_with_label(
+                10,
+                Value::Promise(awaited.0),
+                crate::ifc_artifacts::Label::Confidential,
+            )
+            .expect("awaited handle should be writable");
+
+            core.execute(&module)
+                .expect("pending await in try should suspend");
+            let Value::Promise(result_handle) = core.registers[1] else {
+                panic!("async call should publish its result Promise");
+            };
+            core.reject_promise(
+                awaited,
+                crate::object_model::JsValue::Str("caught".into()),
+                crate::ifc_artifacts::Label::Secret,
+            )
+            .expect("awaited Promise should reject");
+            core.drain_microtasks(Some(&module))
+                .expect("rejection should enter the suspended catch");
+
+            let record = core
+                .promise_store
+                .get(crate::promise_model::PromiseHandle(result_handle))
+                .expect("result Promise exists");
+            assert_eq!(record.label, crate::ifc_artifacts::Label::Secret);
+            assert!(matches!(
+                &record.state,
+                crate::promise_model::PromiseState::Fulfilled(
+                    crate::object_model::JsValue::Str(value)
+                ) if value == "caught"
+            ));
+        }
+
+        #[test]
+        fn pending_await_fifo_and_replay_witness_are_deterministic_bd_ur3tk_15() {
+            fn run_once() -> (
+                crate::promise_model::PromiseRecord,
+                crate::promise_model::PromiseRecord,
+                Vec<crate::promise_model::WitnessEvent>,
+                Vec<crate::promise_model::WitnessEvent>,
+            ) {
+                let mut core = InterpreterCore::new(test_quickjs_config(), "pending-await-replay");
+                let module = pending_async_module(
+                    vec![
+                        Ir3Instruction::AwaitValue { promise_reg: 0 },
+                        Ir3Instruction::AsyncReturn { value_reg: 0 },
+                    ],
+                    1,
+                    1,
+                );
+                let awaited = core.promise_store.create();
+                core.write_reg_with_label(
+                    10,
+                    Value::Promise(awaited.0),
+                    crate::ifc_artifacts::Label::Secret,
+                )
+                .expect("awaited handle should be writable");
+                core.execute(&module).expect("pending await should suspend");
+                let Value::Promise(async_result) = core.registers[1] else {
+                    panic!("async call should publish its result Promise");
+                };
+
+                let unrelated = core.promise_store.create();
+                let unrelated_result = core
+                    .promise_store
+                    .then(
+                        unrelated,
+                        None,
+                        None,
+                        crate::ifc_artifacts::Label::Internal,
+                        &mut core.event_loop.microtasks,
+                    )
+                    .expect("unrelated reaction should register");
+                core.fulfill_promise(
+                    awaited,
+                    crate::object_model::JsValue::Int(7),
+                    crate::ifc_artifacts::Label::Public,
+                )
+                .expect("awaited Promise should fulfill first");
+                core.fulfill_promise(
+                    unrelated,
+                    crate::object_model::JsValue::Int(9),
+                    crate::ifc_artifacts::Label::Public,
+                )
+                .expect("unrelated Promise should fulfill second");
+                core.drain_microtasks(Some(&module))
+                    .expect("FIFO checkpoint should drain");
+
+                (
+                    core.promise_store
+                        .get(crate::promise_model::PromiseHandle(async_result))
+                        .expect("async result should exist")
+                        .clone(),
+                    core.promise_store
+                        .get(unrelated_result)
+                        .expect("unrelated result should exist")
+                        .clone(),
+                    core.promise_store.witness_log().to_vec(),
+                    core.event_loop.microtasks.witness_log().to_vec(),
+                )
+            }
+
+            let first = run_once();
+            let second = run_once();
+            assert_eq!(
+                first, second,
+                "identical runs must emit identical replay evidence"
+            );
+            assert_eq!(
+                first.3,
+                vec![
+                    crate::promise_model::WitnessEvent::MicrotaskEnqueued { index: 0 },
+                    crate::promise_model::WitnessEvent::MicrotaskEnqueued { index: 1 },
+                    crate::promise_model::WitnessEvent::MicrotaskDequeued { index: 0 },
+                    crate::promise_model::WitnessEvent::MicrotaskDequeued { index: 1 },
+                ],
+                "await resumption must retain strict FIFO ordering with unrelated jobs"
+            );
+            assert_eq!(first.0.label, crate::ifc_artifacts::Label::Secret);
+            assert!(matches!(
+                first.0.state,
+                crate::promise_model::PromiseState::Fulfilled(crate::object_model::JsValue::Int(7))
+            ));
+            assert_eq!(first.1.label, crate::ifc_artifacts::Label::Internal);
+            assert!(matches!(
+                first.1.state,
+                crate::promise_model::PromiseState::Fulfilled(crate::object_model::JsValue::Int(9))
             ));
         }
 
@@ -14229,8 +30400,8 @@ mod tests {
                     crate::object_model::JsValue::Float(3.25f64.to_bits()),
                 ),
                 (
-                    Value::Str("hello".to_string()),
-                    crate::object_model::JsValue::Str("hello".to_string()),
+                    Value::str("hello"),
+                    crate::object_model::JsValue::str("hello"),
                 ),
                 (
                     Value::Object(ObjectId(100)),
@@ -14271,6 +30442,7 @@ mod tests {
                     frame_size: 1,
                     name: Some("test_async_gen".to_string()),
                     is_generator: false,
+                    rest_param_index: None,
                 }],
             );
 
@@ -14304,7 +30476,8 @@ mod tests {
                         dst: 1,
                     },
                     Ir3Instruction::Halt,
-                    Ir3Instruction::Halt,
+                    Ir3Instruction::GeneratorBodyStart,
+                    Ir3Instruction::Return { value: 0 },
                 ],
                 vec![Ir3FunctionDesc {
                     entry: 3,
@@ -14312,6 +30485,7 @@ mod tests {
                     frame_size: 1,
                     name: Some("test_async_gen".to_string()),
                     is_generator: false,
+                    rest_param_index: None,
                 }],
             );
 
@@ -14320,8 +30494,11 @@ mod tests {
 
             assert_eq!(core.async_generators.len(), 1);
             let created = &core.async_generators[0];
-            assert_eq!(created.function_index, 0);
-            assert_eq!(created.closure_index, Some(0));
+            let execution = created
+                .execution
+                .as_ref()
+                .expect("created async generator should own its activation");
+            assert_eq!(execution.call_stack[0].function_index, Some(0));
             assert!(matches!(created.phase, AsyncGeneratorPhase::SuspendedStart));
             assert!(matches!(core.registers[1], Value::AsyncGeneratorObject(0)));
         }
@@ -14336,19 +30513,20 @@ mod tests {
             // Create async generator, call it to get object, then call .next()
             let async_gen_id = {
                 core.async_generators.push(AsyncGeneratorObject {
-                    function_index: 0,
-                    closure_index: None,
-                    saved_ip: 0,
-                    saved_registers: Vec::new(),
-                    saved_register_labels: Vec::new(),
-                    saved_register_base: 0,
+                    execution: None,
+                    resume_dst: None,
                     phase: AsyncGeneratorPhase::Completed,
                 });
                 (core.async_generators.len() - 1) as u32
             };
 
             let result = core
-                .async_generator_next(&test_module(vec![]), async_gen_id, Value::Undefined)
+                .async_generator_next(
+                    &test_module(vec![]),
+                    async_gen_id,
+                    Value::Undefined,
+                    crate::ifc_artifacts::Label::Public,
+                )
                 .unwrap();
 
             match result {
@@ -14364,6 +30542,7 @@ mod tests {
             // Create a simple async generator function that yields then returns
             let module = test_module_with_pool_and_functions(
                 vec![
+                    Ir3Instruction::GeneratorBodyStart,
                     Ir3Instruction::LoadStr {
                         dst: 0,
                         pool_index: 0,
@@ -14386,24 +30565,23 @@ mod tests {
                     frame_size: 1,
                     name: Some("test_async_gen".to_string()),
                     is_generator: true,
+                    rest_param_index: None,
                 }],
             );
 
             let async_gen_id = {
-                core.async_generators.push(AsyncGeneratorObject {
-                    function_index: 0,
-                    closure_index: None,
-                    saved_ip: 0,
-                    saved_registers: Vec::new(),
-                    saved_register_labels: Vec::new(),
-                    saved_register_base: 0,
-                    phase: AsyncGeneratorPhase::SuspendedStart,
-                });
+                let generator = prepared_async_generator(&mut core, &module, Vec::new());
+                core.async_generators.push(generator);
                 (core.async_generators.len() - 1) as u32
             };
 
             let result = core
-                .async_generator_next(&module, async_gen_id, Value::Undefined)
+                .async_generator_next(
+                    &module,
+                    async_gen_id,
+                    Value::Undefined,
+                    crate::ifc_artifacts::Label::Public,
+                )
                 .expect("async generator execution should succeed");
 
             // Should return a promise
@@ -14426,6 +30604,7 @@ mod tests {
             // Create a simple async generator function that yields then returns
             let module = test_module_with_pool_and_functions(
                 vec![
+                    Ir3Instruction::GeneratorBodyStart,
                     Ir3Instruction::LoadStr {
                         dst: 0,
                         pool_index: 0,
@@ -14448,24 +30627,30 @@ mod tests {
                     frame_size: 1,
                     name: Some("test_async_gen".to_string()),
                     is_generator: true,
+                    rest_param_index: None,
                 }],
             );
 
             let async_gen_id = {
-                core.async_generators.push(AsyncGeneratorObject {
-                    function_index: 0,
-                    closure_index: None,
-                    saved_ip: 2, // Resume after yield
-                    saved_registers: vec![Value::Undefined],
-                    saved_register_labels: vec![crate::ifc_artifacts::Label::Public],
-                    saved_register_base: 0,
-                    phase: AsyncGeneratorPhase::SuspendedYield,
-                });
+                let generator = prepared_async_generator(&mut core, &module, Vec::new());
+                core.async_generators.push(generator);
                 (core.async_generators.len() - 1) as u32
             };
 
+            core.async_generator_next(
+                &module,
+                async_gen_id,
+                Value::Undefined,
+                crate::ifc_artifacts::Label::Public,
+            )
+            .expect("first async generator step should yield");
             let result = core
-                .async_generator_next(&module, async_gen_id, Value::Undefined)
+                .async_generator_next(
+                    &module,
+                    async_gen_id,
+                    Value::Undefined,
+                    crate::ifc_artifacts::Label::Public,
+                )
                 .expect("async generator resume should succeed");
 
             // Should return a promise
@@ -14478,6 +30663,183 @@ mod tests {
             assert!(matches!(
                 core.async_generators[async_gen_id as usize].phase,
                 AsyncGeneratorPhase::Completed
+            ));
+        }
+
+        #[test]
+        fn async_generator_rejects_mismatched_value_and_label_snapshot_bd_ur3tk_5() {
+            let module = test_module(vec![
+                Ir3Instruction::GeneratorBodyStart,
+                Ir3Instruction::Return { value: 0 },
+            ]);
+            let mut core = test_interpreter();
+            let mut generator = prepared_async_generator(&mut core, &module, Vec::new());
+            generator
+                .execution
+                .as_mut()
+                .expect("prepared async generator activation")
+                .register_labels
+                .pop();
+            core.async_generators.push(generator);
+            let promise_count = core.promise_store.len();
+
+            let error = core
+                .async_generator_next(
+                    &module,
+                    0,
+                    Value::Undefined,
+                    crate::ifc_artifacts::Label::Public,
+                )
+                .expect_err("a missing async-generator register label must fail closed");
+            assert!(matches!(
+                error,
+                InterpreterError::TypeError { expected, got }
+                    if expected.contains("one IFC label per register")
+                        && got.contains("values=")
+                        && got.contains("labels=")
+            ));
+            assert_eq!(core.promise_store.len(), promise_count);
+            assert_eq!(
+                core.async_generators[0].phase,
+                AsyncGeneratorPhase::SuspendedStart
+            );
+            assert!(core.async_generators[0].execution.is_some());
+        }
+
+        #[test]
+        fn async_generator_preserves_yield_resume_and_rejection_labels_bd_ur3tk_5() {
+            let value_module = test_module(vec![
+                Ir3Instruction::GeneratorBodyStart,
+                Ir3Instruction::Yield {
+                    value: 0,
+                    delegate: false,
+                    resume_dst: 1,
+                },
+                Ir3Instruction::Return { value: 1 },
+            ]);
+            let mut core = test_interpreter();
+            let generator = prepared_async_generator(
+                &mut core,
+                &value_module,
+                vec![(Value::Int(7), crate::ifc_artifacts::Label::Secret)],
+            );
+            core.async_generators.push(generator);
+
+            let Value::Promise(yield_handle) = core
+                .async_generator_next(
+                    &value_module,
+                    0,
+                    Value::Undefined,
+                    crate::ifc_artifacts::Label::Public,
+                )
+                .expect("first async generator step should yield")
+            else {
+                panic!("async generator next should return a Promise");
+            };
+            assert_eq!(
+                core.promise_store
+                    .get(crate::promise_model::PromiseHandle(yield_handle))
+                    .expect("yield Promise should exist")
+                    .label,
+                crate::ifc_artifacts::Label::Secret
+            );
+
+            let Value::Promise(return_handle) = core
+                .async_generator_next(
+                    &value_module,
+                    0,
+                    Value::Int(9),
+                    crate::ifc_artifacts::Label::Confidential,
+                )
+                .expect("second async generator step should return")
+            else {
+                panic!("async generator next should return a Promise");
+            };
+            assert_eq!(
+                core.promise_store
+                    .get(crate::promise_model::PromiseHandle(return_handle))
+                    .expect("return Promise should exist")
+                    .label,
+                crate::ifc_artifacts::Label::Confidential
+            );
+
+            let throw_module = test_module(vec![
+                Ir3Instruction::GeneratorBodyStart,
+                Ir3Instruction::BeginTry {
+                    catch_target: 3,
+                    finally_target: Some(3),
+                },
+                Ir3Instruction::Throw { value: 0 },
+                Ir3Instruction::EnterFinally,
+                Ir3Instruction::Yield {
+                    value: 1,
+                    delegate: false,
+                    resume_dst: 2,
+                },
+                Ir3Instruction::EndFinally,
+            ]);
+            let throwing = prepared_async_generator(
+                &mut core,
+                &throw_module,
+                vec![
+                    (Value::str("boom"), crate::ifc_artifacts::Label::TopSecret),
+                    (Value::str("cleanup"), crate::ifc_artifacts::Label::Internal),
+                ],
+            );
+            core.async_generators.push(throwing);
+            let Value::Promise(finally_yield_handle) = core
+                .async_generator_next(
+                    &throw_module,
+                    1,
+                    Value::Undefined,
+                    crate::ifc_artifacts::Label::Public,
+                )
+                .expect("throwing async generator should yield from its finally body")
+            else {
+                panic!("async generator next should return a Promise");
+            };
+            assert_eq!(
+                core.promise_store
+                    .get(crate::promise_model::PromiseHandle(finally_yield_handle))
+                    .expect("finally-yield Promise should exist")
+                    .label,
+                crate::ifc_artifacts::Label::Internal
+            );
+            let suspended = core.async_generators[1]
+                .execution
+                .as_ref()
+                .expect("finally yield should retain the async-generator activation");
+            assert!(matches!(
+                suspended.finally_frames.last(),
+                Some(FinallyFrame {
+                    completion: Some(AbruptCompletion::Exception(LabeledException {
+                        value: Value::Str(reason),
+                        label: crate::ifc_artifacts::Label::TopSecret,
+                    })),
+                }) if reason == "boom"
+            ));
+
+            let Value::Promise(rejection_handle) = core
+                .async_generator_next(
+                    &throw_module,
+                    1,
+                    Value::Undefined,
+                    crate::ifc_artifacts::Label::Public,
+                )
+                .expect("resuming the finally body should reject with the retained throw")
+            else {
+                panic!("async generator next should return a Promise");
+            };
+            let rejection = core
+                .promise_store
+                .get(crate::promise_model::PromiseHandle(rejection_handle))
+                .expect("rejection Promise should exist");
+            assert_eq!(rejection.label, crate::ifc_artifacts::Label::TopSecret);
+            assert!(matches!(
+                &rejection.state,
+                crate::promise_model::PromiseState::Rejected(
+                    crate::object_model::JsValue::Str(reason)
+                ) if reason == "boom"
             ));
         }
 

@@ -1103,6 +1103,9 @@ impl SemanticTransportAnalyzer {
         let mut canonical = Vec::new();
         canonical.extend_from_slice(TRANSPORT_LEDGER_SCHEMA_VERSION.as_bytes());
         canonical.extend_from_slice(b"|morphism|");
+        // Length-prefix the name to prevent delimiter collisions when the name
+        // contains '|' (mirrors `compute_entry_hash` above).
+        canonical.extend_from_slice(&(name.len() as u32).to_le_bytes());
         canonical.extend_from_slice(name.as_bytes());
         canonical.push(b'|');
         canonical.extend_from_slice(format!("{domain}").as_bytes());

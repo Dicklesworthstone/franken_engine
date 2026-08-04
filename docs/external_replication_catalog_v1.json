@@ -60,7 +60,7 @@
       "verification_commands": [
         "./scripts/run_rgc_runtime_semantics_verification_pack.sh ci",
         "./scripts/run_third_party_verifier_suite.sh ci",
-        "franken-verify replay --input artifacts/<bundle_id>/replay_verification_input.json --summary"
+        "franken-verify replay --input artifacts/<bundle_id>/replay_verification_input.json --trace-trust-snapshot-file /etc/franken-engine/trust/causal-replay-v1.json --trace-trust-snapshot-digest <auditor_pinned_sha256> --summary"
       ],
       "claim_summary": "Deterministic runtime and replay claims can be independently rerun from receipt-linked bundles without project-private context.",
       "replication_gap": "This lane remains non-replicated until a third party reruns the replay bundle and confirms the published verdicts."

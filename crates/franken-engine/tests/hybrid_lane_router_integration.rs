@@ -42,6 +42,12 @@ fn ok_observation(lane: LaneChoice) -> LaneObservation {
     }
 }
 
+fn prime_conformal_warmup(router: &mut HybridLaneRouter) {
+    for _ in 0..router.config.conformal.min_observations {
+        router.conformal.observe(true);
+    }
+}
+
 // =========================================================================
 // LaneChoice
 // =========================================================================
@@ -476,14 +482,56 @@ fn router_observe_returns_decision_trace() {
 #[test]
 fn router_promote_to_adaptive() {
     let mut router = HybridLaneRouter::with_defaults();
+    prime_conformal_warmup(&mut router);
     router.promote_to_adaptive().unwrap();
     assert_eq!(router.policy, RoutingPolicy::Adaptive);
     assert_eq!(router.policy_transitions.len(), 1);
 }
 
 #[test]
+fn router_refuses_promote_before_conformal_warmup() {
+    let mut router = HybridLaneRouter::with_defaults();
+    let err = router.promote_to_adaptive().unwrap_err();
+    assert_eq!(
+        err,
+        RouterError::AdaptiveWarmupIncomplete {
+            observations: 0,
+            required: router.config.conformal.min_observations,
+        }
+    );
+    assert_eq!(router.policy, RoutingPolicy::Conservative);
+    assert!(router.policy_transitions.is_empty());
+}
+
+#[test]
+fn router_refuses_promote_with_invalid_conformal_warmup() {
+    let mut router = HybridLaneRouter::new(RouterConfig {
+        conformal: ConformalConfig {
+            target_coverage_millionths: 900_000,
+            min_observations: 5,
+            window_size: 10,
+        },
+        ..RouterConfig::default_config()
+    });
+    for _ in 0..5 {
+        router.conformal.observe(false);
+    }
+    let err = router.promote_to_adaptive().unwrap_err();
+    assert_eq!(
+        err,
+        RouterError::AdaptiveWarmupInvalid {
+            coverage_millionths: 0,
+            target_millionths: 900_000,
+        }
+    );
+    assert_eq!(router.policy, RoutingPolicy::Conservative);
+    assert!(router.policy_transitions.is_empty());
+}
+
+#[test]
 fn router_manual_demote() {
     let mut router = HybridLaneRouter::with_defaults();
+    prime_conformal_warmup(&mut router);
     router.promote_to_adaptive().unwrap();
     router.manual_demote().unwrap();
     assert_eq!(router.policy, RoutingPolicy::Conservative);
@@ -512,6 +560,7 @@ fn router_lane_probabilities_conservative() {
 #[test]
 fn router_lane_probabilities_adaptive() {
     let mut router = HybridLaneRouter::with_defaults();
+    prime_conformal_warmup(&mut router);
     router.promote_to_adaptive().unwrap();
     let probs = router.lane_probabilities();
     // Both should be > 0 (exploration ensures non-zero probability)
@@ -575,6 +624,7 @@ fn full_lifecycle() {
     assert_eq!(router.total_js_routes, 5);
 
     // Promote to adaptive
+    prime_conformal_warmup(&mut router);
     router.promote_to_adaptive().unwrap();
     assert_eq!(router.policy, RoutingPolicy::Adaptive);
 
@@ -1550,6 +1600,14 @@ fn router_config_custom_serde_roundtrip() {
 fn router_error_all_variants_serde() {
     let errors = vec![
         RouterError::AlreadyConservative,
+        RouterError::AdaptiveWarmupIncomplete {
+            observations: 3,
+            required: 20,
+        },
+        RouterError::AdaptiveWarmupInvalid {
+            coverage_millionths: 500_000,
+            target_millionths: 900_000,
+        },
         RouterError::InvalidRandomDraw { value: -1 },
         RouterError::InvalidRandomDraw { value: 2_000_000 },
         RouterError::InvalidConfig {
@@ -1631,6 +1689,7 @@ fn router_observe_with_random_draw() {
 #[test]
 fn router_promote_idempotent() {
     let mut router = HybridLaneRouter::with_defaults();
+    prime_conformal_warmup(&mut router);
     router.promote_to_adaptive().unwrap();
     // Second promote is idempotent
     router.promote_to_adaptive().unwrap();
@@ -1647,6 +1706,7 @@ fn router_promote_resets_consecutive_conservative() {
     router.observe(LaneChoice::Js, &obs, None);
     assert_eq!(router.consecutive_conservative_rounds, 2);
 
+    prime_conformal_warmup(&mut router);
     router.promote_to_adaptive().unwrap();
     assert_eq!(router.consecutive_conservative_rounds, 0);
 }
@@ -1658,6 +1718,7 @@ fn router_consecutive_conservative_resets_on_adaptive() {
     router.observe(LaneChoice::Js, &obs, None);
     router.observe(LaneChoice::Js, &obs, None);
 
+    prime_conformal_warmup(&mut router);
     router.promote_to_adaptive().unwrap();
     router.observe(LaneChoice::Js, &obs, None);
     assert_eq!(router.consecutive_conservative_rounds, 0);
@@ -1707,6 +1768,7 @@ fn router_demotes_on_tail_latency() {
         },
         ..RouterConfig::default_config()
     });
+    prime_conformal_warmup(&mut router);
     router.promote_to_adaptive().unwrap();
 
     // Send many high-latency observations
@@ -1739,6 +1801,7 @@ fn router_demotes_on_conformal_violation() {
         },
         ..RouterConfig::default_config()
     });
+    prime_conformal_warmup(&mut router);
     router.promote_to_adaptive().unwrap();
 
     // Failing observations -> conformal violation
@@ -1788,6 +1851,7 @@ fn router_promote_demote_promote_cycle() {
     });
 
     // First promote
+    prime_conformal_warmup(&mut router);
     router.promote_to_adaptive().unwrap();
     assert_eq!(router.policy, RoutingPolicy::Adaptive);
 
@@ -1906,6 +1970,7 @@ fn e2e_adaptive_session_stays_adaptive_with_good_data() {
         },
         ..RouterConfig::default_config()
     });
+    prime_conformal_warmup(&mut router);
     router.promote_to_adaptive().unwrap();
 
     for i in 0..50 {
@@ -1937,6 +2002,7 @@ fn e2e_regime_shift_causes_demotion() {
         },
         ..RouterConfig::default_config()
     });
+    prime_conformal_warmup(&mut router);
     router.promote_to_adaptive().unwrap();
 
     // Good period
@@ -1978,6 +2044,7 @@ fn e2e_mixed_lane_routing_adaptive() {
         },
         ..RouterConfig::default_config()
     });
+    prime_conformal_warmup(&mut router);
     router.promote_to_adaptive().unwrap();
 
     // Alternate between lanes
@@ -2004,6 +2071,7 @@ fn e2e_decision_trace_captures_demotion_reason() {
         },
         ..RouterConfig::default_config()
     });
+    prime_conformal_warmup(&mut router);
     router.promote_to_adaptive().unwrap();
 
     let bad = LaneObservation {
@@ -2029,6 +2097,7 @@ fn e2e_serde_roundtrip_after_transitions() {
     for _ in 0..5 {
         router.observe(LaneChoice::Js, &ok_observation(LaneChoice::Js), None);
     }
+    prime_conformal_warmup(&mut router);
     router.promote_to_adaptive().unwrap();
     for i in 0..10 {
         let lane = if i % 2 == 0 {
@@ -2047,6 +2116,7 @@ fn e2e_serde_roundtrip_after_transitions() {
 #[test]
 fn e2e_lane_probabilities_shift_with_reward() {
     let mut router = HybridLaneRouter::with_defaults();
+    prime_conformal_warmup(&mut router);
     router.promote_to_adaptive().unwrap();
 
     let probs_before = router.lane_probabilities();

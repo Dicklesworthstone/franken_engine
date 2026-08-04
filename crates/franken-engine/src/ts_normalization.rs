@@ -284,11 +284,23 @@ pub enum TsNormalizationError {
 pub fn classify_source_language(source_label: Option<&str>, source: &str) -> SourceLanguage {
     if source_label.is_some_and(source_label_has_typescript_extension)
         || source_looks_typescript(source)
+        || source_uses_typed_hostcall_dsl(source)
     {
         SourceLanguage::TypeScript
     } else {
         SourceLanguage::JavaScript
     }
+}
+
+/// The typed-hostcall capability DSL (`hostcall<"cap">(args)`) uses TypeScript
+/// generic-call syntax: in plain JavaScript it would parse as a comparison chain,
+/// so its capability intent would be lost. Any source that uses it must run the TS
+/// normalization that extracts the capability intent and strips the generic
+/// parameter, so the analyzer and the runtime agree on the hostcall edge
+/// regardless of the file extension (e.g. a `.js` package module that declares a
+/// `hostcall<"declassify.audit">(...)` obligation).
+fn source_uses_typed_hostcall_dsl(source: &str) -> bool {
+    source.contains("hostcall<\"")
 }
 
 pub fn prepare_source_entry_for_public_entrypoints(
@@ -563,7 +575,7 @@ pub fn normalize_typescript_to_es2020(
     ));
     current = jsx_lowered;
 
-    let normalized_source = normalize_spacing(current);
+    let normalized_source = current;
     if normalized_source.trim().is_empty() {
         events.push(failure_event(
             trace_id,
@@ -926,15 +938,6 @@ fn class_declaration_uses_implements_clause(statement: &str) -> bool {
     }
 
     false
-}
-
-fn normalize_spacing(source: String) -> String {
-    source
-        .lines()
-        .map(str::trim)
-        .filter(|line| !line.is_empty())
-        .collect::<Vec<_>>()
-        .join("\n")
 }
 
 fn build_decision(step: &str, changed: bool, detail: &str) -> NormalizationDecision {
@@ -3649,7 +3652,7 @@ abstract class Base { }"#;
         assert!(output.normalized_source.ends_with(';'));
     }
 
-    // --- Helper functions ---
+    // --- Layout preservation and helper functions ---
 
     #[test]
     fn normalize_newlines_crlf_to_lf() {
@@ -3658,9 +3661,48 @@ abstract class Base { }"#;
     }
 
     #[test]
-    fn normalize_spacing_removes_blank_lines_and_trims() {
-        let result = normalize_spacing("  hello  \n\n  world  ".to_string());
-        assert_eq!(result, "hello\nworld");
+    fn typescript_normalization_preserves_runtime_template_bytes_bd_88rcn() {
+        let source = "const label: string = \"x\";\nconst value: string = `\n  alpha\\` ${label}\n\n    beta\n`;\nvalue;";
+        let output = normalize_typescript_to_es2020(
+            source,
+            &TsNormalizationConfig::default(),
+            "t",
+            "d",
+            "p",
+        )
+        .expect("runtime template TypeScript should normalize");
+
+        assert!(
+            output
+                .normalized_source
+                .contains("`\n  alpha\\` ${label}\n\n    beta\n`")
+        );
+    }
+
+    #[test]
+    fn typescript_normalization_preserves_ordinary_layout_bd_88rcn() {
+        let source = "const quoted: string = \"`\";  \n\nconst pattern: RegExp = /`/;\n// comment  \nconst value = 1;";
+        let output = normalize_typescript_to_es2020(
+            source,
+            &TsNormalizationConfig::default(),
+            "t",
+            "d",
+            "p",
+        )
+        .expect("ordinary TypeScript should normalize");
+
+        assert!(!output.normalized_source.contains(": string"));
+        assert!(!output.normalized_source.contains(": RegExp"));
+        assert!(
+            output
+                .normalized_source
+                .contains("\"`\";  \n\nconst pattern")
+        );
+        assert!(
+            output
+                .normalized_source
+                .contains("/`/;\n// comment  \nconst value")
+        );
     }
 
     #[test]

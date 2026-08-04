@@ -76,10 +76,10 @@
   "contract": {
     "workload_id": "real_runtime_hot_paths",
     "source_revision": "stale-source-revision",
-    "command": "RCH_DAEMON_WAIT_RESPONSE_TIMEOUT_SECS=3600 RCH_QUEUE_WHEN_BUSY=1 RCH_PRIORITY=high RCH_VISIBILITY=verbose RCH_TEST_TIMEOUT_SEC=1800 rch exec -- env RUSTUP_TOOLCHAIN=nightly CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_real_hot_path_proof_golden CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=4 RUSTFLAGS=-Cdebuginfo=0 cargo bench -p frankenengine-engine --no-default-features --bench hot_paths -- --test",
+    "command": "env -u CARGO_ENCODED_RUSTFLAGS RCH_DAEMON_WAIT_RESPONSE_TIMEOUT_SECS=3600 RCH_QUEUE_WHEN_BUSY=1 RCH_PRIORITY=high RCH_VISIBILITY=verbose RCH_TEST_TIMEOUT_SEC=1800 timeout --kill-after=30 3900 rch exec -- env -u CARGO_ENCODED_RUSTFLAGS RUSTUP_TOOLCHAIN=nightly CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_real_hot_path_proof_golden CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=4 RUSTFLAGS=-Cdebuginfo=0\\ -Clinker-features=-lld cargo bench -p frankenengine-engine --no-default-features --bench hot_paths -- --test",
     "rch_worker": "worker-golden",
     "target_dir_policy": "off_repo_tmp_required",
-    "correctness_digest": "99d815102be6bb183fe1e92ff8b2c8e9565a85da8b261c0ef761608fced6c7d7",
+    "correctness_digest": "1e1d569303fae5f5924aec628b481b6353f63b50053eb99e74449c592afeee0a",
     "metric_fields": {
       "remote_exit_code": 0,
       "local_fallback_detected": false,
@@ -110,16 +110,16 @@
 status: fail
 bundle: scripts/testdata/real_hot_path_proof_contract/stale_source
 failure_count: 1
-correctness_digest: 99d815102be6bb183fe1e92ff8b2c8e9565a85da8b261c0ef761608fced6c7d7
+correctness_digest: 1e1d569303fae5f5924aec628b481b6353f63b50053eb99e74449c592afeee0a
 
 ## Contract Summary
 
 - workload_id: "real_runtime_hot_paths"
 - source_revision: "stale-source-revision"
-- command: "RCH_DAEMON_WAIT_RESPONSE_TIMEOUT_SECS=3600 RCH_QUEUE_WHEN_BUSY=1 RCH_PRIORITY=high RCH_VISIBILITY=verbose RCH_TEST_TIMEOUT_SEC=1800 rch exec -- env RUSTUP_TOOLCHAIN=nightly CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_real_hot_path_proof_golden CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=4 RUSTFLAGS=-Cdebuginfo=0 cargo bench -p frankenengine-engine --no-default-features --bench hot_paths -- --test"
+- command: "env -u CARGO_ENCODED_RUSTFLAGS RCH_DAEMON_WAIT_RESPONSE_TIMEOUT_SECS=3600 RCH_QUEUE_WHEN_BUSY=1 RCH_PRIORITY=high RCH_VISIBILITY=verbose RCH_TEST_TIMEOUT_SEC=1800 timeout --kill-after=30 3900 rch exec -- env -u CARGO_ENCODED_RUSTFLAGS RUSTUP_TOOLCHAIN=nightly CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_real_hot_path_proof_golden CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=4 RUSTFLAGS=-Cdebuginfo=0\\ -Clinker-features=-lld cargo bench -p frankenengine-engine --no-default-features --bench hot_paths -- --test"
 - rch_worker: "worker-golden"
 - target_dir_policy: "off_repo_tmp_required"
-- correctness_digest: "99d815102be6bb183fe1e92ff8b2c8e9565a85da8b261c0ef761608fced6c7d7"
+- correctness_digest: "1e1d569303fae5f5924aec628b481b6353f63b50053eb99e74449c592afeee0a"
 - metric_fields: {"remote_exit_code":0,"local_fallback_detected":false,"queue_when_busy":true}
 - proof_state: {"outcome":"pass","remote_execution_verified":true}
 

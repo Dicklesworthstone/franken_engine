@@ -82,6 +82,21 @@ pub struct EnvironmentSnapshot {
     pub snapshot_hash: ContentHash,
 }
 
+/// Append a variable-length field to a `Sha256` content-hash preimage with a
+/// fixed-width `u64` length prefix.
+///
+/// The snapshot hash commits to the identity of an environment, so its preimage
+/// must be injective. Concatenating adjacent variable-length `String` fields
+/// (or looping a map with no count prefix) is not injective — e.g. `os="ab",
+/// cpu_model="c"` and `os="a", cpu_model="bc"` both serialize to `abc`.
+/// Length-prefixing each variable-length field and count-prefixing the map
+/// removes the ambiguity; fixed-width fields (`u32`/`u64` via `to_le_bytes`) are
+/// self-delimiting. Cf. the same fix crate-wide in commits 7f500570 / 1d3e0542.
+fn hash_field(hasher: &mut Sha256, bytes: &[u8]) {
+    hasher.update((bytes.len() as u64).to_le_bytes());
+    hasher.update(bytes);
+}
+
 impl EnvironmentSnapshot {
     /// Create a new snapshot and compute its hash.
     pub fn new(
@@ -94,15 +109,16 @@ impl EnvironmentSnapshot {
         extra: BTreeMap<String, String>,
     ) -> Self {
         let mut hasher = Sha256::new();
-        hasher.update(os.as_bytes());
-        hasher.update(cpu_model.as_bytes());
+        hash_field(&mut hasher, os.as_bytes());
+        hash_field(&mut hasher, cpu_model.as_bytes());
         hasher.update(logical_cores.to_le_bytes());
         hasher.update(memory_bytes.to_le_bytes());
-        hasher.update(runtime_version.as_bytes());
-        hasher.update(engine_version.as_bytes());
+        hash_field(&mut hasher, runtime_version.as_bytes());
+        hash_field(&mut hasher, engine_version.as_bytes());
+        hasher.update((extra.len() as u64).to_le_bytes());
         for (k, v) in &extra {
-            hasher.update(k.as_bytes());
-            hasher.update(v.as_bytes());
+            hash_field(&mut hasher, k.as_bytes());
+            hash_field(&mut hasher, v.as_bytes());
         }
         let snapshot_hash = ContentHash::compute(&hasher.finalize());
         Self {
@@ -1109,6 +1125,30 @@ fn isqrt(n: u64) -> u64 {
 mod tests {
     use super::*;
 
+    #[test]
+    fn environment_snapshot_hash_is_injective_across_field_boundary() {
+        // bd-fmdcp: os and cpu_model were bare-concatenated into the snapshot
+        // hash, so ("ab","c") and ("a","bc") both hashed "abc". Length-prefixing
+        // each field pins them to distinct hashes (other fields equal).
+        let mk = |os: &str, cpu_model: &str| {
+            EnvironmentSnapshot::new(
+                os.to_string(),
+                cpu_model.to_string(),
+                1,
+                1,
+                "rt".to_string(),
+                "eng".to_string(),
+                BTreeMap::new(),
+            )
+            .snapshot_hash
+        };
+        assert_ne!(
+            mk("ab", "c"),
+            mk("a", "bc"),
+            "os/cpu_model field boundary must not collide"
+        );
+    }
+
     fn epoch(n: u64) -> SecurityEpoch {
         SecurityEpoch::from_raw(n)
     }
@@ -1906,77 +1946,18 @@ mod tests {
     // Golden File Tests for Evidence Bundle Serialization
     // ---------------------------------------------------------------------------
 
-    use std::fs;
-    use std::path::PathBuf;
-
-    /// Helper to get golden file path for a test case.
-    ///
-    /// bd-ub6x8.6.2: migrated from tests/goldens/evidence/ to
-    /// tests/golden/evidence_bundle/ — renamed to avoid collision with
-    /// the existing tests/golden/evidence_ledger/ subdir (different
-    /// owning test, different schema).
-    fn evidence_golden_path(test_name: &str) -> PathBuf {
-        let mut path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-        path.push("tests");
-        path.push("golden");
-        path.push("evidence_bundle");
-        path.push(format!("{}.json", test_name));
-        path
-    }
-
-    /// Helper to check if we should update golden files
-    fn should_update_evidence_goldens() -> bool {
-        std::env::var("UPDATE_GOLDENS").is_ok()
-    }
-
-    /// Assert evidence bundle golden file matches current serialization
-    fn assert_evidence_bundle_golden(bundle: &EvidenceBundle, test_name: &str) {
-        let golden_file = evidence_golden_path(test_name);
-
-        // Serialize to deterministic JSON
+    /// Assert evidence bundle snapshot matches current serialization.
+    fn assert_evidence_bundle_snapshot(bundle: &EvidenceBundle, test_name: &str) {
         let actual_json =
             serde_json::to_string_pretty(bundle).expect("Evidence bundle should serialize to JSON");
+        let snapshot_name = format!("benchmark_evidence_bundle__{test_name}");
 
-        if should_update_evidence_goldens() {
-            // Update mode: write new golden file
-            if let Some(parent) = golden_file.parent() {
-                fs::create_dir_all(parent)
-                    .expect("Should be able to create evidence golden directory");
-            }
-            fs::write(&golden_file, &actual_json)
-                .expect("Should be able to write evidence golden file");
-            eprintln!("[GOLDEN] Updated: {}", golden_file.display());
-            return;
-        }
-
-        // Compare mode: check against existing golden
-        let expected_json = fs::read_to_string(&golden_file).unwrap_or_else(|_| {
-            panic!(
-                "Evidence golden file missing: {}\n\
-                 Run with UPDATE_GOLDENS=1 to create it\n\
-                 Then review and commit: git diff tests/golden/evidence_bundle/",
-                golden_file.display()
-            )
+        insta::with_settings!({
+            snapshot_path => "../tests/snapshots",
+            prepend_module_to_snapshot => false,
+        }, {
+            insta::assert_snapshot!(snapshot_name, actual_json);
         });
-
-        if actual_json != expected_json {
-            // Write actual for easy diffing
-            let actual_path = golden_file.with_extension("actual.json");
-            fs::write(&actual_path, &actual_json)
-                .expect("Should be able to write actual evidence output");
-
-            panic!(
-                "EVIDENCE GOLDEN MISMATCH: {test_name}\n\n\
-                 Expected: {}\n\
-                 Actual:   {}\n\n\
-                 To update: UPDATE_GOLDENS=1 cargo test -- {test_name}\n\
-                 To review: diff {} {}",
-                golden_file.display(),
-                actual_path.display(),
-                golden_file.display(),
-                actual_path.display(),
-            );
-        }
     }
 
     /// Create minimal/empty evidence bundle for golden testing
@@ -2170,19 +2151,19 @@ mod tests {
     #[test]
     fn golden_minimal_evidence_bundle() {
         let bundle = create_minimal_evidence_bundle();
-        assert_evidence_bundle_golden(&bundle, "minimal_bundle");
+        assert_evidence_bundle_snapshot(&bundle, "minimal_bundle");
     }
 
     #[test]
     fn golden_passing_evidence_bundle() {
         let bundle = create_passing_evidence_bundle();
-        assert_evidence_bundle_golden(&bundle, "passing_bundle_with_multiple_workloads");
+        assert_evidence_bundle_snapshot(&bundle, "passing_bundle_with_multiple_workloads");
     }
 
     #[test]
     fn golden_failing_evidence_bundle() {
         let bundle = create_failing_evidence_bundle();
-        assert_evidence_bundle_golden(&bundle, "failing_bundle_with_regression");
+        assert_evidence_bundle_snapshot(&bundle, "failing_bundle_with_regression");
     }
 
     #[test]
@@ -2237,7 +2218,7 @@ mod tests {
         bundle.reference_environment = Some(bundle.runs[0].environment.clone());
         bundle.status = BundleStatus::Sealed;
 
-        assert_evidence_bundle_golden(&bundle, "complex_parity_edge_cases");
+        assert_evidence_bundle_snapshot(&bundle, "complex_parity_edge_cases");
     }
 
     #[test]

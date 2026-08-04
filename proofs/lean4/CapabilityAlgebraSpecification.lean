@@ -24,7 +24,7 @@ crates/franken-engine/src/capability.rs.
 Related: bd-cixqu.7.5, capability algebra security enforcement
 -/
 
-import Mathlib.Order.Lattice.Basic
+import Mathlib.Order.Lattice
 import Mathlib.Order.BoundedOrder
 import Mathlib.Data.Fintype.Basic
 import Mathlib.Data.Finset.Basic

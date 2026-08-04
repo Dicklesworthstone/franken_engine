@@ -4,6 +4,8 @@ use std::path::{Path, PathBuf};
 
 use frankenengine_engine::benchmark_denominator::BenchmarkCase;
 use frankenengine_engine::causal_replay::CounterfactualConfig;
+use frankenengine_engine::evidence_ledger::EvidenceTrustSnapshot;
+use frankenengine_engine::hash_tiers::ContentHash;
 use frankenengine_engine::receipt_verifier_pipeline::{
     ReceiptVerifierCliInput, render_verdict_summary, verify_receipt_by_id,
 };
@@ -62,6 +64,8 @@ fn usage() -> String {
         "  franken-verify benchmark reproduce --bundle <dir> [--summary] [--output <path>]",
         "  franken-verify benchmark verify --bundle <dir> [--summary] [--output <path>]",
         "  franken-verify replay --input <path> [--summary]",
+        "      --trace-trust-snapshot-file <path>",
+        "      --trace-trust-snapshot-digest <sha256-hex>",
         "      [--signature-key-hex <hex> | --signature-key-file <path>]",
         "      [--receipt-key <signer_hex>=<verification_key_hex>]...",
         "      [--receipt-key-file <path>]...",
@@ -607,6 +611,8 @@ fn run_replay(args: &[String]) -> Result<i32, String> {
     let mut receipt_key_overrides = Vec::<String>::new();
     let mut receipt_key_files = Vec::<String>::new();
     let mut counterfactual_config_files = Vec::<String>::new();
+    let mut trace_trust_snapshot_file: Option<String> = None;
+    let mut trace_trust_snapshot_digest: Option<String> = None;
 
     let mut index = 0usize;
     while index < args.len() {
@@ -632,6 +638,20 @@ fn run_replay(args: &[String]) -> Result<i32, String> {
                     .get(index)
                     .ok_or_else(|| "--signature-key-file requires a path".to_string())?;
                 signature_key_hex = Some(load_trimmed_file(value, "signature key file")?);
+            }
+            "--trace-trust-snapshot-file" => {
+                index += 1;
+                let value = args
+                    .get(index)
+                    .ok_or_else(|| "--trace-trust-snapshot-file requires a path".to_string())?;
+                trace_trust_snapshot_file = Some(value.to_string());
+            }
+            "--trace-trust-snapshot-digest" => {
+                index += 1;
+                let value = args
+                    .get(index)
+                    .ok_or_else(|| "--trace-trust-snapshot-digest requires a value".to_string())?;
+                trace_trust_snapshot_digest = Some(value.trim().to_string());
             }
             "--receipt-key" => {
                 index += 1;
@@ -661,6 +681,21 @@ fn run_replay(args: &[String]) -> Result<i32, String> {
 
     let input_path = input_path.ok_or_else(|| "missing required --input <path>".to_string())?;
     let mut input = load_json::<ReplayClaimBundle>(input_path, "replay bundle")?;
+    let receipt_key_overrides = receipt_key_overrides
+        .into_iter()
+        .map(|raw| parse_receipt_key_pair(raw.trim()))
+        .collect::<Result<Vec<_>, _>>()?;
+    let trace_trust_snapshot_file = trace_trust_snapshot_file.ok_or_else(|| {
+        "missing required --trace-trust-snapshot-file <path> for causal trace authentication"
+            .to_string()
+    })?;
+    let expected_snapshot_digest = trace_trust_snapshot_digest.ok_or_else(|| {
+        "missing required --trace-trust-snapshot-digest <sha256-hex> for causal trace authentication"
+            .to_string()
+    })?;
+    let trace_trust_snapshot =
+        load_json::<EvidenceTrustSnapshot>(&trace_trust_snapshot_file, "trace trust snapshot")?;
+    let expected_snapshot_digest = parse_content_hash_pin(&expected_snapshot_digest)?;
 
     if let Some(hex) = signature_key_hex {
         input.signature_verification_key_hex = Some(hex);
@@ -671,8 +706,7 @@ fn run_replay(args: &[String]) -> Result<i32, String> {
         input.receipt_verification_keys_hex.extend(parsed);
     }
 
-    for raw in receipt_key_overrides {
-        let (signer_id_hex, key_hex) = parse_receipt_key_pair(raw.trim())?;
+    for (signer_id_hex, key_hex) in receipt_key_overrides {
         input
             .receipt_verification_keys_hex
             .insert(signer_id_hex, key_hex);
@@ -683,7 +717,7 @@ fn run_replay(args: &[String]) -> Result<i32, String> {
         input.counterfactual_configs.append(&mut parsed);
     }
 
-    let report = verify_replay_claim(&input);
+    let report = verify_replay_claim(&input, &trace_trust_snapshot, &expected_snapshot_digest);
     print_report(&report, summary)?;
     Ok(report.exit_code())
 }
@@ -815,6 +849,23 @@ fn parse_receipt_key_pair(raw: &str) -> Result<(String, String), String> {
         return Err("--receipt-key requires non-empty signer and key hex values".to_string());
     }
     Ok((signer_id_hex.to_string(), key_hex.to_string()))
+}
+
+fn parse_content_hash_pin(raw: &str) -> Result<ContentHash, String> {
+    let raw = raw.strip_prefix("sha256:").unwrap_or(raw);
+    if raw.len() != 64 || !raw.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err(
+            "--trace-trust-snapshot-digest must be exactly 64 hexadecimal SHA-256 characters"
+                .to_string(),
+        );
+    }
+    let bytes = hex::decode(raw).map_err(|error| {
+        format!("failed to decode --trace-trust-snapshot-digest as SHA-256 hex: {error}")
+    })?;
+    let bytes: [u8; 32] = bytes
+        .try_into()
+        .map_err(|_| "--trace-trust-snapshot-digest must decode to exactly 32 bytes".to_string())?;
+    Ok(ContentHash::from_bytes(bytes))
 }
 
 fn load_receipt_key_map(path: &str) -> Result<BTreeMap<String, String>, String> {

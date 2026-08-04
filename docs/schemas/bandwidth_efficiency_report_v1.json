@@ -1,0 +1,89 @@
+{
+  "schema_version": "franken-engine.erasure-bandwidth-efficiency-report.v1",
+  "bead_id": "bd-cixqu.35.3",
+  "component": "erasure_bandwidth_accounting",
+  "purpose": "Quantitative bandwidth comparison of erasure-coded vs full-replication fleet gossip. For each (fleet_size, payload_bytes) cell it reports the real serialized wire cost of the shipped erasure encoder against a full-replication baseline, the fault-tolerance-normalized savings ratio, the metadata-free theoretical ceiling, and a raw dissemination-volume context lens, plus a per-fleet scaling summary and an analytical convergence-vs-bandwidth model.",
+  "implementation_module": "crates/franken-engine/src/erasure_bandwidth_accounting.rs",
+  "integration_point": "crates/franken-engine/src/bin/frankenctl.rs::execute_gates (GatesMode::ErasureBandwidth) and crates/franken-engine/benches/erasure_vs_replication.rs",
+  "coding_scheme": {
+    "id": "xor-single-parity-v1",
+    "description": "The measured gossip erasure lane is a systematic XOR single-parity code: it computes exactly one parity chunk (the XOR of all k data chunks) and recovers at most one missing data shard. When the tuned plan allocates more than one parity slot, those extra slots carry identical copies of the single parity chunk and add duplication, not recovery capacity. This is NOT Reed-Solomon over GF(2^8); the report records the real scheme and never fabricates Reed-Solomon polynomial coefficients or the 60-70% savings figure attributed to a tunable Reed-Solomon code. The fault-tolerance-normalized savings ceiling for this single-parity scheme is (k-1)/(2k), which approaches 0.5 (50%) as k grows.",
+    "honest_labeling": true
+  },
+  "measurement": {
+    "coding_plan": "ErasureCodingPlan::tuned(fleet_size, 0) — the exact plan the live gossip lane derives in encode_evidence_for_erasure_gossip. total_shards (n) = fleet_size; parity_shards ~= n/3; data_shards (k) = n - parity_shards.",
+    "wire_size": "Per shard: raw coded payload bytes (shard_payload length) + serialized metadata framing (shard-set id, origin, sequence, index, plan, role, payload length, two content hashes, timestamp, signature, protocol version, extensions), the framing measured by serializing the shard with an emptied payload. The coded payload is counted raw rather than through serde_json (which would expand a Vec<u8> into a JSON number array) so byte totals reflect an on-wire encoding, not a debug serialization.",
+    "full_copy": "A full replica is a (1,1) erasure encoding of the whole payload — the same envelope struct — so the comparison isolates chunking and parity from framing.",
+    "determinism": "All inputs are fixed (origin node, first sequence, timestamp, shard-set id, generated_at_utc, and a deterministic payload byte pattern p[i] = i mod 251), so the signed report serializes byte-for-byte identically across runs. The gate's deterministic-replay lane compares bandwidth_efficiency_report.json across two runs."
+  },
+  "report_fields": {
+    "schema_version": "string; must equal franken-engine.erasure-bandwidth-efficiency-report.v1",
+    "generated_at_utc": "string; deterministic (non-wall-clock) generation timestamp",
+    "coding_scheme": "string; must equal xor-single-parity-v1",
+    "scheme_fault_tolerance_erasures": "u16; erasures the shipped scheme tolerates per shard set (1)",
+    "honesty_notes": "array<string>; load-bearing disclaimers, including that the scheme is NOT Reed-Solomon and that the ceiling is (k-1)/(2k)",
+    "methodology": "array<string>; how each quantity is measured",
+    "config": "BandwidthComparisonConfig { fleet_sizes: array<u64>, payload_sizes: array<u64>, fanout: u32 }",
+    "cells": "array<bandwidth_cell>; one per (fleet_size, payload_bytes), ordered fleet-major then payload",
+    "scaling_analysis": "array<scaling_point>; one per fleet_size",
+    "convergence_model": "array<convergence_point>; one per fleet_size (analytical, not a live simulation)"
+  },
+  "bandwidth_cell_fields": {
+    "fleet_size": "u64; node count",
+    "payload_bytes": "u64; message payload size",
+    "data_shards": "u16; k, data shards required to reconstruct",
+    "total_shards": "u16; n, shards emitted by the tuned plan",
+    "parity_shards": "u16; n - k, identical XOR parity copies",
+    "unique_parity_chunks": "u16; distinct parity chunks carrying recovery information (1 when parity exists, else 0)",
+    "fault_tolerance_erasures": "u16; erasures tolerated for this plan (0 or 1)",
+    "chunk_len": "u64; per-shard chunk length ceil(payload / k)",
+    "data_shard_wire_bytes": "u64; total wire bytes of the k data shards",
+    "parity_shard_wire_bytes": "u64; wire bytes of one parity shard (0 when no parity slot)",
+    "full_copy_wire_bytes": "u64; wire bytes of one full-payload (1,1) copy",
+    "shard_metadata_overhead_bytes": "u64; framing overhead of a single data shard (wire - chunk_len)",
+    "erasure_coded_bytes": "u64; PRIMARY lens: k data shards + 1 parity (redundancy to survive one loss)",
+    "full_replication_bytes": "u64; PRIMARY lens: (fault_tolerance + 1) full copies",
+    "savings_ratio_millionths": "i64; (full_replication_bytes - erasure_coded_bytes) / full_replication_bytes, in millionths; signed (negative when framing overhead dominates)",
+    "overhead_exceeds_savings": "bool; true when erasure redundancy is at least as costly as replication",
+    "theoretical_savings_ceiling_millionths": "u64; metadata-free (k-1)/(2k) in millionths; measured savings never exceed this",
+    "erasure_as_emitted_bytes": "u64; CONTEXT lens (NOT reliability-normalized): total wire bytes of all n emitted shards",
+    "full_broadcast_bytes": "u64; CONTEXT lens (NOT reliability-normalized): one full copy to every node"
+  },
+  "scaling_point_fields": {
+    "fleet_size": "u64",
+    "data_shards": "u16; k for this fleet size",
+    "theoretical_savings_ceiling_millionths": "u64; (k-1)/(2k), non-decreasing in fleet size",
+    "mean_measured_savings_millionths": "i64; mean savings across payloads",
+    "best_payload_bytes": "u64; payload with the best measured savings",
+    "best_measured_savings_millionths": "i64; best savings across payloads",
+    "payloads_overhead_dominated": "u64; count of payloads where framing overhead exceeds savings"
+  },
+  "convergence_point_fields": {
+    "fleet_size": "u64",
+    "fanout": "u32",
+    "data_shards": "u16",
+    "reference_payload_bytes": "u64; largest configured payload, used for the byte columns",
+    "analytical_model": "bool; always true — an analytical epidemic-push bound, NOT a live network simulation",
+    "full_replication_rounds": "u64; optimistic epidemic-push rounds to inform the whole fleet",
+    "erasure_convergence_rounds": "u64; dissemination rounds plus ceil(k / fanout) gather rounds",
+    "full_replication_total_bytes": "u64; broadcast one full copy to every node",
+    "erasure_total_bytes": "u64; the erasure lane's emitted shard-set volume"
+  },
+  "signed_report": {
+    "report": "the BandwidthEfficiencyReport body",
+    "report_hash": "hex SHA-256 ContentHash over the canonical serialization of report",
+    "signing_key_id": "erasure-bandwidth-benchmark-fixed-key-v1",
+    "verification_key": "hex verification key",
+    "signature_hex": "hex signature over the canonical serialization of report"
+  },
+  "gate": {
+    "command": "frankenctl gates erasure-bandwidth --out-dir <dir> [--config <bandwidth_config.json>]",
+    "artifacts": "bandwidth_efficiency_report.json (signed report; deterministic-replay target), run_manifest.json (outcome=pass, coding_scheme, report_hash), summary.md (per-cell savings table)",
+    "gate_script": "scripts/gates/run_rgc_erasure_bandwidth.sh (build / run x2 / deterministic_replay / bundle_valid+honesty-guard / tests)",
+    "replay_script": "scripts/e2e/rgc_erasure_bandwidth_replay.sh (ISO-8601 timestamped step logs; byte-identical assertion)"
+  },
+  "tests": {
+    "unit": "crates/franken-engine/src/erasure_bandwidth_accounting.rs #[cfg(test)] mod tests (>=20 cases: config validation, deterministic payload, chunk length, theoretical ceiling closed-form + monotonicity + sub-50%, signed savings math, cell shape for real XOR single-parity, large-payload savings under ceiling, tiny-payload overhead domination, wire-byte consistency, determinism, fleet-of-one degeneracy, empty payload, convergence rounds, report cardinality, no fabricated Reed-Solomon claim, signed report round-trip + hash)",
+    "integration": "crates/franken-engine/tests/erasure_bandwidth_accounting_integration.rs (>=30 cases: accounting faithful to real encode round-trips across all documented topologies, protocol correctness under coding — reconstruct from data shards, tolerate one loss via parity, reject two losses, identical parity copies, reconstruction receipt scheme, savings ceiling respected, scaling monotonicity, convergence model, report determinism and honesty)"
+  }
+}

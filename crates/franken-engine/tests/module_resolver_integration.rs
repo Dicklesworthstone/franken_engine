@@ -668,6 +668,7 @@ fn observe_dual_mode_exports_map_behavior(mode: CompatibilityMode) -> String {
 #[test]
 fn module_syntax_ordering() {
     assert!(ModuleSyntax::EsModule < ModuleSyntax::CommonJs);
+    assert!(ModuleSyntax::CommonJs < ModuleSyntax::Wasm);
 }
 
 #[test]
@@ -681,11 +682,16 @@ fn module_syntax_copy() {
 fn module_syntax_as_str() {
     assert_eq!(ModuleSyntax::EsModule.as_str(), "esm");
     assert_eq!(ModuleSyntax::CommonJs.as_str(), "cjs");
+    assert_eq!(ModuleSyntax::Wasm.as_str(), "wasm");
 }
 
 #[test]
 fn module_syntax_serde_all() {
-    for s in [ModuleSyntax::EsModule, ModuleSyntax::CommonJs] {
+    for s in [
+        ModuleSyntax::EsModule,
+        ModuleSyntax::CommonJs,
+        ModuleSyntax::Wasm,
+    ] {
         let json = serde_json::to_string(&s).unwrap();
         let restored: ModuleSyntax = serde_json::from_str(&json).unwrap();
         assert_eq!(s, restored);

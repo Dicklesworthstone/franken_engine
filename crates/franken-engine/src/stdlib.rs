@@ -6,7 +6,9 @@
 //! Coverage priorities (per RGC-306 workload matrix):
 //! - **Tier 1** (critical path): Array, Object, String, Math, JSON, Number, Boolean
 //! - **Tier 2** (ecosystem): Map, Set, Date, RegExp, Error, Symbol, Promise
-//! - **Tier 3** (completeness): WeakMap, WeakSet, Intl subset, Proxy/Reflect
+//! - **Tier 3** (completeness): WeakMap, WeakSet, Proxy/Reflect
+//! - **Intl status**: no exposed `Intl` global; the frozen locale surface is
+//!   inventoried separately
 //!
 //! All arithmetic uses fixed-point millionths (1_000_000 = 1.0) for
 //! cross-architecture determinism.  `BTreeMap`/`BTreeSet` for ordering.
@@ -2460,7 +2462,12 @@ pub fn exec_string_method(
             }
         }
         BuiltinId::StringPrototypeAt => {
-            let len = this.chars().count() as i64;
+            // ES2022 22.1.3.1: relative UTF-16 code-unit index; negative
+            // counts from the end; out of range yields undefined. Unit-indexed
+            // like charAt/charCodeAt (bd-3kvat; previously scalar-indexed at
+            // this seam), with the same fail-closed materialization posture
+            // when the addressed unit is a lone surrogate.
+            let len = utf16_code_units(this) as i64;
             let mut idx = opt_int_arg(args, 0).unwrap_or(0) / FP_SCALE;
             if idx < 0 {
                 idx = len.saturating_add(idx);
@@ -2468,11 +2475,14 @@ pub fn exec_string_method(
             if idx < 0 || idx >= len {
                 return Ok(JsValue::Undefined);
             }
-            let ch = this
-                .chars()
-                .nth(idx as usize)
-                .expect("index validated against length");
-            Ok(JsValue::Str(ch.to_string()))
+            match utf16_code_unit_at(this, idx as usize) {
+                Some(unit) => Ok(JsValue::Str(utf16_materialize(
+                    std::slice::from_ref(&unit),
+                    "String.prototype.at",
+                    &format!("at UTF-16 index {idx}"),
+                )?)),
+                None => Ok(JsValue::Undefined),
+            }
         }
         BuiltinId::StringPrototypeIncludes => {
             let search = require_str("String.prototype.includes", args, 0)?;
@@ -6553,10 +6563,16 @@ mod tests {
             .expect("operation should succeed for valid inputs"),
             JsValue::Str("o".into())
         );
+        // Unit-indexed (bd-3kvat): the astral char occupies indices 0..2, so
+        // index 2 is "b" (scalar indexing would have said undefined at 2).
         assert_eq!(
-            exec_string_method(BuiltinId::StringPrototypeAt, "😀", &[JsValue::Int(0)])
-                .expect("operation should succeed for valid inputs"),
-            JsValue::Str("😀".into())
+            exec_string_method(
+                BuiltinId::StringPrototypeAt,
+                "😀b",
+                &[JsValue::Int(2 * FP_SCALE)]
+            )
+            .expect("operation should succeed for valid inputs"),
+            JsValue::Str("b".into())
         );
         assert_eq!(
             exec_string_method(
@@ -6566,6 +6582,18 @@ mod tests {
             )
             .expect("operation should succeed for valid inputs"),
             JsValue::Undefined
+        );
+    }
+
+    #[test]
+    fn test_string_at_rejects_surrogate_split() {
+        // `"😀".at(0)` addresses the lead surrogate; this UTF-8-carried seam
+        // cannot represent it and fails closed (same posture as charAt).
+        let err =
+            exec_string_method(BuiltinId::StringPrototypeAt, "😀", &[JsValue::Int(0)]).unwrap_err();
+        assert!(
+            format!("{err}").contains("lone surrogates"),
+            "unexpected error: {err}"
         );
     }
 

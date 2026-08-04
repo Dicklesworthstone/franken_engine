@@ -30,8 +30,9 @@ deleted, moved, rewritten, formatted, or staged by the hygiene tools.
 Heavy Cargo commands under test must be supplied to validation_hygiene_wrapper.sh
 with the repository RCH shape, for example:
 
-  rch exec -- env CARGO_TARGET_DIR=/data/tmp/franken_engine-validation \
-    CARGO_INCREMENTAL=0 RUSTFLAGS='-C linker=cc' cargo test -p frankenengine-engine
+  env -u CARGO_ENCODED_RUSTFLAGS rch exec -- env -u CARGO_ENCODED_RUSTFLAGS \
+    CARGO_TARGET_DIR=/data/tmp/franken_engine-validation \
+    CARGO_INCREMENTAL=0 RUSTFLAGS='-C linker=cc -Clinker-features=-lld' cargo test -p frankenengine-engine
 
 This E2E harness itself uses shell fixtures only; it does not invoke Cargo or RCH.
 EOF
@@ -360,7 +361,7 @@ write_aggregate_report() {
         rewrites_fixture_files:false,
         stages_fixture_files:false
       },
-      rch_heavy_command_guidance:"Run heavy Cargo validation through validation_hygiene_wrapper.sh with rch exec -- env CARGO_TARGET_DIR=/data/tmp/franken_engine-validation CARGO_INCREMENTAL=0 RUSTFLAGS='\''-C linker=cc'\'' cargo ..."
+      rch_heavy_command_guidance:"Run heavy Cargo validation through validation_hygiene_wrapper.sh with env -u CARGO_ENCODED_RUSTFLAGS rch exec -- env -u CARGO_ENCODED_RUSTFLAGS CARGO_TARGET_DIR=/data/tmp/franken_engine-validation CARGO_INCREMENTAL=0 RUSTFLAGS='\''-C linker=cc -Clinker-features=-lld'\'' cargo ..."
     }' >"$aggregate_json"
 
   {
@@ -369,8 +370,8 @@ write_aggregate_report() {
     printf -- '- cases: `%s`\n' "$(jq -r '.case_count' "$aggregate_json")"
     printf -- '- output_root: `%s`\n\n' "$output_root"
     jq -r '.cases[] | "- `" + .case_id + "`: " + .classifier.status + " / " + (.classifier.first_blocker.class // "none")' "$aggregate_json"
-    printf '\nHeavy Cargo commands under test must use `rch exec -- env CARGO_TARGET_DIR=... CARGO_INCREMENTAL=0 RUSTFLAGS='
-    printf "'-C linker=cc'"
+    printf '\nHeavy Cargo commands under test must use `env -u CARGO_ENCODED_RUSTFLAGS rch exec -- env -u CARGO_ENCODED_RUSTFLAGS CARGO_TARGET_DIR=... CARGO_INCREMENTAL=0 RUSTFLAGS='
+    printf "'-C linker=cc -Clinker-features=-lld'"
     printf ' cargo ...` through the wrapper.\n'
   } >"$aggregate_md"
 }

@@ -56,7 +56,7 @@ assert_no_forbidden_live_claims() {
   local forbidden_lines
 
   forbidden_lines="$(grep -Ein \
-    'queries live Agent Mail|changes br state|mutates br state|releases reservations|sends Agent Mail|mutates workers|runs cargo|runs rch|repairs bead automatically|repairs beads automatically|automatic bead repair|automatic reservation release|live Agent Mail sends|live RCH execution|queue policy mutation|mutates live worker state' \
+    'queries live Agent Mail|changes br state|mutates br state|releases reservations|sends Agent Mail|mutates workers|runs cargo|runs rch|acknowledges messages|approves contacts|reassigns beads|repairs bead automatically|repairs beads automatically|automatic acknowledgement|automatic contact approval|automatic bead repair|automatic bead reassignment|automatic reservation release|live Agent Mail sends|live RCH execution|queue policy mutation|mutates live worker state' \
     "$doc_path" \
     | grep -Eiv 'does not|never|no live|must not|not claim|reject|forbidden|false|proof-only|advisory-only' || true)"
   if [[ -n "$forbidden_lines" ]]; then
@@ -135,7 +135,7 @@ run_selftest() {
 
   bad_mutation_doc="${tmp_root}/bad-mutation.md"
   cp "$runbook_path" "$bad_mutation_doc"
-  printf '\nThe drill releases reservations, sends Agent Mail, mutates workers, runs cargo, runs rch, and repairs beads automatically.\n' >>"$bad_mutation_doc"
+  printf '\nThe drill acknowledges messages, approves contacts, releases reservations, reassigns beads, sends Agent Mail, mutates workers, runs cargo, runs rch, and repairs beads automatically.\n' >>"$bad_mutation_doc"
   if SWARM_AGENT_CAUSAL_TRACE_RUNBOOK_PATH="$bad_mutation_doc" bash "${BASH_SOURCE[0]}" check >/dev/null 2>&1; then
     record_failure "automatic remediation wording should fail"
     return 1

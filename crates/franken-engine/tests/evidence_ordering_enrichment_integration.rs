@@ -19,7 +19,8 @@
 )]
 
 use frankenengine_engine::evidence_ledger::{
-    CandidateAction, ChosenAction, Constraint, DecisionType, EvidenceEntryBuilder, Witness,
+    CandidateAction, ChosenAction, Constraint, DecisionType, EvidenceEntryBuilder,
+    LabFixtureEvidenceEntryBuilderExt as _, Witness,
 };
 use frankenengine_engine::evidence_ordering::*;
 use frankenengine_engine::security_epoch::SecurityEpoch;

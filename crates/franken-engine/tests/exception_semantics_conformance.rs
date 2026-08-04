@@ -29,6 +29,7 @@ use frankenengine_engine::module_live_binding::LiveBindingMap;
 use frankenengine_engine::object_model::JsValue;
 use frankenengine_engine::parser_api_stability::parse_script;
 use frankenengine_engine::promise_model::PromiseHandle;
+use frankenengine_engine::{EvalErrorCode, HybridRouter};
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -80,6 +81,13 @@ fn eval_source(source: &str) -> String {
         Value::Undefined => "undefined".to_string(),
         other => format!("{:?}", other),
     }
+}
+
+fn eval_router_value(source: &str) -> String {
+    HybridRouter::default()
+        .eval(source)
+        .expect("HybridRouter eval should succeed")
+        .value
 }
 
 fn test_module(instructions: Vec<Ir3Instruction>) -> Ir3Module {
@@ -541,6 +549,294 @@ fn conformance_lowered_try_catch_finally_return_in_finally_overrides_catch_retur
     assert_eq!(result.value, Value::Int(2));
 }
 
+// ---------------------------------------------------------------------------
+// 2a. Eval-path conformance: user-facing throw/catch semantics
+// ---------------------------------------------------------------------------
+
+#[test]
+fn conformance_eval_catches_primitive_throw_value() {
+    assert_eq!(
+        eval_router_value(r#"try { throw "ytbg"; } catch (e) { e; }"#),
+        "ytbg"
+    );
+}
+
+#[test]
+fn conformance_eval_catch_binding_is_block_scoped() {
+    assert_eq!(
+        eval_router_value(r#"let e = "outer"; try { throw "inner"; } catch (e) { e; } e;"#),
+        "outer"
+    );
+    assert_eq!(
+        eval_router_value(r#"try { throw "inner"; } catch (e) { e; } typeof e;"#),
+        "undefined"
+    );
+}
+
+#[test]
+fn conformance_eval_rethrow_reaches_outer_catch() {
+    assert_eq!(
+        eval_router_value(
+            r#"try { try { throw "nested"; } catch (e) { throw e; } } catch (outer) { outer; }"#
+        ),
+        "nested"
+    );
+}
+
+#[test]
+fn conformance_source_finally_order_matches_node_ground_truth() {
+    // Expected values were checked against donor JS runtime behavior for
+    // bd-8enww.4.4. The stale-frame cleanup cases were smoke-checked with Bun
+    // in this environment because `node` resolves to a Bun shim.
+    let cases = [
+        (
+            "normal-path",
+            r#"let log = ""; try { log = log + "try"; } finally { log = log + ":finally"; } log;"#,
+            "try:finally",
+        ),
+        (
+            "caught-throw",
+            r#"let log = ""; try { throw "x"; } catch (e) { log = log + "catch:" + e; } finally { log = log + ":finally"; } log;"#,
+            "catch:x:finally",
+        ),
+        (
+            "rethrown-catch",
+            r#"let log = ""; try { try { log = log + "try"; throw "x"; } catch (e) { log = log + ":catch"; throw "y"; } finally { log = log + ":finally"; } } catch (e) { log = log + ":outer:" + e; } log;"#,
+            "try:catch:finally:outer:y",
+        ),
+        (
+            "return-override",
+            r#"function f() { try { return "try"; } finally { return "finally"; } } f();"#,
+            "finally",
+        ),
+        (
+            "finally-throw-overrides-try-return",
+            r#"function f() { try { return "try"; } finally { throw "final"; } } try { f(); } catch (e) { e; }"#,
+            "final",
+        ),
+        (
+            "finally-throw-overrides-catch-return",
+            r#"function f() { try { throw "try"; } catch (e) { return "catch"; } finally { throw "final"; } } try { f(); } catch (e) { e; }"#,
+            "final",
+        ),
+        (
+            "finally-return-overrides-try-throw",
+            r#"function f() { try { throw "try"; } finally { return "final"; } } f();"#,
+            "final",
+        ),
+        (
+            "finally-return-overrides-catch-throw",
+            r#"function f() { try { throw "try"; } catch (e) { throw "catch"; } finally { return "final"; } } f();"#,
+            "final",
+        ),
+        (
+            "return-clears-catch-frame",
+            r#"function f() { try { return "ret"; } catch (e) { return "bad"; } } let log = f(); try { throw "x"; } catch (e) { log = log + ":caught:" + e; } log;"#,
+            "ret:caught:x",
+        ),
+        (
+            "return-clears-finally-frame",
+            r#"let log = ""; function f() { try { log = log + "try"; return "ret"; } finally { log = log + ":finally"; } } let result = f(); log = log + ":" + result; try { throw "x"; } catch (e) { log = log + ":caught:" + e; } log;"#,
+            "try:finally:ret:caught:x",
+        ),
+        (
+            "return-from-catch-clears-finally-frame",
+            r#"let log = ""; function f() { try { throw "x"; } catch (e) { log = log + "catch:" + e; return "ret"; } finally { log = log + ":finally"; } } let result = f(); log = log + ":" + result; try { throw "y"; } catch (e) { log = log + ":caught:" + e; } log;"#,
+            "catch:x:finally:ret:caught:y",
+        ),
+        (
+            "break-through-finally",
+            r#"let log = ""; outer: while (true) { try { log = log + "try"; break outer; } finally { log = log + ":finally"; } } log;"#,
+            "try:finally",
+        ),
+        (
+            "labeled-block-break-through-finally",
+            r#"let log = ""; outer: { try { log = log + "try"; break outer; } finally { log = log + ":finally"; } log = log + ":after"; } log;"#,
+            "try:finally",
+        ),
+        (
+            "labeled-catch-break-through-finally",
+            r#"let log = ""; outer: { try { throw "x"; } catch (e) { log = log + "catch:" + e; break outer; } finally { log = log + ":finally"; } log = log + ":after"; } log;"#,
+            "catch:x:finally",
+        ),
+        (
+            "finally-break-overrides-throw",
+            r#"let log = ""; outer: { try { log = log + "try"; throw "x"; } finally { log = log + ":finally"; break outer; } log = log + ":after"; } log = log + ":done"; log;"#,
+            "try:finally:done",
+        ),
+        (
+            "finally-break-overrides-return",
+            r#"let log = ""; function f() { outer: { try { log = log + "try"; return "ret"; } finally { log = log + ":finally"; break outer; } } log = log + ":after"; return "after"; } let result = f(); log + ":" + result;"#,
+            "try:finally:after:after",
+        ),
+        (
+            "finally-break-overrides-throw-clears-pending",
+            r#"let log = ""; outer: { try { throw "x"; } finally { log = log + "finally;"; break outer; } } try { log = log + "normal"; } finally { log = log + ":cleanup"; } log;"#,
+            "finally;normal:cleanup",
+        ),
+        (
+            "local-finally-break-preserves-outer-throw",
+            r#"let log = ""; try { try { throw "outer"; } finally { inner: { try { throw "inner"; } finally { break inner; } } log = log + "after;"; } } catch (e) { log = log + "caught:" + e; } log;"#,
+            "after;caught:outer",
+        ),
+        (
+            "nested-finally-break-exiting-outer-finally-overrides-outer-throw",
+            r#"let log = ""; outer: { try { throw "outer"; } finally { try { throw "inner"; } finally { log = log + "inner;"; break outer; } log = log + "bad"; } } log = log + "done"; log;"#,
+            "inner;done",
+        ),
+        (
+            "labeled-block-break-clears-finally-frame",
+            r#"let log = ""; outer: { try { log = log + "try"; break outer; } finally { log = log + ":finally"; } } try { throw "x"; } catch (e) { log = log + ":caught:" + e; } log;"#,
+            "try:finally:caught:x",
+        ),
+        (
+            "labeled-catch-break-clears-finally-frame",
+            r#"let log = ""; outer: { try { throw "x"; } catch (e) { log = log + "catch:" + e; break outer; } finally { log = log + ":finally"; } } try { throw "y"; } catch (e) { log = log + ":caught:" + e; } log;"#,
+            "catch:x:finally:caught:y",
+        ),
+        (
+            "labeled-try-catch-break-clears-catch-frame",
+            r#"let log = ""; outer: { try { log = log + "try"; break outer; } catch (e) { log = log + "bad"; } } try { throw "x"; } catch (e) { log = log + ":caught:" + e; } log;"#,
+            "try:caught:x",
+        ),
+        (
+            "continue-through-finally",
+            r#"let log = ""; for (let i = 0; i < 2; i = i + 1) { try { log = log + "try" + i; continue; } finally { log = log + ":finally" + i + ";"; } } log;"#,
+            "try0:finally0;try1:finally1;",
+        ),
+        (
+            "labeled-continue-through-finally",
+            r#"let log = ""; outer: for (let i = 0; i < 2; i = i + 1) { try { log = log + "try" + i; continue outer; } finally { log = log + ":finally" + i + ";"; } } log;"#,
+            "try0:finally0;try1:finally1;",
+        ),
+        (
+            "labeled-catch-continue-through-finally",
+            r#"let log = ""; outer: for (let i = 0; i < 2; i = i + 1) { try { throw i; } catch (e) { log = log + "catch" + e; continue outer; } finally { log = log + ":finally" + i + ";"; } } log;"#,
+            "catch0:finally0;catch1:finally1;",
+        ),
+        (
+            "finally-continue-overrides-throw",
+            r#"let log = ""; for (let i = 0; i < 2; i = i + 1) { try { log = log + "try" + i; throw "x"; } finally { log = log + ":finally" + i + ";"; continue; } log = log + "bad"; } log;"#,
+            "try0:finally0;try1:finally1;",
+        ),
+        (
+            "finally-continue-overrides-throw-clears-pending",
+            r#"let log = ""; for (let i = 0; i < 1; i = i + 1) { try { throw "x"; } finally { log = log + "finally;"; continue; } } try { log = log + "normal"; } finally { log = log + ":cleanup"; } log;"#,
+            "finally;normal:cleanup",
+        ),
+        (
+            "local-finally-continue-preserves-outer-return",
+            r#"function f() { try { return "outer"; } finally { for (let i = 0; i < 1; i = i + 1) { try { throw "inner"; } finally { continue; } } } } f();"#,
+            "outer",
+        ),
+        (
+            "nested-finally-continue-exiting-outer-finally-overrides-outer-return",
+            r#"let log = ""; function f() { outer: for (let i = 0; i < 1; i = i + 1) { try { return "outer"; } finally { for (let j = 0; j < 1; j = j + 1) { try { throw "inner"; } finally { log = log + "inner;"; continue outer; } } log = log + "bad"; } } return "done"; } let result = f(); log + result;"#,
+            "inner;done",
+        ),
+        (
+            "labeled-continue-clears-finally-frame",
+            r#"let log = ""; outer: for (let i = 0; i < 2; i = i + 1) { try { log = log + "try" + i; continue outer; } finally { log = log + ":finally" + i + ";"; } } try { throw "z"; } catch (e) { log = log + "caught:" + e; } log;"#,
+            "try0:finally0;try1:finally1;caught:z",
+        ),
+        (
+            "labeled-catch-continue-clears-finally-frame",
+            r#"let log = ""; outer: for (let i = 0; i < 2; i = i + 1) { try { throw i; } catch (e) { log = log + "catch" + e; continue outer; } finally { log = log + ":finally" + i + ";"; } } try { throw "z"; } catch (e) { log = log + "caught:" + e; } log;"#,
+            "catch0:finally0;catch1:finally1;caught:z",
+        ),
+        (
+            "labeled-try-catch-continue-clears-catch-frame",
+            r#"let log = ""; outer: for (let i = 0; i < 2; i = i + 1) { try { log = log + "try" + i + ";"; continue outer; } catch (e) { log = log + "bad"; } } try { throw "z"; } catch (e) { log = log + "caught:" + e; } log;"#,
+            "try0;try1;caught:z",
+        ),
+    ];
+
+    for (name, source, expected) in cases {
+        assert_eq!(eval_source(source), expected, "{name}");
+    }
+}
+
+/// bd-8enww.4.9 regression: a `let` / `const` declared inside a `finally` block
+/// whose try has abrupt-completion forwarders (a `break`/`continue` targeting an
+/// enclosing loop/label) used to be rejected at lowering as
+/// `DuplicateLetConstDeclaration`. The finalizer body is inlined once per
+/// completion path, so the lexical name was re-registered in the shared binding
+/// namespace and collided on the second copy. The fix isolates only the
+/// finalizer-declared lexical names per inlined copy (free-var references such as
+/// an assignment to an outer captured `log` are preserved), so each copy gets a
+/// fresh binding and the captured-var side effect survives the abrupt exit.
+#[test]
+fn conformance_lexical_decl_in_finally_with_abrupt_exit_forwarders() {
+    let cases = [
+        // `let` in a finally reached via `break <label>` (multi-copy inline).
+        (
+            "let-in-finally-break",
+            r#"let log = ""; outer: { try { break outer; } finally { let k = "f"; log = log + k; } } log;"#,
+            "f",
+        ),
+        // `const` in a finally reached via a `return` forwarder.
+        (
+            "const-in-finally-return",
+            r#"function f() { try { return 2; } finally { const c = 9; c; } } f();"#,
+            "2",
+        ),
+        // Two lexicals in one finally.
+        (
+            "two-lets-in-finally-return",
+            r#"function f() { try { return 0; } finally { let a = 1; let b = 2; a + b; } } f();"#,
+            "0",
+        ),
+        // `let` loop variable inside a finally reached via a `return` forwarder.
+        (
+            "for-let-in-finally-return",
+            r#"function f() { try { return 1; } finally { for (let j = 0; j < 1; j = j + 1) {} } } f();"#,
+            "1",
+        ),
+        // Single-copy finally with a `let` must keep working (normal path only).
+        (
+            "let-in-finally-normal-path",
+            r#"let log = ""; try { log = log + "t"; } finally { let m = ":f"; log = log + m; } log;"#,
+            "t:f",
+        ),
+        // Captured-var side effect in a nested finally before `continue <label>`
+        // survives the double-finally abrupt exit (the case-734 shape).
+        (
+            "captured-side-effect-survives-continue-outer",
+            r#"let log = ""; function f() { outer: for (let i = 0; i < 1; i = i + 1) { try { return "outer"; } finally { for (let j = 0; j < 1; j = j + 1) { try { throw "inner"; } finally { log = log + "inner;"; continue outer; } } log = log + "bad"; } } return "done"; } let result = f(); log + result;"#,
+            "inner;done",
+        ),
+    ];
+
+    for (name, source, expected) in cases {
+        assert_eq!(eval_source(source), expected, "{name}");
+    }
+}
+
+#[test]
+fn conformance_eval_catches_thrown_object_values() {
+    assert_eq!(
+        eval_router_value(r#"try { throw { message: "botguard" }; } catch (e) { e.message; }"#),
+        "botguard"
+    );
+    assert_eq!(
+        eval_router_value(r#"try { throw { code: 7 }; } catch (e) { e.code; }"#),
+        "7"
+    );
+}
+
+#[test]
+fn conformance_eval_uncaught_throw_surfaces_runtime_fault() {
+    let err = HybridRouter::default()
+        .eval(r#"throw "uncaught-ytbg";"#)
+        .expect_err("uncaught throw should surface as eval error");
+    assert_eq!(err.code, EvalErrorCode::RuntimeFault);
+    assert!(
+        err.to_string()
+            .contains("uncaught exception: uncaught-ytbg"),
+        "uncaught throw diagnostic should include thrown value, got {err}"
+    );
+}
+
 #[test]
 fn conformance_source_break_from_try_finally_executes_finally_before_loop_exit() {
     let source = r#"
@@ -922,4 +1218,207 @@ fn conformance_module_rejection_preserves_description() {
     let state = &eval.states()["failing.js"];
     assert_eq!(state.phase, AsyncModulePhase::Rejected);
     assert!(state.rejection_reason_description.is_some());
+}
+
+// ---------------------------------------------------------------------------
+// 9. Native runtime errors are catchable in JS try/catch (bd-8enww.4.3, YTBG-D3)
+//
+// Native runtime faults raised by the interpreter (a TypeError from `null.x`,
+// a ReferenceError from temporal-dead-zone access) must surface as ordinary
+// JS exceptions that JS `try`/`catch` can intercept — rather than escaping the
+// catch as an uncatchable host error. BotGuard deliberately triggers such
+// errors as branch probes, so the G-3 report vector fails if they bypass catch.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn conformance_g3_null_property_access_typeerror_is_catchable() {
+    // The canonical G-3 vector shape: a TypeError from null property access
+    // must be caught and the catch path must run.
+    let source = r#"
+        let result = "uncaught";
+        try {
+            let o = null;
+            o.x;
+        } catch (e) {
+            result = "caught";
+        }
+        result;
+    "#;
+    assert_eq!(
+        eval_source(source),
+        "caught",
+        "TypeError from null property access must be catchable by JS try/catch"
+    );
+}
+
+#[test]
+fn conformance_native_typeerror_binds_error_object_with_name() {
+    // The caught value is an Error-shaped object exposing `.name`/`.message`.
+    let source = r#"
+        let name = "none";
+        try {
+            let o = null;
+            o.x;
+        } catch (e) {
+            name = e.name;
+        }
+        name;
+    "#;
+    assert_eq!(
+        eval_source(source),
+        "TypeError",
+        "caught native runtime error must bind a TypeError object with .name"
+    );
+}
+
+#[test]
+fn conformance_native_typeerror_message_is_observable() {
+    let source = r#"
+        let msg = "";
+        try {
+            let o = undefined;
+            o.y;
+        } catch (e) {
+            msg = (typeof e.message === "string") ? "has-message" : "no-message";
+        }
+        msg;
+    "#;
+    assert_eq!(
+        eval_source(source),
+        "has-message",
+        "caught native runtime error must expose a string .message for diagnostics"
+    );
+}
+
+#[test]
+fn conformance_native_error_thrown_from_called_function_unwinds_to_catch() {
+    // A native TypeError raised inside a *called* function must unwind the
+    // call stack to the enclosing try/catch, just like an explicit throw.
+    let source = r#"
+        function boom() {
+            let o = null;
+            return o.z;
+        }
+        let r = "no";
+        try {
+            boom();
+        } catch (e) {
+            r = "yes:" + e.name;
+        }
+        r;
+    "#;
+    assert_eq!(
+        eval_source(source),
+        "yes:TypeError",
+        "native error from a nested call must unwind to the enclosing catch"
+    );
+}
+
+#[test]
+fn conformance_native_error_runs_finally_then_propagates() {
+    // try/finally (no catch): finally must run, then the native error rethrows.
+    let source = r#"
+        let log = "";
+        function attempt() {
+            try {
+                let o = null;
+                o.q;
+            } finally {
+                log = "finally-ran";
+            }
+        }
+        let outcome = "";
+        try {
+            attempt();
+        } catch (e) {
+            outcome = log + ":" + e.name;
+        }
+        outcome;
+    "#;
+    assert_eq!(
+        eval_source(source),
+        "finally-ran:TypeError",
+        "native error must run finally, then propagate to the outer catch"
+    );
+}
+
+#[test]
+fn conformance_tdz_reference_error_is_catchable() {
+    // Temporal-dead-zone access of a `let` binding throws a catchable
+    // ReferenceError.
+    let source = r#"
+        let r = "none";
+        try {
+            x;
+            let x = 1;
+        } catch (e) {
+            r = e.name;
+        }
+        r;
+    "#;
+    assert_eq!(
+        eval_source(source),
+        "ReferenceError",
+        "TDZ access of a let binding must be catchable as a ReferenceError"
+    );
+}
+
+#[test]
+fn conformance_caught_native_error_lets_execution_continue() {
+    // After catching a native error, normal execution resumes and the catch
+    // binding does not leak.
+    let source = r#"
+        let total = 0;
+        for (let i = 0; i < 3; i++) {
+            try {
+                let o = null;
+                o.p;
+            } catch (e) {
+                total += 1;
+            }
+        }
+        total;
+    "#;
+    assert_eq!(
+        eval_source(source),
+        "3",
+        "each loop iteration must independently catch the native error"
+    );
+}
+
+#[test]
+fn conformance_uncaught_native_typeerror_still_surfaces_as_host_error() {
+    // Outside any try/catch, a native runtime error must NOT be silently
+    // swallowed — it surfaces to the eval boundary as a host error.
+    let ir3 = lower_source_to_ir3("let o = null; o.x;");
+    let result = engine_core_lane().execute(&ir3, "eval-test");
+    assert!(
+        result.is_err(),
+        "native TypeError with no enclosing try/catch must surface as a host error, got {result:?}"
+    );
+}
+
+#[test]
+fn conformance_resource_limit_errors_are_not_js_catchable() {
+    // Engine faults / resource limits (e.g. budget exhaustion) must NOT be
+    // catchable by untrusted JS — they keep propagating as host errors even
+    // inside try/catch.
+    let source = r#"
+        let caught = false;
+        try {
+            while (true) {}
+        } catch (e) {
+            caught = true;
+        }
+        caught;
+    "#;
+    let ir3 = lower_source_to_ir3(source);
+    let mut config = InterpreterConfig::quickjs_defaults();
+    config.granted_capabilities = CapabilityProfile::engine_core().capabilities().clone();
+    config.instruction_budget = 5_000;
+    let result = QuickJsLane::with_config(config).execute(&ir3, "eval-test");
+    assert!(
+        matches!(result, Err(InterpreterError::BudgetExhausted { .. })),
+        "budget exhaustion must not be catchable by JS try/catch, got {result:?}"
+    );
 }

@@ -46,17 +46,21 @@
 //! - Captured validation logs
 //! - Lean 4 formal proof reference (if available)
 
-use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 
-use crate::deterministic_serde::{CanonicalValue, SchemaHash};
 use crate::engine_object_id::{self, EngineObjectId, ObjectDomain};
 use crate::security_epoch::SecurityEpoch;
 use crate::slot_registry::SlotId;
+
+pub const TRANSLATION_VALIDATION_WITNESS_SCHEMA_VERSION: &str =
+    "franken-engine.translation-validation-witness.v1";
+
+/// Claim ID backed by translation-validation witnesses (bd-fqlfw.6.3/6.5).
+pub const FE_CLAIM_017_CLAIM_ID: &str = "FE-CLAIM-017";
 
 // ---------------------------------------------------------------------------
 // Translation Validation Proof Types
@@ -109,6 +113,19 @@ pub enum ValidationErrorCode {
     FormalVerificationError,
     /// Internal validation engine error.
     InternalError,
+}
+
+impl ValidationErrorCode {
+    fn as_str(&self) -> &'static str {
+        match self {
+            Self::InvalidSourceSpec => "invalid_source_spec",
+            Self::InvalidTargetSpec => "invalid_target_spec",
+            Self::TransformationError => "transformation_error",
+            Self::TestGenerationError => "test_generation_error",
+            Self::FormalVerificationError => "formal_verification_error",
+            Self::InternalError => "internal_error",
+        }
+    }
 }
 
 impl ValidationResult {
@@ -196,11 +213,12 @@ impl TranslationValidationProof {
         validation_timestamp_ns: u64,
         zone: &str,
     ) -> Result<EngineObjectId, crate::engine_object_id::IdError> {
+        // Length-prefix the digests (reusing the module helper) instead of
+        // `|`-delimiting: a `|` inside a digest would otherwise let two distinct
+        // (source, target) pairs derive the same proof id.
         let mut canonical = Vec::new();
-        canonical.extend_from_slice(source_code_digest.as_bytes());
-        canonical.push(b'|');
-        canonical.extend_from_slice(target_code_digest.as_bytes());
-        canonical.push(b'|');
+        append_str(&mut canonical, source_code_digest);
+        append_str(&mut canonical, target_code_digest);
         canonical.extend_from_slice(&validation_timestamp_ns.to_be_bytes());
 
         let schema_id =
@@ -256,6 +274,428 @@ impl TranslationValidationProof {
             }
         }
     }
+}
+
+/// Machine-readable outcome class emitted for validator witnesses.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TranslationValidationWitnessVerdict {
+    /// The validator produced evidence strong enough to prove equivalence.
+    Proven,
+    /// The validator found a semantic divergence and emitted counterexample data.
+    Counterexample,
+    /// The validator could not produce a proof or counterexample.
+    Unavailable,
+}
+
+impl TranslationValidationWitnessVerdict {
+    fn as_str(&self) -> &'static str {
+        match self {
+            Self::Proven => "proven",
+            Self::Counterexample => "counterexample",
+            Self::Unavailable => "unavailable",
+        }
+    }
+}
+
+/// Counterexample payload for a failed translation-validation run.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TranslationValidationCounterexample {
+    /// Deterministic hash of the divergence description and compared specs.
+    pub counterexample_hash: String,
+    /// Validator-supplied failure reasons.
+    pub failure_reasons: Vec<String>,
+    /// Number of cases that still passed before divergence was classified.
+    pub test_cases_passed: u32,
+    /// Total number of cases examined by the validator.
+    pub test_cases_total: u32,
+    /// Integer percent reported by the validator.
+    pub success_rate_percent: u32,
+}
+
+/// Flat JSON artifact emitted by translation validators.
+///
+/// This is intentionally distinct from [`TranslationValidationProof`]: the
+/// proof carries the original validator result, while this witness normalizes
+/// that result into the gate-facing `proven` / `counterexample` / `unavailable`
+/// trichotomy and binds it with a deterministic content hash.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TranslationValidationWitnessArtifact {
+    /// Schema id for this witness JSON shape.
+    pub schema_version: String,
+    /// Validator that produced the witness.
+    pub validator_id: String,
+    /// Content-addressed proof id from the underlying proof carrier.
+    pub proof_id: String,
+    /// Source slot id under validation.
+    pub source_slot_id: String,
+    /// Target slot id under validation.
+    pub target_slot_id: String,
+    /// Source code digest under validation.
+    pub source_code_digest: String,
+    /// Target code digest under validation.
+    pub target_code_digest: String,
+    /// Normalized gate-facing verdict.
+    pub verdict: TranslationValidationWitnessVerdict,
+    /// Original validator result, preserved for consumers needing full detail.
+    pub validation_result: ValidationResult,
+    /// Human-readable summary derived from the original proof.
+    pub validation_summary: String,
+    /// Counterexample payload for failed validation.
+    pub counterexample: Option<TranslationValidationCounterexample>,
+    /// Fail-closed reason for unavailable validation.
+    pub unavailable_reason: Option<String>,
+    /// Test-case digest from the underlying proof.
+    pub test_case_digest: String,
+    /// Formal proof reference, when the validator supplied one.
+    pub formal_proof_ref: Option<String>,
+    /// Validation timestamp from the underlying proof.
+    pub validation_timestamp_ns: u64,
+    /// Security epoch for the validation.
+    pub security_epoch: SecurityEpoch,
+    /// Zone scoped by the underlying proof.
+    pub zone: String,
+    /// Bounded validator logs captured by the proof carrier.
+    pub validation_logs: Vec<String>,
+    /// Deterministic SHA-256 hash over every field above.
+    pub content_hash: String,
+}
+
+impl TranslationValidationWitnessArtifact {
+    /// Build a gate-facing witness from a proof carrier result.
+    pub fn from_proof(validator_id: impl Into<String>, proof: &TranslationValidationProof) -> Self {
+        let (verdict, counterexample, unavailable_reason) = match &proof.validation_result {
+            ValidationResult::Success { .. } => {
+                (TranslationValidationWitnessVerdict::Proven, None, None)
+            }
+            ValidationResult::Failed {
+                test_cases_passed,
+                test_cases_total,
+                success_rate_percent,
+                failure_reasons,
+            } => {
+                let counterexample = TranslationValidationCounterexample {
+                    counterexample_hash: derive_counterexample_hash(proof, failure_reasons),
+                    failure_reasons: failure_reasons.clone(),
+                    test_cases_passed: *test_cases_passed,
+                    test_cases_total: *test_cases_total,
+                    success_rate_percent: *success_rate_percent,
+                };
+                (
+                    TranslationValidationWitnessVerdict::Counterexample,
+                    Some(counterexample),
+                    None,
+                )
+            }
+            ValidationResult::Error {
+                error_message,
+                error_code,
+            } => (
+                TranslationValidationWitnessVerdict::Unavailable,
+                None,
+                Some(format!("{}: {}", error_code.as_str(), error_message)),
+            ),
+        };
+
+        let mut artifact = Self {
+            schema_version: TRANSLATION_VALIDATION_WITNESS_SCHEMA_VERSION.to_string(),
+            validator_id: validator_id.into(),
+            proof_id: proof.proof_id.to_hex(),
+            source_slot_id: proof.source_spec.slot_id.as_str().to_string(),
+            target_slot_id: proof.target_spec.slot_id.as_str().to_string(),
+            source_code_digest: proof.source_spec.code_digest.clone(),
+            target_code_digest: proof.target_spec.code_digest.clone(),
+            verdict,
+            validation_result: proof.validation_result.clone(),
+            validation_summary: proof.summary(),
+            counterexample,
+            unavailable_reason,
+            test_case_digest: proof.test_case_digest.clone(),
+            formal_proof_ref: proof.formal_proof_ref.clone(),
+            validation_timestamp_ns: proof.validation_timestamp_ns,
+            security_epoch: proof.security_epoch,
+            zone: proof.zone.clone(),
+            validation_logs: proof.validation_logs.clone(),
+            content_hash: String::new(),
+        };
+        artifact.content_hash = artifact.compute_content_hash();
+        artifact
+    }
+
+    /// Recompute and verify the witness content hash.
+    pub fn verify_content_hash(&self) -> bool {
+        self.content_hash == self.compute_content_hash()
+    }
+
+    /// Deterministic hash over the artifact body, excluding `content_hash`.
+    pub fn compute_content_hash(&self) -> String {
+        let mut preimage = Vec::new();
+        append_str(&mut preimage, &self.schema_version);
+        append_str(&mut preimage, &self.validator_id);
+        append_str(&mut preimage, &self.proof_id);
+        append_str(&mut preimage, &self.source_slot_id);
+        append_str(&mut preimage, &self.target_slot_id);
+        append_str(&mut preimage, &self.source_code_digest);
+        append_str(&mut preimage, &self.target_code_digest);
+        append_str(&mut preimage, self.verdict.as_str());
+        append_validation_result(&mut preimage, &self.validation_result);
+        append_str(&mut preimage, &self.validation_summary);
+        append_counterexample(&mut preimage, self.counterexample.as_ref());
+        append_optional_str(&mut preimage, self.unavailable_reason.as_deref());
+        append_str(&mut preimage, &self.test_case_digest);
+        append_optional_str(&mut preimage, self.formal_proof_ref.as_deref());
+        preimage.extend_from_slice(&self.validation_timestamp_ns.to_be_bytes());
+        preimage.extend_from_slice(&self.security_epoch.as_u64().to_be_bytes());
+        append_str(&mut preimage, &self.zone);
+        append_str_vec(&mut preimage, &self.validation_logs);
+        sha256_hex(&preimage)
+    }
+
+    /// Bridge this witness into the strict E6.T1 proof.json producer contract
+    /// (bd-fqlfw.6.5) so the proof-spine claim gate can classify it alongside
+    /// other producer artifacts under FE-CLAIM-017.
+    ///
+    /// Verdict mapping: `Proven` → `Passed`, `Counterexample` → `Failed`
+    /// (with the counterexample hash bound into `counterexample_artifacts`),
+    /// `Unavailable` → `Unavailable`. The artifact is committed with a
+    /// recomputed content hash, so downstream tamper detection holds.
+    pub fn to_proof_producer_artifact(&self) -> crate::proof_schema::ProofProducerArtifact {
+        use crate::hash_tiers::ContentHash;
+        use crate::proof_schema::{
+            ProofCheckerResult, ProofProducerArtifact, ProofSignatureOrContentHash,
+            ProofToolIdentity, proof_schema_version_current,
+        };
+
+        let mut input_artifact_hashes = std::collections::BTreeMap::new();
+        input_artifact_hashes.insert(
+            format!("source:{}", self.source_slot_id),
+            ContentHash::compute(self.source_code_digest.as_bytes()),
+        );
+        input_artifact_hashes.insert(
+            format!("target:{}", self.target_slot_id),
+            ContentHash::compute(self.target_code_digest.as_bytes()),
+        );
+        let mut output_artifact_hashes = std::collections::BTreeMap::new();
+        output_artifact_hashes.insert(
+            "translation_validation_witness.proof.json".to_string(),
+            ContentHash::compute(self.content_hash.as_bytes()),
+        );
+
+        let mut counterexample_artifacts = std::collections::BTreeMap::new();
+        let checker_result = match self.verdict {
+            TranslationValidationWitnessVerdict::Proven => ProofCheckerResult::Passed,
+            TranslationValidationWitnessVerdict::Counterexample => {
+                let reason = self
+                    .counterexample
+                    .as_ref()
+                    .map(|ce| ce.failure_reasons.join("; "))
+                    .unwrap_or_else(|| self.validation_summary.clone());
+                if let Some(ce) = &self.counterexample {
+                    counterexample_artifacts.insert(
+                        "counterexample".to_string(),
+                        ContentHash::compute(ce.counterexample_hash.as_bytes()),
+                    );
+                }
+                ProofCheckerResult::Failed { reason }
+            }
+            TranslationValidationWitnessVerdict::Unavailable => {
+                let reason = self
+                    .unavailable_reason
+                    .clone()
+                    .unwrap_or_else(|| self.validation_summary.clone());
+                ProofCheckerResult::Unavailable { reason }
+            }
+        };
+
+        let mut artifact = ProofProducerArtifact {
+            schema_version: proof_schema_version_current(),
+            claim_ids: vec![FE_CLAIM_017_CLAIM_ID.to_string()],
+            theorem_or_validator_id: self.validator_id.clone(),
+            input_artifact_hashes,
+            output_artifact_hashes,
+            command: format!(
+                "translation-validate {} -> {}",
+                self.source_slot_id, self.target_slot_id
+            ),
+            tool_identity: ProofToolIdentity {
+                tool_name: "translation-validator".to_string(),
+                tool_version: self.schema_version.clone(),
+                tool_invocation_id: self.proof_id.clone(),
+            },
+            checker_result,
+            counterexample_artifacts,
+            timestamp_ticks: self.validation_timestamp_ns,
+            logical_epoch: self.security_epoch,
+            signature_or_content_hash: ProofSignatureOrContentHash::ContentHash(
+                ContentHash::from_bytes([0u8; 32]),
+            ),
+        };
+        artifact.signature_or_content_hash =
+            ProofSignatureOrContentHash::ContentHash(artifact.content_hash());
+        artifact
+    }
+}
+
+/// Result returned after writing a translation-validation witness artifact.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EmittedTranslationValidationWitness {
+    /// Path to the emitted JSON artifact.
+    pub path: PathBuf,
+    /// Artifact content hash.
+    pub content_hash: String,
+    /// Normalized verdict written to the artifact.
+    pub verdict: TranslationValidationWitnessVerdict,
+}
+
+/// Emit a machine-readable proof/counterexample witness JSON file.
+///
+/// The output file is `<validator_id>.proof.json` under `bundle_dir`, with the
+/// validator id sanitized to a filesystem-safe stem. Failed validations still
+/// emit a counterexample artifact; unavailable validations emit fail-closed
+/// reason metadata instead of pretending to be proofs.
+pub fn emit_translation_validation_witness_artifact(
+    proof: &TranslationValidationProof,
+    bundle_dir: &Path,
+    validator_id: &str,
+) -> Result<EmittedTranslationValidationWitness, TranslationValidationError> {
+    std::fs::create_dir_all(bundle_dir).map_err(|e| {
+        TranslationValidationError::StorageFailed(format!(
+            "creating witness dir {}: {}",
+            bundle_dir.to_string_lossy(),
+            e
+        ))
+    })?;
+
+    let artifact = TranslationValidationWitnessArtifact::from_proof(validator_id, proof);
+    let file_stem = sanitize_witness_file_stem(validator_id);
+    let path = bundle_dir.join(format!("{file_stem}.proof.json"));
+    let json = serde_json::to_vec_pretty(&artifact).map_err(|e| {
+        TranslationValidationError::StorageFailed(format!("serialising witness: {}", e))
+    })?;
+    std::fs::write(&path, json).map_err(|e| {
+        TranslationValidationError::StorageFailed(format!(
+            "writing witness {}: {}",
+            path.to_string_lossy(),
+            e
+        ))
+    })?;
+
+    Ok(EmittedTranslationValidationWitness {
+        path,
+        content_hash: artifact.content_hash,
+        verdict: artifact.verdict,
+    })
+}
+
+fn derive_counterexample_hash(
+    proof: &TranslationValidationProof,
+    failure_reasons: &[String],
+) -> String {
+    let mut preimage = Vec::new();
+    append_str(&mut preimage, proof.source_spec.slot_id.as_str());
+    append_str(&mut preimage, proof.target_spec.slot_id.as_str());
+    append_str(&mut preimage, &proof.source_spec.code_digest);
+    append_str(&mut preimage, &proof.target_spec.code_digest);
+    append_str(&mut preimage, &proof.test_case_digest);
+    append_str_vec(&mut preimage, failure_reasons);
+    sha256_hex(&preimage)
+}
+
+fn sanitize_witness_file_stem(validator_id: &str) -> String {
+    let stem: String = validator_id
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    if stem.is_empty() {
+        "translation-validator".to_string()
+    } else {
+        stem
+    }
+}
+
+fn append_len_prefixed(preimage: &mut Vec<u8>, bytes: &[u8]) {
+    preimage.extend_from_slice(&(bytes.len() as u64).to_be_bytes());
+    preimage.extend_from_slice(bytes);
+}
+
+fn append_str(preimage: &mut Vec<u8>, value: &str) {
+    append_len_prefixed(preimage, value.as_bytes());
+}
+
+fn append_optional_str(preimage: &mut Vec<u8>, value: Option<&str>) {
+    preimage.push(u8::from(value.is_some()));
+    if let Some(value) = value {
+        append_str(preimage, value);
+    }
+}
+
+fn append_str_vec(preimage: &mut Vec<u8>, values: &[String]) {
+    preimage.extend_from_slice(&(values.len() as u64).to_be_bytes());
+    for value in values {
+        append_str(preimage, value);
+    }
+}
+
+fn append_counterexample(
+    preimage: &mut Vec<u8>,
+    counterexample: Option<&TranslationValidationCounterexample>,
+) {
+    preimage.push(u8::from(counterexample.is_some()));
+    if let Some(counterexample) = counterexample {
+        append_str(preimage, &counterexample.counterexample_hash);
+        append_str_vec(preimage, &counterexample.failure_reasons);
+        preimage.extend_from_slice(&counterexample.test_cases_passed.to_be_bytes());
+        preimage.extend_from_slice(&counterexample.test_cases_total.to_be_bytes());
+        preimage.extend_from_slice(&counterexample.success_rate_percent.to_be_bytes());
+    }
+}
+
+fn append_validation_result(preimage: &mut Vec<u8>, result: &ValidationResult) {
+    match result {
+        ValidationResult::Success {
+            test_cases_passed,
+            test_cases_total,
+            success_rate_percent,
+        } => {
+            append_str(preimage, "success");
+            preimage.extend_from_slice(&test_cases_passed.to_be_bytes());
+            preimage.extend_from_slice(&test_cases_total.to_be_bytes());
+            preimage.extend_from_slice(&success_rate_percent.to_be_bytes());
+        }
+        ValidationResult::Failed {
+            test_cases_passed,
+            test_cases_total,
+            success_rate_percent,
+            failure_reasons,
+        } => {
+            append_str(preimage, "failed");
+            preimage.extend_from_slice(&test_cases_passed.to_be_bytes());
+            preimage.extend_from_slice(&test_cases_total.to_be_bytes());
+            preimage.extend_from_slice(&success_rate_percent.to_be_bytes());
+            append_str_vec(preimage, failure_reasons);
+        }
+        ValidationResult::Error {
+            error_message,
+            error_code,
+        } => {
+            append_str(preimage, "error");
+            append_str(preimage, error_code.as_str());
+            append_str(preimage, error_message);
+        }
+    }
+}
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    hasher.update(bytes);
+    format!("{:x}", hasher.finalize())
 }
 
 // ---------------------------------------------------------------------------
@@ -371,9 +811,12 @@ impl TranslationValidationEngine {
         // specs being compared — not a placeholder string.
         let test_case_digest = {
             use sha2::{Digest, Sha256};
+            // Length-prefix the two digests instead of `|`-joining so distinct
+            // (source, target) pairs cannot collide to the same test-case digest.
             let mut hasher = Sha256::new();
+            hasher.update((source_spec.code_digest.len() as u64).to_be_bytes());
             hasher.update(source_spec.code_digest.as_bytes());
-            hasher.update(b"|");
+            hasher.update((target_spec.code_digest.len() as u64).to_be_bytes());
             hasher.update(target_spec.code_digest.as_bytes());
             format!("{:x}", hasher.finalize())
         };
@@ -812,6 +1255,11 @@ pub fn emit_fe_claim_017_proof_bundle(
         // "placeholder" source markers. The live module path satisfies the
         // non-fixture rule and points to the carrier the bundle came from.
         source_module: "frankenengine_engine::translation_validation_proof_carrier".to_string(),
+        producer_tool: "translation-validation-proof-carrier".to_string(),
+        producer_version: TRANSLATION_VALIDATION_WITNESS_SCHEMA_VERSION.to_string(),
+        timeout_policy: "not-applicable".to_string(),
+        timeout_seconds: 0,
+        theorem_count: 1,
         theorem_ids: vec![theorem_id],
     };
 
@@ -922,7 +1370,7 @@ mod tests {
     fn test_translation_validation_proof_derive_id() {
         let source_digest = "abc123";
         let target_digest = "def456";
-        let timestamp = 1234567890_000_000_000u64;
+        let timestamp = 1_234_567_890_000_000_000_u64;
         let zone = "test_zone";
 
         let proof_id = TranslationValidationProof::derive_proof_id(
@@ -943,6 +1391,20 @@ mod tests {
         .expect("valid proof ID");
 
         assert_eq!(proof_id, proof_id2);
+    }
+
+    #[test]
+    fn test_derive_proof_id_injective_across_digest_boundary() {
+        // ("a|","b") and ("a","|b") share the concatenation of the two digests
+        // but are distinct (source, target) pairs; length-prefixing must keep
+        // their derived proof ids apart (the `|`-delimiter boundary collision).
+        let ts = 1_234_567_890_000_000_000_u64;
+        let zone = "test_zone";
+        let a = TranslationValidationProof::derive_proof_id("a|", "b", ts, zone)
+            .expect("valid proof ID");
+        let b = TranslationValidationProof::derive_proof_id("a", "|b", ts, zone)
+            .expect("valid proof ID");
+        assert_ne!(a, b);
     }
 
     #[test]
@@ -1175,6 +1637,252 @@ mod tests {
             security_epoch: SecurityEpoch::from_raw(1),
             zone: "fe-claim-017-test".to_string(),
         }
+    }
+
+    #[test]
+    fn witness_artifact_normalizes_success_to_proven() {
+        let proof = proof_with_result(ValidationResult::Success {
+            test_cases_passed: 64,
+            test_cases_total: 64,
+            success_rate_percent: 100,
+        });
+
+        let artifact =
+            TranslationValidationWitnessArtifact::from_proof("exception-validator", &proof);
+
+        assert_eq!(
+            artifact.schema_version,
+            TRANSLATION_VALIDATION_WITNESS_SCHEMA_VERSION
+        );
+        assert_eq!(
+            artifact.verdict,
+            TranslationValidationWitnessVerdict::Proven
+        );
+        assert!(artifact.counterexample.is_none());
+        assert!(artifact.unavailable_reason.is_none());
+        assert!(artifact.verify_content_hash());
+    }
+
+    #[test]
+    fn witness_artifact_normalizes_failed_to_counterexample() {
+        let proof = proof_with_result(ValidationResult::Failed {
+            test_cases_passed: 12,
+            test_cases_total: 16,
+            success_rate_percent: 75,
+            failure_reasons: vec![
+                "iterator close order diverged".to_string(),
+                "hostcall sequence changed".to_string(),
+            ],
+        });
+
+        let artifact =
+            TranslationValidationWitnessArtifact::from_proof("iterator-validator", &proof);
+
+        assert_eq!(
+            artifact.verdict,
+            TranslationValidationWitnessVerdict::Counterexample
+        );
+        let counterexample = artifact
+            .counterexample
+            .as_ref()
+            .expect("failed validation should emit counterexample payload");
+        assert_eq!(counterexample.test_cases_passed, 12);
+        assert_eq!(counterexample.test_cases_total, 16);
+        assert_eq!(counterexample.failure_reasons.len(), 2);
+        assert_ne!(counterexample.counterexample_hash, proof.test_case_digest);
+        assert!(artifact.unavailable_reason.is_none());
+        assert!(artifact.verify_content_hash());
+
+        let mut tampered = artifact.clone();
+        tampered.validation_summary.push_str(" tampered");
+        assert!(
+            !tampered.verify_content_hash(),
+            "content hash should bind witness fields"
+        );
+    }
+
+    #[test]
+    fn witness_artifact_normalizes_error_to_unavailable() {
+        let proof = proof_with_result(ValidationResult::Error {
+            error_message: "validator binary missing".to_string(),
+            error_code: ValidationErrorCode::InternalError,
+        });
+
+        let artifact = TranslationValidationWitnessArtifact::from_proof("full-ir", &proof);
+
+        assert_eq!(
+            artifact.verdict,
+            TranslationValidationWitnessVerdict::Unavailable
+        );
+        assert!(artifact.counterexample.is_none());
+        assert!(
+            artifact
+                .unavailable_reason
+                .as_deref()
+                .is_some_and(|reason| reason.contains("validator binary missing"))
+        );
+        assert!(artifact.verify_content_hash());
+    }
+
+    #[test]
+    fn every_validator_class_emits_a_witness_artifact() {
+        // The E6.T3 validator inventory (bd-fqlfw.6.3): each differential
+        // translation validator emits a machine-readable witness (proof or
+        // counterexample), not just pass/fail. The emitter is generic over
+        // the validator id; this pins the six-class inventory end-to-end
+        // through sanitized proof.json emission and round-trip.
+        let validator_ids = [
+            "exception-validator",
+            "iterator-validator",
+            "hostcall-validator",
+            "async-generator-validator",
+            "ifc-label-validator",
+            "full-ir-validator",
+        ];
+        let tmp = tempfile::tempdir().expect("tempdir");
+        for (index, validator_id) in validator_ids.iter().enumerate() {
+            let proof = if index.is_multiple_of(2) {
+                proof_with_result(ValidationResult::Success {
+                    test_cases_passed: 8,
+                    test_cases_total: 8,
+                    success_rate_percent: 100,
+                })
+            } else {
+                proof_with_result(ValidationResult::Failed {
+                    test_cases_passed: 7,
+                    test_cases_total: 8,
+                    success_rate_percent: 87,
+                    failure_reasons: vec![format!("{validator_id} divergence")],
+                })
+            };
+
+            let emitted =
+                emit_translation_validation_witness_artifact(&proof, tmp.path(), validator_id)
+                    .unwrap_or_else(|err| panic!("{validator_id} emission failed: {err:?}"));
+
+            let json = std::fs::read_to_string(&emitted.path).expect("read witness");
+            let parsed: TranslationValidationWitnessArtifact =
+                serde_json::from_str(&json).expect("valid witness json");
+            assert_eq!(parsed.validator_id, *validator_id);
+            assert!(parsed.verify_content_hash(), "{validator_id} hash binding");
+            match parsed.verdict {
+                TranslationValidationWitnessVerdict::Proven => {
+                    assert!(parsed.counterexample.is_none());
+                }
+                TranslationValidationWitnessVerdict::Counterexample => {
+                    assert!(parsed.counterexample.is_some());
+                }
+                TranslationValidationWitnessVerdict::Unavailable => {
+                    panic!("{validator_id}: unexpected Unavailable verdict")
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn proven_witness_bridges_to_strict_artifact_and_promotes_fe_claim_017() {
+        use crate::proof_spine_claim_gate::{
+            ClaimSpineAction, ProofArtifactClass, classify_proof_artifact, decide_claim_state,
+        };
+
+        let witness = TranslationValidationWitnessArtifact::from_proof(
+            "full-ir-validator",
+            &proof_with_result(ValidationResult::Success {
+                test_cases_passed: 32,
+                test_cases_total: 32,
+                success_rate_percent: 100,
+            }),
+        );
+        let artifact = witness.to_proof_producer_artifact();
+
+        assert_eq!(artifact.claim_ids, vec![FE_CLAIM_017_CLAIM_ID]);
+        assert_eq!(artifact.theorem_or_validator_id, "full-ir-validator");
+        assert_eq!(artifact.tool_identity.tool_name, "translation-validator");
+        crate::proof_schema::validate_proof_producer_artifact(&artifact)
+            .expect("bridged proven witness must satisfy the strict contract");
+        assert_eq!(
+            classify_proof_artifact(&artifact),
+            ProofArtifactClass::Proven
+        );
+        let verdict = decide_claim_state(FE_CLAIM_017_CLAIM_ID, false, &[artifact]);
+        assert_eq!(verdict.action, ClaimSpineAction::PromoteObserved);
+    }
+
+    #[test]
+    fn counterexample_witness_bridges_to_failed_artifact_and_demotes() {
+        use crate::proof_spine_claim_gate::{
+            ClaimSpineAction, ProofArtifactClass, classify_proof_artifact, decide_claim_state,
+        };
+
+        let witness = TranslationValidationWitnessArtifact::from_proof(
+            "exception-validator",
+            &proof_with_result(ValidationResult::Failed {
+                test_cases_passed: 30,
+                test_cases_total: 32,
+                success_rate_percent: 93,
+                failure_reasons: vec!["finally ordering diverged".to_string()],
+            }),
+        );
+        let artifact = witness.to_proof_producer_artifact();
+
+        assert!(matches!(
+            classify_proof_artifact(&artifact),
+            ProofArtifactClass::Counterexample { ref reason }
+                if reason.contains("finally ordering diverged")
+        ));
+        assert!(!artifact.counterexample_artifacts.is_empty());
+        let verdict = decide_claim_state(FE_CLAIM_017_CLAIM_ID, true, &[artifact]);
+        assert_eq!(verdict.action, ClaimSpineAction::Demote);
+    }
+
+    #[test]
+    fn unavailable_witness_bridges_to_unavailable_artifact() {
+        use crate::proof_spine_claim_gate::{ProofArtifactClass, classify_proof_artifact};
+
+        let witness = TranslationValidationWitnessArtifact::from_proof(
+            "ifc-label-validator",
+            &proof_with_result(ValidationResult::Error {
+                error_message: "validator pipeline not wired".to_string(),
+                error_code: ValidationErrorCode::InternalError,
+            }),
+        );
+        let artifact = witness.to_proof_producer_artifact();
+
+        assert!(matches!(
+            classify_proof_artifact(&artifact),
+            ProofArtifactClass::Unavailable { ref reason }
+                if reason.contains("validator pipeline not wired")
+        ));
+    }
+
+    #[test]
+    fn emit_translation_validation_witness_artifact_writes_sanitized_proof_json() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let proof = proof_with_result(ValidationResult::Failed {
+            test_cases_passed: 3,
+            test_cases_total: 4,
+            success_rate_percent: 75,
+            failure_reasons: vec!["ifc label lost".to_string()],
+        });
+
+        let emitted =
+            emit_translation_validation_witness_artifact(&proof, tmp.path(), "ifc/label validator")
+                .expect("witness emission should succeed");
+        assert_eq!(
+            emitted.verdict,
+            TranslationValidationWitnessVerdict::Counterexample
+        );
+        assert_eq!(
+            emitted.path.file_name().and_then(|n| n.to_str()),
+            Some("ifc_label_validator.proof.json")
+        );
+
+        let json = std::fs::read_to_string(&emitted.path).expect("read witness");
+        let parsed: TranslationValidationWitnessArtifact =
+            serde_json::from_str(&json).expect("valid witness json");
+        assert_eq!(parsed.content_hash, emitted.content_hash);
+        assert_eq!(parsed.verdict, emitted.verdict);
+        assert!(parsed.verify_content_hash());
     }
 
     /// Successful emission: the file lands at FE-CLAIM-017.proof.json, and the

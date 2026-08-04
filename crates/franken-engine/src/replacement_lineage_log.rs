@@ -96,21 +96,27 @@ impl LineageLogEntry {
         receipt: &ReplacementReceipt,
         predecessor_hash: &ContentHash,
     ) -> ContentHash {
+        // Length-prefix every variable-length field instead of `|`-delimiting:
+        // `old_cell_digest`/`new_cell_digest` (and the ids) are unconstrained
+        // strings, so a `|` inside one would let two distinct receipts share a
+        // preimage (e.g. old="a|b",new="c" vs old="a",new="b|c").
         let mut canonical = Vec::new();
         canonical.extend_from_slice(&sequence.to_be_bytes());
-        canonical.extend_from_slice(kind.as_str().as_bytes());
-        canonical.push(b'|');
-        canonical.extend_from_slice(receipt.receipt_id.as_bytes());
-        canonical.push(b'|');
-        canonical.extend_from_slice(receipt.old_cell_digest.as_bytes());
-        canonical.push(b'|');
-        canonical.extend_from_slice(receipt.new_cell_digest.as_bytes());
-        canonical.push(b'|');
-        canonical.extend_from_slice(receipt.slot_id.as_str().as_bytes());
-        canonical.push(b'|');
+        append_len_prefixed(&mut canonical, kind.as_str().as_bytes());
+        append_len_prefixed(&mut canonical, receipt.receipt_id.as_bytes());
+        append_len_prefixed(&mut canonical, receipt.old_cell_digest.as_bytes());
+        append_len_prefixed(&mut canonical, receipt.new_cell_digest.as_bytes());
+        append_len_prefixed(&mut canonical, receipt.slot_id.as_str().as_bytes());
         canonical.extend_from_slice(predecessor_hash.as_bytes());
         ContentHash::compute(&canonical)
     }
+}
+
+/// Append `bytes` to `buf` with a fixed-width `u64` length prefix so adjacent
+/// variable-length fields cannot share a content-hash preimage.
+fn append_len_prefixed(buf: &mut Vec<u8>, bytes: &[u8]) {
+    buf.extend_from_slice(&(bytes.len() as u64).to_le_bytes());
+    buf.extend_from_slice(bytes);
 }
 
 // ---------------------------------------------------------------------------
@@ -2456,6 +2462,25 @@ mod tests {
         assert_eq!(seq, 0);
         assert_eq!(log.len(), 1);
         assert!(!log.is_empty());
+    }
+
+    #[test]
+    fn lineage_hash_injective_across_digest_boundary() {
+        // Two receipts that share the concatenation of old/new digests but split
+        // it differently must not share a lineage entry hash. Holds receipt_id /
+        // slot_id fixed (clone) so only the digest boundary varies — the bug the
+        // `|`-delimiter scheme allowed: old="a|b",new="c" vs old="a",new="b|c".
+        let base = test_receipt("slot-a", "x", "y", 1000);
+        let pred = ContentHash::compute(b"genesis");
+        let mut r1 = base.clone();
+        r1.old_cell_digest = "a|b".to_string();
+        r1.new_cell_digest = "c".to_string();
+        let mut r2 = base;
+        r2.old_cell_digest = "a".to_string();
+        r2.new_cell_digest = "b|c".to_string();
+        let h1 = LineageLogEntry::compute_hash(0, ReplacementKind::DelegateToNative, &r1, &pred);
+        let h2 = LineageLogEntry::compute_hash(0, ReplacementKind::DelegateToNative, &r2, &pred);
+        assert_ne!(h1, h2);
     }
 
     #[test]

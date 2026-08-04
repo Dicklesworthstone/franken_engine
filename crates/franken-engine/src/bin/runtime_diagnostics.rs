@@ -12,7 +12,7 @@ use frankenengine_engine::runtime_diagnostics_cli::{
     RuntimeDiagnosticsCliInput, SupportBundleFile, SupportBundleOutput,
     SupportBundleRedactionPolicy, build_compatibility_advisories, build_ga_evidence_package,
     build_onboarding_owner_routing, build_onboarding_scorecard, build_platform_risk_matrix,
-    build_rollout_decision_artifact, collect_runtime_diagnostics, export_evidence_bundle,
+    build_rollout_decision_artifact, collect_runtime_diagnostics_for_input, export_evidence_bundle,
     export_support_bundle, parse_decision_type, parse_evidence_severity,
     render_compatibility_advisory_summary, render_diagnostics_summary, render_evidence_summary,
     render_ga_evidence_package_summary, render_onboarding_scorecard_markdown,
@@ -112,12 +112,7 @@ fn run_diagnostics(args: &[String]) -> Result<(), String> {
     let path = input_path.ok_or_else(|| "missing required --input <path>".to_string())?;
     let input = load_input(path)?;
 
-    let output = collect_runtime_diagnostics(
-        &input.runtime_state,
-        &input.trace_id,
-        &input.decision_id,
-        &input.policy_id,
-    );
+    let output = collect_runtime_diagnostics_for_input(&input);
 
     if summary {
         println!("{}", render_diagnostics_summary(&output));
@@ -1410,6 +1405,7 @@ mod tests {
             },
             evidence_entries: Vec::new(),
             hostcall_records: Vec::new(),
+            telemetry_drop_counts: Default::default(),
             containment_receipts: Vec::new(),
             replay_artifacts: Vec::new(),
         }

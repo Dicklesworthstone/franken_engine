@@ -11,13 +11,27 @@ use frankenengine_engine::ir_contract::{
 };
 
 const BASELINE_INTERPRETER: &str = include_str!("../src/baseline_interpreter.rs");
-// bd-ub6x8.6.3: migrated from tests/golden_vectors/ to tests/golden/wire_vectors/.
-const DISPATCH_ARMS_GOLDEN: &str = include_str!("golden/wire_vectors/baseline_dispatch_arms.txt");
 
 fn render_dispatch_arm_snapshot(source: &str) -> String {
+    let dispatch_source = source
+        .split_once("    fn dispatch_builtin_hostcall_inner(")
+        .expect("baseline interpreter must define dispatch_builtin_hostcall_inner")
+        .1
+        .split_once("\n    fn ")
+        .expect("dispatch_builtin_hostcall_inner must be followed by another method")
+        .0;
     let mut capabilities = Vec::new();
-    for line in source.lines() {
-        let trimmed = line.trim_start();
+    for line in dispatch_source.lines() {
+        // rustfmt indents the direct `match cap` arms by twelve spaces. Keep
+        // the scanner at that exact depth so nested capability selectors and
+        // helper matches elsewhere in the source cannot masquerade as a
+        // second dispatch arm.
+        let Some(trimmed) = line.strip_prefix("            ") else {
+            continue;
+        };
+        if trimmed.starts_with(' ') || trimmed.starts_with('\t') {
+            continue;
+        }
         if !trimmed.starts_with("\"builtin:") || !trimmed.contains("\" =>") {
             continue;
         }
@@ -77,10 +91,8 @@ fn builtin_ids_for(capability: &str) -> Vec<u32> {
 
 #[test]
 fn baseline_dispatch_arm_snapshot_matches_golden() {
-    assert_eq!(
-        render_dispatch_arm_snapshot(BASELINE_INTERPRETER),
-        DISPATCH_ARMS_GOLDEN
-    );
+    let actual = render_dispatch_arm_snapshot(BASELINE_INTERPRETER);
+    insta::assert_snapshot!("baseline_dispatch_arm_snapshot", actual);
 }
 
 #[test]
@@ -112,7 +124,7 @@ fn test_module(instructions: Vec<Ir3Instruction>, constant_pool: Vec<String>) ->
             source_label: "baseline-interpreter-conformance".to_string(),
         },
         instructions,
-        constant_pool,
+        constant_pool: constant_pool.into_iter().map(Into::into).collect(),
         function_table: Vec::new(),
         specialization: None,
         required_capabilities: Vec::new(),

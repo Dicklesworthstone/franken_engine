@@ -18,6 +18,23 @@ use serde::{Deserialize, Serialize};
 use crate::hash_tiers::ContentHash;
 use crate::security_epoch::SecurityEpoch;
 
+/// Append a variable-length field to a content-hash preimage with a fixed-width
+/// `u64` length prefix.
+///
+/// `content_hash` commits to the identity of a gap matrix, so its preimage must
+/// be injective. The previous implementation bare-concatenated variable-length
+/// fields (the enum `Display`s and the free-form `rationale`) with no delimiter
+/// and emitted the entry list with no count, so two distinct matrices could
+/// share a preimage — a single entry whose `rationale` embeds a second entry's
+/// serialization collided with a genuine two-entry matrix. Length-prefixing
+/// every variable-length field and count-prefixing the entry list removes the
+/// ambiguity; fixed-width fields (`u64` via `to_le_bytes`) are self-delimiting.
+/// Cf. the same fix crate-wide in commits 7f500570 / 1d3e0542.
+fn hash_field(buf: &mut Vec<u8>, bytes: &[u8]) {
+    buf.extend_from_slice(&(bytes.len() as u64).to_le_bytes());
+    buf.extend_from_slice(bytes);
+}
+
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
@@ -432,18 +449,22 @@ impl GapMatrix {
     /// Compute a deterministic content hash of the matrix.
     pub fn content_hash(&self) -> ContentHash {
         let mut buf = Vec::new();
-        buf.extend_from_slice(self.schema_version.as_bytes());
+        hash_field(&mut buf, self.schema_version.as_bytes());
         buf.extend_from_slice(&self.assessed_epoch.as_u64().to_le_bytes());
         {
             let mut sorted_entries: Vec<&GapMatrixEntry> = self.entries.iter().collect();
             sorted_entries.sort_by_key(|e| (e.local_surface, e.upstream_capability));
+            buf.extend_from_slice(&(sorted_entries.len() as u64).to_le_bytes());
             for entry in &sorted_entries {
-                buf.extend_from_slice(format!("{}", entry.local_surface).as_bytes());
-                buf.extend_from_slice(format!("{}", entry.upstream_capability).as_bytes());
-                buf.extend_from_slice(format!("{}", entry.status).as_bytes());
+                hash_field(&mut buf, format!("{}", entry.local_surface).as_bytes());
+                hash_field(
+                    &mut buf,
+                    format!("{}", entry.upstream_capability).as_bytes(),
+                );
+                hash_field(&mut buf, format!("{}", entry.status).as_bytes());
                 buf.extend_from_slice(&entry.coverage_millionths.to_le_bytes());
-                buf.extend_from_slice(format!("{}", entry.migration_decision).as_bytes());
-                buf.extend_from_slice(entry.rationale.as_bytes());
+                hash_field(&mut buf, format!("{}", entry.migration_decision).as_bytes());
+                hash_field(&mut buf, entry.rationale.as_bytes());
                 buf.extend_from_slice(&entry.confidence_millionths.to_le_bytes());
             }
         }
@@ -1862,6 +1883,59 @@ mod tests {
         let m1 = build_canonical_gap_matrix(SecurityEpoch::from_raw(1));
         let m2 = build_canonical_gap_matrix(SecurityEpoch::from_raw(2));
         assert_ne!(m1.content_hash(), m2.content_hash());
+    }
+
+    #[test]
+    fn gap_matrix_content_hash_is_injective_across_entry_boundaries() {
+        // bd-x6dy1: content_hash bare-concatenated each entry's enum Displays and
+        // free-form `rationale` with no delimiter and no entry count, so a single
+        // entry whose `rationale` embeds a second entry's serialization collided
+        // with a genuine two-entry matrix. With coverage/confidence = 0 the
+        // per-entry numeric fields are 8 NUL bytes (valid UTF-8), so the old byte
+        // stream is reconstructible as a String. Count- + length-prefixing makes
+        // the two cases distinct (they collided byte-for-byte under the old code).
+        let epoch = SecurityEpoch::from_raw(7);
+        let nul8 = String::from_utf8(vec![0u8; 8]).expect("NUL bytes are valid UTF-8");
+        // Both entries share the sort key (local_surface, upstream_capability), so
+        // the stable sort preserves insertion order: [ea, eb].
+        let mk = |rationale: &str| GapMatrixEntry {
+            local_surface: LabSurfaceKind::DeterministicReplay,
+            upstream_capability: UpstreamCapability::LabRuntime,
+            status: GapStatus::Covered,
+            coverage_millionths: 0,
+            migration_decision: MigrationDecision::NoMigration,
+            rationale: rationale.to_string(),
+            confidence_millionths: 0,
+        };
+        // Old per-entry serialization of `eb` up to (but excluding) its trailing
+        // confidence field, which becomes the single entry's own confidence:
+        // local_surface | upstream | status | coverage(NUL8) | decision | rationale.
+        let eb = mk("rb");
+        let eb_serialized = format!(
+            "{}{}{}{}{}{}",
+            eb.local_surface,
+            eb.upstream_capability,
+            eb.status,
+            nul8,
+            eb.migration_decision,
+            eb.rationale,
+        );
+
+        let mut two = GapMatrix::new(epoch);
+        two.add_entry(mk("ra"));
+        two.add_entry(mk("rb"));
+
+        // Single entry whose rationale absorbs (ea.conf = NUL8) + eb_serialized.
+        let mut absorbing = mk("ra");
+        absorbing.rationale = format!("ra{nul8}{eb_serialized}");
+        let mut one = GapMatrix::new(epoch);
+        one.add_entry(absorbing);
+
+        assert_ne!(
+            one.content_hash(),
+            two.content_hash(),
+            "entry count + rationale boundary must not collide"
+        );
     }
 
     #[test]

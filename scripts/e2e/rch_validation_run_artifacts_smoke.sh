@@ -36,7 +36,12 @@ assert_contract() {
       "summary.md",
       "trace_ids.json"
     ] | sort)
-    and (.required_verdict_categories | length) == 6
+    and (.required_verdict_categories | length) == 7
+    and (.companion_artifacts[] | select(.artifact == "rch_admission_refusal_receipt.json" and .source_evidence == false and .cargo_executed == false))
+    and .admission_refusal_policy.final_verdict == "admission_refused"
+    and .admission_refusal_policy.reason_code == "no_admissible_workers"
+    and .admission_refusal_policy.source_evidence == false
+    and .admission_refusal_policy.cargo_executed == false
     and (.smoke_modes | sort) == (["check", "replay", "selftest"] | sort)
     and (.required_event_fields | sort) == ([
       "command_kind",
@@ -124,6 +129,7 @@ assert_manifest() {
     "source failure" \
     "remote toolchain failure" \
     "remote timeout" \
+    "admission refused before worker start" \
     "local fallback refusal" \
     "missing proof"; do
     if ! grep -Fq "$category" "${case_dir}/summary.md"; then
@@ -256,6 +262,7 @@ run_replay() {
     "source failure" \
     "remote toolchain failure" \
     "remote timeout" \
+    "admission refused before worker start" \
     "local fallback refusal" \
     "missing proof"; do
     if ! grep -Fq "$category" "${bundle_dir}/summary.md"; then

@@ -81,6 +81,159 @@
       }
     },
     {
+      "case_id": "ack_attempt_failed",
+      "now_ts": "2026-05-09T15:00:00Z",
+      "mail_snapshot": {
+        "schema_version": "franken-engine.agent-mail-snapshot.v1",
+        "agents": [
+          {
+            "name": "AckDriftAgent",
+            "last_active_ts": "2026-05-09T14:59:00Z",
+            "contact_policy": "auto"
+          }
+        ],
+        "messages": [
+          {
+            "id": 17897,
+            "to_agent": "AckDriftAgent",
+            "thread_id": "bd-ack-drift",
+            "bead_id": "bd-ack-drift",
+            "ack_required": true,
+            "acknowledged": false,
+            "created_ts": "2026-05-09T14:58:30Z"
+          }
+        ],
+        "ack_attempts": [
+          {
+            "message_id": 17897,
+            "agent_name": "AckDriftAgent",
+            "thread_id": "bd-ack-drift",
+            "bead_id": "bd-ack-drift",
+            "attempted_at": "2026-05-09T14:59:30Z",
+            "success": false,
+            "error": "MessageRecipient not found: 739:17897"
+          }
+        ],
+        "reservations": []
+      },
+      "br_in_progress": {
+        "issues": []
+      },
+      "identity_reconciliation_receipt": {
+        "schema_version": "franken-engine.swarm-agent-mail-identity-reconciliation-receipt.v1",
+        "decision": "fail_closed",
+        "bead_id": "bd-ack-drift",
+        "thread_id": "bd-ack-drift",
+        "raw_error": "MessageRecipient not found: 739:17897",
+        "evidence": {
+          "failed_ack_attempt_count": 1,
+          "anomalies": [
+            {
+              "anomaly_class": "stale_message_recipient_row",
+              "severity": "fail_closed",
+              "raw_error": "MessageRecipient not found: 739:17897",
+              "affected_entities": {
+                "message_id": 17897,
+                "thread_id": "bd-ack-drift",
+                "bead_id": "bd-ack-drift"
+              }
+            }
+          ]
+        }
+      },
+      "expected": {
+        "decision": "blocked",
+        "diagnostic_codes": [
+          "ack_attempt_failed"
+        ]
+      }
+    },
+    {
+      "case_id": "ack_attempt_failed_missing_identity_receipt",
+      "now_ts": "2026-05-09T15:00:00Z",
+      "mail_snapshot": {
+        "schema_version": "franken-engine.agent-mail-snapshot.v1",
+        "agents": [
+          {
+            "name": "AckDriftAgent",
+            "last_active_ts": "2026-05-09T14:59:00Z",
+            "contact_policy": "auto"
+          }
+        ],
+        "messages": [],
+        "ack_attempts": [
+          {
+            "message_id": 17898,
+            "agent_name": "AckDriftAgent",
+            "thread_id": "bd-ack-missing-receipt",
+            "bead_id": "bd-ack-missing-receipt",
+            "attempted_at": "2026-05-09T14:59:30Z",
+            "success": false,
+            "error": "AgentLink not found: MistyFox:AckDriftAgent"
+          }
+        ],
+        "reservations": []
+      },
+      "br_in_progress": {
+        "issues": []
+      },
+      "expected": {
+        "decision": "blocked",
+        "diagnostic_codes": [
+          "ack_attempt_failed",
+          "identity_reconciliation_receipt_missing"
+        ]
+      }
+    },
+    {
+      "case_id": "ack_attempt_failed_contradictory_identity_receipt",
+      "now_ts": "2026-05-09T15:00:00Z",
+      "mail_snapshot": {
+        "schema_version": "franken-engine.agent-mail-snapshot.v1",
+        "agents": [
+          {
+            "name": "AckDriftAgent",
+            "last_active_ts": "2026-05-09T14:59:00Z",
+            "contact_policy": "auto"
+          }
+        ],
+        "messages": [],
+        "ack_attempts": [
+          {
+            "message_id": 17899,
+            "agent_name": "AckDriftAgent",
+            "thread_id": "bd-ack-contradiction",
+            "bead_id": "bd-ack-contradiction",
+            "attempted_at": "2026-05-09T14:59:30Z",
+            "success": false,
+            "error": "MessageRecipient not found: 741:17899"
+          }
+        ],
+        "reservations": []
+      },
+      "br_in_progress": {
+        "issues": []
+      },
+      "identity_reconciliation_receipt": {
+        "schema_version": "franken-engine.swarm-agent-mail-identity-reconciliation-receipt.v1",
+        "decision": "pass",
+        "bead_id": "bd-different",
+        "thread_id": "bd-different",
+        "raw_error": "",
+        "evidence": {
+          "failed_ack_attempt_count": 0,
+          "anomalies": []
+        }
+      },
+      "expected": {
+        "decision": "blocked",
+        "diagnostic_codes": [
+          "ack_attempt_failed",
+          "identity_reconciliation_receipt_contradicts_ack_attempt"
+        ]
+      }
+    },
+    {
       "case_id": "expired_reservation",
       "now_ts": "2026-05-09T15:00:00Z",
       "mail_snapshot": {

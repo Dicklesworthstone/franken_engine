@@ -23,7 +23,8 @@ Required:
   --artifact-dir DIR       Bundle/run directory to inspect; may be repeated
 
 Options:
-  --contract-json FILE     Optional contract metadata with required_files or required_artifacts
+  --contract-json FILE     Optional contract metadata with required_files,
+                           required_artifacts, or required_manifest_fields
   --output-dir DIR
   --source-revision REV
 
@@ -250,6 +251,53 @@ check_hashes() {
   )
 }
 
+check_required_manifest_fields() {
+  local bundle_id="$1"
+  local manifest_path="$2"
+  local manifest_field code detail remediation
+
+  if [[ -z "$contract_json" ]] || [[ ! -f "$manifest_path" ]] || ! jq empty "$manifest_path" >/dev/null 2>&1; then
+    return
+  fi
+
+  while IFS=$'\t' read -r manifest_field code detail remediation; do
+    [[ -z "$manifest_field" ]] && continue
+    if ! jq -e --arg manifest_field "$manifest_field" '
+      def manifest_path($path):
+        reduce ($path | split("."))[] as $part (.;
+          if type == "object" then .[$part] else null end
+        );
+      (manifest_path($manifest_field) // null) as $value
+      | ($value != null)
+        and ((($value | type) != "string") or (($value | length) > 0))
+    ' "$manifest_path" >/dev/null; then
+      emit_diag "$bundle_id" "error" "$code" "run_manifest.json:${manifest_field}" "$detail" "$remediation"
+    fi
+  done < <(
+    jq -r '
+      (.required_manifest_fields // .artifact_contract.required_manifest_fields // [])
+      | .[]?
+      | if type == "string" then
+          {
+            path: .,
+            code: "missing_manifest_field",
+            detail: ("required manifest field `" + . + "` is absent or empty"),
+            remediation: "Regenerate the bundle manifest with the required field before consuming this evidence."
+          }
+        else
+          .
+        end
+      | [
+          (.path // ""),
+          (.code // "missing_manifest_field"),
+          (.detail // ("required manifest field `" + (.path // "") + "` is absent or empty")),
+          (.remediation // "Regenerate the bundle manifest with the required field before consuming this evidence.")
+        ]
+      | @tsv
+    ' "$contract_json"
+  )
+}
+
 check_bundle() {
   local bundle_dir="$1"
   local bundle_id manifest_path events_file commands_file required_rel resolved_path schema_version
@@ -304,6 +352,7 @@ check_bundle() {
     emit_diag "$bundle_id" "error" "local_fallback_marker" "$bundle_dir" "local fallback marker found in preserved bundle artifacts" "Do not consume this as remote proof; rerun with remote-required rch evidence."
   fi
 
+  check_required_manifest_fields "$bundle_id" "$manifest_path"
   check_hashes "$bundle_id" "$bundle_dir"
   write_event "bundle.checked" "ok" "$bundle_id" "$bundle_dir"
 }

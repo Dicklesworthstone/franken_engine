@@ -1,0 +1,20 @@
+---
+source: crates/franken-engine/tests/perf_h8_incremental_memory_integration.rs
+expression: "lines.join(\"\\n\")"
+---
+register_arithmetic: estimated_memory_bytes=1833
+object_allocation_and_property_writes: estimated_memory_bytes=2540
+property_removal: estimated_memory_bytes=2655
+array_growth_and_overwrite: estimated_memory_bytes=4457
+closure_capture: estimated_memory_bytes=2636
+for_in_iteration: estimated_memory_bytes=2531
+for_of_iteration: estimated_memory_bytes=2429
+nested_scopes_and_string_growth: estimated_memory_bytes=2223
+map_set_overwrite_delete: estimated_memory_bytes=2922
+set_add_duplicate_delete: estimated_memory_bytes=2637
+set_seed_from_iterable_and_clear: estimated_memory_bytes=3135
+map_seed_clear: estimated_memory_bytes=2606
+array_reverse_including_sparse: estimated_memory_bytes=3741
+array_sort_with_holes: estimated_memory_bytes=3206
+array_splice_remove_insert: estimated_memory_bytes=3125
+object_define_property: estimated_memory_bytes=2867

@@ -34,7 +34,12 @@ use frankenengine_engine::storage_adapter::{
     InMemoryStorageAdapter, MigrationReceipt, STORAGE_SCHEMA_VERSION, StorageAdapter, StorageError,
     StorageEvent, StoreKind, StoreQuery, StoreRecord,
 };
+// The real FrankenSQLite-backed harness below needs `/dp/sqlmodel_rust` and
+// `/dp/frankensqlite`. The MockBackend / InMemoryStorageAdapter tests in this
+// file do not, and keep running in a no-siblings build (bd-ndpm2).
+#[cfg(feature = "sibling-persistence")]
 use sqlmodel::{Row, Value};
+#[cfg(feature = "sibling-persistence")]
 use sqlmodel_frankensqlite::FrankenConnection;
 
 // ---------------------------------------------------------------------------
@@ -216,10 +221,12 @@ impl FrankensqliteBackend for MockBackend {
     }
 }
 
+#[cfg(feature = "sibling-persistence")]
 struct RealFrankensqliteBackend {
     conn: FrankenConnection,
 }
 
+#[cfg(feature = "sibling-persistence")]
 impl RealFrankensqliteBackend {
     fn open_memory() -> Result<Self, String> {
         Ok(Self {
@@ -290,6 +297,7 @@ impl RealFrankensqliteBackend {
     }
 }
 
+#[cfg(feature = "sibling-persistence")]
 impl FrankensqliteBackend for RealFrankensqliteBackend {
     fn apply_control_plane_profile(&mut self) -> Result<(), String> {
         self.apply_schema()
@@ -450,6 +458,7 @@ impl FrankensqliteBackend for RealFrankensqliteBackend {
     }
 }
 
+#[cfg(feature = "sibling-persistence")]
 fn text_column(row: &Row, name: &str) -> Result<String, String> {
     match row.get_by_name(name) {
         Some(Value::Text(value)) => Ok(value.clone()),
@@ -461,6 +470,7 @@ fn text_column(row: &Row, name: &str) -> Result<String, String> {
     }
 }
 
+#[cfg(feature = "sibling-persistence")]
 fn bytes_column(row: &Row, name: &str) -> Result<Vec<u8>, String> {
     match row.get_by_name(name) {
         Some(Value::Bytes(value)) => Ok(value.clone()),
@@ -472,6 +482,7 @@ fn bytes_column(row: &Row, name: &str) -> Result<Vec<u8>, String> {
     }
 }
 
+#[cfg(feature = "sibling-persistence")]
 fn u64_column(row: &Row, name: &str) -> Result<u64, String> {
     match row.get_by_name(name) {
         Some(Value::BigInt(value)) => {
@@ -1910,6 +1921,7 @@ fn frankensqlite_adapter_schema_version_failure() {
 // ===========================================================================
 
 #[test]
+#[cfg(feature = "sibling-persistence")]
 fn frankensqlite_put_get_delete_cycle() {
     tracing::info!(
         suite = "storage_adapter_integration",
@@ -2578,6 +2590,7 @@ fn cross_concern_batch_then_query_with_filters() {
 }
 
 #[test]
+#[cfg(feature = "sibling-persistence")]
 fn cross_concern_frankensqlite_put_then_query_prefix_with_limit() {
     tracing::info!(
         suite = "storage_adapter_integration",

@@ -10,7 +10,6 @@ use std::fs;
 use std::path::Path;
 
 use frankenengine_engine::{
-    ast::Expression,
     effect_set::EffectKind,
     ir_contract::Ir0Module,
     lowering_pipeline::{LoweringPipelineError, lower_ir0_to_ir1},
@@ -201,15 +200,44 @@ fn ambient_authority_error_includes_source_span() {
             accessor, "globalThis.process",
             "diagnostic must name the offending ambient-authority accessor"
         );
-        // `span` is intentionally `None`: expression-level AST nodes carry no
-        // source span, so precise line/column spans require parser/AST span
-        // tracking (a separate, larger effort — see the variant's `span` doc).
-        // Assert the documented current behaviour rather than leaving a stale TODO.
-        assert!(
-            span.is_none(),
-            "expression-layer AST has no spans; span is None until AST span tracking lands"
+        // Since bd-fqlfw.1.1 landed parse-time spans on Member expressions,
+        // the denial must point at concrete source (bd-fqlfw.1.2 acceptance:
+        // "an ambient-authority denial on process.env reports a concrete
+        // span, not None"). Spans are currently statement-granular.
+        let span = span.expect(
+            "ambient-authority denial on a member access must carry a concrete source span",
         );
+        assert!(
+            span.start_offset <= span.end_offset && span.end_offset <= module_source.len() as u64,
+            "denial span must lie within the source: {span:?}"
+        );
+        assert!(span.start_line >= 1 && span.start_column >= 1);
     } else {
         panic!("Expected AmbientAuthorityViolation error for globalThis.process access");
+    }
+}
+
+/// A `require(...)` denial points at the call site: the bare callee
+/// identifier carries no span (deferred per bd-fqlfw.1.1 design), but the
+/// enclosing call expression does (bd-fqlfw.1.2).
+#[test]
+fn ambient_authority_require_denial_carries_call_site_span() {
+    let module_source = "const fs = require(\"fs\");";
+
+    let tree = parse_module(module_source).expect("Should parse successfully");
+    let ir0 = Ir0Module::from_syntax_tree(tree, "require_span_test");
+
+    match lower_ir0_to_ir1(&ir0) {
+        Err(LoweringPipelineError::AmbientAuthorityViolation { span, accessor, .. }) => {
+            assert_eq!(accessor, "require");
+            let span = span
+                .expect("require denial must carry the enclosing call expression's source span");
+            assert!(
+                span.start_offset <= span.end_offset
+                    && span.end_offset <= module_source.len() as u64,
+                "denial span must lie within the source: {span:?}"
+            );
+        }
+        other => panic!("Expected AmbientAuthorityViolation for require, got {other:?}"),
     }
 }

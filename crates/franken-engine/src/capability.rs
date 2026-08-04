@@ -65,6 +65,15 @@ pub enum RuntimeCapability {
     Timer,
     /// Built-in JavaScript operations (Array.prototype.*, Object.*, etc.).
     Builtin,
+    /// IFC declassification hostcalls (`declassify.*` / `declassify:*` routes).
+    ///
+    /// This is the *interpreter-gate* authority only: it lets a package invoke
+    /// a declassification-routed hostcall at all. The per-route semantics
+    /// (obligation linkage, signed receipts, source/sink label checks) are
+    /// enforced separately by the orchestrator's runtime flow guards; holding
+    /// this capability without a valid staged receipt still fails closed there
+    /// (bd-lduxz).
+    Declassify,
 }
 
 impl fmt::Display for RuntimeCapability {
@@ -90,6 +99,7 @@ impl fmt::Display for RuntimeCapability {
             Self::Console => "console",
             Self::Timer => "timer",
             Self::Builtin => "builtin",
+            Self::Declassify => "declassify",
         };
         f.write_str(name)
     }
@@ -97,7 +107,7 @@ impl fmt::Display for RuntimeCapability {
 
 impl RuntimeCapability {
     /// Every runtime capability variant in canonical declaration order.
-    pub const ALL: [Self; 20] = [
+    pub const ALL: [Self; 21] = [
         Self::VmDispatch,
         Self::GcInvoke,
         Self::IrLowering,
@@ -118,6 +128,7 @@ impl RuntimeCapability {
         Self::Console,
         Self::Timer,
         Self::Builtin,
+        Self::Declassify,
     ];
 
     /// Map a capability-tag string (as used in [`CapabilityTag`] / hostcall
@@ -148,10 +159,25 @@ impl RuntimeCapability {
             "console" => Some(Self::Console),
             "timer" => Some(Self::Timer),
             "builtin" => Some(Self::Builtin),
+            "declassify" => Some(Self::Declassify),
 
             // Short aliases used in IR / tests
-            "network" | "net" | "net:connect" | "net:fetch" | "net:outbound" | "net.write"
-            | "network.write" => Some(Self::NetworkEgress),
+            // bd-656a2: `net:request` is the tag emitted by the JS http.get/
+            // http.request lowering (the http leg of the proof-carrying host
+            // effect producer); it maps to the same NetworkEgress capability as
+            // the other short network aliases so the hostcall gate authorizes it
+            // only when network egress was granted on the run path.
+            // bd-3894s slice (2b): `net:client_request` is the tag emitted by the
+            // `http.request(url[, opts])` lowering. It does NOT egress at the call
+            // site — it builds a `ClientRequest` writable-stream object whose
+            // `.end()` performs the egress later, through the same SSRF-gated
+            // provider. It maps to `NetworkEgress` here so the hostcall capability
+            // gate fires at CREATION time: a ClientRequest cannot even be
+            // constructed unless network egress was granted, closing the bypass
+            // where the deferred `.end()` egress would otherwise skip the engine
+            // capability gate (`.end()` runs as a builtin, not a HostCall IR op).
+            "network" | "net" | "net:connect" | "net:fetch" | "net:outbound" | "net:request"
+            | "net:client_request" | "net.write" | "network.write" => Some(Self::NetworkEgress),
             "fs" | "fs:read" | "fs.read" => Some(Self::FsRead),
             "fs:write" | "fs.write" => Some(Self::FsWrite),
             "module:require" | "module:import" | "module.import" => Some(Self::ModuleLoad),
@@ -167,6 +193,16 @@ impl RuntimeCapability {
 
             // Map number hostcalls to Builtin capability (number operations are built-ins)
             tag if tag.starts_with("number:") => Some(Self::Builtin),
+
+            // Map declassification-routed hostcalls (`declassify.audit`,
+            // `declassify:route-x`, …) to the Declassify capability. The route
+            // suffix is obligation routing, not a distinct capability; per-route
+            // receipt semantics are enforced by the orchestrator's runtime flow
+            // guards (bd-lduxz). Before the typed-capability migration these
+            // tags were granted as raw strings from the package manifest.
+            tag if tag.starts_with("declassify.") || tag.starts_with("declassify:") => {
+                Some(Self::Declassify)
+            }
 
             // Unknown / internal tags — not mapped
             _ => None,
@@ -314,6 +350,7 @@ impl CapabilityProfile {
                 Console,
                 Timer,
                 Builtin,
+                Declassify,
             ]),
         }
     }
@@ -1783,6 +1820,12 @@ mod tests {
         );
         assert_eq!(
             RuntimeCapability::from_tag_str("net:connect"),
+            Some(RuntimeCapability::NetworkEgress)
+        );
+        // bd-3894s slice (2b): the ClientRequest-creation tag maps to NetworkEgress
+        // so the hostcall capability gate fires at `http.request(...)` time.
+        assert_eq!(
+            RuntimeCapability::from_tag_str("net:client_request"),
             Some(RuntimeCapability::NetworkEgress)
         );
         assert_eq!(

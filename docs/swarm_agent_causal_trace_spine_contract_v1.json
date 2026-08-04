@@ -144,9 +144,15 @@
     },
     {
       "source_id": "agent_mail_messages_json",
-      "capture_command": "Agent Mail inbox/search/thread snapshot",
+      "capture_command": "Agent Mail inbox/search/thread snapshot, optionally including ack_attempts or acknowledgement_attempts",
       "required": false,
       "missing_decision": "degraded"
+    },
+    {
+      "source_id": "identity_reconciliation_receipt_json",
+      "capture_command": "scripts/swarm_agent_mail_identity_reconciler.sh receipt output",
+      "required": false,
+      "missing_decision": "degraded when ack_attempt_failed evidence exists"
     },
     {
       "source_id": "file_reservations_json",
@@ -220,6 +226,8 @@
     "agent_profile",
     "bead_state",
     "mail_message",
+    "ack_attempt",
+    "identity_reconciliation_receipt",
     "file_reservation",
     "git_status",
     "git_commit",
@@ -233,6 +241,8 @@
     "bead_claimed",
     "reservation_covers_path",
     "message_acknowledged",
+    "message_ack_failed",
+    "ack_failure_reconciled",
     "validation_proves_closeout",
     "commit_closes_bead",
     "operator_status_summarizes_trace",
@@ -248,6 +258,9 @@
     "closed_bead_missing_commit",
     "closed_bead_missing_validation_evidence",
     "ack_required_message_unacknowledged",
+    "ack_attempt_failed",
+    "identity_reconciliation_receipt_missing",
+    "identity_reconciliation_receipt_contradicts_ack_attempt",
     "stale_owner_recent_activity_conflict"
   ],
   "required_artifact_contracts": [
@@ -304,6 +317,9 @@
     "dirty path without matching bead scope and reservation fails closed",
     "local RCH fallback marker contaminates remote proof evidence",
     "ack_required message without acknowledgement evidence fails closed when the message is in the supplied thread snapshot",
+    "failed Agent Mail acknowledgement attempt with explicit error evidence fails closed when the attempt belongs to the supplied bead thread",
+    "failed acknowledgement attempt without an identity reconciliation receipt is degraded but still preserves the raw ack failure",
+    "identity reconciliation receipt that contradicts raw ack attempt evidence fails closed",
     "contradictory owner freshness between bead state, Agent Mail activity, reservations, and git activity fails closed",
     "runbook output must not claim automatic bead repair, automatic reservation release, live Agent Mail sends, live RCH execution, or queue policy mutation"
   ],
@@ -351,6 +367,21 @@
       "fixture_id": "closed_without_validation",
       "expected_decision": "fail_closed",
       "description": "closed bead lacks linked validation proof"
+    },
+    {
+      "fixture_id": "ack_attempt_failed",
+      "expected_decision": "fail_closed",
+      "description": "failed Agent Mail acknowledgement attempt is preserved as ack_attempt evidence and linked to a message_ack_failed graph edge plus a matching identity reconciliation receipt"
+    },
+    {
+      "fixture_id": "ack_attempt_failed_missing_identity_receipt",
+      "expected_decision": "fail_closed",
+      "description": "failed acknowledgement attempt without optional identity reconciliation receipt records degraded missing-receipt state"
+    },
+    {
+      "fixture_id": "ack_attempt_failed_contradictory_identity_receipt",
+      "expected_decision": "fail_closed",
+      "description": "supplied identity reconciliation receipt that points at a different message, thread, or bead fails closed"
     }
   ],
   "downstream_beads": [

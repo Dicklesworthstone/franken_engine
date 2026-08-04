@@ -264,12 +264,13 @@ fn enrichment_iterator_symbol_kind_symbol_ids_distinct() {
 fn enrichment_close_reason_display_all_unique() {
     let all = [
         CloseReason::Break,
+        CloseReason::Continue,
         CloseReason::Return,
         CloseReason::Throw,
         CloseReason::DestructuringExhausted,
     ];
     let displays: BTreeSet<String> = all.iter().map(|r| r.to_string()).collect();
-    assert_eq!(displays.len(), 4);
+    assert_eq!(displays.len(), 5);
 }
 
 #[test]
@@ -283,6 +284,7 @@ fn enrichment_close_reason_clone_independence() {
 fn enrichment_close_reason_serde_all_variants() {
     let all = [
         CloseReason::Break,
+        CloseReason::Continue,
         CloseReason::Return,
         CloseReason::Throw,
         CloseReason::DestructuringExhausted,
@@ -839,7 +841,7 @@ fn enrichment_step_indices_in_trace_are_sequential() {
 fn enrichment_schema_version_format() {
     assert!(ITERATOR_PROTOCOL_SCHEMA_VERSION.starts_with("franken-engine."));
     assert!(ITERATOR_PROTOCOL_SCHEMA_VERSION.contains("iterator-protocol"));
-    assert!(ITERATOR_PROTOCOL_SCHEMA_VERSION.ends_with(".v1"));
+    assert!(ITERATOR_PROTOCOL_SCHEMA_VERSION.ends_with(".v2"));
 }
 
 #[test]

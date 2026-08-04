@@ -33,6 +33,7 @@ fn pure_ir2_op(inner: Ir1Op) -> Ir2Op {
         effect: EffectBoundary::Pure,
         required_capability: None,
         flow: None,
+        span: None,
     }
 }
 
@@ -203,6 +204,9 @@ fn lower_ir2_to_ir3_rejects_deferred_function_value_stack_underflow() {
         body_ops: vec![Ir1Op::Return],
         free_vars: Vec::new(),
         free_var_ids: Vec::new(),
+        runtime_global_loads: Vec::new(),
+        child_captured_locals: Vec::new(),
+        local_lexical_bindings: Vec::new(),
         is_generator: false,
         is_async: false,
         rest_param_index: None,
@@ -674,6 +678,7 @@ fn declassification_flow_inserts_runtime_ifc_guard_before_hostcall() {
         effect: EffectBoundary::Pure,
         required_capability: None,
         flow: None,
+        span: None,
     });
     ir2.ops.push(Ir2Op {
         inner: Ir1Op::HostCall {
@@ -687,6 +692,7 @@ fn declassification_flow_inserts_runtime_ifc_guard_before_hostcall() {
             sink_clearance: Label::Public,
             declassification_required: true,
         }),
+        span: None,
     });
 
     let ir3 = lower_ir2_to_ir3(&ir2)
@@ -800,7 +806,7 @@ fn enrichment_numeric_literal_lowering_produces_ir3() {
 fn enrichment_string_literal_lowering_produces_ir3() {
     let ir0 = make_ir0(
         vec![make_expr_stmt(Expression::StringLiteral(
-            "hello".to_string(),
+            "hello".to_string().into(),
         ))],
         ParseGoal::Script,
         "enr_str.js",
@@ -1715,7 +1721,7 @@ fn enrichment_delete_member_lowering() {
 fn enrichment_determinism_same_ast_identical_hashes() {
     let body = vec![
         make_expr_stmt(Expression::NumericLiteral(100)),
-        make_expr_stmt(Expression::StringLiteral("abc".to_string())),
+        make_expr_stmt(Expression::StringLiteral("abc".to_string().into())),
     ];
     let ir0 = make_ir0(body.clone(), ParseGoal::Script, "enr_det1.js");
     let ctx = default_ctx();
@@ -2231,7 +2237,9 @@ fn enrichment_zero_numeric_literal() {
 #[test]
 fn enrichment_empty_string_literal() {
     let ir0 = make_ir0(
-        vec![make_expr_stmt(Expression::StringLiteral(String::new()))],
+        vec![make_expr_stmt(Expression::StringLiteral(
+            String::new().into(),
+        ))],
         ParseGoal::Script,
         "enr_empty_str.js",
     );
@@ -2500,8 +2508,12 @@ fn enrichment_module_id_in_artifact() {
 #[test]
 fn enrichment_instanceof_lowering() {
     let parser = CanonicalEs2020Parser;
+    // Use a user-defined RHS, not `Array`: unshadowed `instanceof Array` is
+    // intentionally routed to the `Array.isArray` predicate (bd-ck8ui,
+    // 5040f7b3), so it never emits InstanceOf. A non-builtin constructor
+    // exercises the genuine InstanceOf lowering this test targets.
     let tree = parser
-        .parse("x instanceof Array;", ParseGoal::Script)
+        .parse("x instanceof Shape;", ParseGoal::Script)
         .expect("parse");
     let ir0 = Ir0Module::from_syntax_tree(tree, "enr_instanceof.js");
     let output = lower_ir0_to_ir3(&ir0, &default_ctx()).expect("pipeline");

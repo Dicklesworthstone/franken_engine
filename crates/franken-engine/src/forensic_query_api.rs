@@ -31,7 +31,7 @@ use crate::causation_graph_schema::{
     CausationEdge, CausationGraph, CausationNode, CausationType, DecisionOutcome, EdgeId,
     GraphError, InfluenceWeight, NodeId, NodeType,
 };
-use crate::hash_tiers::ContentHash;
+use crate::hash_tiers::{AuthenticityHash, ContentHash};
 use crate::minimal_causal_set_inference::DecisionFactor;
 
 // ---------------------------------------------------------------------------
@@ -176,6 +176,7 @@ pub enum QueryStatus {
 /// Main result data from a forensic query.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", content = "data")]
+#[allow(clippy::large_enum_variant)]
 pub enum QueryResult {
     /// Causal explanation result.
     CausalExplanation(CausalExplanationResult),
@@ -524,7 +525,6 @@ impl ForensicQueryEngine {
         let final_result = match result {
             Ok(mut query_result) => {
                 query_result.metadata.execution_time_us = execution_time_us;
-                query_result.status = QueryStatus::Success;
                 query_result
             }
             Err(e) => ForensicQueryResult {
@@ -557,10 +557,9 @@ impl ForensicQueryEngine {
                 decision_id: node_decision_id,
                 ..
             } = &node.node_type
+                && node_decision_id == decision_id
             {
-                if node_decision_id == decision_id {
-                    return Ok(*node_id);
-                }
+                return Ok(*node_id);
             }
         }
         Err(QueryError::DecisionNotFound(decision_id.to_string()))
@@ -613,7 +612,9 @@ impl ForensicQueryEngine {
         for edge_id in &visited_edges {
             if let Some(edge) = self.graph.edges.get(edge_id) {
                 edges.insert(*edge_id, edge.clone());
-                total_influence.millionths += edge.weight.millionths;
+                total_influence.millionths = total_influence
+                    .millionths
+                    .saturating_add(edge.weight.millionths);
             }
         }
 
@@ -651,12 +652,127 @@ impl ForensicQueryEngine {
         })
     }
 
+    fn max_graph_depth(&self) -> usize {
+        self.graph.nodes.len().max(1)
+    }
+
+    fn resolve_query_node(&self, target: &QueryTarget) -> Result<NodeId, QueryError> {
+        match target {
+            QueryTarget::Decision(decision_id) => self.find_decision_node(decision_id),
+            QueryTarget::Node(node_id) => {
+                if self.graph.nodes.contains_key(node_id) {
+                    Ok(*node_id)
+                } else {
+                    Err(QueryError::NodeNotFound(*node_id))
+                }
+            }
+            QueryTarget::Evidence(evidence_id) => self
+                .graph
+                .nodes
+                .iter()
+                .find_map(|(node_id, node)| match &node.node_type {
+                    NodeType::EvidenceAtom { dependency, .. }
+                        if dependency.evidence_atom_id == *evidence_id =>
+                    {
+                        Some(*node_id)
+                    }
+                    _ => None,
+                })
+                .ok_or_else(|| {
+                    QueryError::InvalidTarget(format!("Evidence not found: {evidence_id}"))
+                }),
+            QueryTarget::Graph => Err(QueryError::InvalidTarget(
+                "query requires a concrete decision, evidence, or node target".to_string(),
+            )),
+        }
+    }
+
+    fn full_graph_subgraph(&self) -> CausalSubgraph {
+        let mut total_influence = InfluenceWeight::ZERO;
+        for edge in self.graph.edges.values() {
+            total_influence.millionths = total_influence
+                .millionths
+                .saturating_add(edge.weight.millionths);
+        }
+
+        let root_nodes = self
+            .graph
+            .nodes
+            .keys()
+            .filter(|node_id| {
+                self.graph
+                    .reverse_adjacency
+                    .get(node_id)
+                    .is_none_or(Vec::is_empty)
+            })
+            .copied()
+            .collect();
+        let leaf_nodes = self
+            .graph
+            .nodes
+            .keys()
+            .filter(|node_id| self.graph.adjacency.get(node_id).is_none_or(Vec::is_empty))
+            .copied()
+            .collect();
+
+        CausalSubgraph {
+            nodes: self.graph.nodes.clone(),
+            edges: self.graph.edges.clone(),
+            root_nodes,
+            leaf_nodes,
+            total_influence,
+        }
+    }
+
+    fn subgraph_for_query_target(
+        &self,
+        target: &QueryTarget,
+    ) -> Result<CausalSubgraph, QueryError> {
+        let subgraph = if matches!(target, QueryTarget::Graph) {
+            self.full_graph_subgraph()
+        } else {
+            let target_node = self.resolve_query_node(target)?;
+            self.extract_causal_subgraph(target_node, self.max_graph_depth())?
+        };
+
+        if subgraph.nodes.len() as u32 > self.config.max_subgraph_size {
+            return Err(QueryError::SubgraphTooLarge(subgraph.nodes.len() as u32));
+        }
+
+        Ok(subgraph)
+    }
+
+    fn node_decision_factor(node: &CausationNode) -> Option<DecisionFactor> {
+        match &node.node_type {
+            NodeType::EvidenceAtom { dependency, .. } => Some(dependency.influenced_factor),
+            NodeType::Decision { factor, .. } => Some(*factor),
+            NodeType::AggregateInfluence { .. } => None,
+        }
+    }
+
+    fn node_evidence_id(node: &CausationNode) -> Option<String> {
+        match &node.node_type {
+            NodeType::EvidenceAtom { dependency, .. } => Some(dependency.evidence_atom_id.clone()),
+            _ => None,
+        }
+    }
+
+    fn influence_type_for(edge: &CausationEdge) -> InfluenceType {
+        match edge.causation_type {
+            CausationType::Direct | CausationType::Evidential => InfluenceType::DirectSupport,
+            CausationType::Indirect | CausationType::Logical | CausationType::Temporal => {
+                InfluenceType::Contextual
+            }
+            CausationType::Correlational => InfluenceType::Precedent,
+        }
+    }
+
     /// Execute causal explanation query.
     fn execute_causal_explanation(
         &self,
         query: &ForensicQuery,
         max_depth: usize,
-        include_weak_influences: bool,
+        _include_weak_influences: bool,
     ) -> Result<ForensicQueryResult, QueryError> {
         let target_node_id = match &query.target {
             QueryTarget::Decision(decision_id) => self.find_decision_node(decision_id)?,
@@ -672,7 +788,7 @@ impl ForensicQueryEngine {
             .graph
             .nodes
             .get(&target_node_id)
-            .ok_or_else(|| QueryError::NodeNotFound(target_node_id))?
+            .ok_or(QueryError::NodeNotFound(target_node_id))?
             .clone();
 
         // Extract causal subgraph
@@ -717,15 +833,104 @@ impl ForensicQueryEngine {
         min_threshold: InfluenceWeight,
         rank_by_strength: bool,
     ) -> Result<ForensicQueryResult, QueryError> {
-        // Implementation placeholder - would analyze influence patterns
-        // This is a simplified version for the working implementation
+        let subgraph = self.subgraph_for_query_target(&query.target)?;
+        let causation_filter = query.parameters.causation_type_filter.as_ref();
+        let factor_filter = query.parameters.decision_factor_filter.as_ref();
 
-        let ranked_influences = vec![];
-        let factor_distribution = BTreeMap::new();
+        let mut ranked_influences = Vec::new();
+        let mut factor_distribution: BTreeMap<DecisionFactor, InfluenceWeight> = BTreeMap::new();
+        let mut adjacency: BTreeMap<NodeId, Vec<(NodeId, InfluenceWeight)>> = BTreeMap::new();
+        let mut centrality_totals: BTreeMap<NodeId, u64> = BTreeMap::new();
+        let mut warnings = Vec::new();
+
+        for edge in subgraph.edges.values() {
+            if edge.weight.millionths < min_threshold.millionths {
+                continue;
+            }
+            if let Some(allowed_types) = causation_filter
+                && !allowed_types.contains(&edge.causation_type)
+            {
+                continue;
+            }
+
+            let Some(source_node) = subgraph.nodes.get(&edge.source) else {
+                continue;
+            };
+            let factor = Self::node_decision_factor(source_node);
+            if let Some(allowed_factors) = factor_filter {
+                let Some(factor) = factor else {
+                    continue;
+                };
+                if !allowed_factors.contains(&factor) {
+                    continue;
+                }
+            }
+
+            if let Some(factor) = factor {
+                let entry = factor_distribution
+                    .entry(factor)
+                    .or_insert(InfluenceWeight::ZERO);
+                entry.millionths = entry.millionths.saturating_add(edge.weight.millionths);
+            }
+
+            adjacency
+                .entry(edge.source)
+                .or_default()
+                .push((edge.target, edge.weight));
+            *centrality_totals.entry(edge.source).or_default() += u64::from(edge.weight.millionths);
+            *centrality_totals.entry(edge.target).or_default() += u64::from(edge.weight.millionths);
+
+            ranked_influences.push(InfluenceFactor {
+                node_id: edge.source,
+                evidence_id: Self::node_evidence_id(source_node),
+                influence_weight: edge.weight,
+                influence_type: Self::influence_type_for(edge),
+                description: format!(
+                    "{} influenced {} via {:?} with weight {}",
+                    edge.source, edge.target, edge.causation_type, edge.weight
+                ),
+            });
+        }
+
+        if rank_by_strength {
+            ranked_influences.sort_by(|left, right| {
+                right
+                    .influence_weight
+                    .millionths
+                    .cmp(&left.influence_weight.millionths)
+                    .then_with(|| left.node_id.cmp(&right.node_id))
+            });
+        } else {
+            ranked_influences.sort_by_key(|factor| factor.node_id);
+        }
+
+        if let Some(limit) = query.parameters.limit {
+            ranked_influences.truncate(limit);
+        }
+
+        if ranked_influences.is_empty() {
+            warnings.push("no causal influences matched the requested filters".to_string());
+        }
+
+        let max_centrality = centrality_totals.values().copied().max().unwrap_or(1) as f64;
+        let centrality_scores = centrality_totals
+            .into_iter()
+            .map(|(node_id, total)| (node_id, total as f64 / max_centrality))
+            .collect();
+        let influence_communities = adjacency
+            .iter()
+            .map(|(source, targets)| {
+                let mut community = Vec::with_capacity(targets.len() + 1);
+                community.push(*source);
+                community.extend(targets.iter().map(|(target, _)| *target));
+                community
+            })
+            .collect();
+
         let influence_network = InfluenceNetwork {
-            adjacency: BTreeMap::new(),
-            centrality_scores: BTreeMap::new(),
-            influence_communities: vec![],
+            adjacency,
+            centrality_scores,
+            influence_communities,
         };
 
         let result = InfluenceAnalysisResult {
@@ -740,10 +945,10 @@ impl ForensicQueryEngine {
             result: QueryResult::InfluenceAnalysis(result),
             metadata: QueryMetadata {
                 execution_time_us: 0,
-                nodes_examined: 0,
-                edges_traversed: 0,
-                subgraph_size: 0,
-                warnings: vec![],
+                nodes_examined: subgraph.nodes.len() as u32,
+                edges_traversed: subgraph.edges.len() as u32,
+                subgraph_size: subgraph.nodes.len() as u32,
+                warnings,
             },
         })
     }
@@ -755,37 +960,151 @@ impl ForensicQueryEngine {
         modified_evidence: &[EvidenceModification],
         recompute_downstream: bool,
     ) -> Result<ForensicQueryResult, QueryError> {
-        // Implementation placeholder - would perform what-if analysis
-        // This is a simplified version for the working implementation
+        let target_node_id = self.resolve_query_node(&query.target)?;
+        let decision_node = self
+            .graph
+            .nodes
+            .get(&target_node_id)
+            .ok_or(QueryError::NodeNotFound(target_node_id))?;
+        let original_outcome = match &decision_node.node_type {
+            NodeType::Decision { outcome, .. } => *outcome,
+            _ => {
+                return Err(QueryError::InvalidTarget(
+                    "Counterfactual analysis requires a decision target".to_string(),
+                ));
+            }
+        };
+
+        let mut modified_subgraph =
+            self.extract_causal_subgraph(target_node_id, self.max_graph_depth())?;
+        let original_total = modified_subgraph.total_influence.millionths.max(1) as f64;
+        let mut sensitivity_scores = BTreeMap::new();
+        let mut critical_evidence = Vec::new();
+
+        for modification in modified_evidence {
+            let mut matched_nodes = Vec::new();
+            let mut max_delta = 0.0f64;
+
+            for (node_id, node) in &mut modified_subgraph.nodes {
+                let NodeType::EvidenceAtom {
+                    dependency,
+                    confidence_millionths,
+                    ..
+                } = &mut node.node_type
+                else {
+                    continue;
+                };
+
+                if dependency.evidence_atom_id != modification.evidence_id {
+                    continue;
+                }
+
+                let original_influence = dependency
+                    .influence_magnitude_millionths
+                    .unsigned_abs()
+                    .min(u64::from(InfluenceWeight::MAX.millionths))
+                    as u32;
+                let delta = original_influence.abs_diff(modification.new_influence.millionths);
+                max_delta = max_delta.max(delta as f64 / original_total);
+
+                dependency.influence_magnitude_millionths =
+                    i64::from(modification.new_influence.millionths);
+                if let Some(new_confidence) = modification.new_confidence_millionths {
+                    *confidence_millionths = new_confidence.min(InfluenceWeight::MAX.millionths);
+                }
+
+                let material = format!(
+                    "{}:{}:{}:{:?}",
+                    modification.evidence_id,
+                    modification.new_influence.millionths,
+                    modification
+                        .new_confidence_millionths
+                        .unwrap_or(*confidence_millionths),
+                    query.query_id
+                );
+                node.content_hash = ContentHash::compute(material.as_bytes());
+                node.authenticity_hash = AuthenticityHash::compute_keyed(
+                    FORENSIC_QUERY_POLICY_ID.as_bytes(),
+                    material.as_bytes(),
+                );
+                matched_nodes.push(*node_id);
+            }
+
+            if matched_nodes.is_empty() {
+                return Err(QueryError::InvalidTarget(format!(
+                    "Counterfactual evidence not found in causal subgraph: {}",
+                    modification.evidence_id
+                )));
+            }
+
+            if recompute_downstream {
+                for edge in modified_subgraph.edges.values_mut() {
+                    if matched_nodes.contains(&edge.source) {
+                        edge.weight = modification.new_influence;
+                        let material = format!(
+                            "{}:{}:{}:{}",
+                            modification.evidence_id,
+                            edge.source,
+                            edge.target,
+                            modification.new_influence.millionths
+                        );
+                        edge.content_hash = ContentHash::compute(material.as_bytes());
+                    }
+                }
+            }
+
+            let sensitivity = max_delta.min(1.0);
+            sensitivity_scores.insert(modification.evidence_id.clone(), sensitivity);
+            if sensitivity >= 0.1 {
+                critical_evidence.push(modification.evidence_id.clone());
+            }
+        }
+
+        modified_subgraph.total_influence = InfluenceWeight::from_millionths(
+            modified_subgraph
+                .edges
+                .values()
+                .fold(0u32, |sum, edge| sum.saturating_add(edge.weight.millionths)),
+        );
+
+        let max_sensitivity = sensitivity_scores
+            .values()
+            .copied()
+            .fold(0.0f64, f64::max)
+            .min(1.0);
+        let robustness_score = 1.0 - max_sensitivity;
+        let mut warnings = vec![
+            "counterfactual query reports structural sensitivity only; no policy re-evaluator is available, so predicted outcome is held at the original outcome"
+                .to_string(),
+        ];
+        if !recompute_downstream {
+            warnings.push("downstream edge weights were not recomputed by request".to_string());
+        }
 
         let result = CounterfactualAnalysisResult {
-            original_outcome: DecisionOutcome::Allow,
-            counterfactual_outcome: DecisionOutcome::Deny,
-            outcome_change_probability: InfluenceWeight::from_millionths(750_000),
-            modified_subgraph: CausalSubgraph {
-                nodes: BTreeMap::new(),
-                edges: BTreeMap::new(),
-                root_nodes: vec![],
-                leaf_nodes: vec![],
-                total_influence: InfluenceWeight::ZERO,
-            },
+            original_outcome,
+            counterfactual_outcome: original_outcome,
+            outcome_change_probability: InfluenceWeight::ZERO,
+            modified_subgraph,
             sensitivity_analysis: SensitivityAnalysis {
-                sensitivity_scores: BTreeMap::new(),
-                critical_evidence: vec![],
-                robustness_score: 0.75,
+                sensitivity_scores,
+                critical_evidence,
+                robustness_score,
             },
         };
+        let nodes_examined = result.modified_subgraph.nodes.len() as u32;
+        let edges_traversed = result.modified_subgraph.edges.len() as u32;
 
         Ok(ForensicQueryResult {
             query: query.clone(),
-            status: QueryStatus::Success,
+            status: QueryStatus::PartialSuccess,
             result: QueryResult::CounterfactualAnalysis(result),
             metadata: QueryMetadata {
                 execution_time_us: 0,
-                nodes_examined: 0,
-                edges_traversed: 0,
-                subgraph_size: 0,
-                warnings: vec![],
+                nodes_examined,
+                edges_traversed,
+                subgraph_size: nodes_examined,
+                warnings,
             },
         })
     }
@@ -798,14 +1117,103 @@ impl ForensicQueryEngine {
         end_timestamp: u64,
         sort_by_causation: bool,
     ) -> Result<ForensicQueryResult, QueryError> {
-        // Implementation placeholder - would reconstruct event timeline
-        // This is a simplified version for the working implementation
+        let subgraph = self.subgraph_for_query_target(&query.target)?;
+        let order_index: BTreeMap<NodeId, usize> = self
+            .graph
+            .topological_order
+            .iter()
+            .enumerate()
+            .map(|(index, node_id)| (*node_id, index))
+            .collect();
+
+        let mut timeline_events = Vec::new();
+        for node in subgraph.nodes.values() {
+            if node.timestamp_ns < start_timestamp || node.timestamp_ns > end_timestamp {
+                continue;
+            }
+
+            let event_type = match &node.node_type {
+                NodeType::EvidenceAtom { .. } => EventType::EvidenceIntroduced,
+                NodeType::Decision { .. } => EventType::DecisionMade,
+                NodeType::AggregateInfluence { .. } => EventType::InfluenceAggregated,
+            };
+            timeline_events.push(TimelineEvent {
+                timestamp_ns: node.timestamp_ns,
+                node_id: node.id,
+                event_type,
+                description: format!("{event_type:?} at {}", node.id),
+            });
+        }
+
+        if sort_by_causation {
+            timeline_events.sort_by_key(|event| {
+                (
+                    order_index
+                        .get(&event.node_id)
+                        .copied()
+                        .unwrap_or(usize::MAX),
+                    event.timestamp_ns,
+                    event.node_id,
+                )
+            });
+        } else {
+            timeline_events.sort_by_key(|event| (event.timestamp_ns, event.node_id));
+        }
+
+        if let Some(limit) = query.parameters.limit {
+            timeline_events.truncate(limit);
+        }
+
+        let event_node_ids: BTreeSet<_> =
+            timeline_events.iter().map(|event| event.node_id).collect();
+        let mut critical_points = Vec::new();
+        for node_id in &event_node_ids {
+            let Some(node) = subgraph.nodes.get(node_id) else {
+                continue;
+            };
+            let NodeType::Decision { decision_id, .. } = &node.node_type else {
+                continue;
+            };
+            let strongest_incoming = subgraph
+                .edges
+                .values()
+                .filter(|edge| edge.target == *node_id)
+                .map(|edge| edge.weight.to_f64())
+                .fold(0.0f64, f64::max);
+            critical_points.push(CriticalPoint {
+                timestamp_ns: node.timestamp_ns,
+                decision_node: *node_id,
+                criticality_reason: format!("decision {decision_id} closed a causal chain"),
+                impact_score: strongest_incoming,
+            });
+        }
+
+        let mut timestamp_groups: BTreeMap<u64, Vec<NodeId>> = BTreeMap::new();
+        for event in &timeline_events {
+            timestamp_groups
+                .entry(event.timestamp_ns)
+                .or_default()
+                .push(event.node_id);
+        }
+        let parallel_chains = timestamp_groups
+            .into_iter()
+            .filter_map(|(timestamp_ns, nodes)| {
+                (nodes.len() > 1).then(|| ParallelChain {
+                    chain_nodes: nodes,
+                    start_timestamp_ns: timestamp_ns,
+                    end_timestamp_ns: timestamp_ns,
+                    description: "nodes share an identical event timestamp".to_string(),
+                })
+            })
+            .collect();
 
         let result = TimelineReconstructionResult {
-            timeline_events: vec![],
-            critical_points: vec![],
-            parallel_chains: vec![],
+            timeline_events,
+            critical_points,
+            parallel_chains,
         };
+        let nodes_examined = subgraph.nodes.len() as u32;
+        let edges_traversed = subgraph.edges.len() as u32;
 
         Ok(ForensicQueryResult {
             query: query.clone(),
@@ -813,9 +1221,9 @@ impl ForensicQueryEngine {
             result: QueryResult::TimelineReconstruction(result),
             metadata: QueryMetadata {
                 execution_time_us: 0,
-                nodes_examined: 0,
-                edges_traversed: 0,
-                subgraph_size: 0,
+                nodes_examined,
+                edges_traversed,
+                subgraph_size: nodes_examined,
                 warnings: vec![],
             },
         })
@@ -825,24 +1233,27 @@ impl ForensicQueryEngine {
     fn generate_causal_summary(
         &self,
         subgraph: &CausalSubgraph,
-        decision_node: &CausationNode,
+        _decision_node: &CausationNode,
     ) -> Result<CausalSummary, QueryError> {
         let mut primary_evidence = Vec::new();
         let mut activated_factors = Vec::new();
         let mut evidence_count = 0;
+        let mut confidence_sum = 0u64;
         let mut strongest_influence = InfluenceWeight::ZERO;
 
         // Analyze nodes in subgraph
         for (node_id, node) in &subgraph.nodes {
             match &node.node_type {
-                NodeType::EvidenceAtom { .. } => {
+                NodeType::EvidenceAtom {
+                    confidence_millionths,
+                    ..
+                } => {
                     evidence_count += 1;
+                    confidence_sum += u64::from(*confidence_millionths);
                     primary_evidence.push(*node_id);
                 }
-                NodeType::Decision { factor, .. } => {
-                    if !activated_factors.contains(factor) {
-                        activated_factors.push(*factor);
-                    }
+                NodeType::Decision { factor, .. } if !activated_factors.contains(factor) => {
+                    activated_factors.push(*factor);
                 }
                 _ => {}
             }
@@ -865,7 +1276,11 @@ impl ForensicQueryEngine {
             primary_evidence,
             activated_factors,
             evidence_count,
-            aggregate_confidence_millionths: 800_000, // Placeholder
+            aggregate_confidence_millionths: if evidence_count == 0 {
+                0
+            } else {
+                (confidence_sum / u64::from(evidence_count)) as u32
+            },
             strongest_influence,
             explanation,
         })
@@ -877,18 +1292,97 @@ impl ForensicQueryEngine {
         subgraph: &CausalSubgraph,
         decision_node: &CausationNode,
     ) -> Result<Vec<AlternativePath>, QueryError> {
-        // Implementation placeholder - would generate what-if scenarios
-        Ok(vec![])
+        let (target_decision_id, original_outcome) = match &decision_node.node_type {
+            NodeType::Decision {
+                decision_id,
+                outcome,
+                ..
+            } => (decision_id.as_str(), *outcome),
+            _ => return Ok(Vec::new()),
+        };
+
+        let mut alternatives = Vec::new();
+        for (node_id, node) in &subgraph.nodes {
+            if *node_id == decision_node.id {
+                continue;
+            }
+
+            let NodeType::Decision {
+                decision_id,
+                outcome,
+                ..
+            } = &node.node_type
+            else {
+                continue;
+            };
+            if *outcome == original_outcome {
+                continue;
+            }
+
+            // The probability of an alternative path is the causal influence
+            // the alternative decision EXERTS (strongest outgoing edge, e.g.
+            // its link toward the target decision) — not the influence it
+            // receives. Using incoming edges yielded probability 0 for any
+            // alternative with no in-edges even when it directly influenced
+            // the target (bd-ou0ne). Alternatives with no outgoing edges fall
+            // back to their strongest incoming influence.
+            let strongest_outgoing = subgraph
+                .edges
+                .values()
+                .filter(|edge| edge.source == *node_id)
+                .map(|edge| edge.weight)
+                .max_by_key(|weight| weight.millionths);
+            let probability = strongest_outgoing.unwrap_or_else(|| {
+                subgraph
+                    .edges
+                    .values()
+                    .filter(|edge| edge.target == *node_id)
+                    .map(|edge| edge.weight)
+                    .max_by_key(|weight| weight.millionths)
+                    .unwrap_or(InfluenceWeight::ZERO)
+            });
+
+            alternatives.push(AlternativePath {
+                scenario: format!(
+                    "Observed causal-subgraph decision {decision_id} had outcome {outcome:?}, differing from target decision {target_decision_id}"
+                ),
+                required_modifications: Vec::new(),
+                alternative_outcome: *outcome,
+                probability,
+            });
+        }
+
+        alternatives.sort_by(|left, right| {
+            right
+                .probability
+                .millionths
+                .cmp(&left.probability.millionths)
+                .then_with(|| left.scenario.cmp(&right.scenario))
+        });
+
+        Ok(alternatives)
     }
 
     /// Compute cache key for a query.
     fn compute_cache_key(&self, query: &ForensicQuery) -> Result<String, QueryError> {
-        // Simple cache key based on query content
+        // Cache key based on query content. Length-prefix each variable field so
+        // a boundary shift between query_id and the serialized type/target cannot
+        // alias two distinct queries onto the same cache entry (returning a stale
+        // result for the wrong query).
         let mut hash_data = Vec::new();
-
-        hash_data.extend_from_slice(query.query_id.as_bytes());
-        hash_data.extend_from_slice(serde_json::to_string(&query.query_type)?.as_bytes());
-        hash_data.extend_from_slice(serde_json::to_string(&query.target)?.as_bytes());
+        let append = |buf: &mut Vec<u8>, bytes: &[u8]| {
+            buf.extend_from_slice(&(bytes.len() as u64).to_le_bytes());
+            buf.extend_from_slice(bytes);
+        };
+        append(&mut hash_data, query.query_id.as_bytes());
+        append(
+            &mut hash_data,
+            serde_json::to_string(&query.query_type)?.as_bytes(),
+        );
+        append(
+            &mut hash_data,
+            serde_json::to_string(&query.target)?.as_bytes(),
+        );
 
         let hash = ContentHash::compute(&hash_data);
         Ok(format!(
@@ -1022,6 +1516,16 @@ mod tests {
         graph
     }
 
+    fn default_query_parameters(limit: Option<usize>) -> QueryParameters {
+        QueryParameters {
+            limit,
+            include_trace: false,
+            include_raw_data: false,
+            causation_type_filter: None,
+            decision_factor_filter: None,
+        }
+    }
+
     #[test]
     fn test_forensic_query_engine_creation() {
         let graph = create_test_graph();
@@ -1086,7 +1590,221 @@ mod tests {
         if let QueryResult::CausalExplanation(explanation) = result.result {
             assert_eq!(explanation.decision_node.id, NodeId(2));
             assert_eq!(explanation.causal_summary.evidence_count, 1);
+            assert_eq!(
+                explanation.causal_summary.aggregate_confidence_millionths,
+                900_000
+            );
         }
+    }
+
+    #[test]
+    fn test_causal_explanation_reports_observed_alternative_decision_paths() {
+        let mut graph = create_test_graph();
+        let alternative_decision_node = CausationNode {
+            id: NodeId(3),
+            node_type: NodeType::Decision {
+                decision_id: "observed-allow-path".to_string(),
+                factor: DecisionFactor::GuardrailActivation,
+                context_hash: ContentHash::compute(b"alternative-decision-context"),
+                outcome: DecisionOutcome::Allow,
+            },
+            content_hash: ContentHash::compute(b"alternative-decision-node"),
+            authenticity_hash: AuthenticityHash::compute_keyed(b"alternative-decision", b"key"),
+            timestamp_ns: 1_500_000,
+            metadata: BTreeMap::new(),
+        };
+        graph.add_node(alternative_decision_node).unwrap();
+        graph
+            .add_edge(CausationEdge {
+                id: EdgeId(2),
+                source: NodeId(3),
+                target: NodeId(2),
+                weight: InfluenceWeight::from_millionths(250_000),
+                causation_type: CausationType::Indirect,
+                content_hash: ContentHash::compute(b"alternative-path-edge"),
+                timestamp_ns: 1_750_000,
+                metadata: BTreeMap::new(),
+            })
+            .unwrap();
+
+        let mut engine = ForensicQueryEngine::new(graph);
+        let query = ForensicQuery {
+            query_id: "causal-alternative-paths".to_string(),
+            query_type: QueryType::CausalExplanation {
+                max_depth: 5,
+                include_weak_influences: true,
+            },
+            target: QueryTarget::Decision("test-decision".to_string()),
+            parameters: default_query_parameters(None),
+            timestamp_ns: 3_000_000,
+        };
+
+        let result = engine.execute_query(query).unwrap();
+        let QueryResult::CausalExplanation(explanation) = result.result else {
+            panic!("expected causal explanation result");
+        };
+        assert_eq!(explanation.alternative_paths.len(), 1);
+        assert_eq!(
+            explanation.alternative_paths[0].alternative_outcome,
+            DecisionOutcome::Allow
+        );
+        assert_eq!(
+            explanation.alternative_paths[0].probability,
+            InfluenceWeight::from_millionths(250_000)
+        );
+        assert!(
+            explanation.alternative_paths[0]
+                .required_modifications
+                .is_empty()
+        );
+        assert!(
+            explanation.alternative_paths[0]
+                .scenario
+                .contains("observed-allow-path")
+        );
+    }
+
+    #[test]
+    fn test_influence_analysis_uses_causal_edges() {
+        let graph = create_test_graph();
+        let mut engine = ForensicQueryEngine::new(graph);
+
+        let query = ForensicQuery {
+            query_id: "influence-uses-edges".to_string(),
+            query_type: QueryType::InfluenceAnalysis {
+                min_influence_threshold: InfluenceWeight::from_millionths(100_000),
+                rank_by_strength: true,
+            },
+            target: QueryTarget::Decision("test-decision".to_string()),
+            parameters: default_query_parameters(None),
+            timestamp_ns: 3_000_000,
+        };
+
+        let result = engine.execute_query(query).unwrap();
+        assert_eq!(result.status, QueryStatus::Success);
+        assert_eq!(result.metadata.nodes_examined, 2);
+        assert_eq!(result.metadata.edges_traversed, 1);
+
+        let QueryResult::InfluenceAnalysis(analysis) = result.result else {
+            panic!("expected influence analysis result");
+        };
+        assert_eq!(analysis.ranked_influences.len(), 1);
+        assert_eq!(analysis.ranked_influences[0].node_id, NodeId(1));
+        assert_eq!(
+            analysis.ranked_influences[0].evidence_id.as_deref(),
+            Some("test-evidence")
+        );
+        assert_eq!(
+            analysis.ranked_influences[0].influence_weight,
+            InfluenceWeight::from_millionths(800_000)
+        );
+        assert_eq!(
+            analysis
+                .factor_distribution
+                .get(&DecisionFactor::PosteriorProbability)
+                .copied(),
+            Some(InfluenceWeight::from_millionths(800_000))
+        );
+        assert_eq!(
+            analysis
+                .influence_network
+                .adjacency
+                .get(&NodeId(1))
+                .unwrap()[0],
+            (NodeId(2), InfluenceWeight::from_millionths(800_000))
+        );
+    }
+
+    #[test]
+    fn test_counterfactual_analysis_reports_structural_sensitivity() {
+        let graph = create_test_graph();
+        let mut engine = ForensicQueryEngine::new(graph);
+
+        let query = ForensicQuery {
+            query_id: "counterfactual-structural".to_string(),
+            query_type: QueryType::CounterfactualAnalysis {
+                modified_evidence: vec![EvidenceModification {
+                    evidence_id: "test-evidence".to_string(),
+                    new_influence: InfluenceWeight::from_millionths(100_000),
+                    new_confidence_millionths: Some(500_000),
+                    description: "lower confidence for structural sensitivity".to_string(),
+                }],
+                recompute_downstream: true,
+            },
+            target: QueryTarget::Decision("test-decision".to_string()),
+            parameters: default_query_parameters(None),
+            timestamp_ns: 3_000_001,
+        };
+
+        let result = engine.execute_query(query).unwrap();
+        assert_eq!(result.status, QueryStatus::PartialSuccess);
+        assert!(
+            result
+                .metadata
+                .warnings
+                .iter()
+                .any(|warning| warning.contains("structural sensitivity only"))
+        );
+
+        let QueryResult::CounterfactualAnalysis(analysis) = &result.result else {
+            panic!("expected counterfactual analysis result");
+        };
+        assert_eq!(analysis.original_outcome, DecisionOutcome::Deny);
+        assert_eq!(analysis.counterfactual_outcome, DecisionOutcome::Deny);
+        assert_eq!(analysis.outcome_change_probability, InfluenceWeight::ZERO);
+        let sensitivity = analysis
+            .sensitivity_analysis
+            .sensitivity_scores
+            .get("test-evidence")
+            .copied()
+            .expect("test evidence sensitivity should be present");
+        assert!((sensitivity - 0.75).abs() < 1e-9);
+        assert_eq!(
+            analysis.sensitivity_analysis.critical_evidence,
+            vec!["test-evidence".to_string()]
+        );
+        assert_eq!(
+            analysis
+                .modified_subgraph
+                .edges
+                .get(&EdgeId(1))
+                .unwrap()
+                .weight,
+            InfluenceWeight::from_millionths(100_000)
+        );
+    }
+
+    #[test]
+    fn test_timeline_reconstruction_emits_graph_events() {
+        let graph = create_test_graph();
+        let mut engine = ForensicQueryEngine::new(graph);
+
+        let query = ForensicQuery {
+            query_id: "timeline-from-graph".to_string(),
+            query_type: QueryType::TimelineReconstruction {
+                start_timestamp_ns: 0,
+                end_timestamp_ns: 3_000_000,
+                sort_by_causation: true,
+            },
+            target: QueryTarget::Graph,
+            parameters: default_query_parameters(None),
+            timestamp_ns: 3_000_002,
+        };
+
+        let result = engine.execute_query(query).unwrap();
+        assert_eq!(result.status, QueryStatus::Success);
+        assert_eq!(result.metadata.nodes_examined, 2);
+        assert_eq!(result.metadata.edges_traversed, 1);
+
+        let QueryResult::TimelineReconstruction(timeline) = result.result else {
+            panic!("expected timeline reconstruction result");
+        };
+        assert_eq!(timeline.timeline_events.len(), 2);
+        assert_eq!(timeline.timeline_events[0].node_id, NodeId(1));
+        assert_eq!(timeline.timeline_events[1].node_id, NodeId(2));
+        assert_eq!(timeline.critical_points.len(), 1);
+        assert_eq!(timeline.critical_points[0].decision_node, NodeId(2));
+        assert!((timeline.critical_points[0].impact_score - 0.8).abs() < 1e-9);
     }
 
     #[test]

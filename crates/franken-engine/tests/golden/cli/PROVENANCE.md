@@ -49,5 +49,6 @@ The CLI captures are built on demand and emitted by the owning test below
 ## Toolchain
 
 - Rust: 2024 edition
-- frankenengine-engine: v0.1.0
+- Active insta snapshots: frankenengine-engine v0.2.0 (unreleased compatibility line)
+- Legacy JSON audit fixtures retained in this directory: frankenengine-engine v0.1.0
 - Mode: `INSTA_UPDATE=always` for blessing; default compare mode otherwise.

@@ -22,7 +22,7 @@ use frankenengine_engine::hash_tiers::ContentHash;
 /// Parse command line arguments.
 fn parse_args() -> ArgMatches {
     Command::new("franken-benchmark-evidence-export")
-        .version("0.1.0")
+        .version(env!("CARGO_PKG_VERSION"))
         .about("Export benchmark evidence bundles to JSON/TOML formats")
         .arg(
             Arg::new("input")

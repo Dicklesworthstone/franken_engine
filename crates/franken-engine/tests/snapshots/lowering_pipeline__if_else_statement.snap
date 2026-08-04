@@ -1,0 +1,596 @@
+---
+source: crates/franken-engine/src/lowering_pipeline.rs
+expression: actual_json
+---
+{
+  "ir1": {
+    "header": {
+      "schema_version": {
+        "major": 0,
+        "minor": 7,
+        "patch": 0
+      },
+      "level": "Ir1",
+      "source_hash": [
+        154,
+        177,
+        235,
+        70,
+        0,
+        108,
+        156,
+        250,
+        60,
+        181,
+        147,
+        138,
+        155,
+        159,
+        180,
+        68,
+        204,
+        187,
+        240,
+        161,
+        50,
+        11,
+        17,
+        134,
+        9,
+        146,
+        249,
+        190,
+        240,
+        38,
+        193,
+        164
+      ],
+      "source_label": "conditional.js"
+    },
+    "scopes": [
+      {
+        "scope_id": {
+          "depth": 0,
+          "index": 0
+        },
+        "parent": null,
+        "kind": "Global",
+        "bindings": []
+      }
+    ],
+    "ops": [
+      {
+        "LoadName": {
+          "name": "x",
+          "allow_missing": false
+        }
+      },
+      {
+        "LoadLiteral": {
+          "value": {
+            "Integer": 0
+          }
+        }
+      },
+      {
+        "BinaryOp": {
+          "operator": "GreaterThan"
+        }
+      },
+      {
+        "JumpIfFalsy": {
+          "label_id": 0
+        }
+      },
+      "Pop",
+      {
+        "LoadLiteral": {
+          "value": {
+            "String": "positive"
+          }
+        }
+      },
+      "Pop",
+      {
+        "Jump": {
+          "label_id": 1
+        }
+      },
+      {
+        "Label": {
+          "id": 0
+        }
+      },
+      {
+        "LoadLiteral": {
+          "value": {
+            "String": "non-positive"
+          }
+        }
+      },
+      "Pop",
+      {
+        "Label": {
+          "id": 1
+        }
+      },
+      "Return"
+    ]
+  },
+  "ir2": {
+    "header": {
+      "schema_version": {
+        "major": 0,
+        "minor": 7,
+        "patch": 0
+      },
+      "level": "Ir2",
+      "source_hash": [
+        165,
+        20,
+        65,
+        110,
+        74,
+        246,
+        83,
+        200,
+        249,
+        226,
+        98,
+        40,
+        255,
+        234,
+        27,
+        145,
+        231,
+        93,
+        169,
+        203,
+        203,
+        67,
+        113,
+        6,
+        200,
+        79,
+        204,
+        180,
+        72,
+        1,
+        151,
+        234
+      ],
+      "source_label": "conditional.js"
+    },
+    "scopes": [
+      {
+        "scope_id": {
+          "depth": 0,
+          "index": 0
+        },
+        "parent": null,
+        "kind": "Global",
+        "bindings": []
+      }
+    ],
+    "ops": [
+      {
+        "inner": {
+          "LoadName": {
+            "name": "x",
+            "allow_missing": false
+          }
+        },
+        "effect": "ReadEffect",
+        "required_capability": null,
+        "flow": {
+          "data_label": "Internal",
+          "sink_clearance": "Internal",
+          "declassification_required": false
+        }
+      },
+      {
+        "inner": {
+          "LoadLiteral": {
+            "value": {
+              "Integer": 0
+            }
+          }
+        },
+        "effect": "Pure",
+        "required_capability": null,
+        "flow": null
+      },
+      {
+        "inner": {
+          "BinaryOp": {
+            "operator": "GreaterThan"
+          }
+        },
+        "effect": "Pure",
+        "required_capability": null,
+        "flow": null
+      },
+      {
+        "inner": {
+          "JumpIfFalsy": {
+            "label_id": 0
+          }
+        },
+        "effect": "Pure",
+        "required_capability": null,
+        "flow": null
+      },
+      {
+        "inner": "Pop",
+        "effect": "Pure",
+        "required_capability": null,
+        "flow": null
+      },
+      {
+        "inner": {
+          "LoadLiteral": {
+            "value": {
+              "String": "positive"
+            }
+          }
+        },
+        "effect": "Pure",
+        "required_capability": null,
+        "flow": null
+      },
+      {
+        "inner": "Pop",
+        "effect": "Pure",
+        "required_capability": null,
+        "flow": null
+      },
+      {
+        "inner": {
+          "Jump": {
+            "label_id": 1
+          }
+        },
+        "effect": "Pure",
+        "required_capability": null,
+        "flow": null
+      },
+      {
+        "inner": {
+          "Label": {
+            "id": 0
+          }
+        },
+        "effect": "Pure",
+        "required_capability": null,
+        "flow": null
+      },
+      {
+        "inner": {
+          "LoadLiteral": {
+            "value": {
+              "String": "non-positive"
+            }
+          }
+        },
+        "effect": "Pure",
+        "required_capability": null,
+        "flow": null
+      },
+      {
+        "inner": "Pop",
+        "effect": "Pure",
+        "required_capability": null,
+        "flow": null
+      },
+      {
+        "inner": {
+          "Label": {
+            "id": 1
+          }
+        },
+        "effect": "Pure",
+        "required_capability": null,
+        "flow": null
+      },
+      {
+        "inner": "Return",
+        "effect": "Pure",
+        "required_capability": null,
+        "flow": null
+      }
+    ],
+    "required_capabilities": []
+  },
+  "ir3": {
+    "header": {
+      "schema_version": {
+        "major": 0,
+        "minor": 7,
+        "patch": 0
+      },
+      "level": "Ir3",
+      "source_hash": [
+        116,
+        11,
+        149,
+        155,
+        104,
+        150,
+        211,
+        18,
+        110,
+        173,
+        227,
+        65,
+        72,
+        188,
+        171,
+        248,
+        40,
+        210,
+        70,
+        255,
+        42,
+        190,
+        254,
+        129,
+        232,
+        36,
+        169,
+        252,
+        6,
+        176,
+        195,
+        26
+      ],
+      "source_label": "conditional.js"
+    },
+    "instructions": [
+      {
+        "LoadName": {
+          "dst": 1,
+          "name_pool_index": 0,
+          "allow_missing": false
+        }
+      },
+      {
+        "LoadInt": {
+          "dst": 2,
+          "value": 0
+        }
+      },
+      {
+        "Gt": {
+          "dst": 3,
+          "lhs": 1,
+          "rhs": 2
+        }
+      },
+      {
+        "JumpIf": {
+          "cond": 3,
+          "target": 5
+        }
+      },
+      {
+        "Jump": {
+          "target": 9
+        }
+      },
+      {
+        "Move": {
+          "dst": 0,
+          "src": 3
+        }
+      },
+      {
+        "LoadStr": {
+          "dst": 4,
+          "pool_index": 1
+        }
+      },
+      {
+        "Move": {
+          "dst": 0,
+          "src": 4
+        }
+      },
+      {
+        "Jump": {
+          "target": 11
+        }
+      },
+      {
+        "LoadStr": {
+          "dst": 5,
+          "pool_index": 2
+        }
+      },
+      {
+        "Move": {
+          "dst": 0,
+          "src": 5
+        }
+      },
+      {
+        "Return": {
+          "value": 0
+        }
+      },
+      "Halt"
+    ],
+    "constant_pool": [
+      "x",
+      "positive",
+      "non-positive"
+    ],
+    "function_table": [
+      {
+        "entry": 0,
+        "arity": 0,
+        "frame_size": 6,
+        "name": "main",
+        "is_generator": false
+      }
+    ],
+    "specialization": null,
+    "required_capabilities": []
+  },
+  "ir2_flow_proof_artifact": {
+    "schema_version": "frankenengine.ir2_flow_proof_witness.v1",
+    "artifact_id": "sha256:dd5834665455d96c3d1edcb430b4e7fe8e281d68602edebf4ad707bffb7c8e4d",
+    "trace_id": "golden_test_if_else_statement",
+    "decision_id": "decision_if_else_statement",
+    "policy_id": "policy_if_else_statement",
+    "module_id": "conditional.js",
+    "proved_flows": [
+      {
+        "op_index": 0,
+        "source_label": "Internal",
+        "sink_clearance": "Internal",
+        "capability": null,
+        "proof_method": "StaticAnalysis"
+      }
+    ],
+    "denied_flows": [],
+    "required_declassifications": [],
+    "runtime_checkpoints": []
+  },
+  "witnesses": [
+    {
+      "pass_id": "ir0_to_ir1",
+      "input_hash": "sha256:9ab1eb46006c9cfa3cb5938a9b9fb444ccbbf0a1320b11860992f9bef026c1a4",
+      "output_hash": "sha256:a514416e4af653c8f9e26228ffea1b91e75da9cbcb437106c84fccb4480197ea",
+      "rollback_token": "sha256:9ab1eb46006c9cfa3cb5938a9b9fb444ccbbf0a1320b11860992f9bef026c1a4",
+      "invariant_checks": [
+        {
+          "name": "source_hash_linkage",
+          "passed": true,
+          "detail": "IR1 source_hash references IR0 hash"
+        },
+        {
+          "name": "scope_binding_ids_unique",
+          "passed": true,
+          "detail": "All scope binding IDs are unique"
+        }
+      ]
+    },
+    {
+      "pass_id": "ir1_to_ir2",
+      "input_hash": "sha256:a514416e4af653c8f9e26228ffea1b91e75da9cbcb437106c84fccb4480197ea",
+      "output_hash": "sha256:740b959b6896d3126eade34148bcabf828d246ff2abefe81e824a9fc06b0c31a",
+      "rollback_token": "sha256:a514416e4af653c8f9e26228ffea1b91e75da9cbcb437106c84fccb4480197ea",
+      "invariant_checks": [
+        {
+          "name": "source_hash_linkage",
+          "passed": true,
+          "detail": "IR2 source_hash references IR1 hash"
+        },
+        {
+          "name": "hostcall_capability_required",
+          "passed": true,
+          "detail": "Hostcall effects always carry capability tags"
+        },
+        {
+          "name": "ir2_flow_metrics_consistent",
+          "passed": true,
+          "detail": "flow_ops=1 static_proven=1 runtime_checks=0"
+        },
+        {
+          "name": "ir2_static_flow_coverage_ratio",
+          "passed": true,
+          "detail": "static_coverage_millionths=1000000 static_proven=1 total_flow_ops=1"
+        }
+      ]
+    },
+    {
+      "pass_id": "ir2_to_ir3",
+      "input_hash": "sha256:740b959b6896d3126eade34148bcabf828d246ff2abefe81e824a9fc06b0c31a",
+      "output_hash": "sha256:b0b117021c068c33f10a2a9dc3dedf8a75fbb122de962f1e7937f2a7ceae9421",
+      "rollback_token": "sha256:740b959b6896d3126eade34148bcabf828d246ff2abefe81e824a9fc06b0c31a",
+      "invariant_checks": [
+        {
+          "name": "source_hash_linkage",
+          "passed": true,
+          "detail": "IR3 source_hash references IR2 hash"
+        },
+        {
+          "name": "function_table_present",
+          "passed": true,
+          "detail": "IR3 function table contains a deterministic main entry"
+        },
+        {
+          "name": "terminal_halt_instruction",
+          "passed": true,
+          "detail": "IR3 instruction stream ends with HALT"
+        },
+        {
+          "name": "resolved_control_flow_targets",
+          "passed": true,
+          "detail": "IR3 jump targets resolve to concrete instruction indices"
+        }
+      ]
+    }
+  ],
+  "isomorphism_ledger": [
+    {
+      "pass_id": "ir0_to_ir1",
+      "input_hash": "sha256:9ab1eb46006c9cfa3cb5938a9b9fb444ccbbf0a1320b11860992f9bef026c1a4",
+      "output_hash": "sha256:a514416e4af653c8f9e26228ffea1b91e75da9cbcb437106c84fccb4480197ea",
+      "input_op_count": 1,
+      "output_op_count": 13
+    },
+    {
+      "pass_id": "ir1_to_ir2",
+      "input_hash": "sha256:a514416e4af653c8f9e26228ffea1b91e75da9cbcb437106c84fccb4480197ea",
+      "output_hash": "sha256:740b959b6896d3126eade34148bcabf828d246ff2abefe81e824a9fc06b0c31a",
+      "input_op_count": 13,
+      "output_op_count": 13
+    },
+    {
+      "pass_id": "ir2_to_ir3",
+      "input_hash": "sha256:740b959b6896d3126eade34148bcabf828d246ff2abefe81e824a9fc06b0c31a",
+      "output_hash": "sha256:b0b117021c068c33f10a2a9dc3dedf8a75fbb122de962f1e7937f2a7ceae9421",
+      "input_op_count": 13,
+      "output_op_count": 13
+    }
+  ],
+  "events": [
+    {
+      "trace_id": "golden_test_if_else_statement",
+      "decision_id": "decision_if_else_statement",
+      "policy_id": "policy_if_else_statement",
+      "component": "lowering_pipeline",
+      "event": "ir0_to_ir1_lowered",
+      "outcome": "pass",
+      "error_code": null
+    },
+    {
+      "trace_id": "golden_test_if_else_statement",
+      "decision_id": "decision_if_else_statement",
+      "policy_id": "policy_if_else_statement",
+      "component": "lowering_pipeline",
+      "event": "ir1_to_ir2_lowered",
+      "outcome": "pass",
+      "error_code": null
+    },
+    {
+      "trace_id": "golden_test_if_else_statement",
+      "decision_id": "decision_if_else_statement",
+      "policy_id": "policy_if_else_statement",
+      "component": "lowering_pipeline",
+      "event": "ir2_flow_check_completed",
+      "outcome": "pass",
+      "error_code": null
+    },
+    {
+      "trace_id": "golden_test_if_else_statement",
+      "decision_id": "decision_if_else_statement",
+      "policy_id": "policy_if_else_statement",
+      "component": "lowering_pipeline",
+      "event": "ir2_to_ir3_lowered",
+      "outcome": "pass",
+      "error_code": null
+    }
+  ]
+}

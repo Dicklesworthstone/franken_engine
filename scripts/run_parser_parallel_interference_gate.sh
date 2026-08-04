@@ -23,6 +23,45 @@ else
   target_dir="${default_target_dir_root}/${timestamp}-pid$$"
   target_dir_strategy="run-scoped-default"
 fi
+
+parser_rustflags_have_linker_policy() {
+  local rustflags="${1-}"
+  local -a tokens=()
+  local index
+  local effective_state="unset"
+
+  read -r -a tokens <<<"$rustflags"
+  for index in "${!tokens[@]}"; do
+    case "${tokens[$index]}" in
+      -Clinker-features=-lld) effective_state="disabled" ;;
+      -Clinker-features=*) effective_state="other" ;;
+      -C)
+        case "${tokens[$((index + 1))]:-}" in
+          linker-features=-lld) effective_state="disabled" ;;
+          linker-features=*) effective_state="other" ;;
+        esac
+        ;;
+    esac
+  done
+  [[ "$effective_state" == "disabled" ]]
+}
+
+parser_compose_linker_policy_rustflags() {
+  local rustflags="${1-}"
+
+  if parser_rustflags_have_linker_policy "$rustflags"; then
+    printf '%s' "$rustflags"
+  elif [[ -n "$rustflags" ]]; then
+    printf '%s %s' "$rustflags" '-Clinker-features=-lld'
+  else
+    printf '%s' '-Clinker-features=-lld'
+  fi
+}
+
+parser_parallel_rustflags="$(parser_compose_linker_policy_rustflags "${RUSTFLAGS-}")"
+parser_parallel_clippy_rustflags="${parser_parallel_rustflags} -Dwarnings"
+printf -v parser_parallel_rustflags_shell '%q' "$parser_parallel_rustflags"
+printf -v parser_parallel_clippy_rustflags_shell '%q' "$parser_parallel_clippy_rustflags"
 run_dir="${artifact_root}/${timestamp}"
 manifest_path="${run_dir}/run_manifest.json"
 events_path="${run_dir}/events.jsonl"
@@ -32,7 +71,7 @@ trace_id="trace-parser-parallel-interference-${timestamp}"
 decision_id="decision-parser-parallel-interference-${timestamp}"
 policy_id="policy-parser-parallel-interference-v1"
 component="parser_parallel_interference_gate"
-replay_command="${0} ${mode}"
+replay_command="env -u CARGO_ENCODED_RUSTFLAGS RUSTFLAGS=${parser_parallel_rustflags_shell} ${0} ${mode}"
 
 mkdir -p "$run_dir"
 
@@ -42,12 +81,14 @@ if ! command -v rch >/dev/null 2>&1; then
 fi
 
 run_rch() {
-  RCH_BUILD_TIMEOUT_SEC="${rch_build_timeout_sec}" \
+  env -u CARGO_ENCODED_RUSTFLAGS \
+    RCH_BUILD_TIMEOUT_SEC="${rch_build_timeout_sec}" \
     RCH_BUILD_TIMEOUT_SECONDS="${rch_build_timeout_sec}" \
     timeout "${rch_timeout_seconds}" \
-    rch exec -- env \
+    rch exec -- env -u CARGO_ENCODED_RUSTFLAGS \
     "RUSTUP_TOOLCHAIN=${toolchain}" \
     "CARGO_TARGET_DIR=${target_dir}" \
+    "RUSTFLAGS=${parser_parallel_rustflags}" \
     "$@"
 }
 
@@ -247,8 +288,8 @@ run_mode() {
       ;;
     clippy)
       run_step \
-        "env RUSTC_WORKSPACE_WRAPPER=clippy-driver RUSTFLAGS=-Dwarnings cargo test -p frankenengine-engine --lib --test parallel_interference_gate_integration --test parallel_parser_integration --no-run" \
-        env RUSTC_WORKSPACE_WRAPPER=clippy-driver RUSTFLAGS=-Dwarnings cargo test -p frankenengine-engine --lib --test parallel_interference_gate_integration --test parallel_parser_integration --no-run
+        "env RUSTC_WORKSPACE_WRAPPER=clippy-driver RUSTFLAGS=${parser_parallel_clippy_rustflags_shell} cargo test -p frankenengine-engine --lib --test parallel_interference_gate_integration --test parallel_parser_integration --no-run" \
+        env RUSTC_WORKSPACE_WRAPPER=clippy-driver "RUSTFLAGS=${parser_parallel_clippy_rustflags}" cargo test -p frankenengine-engine --lib --test parallel_interference_gate_integration --test parallel_parser_integration --no-run
       ;;
     ci)
       run_step \
@@ -256,8 +297,8 @@ run_mode() {
         cargo test -p frankenengine-engine --lib --test parallel_interference_gate_integration --test parallel_parser_integration --no-run
       run_test_lane
       run_step \
-        "env RUSTC_WORKSPACE_WRAPPER=clippy-driver RUSTFLAGS=-Dwarnings cargo test -p frankenengine-engine --lib --test parallel_interference_gate_integration --test parallel_parser_integration --no-run" \
-        env RUSTC_WORKSPACE_WRAPPER=clippy-driver RUSTFLAGS=-Dwarnings cargo test -p frankenengine-engine --lib --test parallel_interference_gate_integration --test parallel_parser_integration --no-run
+        "env RUSTC_WORKSPACE_WRAPPER=clippy-driver RUSTFLAGS=${parser_parallel_clippy_rustflags_shell} cargo test -p frankenengine-engine --lib --test parallel_interference_gate_integration --test parallel_parser_integration --no-run" \
+        env RUSTC_WORKSPACE_WRAPPER=clippy-driver "RUSTFLAGS=${parser_parallel_clippy_rustflags}" cargo test -p frankenengine-engine --lib --test parallel_interference_gate_integration --test parallel_parser_integration --no-run
       ;;
     *)
       echo "usage: $0 [check|test|clippy|ci]" >&2

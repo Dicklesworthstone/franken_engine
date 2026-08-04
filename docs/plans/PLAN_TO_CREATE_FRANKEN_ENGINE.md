@@ -56,7 +56,7 @@ This will be achieved through creative, radically innovative application of `$ex
 Category-defining disruptive floor (non-optional targets):
 - `>= 3x` weighted-geometric-mean throughput on Extension-Heavy Benchmark Suite v1.0 (Section `14` denominator contract) versus both baseline Node and Bun configurations at equivalent behavior. **Target pending live measurement integration.**
 - `>= 10x` reduction in successful red-team host compromise rate versus baseline Node/Bun default posture. **Target pending live red-team scenario implementation.**
-- `<= 250ms` median time from high-risk signal crossing to containment action.
+- `<= 250ms` median time from high-risk signal crossing to containment action. **Target pending measured-latency evidence integration.**
 - `100%` deterministic replay coverage for declared security-critical allow/deny/escalation decisions, backed by fail-closed replay evidence validation and fixed-input byte-identical `frankenctl` artifact proof.
 - At least `3` production features that are impossible by default in standard Node/Bun deployments (for example posterior-explained policy actions, signed policy checkpoints with rollback resistance, autonomous quarantine mesh).
 
@@ -1415,3 +1415,1192 @@ Output contract:
 - At least 4 publishable technical reports with reproducible artifact bundles.
 - At least 2 externally replicated high-impact claims.
 - At least 1 open benchmark or verification tool release adopted outside the project.
+
+## 17. ES2020 Observable-Surface Coverage (target)
+
+FrankenEngine targets executing a high fraction of the ES2020 observable
+surface through a versioned tc39/test262 profile that includes the applicable
+ES2020 normative tests and explicitly excludes Annex B, ECMA-402, proposals,
+and features standardized after ES2020. Directory names alone are not an
+edition filter: modern Test262 places later features such as Temporal under
+`built-ins/*`. The profile therefore needs an audited feature-to-edition map
+and a checked-in, content-addressed selected-test manifest.
+
+The headline figure is the honest aggregate over the conformance views, always
+published alongside a floor that exposes the weakest view, so a strong category
+cannot hide a weak one behind a flattering average. The 2026-06-21 result
+(`120 / 47,157`) is a runner-system baseline, not a semantic conformance score:
+the runner does not preload requested harness includes, does not implement the
+full YAML metadata or strict/module/async execution matrix, does not classify
+negative tests by parse/resolution/runtime phase and constructor, treats normal
+non-`undefined` completion as failure, and admits post-ES2020 tests. It remains
+valuable evidence of the current end-to-end system, but it cannot be promoted
+as ES2020 semantic coverage.
+
+`FE-CLAIM-026` remains a target until the harness-oracle gate in Section 18 is
+green and a fresh full-corpus run has been produced. After that cutover,
+“100% ES2020 conformance” means zero unwaived semantic failures in the declared
+profile. Waivers may cover only independently demonstrated host/harness
+inapplicability; `not_yet_implemented`, parser gaps, builtin gaps, and intended
+shortcuts are failures, not waivers.
+
+## 18. 2026-07-23 Performance And ES2020 Conformance Bridge Program
+
+### 18.0 Purpose, Authority, And Starting Evidence
+
+This section is the Phase-2 bridge from the 2026-07-23 reality check to
+executable work. It supersedes any tracker status or older prose that equates a
+planning model with an execution tier, a synthetic estimate with a conformance
+run, or tactical bead closure with the program's victory conditions. It does
+not erase the earlier work: policy models, proof contracts, runner schemas,
+profiling tools, and frontier machinery are inputs to this program. They simply
+do not count as executable JIT/AOT output or semantic Test262 success until the
+new gates below prove those properties.
+
+Current measured anchors:
+
+- The committed E2 denominator reports FrankenEngine about `1,087x` slower
+  than Node and `1,264x` slower than Bun by weighted geometric mean. Individual
+  admitted cases range from roughly `86x` to `3,605x` behind.
+- That denominator reparses, relowers, and executes through FrankenEngine on
+  every sample while Node/Bun receive compiled warmup, so it mixes startup,
+  compilation, and execution costs. The result is still a real end-to-end
+  failure, but it is insufficient for attributing the gap.
+- The production path is parser -> IR0 -> IR1/IR2/IR3 lowering ->
+  `baseline_interpreter`. Both advertised execution lane tags instantiate the
+  same interpreter with different budgets. Profiling enablement in the lane
+  router is currently a no-op.
+- The interpreter clones each decoded instruction, clones register `Value`s,
+  performs memory/label bookkeeping around writes, and uses a large enum-based
+  `Value` plus ordered tree-backed object/property storage.
+- Existing quickening, PIC, superblock, trace-fusion, tier-up, hardware-layout,
+  and AOT modules mostly produce policy/provenance records. There is no native
+  code-generation dependency or executable optimized tier in the manifests.
+- `aot_entrygraph_compiler` correctly declares that it simulates compilation
+  and emits planning/provenance identities, not bytecode or machine code.
+- The prior eight-scenario profile attributes useful incidental costs
+  (interpreter evaluation, `Value`/seed cloning, Ed25519 key derivation,
+  allocation, deterministic serialization), but it does not profile the
+  28-case denominator or establish a per-opcode cycle model.
+- The live Test262 artifact reports `120 / 47,157` passing, with `37,433`
+  runtime failures and `6,616` parse failures. The denominator includes at
+  least `4,588` Temporal tests and other post-ES2020 surfaces, while the harness
+  omits required includes, metadata semantics, negative phases, and execution
+  modes.
+- `crates/franken-core` is a real workspace member and substantial second
+  implementation lane, while `crates/franken-engine` remains the canonical
+  shipped runtime owner. Maintaining semantic fixes twice without an explicit
+  per-module ownership cutover is unacceptable for this campaign.
+
+The authoritative outputs of this bridge are:
+
+1. a truthful, decomposed performance and conformance baseline;
+2. one canonical semantic implementation lane per module;
+3. an executable multi-tier VM with safe fallback and native code output;
+4. architecture-specific backends and high-core throughput paths;
+5. a Test262-conformant runner and exact ES2020 profile;
+6. a dependency-ordered semantic completion campaign;
+7. continuous proof, performance, and conformance ratchets;
+8. an external reproduction package.
+
+### 18.1 Outcome Definitions: Two Performance Scoreboards, One Conformance Gate
+
+The performance program MUST report two non-substitutable scoreboards.
+
+**Raw JavaScript execution frontier**
+
+- Measures parse, lower, cold execution, warm execution, steady-state
+  execution, compile latency, deoptimization, peak RSS, and code-cache size
+  separately.
+- Uses behavior-identical, security-mode-decomposed cells against pinned Node
+  and Bun versions on the same host.
+- Publishes per-case ratios and weighted geometric means; it never hides an
+  outlier behind one aggregate.
+- The mandate is to minimize the distance to Node and Bun as far as evidence
+  permits. The staged engineering target is `<= 10x`, then `<= 3x`, then
+  `<= 1.5x` raw warm steady-state on the declared compute corpus, with parity
+  or a lead retained as a stretch objective. These are promotion thresholds,
+  not claims that the result already exists.
+
+**Equivalent secure-extension transaction frontier**
+
+- Implements Section 14 exactly: equivalent isolation, capability policy,
+  evidence, durability, effects, errors, and output digests.
+- Preserves the binding `>= 3x` weighted-geometric-mean target versus both Node
+  and Bun.
+- May exploit structural in-process advantages only when the baselines perform
+  equivalent work. The benchmark specification must be frozen before results,
+  not edited after seeing them.
+
+**ES2020 conformance**
+
+- The gate is the exact selected-test manifest from a pinned Test262 revision,
+  executed according to Test262's interpretation contract.
+- “100%” means every applicable strict and non-strict variant passes, with zero
+  unwaived semantic failures.
+- Host-only waivers require a clause, proof of inapplicability, owner, expiry,
+  and independent review. Expired, missing, `not_yet_implemented`, or
+  `intentional_divergence` entries fail the release gate.
+- Annex B and ECMA-402 are separate scored tracks. They cannot inflate or
+  depress the ES2020 normative headline and cannot be silently ignored.
+
+No performance optimization may weaken conformance, capability enforcement,
+IFC, replay, resource accounting, error semantics, or evidence integrity.
+Every fast tier has a semantically exact fallback, and every failed guard
+returns to that fallback without observable duplication or omission.
+
+### 18.2 P0 Decisions And Program Constitution
+
+The following decisions happen before broad implementation.
+
+1. **Canonical semantics ownership.** `crates/franken-engine` remains the
+   canonical parser/lowering/interpreter and shipped-runtime owner during this
+   bridge. Each of the 42 `franken-core` module families receives one explicit
+   disposition: shared canonical dependency, migration candidate with a
+   one-time cutover, independent proof oracle, or frozen reference. New
+   semantic behavior is never hand-implemented in both lanes. A later cutover
+   is allowed only by the existing graduation contract and parity gate.
+2. **Native code boundary.** Existing repository crates retain
+   `#![forbid(unsafe_code)]`. Executable machine-code allocation and invocation
+   require the separately audited `/dp/franken_native_capsule` sibling with a
+   safe, typed, ENGINE-authorized interface. The production dependency chain
+   is `franken_node -> franken_engine -> franken_native_capsule`; the capsule
+   has no JavaScript semantics and no production reverse dependency. Cranelift
+   is the first portable backend. FrankenEngine lowers into a backend-neutral,
+   machine-code-free `NativeRegionPlan`; the capsule compiler consumes it and
+   produces/seals the Region Code Object. Copy-and-patch and
+   whole-interpreter partial evaluation remain measured Tier-B bakeoff
+   candidates behind those contracts. A typed interface, signature,
+   structural validator, W^X, or CFI does not sandbox a compiler bug: the
+   compiler, capsule, and generated code are an explicit TCB for in-process
+   execution. A fatal native fault terminates the executing process; parent
+   survival requires the complete execution cell and native heap to run in a
+   child process. That boundary alone does not confine authority: untrusted
+   production also requires a cross-platform least-authority sandbox,
+   out-of-cell effect/key/checkpoint broker, and typed indeterminate outcome
+   for external effects whose commit state cannot be reconciled.
+   A checkpoint emitted by a cell after it entered potentially corrupt native
+   code is not a trusted recovery root. Recovery starts from the last
+   pre-native checkpoint bound to the broker/evidence prefix, or from state
+   independently reconstructed and verified outside the child, then replays
+   broker-held nondeterminism and effect receipts. The broker treats
+   child-supplied IFC labels, capability claims, provenance, evidence, and
+   commit assertions as untrusted and rederives or verifies the authority
+   needed for each effect.
+   It cannot reconstruct arbitrary value-level IFC provenance from bytes
+   emitted by a memory-corrupted cell, so it enforces an independently
+   maintained conservative output label equal to the join of all labels
+   admitted to the cell plus broker-derived input lineage. Fine-grained
+   language-level capability/IFC semantics retain the engine, compiler,
+   backend, capsule, helpers, and generated code in their claim-specific TCB;
+   no arbitrary-code-resilient fine-IFC claim is made without unforgeable
+   broker-owned labeled handles or equivalent external derivation.
+   Native eligibility must also preserve user-visible behavior: prove before
+   entry that all prospective effects accept the broker-owned cell high-water
+   label, otherwise route `preferred` to independently eligible Tier I or
+   return a typed `required`-mode denial with doctor/explain evidence.
+   Post-entry label escalation denies the effect and may restart at the
+   trusted pre-native boundary in Tier I only when broker-held effect state
+   proves replay safe; otherwise it is typed partial/indeterminate. Signed
+   declassification stays outside the cell and overtaint/fallback rates are
+   measured.
+   Compilation-worker isolation alone is insufficient. Compile authorization
+   binds inputs and budgets before compilation; a distinct activation
+   authorization binds the resulting sealed RCO and runtime contract.
+   `ADR-0010` freezes the detailed boundary and remains proposed until the
+   project owner explicitly approves its payload. Until then, native JIT work
+   remains blocked rather than smuggling `unsafe` into either existing
+   repository.
+3. **No binding-led escape hatch.** Cranelift, a stencil linker, or another
+   machine-code backend is a compiler backend, not a borrowed JavaScript
+   engine. V8, JavaScriptCore, QuickJS, Boa, or equivalent cannot become the
+   core execution path.
+4. **Reference tier is permanent.** The simplest correct interpreter remains
+   available in tests, replay, differential validation, and deterministic safe
+   mode even after faster tiers ship.
+5. **Profiles are explicit products.** Security-off, guardplane-on, IFC-on,
+   evidence-on, and full-containment measurements are separate. “Off” paths
+   must be genuinely zero- or near-zero-cost, while the release claim uses the
+   required production profile.
+6. **Single observable semantics.** Interpreter, baseline JIT, optimizing JIT,
+   AOT, and architecture-specialized code share the same bytecode semantics,
+   exception points, hostcall ABI, budget model, and deoptimization state map.
+7. **Closed-bead recertification.** Closed `RGC-603`, `RGC-610`, Test262
+   harness, and similar scaffold beads are historical inputs. The new program
+   only credits executable bytes, actual tier dispatch, reference-oracle
+   agreement, and current artifacts.
+8. **Swarm-safe delivery surfaces.** Before broad implementation, publish a
+   generated critical-path and ownership map covering modules, files, hardware
+   labs, integration order, and smallest-safe reservations. In particular,
+   the 98k-line `baseline_interpreter.rs` cannot remain the shared edit point
+   for every semantics, representation, security, and tiering lane. Extract
+   measured vertical slices behind the single-source semantics contract, one
+   reviewable change at a time, without a broad mechanical rewrite.
+
+**Native-code capsule decision checkpoint (`NCC-PLAN-0010-V1`)**
+
+- Canonical decision: `docs/adr/ADR-0010-native-code-capsule-trust-boundary.md`
+- Machine-readable decision:
+  `docs/adr/native_code_capsule_decision_v1.json`
+- Candidate portable sibling: `/dp/franken_native_capsule`
+- Candidate packages: `frankenengine-native-capsule-api`,
+  `frankenengine-native-capsule`, and `franken-native-capsule-worker`
+- Unsafe ownership: the API and worker packages remain unsafe-forbidden.
+  First-party unsafe is restricted to the runtime package’s exact ADR
+  allowlist for raw invocation plus platform executable-memory, unwind,
+  process-sandbox, and process-supervisor mechanisms. Every block carries an
+  invariant ID, local proof/test linkage, cfg/feature coverage, and
+  producer-distinct review; build scripts, proc macros, examples, tests,
+  benches, generated source, and new unallowlisted modules remain forbidden,
+  and transitive unsafe gets a separate Cargo/geiger/SBOM risk inventory.
+  FrankenNode owns supervision policy/operations, but low-level OS mechanisms
+  route through a narrow safe capsule-to-engine API; there is no direct
+  product-to-capsule call.
+- Candidate first portable backend: Cranelift `0.134.2` from Wasmtime
+  `v47.0.2` at `90fed3c6adf53f112c4dea56851728557bb73799`, minimum
+  Rust `1.94.0`, with exact crate/source/Cargo-lock checksums behind RCO v1.
+  The separately recorded `bccd12218bb4d16e0f535cd69b4d96994ff3a7ad`
+  research-head snapshot is not an implementation release identity.
+- Compiler ownership: engine produces `NativeRegionPlan`; capsule worker
+  produces/seals RCO under compile authorization and receipt
+- Profile model: every decision and receipt records `code_mode`
+  (`tier-i`/`jit`/`aot`), fault domain, authority profile, sandbox profile, and
+  administrator mode (`disabled`/`preferred`/`required`). AOT is a code mode,
+  not a security profile. It retains the offline compiler/backend/generated
+  code in the semantic TCB, may remove runtime compilation from the active
+  process, and adds artifact distribution/loading/signing to the deployment
+  TCB.
+- Named native profiles: `native-throughput`,
+  `native-parent-crash-contained`, `native-crash-contained`, and
+  `portable-tier-i`
+- Untrusted native default: whole-execution-cell child process plus
+  platform-least-authority sandbox and out-of-cell authority/effect broker; no
+  per-opcode IPC, shared mutable VM memory, ambient host authority, or in-cell
+  long-lived signing/declassification keys
+- Side-channel boundary: ordinary native profiles make no
+  microarchitectural-confidentiality claim. Any high-assurance profile must
+  separately own core scheduling/isolation, SMT policy, cache/NUMA placement,
+  predictor/serialization mitigations, a constant-time out-of-cell key
+  service, cross-tenant Prime+Probe/branch-target red probes, and measured
+  performance/capacity cost.
+- Crash-artifact boundary: ambient OS core dumps are disabled. Explicit
+  diagnostic dumps use only a broker-controlled encrypted,
+  quota/retention-bounded store with no guest-chosen filenames; heap,
+  registers, native pages, and specialized constants are tenant-secret-bearing
+  and require redacted operator output plus verified zero/expiry.
+- Fatal-fault rule: a native memory/control/stack fault is process-fatal and
+  can recover only through supervisor restart from the last pre-native
+  trusted checkpoint and broker-proved nondeterminism/effect/evidence prefix,
+  or from independently reconstructed/verified out-of-cell state. A
+  post-entry child checkpoint is only an untrusted proposal. Unknown
+  non-reconcilable external effects terminate as indeterminate and are never
+  blindly replayed.
+- Authorization rule: `franken_engine` owns the policy logic, but only an
+  out-of-cell control-plane native-authorization service may revalidate and
+  sign separate `CompileAuthorization` and `ActivationAuthorization` records.
+  An execution-cell engine submits unsigned, untrusted proposals only and has
+  no issuer key. Signer outage, stale epoch, rotation, or revocation fails
+  closed to Tier-I or a typed unavailable outcome with no in-cell/unsigned
+  bypass; signatures establish provenance, not memory safety
+- Lifecycle rule: immutable RCO cache, validate/reserve/relocate/finalize/RX,
+  prepared/dormant/admission-committed-or-aborted/atomically-enabled activation
+  with a post-linearization observation or typed indeterminate reconciliation,
+  then unroute/quiesce/unregister/zero/unmap and a linked retirement receipt
+- Approval rule: while the ADR state is `proposed` and
+  `implementation_authorized=false`, all executable native implementation
+  leaves remain blocked
+
+### 18.3 Measurement-First Truth Layer
+
+Optimization work is blocked until a representative truth layer exists.
+
+**Scenario matrix**
+
+- Raw microkernels: arithmetic, comparison, bitwise, branch, call/return,
+  recursion, exception, property get/set/delete, dense/holey array, string,
+  closure, iterator, promise, module, regexp, typed array, JSON, and GC churn.
+- Real programs: the 28-case E2 corpus, representative extension packages,
+  startup/compile/cache-hit workloads, and adversarial security workloads.
+- Scale: `1/10/50/100/500/1000` independent cells or requests where meaningful.
+- Hosts: generic x86-64 Linux, Zen 5 workstation/server, Apple M4, Apple M5,
+  plus CI's portable baseline.
+
+**Required decomposition**
+
+- source read, parse, each lowering pass, artifact validation, cell creation;
+- interpreter dispatch, operand decode, register read/write, `Value` clone/drop;
+- property lookup/shape transition, allocation/GC, string work, builtin body;
+- label propagation, budget accounting, hook checks, capability checks;
+- evidence construction, serialization, hashing/signing, host effects;
+- JIT queue, compile time, code install, warmup, OSR, guard failure, deopt;
+- CPU cycles/instructions, branch/indirect-branch misses, frontend/backend
+  stalls, L1/L2/LLC misses, TLB misses, allocations/bytes, RSS, page faults,
+  context switches, lock wait, and NUMA remote-access counters where available.
+
+**Statistical contract**
+
+- At least 30 independent process runs for claims and at least 20 for
+  exploratory baselines; fixed warmup and randomized case order.
+- Report raw samples, p50/p95/p99/p99.9/max, throughput, RSS, bootstrap 95% CI,
+  coefficient of variation, and effect size. Tails below 1,000 samples are
+  marked conservative.
+- Pin source, toolchain, target features, governor/power mode, affinity/QoS,
+  Node, Bun, kernel/macOS version, microcode, and benchmark datasets.
+- A win requires the improvement CI to exclude zero, at least 3% practical
+  gain on its primary metric, and no correctness or secondary-SLO regression.
+- Every change is one lever with before/after artifacts. Mixed changes are
+  rejected because attribution and rollback would be ambiguous.
+
+**Artifacts**
+
+Every run emits `baseline.json`, `samples.jsonl`, `env.json`,
+`run_manifest.json`, `commands.txt`, CPU and allocation profiles, disassembly
+for compiled code, correctness digests, Test262 deltas, `repro.lock`,
+`LEGAL.md`, and a manifest hashing all files. PMU-unavailable runs state that
+limitation instead of synthesizing counters.
+
+The tracker graph also emits a machine-readable execution map. It rejects
+orphaned critical work, ambiguous shared-file ownership, dependency cycles,
+and overlapping reservations in representative dry runs. Measurement,
+Test262, Tier I, native-capsule, representation, and hardware lanes remain
+parallel where their actual interfaces permit; a convenient monolithic file
+is not allowed to create false serialization.
+
+Exit gate `MEASURE-0`:
+
+- the 28-case denominator is rerun with separate cold/warm/steady phases;
+- the production profile has a ranked CPU/allocation/contention table;
+- at least three orthogonal signals support each top hypothesis;
+- the old headline is retained as historical evidence;
+- the profiler-to-bead handoff contains no optimization bundled into it.
+
+### 18.4 Executable Tier Architecture
+
+The target architecture is a five-tier system with deterministic promotion,
+bounded compilation, and exact fallback.
+
+**Tier R: reference interpreter**
+
+- Readable, spec-exact semantics and exhaustive assertions.
+- Used for differential testing, minimized repros, proof oracles, and safe mode.
+- Not burdened with production-only tracing when those systems are disabled.
+
+**Tier I: generated quickened interpreter**
+
+- Replace enum cloning with a compact decoded bytecode stream and immutable
+  constant pool.
+- Generate handlers from one bytecode-semantics description so operand decode,
+  interpreter behavior, baseline-JIT stencils, and test oracles cannot drift.
+- Use flat register frames and preallocated IC/feedback arrays; no allocation
+  on the ordinary handler fast path.
+- Add type/shape quickening, monomorphic property/call ICs, hot/cold slow-path
+  outlining, superinstructions selected from measured pairs, and fallthrough
+  layout optimized by profile.
+- Keep generic handlers for every specialized variant and dequicken on guard
+  invalidation.
+
+**Tier B: ultra-low-latency baseline JIT**
+
+- Default design hypothesis: Deegen-style generated semantics plus
+  copy-and-patch stencils for x86-64 and AArch64.
+- Remove dispatch and bytecode decode, burn register/constant/IC offsets into
+  code, use hot/cold splitting, and emit direct fallthroughs.
+- Include polymorphic property/call IC stubs, exact safepoints, stack maps,
+  exception tables, and OSR entry.
+- Run a bounded bakeoff against direct Cranelift lowering and whole-interpreter
+  partial evaluation on the same opcode subset. Select by net execution
+  savings, compile latency, code size, portability, and proof burden—not
+  novelty.
+
+**Tier O: optimizing region JIT**
+
+- Form regions from measured hot basic blocks with explicit side exits.
+- Lower to a compact SSA IR with effect, exception, capability, IFC, budget,
+  and deopt metadata.
+- Implement in evidence-gated waves: SCCP/constant folding, type propagation,
+  basic-block versioning, guarded inlining, LICM, GVN/CSE, bounds-check
+  elimination, escape analysis, scalar replacement, allocation sinking, loop
+  peeling/unrolling, vectorizable builtin kernels, and register allocation.
+- Every speculation records assumptions and a materialization recipe for all
+  interpreter-visible state. Guard failure, invalidation, exception, interrupt,
+  budget exhaustion, and policy epoch change deopt at a tested safepoint.
+- Use bounded e-graphs only inside selected pure regions with node/time/memory
+  caps and translation witnesses.
+
+**Tier A: content-addressed AOT/PGO image**
+
+- Compile selected modules or packages ahead of time using the same Tier O
+  pipeline, with target-feature variants and a generic fallback.
+- Cache key includes source/IR hashes, compiler build, semantics schema,
+  security profile, policy/proof epoch, target triple/features, and ABI.
+- Signed receipts bind executable output bytes, relocations, stack maps,
+  assumptions, proofs, benchmarks, and rollback token—not merely input hashes.
+- PGO profiles are versioned, mergeable, aged, and rejected on workload drift.
+- S3-FIFO is the default code-cache eviction hypothesis, subject to trace
+  replay and comparison with LRU/LFU/TinyLFU.
+
+**Promotion controller**
+
+- Promotion minimizes expected total cost:
+  `compile_cpu + latency_risk + code_memory + deopt_risk - predicted_saved_cpu`.
+- Budgets cap compile CPU, queue wait, variants/site, total code bytes, and
+  invalidation churn.
+- Calibration or drift failure disables speculation and returns to Tier I/R.
+- Compilation happens off the execution thread; one program's hot loop cannot
+  cause an unbounded compile storm.
+
+**Single-source bytecode semantics contract**
+
+- Replace hand-maintained tier copies with a declarative bytecode definition
+  that names operands, reads/writes, control flow, exception points, effects,
+  abstract semantic operation, fast-path guards, slow path, budget charge, IFC
+  transfer, and deopt materialization.
+- Generate the decoded opcode layout, reference dispatch table, quickened
+  variants, Tier-B stencil requests, Tier-O lowering skeleton, disassembler,
+  verifier, fuzz generator, and documentation from that definition.
+- Generated code is checked in or reproducibly regenerated with a generator
+  hash; CI fails on drift. The generator cannot contain an alternate hidden
+  implementation of JavaScript semantics.
+- An opcode is not Tier-B/Tier-O eligible until its generated test matrix
+  covers normal return, every abrupt completion, host effect, budget failure,
+  label transfer, OSR entry, deopt at each safepoint, and GC root map.
+- Unsupported bytecodes call the exact Tier-R/I slow path. Partial compilation
+  is therefore useful early and cannot silently miscompile the unsupported
+  tail.
+- Carve the current interpreter into generated instruction semantics,
+  frame/register, object/heap, hostcall/security, tier-routing, and diagnostic
+  boundaries. Each extraction must preserve replay bytes, cross-lane behavior,
+  Test262 strata, capability-first hostcall invariants, and performance
+  budgets. It is accepted independently and can be reverted independently.
+
+**VM-to-native executable ABI**
+
+- A versioned `VmContext` contains only typed handles to registers, heap,
+  interned constants, IC/feedback arrays, policy/proof epoch, budget state,
+  interrupt word, exception slot, and slow-path table.
+- Reserve architecture-specific callee-saved registers for the VM context,
+  frame base, bytecode/continuation PC, and common tags only after measuring
+  register pressure on both AArch64 and x86-64. Spill/fallback conventions are
+  explicit and unwind-safe.
+- Interpreter and compiled tiers share one frame header and value-slot layout.
+  OSR maps bytecode offsets to native entry labels; deopt maps every live native
+  value back to a canonical frame without rerunning effects.
+- Calls use typed trampolines generated by the codegen capsule. The safe engine
+  never transmutes function pointers or dereferences generated-code pointers.
+- Stack maps enumerate strong/weak roots at calls, allocation points, loop
+  polls, exceptions, and deopt. A moving collector cannot ship until compiled
+  roots survive forced collection at every safepoint.
+- Exception unwinding initially returns a typed status to the shared runtime
+  rather than depending on platform-language unwinding through JIT frames.
+  Native unwind metadata is an optional later optimization with its own proof.
+- The native ABI saves and restores floating-point control state, preserves
+  ECMAScript NaN and negative-zero behavior, forbids direct syscalls and
+  nondeterministic instructions outside approved helpers, and forbids
+  Rust/platform unwinding across the boundary. An independent parent watchdog
+  owns hard hangs and resource ceilings when corrupt code ignores safepoints.
+
+**Executable-memory and hostile-code contract**
+
+- Code pages transition `RW -> RX`; no page is writable and executable at the
+  same time. Patching uses a bounded stopped/epoch-swapped region or new RX
+  copy, never an uncoordinated write into executing code.
+- Validate relocations, branch targets, code bounds, stack-map offsets, target
+  features, and capsule ABI before activation. Hash the final executable bytes
+  after relocation.
+- Enforce per-tenant and global code-memory quotas, variant caps, compile-rate
+  limits, and S3-FIFO eviction. Eviction waits for an execution epoch in which
+  no frame can reference the code.
+- Correctly generated code is required to derive accesses from the versioned
+  `VmContext` and approved helper table. Bounds, capability, IFC, and policy
+  operations are never arbitrary host addresses embedded in stencils. This is
+  a compiler/validator invariant inside the declared TCB, not a claim that a
+  corrupt instruction stream is memory-confined.
+- Add control-flow-integrity-compatible entry points, guard against code/data
+  pointer confusion, and audit Spectre-style bounds/indirect-branch gadgets at
+  the guest-to-host boundary. Architecture mitigations are selected from the
+  threat model and measured; they are not globally disabled for benchmark wins.
+- macOS hardened-runtime entitlements and Linux executable-memory policy are
+  deployment inputs recorded in receipts. A missing entitlement or denied JIT
+  allocation produces a typed pre-entry refusal. It may route only to an
+  independently eligible, explicitly configured `aot` code mode or to Tier
+  I/R; it never silently changes any profile axis or claim semantics.
+- Windows uses dedicated mappings, explicit instruction-cache flush, exact CFG
+  call-target registration, and dynamic function-table lifecycle. Apple uses
+  the supported `MAP_JIT` write-authorization path, callback allowlist, and
+  instruction-cache invalidation. Linux uses dedicated page-aligned mappings,
+  `RW -> RX`, and sealed transfer where shared immutable code is used. Each
+  platform has a named owner and typed unavailable state.
+- `native-throughput`, `native-parent-crash-contained`, and
+  `native-crash-contained` publish separate semantic, parent-survival,
+  authority-confinement, recovery, and performance claims. A native fault is
+  never caught and converted into an in-process deoptimization. The
+  untrusted-production profile places the whole execution cell in a long-lived
+  child process, removes ambient authority with platform controls, and routes
+  effects/checkpoints/evidence keys through the parent broker without
+  per-operation VM IPC.
+
+**Compilation replay and compiler quality**
+
+- Record every query the compiler makes of runtime state—types, shapes,
+  constants, epochs, target features, profile counters, IC state—and the
+  corresponding answer in a content-addressed compilation transcript.
+- Replaying that transcript must reproduce the same pre-relocation IR and
+  machine-code digest on the same compiler/target fingerprint. This turns a
+  wrong-code, crash, or performance anomaly into an offline deterministic case.
+- Run layered differential performance testing across Tier I/B/O so a
+  semantically correct but accidentally deoptimized/slow compiler change is
+  detected. Automatically minimize programs that cause tier inversions,
+  compile storms, excess deopts, or code-size explosions.
+- Publish code-quality reports: instructions/bytecode, branches/bytecode,
+  spills, calls to slow paths, IC hit/miss distribution, I-cache footprint,
+  compile throughput, time-to-break-even, and steady-state ratio.
+- Inspect representative generated blocks with disassembly, PMU counters, and
+  static scheduling tools. Hand-written assembly or stencil changes require
+  the same A/B, correctness, and rollback evidence as any other lever.
+
+**Generated-code observability and resource accounting**
+
+- Maintain a stable source-to-bytecode-to-IR-to-native-PC crosswalk, including
+  inline and deopt frames. Emit bounded source maps, symbolic stack traces,
+  disassembly, and Linux perf-map/jitdump or equivalent offline artifacts
+  where supported. A native crash or wrong result must identify the tier,
+  executable hash, assumptions, helper ABI, and exact fallback reason.
+- Treat compilation as metered runtime work: reserve and charge frontend,
+  optimizer, backend, transient IR/relocation memory, executable pages,
+  metadata, cache residency, invalidation churn, and worker queue time by
+  tenant/package/tier. Cancellation, OOM, quota exhaustion, and overload
+  produce a deterministic refusal receipt and Tier-R/I fallback.
+- Metadata has `off`, bounded production, and full diagnostic modes with
+  measured compile-time, code-size, steady-state, and logging costs. Forged or
+  mismatched metadata is rejected before symbolization or activation.
+
+Exit gate `TIER-EXEC` requires native instruction bytes, actual dispatch into
+them, a machine-code digest, disassembly, stack/deopt maps, interpreter
+equivalence, and measured speedup. A struct named `CompiledArtifact`, backend
+label, synthetic compile duration, or input-derived hash does not satisfy it.
+
+### 18.5 Value, Object, Memory, And Builtin Fast Substrate
+
+JIT quality is capped by the runtime representation, so these changes precede
+aggressive optimization.
+
+**Compact values**
+
+- Prototype a 64-bit `ValueWord` using immediate doubles/small integers and
+  generation-checked heap handles rather than raw pointers. Compare against a
+  128-bit tagged fallback.
+- Preserve all NaN, `-0`, BigInt, Symbol, object identity, weak reference, and
+  GC-root semantics. Fuzz every bit pattern and round-trip through interpreter,
+  JIT, serialization boundaries, and deopt.
+- Select only after workload-weighted memory bandwidth, clone/drop, register
+  pressure, and code-size evidence.
+
+**Shapes and properties**
+
+- Introduce immutable hidden-class transitions, slot vectors, prototype
+  validity cells, watchpoints, and monomorphic/polymorphic ICs.
+- Preserve ECMAScript key order: integer indices ascending, then string
+  insertion order, then symbols. Dictionary-mode fallback handles deletions,
+  accessors, proxies, and pathological churn.
+- Use Swiss-table metadata only for dictionary/symbol lookup where profiles
+  justify it; deterministic enumeration comes from explicit order metadata,
+  not hash iteration.
+- Validate every structural transition through property-descriptor,
+  `Reflect`, proxy-observation, prototype mutation, and enumeration tests.
+
+**Arrays, strings, and typed data**
+
+- Arrays use packed/holey element kinds and one-way evidence-backed transitions
+  to dictionary storage, with spec-exact prototype and length slow paths.
+- Strings use atoms/interning, short-string representation, slices, and
+  flatten-on-demand ropes only where allocation profiles justify them.
+- Typed arrays and ArrayBuffer/DataView use contiguous backing stores with
+  detached-buffer, bounds, endianness, and alias checks centralized into
+  hoistable guards.
+- SIMD kernels target proven bulk builtins; scalar JavaScript control flow is
+  not force-vectorized merely because a wide ISA exists.
+
+**Allocation and collection**
+
+- Start with typed arenas/slabs for bytecode, frames, IC entries, shapes, and
+  short-lived lowering data.
+- Build a generation-checked handle heap that can support a nursery and later
+  moving collection without exposing raw pointers to safe engine code.
+- Profile generational, incremental, and concurrent collection separately.
+  Deterministic test/replay mode fixes collection triggers and records them.
+- Treat allocator replacement as an experiment; mimalloc/system/slab variants
+  require allocation and fragmentation evidence.
+
+### 18.6 Security Work Must Become Optimization Fuel
+
+The current engine pays some security costs per instruction even where
+enforcement occurs at coarser boundaries. The solution is proof-preserving
+cost placement, not disabling security.
+
+- Split basic blocks at host effects, possible exceptions, deopt/safepoints,
+  observable budget boundaries, and dynamic label changes.
+- Precompute static instruction/memory charges per effect-free block and
+  reserve them once before entry. Dynamic charges use side exits. This preserves
+  fail-before-effect behavior while removing repeated bookkeeping.
+- Represent IFC labels as compact interned lattice IDs. Propagate summaries
+  through proven regions; elide operations only after the open soundness bugs
+  are fixed and translation validation proves the same source-to-sink decision.
+- Specialize hostcall dispatch to the manifest capability set, while retaining
+  the inline fail-closed gate as the first operation on every reachable call.
+- Compile separate static modes so disabled guardplane hooks are absent from
+  hot code, not branches checked on every instruction.
+- Batch evidence hashing/signing outside the instruction loop at explicit
+  decision/effect boundaries while preserving per-event inclusion proofs and
+  global order.
+- Make policy/proof epochs watchpoints. Any revocation or proof invalidation
+  atomically prevents new entry and deoptimizes active specialized code.
+- Store a signed optimization receipt containing proof inputs, removed checks,
+  equivalence result, activation epoch, invalidation key, and fallback digest.
+
+No IFC elision is eligible until `can_flow_to` enforcement and the known
+multi-argument/exception/async label-join defects are closed with adversarial
+tests. Security-off benchmarks cannot justify a production-profile claim.
+
+### 18.7 Architecture-Specific And High-Core Program
+
+The portable tier remains correct everywhere. Architecture-specific work is a
+target-feature dispatch layer with measured promotion and a portable fallback.
+
+**Apple Silicon target**
+
+- First-class triples: `aarch64-apple-darwin` on M4 and M5; M5 Pro/Max is a
+  separate high-core/memory-bandwidth cell when hardware is available.
+- Respect Apple's JIT contract: one `MAP_JIT` region under Hardened Runtime,
+  required entitlements, thread-local write protection or allowlisted write
+  callbacks, never simultaneous writable/executable access, instruction-cache
+  synchronization, code signing/notarization, and a no-JIT fallback.
+- Profile performance/efficiency/super-core scheduling through supported QoS
+  and affinity hints; do not assume stable core IDs or undocumented topology.
+- Tune AArch64 code layout, literal pools, conditional-select patterns,
+  paired loads/stores, call veneers, branch range, BTB/I-cache footprint, and
+  NEON builtin kernels using PMU/xctrace evidence.
+- Use M5's published memory-bandwidth and core configuration only as a
+  benchmark fingerprint. GPU/Neural accelerators are not part of scalar JS
+  execution unless a separately proved bulk builtin naturally maps to them.
+
+**AMD target**
+
+- Correct hardware naming matters: Threadripper PRO 9995WX has 96 cores/192
+  threads. Current 128-core targets are EPYC 9755/9745; EPYC 9965 reaches 192
+  cores. Artifacts name the exact SKU rather than “128-core Threadripper.”
+- First-class `x86_64-unknown-linux-gnu` variants cover generic x86-64-v3,
+  Zen 4, and Zen 5. Dispatch may use BMI2, AVX2, and AVX-512 only after feature
+  detection and scalar-equivalence tests.
+- Model CCD/CCX, L3, socket, and NUMA topology. Use first-touch allocation,
+  per-node heaps/code caches, core-local run queues, bounded cross-node
+  messages, and topology-aware compile scheduling.
+- Measure SMT on/off, preferred-core/frequency tradeoffs, huge pages, code/data
+  placement, remote-memory traffic, and power/thermal throttling. Defaults are
+  chosen by tail latency and throughput, not core count alone.
+
+**Parallelism contract**
+
+- One JavaScript agent's observable event-loop order remains sequential unless
+  a proof identifies an unobservable pure region.
+- High core counts accelerate independent extension cells, concurrent package
+  compilation, Test262 shards, background JIT, GC phases with deterministic
+  barriers, and batched evidence/host effects.
+- Default server architecture is share-nothing/thread-per-core by cell shard:
+  core-local heap, ICs, code-cache partition, and bounded SPSC-style messages.
+  Cross-core work stealing is permitted only for ownership-free compile/test
+  jobs, not mutable JS heaps.
+- Morsel/vector batching applies to independent requests or bulk builtins. It
+  must never reorder effects, Promise jobs, exceptions, or evidence.
+- Scaling gates report efficiency from 1 to all physical cores and p99 queue
+  latency under skew; a 192-core machine is not a single-program speedup claim.
+
+**Machine-optimization laboratory**
+
+- Maintain one generic and a small bounded set of architecture variants.
+  Multiversioning happens at artifact granularity or stable call sites, not an
+  unpredictable target-feature branch inside every bytecode.
+- Derive instruction selection from measured code shapes: tagged arithmetic,
+  number conversion, tag/type tests, property IC hit/miss, dense-array bounds,
+  call/return, exception checks, write barriers, and hostcall entry.
+- On AArch64 evaluate `CBZ/CBNZ`, `TBZ/TBNZ`, conditional select, paired
+  load/store, literal materialization, branch veneers, BTI/PAC-compatible entry,
+  and NEON kernels. On x86-64 evaluate macro-fused compare/branch, conditional
+  move, BMI2, LEA/addressing forms, zero idioms, AVX2/AVX-512 kernels, and the
+  frequency/transition cost of wide vectors.
+- Treat branch prediction, indirect target prediction, decoded/uop cache,
+  I-cache line placement, instruction alignment, register spills, and slow-path
+  distance as first-class metrics. Reorder opcode handlers and compiled blocks
+  only from profile evidence.
+- Run build PGO and post-link/code-layout experiments (for example LLVM PGO
+  and a BOLT-class Linux path) as separately attributable levers. Reproducible
+  target-neutral builds remain available.
+- Consider huge pages for mature code caches and large heaps only after
+  iTLB/dTLB evidence. Record page size, residency, fault cost, and rollback;
+  never assume huge pages are uniformly beneficial.
+- Use offline stochastic superoptimization for tiny pure helpers and stencil
+  fragments. Search cost is outside production; the admitted candidate carries
+  exhaustive boundary tests, randomized equivalence, SMT bit-vector proof when
+  feasible, target fingerprint, and generic fallback.
+- Use Bayesian optimization only for offline search over finite code-layout,
+  register, unroll, and cache parameters. The compiled result is a plain
+  versioned table; runtime decisions remain bounded and calibrated.
+- Maintain a “performance portability tax” report showing the generic path,
+  each promoted architecture path, binary/code-cache growth, build time, and
+  maintenance/proof burden. A 2% local win that doubles variants is rejected.
+
+**High-core service architecture**
+
+- Hash each independent extension cell to a home shard using a versioned,
+  deterministic routing function. Heap mutation, event-loop jobs, ICs, and
+  ordinary evidence staging remain core-local.
+- Partition compilation into parse/lower, baseline codegen, optimize, and
+  validation queues. Work stealing is allowed between compilation workers;
+  admission control prevents compile jobs from starving execution.
+- Use a bounded compilation service on large AMD hosts: shared immutable
+  semantics/stencil libraries, NUMA-local worker pools, content-addressed
+  transcript/IR caches, and local final relocation/validation. A remote result
+  is never trusted without local hash, target, epoch, and semantic validation.
+- Batch cross-shard evidence roots and host-effect broker messages while
+  preserving per-cell sequence numbers and a deterministic merge order.
+- Evaluate concurrent/incremental GC only after the handle/root contract is
+  sound. Barriers, pause tails, mutator utilization, and replay schedules are
+  explicit; “background” is not synonymous with free.
+- Overload behavior is part of correctness: bounded queues, backpressure,
+  compile cancellation, per-tenant fairness, and safe-tier execution when the
+  compiler is saturated.
+
+### 18.8 Alien And SOTA Research Portfolio
+
+These are falsifiable recommendation cards. “Read” or “prototype” is not an
+adoption decision.
+
+| ID | Lever | Default disposition | Expected value | Required proof / kill rule |
+| --- | --- | --- | --- | --- |
+| R1 | Deegen-style generated VM + ICs | adopt architecture, reimplement in project constraints | highest; unifies Tier I/B semantics and attacks dispatch/decode | executable opcode slice, no semantic duplication, >=20% Tier-I gain or kill generator design |
+| R2 | Copy-and-patch baseline JIT | prototype against Cranelift and PE | very high compile-speed/quality potential | compile ns/op, runtime, code bytes, W^X audit; kill if net benefit loses on representative reuse |
+| R3 | Whole-interpreter partial evaluation | research prototype | published 2.17x SpiderMonkey-interpreter result makes it a high-EV accelerator | reproduce on 10 Franken bytecodes; kill if Rust IR/tooling changes are invasive or equivalence opaque |
+| R4 | Cranelift optimizing backend | adopt behind codegen capsule if boundary approved | mature portable x86-64/AArch64 codegen | safe interface, fuzzed lowering, stack/deopt maps, backend-version pin and rollback |
+| R5 | Bounded equality saturation | hold for pure Tier-O regions | medium/high for phase-ordering | node/time/RSS caps plus translation witness; kill on compile-budget or code-size breach |
+| R6 | Stochastic superoptimization | tiny AOT kernels only | high local, low global | 5-20 instruction kernels, exhaustive/fuzz + SMT equivalence; never patch production binaries ad hoc |
+| R7 | Polyhedral transforms | builtin affine loops only | narrow | dependence proof and cache/SIMD win; kill for irregular JS loops |
+| R8 | Swiss metadata + shapes | adopt after object trace | high for property/dictionary paths | descriptor/order/proxy parity and cache-miss reduction |
+| R9 | Typed arenas/slabs / allocator bakeoff | adopt incrementally | medium, low semantic risk | allocation/RSS/tail evidence per domain; reject global allocator folklore |
+| R10 | S3-FIFO code cache | prototype | medium under scan/burst workloads | trace replay beats LRU/TinyLFU on hit rate and p99; deterministic fallback |
+| R11 | Share-nothing core shards | adopt for independent cells | very high on 96-192 cores | near-linear throughput region, bounded skew, deterministic routing |
+| R12 | AMAC/coroutine interleaving | hold for batched random property/index probes | narrow/experimental | LLC-stall evidence and >=4 independent probes; kill if cache-resident or batching unavailable |
+| R13 | Zygote/COW warm images | hold, platform-specific | possible cold-start win | safe process state, no inherited secret/lock/FD ambiguity; conflicts with no-unsafe boundary require external capsule |
+| R14 | Learned indexes | reject by default | low natural fit | reconsider only for static giant lookup tables with bounded error |
+| R15 | Druid-style meta-compilation | compare with R1-R3 | high maintainability prior; 2025 Pharo work generated a baseline frontend from annotated interpreter semantics | require parity with handwritten opcode slice and >=70% of selected backend performance |
+| R16 | Reusable optimized IR / compilation server | hold until Tier O | medium for cold starts and high-core fleets | validate every specialization on replay; kill if transfer/validation costs exceed saved compilation |
+| R17 | Layered JIT performance-bug testing | adopt with Tier B | high defensive value | find seeded tier-inversion/deopt/code-size bugs with bounded false positives |
+
+Each promoted card compiles into plain artifacts: guards, tables, generated
+handlers/stencils, target-feature selectors, certificates, calibration rules,
+rollback commands, and evidence manifests. Advanced terminology without one of
+those outputs is not implementation.
+
+Primary sources to reproduce before adoption:
+
+- Deegen, 2024: <https://arxiv.org/abs/2411.11469>
+- Copy-and-Patch, 2021: <https://arxiv.org/abs/2011.13127>
+- Partial Evaluation, Whole-Program Compilation, 2024:
+  <https://arxiv.org/abs/2411.10559>
+- Meta-compilation of Baseline JIT Compilers with Druid, 2025:
+  <https://arxiv.org/abs/2502.20543>
+- Reusing Highly Optimized IR in Dynamic Compilation, 2025:
+  <https://drops.dagstuhl.de/entities/document/10.4230/LIPIcs.ECOOP.2025.25>
+- Understanding and Finding JIT Compiler Performance Bugs, 2026:
+  <https://arxiv.org/abs/2603.06551>
+- Test262 interpretation contract:
+  <https://github.com/tc39/test262/blob/main/INTERPRETING.md>
+- Cranelift IR and embedding documentation:
+  <https://github.com/bytecodealliance/wasmtime/blob/main/cranelift/docs/ir.md>
+- Apple JIT-on-Apple-Silicon contract:
+  <https://developer.apple.com/documentation/apple-silicon/porting-just-in-time-compilers-to-apple-silicon>
+- Apple M4/M5 product fingerprints:
+  <https://www.apple.com/newsroom/2025/03/apple-unveils-new-mac-studio-the-most-powerful-mac-ever/>
+  and
+  <https://www.apple.com/newsroom/2026/03/apple-introduces-macbook-pro-with-all-new-m5-pro-and-m5-max/>
+- AMD Threadripper/EPYC product fingerprints:
+  <https://ir.amd.com/news-events/press-releases/detail/1253/amd-introduces-new-radeon-graphics-cards-and-ryzen-threadripper-processors-at-computex-2025>
+  and
+  <https://www.amd.com/en/products/processors/server/epyc/9005-series.html>
+
+Every paper begins in `HYPOTHESIS`. Reproduction artifacts, licensing/patent
+review, portability, maintenance cost, and adversarial correctness decide
+promotion. Published speedups from another VM are priors, not FrankenEngine
+evidence.
+
+### 18.9 Test262 Harness-Oracular Repair
+
+No semantic implementation campaign uses the current pass percentage for
+prioritization until this stage passes.
+
+1. Parse Test262 frontmatter with a real YAML parser and preserve unknown keys
+   fail-closed for review.
+2. Model each test as one or two variants according to `onlyStrict`,
+   `noStrict`, `module`, `raw`, and the default strict-plus-nonstrict rule.
+3. Evaluate base harness bindings and requested `includes` in order in a fresh
+   realm before the test. `raw` tests receive no transformation or includes.
+4. Implement `negative.phase` exactly for parse, module resolution, and runtime,
+   and match the thrown constructor name.
+5. Treat ordinary completion without an uncaught exception as pass regardless
+   of final expression value. Never compare all positive tests to
+   `"undefined"`.
+6. Implement async completion through `doneprintHandle.js`/`$DONE`, bounded
+   timeout, Promise-job drain, and deterministic failure text.
+7. Build real script and module paths with `_FIXTURE` resolution, module graph
+   instantiation/evaluation, cycles, and JSON/module-source policy.
+8. Implement required `$262` host surface: `global`, `evalScript`,
+   `createRealm`, `detachArrayBuffer`, `gc` behavior, agent APIs, monotonic
+   time, and optional `IsHTMLDDA` classification.
+9. Produce isolated realm/cell state for every variant and detect leaked
+   globals, jobs, modules, agents, clocks, or buffers between tests.
+10. Pin Test262 and generate an exact selected-test manifest using an audited
+    feature-introduction map. Report exclusion counts by Annex B, Intl,
+    post-ES2020 feature, staging, fixture, and host-inapplicable category.
+11. Meta-validate classification against at least two conforming reference
+    runners on a stratified corpus covering every flag, include, negative
+    phase, module, realm, agent, and async behavior.
+12. Add mutation tests that intentionally break each harness rule and prove
+    the meta-gate fails.
+
+Exit gate `HARNESS-ORACLE`:
+
+- reference runners agree with FrankenEngine's pass/fail/phase classification
+  on the stratified corpus;
+- the old 47,157 denominator is replaced by an exact, reviewable ES2020
+  manifest and exclusion ledger;
+- stale waivers fail;
+- two identical runs have identical selected tests and classifications;
+- a fresh full run emits the new honest semantic baseline.
+
+### 18.10 ES2020 Semantic Completion DAG
+
+After `HARNESS-ORACLE`, failures are minimized, fingerprinted, and clustered by
+the earliest missing abstract operation rather than filed one test at a time.
+
+**Foundation F0: spec execution model**
+
+- realms, agents, execution contexts, lexical/variable environments;
+- completion records and exact abrupt-completion propagation;
+- ordinary/exotic object internal methods;
+- property keys/descriptors and `ValidateAndApplyPropertyDescriptor`;
+- callable/constructable functions, `this`, `super`, `new.target`, arguments;
+- jobs, promises, module records, and host hooks;
+- centralized conversions and comparisons (`ToPrimitive`, `ToNumeric`,
+  `ToNumber`, `ToBigInt`, `ToString`, `ToObject`, `ToPropertyKey`,
+  `SameValue`, abstract/strict equality, relational comparison).
+
+**Foundation F1: parser and static semantics**
+
+- lexical grammar, Unicode identifiers/escapes, automatic semicolon insertion;
+- precedence, cover grammars, early errors, strict/sloppy differences;
+- declarations/functions/classes/generators/async;
+- destructuring, spread/rest, templates, regexp literals, BigInt;
+- script and module grammar, imports/exports, top-level await exclusion for
+  ES2020 where inapplicable;
+- direct/indirect eval and Function constructors under an explicit
+  conformance-only authority grant.
+
+**Builtins B0-B8, in dependency order**
+
+1. global properties, Object, Function, Boolean, Symbol, descriptors;
+2. Array and iterator protocols;
+3. String and RegExp;
+4. Number, BigInt, Math, Date, JSON;
+5. Map, Set, WeakMap, WeakSet;
+6. ArrayBuffer, SharedArrayBuffer, DataView, TypedArrays, Atomics;
+7. Promise and async job ordering;
+8. Reflect and Proxy, last because they expose internal-method ordering;
+9. Error families and all constructor/prototype metadata throughout.
+
+RegExp receives its own engine epic: Unicode modes/properties, captures,
+backreferences, lookahead/lookbehind, named groups, replacement semantics,
+`lastIndex`, sticky/global behavior, and catastrophic-backtracking budgets.
+Using a Rust regex crate is allowed only if an audit proves ECMAScript
+semantics; otherwise it is an implementation aid, not the semantic engine.
+
+**Language L0-L5**
+
+- scope/declaration/TDZ and strict/sloppy/global binding behavior;
+- control flow, loops, switch, try/catch/finally, labels, completion values;
+- closures/classes/private state excluded if post-ES2020, generators/iterators;
+- calls/constructors/eval, arguments aliasing, sloppy block functions, `with`;
+- modules, cycles, namespace objects, dynamic import;
+- async functions/generators and Promise integration.
+
+Sloppy mode is implemented, not waived. Proxy, RegExp, modules, SharedArrayBuffer
+and Atomics are first-class work, not a permanent “hard tail.”
+
+**Conformance industrialization**
+
+- Generate a machine-readable ES2020 abstract-operation graph from the pinned
+  specification: clauses, callers, internal methods, builtins, syntax forms,
+  Test262 metadata/features, implementation owner, and current proof state.
+  Human review signs off mappings; an LLM-generated relation is never accepted
+  as normative by itself.
+- Extend the existing `IntrinsicRow`/declarative builtin machinery so one
+  reviewed row can generate installation, descriptor attributes, arity/name,
+  receiver validation, slow-path dispatch, documentation, and focused tests.
+  Semantic bodies still implement the normative algorithms and abrupt
+  completions explicitly.
+- Cluster failures by normalized earliest fault, missing intrinsic/operation,
+  parser production, clause, and minimized program. One cluster bead owns one
+  semantic primitive and lists the expected downstream pass fan-out.
+- Run delta-debugging and AST-aware reduction against the Tier-R runner,
+  retaining strict/module/async/negative metadata. Each cluster checks in small
+  non-copyright-infringing repro fixtures plus pointers/hashes to upstream
+  tests, not bulk copies of the corpus.
+- Prioritize by dependency centrality times affected-test count times
+  confidence, divided by implementation/proof cost. The frontier can reorder
+  work when real pass deltas contradict estimates.
+- Use differential and metamorphic generation around each abstract operation:
+  coercion order, getter/proxy observation, abrupt completion, `-0`/NaN,
+  Unicode, holes, detached buffers, realms, and prototype mutation.
+- Parallelize the corpus by deterministic shard while keeping per-test fresh
+  state. Persist every result keyed by test hash, engine hash, harness hash,
+  profile hash, and mode; invalidate only affected cache entries.
+- Nightly full runs and per-change affected shards feed a monotonic pass-set
+  gate. A test that changes from pass to fail blocks regardless of aggregate
+  count; newly selected upstream tests begin as visible failures.
+- Publish weekly burn-up by semantic cluster, not just pass percentage:
+  remaining parser, runtime, builtin, resolution, assertion, timeout, crash,
+  and harness categories; weakest view; new regressions; and frontier ETA
+  assumptions.
+
+For each cluster:
+
+- identify normative clauses and shared missing primitive;
+- minimize representative failures and add unit/property/metamorphic tests;
+- implement once in the canonical owner;
+- run the affected Test262 shard, full high-water subset, engine/core oracle
+  where applicable, and interpreter/JIT differential matrix;
+- emit pass delta, new failures, timing/RSS delta, and reproducible artifacts;
+- close only when the cluster's unwaived failures are zero or reclassified to a
+  more fundamental open cluster.
+
+### 18.11 Joint Perf-Conformance Correctness Matrix
+
+Every executable tier and fast representation is tested across:
+
+- normal, strict, sloppy, module, async, generator, proxy, regexp, typed-array,
+  exception, OOM/budget, cancellation, and policy-revocation paths;
+- generic and each target architecture;
+- Tier R/I/B/O/A, including OSR entry, every guard family, deopt, invalidation,
+  code-cache miss/eviction, and safe-mode rollback;
+- capability sets, IFC labels/declassification, guardplane on/off, evidence
+  on/off, and resource limits;
+- randomized and adversarial objects/shapes/prototype mutations;
+- deterministic replay and byte-identical evidence where required.
+
+Required oracles:
+
+- Tier R versus each faster tier;
+- Node and Bun differential output/error/effect class for portable semantics;
+- Test262 expected classification;
+- engine versus `franken-core` only for modules explicitly assigned as an
+  independent oracle;
+- metamorphic transformations and fuzz/minimized seeds;
+- translation validation for optimizer rewrites and generated machine code.
+
+Native-code fuzzing runs in a process boundary with time/memory limits. A JIT
+crash, wrong-code result, W^X violation, missing stack map, or irreproducible
+deopt blocks promotion and preserves the prior tier as default.
+
+### 18.12 Milestones And Promotion Gates
+
+Milestones are evidence gates, not calendar promises.
+
+| Gate | Performance exit | Conformance exit |
+| --- | --- | --- |
+| G0 Truth | `MEASURE-0`; cold/warm/steady and security costs decomposed | `HARNESS-ORACLE`; corrected denominator and baseline |
+| G1 Canonical core | no dual-written semantic modules; Tier R oracle frozen | abstract-operation dependency graph and cluster ledger live |
+| G2 Fast interpreter | Tier I executable; >=10x geomean over old interpreter or profile-explained shortfall; no semantic delta | parser/static semantics and foundational operations materially lift corrected baseline |
+| G3 Baseline JIT | Tier B executable; compile latency amortizes within declared reuse; raw warm gap `<=10x` target | >=75%, then >=90%, with zero regressions |
+| G4 Optimizing JIT | Tier O + deopt; raw warm gap `<=3x` target; p99 and RSS within budgets | >=95%, then >=99%; all hard-tail epics active |
+| G5 Hardware frontier | M4/M5 and Zen 5 variants beat generic where promoted; high-core scaling artifact | full suite shards complete within operational SLO |
+| G6 Conformance | no performance regression beyond budget | 100% applicable ES2020, zero unwaived semantic failures |
+| G7 Category claim | minimize raw gap toward `<=1.5x`/parity stretch; Section-14 suite `>=3x` vs both | every benchmark case passes Tier R/Test262/differential equivalence |
+| G8 External | neutral rerun package and generic fallback | two independent reproductions before externally validated claim |
+
+If a threshold is missed, the artifact records the miss and the program returns
+to the ranked bottleneck. It does not fabricate completion, widen waivers, or
+change the benchmark after measurement.
+
+### 18.13 Workstreams And Dependency Skeleton
+
+The bead graph generated from this plan uses these canonical workstreams:
+
+- `BRIDGE-00`: truth recertification, historical-claim correction, and a
+  dependency-safe ownership/reservation execution map;
+- `BRIDGE-01`: canonical module ownership, semantics generator contract, and
+  reviewable decomposition of the interpreter collision surface;
+- `BRIDGE-02`: benchmark, profiler, PMU, statistics, and artifact platform;
+- `BRIDGE-03`: compact values, shapes, arrays, strings, heap, and GC;
+- `BRIDGE-04`: Tier I generated/quickened interpreter;
+- `BRIDGE-05`: safe native-code capsule, executable ABI, compile-resource
+  metering, and generated-code diagnostics;
+- `BRIDGE-06`: Tier B backend bakeoff and baseline JIT;
+- `BRIDGE-07`: Tier O optimizer, guards, OSR, deopt, and validation;
+- `BRIDGE-08`: Tier A AOT/PGO/code cache;
+- `BRIDGE-09`: security-proof-guided cost removal;
+- `BRIDGE-10`: Apple M4/M5 backend and JIT operations;
+- `BRIDGE-11`: AMD Zen/Threadripper/EPYC and NUMA scaling;
+- `BRIDGE-12`: Test262 harness oracle and exact ES2020 profile;
+- `BRIDGE-13`: abstract operations and execution model;
+- `BRIDGE-14`: parser/language semantics;
+- `BRIDGE-15`: builtin dependency campaign;
+- `BRIDGE-16`: RegExp;
+- `BRIDGE-17`: modules, Promise/async, agents, SAB/Atomics;
+- `BRIDGE-18`: continuous differential/fuzz/metamorphic/translation validation;
+- `BRIDGE-19`: CI ratchets, claim matrix, neutral verifier, and external reruns;
+- `BRIDGE-20`: research portfolio reproduction and promote/hold/kill decisions.
+
+Dependency spine:
+
+`00 -> {01,02,12}`;
+
+`{01,02} -> 03 -> 04 -> 05 -> 06 -> 07 -> 08`;
+
+`{02,04,05} -> {09,10,11}`;
+
+`12 -> 13 -> {14,15,16,17}`;
+
+`{04,06,07,08,09,13,14,15,16,17} -> 18 -> 19`;
+
+`02 -> 20`, with successful research cards feeding the owning implementation
+workstream through explicit dependencies rather than bypassing gates.
+
+All Rust-heavy verification runs through `rch` with a unique
+`CARGO_TARGET_DIR`. Each implementation bead has separate correctness,
+integration/e2e, performance, failure-injection, observability, and artifact
+acceptance. Beads embed sufficient context to execute without reopening this
+plan, but this document remains the architectural authority.
+
+### 18.14 Vertical Delivery Slices, Rollout, And Frontier Governance
+
+The bridge delivers thin end-to-end slices before broad rewrites.
+
+**Slice S0: truth cutover**
+
+- Land the decomposed benchmark and harness-oracle repairs.
+- Reclassify historical simulated/synthetic artifacts without deleting them.
+- Produce the corrected raw-performance and ES2020 baselines.
+- Wire claim-matrix, stale-waiver, pass-set, and executable-tier truth gates
+  into CI.
+
+**Slice S1: executable twelve-opcode kernel**
+
+- Select a representative minimum set covering constants, arithmetic,
+  comparison/branch, call/return, object/array allocation, property get/set,
+  hostcall, exception, and halt.
+- Drive the same semantic definition through Tier R, generated Tier I,
+  baseline backend candidates, executable code capsule, OSR, forced GC,
+  exception, budget denial, policy invalidation, and deopt.
+- Run on generic x86-64 and AArch64 before selecting the Tier-B backend.
+- Exit only with real disassembly, machine-code hash, differential/fuzz proof,
+  and end-to-end speed/compile/code-size artifacts.
+
+**Slice S2: first useful JavaScript island**
+
+- Add enough bytecodes, shapes, dense arrays, strings, functions/closures, and
+  core builtins to execute one representative extension package and a declared
+  corrected Test262 shard entirely through Tier B fast paths.
+- Exercise full capability, IFC, evidence, replay, resource, and host-effect
+  behavior. Report slow-path and unsupported-opcode coverage.
+- Use this slice to validate time-to-break-even and cold/warm cache behavior
+  before scaling opcode coverage.
+
+**Slice S3: optimizing loop and object island**
+
+- Add Tier O for one numeric loop family and one shape-stable object family,
+  including inlining, BBV/type propagation, bounds/shape guards, OSR, every
+  deopt reason, and scalar replacement where proven.
+- Reproduce the same compilation from a transcript and run layered
+  performance-bug testing.
+- Promote only if steady-state savings repay compilation under the declared
+  reuse distribution and p99/deopt/code-memory budgets.
+
+**Slice S4: machine frontier**
+
+- Promote independently measured M4/M5 and Zen 5 variants; validate generic
+  fallback and cross-architecture semantic identity.
+- Demonstrate independent-cell scaling on all available physical cores with
+  NUMA/topology evidence and overload safety.
+- No architecture path blocks conformance or portable releases.
+
+**Slice S5: full surface and hard tail**
+
+- Expand generated semantics and tiers across the full bytecode surface while
+  the Test262 DAG converges through 75/90/95/99/100% gates.
+- Finish Proxy, RegExp, modules, sloppy mode, async/generators, SAB/Atomics,
+  weak/GC-observable behavior, and every target-tier differential cell.
+- Freeze the Section-14 suite and seek external reproductions only after local
+  gates are reproducibly green.
+
+**Rollout wedge**
+
+- New representations and tiers begin in shadow mode: execute Tier R/I for
+  authority and compare candidate output/state/effects without committing
+  candidate effects.
+- Advance through test-only, opt-in canary, selected package, selected cohort,
+  and default stages. Each stage has a maximum wrong-result, crash, deopt,
+  compile-overhead, latency, memory, and evidence-divergence budget.
+- A signed activation record names compiler/semantics/target/profile hashes,
+  cohort, budget, start/end, guard assumptions, and one-command rollback.
+- Rollback invalidates entry to the candidate tier and cache generation; active
+  frames deopt at the next bounded safepoint. It never requires deleting
+  artifacts or rewriting user data.
+
+**Formal frontier objective**
+
+- Maintain a Pareto surface over raw cold latency, raw warm throughput,
+  secure-transaction throughput, p99/p99.9, RSS, code memory, compile CPU,
+  energy where measurable, conformance, and security proof coverage.
+- Define per-workload loss relative to the better pinned baseline:
+  `L = log(runtime_franken / min(runtime_node, runtime_bun))`, augmented by
+  bounded penalties for tails, memory, compile cost, and any correctness or
+  security regression. Correctness/security failure is infinite loss.
+- Rank one-lever experiments by expected loss reduction divided by engineering
+  and proof cost. Use conservative posterior lower bounds and a reject option;
+  low-confidence experiments stay off production.
+- Sequential e-process evidence detects durable wins without repeated-testing
+  p-hacking. Change-point/drift detection invalidates stale profiles and returns
+  promotion to the generic policy.
+- Use a queueing model for compiler workers and cell shards so promotion
+  thresholds include queue delay and overload, not only isolated speedup.
+- Stop a research lever after its predeclared kill rule, but do not stop the
+  raw-frontier program while a positive-EV measured bottleneck remains.
+
+**Research radar and external challenge**
+
+- Every six weeks, scan primary compiler/runtime/architecture publications and
+  official backend/platform changes. Add only project-relevant candidates with
+  a reproduction hypothesis, IP/license review, proof obligation, budget,
+  owner, and kill rule.
+- Maintain an adversarial review track whose job is to disprove speedups,
+  fairness, semantic equivalence, reproducibility, and hardware claims.
+- Invite compiler/runtime researchers to review the bytecode-semantics DSL,
+  deopt model, Test262 profile, and benchmark contract before category claims.
+- Publish negative results (for example a sophisticated IC or vector path that
+  loses on modern hardware) so the program does not repeatedly rediscover them.
+
+### 18.15 Stop Conditions And Non-Goals
+
+- Do not optimize the current incorrect Test262 classification to run faster.
+- Do not add post-ES2020 features to inflate the ES2020 score; track them
+  separately.
+- Do not hand-code architecture assembly before profiles and backend bakeoffs
+  identify an instruction-level bottleneck.
+- Do not parallelize observable JavaScript execution merely to use more cores.
+- Do not treat generated hashes, policy records, or simulated timings as
+  executable output.
+- Do not weaken `forbid(unsafe_code)` inside existing crates. If the audited
+  capsule is not approved, retain interpreter/AOT-safe work and report the raw
+  performance ceiling honestly.
+- Do not delete the second lane or any file under this plan; ownership and
+  freezing are reversible metadata/architecture decisions until separately
+  authorized.
+- Do not close the program because bead completion is high. Close only at G8,
+  or explicitly revise the vision with evidence and user approval.

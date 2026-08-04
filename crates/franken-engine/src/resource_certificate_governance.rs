@@ -342,11 +342,17 @@ impl RegressionEntry {
         current_usage: u64,
         max_regression: u64,
     ) -> Self {
-        let regression_millionths = current_usage
-            .saturating_sub(previous_usage)
-            .saturating_mul(FIXED_ONE)
-            .checked_div(previous_usage)
-            .unwrap_or(if current_usage == 0 { 0 } else { FIXED_ONE });
+        // Widen to u128 before the fixed-point scale: a u64 usage delta above
+        // ~18.4e12 would saturate `delta * FIXED_ONE` in u64 and corrupt the
+        // ratio (same widening pattern as utilisation_millionths above).
+        let regression_millionths = if previous_usage == 0 {
+            if current_usage == 0 { 0 } else { FIXED_ONE }
+        } else {
+            let wide = (current_usage.saturating_sub(previous_usage) as u128)
+                .saturating_mul(FIXED_ONE as u128)
+                / (previous_usage as u128);
+            u64::try_from(wide).unwrap_or(u64::MAX)
+        };
         let within_budget = regression_millionths <= max_regression;
         let mut buf = Vec::with_capacity(64);
         append_str(&mut buf, &dimension.to_string());

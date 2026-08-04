@@ -117,3 +117,59 @@ fn diag_plain_class_stmt_constructor() {
         "3"
     );
 }
+
+#[test]
+fn class_parameter_defaults_capture_outer_binding_before_body_shadow_bd_4thqe() {
+    let cases = [
+        (
+            "class statement constructor",
+            "const x = 42; class C { constructor(a = x) { let x = 7; this.v = a; } } new C().v;",
+        ),
+        (
+            "class statement method",
+            "const x = 42; class C { m(a = x) { let x = 7; return a; } } new C().m();",
+        ),
+        (
+            "class expression constructor",
+            "const x = 42; let C = class { constructor(a = x) { let x = 7; this.v = a; } }; new C().v;",
+        ),
+        (
+            "class expression method",
+            "const x = 42; let C = class { m(a = x) { let x = 7; return a; } }; new C().m();",
+        ),
+    ];
+
+    for (form, source) in cases {
+        assert_eq!(eval_value(source), "42", "{form}");
+    }
+}
+
+#[test]
+fn class_parameter_defaults_honor_outer_static_global_shadows_bd_4thqe() {
+    let cases = [
+        "const Math = { abs: n => n + 40 }; class C { constructor(v = Math.abs(2)) { this.v = v; } } new C().v;",
+        "const Math = { abs: n => n + 40 }; class C { m(v = Math.abs(2)) { return v; } } new C().m();",
+        "const Math = { abs: n => n + 40 }; let C = class { constructor(v = Math.abs(2)) { this.v = v; } }; new C().v;",
+        "const Math = { abs: n => n + 40 }; let C = class { m(v = Math.abs(2)) { return v; } }; new C().m();",
+    ];
+
+    for source in cases {
+        assert_eq!(eval_value(source), "42");
+    }
+}
+
+#[test]
+fn named_class_expression_self_is_visible_to_its_defaults_bd_4thqe() {
+    assert_eq!(
+        eval_value(
+            "let Inner = 7;\
+             let C = class Inner {\
+                 constructor(v = Inner) { let Inner = 9; this.v = v; }\
+                 m(v = Inner) { let Inner = 9; return v; }\
+             };\
+             let D = C; C = 0; let d = new D();\
+             d.v === D && d.m() === D && Inner === 7;"
+        ),
+        "true"
+    );
+}

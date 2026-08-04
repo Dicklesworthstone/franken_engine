@@ -305,7 +305,7 @@ impl SiblingHealthReport {
     /// output (and its content hash) is independent of insertion order.
     #[must_use]
     pub fn from_pins(generated_utc: impl Into<String>, mut pins: Vec<SiblingPin>) -> Self {
-        pins.sort_by(|a, b| a.repo.cmp(&b.repo));
+        pins.sort_by_key(|pin| pin.repo);
         let mut passed = 0;
         let mut skipped = 0;
         let mut failed = 0;

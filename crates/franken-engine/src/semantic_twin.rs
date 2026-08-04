@@ -887,13 +887,23 @@ fn transition_guard(source: &str, target: &str) -> Option<TransitionGuard> {
     }
 }
 
+/// Append a variable-length field to a `Sha256` preimage with a fixed-width
+/// `u64` length prefix, so adjacent variable-length fields cannot be re-split
+/// into a colliding decomposition. Cf. commits 7f500570 / 1d3e0542.
+fn hash_field(hasher: &mut Sha256, bytes: &[u8]) {
+    hasher.update((bytes.len() as u64).to_le_bytes());
+    hasher.update(bytes);
+}
+
 fn predicate_hash(assumption_id: &str, variable: &str, threshold_millionths: i64) -> String {
+    // The predicate hash is an assumption identity, so its preimage must be
+    // injective. `assumption_id` and `variable` were ':'-joined free-form
+    // fields, so ("a:b","c") and ("a","b:c") both hashed "a:b:c:<threshold>".
+    // Length-prefix each variable-length field; the threshold is fixed-width.
     let mut hasher = Sha256::new();
-    hasher.update(assumption_id.as_bytes());
-    hasher.update(b":");
-    hasher.update(variable.as_bytes());
-    hasher.update(b":");
-    hasher.update(threshold_millionths.to_string().as_bytes());
+    hash_field(&mut hasher, assumption_id.as_bytes());
+    hash_field(&mut hasher, variable.as_bytes());
+    hasher.update(threshold_millionths.to_le_bytes());
     format!("sha256:{:x}", hasher.finalize())
 }
 
@@ -910,6 +920,18 @@ fn action_label(action: &DemotionAction) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn predicate_hash_is_injective_across_field_boundary() {
+        // bd-cq6ay: assumption_id and variable were ':'-joined free-form fields,
+        // so ("a:b","c") and ("a","b:c") both hashed "a:b:c:<threshold>".
+        // Length-prefixing each field pins them to distinct hashes.
+        assert_ne!(
+            predicate_hash("a:b", "c", 0),
+            predicate_hash("a", "b:c", 0),
+            "assumption_id / variable boundary must not collide"
+        );
+    }
 
     #[test]
     fn frx_19_1_default_spec_validates() {

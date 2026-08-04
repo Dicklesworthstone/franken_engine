@@ -1,0 +1,30 @@
+---
+source: tests/deterministic_serde_golden.rs
+expression: actual
+---
+{
+  "value": {
+    "Map": {
+      "k4": {
+        "Map": {
+          "k3": {
+            "Map": {
+              "k2": {
+                "Map": {
+                  "k1": {
+                    "Map": {
+                      "k0": {
+                        "String": "leaf"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "expected_sha256_hex": "87ee88b13904df2295adff1fb19f05fc52cafc4c31705a47f7175140d39efdc8"
+}

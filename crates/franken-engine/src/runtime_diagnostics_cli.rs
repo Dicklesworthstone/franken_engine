@@ -16,7 +16,7 @@ use crate::compatibility_advisory::Advisory;
 use crate::containment_executor::{ContainmentReceipt, ContainmentState};
 use crate::evidence_ledger::{DecisionType, EvidenceEntry};
 use crate::expected_loss_selector::ContainmentAction;
-use crate::hostcall_telemetry::{HostcallResult, HostcallTelemetryRecord};
+use crate::hostcall_telemetry::{HostcallResult, HostcallTelemetryRecord, TelemetryDropCounts};
 use crate::module_compatibility_matrix::{CompatibilityScenarioReport, DivergenceCategory};
 use crate::security_epoch::SecurityEpoch;
 use crate::support_bundle_export::{is_sensitive, prefixed_sha256};
@@ -26,6 +26,7 @@ const COMPONENT: &str = "runtime_diagnostics_cli";
 const SUPPORT_BUNDLE_SCHEMA_VERSION: &str = "franken-engine.runtime-diagnostics.support-bundle.v1";
 const DEFAULT_SUPPORT_BUNDLE_REDACTION_MARKER: &str = "sha256:REDACTED";
 const PREFLIGHT_DOCTOR_FAILURE_CODE: &str = "FE-RUNTIME-DIAGNOSTICS-DOCTOR-0001";
+const INCOMPLETE_TELEMETRY_CODE: &str = "FE-RUNTIME-DIAGNOSTICS-TELEMETRY-0001";
 const ONBOARDING_SCORECARD_SCHEMA_VERSION: &str =
     "franken-engine.runtime-diagnostics.onboarding-scorecard.v1";
 const ONBOARDING_OWNER_ROUTING_SCHEMA_VERSION: &str =
@@ -186,6 +187,9 @@ pub struct RuntimeDiagnosticsCliInput {
     pub runtime_state: RuntimeStateInput,
     pub evidence_entries: Vec<EvidenceEntry>,
     pub hostcall_records: Vec<HostcallTelemetryEnvelope>,
+    /// Per-reason records refused by the source hostcall recorder.
+    #[serde(default)]
+    pub telemetry_drop_counts: TelemetryDropCounts,
     pub containment_receipts: Vec<ContainmentReceiptEnvelope>,
     pub replay_artifacts: Vec<ReplayArtifactRecord>,
 }
@@ -222,6 +226,9 @@ pub struct RuntimeDiagnosticsOutput {
     pub security_epoch: SecurityEpoch,
     pub gc_pressure: Vec<GcPressureDiagnostics>,
     pub scheduler_lanes: Vec<SchedulerLaneDiagnostics>,
+    /// Completeness evidence for the source hostcall record stream.
+    #[serde(default)]
+    pub telemetry_drop_counts: TelemetryDropCounts,
     pub logs: Vec<StructuredLogEvent>,
 }
 
@@ -295,8 +302,30 @@ pub fn collect_runtime_diagnostics(
         security_epoch: input.security_epoch,
         gc_pressure,
         scheduler_lanes,
+        telemetry_drop_counts: TelemetryDropCounts::default(),
         logs,
     }
+}
+
+/// Collect a runtime diagnostics snapshot from the full CLI input, retaining
+/// hostcall stream completeness evidence alongside the runtime-state rows.
+pub fn collect_runtime_diagnostics_for_input(
+    input: &RuntimeDiagnosticsCliInput,
+) -> RuntimeDiagnosticsOutput {
+    let mut output = collect_runtime_diagnostics(
+        &input.runtime_state,
+        &input.trace_id,
+        &input.decision_id,
+        &input.policy_id,
+    );
+    output.telemetry_drop_counts = input.telemetry_drop_counts;
+    if input.telemetry_drop_counts.any() {
+        for event in &mut output.logs {
+            event.outcome = "incomplete".to_string();
+            event.error_code = Some(INCOMPLETE_TELEMETRY_CODE.to_string());
+        }
+    }
+    output
 }
 
 /// Render diagnostics output in a deterministic human-readable form.
@@ -336,6 +365,16 @@ pub fn render_diagnostics_summary(output: &RuntimeDiagnosticsOutput) -> String {
         lines.push(format!(
             "  - {} queue_depth={} utilization={}",
             lane.lane, lane.queue_depth, lane.utilization_millionths
+        ));
+    }
+    let dropped = output.telemetry_drop_counts;
+    if dropped.any() {
+        lines.push(format!(
+            "telemetry_drop_counts: total={} channel_full={} monotonicity_violation={} empty_extension_id={}",
+            dropped.total(),
+            dropped.channel_full,
+            dropped.monotonicity_violation,
+            dropped.empty_extension_id
         ));
     }
     lines.join("\n")
@@ -437,6 +476,9 @@ pub struct EvidenceExportSummary {
     pub total_records: usize,
     pub counts_by_kind: BTreeMap<String, u64>,
     pub counts_by_severity: BTreeMap<String, u64>,
+    /// Completeness evidence for the exported hostcall record stream.
+    #[serde(default)]
+    pub telemetry_drop_counts: TelemetryDropCounts,
 }
 
 /// Output from evidence export command.
@@ -524,6 +566,8 @@ pub struct SupportBundleIndex {
     pub decision_id: String,
     pub policy_id: String,
     pub total_records: usize,
+    #[serde(default)]
+    pub telemetry_drop_counts: TelemetryDropCounts,
     pub total_redacted_fields: u64,
     pub files: Vec<SupportBundleFileIndexEntry>,
     pub reproducible_commands: Vec<String>,
@@ -1185,14 +1229,20 @@ pub fn export_evidence_bundle(
             .or_insert(0) += 1;
     }
 
+    let telemetry_incomplete = input.telemetry_drop_counts.any();
     let logs = vec![StructuredLogEvent {
         trace_id: input.trace_id.clone(),
         decision_id: input.decision_id.clone(),
         policy_id: input.policy_id.clone(),
         component: COMPONENT.to_string(),
         event: "evidence_export".to_string(),
-        outcome: "pass".to_string(),
-        error_code: None,
+        outcome: if telemetry_incomplete {
+            "incomplete"
+        } else {
+            "pass"
+        }
+        .to_string(),
+        error_code: telemetry_incomplete.then(|| INCOMPLETE_TELEMETRY_CODE.to_string()),
     }];
 
     EvidenceExportOutput {
@@ -1201,6 +1251,7 @@ pub fn export_evidence_bundle(
             total_records: records.len(),
             counts_by_kind,
             counts_by_severity,
+            telemetry_drop_counts: input.telemetry_drop_counts,
         },
         records,
         logs,
@@ -1212,6 +1263,16 @@ pub fn render_evidence_summary(output: &EvidenceExportOutput) -> String {
     let mut lines = Vec::new();
     if output.records.is_empty() {
         lines.push("No evidence entries found for the specified filters.".to_string());
+        let dropped = output.summary.telemetry_drop_counts;
+        if dropped.any() {
+            lines.push(format!(
+                "telemetry_drop_counts: total={} channel_full={} monotonicity_violation={} empty_extension_id={}",
+                dropped.total(),
+                dropped.channel_full,
+                dropped.monotonicity_violation,
+                dropped.empty_extension_id
+            ));
+        }
         return lines.join("\n");
     }
 
@@ -1224,6 +1285,14 @@ pub fn render_evidence_summary(output: &EvidenceExportOutput) -> String {
     for (severity, count) in &output.summary.counts_by_severity {
         lines.push(format!("  - {}={}", severity, count));
     }
+    let dropped = output.summary.telemetry_drop_counts;
+    lines.push(format!(
+        "telemetry_drop_counts: total={} channel_full={} monotonicity_violation={} empty_extension_id={}",
+        dropped.total(),
+        dropped.channel_full,
+        dropped.monotonicity_violation,
+        dropped.empty_extension_id
+    ));
     lines.join("\n")
 }
 
@@ -1233,14 +1302,10 @@ pub fn export_support_bundle(
     filter: EvidenceExportFilter,
     redaction_policy: SupportBundleRedactionPolicy,
 ) -> SupportBundleOutput {
-    let diagnostics = collect_runtime_diagnostics(
-        &input.runtime_state,
-        &input.trace_id,
-        &input.decision_id,
-        &input.policy_id,
-    );
+    let diagnostics = collect_runtime_diagnostics_for_input(input);
 
     let mut evidence_output = export_evidence_bundle(input, filter.clone());
+    let telemetry_incomplete = evidence_output.summary.telemetry_drop_counts.any();
     let mut total_redacted_fields = 0_u64;
     for record in &mut evidence_output.records {
         let (redacted_payload, redacted_count) =
@@ -1262,6 +1327,7 @@ pub fn export_support_bundle(
         "decision_id": input.decision_id,
         "policy_id": input.policy_id,
         "total_records": evidence_output.summary.total_records,
+        "telemetry_drop_counts": evidence_output.summary.telemetry_drop_counts,
         "total_redacted_fields": total_redacted_fields,
         "filter": filter,
     });
@@ -1273,8 +1339,13 @@ pub fn export_support_bundle(
         policy_id: input.policy_id.clone(),
         component: COMPONENT.to_string(),
         event: "support_bundle_export".to_string(),
-        outcome: "pass".to_string(),
-        error_code: None,
+        outcome: if telemetry_incomplete {
+            "incomplete"
+        } else {
+            "pass"
+        }
+        .to_string(),
+        error_code: telemetry_incomplete.then(|| INCOMPLETE_TELEMETRY_CODE.to_string()),
     });
     logs.sort_by(|left, right| {
         left.event
@@ -1294,6 +1365,20 @@ pub fn export_support_bundle(
         lines.push(format!(
             "- total_records: `{}`",
             evidence_output.summary.total_records
+        ));
+        let dropped = evidence_output.summary.telemetry_drop_counts;
+        lines.push(format!("- telemetry_drops_total: `{}`", dropped.total()));
+        lines.push(format!(
+            "- telemetry_drops_channel_full: `{}`",
+            dropped.channel_full
+        ));
+        lines.push(format!(
+            "- telemetry_drops_monotonicity_violation: `{}`",
+            dropped.monotonicity_violation
+        ));
+        lines.push(format!(
+            "- telemetry_drops_empty_extension_id: `{}`",
+            dropped.empty_extension_id
         ));
         lines.push(format!(
             "- total_redacted_fields: `{}`",
@@ -1335,6 +1420,13 @@ pub fn export_support_bundle(
             "support_bundle/evidence_records.jsonl",
             render_evidence_records_jsonl(&evidence_output.records),
         ),
+        make_support_bundle_file(
+            "support_bundle/evidence_summary.json",
+            serialize_pretty_json_string(
+                &evidence_output.summary,
+                "support bundle evidence summary should serialize",
+            ),
+        ),
         make_support_bundle_file("support_bundle/summary.md", summary_md),
     ];
 
@@ -1368,6 +1460,7 @@ pub fn export_support_bundle(
         decision_id: input.decision_id.clone(),
         policy_id: input.policy_id.clone(),
         total_records: evidence_output.summary.total_records,
+        telemetry_drop_counts: evidence_output.summary.telemetry_drop_counts,
         total_redacted_fields,
         files: file_index_entries,
         reproducible_commands,
@@ -1398,6 +1491,14 @@ pub fn render_support_bundle_summary(output: &SupportBundleOutput) -> String {
     lines.push(format!("decision_id: {}", output.index.decision_id));
     lines.push(format!("policy_id: {}", output.index.policy_id));
     lines.push(format!("total_records: {}", output.index.total_records));
+    let dropped = output.index.telemetry_drop_counts;
+    lines.push(format!(
+        "telemetry_drop_counts: total={} channel_full={} monotonicity_violation={} empty_extension_id={}",
+        dropped.total(),
+        dropped.channel_full,
+        dropped.monotonicity_violation,
+        dropped.empty_extension_id
+    ));
     lines.push(format!(
         "total_redacted_fields: {}",
         output.index.total_redacted_fields
@@ -1434,18 +1535,35 @@ pub fn run_preflight_doctor(
     filter: EvidenceExportFilter,
     redaction_policy: SupportBundleRedactionPolicy,
 ) -> PreflightDoctorOutput {
-    let diagnostics = collect_runtime_diagnostics(
-        &input.runtime_state,
-        &input.trace_id,
-        &input.decision_id,
-        &input.policy_id,
-    );
+    let diagnostics = collect_runtime_diagnostics_for_input(input);
     let evidence_output = export_evidence_bundle(input, filter.clone());
     let support_bundle = export_support_bundle(input, filter, redaction_policy);
     let mandatory_field_status =
         validate_preflight_mandatory_fields(input, &evidence_output, &support_bundle);
 
     let mut blockers = Vec::new();
+    if input.telemetry_drop_counts.any() {
+        let dropped = input.telemetry_drop_counts;
+        blockers.push(PreflightBlocker {
+            blocker_id: "incomplete_hostcall_telemetry".to_string(),
+            severity: EvidenceSeverity::Critical,
+            rationale: format!(
+                "hostcall telemetry is incomplete: {} record(s) dropped (channel_full={}, monotonicity_violation={}, empty_extension_id={})",
+                dropped.total(),
+                dropped.channel_full,
+                dropped.monotonicity_violation,
+                dropped.empty_extension_id
+            ),
+            remediation: "treat this run as incomplete, increase telemetry capacity or fix rejected inputs, and rerun before promotion".to_string(),
+            reproducible_command:
+                "runtime_diagnostics export-evidence --input <path> --summary".to_string(),
+            evidence_links: vec![
+                "support_bundle/evidence_summary.json".to_string(),
+                "support_bundle/run_manifest.json".to_string(),
+                "support_bundle/index.json".to_string(),
+            ],
+        });
+    }
     if !mandatory_field_status.valid {
         blockers.push(PreflightBlocker {
             blocker_id: "mandatory_field_contract".to_string(),
@@ -3246,6 +3364,7 @@ fn validate_preflight_mandatory_fields(
         "support_bundle/commands.txt",
         "support_bundle/runtime_diagnostics.json",
         "support_bundle/evidence_records.jsonl",
+        "support_bundle/evidence_summary.json",
         "support_bundle/summary.md",
         "support_bundle/redaction_audit_report.json",
         "support_bundle/leak_fixture_matrix.json",
@@ -3272,6 +3391,9 @@ fn validate_preflight_mandatory_fields(
             "total_records:{}!={}",
             support_bundle.index.total_records, evidence_output.summary.total_records
         ));
+    }
+    if support_bundle.index.telemetry_drop_counts != evidence_output.summary.telemetry_drop_counts {
+        inconsistent_fields.push("telemetry_drop_counts".to_string());
     }
 
     missing_fields.sort();
@@ -4102,6 +4224,7 @@ mod tests {
             runtime_state: sample_runtime_state(),
             evidence_entries: sample_evidence_entries(),
             hostcall_records: sample_hostcall_envelopes(),
+            telemetry_drop_counts: TelemetryDropCounts::default(),
             containment_receipts: sample_containment_receipts(),
             replay_artifacts: vec![ReplayArtifactRecord {
                 trace_id: "trace-1".to_string(),
@@ -4692,6 +4815,7 @@ mod tests {
             total_records: 5,
             counts_by_kind,
             counts_by_severity,
+            telemetry_drop_counts: TelemetryDropCounts::default(),
         };
         let json = serde_json::to_string(&summary).expect("serde JSON operation should succeed");
         let back: EvidenceExportSummary =
@@ -5166,6 +5290,7 @@ mod tests {
             total_records: 5,
             counts_by_kind: BTreeMap::new(),
             counts_by_severity: BTreeMap::new(),
+            telemetry_drop_counts: TelemetryDropCounts::default(),
         };
         let json = serde_json::to_string(&summary).expect("serde JSON operation should succeed");
         assert!(json.contains("\"total_records\""));
@@ -5417,6 +5542,7 @@ mod tests {
                 total_records: 0,
                 counts_by_kind: BTreeMap::new(),
                 counts_by_severity: BTreeMap::new(),
+                telemetry_drop_counts: TelemetryDropCounts::default(),
             },
             logs: vec![],
         };

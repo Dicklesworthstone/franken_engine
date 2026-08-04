@@ -1,0 +1,53 @@
+{
+  "artifacts": {
+    "coverage": {
+      "path": "coverage_summary.json",
+      "sha256": "sha256:f3df45a6b2ee258feff486ef00518c4b19c852aba11b77ed2dc8d3d2d88e5cfa"
+    },
+    "env": {
+      "path": "env.json",
+      "sha256": "sha256:e692cc4f7544d9e276f35bdb80d87b442998d823ea8e29d0c8b9c5fe50c01f74"
+    },
+    "lock": {
+      "path": "repro.lock",
+      "sha256": "sha256:08d8e111a3f852263bf414b07b1701b0053a2661c45ea24c205a2124686b6494"
+    }
+  },
+  "canonicalization": {
+    "format": "json",
+    "hash_algorithm": "sha256",
+    "key_order": "lexicographic",
+    "newline": "lf"
+  },
+  "claim": {
+    "bundle_root": "docs/coverage/es2020_coverage_summary_bundle_v1",
+    "claim_id": "FE-CLAIM-026",
+    "class": "CONFORMANCE",
+    "statement": "A reproducible, content-addressed, gated coverage summary reports the measured fraction of the ES2020 observable surface the engine executes, in six weighted category views with a floor that exposes the weakest view.",
+    "status": "target"
+  },
+  "generated_at_utc": "20260626T200450Z",
+  "headline": {
+    "floor_view": "builtin",
+    "floor_view_executed_millionths": 16664,
+    "in_scope_passed": 6201,
+    "in_scope_total": 47514,
+    "observable_surface_executed_millionths": 130508
+  },
+  "manifest_id": "sha256:2b57cc6029a9a9576e90332f1a08d31fb8c4d181a914bf44ce462367e03c5116",
+  "owning_bead": "bd-fqlfw.7.4",
+  "retention": {
+    "min_days": 365,
+    "rotation_policy": "archive-with-addressable-retrieval"
+  },
+  "schema_version": "franken-engine.manifest.v1",
+  "source_revision": {
+    "branch": "main",
+    "commit": "5e77ab86dc36a5c379037f37e45425f0c4733351",
+    "repo": "franken_engine"
+  },
+  "validation": {
+    "error_taxonomy": "FE-REPRO-0001..FE-REPRO-0008",
+    "validator": "./scripts/run_coverage_summary_bundle_gate.sh ci"
+  }
+}

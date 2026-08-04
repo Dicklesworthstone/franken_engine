@@ -350,7 +350,7 @@ impl Default for CompileConfig {
             require_provenance: true,
             honour_cache: true,
             policy_revision: 1,
-            engine_version: String::from("0.1.0"),
+            engine_version: env!("CARGO_PKG_VERSION").to_string(),
             max_module_source_bytes: 2 * 1024 * 1024, // 2 MiB
             allowed_entry_kinds: BTreeSet::new(),
         }
@@ -733,6 +733,9 @@ fn compile_module(
     let mut hasher = Sha256::new();
     hasher.update(module.source_hash.as_bytes());
     hasher.update(graph.graph_hash.as_bytes());
+    // Length-prefix the free-form engine_version so its boundary with the
+    // following fixed-width policy_revision is unambiguous (injective preimage).
+    hasher.update((config.engine_version.len() as u64).to_le_bytes());
     hasher.update(config.engine_version.as_bytes());
     hasher.update(config.policy_revision.to_le_bytes());
     hasher.update(config.target.to_string().as_bytes());

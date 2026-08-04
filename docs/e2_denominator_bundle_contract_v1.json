@@ -1,0 +1,79 @@
+{
+  "schema_version": "franken-engine.e2-denominator-bundle-contract.v1",
+  "contract_id": "E2-DENOMINATOR-BUNDLE-V1",
+  "owning_bead": "bd-fqlfw.2.6",
+  "claim_id": "FE-CLAIM-010",
+  "purpose": "Content-addressed reproducibility bundle for the measured Node/Bun differential-oracle throughput denominator, with pinned node/bun versions, a freshness window, and a fail-closed degraded receipt when the denominator is unavailable.",
+  "bundle_root": "docs/perf/e2_denominator_bundle_v1",
+  "required_files": [
+    {
+      "path": "denominator.json",
+      "schema_version": "franken-engine.e2-denominator-bundle.v1",
+      "role": "distilled measured denominator + per-case correctness verdicts (the results.json analogue)"
+    },
+    {
+      "path": "env.json",
+      "schema_version": "franken-engine.env.v1",
+      "role": "host / toolchain / runtime facts with pinned node+bun versions (reproducibility-contract env)"
+    },
+    {
+      "path": "repro.lock",
+      "schema_version": "franken-engine.repro-lock.v1",
+      "role": "locked replay recipe; expected output is the byte-identical correctness-verdict hash"
+    },
+    {
+      "path": "manifest.json",
+      "schema_version": "franken-engine.manifest.v1",
+      "role": "content-addressed index referencing env.json, repro.lock, and denominator.json by sha256"
+    }
+  ],
+  "optional_files": [
+    {
+      "path": "degraded_receipt.json",
+      "schema_version": "franken-engine.e2-denominator-degraded-receipt.v1",
+      "role": "present iff the denominator is degraded/unavailable; documents the failure rather than silently passing"
+    }
+  ],
+  "reproducibility_scope": {
+    "byte_identical_field": "denominator.json#correctness_verdicts",
+    "anchor_hash": "denominator.json#correctness_verdict_hash",
+    "rationale": "wall-clock timing is inherently non-deterministic; the byte-identical assertion is scoped to the per-case behaviour-equivalence verdicts (behavior_equivalent + equivalence_group + corpus_sha256), which reproduce exactly on a re-run.",
+    "locked_in": "repro.lock.expected_outputs[0].sha256"
+  },
+  "freshness": {
+    "gate_module": "crates/franken-engine/src/benchmark_freshness_gate.rs",
+    "wiring_test": "crates/franken-engine/tests/e2_denominator_freshness_integration.rs",
+    "sample_floor": 10,
+    "sample_floor_const": "DEFAULT_MIN_ACQUISITION_SAMPLES",
+    "max_age_days_default": 90,
+    "max_age_env": "E2_DENOM_MAX_AGE_DAYS",
+    "stale_rejection_codes": ["FE-REPRO-0007"]
+  },
+  "gate": {
+    "runner": "scripts/run_e2_denominator_bundle_gate.sh",
+    "modes": ["ci", "verify", "generate"],
+    "replay_wrapper": "scripts/e2e/e2_denominator_bundle_replay.sh",
+    "builder": "scripts/build_e2_denominator_bundle.py",
+    "error_taxonomy": "FE-REPRO-0001..FE-REPRO-0008",
+    "checks": [
+      "all required files present (FE-REPRO-0001)",
+      "valid JSON + schema_version per file (FE-REPRO-0002)",
+      "correctness verdicts reproduce their recorded hash (FE-REPRO-0003)",
+      "manifest-recorded digests match recomputed sha256 of env/lock/results (FE-REPRO-0004)",
+      "repro.lock partner present and binds the correctness-verdict hash (FE-REPRO-0005)",
+      "denominator is within the freshness window and meets the sample floor (FE-REPRO-0007)",
+      "degraded bundles carry a degraded_receipt.json (FE-REPRO-0008)"
+    ]
+  },
+  "degraded_policy": {
+    "trigger": "node/bun unavailable, not genuine, fairness rules unmet, or no admitted case",
+    "action": "write degraded_receipt.json with error_code FE-REPRO-0007 and verdict=degraded",
+    "promotion_rule": "degraded mode must never promote claim status to observed; FE-CLAIM-010 stays target"
+  },
+  "claim_linkage": {
+    "claim_id": "FE-CLAIM-010",
+    "matrix": "docs/claim_to_proof_matrix_v1.json",
+    "allowed_state": "target",
+    "honest_finding": "the measured denominator does not meet the >=3x floor (engine baseline interpreter is materially slower than V8/JSC JIT); the claim stays target, now backed by real numbers instead of absence of data."
+  }
+}

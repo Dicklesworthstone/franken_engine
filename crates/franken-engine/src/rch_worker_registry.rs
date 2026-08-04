@@ -6,11 +6,10 @@
 #![forbid(unsafe_code)]
 
 use crate::macos_arm64_worker::{
-    MacOSArm64WorkerConfig, MacOSArm64WorkerManager, MacOSWorkerError,
-    WorkerExecutionResult as MacOSExecutionResult,
+    MacOSArm64WorkerConfig, MacOSArm64WorkerManager, WorkerExecutionResult as MacOSExecutionResult,
 };
 use crate::windows_x64_worker::{
-    WindowsWorkerError, WindowsX64WorkerConfig, WindowsX64WorkerManager,
+    WindowsX64WorkerConfig, WindowsX64WorkerManager,
     WorkerExecutionResult as WindowsExecutionResult,
 };
 use crate::worker_env_capture::{
@@ -84,6 +83,7 @@ impl WorkerPlatform {
     }
 
     /// Parse platform from string identifier.
+    #[allow(clippy::should_implement_trait)]
     pub fn from_str(s: &str) -> Option<Self> {
         match s {
             "macos-arm64" => Some(Self::MacOSArm64),

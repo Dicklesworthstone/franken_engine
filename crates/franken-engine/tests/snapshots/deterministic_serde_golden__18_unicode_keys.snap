@@ -1,0 +1,20 @@
+---
+source: tests/deterministic_serde_golden.rs
+expression: actual
+---
+{
+  "value": {
+    "Map": {
+      "café": {
+        "String": "hot"
+      },
+      "naïve": {
+        "Bool": false
+      },
+      "🎷": {
+        "U64": 9
+      }
+    }
+  },
+  "expected_sha256_hex": "25f2eefa90f167338f0110c62f78037fef106363cf6c2ba071b613deaa8fd4f0"
+}

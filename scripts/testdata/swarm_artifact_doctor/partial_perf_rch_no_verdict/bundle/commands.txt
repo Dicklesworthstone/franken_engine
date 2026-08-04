@@ -1,0 +1,1 @@
+RCH_REQUIRE_REMOTE=1 rch exec --json --no-self-healing -- env CARGO_TARGET_DIR=/tmp/rch_target_fixture_partial cargo bench -p frankenengine-engine --bench evidence_ledger_batch

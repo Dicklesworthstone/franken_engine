@@ -1,0 +1,52 @@
+---
+source: crates/franken-engine/tests/golden_lowering.rs
+expression: actual
+---
+# franken-engine lowering IR3 golden
+# Update with:
+#   INSTA_UPDATE=always cargo test -p frankenengine-engine --test golden_lowering
+# Then review with `cargo insta review` and commit tests/snapshots/.
+case: for_of_destructuring
+goal: Script
+source:
+  for (const [first] of pairs) { first; }
+
+constant_pool:
+  [0000] "pairs"
+  [0001] "0"
+
+instructions:
+  0000: {"LoadName":{"dst":1,"name_pool_index":0,"allow_missing":false}}
+  0001: {"ForOfInit":{"src":1,"dst":2}}
+  0002: {"Move":{"dst":3,"src":2}}
+  0003: {"ForOfNext":{"iterator":3,"value_dst":4,"done_target":32}}
+  0004: {"BeginTry":{"catch_target":28,"finally_target":28}}
+  0005: {"Move":{"dst":5,"src":4}}
+  0006: {"Move":{"dst":0,"src":5}}
+  0007: {"Move":{"dst":6,"src":5}}
+  0008: {"LoadStr":{"dst":7,"pool_index":1}}
+  0009: {"GetProperty":{"obj":6,"key":7,"dst":8}}
+  0010: {"Move":{"dst":9,"src":8}}
+  0011: {"Move":{"dst":0,"src":9}}
+  0012: "EndTry"
+  0013: {"BeginTry":{"catch_target":28,"finally_target":24}}
+  0014: {"Move":{"dst":10,"src":9}}
+  0015: {"Move":{"dst":0,"src":10}}
+  0016: "EndTry"
+  0017: {"Jump":{"target":3}}
+  0018: "EndTry"
+  0019: {"Jump":{"target":3}}
+  0020: "EndTry"
+  0021: {"Move":{"dst":11,"src":3}}
+  0022: {"IteratorClose":{"iterator":11,"reason":"Break"}}
+  0023: {"Jump":{"target":32}}
+  0024: {"Move":{"dst":12,"src":3}}
+  0025: {"IteratorClose":{"iterator":12,"reason":"Return"}}
+  0026: "EnterFinally"
+  0027: "EndFinally"
+  0028: "EnterFinally"
+  0029: {"Move":{"dst":13,"src":3}}
+  0030: {"IteratorClose":{"iterator":13,"reason":"Throw"}}
+  0031: "EndFinally"
+  0032: {"Return":{"value":0}}
+  0033: "Halt"

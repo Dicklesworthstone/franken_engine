@@ -31,6 +31,40 @@ use crate::hash_tiers::ContentHash;
 use crate::security_epoch::SecurityEpoch;
 
 // ---------------------------------------------------------------------------
+// Content-hash preimage helpers
+// ---------------------------------------------------------------------------
+//
+// The registry/waiver/report hashes must be *injective*: distinct logical
+// inputs must never share a preimage. Feeding free-form `String`s (needles,
+// reasons, ids, paths, justifications) into the hasher with no length marker,
+// looping over a collection with no count marker, or appending an `Option`
+// only when `Some`, all break that — `("ab","c")` collides with `("a","bc")`
+// and `Some("")` aliases `None`. These helpers append self-delimiting fields.
+
+/// Feed `bytes` with a fixed-width `u64` little-endian length prefix.
+fn update_len_prefixed(h: &mut Sha256, bytes: &[u8]) {
+    h.update((bytes.len() as u64).to_le_bytes());
+    h.update(bytes);
+}
+
+/// Feed a `u64` little-endian count prefix for a collection.
+fn update_count(h: &mut Sha256, count: usize) {
+    h.update((count as u64).to_le_bytes());
+}
+
+/// Feed an optional length-prefixed field with a presence tag so `Some("")`
+/// cannot alias `None`.
+fn update_opt_len_prefixed(h: &mut Sha256, value: Option<&[u8]>) {
+    match value {
+        Some(bytes) => {
+            h.update([1u8]);
+            update_len_prefixed(h, bytes);
+        }
+        None => h.update([0u8]),
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
 
@@ -296,15 +330,17 @@ fn compute_registry_hash(patterns: &BTreeMap<String, Vec<ForbiddenPattern>>) -> 
     let mut hasher = Sha256::new();
     hasher.update(b"mock-seam-guardrail-registry-v1");
     // BTreeMap iteration is deterministic by key.
+    update_count(&mut hasher, patterns.len());
     for (cat, pats) in patterns {
-        hasher.update(cat.as_bytes());
+        update_len_prefixed(&mut hasher, cat.as_bytes());
         // Sort patterns by needle for insertion-order independence within each category.
         let mut sorted: Vec<_> = pats.iter().collect();
         sorted.sort_by(|a, b| a.needle.cmp(&b.needle));
+        update_count(&mut hasher, sorted.len());
         for p in &sorted {
-            hasher.update(p.needle.as_bytes());
-            hasher.update(format!("{:?}", p.category).as_bytes());
-            hasher.update(p.reason.as_bytes());
+            update_len_prefixed(&mut hasher, p.needle.as_bytes());
+            update_len_prefixed(&mut hasher, format!("{:?}", p.category).as_bytes());
+            update_len_prefixed(&mut hasher, p.reason.as_bytes());
             hasher.update(p.definition_hash.as_bytes());
         }
     }
@@ -475,16 +511,21 @@ fn compute_waiver_hash(waivers: &[Waiver]) -> ContentHash {
     // Sort waivers by waiver_id for insertion-order independence.
     let mut sorted: Vec<_> = waivers.iter().collect();
     sorted.sort_by(|a, b| a.waiver_id.cmp(&b.waiver_id));
+    update_count(&mut hasher, sorted.len());
     for w in &sorted {
-        hasher.update(w.waiver_id.as_bytes());
-        hasher.update(w.file_pattern.as_bytes());
-        if let Some(pn) = &w.pattern_needle {
-            hasher.update(pn.as_bytes());
-        }
-        hasher.update(w.justification.as_bytes());
+        update_len_prefixed(&mut hasher, w.waiver_id.as_bytes());
+        update_len_prefixed(&mut hasher, w.file_pattern.as_bytes());
+        update_opt_len_prefixed(&mut hasher, w.pattern_needle.as_deref().map(str::as_bytes));
+        update_len_prefixed(&mut hasher, w.justification.as_bytes());
         hasher.update(w.granted_epoch.as_u64().to_le_bytes());
-        if let Some(expiry) = &w.expiry_epoch {
-            hasher.update(expiry.as_u64().to_le_bytes());
+        // Presence tag so a `Some(epoch)` cannot shift the next iteration's
+        // boundary versus `None`.
+        match &w.expiry_epoch {
+            Some(expiry) => {
+                hasher.update([1u8]);
+                hasher.update(expiry.as_u64().to_le_bytes());
+            }
+            None => hasher.update([0u8]),
         }
     }
     ContentHash::compute(&hasher.finalize())
@@ -744,8 +785,9 @@ fn compute_report_hash(results: &[FileScanResult], epoch: SecurityEpoch) -> Cont
     let mut hasher = Sha256::new();
     hasher.update(b"mock-seam-guard-report-v1");
     hasher.update(epoch.as_u64().to_le_bytes());
+    update_count(&mut hasher, results.len());
     for r in results {
-        hasher.update(r.file_path.as_bytes());
+        update_len_prefixed(&mut hasher, r.file_path.as_bytes());
         hasher.update(r.file_hash.as_bytes());
         hasher.update((r.production_violation_count as u64).to_le_bytes());
     }
@@ -858,6 +900,26 @@ mod tests {
 
     fn epoch(n: u64) -> SecurityEpoch {
         SecurityEpoch::from_raw(n)
+    }
+
+    #[test]
+    fn preimage_helpers_are_injective_bd_za74y() {
+        // Regression (bd-za74y): the registry/waiver/report hashes concatenated
+        // free-form Strings with no length prefix and appended Options only when
+        // Some, so ("ab","c") aliased ("a","bc") and Some("") aliased None.
+        let mut a = Sha256::new();
+        update_len_prefixed(&mut a, b"ab");
+        update_len_prefixed(&mut a, b"c");
+        let mut b = Sha256::new();
+        update_len_prefixed(&mut b, b"a");
+        update_len_prefixed(&mut b, b"bc");
+        assert_ne!(a.finalize(), b.finalize());
+
+        let mut some_empty = Sha256::new();
+        update_opt_len_prefixed(&mut some_empty, Some(b"".as_slice()));
+        let mut none = Sha256::new();
+        update_opt_len_prefixed(&mut none, None);
+        assert_ne!(some_empty.finalize(), none.finalize());
     }
 
     // --- PatternCategory ---

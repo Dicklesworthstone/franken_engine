@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use chrono::{NaiveDate, Utc};
+use frankenengine_engine::test262_harness::Test262Harness;
 use frankenengine_engine::test262_release_gate::{
     Test262EvidenceCollector, Test262GateRunner, Test262HighWaterMark, Test262ObservedResult,
     Test262PinSet, Test262Profile, Test262RunnerConfig, Test262WaiverSet, next_high_water_mark,
@@ -37,6 +38,13 @@ struct CliArgs {
     profile_path: PathBuf,
     waivers_path: PathBuf,
     case_vectors_path: PathBuf,
+    /// A real tc39/test262 checkout. When set, case vectors are generated live
+    /// from this checkout (via `Test262Harness`) instead of read from
+    /// `case_vectors_path`, so the runner measures a real corpus denominator.
+    suite_path: Option<PathBuf>,
+    /// Cap on the number of cases drawn from `suite_path` (deterministic prefix of
+    /// the path-sorted profile-selected set). `None` runs the whole profile.
+    sample_count: Option<usize>,
     observed_results_path: Option<PathBuf>,
     allow_precomputed_observed: bool,
     single_test_id: Option<String>,
@@ -74,7 +82,7 @@ fn default_output_root() -> PathBuf {
 }
 
 fn usage() -> &'static str {
-    "usage: franken_test262_runner [--pins <path>] [--profile <path>] [--waivers <path>] [--case-vectors <path>] [--single-test-id <id>] [--observed-results <path> --allow-precomputed-observed] [--output-root <path>] [--high-water-mark <path>] [--run-date <YYYY-MM-DD>] [--worker-count <n>] [--trace-prefix <prefix>] [--policy-id <id>] [--acknowledge-pass-regression]"
+    "usage: franken_test262_runner [--pins <path>] [--profile <path>] [--waivers <path>] [--case-vectors <path>] [--suite-path <test262-checkout>] [--sample-count <n>] [--single-test-id <id>] [--observed-results <path> --allow-precomputed-observed] [--output-root <path>] [--high-water-mark <path>] [--run-date <YYYY-MM-DD>] [--worker-count <n>] [--trace-prefix <prefix>] [--policy-id <id>] [--acknowledge-pass-regression]"
 }
 
 fn parse_args() -> Result<CliArgs, String> {
@@ -89,6 +97,8 @@ where
     let mut profile_path = default_profile_path();
     let mut waivers_path = default_waivers_path();
     let mut case_vectors_path = default_case_vectors_path();
+    let mut suite_path = None;
+    let mut sample_count = None;
     let mut observed_results_path = None;
     let mut allow_precomputed_observed = false;
     let mut single_test_id = None;
@@ -126,6 +136,21 @@ where
                     .next()
                     .ok_or_else(|| "--case-vectors requires a value".to_string())?;
                 case_vectors_path = PathBuf::from(value);
+            }
+            "--suite-path" => {
+                let value = args
+                    .next()
+                    .ok_or_else(|| "--suite-path requires a value".to_string())?;
+                suite_path = Some(PathBuf::from(value));
+            }
+            "--sample-count" => {
+                let value = args
+                    .next()
+                    .ok_or_else(|| "--sample-count requires a value".to_string())?;
+                let parsed: usize = value.parse().map_err(|_| {
+                    format!("--sample-count must be a non-negative integer: {value}")
+                })?;
+                sample_count = Some(parsed);
             }
             "--single-test-id" => {
                 let value = args
@@ -217,6 +242,8 @@ where
         profile_path,
         waivers_path,
         case_vectors_path,
+        suite_path,
+        sample_count,
         observed_results_path,
         allow_precomputed_observed,
         single_test_id,
@@ -616,13 +643,65 @@ fn execute_case_vector(
     (observed, artifact)
 }
 
+/// Generate runner case vectors live from a real tc39/test262 checkout via
+/// `Test262Harness` (the `--suite-path` path). This is what turns the provisional
+/// curated smoke into a real-corpus denominator: the harness walks the pinned
+/// checkout, filters by the ES2020 profile, and the (deterministically sorted)
+/// prefix of `sample_count` cases is run. Returns the runner's own
+/// `Test262CaseVector` type (validated) so the downstream execution path is
+/// identical to the `--case-vectors` file path.
+fn vectors_from_suite(suite: &Path, args: &CliArgs) -> io::Result<Vec<Test262CaseVector>> {
+    let pins = Test262PinSet::load_toml(&args.pins_path)?;
+    let profile = Test262Profile::load_toml(&args.profile_path)?;
+    let harness = Test262Harness::new(suite.to_path_buf(), pins, profile);
+    let mut cases = harness
+        .extract_test_cases()
+        .map_err(|err| io::Error::other(format!("test262 suite extraction failed: {err}")))?;
+    if let Some(limit) = args.sample_count {
+        cases.truncate(limit);
+    }
+    let harness_vectors = harness.generate_case_vectors(&cases);
+    let total_generated = harness_vectors.len();
+    let vectors: Vec<Test262CaseVector> = harness_vectors
+        .into_iter()
+        // A handful of real cases (e.g. hashbang-only tests) reduce to an empty
+        // source once the frontmatter is stripped; they cannot be meaningfully
+        // executed and the strict vector validator rejects an empty source, which
+        // would otherwise abort the whole run. Drop them from the denominator
+        // rather than synthesizing a verdict for them.
+        .filter(|v| !v.source.trim().is_empty())
+        .map(|v| Test262CaseVector {
+            test_id: v.test_id,
+            es2020_clause: v.es2020_clause,
+            source: v.source,
+            expected_value: v.expected_value,
+            // The harness emits a free-form lane string; the runner picks the lane
+            // by its own default (hybrid) and the gate records it per case.
+            runtime_lane: RuntimeLane::default(),
+            deterministic_seed: v.deterministic_seed,
+            origin_commit: None,
+            origin_url: None,
+        })
+        .collect();
+    let skipped = total_generated - vectors.len();
+    if skipped > 0 {
+        eprintln!(
+            "[suite] skipped {skipped} case(s) with empty post-frontmatter source (e.g. hashbang-only tests)"
+        );
+    }
+    validate_case_vectors(vectors)
+}
+
 fn execute_live_case_vectors(
     args: &CliArgs,
 ) -> io::Result<(
     Vec<Test262ObservedResult>,
     Vec<Test262CaseExecutionArtifact>,
 )> {
-    let all_vectors = load_case_vectors(&args.case_vectors_path)?;
+    let all_vectors = match args.suite_path.as_ref() {
+        Some(suite) => vectors_from_suite(suite, args)?,
+        None => load_case_vectors(&args.case_vectors_path)?,
+    };
     let selected: Vec<Test262CaseVector> = match args.single_test_id.as_ref() {
         Some(single) => all_vectors
             .into_iter()

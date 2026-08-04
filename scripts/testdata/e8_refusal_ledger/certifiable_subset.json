@@ -1,0 +1,44 @@
+{
+  "schema_version": "franken-engine.e8-refusal-ledger.v1",
+  "ledger_id": "e8-refusal-ledger-certifiable-subset",
+  "run_id": "frankenctl-run-certifiable-subset",
+  "contract_id": "contract-e8-001",
+  "result_class": "certifiable_subset",
+  "threat_model_scope": "explicit_flow_ifc_v1",
+  "certifier_input_allowed": true,
+  "positive_non_use_claim_allowed": false,
+  "must_block_certificate": false,
+  "analyzed_surface_count": 5,
+  "unanalyzed_surface_count": 0,
+  "degraded_surface_count": 0,
+  "refusal_codes": [],
+  "source_refs": [
+    {
+      "id": "data-contract",
+      "surface": "data_contract_binding",
+      "path": "crates/franken-engine/src/data_contract.rs",
+      "symbol": "DataContractRunBinding"
+    },
+    {
+      "id": "flow-obligation",
+      "surface": "flow_envelope",
+      "path": "crates/franken-engine/src/flow_envelope.rs",
+      "symbol": "FlowProofObligation"
+    }
+  ],
+  "evidence_refs": [
+    {
+      "id": "run-explain",
+      "kind": "runtime_explain_bundle",
+      "status": "present",
+      "artifact_path": "artifacts/e8/certifiable_subset/explain.json"
+    },
+    {
+      "id": "flow-proof",
+      "kind": "flow_proof_obligation",
+      "status": "present",
+      "artifact_path": "artifacts/e8/certifiable_subset/flow_proof.json"
+    }
+  ],
+  "remediation_actions": []
+}

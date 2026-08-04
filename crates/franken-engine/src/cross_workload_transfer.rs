@@ -460,34 +460,44 @@ impl TransferSession {
 
     /// Evaluate a candidate and produce a decision.
     pub fn evaluate_candidate(&mut self, candidate: &TransferCandidate) -> TransferDecision {
-        let verdict;
-        let reason;
-
-        if !self.config.kind_allowed(candidate.kind) {
-            verdict = TransferVerdict::Rejected;
-            reason = Some(TransferRejectionReason::KindBlocked);
+        let (verdict, reason) = if !self.config.kind_allowed(candidate.kind) {
+            (
+                TransferVerdict::Rejected,
+                Some(TransferRejectionReason::KindBlocked),
+            )
         } else if candidate.proximity_score < self.config.min_proximity_score {
-            verdict = TransferVerdict::Rejected;
-            reason = Some(TransferRejectionReason::ProximityTooLow);
+            (
+                TransferVerdict::Rejected,
+                Some(TransferRejectionReason::ProximityTooLow),
+            )
         } else if self.local_prior_hashes.contains(&candidate.prior_hash) {
-            verdict = TransferVerdict::Rejected;
-            reason = Some(TransferRejectionReason::AlreadyPresent);
+            (
+                TransferVerdict::Rejected,
+                Some(TransferRejectionReason::AlreadyPresent),
+            )
         } else if self.active_transfers.len() >= self.config.max_active_transfers {
-            verdict = TransferVerdict::Deferred;
-            reason = Some(TransferRejectionReason::BudgetExhausted);
+            (
+                TransferVerdict::Deferred,
+                Some(TransferRejectionReason::BudgetExhausted),
+            )
         } else if self.epoch_gap_too_large(candidate) {
-            verdict = TransferVerdict::Rejected;
-            reason = Some(TransferRejectionReason::EpochGapTooLarge);
+            (
+                TransferVerdict::Rejected,
+                Some(TransferRejectionReason::EpochGapTooLarge),
+            )
         } else if self.in_rollback_cooldown(candidate.kind) {
-            verdict = TransferVerdict::Deferred;
-            reason = Some(TransferRejectionReason::RecentRollback);
+            (
+                TransferVerdict::Deferred,
+                Some(TransferRejectionReason::RecentRollback),
+            )
         } else if candidate.donor_performance_estimate < 0 {
-            verdict = TransferVerdict::Rejected;
-            reason = Some(TransferRejectionReason::InsufficientEvidence);
+            (
+                TransferVerdict::Rejected,
+                Some(TransferRejectionReason::InsufficientEvidence),
+            )
         } else {
-            verdict = TransferVerdict::Accepted;
-            reason = None;
-        }
+            (TransferVerdict::Accepted, None)
+        };
 
         let decision_hash = self.compute_decision_hash(candidate, verdict);
 

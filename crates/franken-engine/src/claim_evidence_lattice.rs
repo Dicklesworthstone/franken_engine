@@ -1,0 +1,1789 @@
+//! Claim ⇄ evidence soundness lattice (CEI track A.1, bead `bd-sde5e.1.1`).
+//!
+//! # Why this module exists
+//!
+//! FrankenEngine's constitutional thesis (`docs/RUNTIME_CHARTER.md` §7) is that a
+//! claim's *stated strength* may never exceed its *evidence*. The historical
+//! claim-to-proof gate (`scripts/run_claim_to_proof_matrix_gate.sh`) only enforces
+//! **one** direction of that contract:
+//!
+//! ```text
+//! README wording state  ≤  matrix.allowed_state          (already enforced)
+//! ```
+//!
+//! It treats `matrix.allowed_state` as a *trusted oracle* and never checks the
+//! other direction:
+//!
+//! ```text
+//! matrix.allowed_state  ≤  evidence actually committed     (NOT enforced — the gap)
+//! ```
+//!
+//! The 2026-06-18 reality check found exactly this drift: rows marked `observed`
+//! whose proof bundles are git-ignored (a fresh clone has *zero* evidence),
+//! carry `verification_result = pending` from a backfill script, and advertise a
+//! fictional `freshness_days = 1` when the real artifact age is weeks.
+//!
+//! This module closes the missing direction *by construction*. It defines two
+//! finite, totally-ordered lattices and a **monotone** map `tier` from
+//! machine-checkable facts to an evidence tier, a total `ceiling` from evidence
+//! tier to the maximum honestly-assertable claim state, and the soundness
+//! predicate `state(claim) ≤ ceiling(tier(claim))`. The fraction of rows that
+//! satisfy the predicate is the **claim-integrity-coverage** — a single number
+//! that can only rise as real, committed, freshly-verified evidence lands.
+//!
+//! # The two lattices
+//!
+//! Claim-assertion state (mirrors `docs/claim_to_proof_matrix_v1.json` `state_order`):
+//!
+//! ```text
+//! Hypothesis  <  Target  <  Observed
+//! ```
+//!
+//! Evidence tier (computed only from facts a machine can re-derive):
+//!
+//! ```text
+//! Unbacked  <  Asserted  <  Exercised  <  Reproduced  <  AdversariallyVerified
+//! ```
+//!
+//! Both are *chains* (total orders), hence lattices with `join = max` and
+//! `meet = min`. The lattice laws (idempotence, commutativity, associativity,
+//! absorption) and the monotonicity of `tier` / `ceiling` are proven by the unit
+//! tests at the bottom of this file.
+//!
+//! # Scope of A.1
+//!
+//! This bead delivers the pure scorer plus a fact collector that reads the real
+//! repository (git-tracked status, manifest `verification_result`, freshness).
+//! Turning the advisory coverage metric into a *blocking* gate is deferred to
+//! A.3 (`bd-sde5e.1.3`), which depends on track B committing the evidence first;
+//! enforcing it before then would brick the gate against every currently-drifted
+//! row. The full e2e runner + replay wrapper belong to A.6 (`bd-sde5e.1.6`).
+
+use std::fmt;
+use std::path::Path;
+use std::process::Command;
+
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
+
+use crate::hash_tiers::ContentHash;
+use crate::martingale_decision_ledger::{MartingaleLedger, MartingaleVerdict, StoppingThreshold};
+use crate::security_epoch::SecurityEpoch;
+
+/// Schema/domain tag mixed into the content-addressed coverage digest so a digest
+/// for this report can never be confused with any other length-prefixed preimage.
+pub const COVERAGE_DIGEST_DOMAIN: &str = "franken-engine.claim-evidence-integrity.v1";
+
+// ---------------------------------------------------------------------------
+// Length-prefixed canonical encoding helpers
+// ---------------------------------------------------------------------------
+//
+// These mirror `push_len_prefixed` / `push_count` in `semantic_cover_schema`
+// and the project-wide determinism discipline: every variable-length field is
+// length-prefixed before concatenation so two distinct reports can never share
+// a preimage (injectivity).
+
+/// Append `bytes` with a fixed-width `u64` little-endian length prefix.
+fn push_len_prefixed(buf: &mut Vec<u8>, bytes: &[u8]) {
+    buf.extend_from_slice(&(bytes.len() as u64).to_le_bytes());
+    buf.extend_from_slice(bytes);
+}
+
+/// Append a `u64` little-endian count prefix for an otherwise-unbounded sequence.
+fn push_count(buf: &mut Vec<u8>, count: usize) {
+    buf.extend_from_slice(&(count as u64).to_le_bytes());
+}
+
+// ---------------------------------------------------------------------------
+// Claim-assertion state lattice: Hypothesis < Target < Observed
+// ---------------------------------------------------------------------------
+
+/// How strongly a README sentence / matrix row *asserts* a capability.
+///
+/// Declaration order is ascending, so the derived `Ord` is the lattice order.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ClaimAssertionState {
+    /// Projected / optional behaviour; must not be read as shipped proof.
+    Hypothesis,
+    /// A documented design goal or SLO; a roadmap commitment, not a guarantee.
+    Target,
+    /// Current artifacts and a verification command are linked. Strongest wording.
+    Observed,
+}
+
+impl ClaimAssertionState {
+    /// Numeric rank within the chain (0 = weakest).
+    #[must_use]
+    pub fn rank(self) -> u8 {
+        match self {
+            Self::Hypothesis => 0,
+            Self::Target => 1,
+            Self::Observed => 2,
+        }
+    }
+
+    /// Lattice join (least upper bound) — the stronger of two states.
+    #[must_use]
+    pub fn join(self, other: Self) -> Self {
+        if self >= other { self } else { other }
+    }
+
+    /// Lattice meet (greatest lower bound) — the weaker of two states.
+    #[must_use]
+    pub fn meet(self, other: Self) -> Self {
+        if self <= other { self } else { other }
+    }
+
+    /// Parse a matrix state string (`hypothesis` / `target` / `observed`).
+    ///
+    /// Matching is case-insensitive and tolerant of surrounding whitespace.
+    pub fn parse(s: &str) -> Result<Self, IntegrityError> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "hypothesis" => Ok(Self::Hypothesis),
+            "target" => Ok(Self::Target),
+            "observed" => Ok(Self::Observed),
+            other => Err(IntegrityError::UnknownClaimState(other.to_string())),
+        }
+    }
+
+    /// All states, ascending — used by lattice-law property tests.
+    #[must_use]
+    pub fn all() -> [Self; 3] {
+        [Self::Hypothesis, Self::Target, Self::Observed]
+    }
+}
+
+impl fmt::Display for ClaimAssertionState {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let label = match self {
+            Self::Hypothesis => "hypothesis",
+            Self::Target => "target",
+            Self::Observed => "observed",
+        };
+        write!(f, "{label}")
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Evidence-tier lattice: Unbacked < Asserted < Exercised < Reproduced < AdversariallyVerified
+// ---------------------------------------------------------------------------
+
+/// The strength of evidence a claim row can actually stand on, derived purely
+/// from machine-checkable facts. Declaration order is ascending.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EvidenceTier {
+    /// No committed artifact at all (git-ignored or absent). "No artifact, no claim."
+    Unbacked,
+    /// A committed, git-tracked artifact exists but has not been exercised
+    /// (verification pending / backfilled, or no zero-exit run receipt).
+    Asserted,
+    /// The verifying gate ran and passed with a committed zero-exit run receipt,
+    /// but the bundle is not reproducible (no committed `repro.lock`) or is stale.
+    Exercised,
+    /// Exercised *and* reproducible: a git-tracked `repro.lock` partner plus a
+    /// freshness within the matrix window.
+    Reproduced,
+    /// Reproduced *and* additionally backed by the adversarial / metamorphic
+    /// self-audit corpus (set by A.5 / track H; default `false` in A.1).
+    AdversariallyVerified,
+}
+
+impl EvidenceTier {
+    /// Numeric rank within the chain (0 = weakest).
+    #[must_use]
+    pub fn rank(self) -> u8 {
+        match self {
+            Self::Unbacked => 0,
+            Self::Asserted => 1,
+            Self::Exercised => 2,
+            Self::Reproduced => 3,
+            Self::AdversariallyVerified => 4,
+        }
+    }
+
+    /// Lattice join (least upper bound).
+    #[must_use]
+    pub fn join(self, other: Self) -> Self {
+        if self >= other { self } else { other }
+    }
+
+    /// Lattice meet (greatest lower bound).
+    #[must_use]
+    pub fn meet(self, other: Self) -> Self {
+        if self <= other { self } else { other }
+    }
+
+    /// All tiers, ascending — used by lattice-law and monotonicity tests.
+    #[must_use]
+    pub fn all() -> [Self; 5] {
+        [
+            Self::Unbacked,
+            Self::Asserted,
+            Self::Exercised,
+            Self::Reproduced,
+            Self::AdversariallyVerified,
+        ]
+    }
+}
+
+impl fmt::Display for EvidenceTier {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let label = match self {
+            Self::Unbacked => "unbacked",
+            Self::Asserted => "asserted",
+            Self::Exercised => "exercised",
+            Self::Reproduced => "reproduced",
+            Self::AdversariallyVerified => "adversarially_verified",
+        };
+        write!(f, "{label}")
+    }
+}
+
+/// Total map from an evidence tier to the **maximum** claim state it can honestly
+/// license. Monotone (non-decreasing in tier) — proven by [`tests`].
+///
+/// The boundary at `Reproduced → Observed` encodes the project's reproducibility
+/// contract (`bd-cixqu.4.3`): an `observed` row must carry a committed,
+/// freshly-verified `repro.lock`, not merely a passing one-shot gate.
+#[must_use]
+pub fn ceiling(tier: EvidenceTier) -> ClaimAssertionState {
+    match tier {
+        EvidenceTier::Unbacked => ClaimAssertionState::Hypothesis,
+        // A committed-but-unexercised artifact can back a roadmap goal, not a guarantee.
+        EvidenceTier::Asserted | EvidenceTier::Exercised => ClaimAssertionState::Target,
+        // Reproducible (and stronger) evidence licenses the strongest wording.
+        EvidenceTier::Reproduced | EvidenceTier::AdversariallyVerified => {
+            ClaimAssertionState::Observed
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Machine-checkable evidence facts
+// ---------------------------------------------------------------------------
+
+/// The finite set of machine-checkable facts that `tier` consumes. Every field
+/// is a *positive* fact (true = stronger evidence) so the dominance order and
+/// monotonicity are unambiguous; freshness is reduced to the boolean `fresh`
+/// for the lattice while `freshness_days` is retained for reporting only.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EvidenceFacts {
+    /// `git ls-files` reports the declared artifact path as tracked.
+    pub artifact_git_tracked: bool,
+    /// Manifest `outputs.verification_result == "passed"` AND not backfill-generated.
+    pub verification_passed: bool,
+    /// A committed run receipt records a zero exit status (e.g. `repro.lock`
+    /// `expected_outputs.exit_code == 0`).
+    pub receipt_exit_zero: bool,
+    /// A git-tracked `repro.lock` partner exists for the bundle.
+    pub repro_lock_present: bool,
+    /// The artifact's real age is within the matrix freshness window.
+    pub fresh: bool,
+    /// The claim is additionally backed by the adversarial / metamorphic corpus.
+    pub adversarially_verified: bool,
+
+    // --- reporting-only fields (NOT part of the monotone lattice) ---
+    /// Real artifact age in days, if it could be computed from the manifest
+    /// timestamp or the artifact's git commit time.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub freshness_days: Option<u64>,
+    /// The anytime-valid e-process freshness verdict that *set* `fresh`
+    /// (reporting-only; the monotone lattice consumes only the boolean `fresh`,
+    /// so this field never participates in [`EvidenceFacts::dominates`] or
+    /// [`tier`]). `None` when no real age could be computed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub freshness_eprocess: Option<FreshnessVerdict>,
+    /// Human-readable provenance notes (e.g. "verification_result=pending").
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub notes: Vec<String>,
+}
+
+impl EvidenceFacts {
+    /// Componentwise dominance over the six monotone facts: `self` is at least as
+    /// strong as `other` in every positive fact. Used to prove `tier` monotone.
+    #[must_use]
+    pub fn dominates(&self, other: &Self) -> bool {
+        (self.artifact_git_tracked || !other.artifact_git_tracked)
+            && (self.verification_passed || !other.verification_passed)
+            && (self.receipt_exit_zero || !other.receipt_exit_zero)
+            && (self.repro_lock_present || !other.repro_lock_present)
+            && (self.fresh || !other.fresh)
+            && (self.adversarially_verified || !other.adversarially_verified)
+    }
+}
+
+/// Monotone map from machine-checkable facts to an evidence tier.
+///
+/// Built as a ladder of cumulative conjunctive gates, so strengthening any single
+/// fact can only move a row *up* the ladder — never down. This is the structural
+/// guarantee that honesty "can only rise with committed evidence."
+#[must_use]
+pub fn tier(facts: &EvidenceFacts) -> EvidenceTier {
+    let committed = facts.artifact_git_tracked;
+    let exercised = committed && facts.verification_passed && facts.receipt_exit_zero;
+    let reproduced = exercised && facts.repro_lock_present && facts.fresh;
+    let adversarial = reproduced && facts.adversarially_verified;
+
+    if adversarial {
+        EvidenceTier::AdversariallyVerified
+    } else if reproduced {
+        EvidenceTier::Reproduced
+    } else if exercised {
+        EvidenceTier::Exercised
+    } else if committed {
+        EvidenceTier::Asserted
+    } else {
+        EvidenceTier::Unbacked
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Principled freshness via an anytime-valid e-process boundary
+// (CEI track A.4, bead `bd-sde5e.1.4`)
+// ---------------------------------------------------------------------------
+//
+// The historical freshness test was a hard `age_days <= 30` cliff, and the
+// matrix *authored* a per-claim `freshness_days` (often `1`) that bore no
+// relation to the committed bundle's real age — the exact fiction the CEI
+// reality check named (`freshness_days = 1` while real bundles are weeks old).
+// A.4 retires both:
+//
+//   * real age is *computed* from the committed evidence — the manifest
+//     `generated_at_utc`, falling back to the artifact's git commit time — and
+//     never authored into the matrix;
+//   * staleness is judged by an anytime-valid sequential test (an e-process)
+//     rather than a fixed cliff, so the `Observed` ceiling *decays principledly*
+//     past a derived bound instead of dropping off a magic number.
+//
+// # Construction
+//
+// Treat "the committed evidence is still fresh" as the null hypothesis `H0`.
+// Each elapsed day of non-reverification contributes a constant
+// log-likelihood-ratio increment `daily = ln(1/α) / horizon` toward the
+// staleness alternative, so the e-value after `d` days is the product
+// martingale `E_d = exp(daily · d)`. By **Ville's inequality**, the probability
+// that `E_d` *ever* crosses `1/α` while `H0` holds is at most `α`; crossing the
+// boundary is therefore an anytime-valid rejection of freshness at level `α`.
+//
+// Because `daily = ln(1/α)/horizon`, the boundary `E_d ≥ 1/α` is first reached
+// around `d = horizon`, so the default policy `(α = 0.05, horizon = 30)`
+// reproduces the old 30-day window *as a derived consequence* rather than as an
+// authored constant — and it keeps a continuous `stale_confidence` past the
+// boundary instead of a binary cliff. Integer-floored `daily` keeps `d = horizon`
+// strictly below the boundary (still fresh), matching the historical
+// `age <= horizon` semantics exactly so this change regresses no currently-sound
+// row.
+//
+// This reuses the guardplane e-process substrate directly: the crossing is
+// decided by a real [`MartingaleLedger`](crate::martingale_decision_ledger)
+// fed the per-day increments, so a freshness verdict is replayable evidence on
+// the same ledger every other guardrail uses — not a parallel reimplementation.
+
+/// Default false-staleness-alarm tolerance `α = 0.05`, in millionths. The
+/// probability that genuinely-fresh evidence is *ever* falsely flagged stale is
+/// at most this (Ville's inequality).
+pub const DEFAULT_FRESHNESS_ALPHA_MILLIONTHS: i64 = 50_000;
+
+/// Default freshness horizon in days — the policy point at which the e-process
+/// is calibrated to reach its rejection boundary. Mirrors the matrix's
+/// `max_observed_freshness_days`.
+pub const DEFAULT_FRESHNESS_HORIZON_DAYS: u64 = 30;
+
+/// A principled, anytime-valid freshness test calibrated by `(α, horizon)`.
+///
+/// Construct with [`FreshnessEProcess::new`] (explicit `α`) or
+/// [`FreshnessEProcess::from_horizon`] (default `α = 0.05`), then
+/// [`evaluate`](FreshnessEProcess::evaluate) a real artifact age.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FreshnessEProcess {
+    alpha_millionths: i64,
+    horizon_days: u64,
+    /// `ln(1/α)` in millionths — the rejection boundary in log space.
+    log_threshold_millionths: i64,
+    /// `ln(1/α)/horizon` in millionths — the per-day staleness log-LR increment.
+    daily_log_lr_millionths: i64,
+}
+
+impl FreshnessEProcess {
+    /// Build the e-process from an explicit false-alarm tolerance `α`
+    /// (millionths) and a calibration horizon in days.
+    ///
+    /// `α` is clamped to `(0, 1)` so `ln(1/α) > 0` (a non-trivial test), and
+    /// `horizon` to `>= 1` so the per-day increment is well defined.
+    #[must_use]
+    pub fn new(alpha_millionths: i64, horizon_days: u64) -> Self {
+        let alpha = alpha_millionths.clamp(1, 999_999);
+        let horizon = horizon_days.max(1);
+        // α as a fraction is `alpha/1e6`, so `1/α = 1e6/alpha`.
+        let inv_alpha = 1_000_000.0_f64 / alpha as f64;
+        let log_threshold_millionths = (inv_alpha.ln() * 1_000_000.0).round() as i64;
+        // Floor keeps `day == horizon` strictly below the boundary (fresh).
+        let daily_log_lr_millionths = (log_threshold_millionths / horizon as i64).max(1);
+        Self {
+            alpha_millionths: alpha,
+            horizon_days: horizon,
+            log_threshold_millionths,
+            daily_log_lr_millionths,
+        }
+    }
+
+    /// Build with the default `α = 0.05` and the supplied horizon.
+    #[must_use]
+    pub fn from_horizon(horizon_days: u64) -> Self {
+        Self::new(DEFAULT_FRESHNESS_ALPHA_MILLIONTHS, horizon_days)
+    }
+
+    /// `α` in millionths.
+    #[must_use]
+    pub fn alpha_millionths(&self) -> i64 {
+        self.alpha_millionths
+    }
+
+    /// The calibration horizon in days.
+    #[must_use]
+    pub fn horizon_days(&self) -> u64 {
+        self.horizon_days
+    }
+
+    /// `ln(1/α)` in millionths (the rejection boundary in log space).
+    #[must_use]
+    pub fn log_threshold_millionths(&self) -> i64 {
+        self.log_threshold_millionths
+    }
+
+    /// `ln(1/α)/horizon` in millionths (the per-day staleness log-LR increment).
+    #[must_use]
+    pub fn daily_log_lr_millionths(&self) -> i64 {
+        self.daily_log_lr_millionths
+    }
+
+    /// The first day `d` at which the e-process *strictly* rejects freshness,
+    /// i.e. the smallest `d` with `d · daily >= ln(1/α)`. Evidence aged
+    /// `< bound_days` is fresh; `>= bound_days` is stale.
+    #[must_use]
+    pub fn bound_days(&self) -> u64 {
+        let daily = self.daily_log_lr_millionths;
+        // ceil(threshold / daily) for positive integers.
+        ((self.log_threshold_millionths + daily - 1) / daily) as u64
+    }
+
+    /// Evaluate freshness for a committed artifact of the given real age.
+    #[must_use]
+    pub fn evaluate(&self, age_days: u64) -> FreshnessVerdict {
+        // Closed-form e-value in log space: exact and monotone in age.
+        let log_e_value_millionths = (age_days as i64).saturating_mul(self.daily_log_lr_millionths);
+
+        // Decide the crossing on the *real* guardplane martingale ledger so the
+        // verdict is replayable evidence rather than a parallel reimplementation.
+        let crossed_on_ledger = self.ledger_crosses(age_days);
+
+        // The two routes must agree on the crossing; if they ever diverge the
+        // closed-form arithmetic is wrong (caught in debug/test builds).
+        debug_assert_eq!(
+            crossed_on_ledger,
+            log_e_value_millionths >= self.log_threshold_millionths,
+            "freshness e-process: ledger and closed-form disagree on the crossing"
+        );
+
+        let fresh = !crossed_on_ledger;
+        let stale_confidence_millionths =
+            (log_e_value_millionths - self.log_threshold_millionths).max(0);
+
+        FreshnessVerdict {
+            age_days,
+            horizon_days: self.horizon_days,
+            alpha_millionths: self.alpha_millionths,
+            bound_days: self.bound_days(),
+            log_e_value_millionths,
+            log_threshold_millionths: self.log_threshold_millionths,
+            fresh,
+            stale_confidence_millionths,
+        }
+    }
+
+    /// Run the unified martingale ledger, feeding one staleness increment per
+    /// elapsed day, and report whether it crossed the rejection boundary.
+    ///
+    /// The loop is capped at `bound_days + 1` because the ledger refuses
+    /// appends after it Stops, so an age in the thousands is still `O(bound)`.
+    fn ledger_crosses(&self, age_days: u64) -> bool {
+        let threshold =
+            match StoppingThreshold::try_from_log_millionths(self.log_threshold_millionths) {
+                Ok(t) => t,
+                // `log_threshold > 0` by construction; the error is unreachable,
+                // but treat it conservatively as "cannot certify fresh".
+                Err(_) => return true,
+            };
+        let mut ledger = MartingaleLedger::new(threshold, SecurityEpoch::GENESIS);
+        let steps = age_days.min(self.bound_days().saturating_add(1));
+        for day in 0..steps {
+            let digest = ContentHash::compute(&day.to_le_bytes());
+            match ledger.append(self.daily_log_lr_millionths, digest, day) {
+                Ok(MartingaleVerdict::Stop { .. }) => return true,
+                Ok(MartingaleVerdict::Continue) => {}
+                // Overflow / already-stopped: fail closed (treat as stale).
+                Err(_) => return true,
+            }
+        }
+        ledger.is_stopped()
+    }
+}
+
+/// The verdict of a [`FreshnessEProcess`] evaluation. Reporting-only: only the
+/// boolean `fresh` feeds the monotone evidence lattice.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FreshnessVerdict {
+    /// The committed artifact's real age in days.
+    pub age_days: u64,
+    /// The calibration horizon `(α, horizon)` used.
+    pub horizon_days: u64,
+    /// The false-staleness-alarm tolerance `α` in millionths.
+    pub alpha_millionths: i64,
+    /// First age (days) at which freshness is rejected.
+    pub bound_days: u64,
+    /// `ln(E_age)` in millionths — the accumulated log e-value.
+    pub log_e_value_millionths: i64,
+    /// `ln(1/α)` in millionths — the rejection boundary in log space.
+    pub log_threshold_millionths: i64,
+    /// Whether the evidence is still fresh (the e-process has not rejected).
+    pub fresh: bool,
+    /// How far past the boundary the e-value sits, `max(0, log_E − ln(1/α))`
+    /// in millionths. Zero while fresh; grows monotonically once stale.
+    pub stale_confidence_millionths: i64,
+}
+
+// ---------------------------------------------------------------------------
+// Per-claim verdict and whole-matrix integrity report
+// ---------------------------------------------------------------------------
+
+/// A minimal view of one claim-to-proof matrix row: what it asserts.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ClaimRow {
+    /// Matrix `claim_id`, e.g. `FE-CLAIM-004`.
+    pub claim_id: String,
+    /// The state the matrix asserts (`allowed_state`).
+    pub asserted_state: ClaimAssertionState,
+    /// The machine-checkable evidence facts gathered for this row.
+    pub facts: EvidenceFacts,
+}
+
+/// The scored verdict for one claim row.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ClaimVerdict {
+    pub claim_id: String,
+    pub asserted_state: ClaimAssertionState,
+    pub evidence_tier: EvidenceTier,
+    pub ceiling: ClaimAssertionState,
+    /// `asserted_state ≤ ceiling` — the soundness predicate for this row.
+    pub sound: bool,
+    /// Reporting-only provenance notes copied from the facts.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub notes: Vec<String>,
+}
+
+impl ClaimVerdict {
+    /// Score a single row against the lattice soundness predicate.
+    #[must_use]
+    pub fn score(row: &ClaimRow) -> Self {
+        let evidence_tier = tier(&row.facts);
+        let ceiling = ceiling(evidence_tier);
+        let sound = row.asserted_state <= ceiling;
+        Self {
+            claim_id: row.claim_id.clone(),
+            asserted_state: row.asserted_state,
+            evidence_tier,
+            ceiling,
+            sound,
+            notes: row.facts.notes.clone(),
+        }
+    }
+}
+
+/// Fixed-point scale for the coverage ratio (`1_000_000 = 1.0`). `f64` is
+/// forbidden in this hashed position per the determinism discipline.
+pub const COVERAGE_SCALE: u64 = 1_000_000;
+
+/// The whole-matrix integrity report: per-row verdicts plus the content-addressed
+/// claim-integrity-coverage scalar.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct IntegrityReport {
+    /// Verdicts keyed by `claim_id`, sorted (BTree iteration) for determinism.
+    pub verdicts: std::collections::BTreeMap<String, ClaimVerdict>,
+    /// Number of rows scored.
+    pub total_rows: u64,
+    /// Rows whose asserted state is within its evidence ceiling.
+    pub sound_rows: u64,
+    /// `sound_rows / total_rows` in millionths (`1_000_000 = 1.0`).
+    pub coverage_millionths: u64,
+    /// Lowercase hex SHA-256 of the canonical, length-prefixed report preimage.
+    pub coverage_digest: String,
+}
+
+impl IntegrityReport {
+    /// Score every row and compute the content-addressed coverage metric.
+    #[must_use]
+    pub fn score(rows: &[ClaimRow]) -> Self {
+        let mut verdicts = std::collections::BTreeMap::new();
+        let mut sound_rows: u64 = 0;
+        for row in rows {
+            let verdict = ClaimVerdict::score(row);
+            if verdict.sound {
+                sound_rows = sound_rows.saturating_add(1);
+            }
+            verdicts.insert(row.claim_id.clone(), verdict);
+        }
+        let total_rows = verdicts.len() as u64;
+        // Integer fixed-point: exactly COVERAGE_SCALE iff all rows are sound
+        // (and vacuously so when there are no rows).
+        let coverage_millionths = sound_rows
+            .saturating_mul(COVERAGE_SCALE)
+            .checked_div(total_rows)
+            .unwrap_or(COVERAGE_SCALE);
+        let coverage_digest = Self::compute_digest(&verdicts, coverage_millionths);
+        Self {
+            verdicts,
+            total_rows,
+            sound_rows,
+            coverage_millionths,
+            coverage_digest,
+        }
+    }
+
+    /// Whether the matrix is internally sound: every asserted state is within its
+    /// evidence ceiling. This is the predicate A.3 will enforce as blocking.
+    #[must_use]
+    pub fn is_sound(&self) -> bool {
+        self.sound_rows == self.total_rows
+    }
+
+    /// The rows that over-promote (asserted state exceeds their evidence ceiling).
+    #[must_use]
+    pub fn unsound(&self) -> Vec<&ClaimVerdict> {
+        self.verdicts.values().filter(|v| !v.sound).collect()
+    }
+
+    /// Canonical, length-prefixed SHA-256 over the (sorted) verdicts and the
+    /// coverage scalar. Deterministic and injective: distinct reports cannot
+    /// share a digest.
+    fn compute_digest(
+        verdicts: &std::collections::BTreeMap<String, ClaimVerdict>,
+        coverage_millionths: u64,
+    ) -> String {
+        let mut buf: Vec<u8> = Vec::new();
+        push_len_prefixed(&mut buf, COVERAGE_DIGEST_DOMAIN.as_bytes());
+        push_count(&mut buf, verdicts.len());
+        for (claim_id, v) in verdicts {
+            push_len_prefixed(&mut buf, claim_id.as_bytes());
+            buf.push(v.asserted_state.rank());
+            buf.push(v.evidence_tier.rank());
+            buf.push(v.ceiling.rank());
+            buf.push(u8::from(v.sound));
+        }
+        buf.extend_from_slice(&coverage_millionths.to_le_bytes());
+        let digest = Sha256::digest(&buf);
+        hex::encode(digest)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Errors
+// ---------------------------------------------------------------------------
+
+/// Errors raised while scoring or collecting facts.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum IntegrityError {
+    /// A matrix state string was not `hypothesis` / `target` / `observed`.
+    UnknownClaimState(String),
+    /// The matrix file could not be read.
+    MatrixRead(String),
+    /// The matrix JSON was malformed or missing required fields.
+    MatrixParse(String),
+}
+
+impl fmt::Display for IntegrityError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::UnknownClaimState(s) => write!(f, "unknown claim state: {s:?}"),
+            Self::MatrixRead(s) => write!(f, "could not read matrix: {s}"),
+            Self::MatrixParse(s) => write!(f, "could not parse matrix: {s}"),
+        }
+    }
+}
+
+impl std::error::Error for IntegrityError {}
+
+// ---------------------------------------------------------------------------
+// Fact collection (machine-checkable, reads the real repository)
+// ---------------------------------------------------------------------------
+
+/// Returns `true` if `rel_path` is tracked by git under `repo_root`.
+///
+/// Uses `git ls-files --error-unmatch`, which exits non-zero for untracked or
+/// ignored paths. A directory is considered tracked iff it contains ≥1 tracked
+/// file (`git ls-files <dir>` prints at least one line).
+#[must_use]
+pub fn git_path_tracked(repo_root: &Path, rel_path: &str) -> bool {
+    if rel_path.is_empty() {
+        return false;
+    }
+    let out = Command::new("git")
+        .arg("-C")
+        .arg(repo_root)
+        .arg("ls-files")
+        .arg("--")
+        .arg(rel_path)
+        .output();
+    match out {
+        Ok(o) if o.status.success() => !o.stdout.is_empty(),
+        _ => false,
+    }
+}
+
+/// Parse an ISO-8601 / RFC-3339 timestamp into a unix-seconds value.
+fn parse_unix_seconds(ts: &str) -> Option<i64> {
+    chrono::DateTime::parse_from_rfc3339(ts.trim())
+        .ok()
+        .map(|dt| dt.timestamp())
+}
+
+/// Gather [`EvidenceFacts`] for one claim row from the real repository.
+///
+/// Reads:
+/// * `git ls-files` for the declared artifact path and any `repro.lock` partner;
+/// * the bundle `manifest.json` `outputs.verification_result` and
+///   `provenance.generated_by` (a `backfill`-generated bundle is never "passed");
+/// * `repro.lock` `expected_outputs.exit_code` for the run receipt;
+/// * the manifest `generated_at_utc` (falling back to the artifact's git commit
+///   time) to derive the real age, which the [`FreshnessEProcess`] judges
+///   against an anytime-valid staleness boundary calibrated by `max_freshness_days`.
+///
+/// `now_unix` and `max_freshness_days` are passed in (never read from the wall
+/// clock here) so the collector is deterministic and unit-testable;
+/// `max_freshness_days` is the e-process horizon, not a hard cliff.
+#[must_use]
+pub fn collect_evidence_facts(
+    repo_root: &Path,
+    artifact_path: &str,
+    now_unix: i64,
+    max_freshness_days: u64,
+) -> EvidenceFacts {
+    let mut facts = EvidenceFacts {
+        artifact_git_tracked: git_path_tracked(repo_root, artifact_path),
+        ..EvidenceFacts::default()
+    };
+
+    if !facts.artifact_git_tracked {
+        facts
+            .notes
+            .push(format!("artifact not git-tracked: {artifact_path}"));
+    }
+
+    let bundle_dir = repo_root.join(artifact_path);
+    let manifest_path = bundle_dir.join("manifest.json");
+    let repro_lock_rel = format!("{}/repro.lock", artifact_path.trim_end_matches('/'));
+
+    // repro.lock must be *committed* to count.
+    facts.repro_lock_present = git_path_tracked(repo_root, &repro_lock_rel);
+
+    // The manifest's self-declared generation time, captured here and resolved
+    // against the git-commit-time fallback below.
+    let mut manifest_generated_unix: Option<i64> = None;
+
+    if let Ok(text) = std::fs::read_to_string(&manifest_path) {
+        if let Ok(json) = serde_json::from_str::<serde_json::Value>(&text) {
+            let verification_result = json
+                .get("outputs")
+                .and_then(|o| o.get("verification_result"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let generated_by = json
+                .get("provenance")
+                .and_then(|p| p.get("generated_by"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let backfilled = generated_by.to_ascii_lowercase().contains("backfill");
+            facts.verification_passed =
+                verification_result.eq_ignore_ascii_case("passed") && !backfilled;
+            if verification_result != "passed" {
+                facts
+                    .notes
+                    .push(format!("verification_result={verification_result}"));
+            }
+            if backfilled {
+                facts
+                    .notes
+                    .push(format!("backfill provenance: {generated_by}"));
+            }
+
+            // Capture the manifest generation timestamp (preferred age source).
+            manifest_generated_unix = json
+                .get("generated_at_utc")
+                .or_else(|| json.get("generated_utc"))
+                .and_then(|v| v.as_str())
+                .and_then(parse_unix_seconds);
+        } else {
+            facts.notes.push("manifest.json not valid JSON".into());
+        }
+    } else if facts.artifact_git_tracked {
+        facts.notes.push("manifest.json missing".into());
+    }
+
+    // Run receipt: zero exit recorded in the committed repro.lock.
+    if facts.repro_lock_present {
+        let repro_lock_path = bundle_dir.join("repro.lock");
+        if let Ok(text) = std::fs::read_to_string(&repro_lock_path)
+            && let Ok(json) = serde_json::from_str::<serde_json::Value>(&text)
+        {
+            let exit = json
+                .get("expected_outputs")
+                .and_then(|o| o.get("exit_code"))
+                .and_then(serde_json::Value::as_i64);
+            facts.receipt_exit_zero = exit == Some(0);
+            if exit != Some(0) {
+                facts.notes.push(format!("repro.lock exit_code={exit:?}"));
+            }
+        }
+    }
+
+    // Principled freshness: compute the *real* age (manifest timestamp, falling
+    // back to the artifact's git commit time) and judge staleness with the
+    // anytime-valid e-process boundary rather than a fixed cliff.
+    let real_generated_unix = manifest_generated_unix
+        .or_else(|| git_commit_unix(repo_root, artifact_path))
+        .or_else(|| git_commit_unix(repo_root, &repro_lock_rel));
+    if let Some(gen_unix) = real_generated_unix {
+        let age_days = ((now_unix - gen_unix).max(0) / 86_400) as u64;
+        facts.freshness_days = Some(age_days);
+        let verdict = FreshnessEProcess::from_horizon(max_freshness_days).evaluate(age_days);
+        facts.fresh = verdict.fresh;
+        if !verdict.fresh {
+            facts.notes.push(format!(
+                "stale: {age_days}d at/past e-process bound {}d (alpha=0.05, horizon={}d)",
+                verdict.bound_days, verdict.horizon_days
+            ));
+        }
+        facts.freshness_eprocess = Some(verdict);
+    } else if facts.artifact_git_tracked {
+        facts
+            .notes
+            .push("no parseable generation timestamp or git commit time".into());
+    }
+
+    facts
+}
+
+/// The unix-seconds commit time of the most recent commit that touched
+/// `rel_path` — the artifact's real "as committed" age. Returns `None` if the
+/// path is empty/untracked or git is unavailable. Used as the freshness age
+/// fallback when a manifest omits a parseable generation timestamp.
+fn git_commit_unix(repo_root: &Path, rel_path: &str) -> Option<i64> {
+    if rel_path.is_empty() {
+        return None;
+    }
+    let out = Command::new("git")
+        .arg("-C")
+        .arg(repo_root)
+        .arg("log")
+        .arg("-1")
+        .arg("--format=%ct")
+        .arg("--")
+        .arg(rel_path)
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    String::from_utf8_lossy(&out.stdout)
+        .trim()
+        .parse::<i64>()
+        .ok()
+}
+
+/// Score the live claim-to-proof matrix JSON file against committed evidence.
+///
+/// Reads `matrix_path`, collects facts for each claim from `repo_root`, and
+/// returns the [`IntegrityReport`]. `now_unix` / `max_freshness_days` are passed
+/// in for determinism; `max_freshness_days` falls back to the matrix's own
+/// `max_observed_freshness_days` when `None`.
+pub fn score_matrix_file(
+    matrix_path: &Path,
+    repo_root: &Path,
+    now_unix: i64,
+    max_freshness_days: Option<u64>,
+) -> Result<IntegrityReport, IntegrityError> {
+    let text = std::fs::read_to_string(matrix_path)
+        .map_err(|e| IntegrityError::MatrixRead(e.to_string()))?;
+    let json: serde_json::Value =
+        serde_json::from_str(&text).map_err(|e| IntegrityError::MatrixParse(e.to_string()))?;
+
+    // The freshness horizon is the e-process calibration point. An explicit
+    // override wins; otherwise prefer the authored `freshness_eprocess_policy`
+    // (the live A.4 policy), then the legacy `max_observed_freshness_days`.
+    let window = max_freshness_days.unwrap_or_else(|| {
+        json.get("freshness_eprocess_policy")
+            .and_then(|p| p.get("horizon_days"))
+            .and_then(serde_json::Value::as_u64)
+            .or_else(|| {
+                json.get("max_observed_freshness_days")
+                    .and_then(serde_json::Value::as_u64)
+            })
+            .unwrap_or(DEFAULT_FRESHNESS_HORIZON_DAYS)
+    });
+
+    let claims = json
+        .get("claims")
+        .and_then(serde_json::Value::as_array)
+        .ok_or_else(|| IntegrityError::MatrixParse("missing `claims` array".into()))?;
+
+    let mut rows = Vec::with_capacity(claims.len());
+    for claim in claims {
+        let claim_id = claim
+            .get("claim_id")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| IntegrityError::MatrixParse("claim missing `claim_id`".into()))?
+            .to_string();
+        let allowed = claim
+            .get("allowed_state")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| {
+                IntegrityError::MatrixParse(format!("{claim_id} missing `allowed_state`"))
+            })?;
+        let asserted_state = ClaimAssertionState::parse(allowed)?;
+        let artifact_path = claim
+            .get("artifact_path")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        let facts = collect_evidence_facts(repo_root, artifact_path, now_unix, window);
+        rows.push(ClaimRow {
+            claim_id,
+            asserted_state,
+            facts,
+        });
+    }
+
+    Ok(IntegrityReport::score(&rows))
+}
+
+// ---------------------------------------------------------------------------
+// Whole-document claim-consistency index (CEI track A.2, bead `bd-sde5e.1.2`)
+// ---------------------------------------------------------------------------
+//
+// The single-anchor `must_contain` scan in `run_claim_to_proof_matrix_gate.sh`
+// only inspects ONE line per claim, so it cannot see a claim that is asserted
+// `observed` in the TL;DR table and `hypothesis` in the Limitations section —
+// exactly the FE-CLAIM-004 / FE-CLAIM-006 drift the CEI reality check found.
+//
+// This index records, for every claim, the canonical state from the matrix plus
+// every *literal* `FE-CLAIM-NNN` mention elsewhere in the docs that unambiguously
+// asserts a state, and flags any claim asserted at two different states. It ships
+// ADVISORY-first; G.1 promotes it to blocking only after Track C reconciles the
+// known contradictions (enforcing it against a self-contradictory README would
+// red the gate immediately).
+
+/// One recorded assertion that a given claim is at a given state, at a location.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StateAssertion {
+    pub claim_id: String,
+    pub state: ClaimAssertionState,
+    /// `path:line` (1-based). The canonical row uses the matrix `source_span`.
+    pub location: String,
+    /// Whether this is the matrix's own `actual_wording_state` (the anchor).
+    pub canonical: bool,
+}
+
+/// The whole-document consistency verdict.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ConsistencyReport {
+    /// Every recorded assertion, grouped by claim id (BTree-sorted, deterministic).
+    pub assertions: std::collections::BTreeMap<String, Vec<StateAssertion>>,
+    /// Claim ids asserted at two or more distinct states anywhere.
+    pub contradictions: Vec<String>,
+    /// Number of documents scanned.
+    pub documents_scanned: u64,
+    /// Lowercase hex SHA-256 over the canonical, length-prefixed report preimage.
+    pub digest: String,
+}
+
+impl ConsistencyReport {
+    /// Whether the document set is internally consistent (no claim is asserted at
+    /// two different states). This is the predicate G.1 will enforce as blocking.
+    #[must_use]
+    pub fn is_consistent(&self) -> bool {
+        self.contradictions.is_empty()
+    }
+}
+
+/// Extract every literal `FE-CLAIM-NNN[-SUFFIX...]` id mentioned on a line, in
+/// order, de-duplicated. Greedy so `FE-CLAIM-004-TEE` is one id, distinct from a
+/// bare `FE-CLAIM-004`.
+#[must_use]
+pub fn extract_claim_ids(line: &str) -> Vec<String> {
+    let mut ids = Vec::new();
+    let bytes = line.as_bytes();
+    let needle = b"FE-CLAIM-";
+    let mut i = 0;
+    while i + needle.len() <= bytes.len() {
+        if &bytes[i..i + needle.len()] == needle {
+            let mut j = i + needle.len();
+            // Consume id body: [A-Z0-9] and internal '-' that is followed by [A-Z0-9].
+            let mut end = j;
+            while j < bytes.len() {
+                let c = bytes[j];
+                if c.is_ascii_uppercase() || c.is_ascii_digit() {
+                    j += 1;
+                    end = j;
+                } else if c == b'-'
+                    && j + 1 < bytes.len()
+                    && (bytes[j + 1].is_ascii_uppercase() || bytes[j + 1].is_ascii_digit())
+                {
+                    j += 1;
+                } else {
+                    break;
+                }
+            }
+            if end > i + needle.len() {
+                let id = line[i..end].to_string();
+                if !ids.contains(&id) {
+                    ids.push(id);
+                }
+                i = end;
+                continue;
+            }
+        }
+        i += 1;
+    }
+    ids
+}
+
+/// Extract the explicit uppercase state-assertion keywords on a line
+/// (`OBSERVED` / `TARGETED` / `HYPOTHESIS`), de-duplicated. The uppercase form is
+/// the docs' convention for asserting a matrix state; lowercase prose words are
+/// intentionally ignored to avoid false positives.
+#[must_use]
+pub fn extract_states(line: &str) -> Vec<ClaimAssertionState> {
+    let mut out = Vec::new();
+    for (token, state) in [
+        ("OBSERVED", ClaimAssertionState::Observed),
+        ("TARGETED", ClaimAssertionState::Target),
+        ("HYPOTHESIS", ClaimAssertionState::Hypothesis),
+    ] {
+        if contains_word(line, token) && !out.contains(&state) {
+            out.push(state);
+        }
+    }
+    out
+}
+
+/// Whether `token` appears in `line` not flanked by ASCII alphanumerics (so
+/// `HYPOTHESIS` matches but `HYPOTHESISED` does not).
+fn contains_word(line: &str, token: &str) -> bool {
+    let lb = line.as_bytes();
+    let tb = token.as_bytes();
+    if tb.is_empty() || lb.len() < tb.len() {
+        return false;
+    }
+    let mut i = 0;
+    while i + tb.len() <= lb.len() {
+        if &lb[i..i + tb.len()] == tb {
+            let before_ok = i == 0 || !lb[i - 1].is_ascii_alphanumeric();
+            let after = i + tb.len();
+            let after_ok = after >= lb.len() || !lb[after].is_ascii_alphanumeric();
+            if before_ok && after_ok {
+                return true;
+            }
+        }
+        i += 1;
+    }
+    false
+}
+
+/// Build the whole-document consistency index from the matrix plus a set of
+/// `(path, text)` documents. The matrix supplies each claim's canonical state and
+/// anchor location; literal mentions in the documents that unambiguously assert a
+/// state (a line with exactly one claim id and exactly one state keyword) add
+/// further assertions. A claim asserted at two distinct states is a contradiction.
+#[must_use]
+pub fn scan_document_consistency(
+    matrix_claims: &[(String, ClaimAssertionState, String)],
+    documents: &[(String, String)],
+) -> ConsistencyReport {
+    let mut assertions: std::collections::BTreeMap<String, Vec<StateAssertion>> =
+        std::collections::BTreeMap::new();
+
+    // 1. Canonical assertion from the matrix for every claim.
+    for (claim_id, state, location) in matrix_claims {
+        assertions
+            .entry(claim_id.clone())
+            .or_default()
+            .push(StateAssertion {
+                claim_id: claim_id.clone(),
+                state: *state,
+                location: location.clone(),
+                canonical: true,
+            });
+    }
+    let known: std::collections::BTreeSet<&String> =
+        matrix_claims.iter().map(|(id, _, _)| id).collect();
+
+    // 2. Literal mentions across the documents (unambiguous lines only).
+    for (path, text) in documents {
+        for (idx, line) in text.lines().enumerate() {
+            let ids = extract_claim_ids(line);
+            if ids.len() != 1 {
+                continue; // ambiguous attribution — skip
+            }
+            let states = extract_states(line);
+            if states.len() != 1 {
+                continue; // no single clear state on this line — skip
+            }
+            let claim_id = &ids[0];
+            // Only track claims the matrix knows about, so a typo'd id is not a
+            // phantom contradiction.
+            if !known.contains(claim_id) {
+                continue;
+            }
+            let location = format!("{path}:{}", idx + 1);
+            let entry = assertions.entry(claim_id.clone()).or_default();
+            // The canonical row already covers the matrix's own anchor line.
+            let is_anchor = entry.iter().any(|a| a.canonical && a.location == location);
+            if is_anchor {
+                continue;
+            }
+            entry.push(StateAssertion {
+                claim_id: claim_id.clone(),
+                state: states[0],
+                location,
+                canonical: false,
+            });
+        }
+    }
+
+    // 3. Contradictions: a claim with two or more distinct asserted states.
+    let mut contradictions = Vec::new();
+    for (claim_id, list) in &assertions {
+        let distinct: std::collections::BTreeSet<ClaimAssertionState> =
+            list.iter().map(|a| a.state).collect();
+        if distinct.len() > 1 {
+            contradictions.push(claim_id.clone());
+        }
+    }
+
+    let digest = consistency_digest(&assertions, &contradictions);
+    ConsistencyReport {
+        assertions,
+        contradictions,
+        documents_scanned: documents.len() as u64,
+        digest,
+    }
+}
+
+/// Canonical, length-prefixed SHA-256 over the consistency index.
+fn consistency_digest(
+    assertions: &std::collections::BTreeMap<String, Vec<StateAssertion>>,
+    contradictions: &[String],
+) -> String {
+    let mut buf: Vec<u8> = Vec::new();
+    push_len_prefixed(&mut buf, b"franken-engine.claim-consistency-index.v1");
+    push_count(&mut buf, assertions.len());
+    for (claim_id, list) in assertions {
+        push_len_prefixed(&mut buf, claim_id.as_bytes());
+        push_count(&mut buf, list.len());
+        for a in list {
+            buf.push(a.state.rank());
+            buf.push(u8::from(a.canonical));
+            push_len_prefixed(&mut buf, a.location.as_bytes());
+        }
+    }
+    push_count(&mut buf, contradictions.len());
+    for c in contradictions {
+        push_len_prefixed(&mut buf, c.as_bytes());
+    }
+    hex::encode(Sha256::digest(&buf))
+}
+
+/// Load the matrix claims as `(claim_id, canonical_state, anchor_location)` for
+/// [`scan_document_consistency`].
+pub fn matrix_canonical_states(
+    matrix_path: &Path,
+) -> Result<Vec<(String, ClaimAssertionState, String)>, IntegrityError> {
+    let text = std::fs::read_to_string(matrix_path)
+        .map_err(|e| IntegrityError::MatrixRead(e.to_string()))?;
+    let json: serde_json::Value =
+        serde_json::from_str(&text).map_err(|e| IntegrityError::MatrixParse(e.to_string()))?;
+    let claims = json
+        .get("claims")
+        .and_then(serde_json::Value::as_array)
+        .ok_or_else(|| IntegrityError::MatrixParse("missing `claims` array".into()))?;
+    let mut out = Vec::with_capacity(claims.len());
+    for claim in claims {
+        let claim_id = claim
+            .get("claim_id")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| IntegrityError::MatrixParse("claim missing `claim_id`".into()))?
+            .to_string();
+        let state = ClaimAssertionState::parse(
+            claim
+                .get("actual_wording_state")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| {
+                    IntegrityError::MatrixParse(format!("{claim_id} missing actual_wording_state"))
+                })?,
+        )?;
+        let (path, line) = claim
+            .get("source_span")
+            .and_then(|s| {
+                let p = claim.get("source_path").and_then(|v| v.as_str())?;
+                let l = s.get("start_line").and_then(serde_json::Value::as_u64)?;
+                Some((p.to_string(), l))
+            })
+            .unwrap_or_else(|| ("<unknown>".to_string(), 0));
+        out.push((claim_id, state, format!("{path}:{line}")));
+    }
+    Ok(out)
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // -- Lattice laws for a finite chain -----------------------------------
+
+    fn claim_law_check<F>(join: bool, op: F)
+    where
+        F: Fn(ClaimAssertionState, ClaimAssertionState) -> ClaimAssertionState,
+    {
+        let all = ClaimAssertionState::all();
+        // Idempotence.
+        for a in all {
+            assert_eq!(op(a, a), a, "idempotence failed for {a}");
+        }
+        // Commutativity.
+        for a in all {
+            for b in all {
+                assert_eq!(op(a, b), op(b, a), "commutativity {a},{b}");
+            }
+        }
+        // Associativity.
+        for a in all {
+            for b in all {
+                for c in all {
+                    assert_eq!(op(op(a, b), c), op(a, op(b, c)), "assoc {a},{b},{c}");
+                }
+            }
+        }
+        // Join/meet agree with max/min on a chain.
+        for a in all {
+            for b in all {
+                let expect = if join { a.max(b) } else { a.min(b) };
+                assert_eq!(op(a, b), expect);
+            }
+        }
+    }
+
+    #[test]
+    fn claim_state_join_meet_satisfy_lattice_laws() {
+        claim_law_check(true, ClaimAssertionState::join);
+        claim_law_check(false, ClaimAssertionState::meet);
+        // Absorption: a ∨ (a ∧ b) = a  and  a ∧ (a ∨ b) = a.
+        for a in ClaimAssertionState::all() {
+            for b in ClaimAssertionState::all() {
+                assert_eq!(a.join(a.meet(b)), a, "absorb-join {a},{b}");
+                assert_eq!(a.meet(a.join(b)), a, "absorb-meet {a},{b}");
+            }
+        }
+    }
+
+    fn tier_law_check<F>(join: bool, op: F)
+    where
+        F: Fn(EvidenceTier, EvidenceTier) -> EvidenceTier,
+    {
+        let all = EvidenceTier::all();
+        for a in all {
+            assert_eq!(op(a, a), a, "idempotence {a}");
+        }
+        for a in all {
+            for b in all {
+                assert_eq!(op(a, b), op(b, a), "commutativity {a},{b}");
+            }
+        }
+        for a in all {
+            for b in all {
+                for c in all {
+                    assert_eq!(op(op(a, b), c), op(a, op(b, c)), "assoc {a},{b},{c}");
+                }
+            }
+        }
+        for a in all {
+            for b in all {
+                let expect = if join { a.max(b) } else { a.min(b) };
+                assert_eq!(op(a, b), expect);
+            }
+        }
+    }
+
+    #[test]
+    fn evidence_tier_join_meet_satisfy_lattice_laws() {
+        tier_law_check(true, EvidenceTier::join);
+        tier_law_check(false, EvidenceTier::meet);
+        for a in EvidenceTier::all() {
+            for b in EvidenceTier::all() {
+                assert_eq!(a.join(a.meet(b)), a, "absorb-join {a},{b}");
+                assert_eq!(a.meet(a.join(b)), a, "absorb-meet {a},{b}");
+            }
+        }
+    }
+
+    // -- Enumerate the finite fact space -----------------------------------
+
+    fn all_fact_combos() -> Vec<EvidenceFacts> {
+        let mut out = Vec::with_capacity(64);
+        for bits in 0u8..64 {
+            out.push(EvidenceFacts {
+                artifact_git_tracked: bits & 1 != 0,
+                verification_passed: bits & 2 != 0,
+                receipt_exit_zero: bits & 4 != 0,
+                repro_lock_present: bits & 8 != 0,
+                fresh: bits & 16 != 0,
+                adversarially_verified: bits & 32 != 0,
+                freshness_days: None,
+                freshness_eprocess: None,
+                notes: Vec::new(),
+            });
+        }
+        out
+    }
+
+    #[test]
+    fn tier_is_monotone_over_the_whole_fact_lattice() {
+        let combos = all_fact_combos();
+        for a in &combos {
+            for b in &combos {
+                if b.dominates(a) {
+                    assert!(
+                        tier(b) >= tier(a),
+                        "monotonicity violated: tier({:?})={} < tier({:?})={}",
+                        b,
+                        tier(b),
+                        a,
+                        tier(a),
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn ceiling_is_total_and_monotone() {
+        let tiers = EvidenceTier::all();
+        for &t1 in &tiers {
+            for &t2 in &tiers {
+                if t1 <= t2 {
+                    assert!(ceiling(t1) <= ceiling(t2), "ceiling not monotone {t1},{t2}");
+                }
+            }
+        }
+        // Totality: ceiling is defined (does not panic) for every tier.
+        assert_eq!(
+            ceiling(EvidenceTier::Unbacked),
+            ClaimAssertionState::Hypothesis
+        );
+        assert_eq!(
+            ceiling(EvidenceTier::AdversariallyVerified),
+            ClaimAssertionState::Observed
+        );
+    }
+
+    // -- The headline acceptance test --------------------------------------
+
+    #[test]
+    fn observed_with_unbacked_evidence_scores_below_one_and_is_rejected() {
+        // A row claiming `observed` with zero committed evidence is exactly the
+        // drift the gate must catch.
+        let unbacked = ClaimRow {
+            claim_id: "FE-CLAIM-SYNTH-DRIFT".into(),
+            asserted_state: ClaimAssertionState::Observed,
+            facts: EvidenceFacts::default(), // all false → tier = Unbacked
+        };
+        let verdict = ClaimVerdict::score(&unbacked);
+        assert_eq!(verdict.evidence_tier, EvidenceTier::Unbacked);
+        assert_eq!(verdict.ceiling, ClaimAssertionState::Hypothesis);
+        assert!(!verdict.sound, "observed-with-unbacked must be unsound");
+
+        // A genuinely sound row: hypothesis wording with no evidence is fine.
+        let honest = ClaimRow {
+            claim_id: "FE-CLAIM-SYNTH-HONEST".into(),
+            asserted_state: ClaimAssertionState::Hypothesis,
+            facts: EvidenceFacts::default(),
+        };
+
+        let report = IntegrityReport::score(&[unbacked, honest]);
+        assert_eq!(report.total_rows, 2);
+        assert_eq!(report.sound_rows, 1);
+        assert!(
+            report.coverage_millionths < COVERAGE_SCALE,
+            "coverage must be < 1.0"
+        );
+        assert_eq!(report.coverage_millionths, 500_000);
+        assert!(
+            !report.is_sound(),
+            "report with a drifted row must be rejected"
+        );
+        assert_eq!(report.unsound().len(), 1);
+        assert_eq!(report.unsound()[0].claim_id, "FE-CLAIM-SYNTH-DRIFT");
+    }
+
+    #[test]
+    fn fully_backed_observed_row_is_sound() {
+        let row = ClaimRow {
+            claim_id: "FE-CLAIM-SYNTH-GOOD".into(),
+            asserted_state: ClaimAssertionState::Observed,
+            facts: EvidenceFacts {
+                artifact_git_tracked: true,
+                verification_passed: true,
+                receipt_exit_zero: true,
+                repro_lock_present: true,
+                fresh: true,
+                adversarially_verified: false,
+                freshness_days: Some(2),
+                freshness_eprocess: None,
+                notes: Vec::new(),
+            },
+        };
+        let verdict = ClaimVerdict::score(&row);
+        assert_eq!(verdict.evidence_tier, EvidenceTier::Reproduced);
+        assert_eq!(verdict.ceiling, ClaimAssertionState::Observed);
+        assert!(verdict.sound);
+
+        let report = IntegrityReport::score(&[row]);
+        assert!(report.is_sound());
+        assert_eq!(report.coverage_millionths, COVERAGE_SCALE);
+    }
+
+    #[test]
+    fn exercised_but_not_reproduced_caps_at_target() {
+        // Passing gate, committed artifact, but no repro.lock → Exercised → Target.
+        let facts = EvidenceFacts {
+            artifact_git_tracked: true,
+            verification_passed: true,
+            receipt_exit_zero: true,
+            repro_lock_present: false,
+            fresh: false,
+            adversarially_verified: false,
+            freshness_days: None,
+            freshness_eprocess: None,
+            notes: Vec::new(),
+        };
+        assert_eq!(tier(&facts), EvidenceTier::Exercised);
+        assert_eq!(ceiling(tier(&facts)), ClaimAssertionState::Target);
+        // An `observed` assertion on Exercised-only evidence is unsound.
+        let row = ClaimRow {
+            claim_id: "X".into(),
+            asserted_state: ClaimAssertionState::Observed,
+            facts: facts.clone(),
+        };
+        assert!(!ClaimVerdict::score(&row).sound);
+        // A `target` assertion on the same evidence is sound.
+        let row_t = ClaimRow {
+            claim_id: "X".into(),
+            asserted_state: ClaimAssertionState::Target,
+            facts,
+        };
+        assert!(ClaimVerdict::score(&row_t).sound);
+    }
+
+    // -- Determinism / content-addressing ----------------------------------
+
+    #[test]
+    fn coverage_digest_is_deterministic_and_order_invariant() {
+        let mk = |id: &str, s: ClaimAssertionState| ClaimRow {
+            claim_id: id.into(),
+            asserted_state: s,
+            facts: EvidenceFacts::default(),
+        };
+        let a = IntegrityReport::score(&[
+            mk("FE-CLAIM-001", ClaimAssertionState::Hypothesis),
+            mk("FE-CLAIM-002", ClaimAssertionState::Observed),
+        ]);
+        // Same rows in the opposite input order → identical digest (BTree-sorted).
+        let b = IntegrityReport::score(&[
+            mk("FE-CLAIM-002", ClaimAssertionState::Observed),
+            mk("FE-CLAIM-001", ClaimAssertionState::Hypothesis),
+        ]);
+        assert_eq!(a.coverage_digest, b.coverage_digest);
+        assert_eq!(a.coverage_digest.len(), 64);
+
+        // A changed assertion state must change the digest (injectivity).
+        let c = IntegrityReport::score(&[
+            mk("FE-CLAIM-001", ClaimAssertionState::Target),
+            mk("FE-CLAIM-002", ClaimAssertionState::Observed),
+        ]);
+        assert_ne!(a.coverage_digest, c.coverage_digest);
+    }
+
+    #[test]
+    fn empty_matrix_is_vacuously_sound() {
+        let report = IntegrityReport::score(&[]);
+        assert!(report.is_sound());
+        assert_eq!(report.coverage_millionths, COVERAGE_SCALE);
+        assert_eq!(report.total_rows, 0);
+    }
+
+    #[test]
+    fn claim_state_parse_roundtrips_matrix_strings() {
+        for s in ["hypothesis", "target", "observed"] {
+            let parsed = ClaimAssertionState::parse(s).unwrap();
+            assert_eq!(parsed.to_string(), s);
+        }
+        assert_eq!(
+            ClaimAssertionState::parse("  OBSERVED ").unwrap(),
+            ClaimAssertionState::Observed
+        );
+        assert!(ClaimAssertionState::parse("guaranteed").is_err());
+    }
+
+    #[test]
+    fn backfilled_pending_bundle_never_reaches_observed_ceiling() {
+        // Mirrors the real FE-CLAIM-004 bundle: committed but verification pending.
+        let facts = EvidenceFacts {
+            artifact_git_tracked: true,
+            verification_passed: false, // pending / backfill
+            receipt_exit_zero: true,
+            repro_lock_present: true,
+            fresh: false, // ~25d old
+            adversarially_verified: false,
+            freshness_days: Some(25),
+            freshness_eprocess: None,
+            notes: vec!["verification_result=pending".into()],
+        };
+        assert_eq!(tier(&facts), EvidenceTier::Asserted);
+        assert_eq!(ceiling(tier(&facts)), ClaimAssertionState::Target);
+    }
+
+    // -- A.4 principled freshness via the e-process boundary -----------------
+
+    #[test]
+    fn freshness_eprocess_reproduces_legacy_30day_window() {
+        // The default (alpha=0.05, horizon=30) must agree with the historical
+        // `age <= 30` cliff on every day, so no currently-sound row regresses.
+        let ep = FreshnessEProcess::from_horizon(DEFAULT_FRESHNESS_HORIZON_DAYS);
+        for age in 0u64..=60 {
+            let v = ep.evaluate(age);
+            let legacy_fresh = age <= DEFAULT_FRESHNESS_HORIZON_DAYS;
+            assert_eq!(
+                v.fresh, legacy_fresh,
+                "freshness disagrees with legacy cliff at age={age} (bound={})",
+                v.bound_days
+            );
+        }
+    }
+
+    #[test]
+    fn freshness_bound_is_derived_not_authored() {
+        // The boundary day falls out of (alpha, horizon) via ln(1/alpha); it is
+        // never an authored magic number.
+        let ep = FreshnessEProcess::from_horizon(30);
+        // ln(1/0.05) = ln(20) ~= 2.9957 -> ~2_995_732 millionths.
+        assert!((ep.log_threshold_millionths() - 2_995_732).abs() <= 2);
+        // First strictly-rejecting day is just past the horizon.
+        assert_eq!(ep.bound_days(), 31);
+        // At the horizon the e-value is still below the boundary (fresh);
+        // one day later it has crossed (stale).
+        assert!(ep.evaluate(30).log_e_value_millionths < ep.log_threshold_millionths());
+        assert!(ep.evaluate(31).log_e_value_millionths >= ep.log_threshold_millionths());
+    }
+
+    #[test]
+    fn freshness_window_tracks_horizon_independent_of_alpha() {
+        // The horizon sets the *window*; alpha sets the *statistical guarantee*
+        // (false-staleness-alarm rate), not the window — because both the
+        // threshold ln(1/alpha) and the per-day increment scale with it.
+        for horizon in [7u64, 14, 30, 60, 90] {
+            for alpha in [10_000i64, 50_000, 200_000] {
+                let ep = FreshnessEProcess::new(alpha, horizon);
+                let bound = ep.bound_days();
+                assert!(
+                    bound == horizon || bound == horizon + 1,
+                    "bound {bound} should track horizon {horizon} (alpha={alpha})"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn freshness_stale_confidence_is_monotone_and_zero_while_fresh() {
+        let ep = FreshnessEProcess::from_horizon(30);
+        let mut prev = i64::MIN;
+        for age in 0u64..=120 {
+            let v = ep.evaluate(age);
+            // The accumulated log e-value never decreases with age.
+            assert!(v.log_e_value_millionths >= prev);
+            prev = v.log_e_value_millionths;
+            if v.fresh {
+                assert_eq!(v.stale_confidence_millionths, 0, "fresh => zero confidence");
+            } else {
+                assert!(
+                    v.stale_confidence_millionths > 0,
+                    "stale => positive confidence"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn freshness_ledger_matches_closed_form_across_ages() {
+        // `evaluate` debug-asserts that the real martingale ledger and the
+        // closed form agree on the crossing; exercise the whole range so any
+        // arithmetic drift panics here in test builds.
+        let ep = FreshnessEProcess::from_horizon(30);
+        for age in 0u64..=200 {
+            let v = ep.evaluate(age);
+            assert_eq!(v.fresh, age < ep.bound_days());
+        }
+    }
+
+    #[test]
+    fn freshness_verdict_serde_round_trip() {
+        let v = FreshnessEProcess::from_horizon(30).evaluate(42);
+        let json = serde_json::to_string(&v).expect("serialize FreshnessVerdict");
+        let back: FreshnessVerdict = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(v, back);
+        assert!(!v.fresh, "age 42 > bound 31 is stale");
+    }
+
+    #[test]
+    fn freshness_eprocess_clamps_degenerate_parameters() {
+        // alpha >= 1 (>= 1_000_000 millionths) would make the test fire on day
+        // zero; it is clamped so the test stays non-trivial, and horizon 0 is
+        // clamped to 1 so the per-day increment is well defined.
+        let ep = FreshnessEProcess::new(5_000_000, 0);
+        assert!(ep.log_threshold_millionths() > 0);
+        assert!(ep.bound_days() >= 1);
+        assert!(
+            ep.evaluate(0).fresh,
+            "fresh evidence at age 0 is never stale"
+        );
+    }
+
+    // -- A.2 whole-document consistency index --------------------------------
+
+    #[test]
+    fn extract_claim_ids_distinguishes_suffixed_and_bare_ids() {
+        assert_eq!(
+            extract_claim_ids("see FE-CLAIM-004 for details"),
+            ["FE-CLAIM-004"]
+        );
+        assert_eq!(
+            extract_claim_ids("the TEE part is FE-CLAIM-004-TEE (hypothesis)"),
+            ["FE-CLAIM-004-TEE"]
+        );
+        assert_eq!(
+            extract_claim_ids("gated by FE-CLAIM-TEST262 row"),
+            ["FE-CLAIM-TEST262"]
+        );
+        // A line mentioning both a bare id and the suffixed id yields both, distinct.
+        assert_eq!(
+            extract_claim_ids("FE-CLAIM-004 signing OBSERVED; FE-CLAIM-004-TEE HYPOTHESIS"),
+            ["FE-CLAIM-004", "FE-CLAIM-004-TEE"]
+        );
+        assert!(extract_claim_ids("no claims here").is_empty());
+    }
+
+    #[test]
+    fn extract_states_matches_only_uppercase_word_tokens() {
+        assert_eq!(
+            extract_states("remains HYPOTHESIS today"),
+            [ClaimAssertionState::Hypothesis]
+        );
+        assert_eq!(
+            extract_states("OBSERVED in tree"),
+            [ClaimAssertionState::Observed]
+        );
+        // Lowercase prose is ignored; an embedded substring is not a word match.
+        assert!(extract_states("this was observed once").is_empty());
+        assert!(extract_states("HYPOTHESISED behaviour").is_empty());
+        // Multiple distinct states on one line are all reported (caller treats as ambiguous).
+        assert_eq!(extract_states("OBSERVED here, HYPOTHESIS there").len(), 2);
+    }
+
+    #[test]
+    fn consistency_index_flags_a_contradicted_claim_with_both_locations() {
+        let matrix = vec![(
+            "FE-CLAIM-X".to_string(),
+            ClaimAssertionState::Observed,
+            "README.md:10".to_string(),
+        )];
+        let doc = (
+            "README.md".to_string(),
+            // line 1: bare mention with a conflicting HYPOTHESIS state.
+            "Limitations: FE-CLAIM-X remains HYPOTHESIS until proof ships\n".to_string(),
+        );
+        let report = scan_document_consistency(&matrix, &[doc]);
+        assert!(!report.is_consistent());
+        assert_eq!(report.contradictions, ["FE-CLAIM-X"]);
+        let list = &report.assertions["FE-CLAIM-X"];
+        // canonical Observed (matrix) + literal Hypothesis (README:1).
+        assert!(
+            list.iter()
+                .any(|a| a.canonical && a.state == ClaimAssertionState::Observed)
+        );
+        assert!(list.iter().any(|a| !a.canonical
+            && a.state == ClaimAssertionState::Hypothesis
+            && a.location == "README.md:1"));
+    }
+
+    #[test]
+    fn consistency_index_accepts_an_agreeing_document() {
+        let matrix = vec![(
+            "FE-CLAIM-Y".to_string(),
+            ClaimAssertionState::Hypothesis,
+            "README.md:5".to_string(),
+        )];
+        let doc = (
+            "README.md".to_string(),
+            "Glossary: FE-CLAIM-Y is HYPOTHESIS until artifacts land\n".to_string(),
+        );
+        let report = scan_document_consistency(&matrix, &[doc]);
+        assert!(report.is_consistent());
+        assert!(report.contradictions.is_empty());
+    }
+
+    #[test]
+    fn consistency_index_ignores_ambiguous_multi_state_lines() {
+        // The reconciled split line mentions one claim but two states → not used.
+        let matrix = vec![(
+            "FE-CLAIM-004-TEE".to_string(),
+            ClaimAssertionState::Hypothesis,
+            "README.md:139".to_string(),
+        )];
+        let doc = (
+            "README.md".to_string(),
+            "signing OBSERVED; TEE attestation is HYPOTHESIS (FE-CLAIM-004-TEE)\n".to_string(),
+        );
+        let report = scan_document_consistency(&matrix, &[doc]);
+        // The multi-state line is skipped, so only the canonical hypothesis remains.
+        assert!(report.is_consistent());
+    }
+
+    #[test]
+    fn consistency_digest_is_deterministic() {
+        let matrix = vec![(
+            "FE-CLAIM-Z".to_string(),
+            ClaimAssertionState::Target,
+            "README.md:1".to_string(),
+        )];
+        let docs = vec![(
+            "README.md".to_string(),
+            "FE-CLAIM-Z is TARGETED\n".to_string(),
+        )];
+        let a = scan_document_consistency(&matrix, &docs);
+        let b = scan_document_consistency(&matrix, &docs);
+        assert_eq!(a.digest, b.digest);
+        assert_eq!(a.digest.len(), 64);
+    }
+}

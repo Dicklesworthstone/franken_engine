@@ -36,12 +36,41 @@ export RUSTC_WRAPPER="${RUSTC_WRAPPER:-}"
 export CARGO_INCREMENTAL="${CARGO_INCREMENTAL:-0}"
 export CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-1}"
 export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-${root_dir}/target_cod_bd_bdrwq4}"
-export RUSTFLAGS="${RUSTFLAGS:--C linker=cc}"
+required_linker_rustflag="-Clinker-features=-lld"
+
+linker_policy_is_effective() {
+  local rustflags_value="${1-}"
+  local -a tokens=()
+  local index
+  local effective_state="unset"
+
+  read -r -a tokens <<<"$rustflags_value"
+  for index in "${!tokens[@]}"; do
+    case "${tokens[$index]}" in
+      "$required_linker_rustflag") effective_state="disabled" ;;
+      -Clinker-features=*) effective_state="other" ;;
+      -C)
+        case "${tokens[$((index + 1))]:-}" in
+          linker-features=-lld) effective_state="disabled" ;;
+          linker-features=*) effective_state="other" ;;
+        esac
+        ;;
+    esac
+  done
+  [[ "$effective_state" == "disabled" ]]
+}
+
+rustflags="${RUSTFLAGS:--C linker=cc -Clinker-features=-lld}"
+if ! linker_policy_is_effective "$rustflags"; then
+  rustflags="${rustflags:+${rustflags} }${required_linker_rustflag}"
+fi
+export RUSTFLAGS="$rustflags"
 
 run_cargo_step() {
   local name="$1"
   shift
-  run_step "$name" rch exec -- env \
+  run_step "$name" env -u CARGO_ENCODED_RUSTFLAGS \
+    rch exec -- env -u CARGO_ENCODED_RUSTFLAGS \
     RUSTC_WRAPPER="$RUSTC_WRAPPER" \
     CARGO_INCREMENTAL="$CARGO_INCREMENTAL" \
     CARGO_BUILD_JOBS="$CARGO_BUILD_JOBS" \

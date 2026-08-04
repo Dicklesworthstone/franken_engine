@@ -1,0 +1,1115 @@
+---
+source: crates/franken-engine/tests/ast_parser_golden_integration.rs
+expression: scrubbed_actual
+---
+{
+  "goal": "Module",
+  "body": [
+    {
+      "ClassDeclaration": {
+        "name": "ApiClient",
+        "super_class": null,
+        "body": [
+          {
+            "key": {
+              "Identifier": "constructor"
+            },
+            "kind": "Constructor",
+            "params": [
+              {
+                "pattern": {
+                  "Identifier": "baseUrl"
+                },
+                "span": {
+                  "start_offset": "[START_OFFSET]",
+                  "end_offset": "[END_OFFSET]",
+                  "start_line": "[START_LINE]",
+                  "start_column": "[START_COLUMN]",
+                  "end_line": "[END_LINE]",
+                  "end_column": "[END_COLUMN]"
+                }
+              }
+            ],
+            "body": {
+              "body": [
+                {
+                  "Expression": {
+                    "expression": {
+                      "Assignment": {
+                        "operator": "Assign",
+                        "left": {
+                          "Member": {
+                            "object": "This",
+                            "property": {
+                              "Identifier": "baseUrl"
+                            },
+                            "computed": false,
+                            "span": {
+                              "start_offset": "[START_OFFSET]",
+                              "end_offset": "[END_OFFSET]",
+                              "start_line": "[START_LINE]",
+                              "start_column": "[START_COLUMN]",
+                              "end_line": "[END_LINE]",
+                              "end_column": "[END_COLUMN]"
+                            }
+                          }
+                        },
+                        "right": {
+                          "Identifier": "baseUrl"
+                        },
+                        "assignment_strictness": "strict"
+                      }
+                    },
+                    "span": {
+                      "start_offset": "[START_OFFSET]",
+                      "end_offset": "[END_OFFSET]",
+                      "start_line": "[START_LINE]",
+                      "start_column": "[START_COLUMN]",
+                      "end_line": "[END_LINE]",
+                      "end_column": "[END_COLUMN]"
+                    }
+                  }
+                },
+                {
+                  "Expression": {
+                    "expression": {
+                      "Assignment": {
+                        "operator": "Assign",
+                        "left": {
+                          "Member": {
+                            "object": "This",
+                            "property": {
+                              "Identifier": "interceptors"
+                            },
+                            "computed": false,
+                            "span": {
+                              "start_offset": "[START_OFFSET]",
+                              "end_offset": "[END_OFFSET]",
+                              "start_line": "[START_LINE]",
+                              "start_column": "[START_COLUMN]",
+                              "end_line": "[END_LINE]",
+                              "end_column": "[END_COLUMN]"
+                            }
+                          }
+                        },
+                        "right": {
+                          "ArrayLiteral": []
+                        },
+                        "assignment_strictness": "strict"
+                      }
+                    },
+                    "span": {
+                      "start_offset": "[START_OFFSET]",
+                      "end_offset": "[END_OFFSET]",
+                      "start_line": "[START_LINE]",
+                      "start_column": "[START_COLUMN]",
+                      "end_line": "[END_LINE]",
+                      "end_column": "[END_COLUMN]"
+                    }
+                  }
+                }
+              ],
+              "span": {
+                "start_offset": "[START_OFFSET]",
+                "end_offset": "[END_OFFSET]",
+                "start_line": "[START_LINE]",
+                "start_column": "[START_COLUMN]",
+                "end_line": "[END_LINE]",
+                "end_column": "[END_COLUMN]"
+              }
+            },
+            "is_static": false,
+            "computed": false,
+            "span": {
+              "start_offset": "[START_OFFSET]",
+              "end_offset": "[END_OFFSET]",
+              "start_line": "[START_LINE]",
+              "start_column": "[START_COLUMN]",
+              "end_line": "[END_LINE]",
+              "end_column": "[END_COLUMN]"
+            }
+          },
+          {
+            "key": {
+              "Identifier": "async request"
+            },
+            "kind": "Method",
+            "params": [
+              {
+                "pattern": {
+                  "Identifier": "method"
+                },
+                "span": {
+                  "start_offset": "[START_OFFSET]",
+                  "end_offset": "[END_OFFSET]",
+                  "start_line": "[START_LINE]",
+                  "start_column": "[START_COLUMN]",
+                  "end_line": "[END_LINE]",
+                  "end_column": "[END_COLUMN]"
+                }
+              },
+              {
+                "pattern": {
+                  "Identifier": "endpoint"
+                },
+                "span": {
+                  "start_offset": "[START_OFFSET]",
+                  "end_offset": "[END_OFFSET]",
+                  "start_line": "[START_LINE]",
+                  "start_column": "[START_COLUMN]",
+                  "end_line": "[END_LINE]",
+                  "end_column": "[END_COLUMN]"
+                }
+              },
+              {
+                "pattern": {
+                  "AssignmentPattern": {
+                    "left": {
+                      "Identifier": "data"
+                    },
+                    "right": "NullLiteral"
+                  }
+                },
+                "span": {
+                  "start_offset": "[START_OFFSET]",
+                  "end_offset": "[END_OFFSET]",
+                  "start_line": "[START_LINE]",
+                  "start_column": "[START_COLUMN]",
+                  "end_line": "[END_LINE]",
+                  "end_column": "[END_COLUMN]"
+                }
+              }
+            ],
+            "body": {
+              "body": [
+                {
+                  "VariableDeclaration": {
+                    "kind": "Const",
+                    "declarations": [
+                      {
+                        "pattern": {
+                          "Identifier": "url"
+                        },
+                        "initializer": {
+                          "TemplateLiteral": {
+                            "quasis": [
+                              "",
+                              "/",
+                              ""
+                            ],
+                            "expressions": [
+                              {
+                                "Member": {
+                                  "object": "This",
+                                  "property": {
+                                    "Identifier": "baseUrl"
+                                  },
+                                  "computed": false,
+                                  "span": {
+                                    "start_offset": "[START_OFFSET]",
+                                    "end_offset": "[END_OFFSET]",
+                                    "start_line": "[START_LINE]",
+                                    "start_column": "[START_COLUMN]",
+                                    "end_line": "[END_LINE]",
+                                    "end_column": "[END_COLUMN]"
+                                  }
+                                }
+                              },
+                              {
+                                "Identifier": "endpoint"
+                              }
+                            ]
+                          }
+                        },
+                        "span": {
+                          "start_offset": "[START_OFFSET]",
+                          "end_offset": "[END_OFFSET]",
+                          "start_line": "[START_LINE]",
+                          "start_column": "[START_COLUMN]",
+                          "end_line": "[END_LINE]",
+                          "end_column": "[END_COLUMN]"
+                        }
+                      }
+                    ],
+                    "span": {
+                      "start_offset": "[START_OFFSET]",
+                      "end_offset": "[END_OFFSET]",
+                      "start_line": "[START_LINE]",
+                      "start_column": "[START_COLUMN]",
+                      "end_line": "[END_LINE]",
+                      "end_column": "[END_COLUMN]"
+                    }
+                  }
+                },
+                {
+                  "VariableDeclaration": {
+                    "kind": "Const",
+                    "declarations": [
+                      {
+                        "pattern": {
+                          "Identifier": "options"
+                        },
+                        "initializer": {
+                          "ObjectLiteral": [
+                            {
+                              "key": {
+                                "Identifier": "method"
+                              },
+                              "value": {
+                                "Identifier": "method"
+                              },
+                              "computed": false,
+                              "shorthand": true,
+                              "kind": "Data"
+                            },
+                            {
+                              "key": {
+                                "Identifier": "headers"
+                              },
+                              "value": {
+                                "ObjectLiteral": [
+                                  {
+                                    "key": {
+                                      "StringLiteral": "Content-Type"
+                                    },
+                                    "value": {
+                                      "StringLiteral": "application/json"
+                                    },
+                                    "computed": false,
+                                    "shorthand": false,
+                                    "kind": "Data"
+                                  }
+                                ]
+                              },
+                              "computed": false,
+                              "shorthand": false,
+                              "kind": "Data"
+                            },
+                            {
+                              "key": {
+                                "SpreadElement": {
+                                  "Binary": {
+                                    "operator": "LogicalAnd",
+                                    "left": {
+                                      "Identifier": "data"
+                                    },
+                                    "right": {
+                                      "ObjectLiteral": [
+                                        {
+                                          "key": {
+                                            "Identifier": "body"
+                                          },
+                                          "value": {
+                                            "Call": {
+                                              "callee": {
+                                                "Member": {
+                                                  "object": {
+                                                    "Identifier": "JSON"
+                                                  },
+                                                  "property": {
+                                                    "Identifier": "stringify"
+                                                  },
+                                                  "computed": false,
+                                                  "span": {
+                                                    "start_offset": "[START_OFFSET]",
+                                                    "end_offset": "[END_OFFSET]",
+                                                    "start_line": "[START_LINE]",
+                                                    "start_column": "[START_COLUMN]",
+                                                    "end_line": "[END_LINE]",
+                                                    "end_column": "[END_COLUMN]"
+                                                  }
+                                                }
+                                              },
+                                              "arguments": [
+                                                {
+                                                  "Identifier": "data"
+                                                }
+                                              ],
+                                              "span": {
+                                                "start_offset": "[START_OFFSET]",
+                                                "end_offset": "[END_OFFSET]",
+                                                "start_line": "[START_LINE]",
+                                                "start_column": "[START_COLUMN]",
+                                                "end_line": "[END_LINE]",
+                                                "end_column": "[END_COLUMN]"
+                                              }
+                                            }
+                                          },
+                                          "computed": false,
+                                          "shorthand": false,
+                                          "kind": "Data"
+                                        }
+                                      ]
+                                    }
+                                  }
+                                }
+                              },
+                              "value": {
+                                "SpreadElement": {
+                                  "Binary": {
+                                    "operator": "LogicalAnd",
+                                    "left": {
+                                      "Identifier": "data"
+                                    },
+                                    "right": {
+                                      "ObjectLiteral": [
+                                        {
+                                          "key": {
+                                            "Identifier": "body"
+                                          },
+                                          "value": {
+                                            "Call": {
+                                              "callee": {
+                                                "Member": {
+                                                  "object": {
+                                                    "Identifier": "JSON"
+                                                  },
+                                                  "property": {
+                                                    "Identifier": "stringify"
+                                                  },
+                                                  "computed": false,
+                                                  "span": {
+                                                    "start_offset": "[START_OFFSET]",
+                                                    "end_offset": "[END_OFFSET]",
+                                                    "start_line": "[START_LINE]",
+                                                    "start_column": "[START_COLUMN]",
+                                                    "end_line": "[END_LINE]",
+                                                    "end_column": "[END_COLUMN]"
+                                                  }
+                                                }
+                                              },
+                                              "arguments": [
+                                                {
+                                                  "Identifier": "data"
+                                                }
+                                              ],
+                                              "span": {
+                                                "start_offset": "[START_OFFSET]",
+                                                "end_offset": "[END_OFFSET]",
+                                                "start_line": "[START_LINE]",
+                                                "start_column": "[START_COLUMN]",
+                                                "end_line": "[END_LINE]",
+                                                "end_column": "[END_COLUMN]"
+                                              }
+                                            }
+                                          },
+                                          "computed": false,
+                                          "shorthand": false,
+                                          "kind": "Data"
+                                        }
+                                      ]
+                                    }
+                                  }
+                                }
+                              },
+                              "computed": false,
+                              "shorthand": true,
+                              "kind": "Data"
+                            }
+                          ]
+                        },
+                        "span": {
+                          "start_offset": "[START_OFFSET]",
+                          "end_offset": "[END_OFFSET]",
+                          "start_line": "[START_LINE]",
+                          "start_column": "[START_COLUMN]",
+                          "end_line": "[END_LINE]",
+                          "end_column": "[END_COLUMN]"
+                        }
+                      }
+                    ],
+                    "span": {
+                      "start_offset": "[START_OFFSET]",
+                      "end_offset": "[END_OFFSET]",
+                      "start_line": "[START_LINE]",
+                      "start_column": "[START_COLUMN]",
+                      "end_line": "[END_LINE]",
+                      "end_column": "[END_COLUMN]"
+                    }
+                  }
+                },
+                {
+                  "TryCatch": {
+                    "block": {
+                      "body": [
+                        {
+                          "VariableDeclaration": {
+                            "kind": "Const",
+                            "declarations": [
+                              {
+                                "pattern": {
+                                  "Identifier": "response"
+                                },
+                                "initializer": {
+                                  "Await": {
+                                    "Call": {
+                                      "callee": {
+                                        "Identifier": "fetch"
+                                      },
+                                      "arguments": [
+                                        {
+                                          "Identifier": "url"
+                                        },
+                                        {
+                                          "Identifier": "options"
+                                        }
+                                      ],
+                                      "span": {
+                                        "start_offset": "[START_OFFSET]",
+                                        "end_offset": "[END_OFFSET]",
+                                        "start_line": "[START_LINE]",
+                                        "start_column": "[START_COLUMN]",
+                                        "end_line": "[END_LINE]",
+                                        "end_column": "[END_COLUMN]"
+                                      }
+                                    }
+                                  }
+                                },
+                                "span": {
+                                  "start_offset": "[START_OFFSET]",
+                                  "end_offset": "[END_OFFSET]",
+                                  "start_line": "[START_LINE]",
+                                  "start_column": "[START_COLUMN]",
+                                  "end_line": "[END_LINE]",
+                                  "end_column": "[END_COLUMN]"
+                                }
+                              }
+                            ],
+                            "span": {
+                              "start_offset": "[START_OFFSET]",
+                              "end_offset": "[END_OFFSET]",
+                              "start_line": "[START_LINE]",
+                              "start_column": "[START_COLUMN]",
+                              "end_line": "[END_LINE]",
+                              "end_column": "[END_COLUMN]"
+                            }
+                          }
+                        },
+                        {
+                          "If": {
+                            "condition": {
+                              "Unary": {
+                                "operator": "LogicalNot",
+                                "argument": {
+                                  "Member": {
+                                    "object": {
+                                      "Identifier": "response"
+                                    },
+                                    "property": {
+                                      "Identifier": "ok"
+                                    },
+                                    "computed": false,
+                                    "span": {
+                                      "start_offset": "[START_OFFSET]",
+                                      "end_offset": "[END_OFFSET]",
+                                      "start_line": "[START_LINE]",
+                                      "start_column": "[START_COLUMN]",
+                                      "end_line": "[END_LINE]",
+                                      "end_column": "[END_COLUMN]"
+                                    }
+                                  }
+                                }
+                              }
+                            },
+                            "consequent": {
+                              "Block": {
+                                "body": [
+                                  {
+                                    "Throw": {
+                                      "argument": {
+                                        "New": {
+                                          "callee": {
+                                            "Identifier": "Error"
+                                          },
+                                          "arguments": [
+                                            {
+                                              "TemplateLiteral": {
+                                                "quasis": [
+                                                  "HTTP ",
+                                                  ": ",
+                                                  ""
+                                                ],
+                                                "expressions": [
+                                                  {
+                                                    "Member": {
+                                                      "object": {
+                                                        "Identifier": "response"
+                                                      },
+                                                      "property": {
+                                                        "Identifier": "status"
+                                                      },
+                                                      "computed": false,
+                                                      "span": {
+                                                        "start_offset": "[START_OFFSET]",
+                                                        "end_offset": "[END_OFFSET]",
+                                                        "start_line": "[START_LINE]",
+                                                        "start_column": "[START_COLUMN]",
+                                                        "end_line": "[END_LINE]",
+                                                        "end_column": "[END_COLUMN]"
+                                                      }
+                                                    }
+                                                  },
+                                                  {
+                                                    "Member": {
+                                                      "object": {
+                                                        "Identifier": "response"
+                                                      },
+                                                      "property": {
+                                                        "Identifier": "statusText"
+                                                      },
+                                                      "computed": false,
+                                                      "span": {
+                                                        "start_offset": "[START_OFFSET]",
+                                                        "end_offset": "[END_OFFSET]",
+                                                        "start_line": "[START_LINE]",
+                                                        "start_column": "[START_COLUMN]",
+                                                        "end_line": "[END_LINE]",
+                                                        "end_column": "[END_COLUMN]"
+                                                      }
+                                                    }
+                                                  }
+                                                ]
+                                              }
+                                            }
+                                          ]
+                                        }
+                                      },
+                                      "span": {
+                                        "start_offset": "[START_OFFSET]",
+                                        "end_offset": "[END_OFFSET]",
+                                        "start_line": "[START_LINE]",
+                                        "start_column": "[START_COLUMN]",
+                                        "end_line": "[END_LINE]",
+                                        "end_column": "[END_COLUMN]"
+                                      }
+                                    }
+                                  }
+                                ],
+                                "span": {
+                                  "start_offset": "[START_OFFSET]",
+                                  "end_offset": "[END_OFFSET]",
+                                  "start_line": "[START_LINE]",
+                                  "start_column": "[START_COLUMN]",
+                                  "end_line": "[END_LINE]",
+                                  "end_column": "[END_COLUMN]"
+                                }
+                              }
+                            },
+                            "alternate": null,
+                            "span": {
+                              "start_offset": "[START_OFFSET]",
+                              "end_offset": "[END_OFFSET]",
+                              "start_line": "[START_LINE]",
+                              "start_column": "[START_COLUMN]",
+                              "end_line": "[END_LINE]",
+                              "end_column": "[END_COLUMN]"
+                            }
+                          }
+                        },
+                        {
+                          "Return": {
+                            "argument": {
+                              "Await": {
+                                "Call": {
+                                  "callee": {
+                                    "Member": {
+                                      "object": {
+                                        "Identifier": "response"
+                                      },
+                                      "property": {
+                                        "Identifier": "json"
+                                      },
+                                      "computed": false,
+                                      "span": {
+                                        "start_offset": "[START_OFFSET]",
+                                        "end_offset": "[END_OFFSET]",
+                                        "start_line": "[START_LINE]",
+                                        "start_column": "[START_COLUMN]",
+                                        "end_line": "[END_LINE]",
+                                        "end_column": "[END_COLUMN]"
+                                      }
+                                    }
+                                  },
+                                  "arguments": [],
+                                  "span": {
+                                    "start_offset": "[START_OFFSET]",
+                                    "end_offset": "[END_OFFSET]",
+                                    "start_line": "[START_LINE]",
+                                    "start_column": "[START_COLUMN]",
+                                    "end_line": "[END_LINE]",
+                                    "end_column": "[END_COLUMN]"
+                                  }
+                                }
+                              }
+                            },
+                            "span": {
+                              "start_offset": "[START_OFFSET]",
+                              "end_offset": "[END_OFFSET]",
+                              "start_line": "[START_LINE]",
+                              "start_column": "[START_COLUMN]",
+                              "end_line": "[END_LINE]",
+                              "end_column": "[END_COLUMN]"
+                            }
+                          }
+                        }
+                      ],
+                      "span": {
+                        "start_offset": "[START_OFFSET]",
+                        "end_offset": "[END_OFFSET]",
+                        "start_line": "[START_LINE]",
+                        "start_column": "[START_COLUMN]",
+                        "end_line": "[END_LINE]",
+                        "end_column": "[END_COLUMN]"
+                      }
+                    },
+                    "handler": {
+                      "parameter": "error",
+                      "body": {
+                        "body": [
+                          {
+                            "Expression": {
+                              "expression": {
+                                "Call": {
+                                  "callee": {
+                                    "Member": {
+                                      "object": "This",
+                                      "property": {
+                                        "Identifier": "handleError"
+                                      },
+                                      "computed": false,
+                                      "span": {
+                                        "start_offset": "[START_OFFSET]",
+                                        "end_offset": "[END_OFFSET]",
+                                        "start_line": "[START_LINE]",
+                                        "start_column": "[START_COLUMN]",
+                                        "end_line": "[END_LINE]",
+                                        "end_column": "[END_COLUMN]"
+                                      }
+                                    }
+                                  },
+                                  "arguments": [
+                                    {
+                                      "Identifier": "error"
+                                    }
+                                  ],
+                                  "span": {
+                                    "start_offset": "[START_OFFSET]",
+                                    "end_offset": "[END_OFFSET]",
+                                    "start_line": "[START_LINE]",
+                                    "start_column": "[START_COLUMN]",
+                                    "end_line": "[END_LINE]",
+                                    "end_column": "[END_COLUMN]"
+                                  }
+                                }
+                              },
+                              "span": {
+                                "start_offset": "[START_OFFSET]",
+                                "end_offset": "[END_OFFSET]",
+                                "start_line": "[START_LINE]",
+                                "start_column": "[START_COLUMN]",
+                                "end_line": "[END_LINE]",
+                                "end_column": "[END_COLUMN]"
+                              }
+                            }
+                          },
+                          {
+                            "Throw": {
+                              "argument": {
+                                "Identifier": "error"
+                              },
+                              "span": {
+                                "start_offset": "[START_OFFSET]",
+                                "end_offset": "[END_OFFSET]",
+                                "start_line": "[START_LINE]",
+                                "start_column": "[START_COLUMN]",
+                                "end_line": "[END_LINE]",
+                                "end_column": "[END_COLUMN]"
+                              }
+                            }
+                          }
+                        ],
+                        "span": {
+                          "start_offset": "[START_OFFSET]",
+                          "end_offset": "[END_OFFSET]",
+                          "start_line": "[START_LINE]",
+                          "start_column": "[START_COLUMN]",
+                          "end_line": "[END_LINE]",
+                          "end_column": "[END_COLUMN]"
+                        }
+                      },
+                      "span": {
+                        "start_offset": "[START_OFFSET]",
+                        "end_offset": "[END_OFFSET]",
+                        "start_line": "[START_LINE]",
+                        "start_column": "[START_COLUMN]",
+                        "end_line": "[END_LINE]",
+                        "end_column": "[END_COLUMN]"
+                      }
+                    },
+                    "finalizer": null,
+                    "span": {
+                      "start_offset": "[START_OFFSET]",
+                      "end_offset": "[END_OFFSET]",
+                      "start_line": "[START_LINE]",
+                      "start_column": "[START_COLUMN]",
+                      "end_line": "[END_LINE]",
+                      "end_column": "[END_COLUMN]"
+                    }
+                  }
+                }
+              ],
+              "span": {
+                "start_offset": "[START_OFFSET]",
+                "end_offset": "[END_OFFSET]",
+                "start_line": "[START_LINE]",
+                "start_column": "[START_COLUMN]",
+                "end_line": "[END_LINE]",
+                "end_column": "[END_COLUMN]"
+              }
+            },
+            "is_static": false,
+            "computed": false,
+            "span": {
+              "start_offset": "[START_OFFSET]",
+              "end_offset": "[END_OFFSET]",
+              "start_line": "[START_LINE]",
+              "start_column": "[START_COLUMN]",
+              "end_line": "[END_LINE]",
+              "end_column": "[END_COLUMN]"
+            }
+          },
+          {
+            "key": {
+              "Identifier": "handleError"
+            },
+            "kind": "Method",
+            "params": [
+              {
+                "pattern": {
+                  "Identifier": "error"
+                },
+                "span": {
+                  "start_offset": "[START_OFFSET]",
+                  "end_offset": "[END_OFFSET]",
+                  "start_line": "[START_LINE]",
+                  "start_column": "[START_COLUMN]",
+                  "end_line": "[END_LINE]",
+                  "end_column": "[END_COLUMN]"
+                }
+              }
+            ],
+            "body": {
+              "body": [
+                {
+                  "Expression": {
+                    "expression": {
+                      "Call": {
+                        "callee": {
+                          "Member": {
+                            "object": {
+                              "Identifier": "console"
+                            },
+                            "property": {
+                              "Identifier": "error"
+                            },
+                            "computed": false,
+                            "span": {
+                              "start_offset": "[START_OFFSET]",
+                              "end_offset": "[END_OFFSET]",
+                              "start_line": "[START_LINE]",
+                              "start_column": "[START_COLUMN]",
+                              "end_line": "[END_LINE]",
+                              "end_column": "[END_COLUMN]"
+                            }
+                          }
+                        },
+                        "arguments": [
+                          {
+                            "StringLiteral": "API Error:"
+                          },
+                          {
+                            "Member": {
+                              "object": {
+                                "Identifier": "error"
+                              },
+                              "property": {
+                                "Identifier": "message"
+                              },
+                              "computed": false,
+                              "span": {
+                                "start_offset": "[START_OFFSET]",
+                                "end_offset": "[END_OFFSET]",
+                                "start_line": "[START_LINE]",
+                                "start_column": "[START_COLUMN]",
+                                "end_line": "[END_LINE]",
+                                "end_column": "[END_COLUMN]"
+                              }
+                            }
+                          }
+                        ],
+                        "span": {
+                          "start_offset": "[START_OFFSET]",
+                          "end_offset": "[END_OFFSET]",
+                          "start_line": "[START_LINE]",
+                          "start_column": "[START_COLUMN]",
+                          "end_line": "[END_LINE]",
+                          "end_column": "[END_COLUMN]"
+                        }
+                      }
+                    },
+                    "span": {
+                      "start_offset": "[START_OFFSET]",
+                      "end_offset": "[END_OFFSET]",
+                      "start_line": "[START_LINE]",
+                      "start_column": "[START_COLUMN]",
+                      "end_line": "[END_LINE]",
+                      "end_column": "[END_COLUMN]"
+                    }
+                  }
+                },
+                {
+                  "Expression": {
+                    "expression": {
+                      "Call": {
+                        "callee": {
+                          "Member": {
+                            "object": {
+                              "Member": {
+                                "object": "This",
+                                "property": {
+                                  "Identifier": "interceptors"
+                                },
+                                "computed": false,
+                                "span": {
+                                  "start_offset": "[START_OFFSET]",
+                                  "end_offset": "[END_OFFSET]",
+                                  "start_line": "[START_LINE]",
+                                  "start_column": "[START_COLUMN]",
+                                  "end_line": "[END_LINE]",
+                                  "end_column": "[END_COLUMN]"
+                                }
+                              }
+                            },
+                            "property": {
+                              "Identifier": "forEach"
+                            },
+                            "computed": false,
+                            "span": {
+                              "start_offset": "[START_OFFSET]",
+                              "end_offset": "[END_OFFSET]",
+                              "start_line": "[START_LINE]",
+                              "start_column": "[START_COLUMN]",
+                              "end_line": "[END_LINE]",
+                              "end_column": "[END_COLUMN]"
+                            }
+                          }
+                        },
+                        "arguments": [
+                          {
+                            "ArrowFunction": {
+                              "params": [
+                                {
+                                  "pattern": {
+                                    "Identifier": "interceptor"
+                                  },
+                                  "span": {
+                                    "start_offset": "[START_OFFSET]",
+                                    "end_offset": "[END_OFFSET]",
+                                    "start_line": "[START_LINE]",
+                                    "start_column": "[START_COLUMN]",
+                                    "end_line": "[END_LINE]",
+                                    "end_column": "[END_COLUMN]"
+                                  }
+                                }
+                              ],
+                              "body": {
+                                "Block": {
+                                  "body": [
+                                    {
+                                      "If": {
+                                        "condition": {
+                                          "Member": {
+                                            "object": {
+                                              "Identifier": "interceptor"
+                                            },
+                                            "property": {
+                                              "Identifier": "onError"
+                                            },
+                                            "computed": false,
+                                            "span": {
+                                              "start_offset": "[START_OFFSET]",
+                                              "end_offset": "[END_OFFSET]",
+                                              "start_line": "[START_LINE]",
+                                              "start_column": "[START_COLUMN]",
+                                              "end_line": "[END_LINE]",
+                                              "end_column": "[END_COLUMN]"
+                                            }
+                                          }
+                                        },
+                                        "consequent": {
+                                          "Block": {
+                                            "body": [
+                                              {
+                                                "Expression": {
+                                                  "expression": {
+                                                    "Call": {
+                                                      "callee": {
+                                                        "Member": {
+                                                          "object": {
+                                                            "Identifier": "interceptor"
+                                                          },
+                                                          "property": {
+                                                            "Identifier": "onError"
+                                                          },
+                                                          "computed": false,
+                                                          "span": {
+                                                            "start_offset": "[START_OFFSET]",
+                                                            "end_offset": "[END_OFFSET]",
+                                                            "start_line": "[START_LINE]",
+                                                            "start_column": "[START_COLUMN]",
+                                                            "end_line": "[END_LINE]",
+                                                            "end_column": "[END_COLUMN]"
+                                                          }
+                                                        }
+                                                      },
+                                                      "arguments": [
+                                                        {
+                                                          "Identifier": "error"
+                                                        }
+                                                      ],
+                                                      "span": {
+                                                        "start_offset": "[START_OFFSET]",
+                                                        "end_offset": "[END_OFFSET]",
+                                                        "start_line": "[START_LINE]",
+                                                        "start_column": "[START_COLUMN]",
+                                                        "end_line": "[END_LINE]",
+                                                        "end_column": "[END_COLUMN]"
+                                                      }
+                                                    }
+                                                  },
+                                                  "span": {
+                                                    "start_offset": "[START_OFFSET]",
+                                                    "end_offset": "[END_OFFSET]",
+                                                    "start_line": "[START_LINE]",
+                                                    "start_column": "[START_COLUMN]",
+                                                    "end_line": "[END_LINE]",
+                                                    "end_column": "[END_COLUMN]"
+                                                  }
+                                                }
+                                              }
+                                            ],
+                                            "span": {
+                                              "start_offset": "[START_OFFSET]",
+                                              "end_offset": "[END_OFFSET]",
+                                              "start_line": "[START_LINE]",
+                                              "start_column": "[START_COLUMN]",
+                                              "end_line": "[END_LINE]",
+                                              "end_column": "[END_COLUMN]"
+                                            }
+                                          }
+                                        },
+                                        "alternate": null,
+                                        "span": {
+                                          "start_offset": "[START_OFFSET]",
+                                          "end_offset": "[END_OFFSET]",
+                                          "start_line": "[START_LINE]",
+                                          "start_column": "[START_COLUMN]",
+                                          "end_line": "[END_LINE]",
+                                          "end_column": "[END_COLUMN]"
+                                        }
+                                      }
+                                    }
+                                  ],
+                                  "span": {
+                                    "start_offset": "[START_OFFSET]",
+                                    "end_offset": "[END_OFFSET]",
+                                    "start_line": "[START_LINE]",
+                                    "start_column": "[START_COLUMN]",
+                                    "end_line": "[END_LINE]",
+                                    "end_column": "[END_COLUMN]"
+                                  }
+                                }
+                              },
+                              "is_async": false
+                            }
+                          }
+                        ],
+                        "span": {
+                          "start_offset": "[START_OFFSET]",
+                          "end_offset": "[END_OFFSET]",
+                          "start_line": "[START_LINE]",
+                          "start_column": "[START_COLUMN]",
+                          "end_line": "[END_LINE]",
+                          "end_column": "[END_COLUMN]"
+                        }
+                      }
+                    },
+                    "span": {
+                      "start_offset": "[START_OFFSET]",
+                      "end_offset": "[END_OFFSET]",
+                      "start_line": "[START_LINE]",
+                      "start_column": "[START_COLUMN]",
+                      "end_line": "[END_LINE]",
+                      "end_column": "[END_COLUMN]"
+                    }
+                  }
+                }
+              ],
+              "span": {
+                "start_offset": "[START_OFFSET]",
+                "end_offset": "[END_OFFSET]",
+                "start_line": "[START_LINE]",
+                "start_column": "[START_COLUMN]",
+                "end_line": "[END_LINE]",
+                "end_column": "[END_COLUMN]"
+              }
+            },
+            "is_static": false,
+            "computed": false,
+            "span": {
+              "start_offset": "[START_OFFSET]",
+              "end_offset": "[END_OFFSET]",
+              "start_line": "[START_LINE]",
+              "start_column": "[START_COLUMN]",
+              "end_line": "[END_LINE]",
+              "end_column": "[END_COLUMN]"
+            }
+          }
+        ],
+        "span": {
+          "start_offset": "[START_OFFSET]",
+          "end_offset": "[END_OFFSET]",
+          "start_line": "[START_LINE]",
+          "start_column": "[START_COLUMN]",
+          "end_line": "[END_LINE]",
+          "end_column": "[END_COLUMN]"
+        }
+      }
+    },
+    {
+      "Export": {
+        "kind": {
+          "Default": {
+            "Identifier": "ApiClient"
+          }
+        },
+        "span": {
+          "start_offset": "[START_OFFSET]",
+          "end_offset": "[END_OFFSET]",
+          "start_line": "[START_LINE]",
+          "start_column": "[START_COLUMN]",
+          "end_line": "[END_LINE]",
+          "end_column": "[END_COLUMN]"
+        }
+      }
+    }
+  ],
+  "span": {
+    "start_offset": "[START_OFFSET]",
+    "end_offset": "[END_OFFSET]",
+    "start_line": "[START_LINE]",
+    "start_column": "[START_COLUMN]",
+    "end_line": "[END_LINE]",
+    "end_column": "[END_COLUMN]"
+  }
+}

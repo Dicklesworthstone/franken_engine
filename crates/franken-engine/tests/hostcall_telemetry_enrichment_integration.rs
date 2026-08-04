@@ -102,7 +102,7 @@ fn small_recorder(capacity: usize) -> TelemetryRecorder {
 // =========================================================================
 
 #[test]
-fn enrichment_hostcall_type_ordering_all_11() {
+fn enrichment_hostcall_type_ordering_all_variants() {
     let all = [
         HostcallType::FsRead,
         HostcallType::FsWrite,
@@ -115,6 +115,10 @@ fn enrichment_hostcall_type_ordering_all_11() {
         HostcallType::CryptoOp,
         HostcallType::IpcSend,
         HostcallType::IpcRecv,
+        HostcallType::Console,
+        HostcallType::Builtin,
+        HostcallType::Promise,
+        HostcallType::ModuleLoad,
     ];
     // Each consecutive pair should maintain Ord invariant.
     for i in 0..all.len() - 1 {
@@ -149,6 +153,10 @@ fn enrichment_hostcall_type_hash_all_distinct() {
         HostcallType::CryptoOp,
         HostcallType::IpcSend,
         HostcallType::IpcRecv,
+        HostcallType::Console,
+        HostcallType::Builtin,
+        HostcallType::Promise,
+        HostcallType::ModuleLoad,
     ];
     let mut hashes = BTreeSet::new();
     for variant in &all {
@@ -156,7 +164,7 @@ fn enrichment_hostcall_type_hash_all_distinct() {
         variant.hash(&mut hasher);
         hashes.insert(hasher.finish());
     }
-    assert_eq!(hashes.len(), 11);
+    assert_eq!(hashes.len(), 15);
 }
 
 // =========================================================================
@@ -236,6 +244,52 @@ fn enrichment_snapshot_serde_on_empty() {
     let restored: TelemetrySnapshot = serde_json::from_str(&json).unwrap();
     assert_eq!(snap, restored);
     assert_eq!(restored.record_id_at_snapshot, None);
+}
+
+#[test]
+fn enrichment_snapshot_hash_distinguishes_equal_total_drop_reasons() {
+    let mut channel_full = small_recorder(1);
+    channel_full
+        .record(100, make_input("ext-a", HostcallType::FsRead))
+        .unwrap();
+    let _ = channel_full.record(200, make_input("ext-a", HostcallType::FsWrite));
+    let channel_full_snapshot = channel_full.snapshot();
+
+    let mut monotonicity = small_recorder(1);
+    monotonicity
+        .record(100, make_input("ext-a", HostcallType::FsRead))
+        .unwrap();
+    let _ = monotonicity.record(50, make_input("ext-a", HostcallType::FsWrite));
+    let monotonicity_snapshot = monotonicity.snapshot();
+
+    let mut empty_extension = small_recorder(1);
+    empty_extension
+        .record(100, make_input("ext-a", HostcallType::FsRead))
+        .unwrap();
+    let _ = empty_extension.record(200, make_input("", HostcallType::FsWrite));
+    let empty_extension_snapshot = empty_extension.snapshot();
+
+    assert_eq!(channel_full_snapshot.record_count, 1);
+    assert_eq!(monotonicity_snapshot.record_count, 1);
+    assert_eq!(empty_extension_snapshot.record_count, 1);
+    assert_eq!(channel_full_snapshot.drop_counts.total(), 1);
+    assert_eq!(monotonicity_snapshot.drop_counts.total(), 1);
+    assert_eq!(empty_extension_snapshot.drop_counts.total(), 1);
+    assert_eq!(channel_full_snapshot.drop_counts.channel_full, 1);
+    assert_eq!(monotonicity_snapshot.drop_counts.monotonicity_violation, 1);
+    assert_eq!(empty_extension_snapshot.drop_counts.empty_extension_id, 1);
+    assert_ne!(
+        channel_full_snapshot.rolling_hash, monotonicity_snapshot.rolling_hash,
+        "the snapshot hash must commit to each reason, not only the total"
+    );
+    assert_ne!(
+        channel_full_snapshot.rolling_hash, empty_extension_snapshot.rolling_hash,
+        "the snapshot hash must commit to each reason, not only the total"
+    );
+    assert_ne!(
+        monotonicity_snapshot.rolling_hash, empty_extension_snapshot.rolling_hash,
+        "the snapshot hash must commit to each reason, not only the total"
+    );
 }
 
 // =========================================================================

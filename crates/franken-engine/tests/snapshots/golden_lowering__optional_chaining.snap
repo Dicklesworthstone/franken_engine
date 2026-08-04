@@ -1,0 +1,35 @@
+---
+source: crates/franken-engine/tests/golden_lowering.rs
+expression: actual
+---
+# franken-engine lowering IR3 golden
+# Update with:
+#   INSTA_UPDATE=always cargo test -p frankenengine-engine --test golden_lowering
+# Then review with `cargo insta review` and commit tests/snapshots/.
+case: optional_chaining
+goal: Script
+source:
+  null?.value;
+
+constant_pool:
+  [0000] "value"
+
+instructions:
+  0000: {"LoadNull":{"dst":1}}
+  0001: {"Move":{"dst":2,"src":1}}
+  0002: {"Move":{"dst":0,"src":2}}
+  0003: {"Move":{"dst":3,"src":2}}
+  0004: {"JumpIfNullish":{"cond":3,"target":11}}
+  0005: {"Move":{"dst":4,"src":2}}
+  0006: {"LoadStr":{"dst":5,"pool_index":0}}
+  0007: {"GetProperty":{"obj":4,"key":5,"dst":6}}
+  0008: {"Move":{"dst":7,"src":6}}
+  0009: {"Move":{"dst":0,"src":7}}
+  0010: {"Jump":{"target":14}}
+  0011: {"LoadUndefined":{"dst":8}}
+  0012: {"Move":{"dst":7,"src":8}}
+  0013: {"Move":{"dst":0,"src":7}}
+  0014: {"Move":{"dst":9,"src":7}}
+  0015: {"Move":{"dst":0,"src":9}}
+  0016: {"Return":{"value":0}}
+  0017: "Halt"

@@ -217,9 +217,9 @@ pub fn build_asupersync_leverage_adoption_gate_from_topology(
         "repro.lock".to_string(),
     ];
     let verification_commands = vec![
-        "rch exec -- cargo check -p frankenengine-engine --lib --bin franken_asupersync_leverage_adoption_gate --test asupersync_leverage_adoption_gate_cli".to_string(),
-        "rch exec 'env RUSTFLAGS=\"-C linker=cc\" cargo test -p frankenengine-engine --test asupersync_leverage_adoption_gate_cli'".to_string(),
-        "rch exec -- cargo clippy -p frankenengine-engine --lib --bin franken_asupersync_leverage_adoption_gate --test asupersync_leverage_adoption_gate_cli -- -D warnings".to_string(),
+        "./scripts/run_asupersync_leverage_adoption_gate.sh check".to_string(),
+        "./scripts/run_asupersync_leverage_adoption_gate.sh test".to_string(),
+        "./scripts/run_asupersync_leverage_adoption_gate.sh clippy".to_string(),
     ];
 
     let mut gate = AsupersyncLeverageAdoptionGate {

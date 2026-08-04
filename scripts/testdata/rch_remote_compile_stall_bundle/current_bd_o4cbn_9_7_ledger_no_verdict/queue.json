@@ -1,0 +1,25 @@
+{
+  "api_version": "1.0",
+  "timestamp": "2026-06-16T20:38:17Z",
+  "command": "queue",
+  "success": true,
+  "data": {
+    "timestamp": "2026-06-16T20:38:17Z",
+    "queue_depth": 0,
+    "active_builds": [
+      {
+        "id": 29890796996001817,
+        "project_id": "franken_engine-5d919732",
+        "worker_id": "vmi1167313",
+        "command": "cargo run -p frankenengine-engine --bin franken_engine_product_blocker_ledger -- --artifact-dir tests/artifacts/perf/alien1_handoff/20260616T194333Z/rgc_engine_product_blocker_ledger/20260616T202945Z_bundle_233340 --beads-json tests/artifacts/perf/alien1_handoff/20260616T194333Z/rgc_engine_product_blocker_ledger/20260616T202945Z_bundle_233340/beads_snapshot.json --support-contract-json docs/support_surface_contract.json",
+        "last_progress_at": "2026-06-16T20:33:10Z",
+        "progress_age_secs": 307,
+        "last_heartbeat_at": "2026-06-16T20:38:15Z",
+        "heartbeat_phase": "execute",
+        "heartbeat_detail": "remote_exec_start",
+        "detector_progress_stale": true,
+        "detector_confidence": 0.25
+      }
+    ]
+  }
+}

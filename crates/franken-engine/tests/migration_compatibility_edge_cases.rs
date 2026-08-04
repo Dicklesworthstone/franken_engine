@@ -84,6 +84,10 @@ fn migration_error_code_display_all_variants() {
         ),
         (MigrationErrorCode::NoMigrationPath, "no_migration_path"),
         (MigrationErrorCode::LossyMigration, "lossy_migration"),
+        (
+            MigrationErrorCode::GoldenLedgerIntegrityFailed,
+            "golden_ledger_integrity_failed",
+        ),
     ];
     for (code, expected) in cases {
         assert_eq!(code.to_string(), expected, "Display for {code:?}");
@@ -112,6 +116,7 @@ fn migration_error_code_serde_all_variants() {
         MigrationErrorCode::PartialReplayFailure,
         MigrationErrorCode::NoMigrationPath,
         MigrationErrorCode::LossyMigration,
+        MigrationErrorCode::GoldenLedgerIntegrityFailed,
     ] {
         let json = serde_json::to_string(&code).unwrap();
         let restored: MigrationErrorCode = serde_json::from_str(&json).unwrap();

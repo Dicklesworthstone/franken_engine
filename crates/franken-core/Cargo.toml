@@ -1,6 +1,6 @@
 [package]
 name = "frankenengine-core"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 description = "Core runtime modules for the FrankenEngine JavaScript runtime"
 license = "MIT"
@@ -16,9 +16,11 @@ sha2 = "0.10"
 hmac = "0.12"
 ed25519-dalek = "2.0"
 rand = "0.8"
+ryu-js = "1.0"
 hex = "0.4"
 chrono = { version = "0.4", features = ["serde"] }
 thiserror = "2.0"
+unicode-id-start = "1.4"
 uuid = { version = "1.16", features = ["v7", "serde"] }
 toml = "0.8"
 frankenengine-extension-host = { path = "../franken-extension-host" }

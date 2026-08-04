@@ -44,6 +44,15 @@ const ALIEN_ELEVATED_REGIME_SHIFT_MILLIONTHS: i64 = 2_500_000; // 2.5 sigma-equi
 #[allow(dead_code)]
 const ALIEN_CRITICAL_REGIME_SHIFT_MILLIONTHS: i64 = 4_000_000; // 4.0 sigma-equivalent
 
+fn append_len_prefixed_bytes(buf: &mut Vec<u8>, bytes: &[u8]) {
+    buf.extend_from_slice(&(bytes.len() as u64).to_le_bytes());
+    buf.extend_from_slice(bytes);
+}
+
+fn append_len_prefixed_str(buf: &mut Vec<u8>, value: &str) {
+    append_len_prefixed_bytes(buf, value.as_bytes());
+}
+
 // ---------------------------------------------------------------------------
 // ContainmentAction — the action space
 // ---------------------------------------------------------------------------
@@ -331,7 +340,7 @@ impl LossMatrix {
     /// Entries sorted by (action, state) for insertion-order independence.
     pub fn content_hash(&self) -> ContentHash {
         let mut buf = Vec::new();
-        buf.extend_from_slice(self.matrix_id.as_bytes());
+        append_len_prefixed_str(&mut buf, &self.matrix_id);
         let mut sorted: Vec<_> = self.entries.iter().collect();
         sorted.sort_by(|a, b| {
             a.action
@@ -1029,35 +1038,49 @@ fn compute_runtime_decision_receipt_hash(
     alien_risk_envelope: &AlienRiskEnvelope,
     alien_floor_gap_steps: u32,
 ) -> ContentHash {
-    let preimage = format!(
-        "{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}",
-        input.trace_id,
-        input.decision_id,
-        input.policy_id,
-        input.extension_id,
-        input.policy_version,
-        input.timestamp_ns,
-        selected.0,
-        selected.1,
-        confidence_interval.lower_millionths,
-        confidence_interval.upper_millionths,
-        attacker_roi.roi_millionths,
-        fleet_roi_summary.extension_count,
-        fleet_roi_summary.average_roi_millionths,
-        alien_risk_envelope.tail_confidence_millionths,
-        alien_risk_envelope.tail_var_millionths,
-        alien_risk_envelope.tail_cvar_millionths,
-        alien_risk_envelope.conformal_quantile_millionths,
-        alien_risk_envelope.conformal_p_value_millionths,
-        alien_risk_envelope.e_value_millionths,
-        alien_risk_envelope.regime_shift_score_millionths,
-        alien_risk_envelope.alert_level,
-        alien_risk_envelope
-            .recommended_floor_action
-            .map_or_else(|| "none".to_string(), |action| action.to_string()),
-        alien_floor_gap_steps,
+    let mut preimage = Vec::new();
+    append_len_prefixed_str(&mut preimage, &input.trace_id);
+    append_len_prefixed_str(&mut preimage, &input.decision_id);
+    append_len_prefixed_str(&mut preimage, &input.policy_id);
+    append_len_prefixed_str(&mut preimage, &input.extension_id);
+    append_len_prefixed_str(&mut preimage, &input.policy_version);
+    preimage.extend_from_slice(&input.timestamp_ns.to_le_bytes());
+    append_len_prefixed_str(&mut preimage, &selected.0.to_string());
+    preimage.extend_from_slice(&selected.1.to_le_bytes());
+    preimage.extend_from_slice(&confidence_interval.lower_millionths.to_le_bytes());
+    preimage.extend_from_slice(&confidence_interval.upper_millionths.to_le_bytes());
+    preimage.extend_from_slice(&attacker_roi.roi_millionths.to_le_bytes());
+    preimage.extend_from_slice(&(fleet_roi_summary.extension_count as u64).to_le_bytes());
+    preimage.extend_from_slice(&fleet_roi_summary.average_roi_millionths.to_le_bytes());
+    preimage.extend_from_slice(&alien_risk_envelope.tail_confidence_millionths.to_le_bytes());
+    preimage.extend_from_slice(&alien_risk_envelope.tail_var_millionths.to_le_bytes());
+    preimage.extend_from_slice(&alien_risk_envelope.tail_cvar_millionths.to_le_bytes());
+    preimage.extend_from_slice(
+        &alien_risk_envelope
+            .conformal_quantile_millionths
+            .to_le_bytes(),
     );
-    ContentHash::compute(preimage.as_bytes())
+    preimage.extend_from_slice(
+        &alien_risk_envelope
+            .conformal_p_value_millionths
+            .to_le_bytes(),
+    );
+    preimage.extend_from_slice(&alien_risk_envelope.e_value_millionths.to_le_bytes());
+    preimage.extend_from_slice(
+        &alien_risk_envelope
+            .regime_shift_score_millionths
+            .to_le_bytes(),
+    );
+    append_len_prefixed_str(&mut preimage, &alien_risk_envelope.alert_level.to_string());
+    match alien_risk_envelope.recommended_floor_action {
+        Some(action) => {
+            preimage.push(1);
+            append_len_prefixed_str(&mut preimage, &action.to_string());
+        }
+        None => preimage.push(0),
+    }
+    preimage.extend_from_slice(&alien_floor_gap_steps.to_le_bytes());
+    ContentHash::compute(&preimage)
 }
 
 fn floor_gap_steps(
@@ -1459,6 +1482,43 @@ mod tests {
         let balanced = LossMatrix::balanced();
         let conservative = LossMatrix::conservative();
         assert_ne!(balanced.content_hash(), conservative.content_hash());
+    }
+
+    #[test]
+    fn loss_matrix_content_hash_len_prefixes_matrix_id_boundary() {
+        let entry = LossEntry {
+            action: ContainmentAction::Allow,
+            state: RiskState::Benign,
+            loss_millionths: 0,
+        };
+
+        let mut absorbed_entry_prefix = Vec::new();
+        absorbed_entry_prefix.extend_from_slice(&1u64.to_le_bytes());
+        let action = entry.action.to_string();
+        absorbed_entry_prefix.extend_from_slice(&(action.len() as u64).to_le_bytes());
+        absorbed_entry_prefix.extend_from_slice(action.as_bytes());
+        let state = entry.state.to_string();
+        absorbed_entry_prefix.extend_from_slice(&(state.len() as u64).to_le_bytes());
+        absorbed_entry_prefix.extend_from_slice(state.as_bytes());
+        absorbed_entry_prefix.extend_from_slice(&entry.loss_millionths.to_le_bytes());
+
+        let with_entry = LossMatrix {
+            matrix_id: "matrix".to_string(),
+            entries: vec![entry],
+        };
+        let without_entry = LossMatrix {
+            matrix_id: format!(
+                "matrix{}",
+                String::from_utf8(absorbed_entry_prefix).unwrap()
+            ),
+            entries: Vec::new(),
+        };
+
+        assert_ne!(
+            with_entry.content_hash(),
+            without_entry.content_hash(),
+            "matrix_id must not be able to absorb the count and entry-prefix boundary"
+        );
     }
 
     // -----------------------------------------------------------------------
@@ -2900,6 +2960,27 @@ mod tests {
         let score1 = s1.score_runtime_decision(&input).unwrap();
         let score2 = s2.score_runtime_decision(&input).unwrap();
         assert_eq!(score1.receipt_preimage_hash, score2.receipt_preimage_hash);
+    }
+
+    #[test]
+    fn receipt_preimage_hash_len_prefixes_string_boundaries() {
+        let mut left_selector = ExpectedLossSelector::balanced();
+        let mut right_selector = ExpectedLossSelector::balanced();
+        let mut left = sample_runtime_input(uncertain_posterior());
+        let mut right = sample_runtime_input(uncertain_posterior());
+
+        left.trace_id = "trace|decision".to_string();
+        left.decision_id = "policy".to_string();
+        right.trace_id = "trace".to_string();
+        right.decision_id = "decision|policy".to_string();
+
+        let left_score = left_selector.score_runtime_decision(&left).unwrap();
+        let right_score = right_selector.score_runtime_decision(&right).unwrap();
+
+        assert_ne!(
+            left_score.receipt_preimage_hash, right_score.receipt_preimage_hash,
+            "free-form ID fields must not alias through delimiter repartitioning"
+        );
     }
 
     #[test]

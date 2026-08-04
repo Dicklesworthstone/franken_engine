@@ -1,0 +1,792 @@
+---
+source: crates/franken-engine/src/lowering_pipeline.rs
+expression: actual_json
+---
+{
+  "ir1": {
+    "header": {
+      "schema_version": {
+        "major": 0,
+        "minor": 7,
+        "patch": 0
+      },
+      "level": "Ir1",
+      "source_hash": [
+        178,
+        78,
+        111,
+        72,
+        228,
+        177,
+        81,
+        40,
+        99,
+        230,
+        96,
+        34,
+        179,
+        8,
+        155,
+        1,
+        229,
+        201,
+        213,
+        220,
+        243,
+        123,
+        163,
+        138,
+        100,
+        3,
+        127,
+        73,
+        177,
+        80,
+        54,
+        105
+      ],
+      "source_label": "loop.js"
+    },
+    "scopes": [
+      {
+        "scope_id": {
+          "depth": 0,
+          "index": 0
+        },
+        "parent": null,
+        "kind": "Global",
+        "bindings": [
+          {
+            "name": "i",
+            "binding_id": 0,
+            "scope": {
+              "depth": 0,
+              "index": 0
+            },
+            "kind": "Let"
+          }
+        ]
+      }
+    ],
+    "ops": [
+      {
+        "LoadLiteral": {
+          "value": {
+            "Integer": 0
+          }
+        }
+      },
+      {
+        "StoreBinding": {
+          "binding_id": 0
+        }
+      },
+      "Discard",
+      {
+        "CreatePerIterationBinding": {
+          "binding_id": 0,
+          "kind": "Let",
+          "preserve_state": true
+        }
+      },
+      {
+        "Label": {
+          "id": 0
+        }
+      },
+      {
+        "LoadBinding": {
+          "binding_id": 0
+        }
+      },
+      {
+        "LoadLiteral": {
+          "value": {
+            "Integer": 5
+          }
+        }
+      },
+      {
+        "BinaryOp": {
+          "operator": "LessThan"
+        }
+      },
+      {
+        "JumpIfFalsy": {
+          "label_id": 2
+        }
+      },
+      "Pop",
+      {
+        "LoadName": {
+          "name": "log",
+          "allow_missing": false
+        }
+      },
+      {
+        "LoadBinding": {
+          "binding_id": 0
+        }
+      },
+      {
+        "Call": {
+          "arg_count": 1
+        }
+      },
+      "Pop",
+      {
+        "Label": {
+          "id": 1
+        }
+      },
+      {
+        "CreatePerIterationBinding": {
+          "binding_id": 0,
+          "kind": "Let",
+          "preserve_state": true
+        }
+      },
+      {
+        "LoadLiteral": {
+          "value": {
+            "Integer": 1
+          }
+        }
+      },
+      {
+        "AssignOp": {
+          "binding_id": 0,
+          "operator": "AddAssign"
+        }
+      },
+      "Pop",
+      {
+        "Jump": {
+          "label_id": 0
+        }
+      },
+      {
+        "Label": {
+          "id": 2
+        }
+      },
+      "Return"
+    ]
+  },
+  "ir2": {
+    "header": {
+      "schema_version": {
+        "major": 0,
+        "minor": 7,
+        "patch": 0
+      },
+      "level": "Ir2",
+      "source_hash": [
+        248,
+        9,
+        147,
+        132,
+        222,
+        91,
+        150,
+        220,
+        19,
+        177,
+        174,
+        145,
+        127,
+        148,
+        190,
+        136,
+        1,
+        74,
+        95,
+        125,
+        194,
+        219,
+        193,
+        100,
+        180,
+        214,
+        91,
+        120,
+        189,
+        214,
+        135,
+        163
+      ],
+      "source_label": "loop.js"
+    },
+    "scopes": [
+      {
+        "scope_id": {
+          "depth": 0,
+          "index": 0
+        },
+        "parent": null,
+        "kind": "Global",
+        "bindings": [
+          {
+            "name": "i",
+            "binding_id": 0,
+            "scope": {
+              "depth": 0,
+              "index": 0
+            },
+            "kind": "Let"
+          }
+        ]
+      }
+    ],
+    "ops": [
+      {
+        "inner": {
+          "LoadLiteral": {
+            "value": {
+              "Integer": 0
+            }
+          }
+        },
+        "effect": "Pure",
+        "required_capability": null,
+        "flow": null
+      },
+      {
+        "inner": {
+          "StoreBinding": {
+            "binding_id": 0
+          }
+        },
+        "effect": "Pure",
+        "required_capability": null,
+        "flow": null
+      },
+      {
+        "inner": "Discard",
+        "effect": "Pure",
+        "required_capability": null,
+        "flow": null
+      },
+      {
+        "inner": {
+          "CreatePerIterationBinding": {
+            "binding_id": 0,
+            "kind": "Let",
+            "preserve_state": true
+          }
+        },
+        "effect": "Pure",
+        "required_capability": null,
+        "flow": null
+      },
+      {
+        "inner": {
+          "Label": {
+            "id": 0
+          }
+        },
+        "effect": "Pure",
+        "required_capability": null,
+        "flow": null
+      },
+      {
+        "inner": {
+          "LoadBinding": {
+            "binding_id": 0
+          }
+        },
+        "effect": "Pure",
+        "required_capability": null,
+        "flow": null
+      },
+      {
+        "inner": {
+          "LoadLiteral": {
+            "value": {
+              "Integer": 5
+            }
+          }
+        },
+        "effect": "Pure",
+        "required_capability": null,
+        "flow": null
+      },
+      {
+        "inner": {
+          "BinaryOp": {
+            "operator": "LessThan"
+          }
+        },
+        "effect": "Pure",
+        "required_capability": null,
+        "flow": null
+      },
+      {
+        "inner": {
+          "JumpIfFalsy": {
+            "label_id": 2
+          }
+        },
+        "effect": "Pure",
+        "required_capability": null,
+        "flow": null
+      },
+      {
+        "inner": "Pop",
+        "effect": "Pure",
+        "required_capability": null,
+        "flow": null
+      },
+      {
+        "inner": {
+          "LoadName": {
+            "name": "log",
+            "allow_missing": false
+          }
+        },
+        "effect": "ReadEffect",
+        "required_capability": null,
+        "flow": {
+          "data_label": "Internal",
+          "sink_clearance": "Internal",
+          "declassification_required": false
+        }
+      },
+      {
+        "inner": {
+          "LoadBinding": {
+            "binding_id": 0
+          }
+        },
+        "effect": "Pure",
+        "required_capability": null,
+        "flow": null
+      },
+      {
+        "inner": {
+          "Call": {
+            "arg_count": 1
+          }
+        },
+        "effect": "Pure",
+        "required_capability": null,
+        "flow": null
+      },
+      {
+        "inner": "Pop",
+        "effect": "Pure",
+        "required_capability": null,
+        "flow": null
+      },
+      {
+        "inner": {
+          "Label": {
+            "id": 1
+          }
+        },
+        "effect": "Pure",
+        "required_capability": null,
+        "flow": null
+      },
+      {
+        "inner": {
+          "CreatePerIterationBinding": {
+            "binding_id": 0,
+            "kind": "Let",
+            "preserve_state": true
+          }
+        },
+        "effect": "Pure",
+        "required_capability": null,
+        "flow": null
+      },
+      {
+        "inner": {
+          "LoadLiteral": {
+            "value": {
+              "Integer": 1
+            }
+          }
+        },
+        "effect": "Pure",
+        "required_capability": null,
+        "flow": null
+      },
+      {
+        "inner": {
+          "AssignOp": {
+            "binding_id": 0,
+            "operator": "AddAssign"
+          }
+        },
+        "effect": "Pure",
+        "required_capability": null,
+        "flow": null
+      },
+      {
+        "inner": "Pop",
+        "effect": "Pure",
+        "required_capability": null,
+        "flow": null
+      },
+      {
+        "inner": {
+          "Jump": {
+            "label_id": 0
+          }
+        },
+        "effect": "Pure",
+        "required_capability": null,
+        "flow": null
+      },
+      {
+        "inner": {
+          "Label": {
+            "id": 2
+          }
+        },
+        "effect": "Pure",
+        "required_capability": null,
+        "flow": null
+      },
+      {
+        "inner": "Return",
+        "effect": "Pure",
+        "required_capability": null,
+        "flow": null
+      }
+    ],
+    "required_capabilities": []
+  },
+  "ir3": {
+    "header": {
+      "schema_version": {
+        "major": 0,
+        "minor": 7,
+        "patch": 0
+      },
+      "level": "Ir3",
+      "source_hash": [
+        98,
+        35,
+        2,
+        129,
+        124,
+        171,
+        52,
+        115,
+        23,
+        69,
+        219,
+        13,
+        33,
+        249,
+        183,
+        253,
+        23,
+        72,
+        85,
+        224,
+        183,
+        48,
+        213,
+        122,
+        105,
+        46,
+        8,
+        218,
+        198,
+        149,
+        165,
+        27
+      ],
+      "source_label": "loop.js"
+    },
+    "instructions": [
+      {
+        "LoadInt": {
+          "dst": 1,
+          "value": 0
+        }
+      },
+      {
+        "Move": {
+          "dst": 2,
+          "src": 1
+        }
+      },
+      {
+        "Move": {
+          "dst": 3,
+          "src": 2
+        }
+      },
+      {
+        "LoadInt": {
+          "dst": 4,
+          "value": 5
+        }
+      },
+      {
+        "Lt": {
+          "dst": 5,
+          "lhs": 3,
+          "rhs": 4
+        }
+      },
+      {
+        "JumpIf": {
+          "cond": 5,
+          "target": 7
+        }
+      },
+      {
+        "Jump": {
+          "target": 17
+        }
+      },
+      {
+        "Move": {
+          "dst": 0,
+          "src": 5
+        }
+      },
+      {
+        "LoadName": {
+          "dst": 6,
+          "name_pool_index": 0,
+          "allow_missing": false
+        }
+      },
+      {
+        "Move": {
+          "dst": 7,
+          "src": 2
+        }
+      },
+      {
+        "Move": {
+          "dst": 8,
+          "src": 7
+        }
+      },
+      {
+        "Call": {
+          "callee": 6,
+          "args": {
+            "start": 8,
+            "count": 1
+          },
+          "dst": 9
+        }
+      },
+      {
+        "Move": {
+          "dst": 0,
+          "src": 9
+        }
+      },
+      {
+        "LoadInt": {
+          "dst": 10,
+          "value": 1
+        }
+      },
+      {
+        "Add": {
+          "dst": 2,
+          "lhs": 2,
+          "rhs": 10
+        }
+      },
+      {
+        "Move": {
+          "dst": 0,
+          "src": 2
+        }
+      },
+      {
+        "Jump": {
+          "target": 2
+        }
+      },
+      {
+        "Return": {
+          "value": 0
+        }
+      },
+      "Halt"
+    ],
+    "constant_pool": [
+      "log"
+    ],
+    "function_table": [
+      {
+        "entry": 0,
+        "arity": 0,
+        "frame_size": 11,
+        "name": "main",
+        "is_generator": false
+      }
+    ],
+    "specialization": null,
+    "required_capabilities": []
+  },
+  "ir2_flow_proof_artifact": {
+    "schema_version": "frankenengine.ir2_flow_proof_witness.v1",
+    "artifact_id": "sha256:dce189572552c9a03a228480b13812f76cf4362690c67e9e843ac6614646785b",
+    "trace_id": "golden_test_for_loop_statement",
+    "decision_id": "decision_for_loop_statement",
+    "policy_id": "policy_for_loop_statement",
+    "module_id": "loop.js",
+    "proved_flows": [
+      {
+        "op_index": 10,
+        "source_label": "Internal",
+        "sink_clearance": "Internal",
+        "capability": null,
+        "proof_method": "StaticAnalysis"
+      }
+    ],
+    "denied_flows": [],
+    "required_declassifications": [],
+    "runtime_checkpoints": []
+  },
+  "witnesses": [
+    {
+      "pass_id": "ir0_to_ir1",
+      "input_hash": "sha256:b24e6f48e4b1512863e66022b3089b01e5c9d5dcf37ba38a64037f49b1503669",
+      "output_hash": "sha256:f8099384de5b96dc13b1ae917f94be88014a5f7dc2dbc164b4d65b78bdd687a3",
+      "rollback_token": "sha256:b24e6f48e4b1512863e66022b3089b01e5c9d5dcf37ba38a64037f49b1503669",
+      "invariant_checks": [
+        {
+          "name": "source_hash_linkage",
+          "passed": true,
+          "detail": "IR1 source_hash references IR0 hash"
+        },
+        {
+          "name": "scope_binding_ids_unique",
+          "passed": true,
+          "detail": "All scope binding IDs are unique"
+        }
+      ]
+    },
+    {
+      "pass_id": "ir1_to_ir2",
+      "input_hash": "sha256:f8099384de5b96dc13b1ae917f94be88014a5f7dc2dbc164b4d65b78bdd687a3",
+      "output_hash": "sha256:622302817cab34731745db0d21f9b7fd174855e0b730d57a692e08dac695a51b",
+      "rollback_token": "sha256:f8099384de5b96dc13b1ae917f94be88014a5f7dc2dbc164b4d65b78bdd687a3",
+      "invariant_checks": [
+        {
+          "name": "source_hash_linkage",
+          "passed": true,
+          "detail": "IR2 source_hash references IR1 hash"
+        },
+        {
+          "name": "hostcall_capability_required",
+          "passed": true,
+          "detail": "Hostcall effects always carry capability tags"
+        },
+        {
+          "name": "ir2_flow_metrics_consistent",
+          "passed": true,
+          "detail": "flow_ops=1 static_proven=1 runtime_checks=0"
+        },
+        {
+          "name": "ir2_static_flow_coverage_ratio",
+          "passed": true,
+          "detail": "static_coverage_millionths=1000000 static_proven=1 total_flow_ops=1"
+        }
+      ]
+    },
+    {
+      "pass_id": "ir2_to_ir3",
+      "input_hash": "sha256:622302817cab34731745db0d21f9b7fd174855e0b730d57a692e08dac695a51b",
+      "output_hash": "sha256:b3631307dab9834e804ab8100feb675ab03609afac079416613d6e395c5078e0",
+      "rollback_token": "sha256:622302817cab34731745db0d21f9b7fd174855e0b730d57a692e08dac695a51b",
+      "invariant_checks": [
+        {
+          "name": "source_hash_linkage",
+          "passed": true,
+          "detail": "IR3 source_hash references IR2 hash"
+        },
+        {
+          "name": "function_table_present",
+          "passed": true,
+          "detail": "IR3 function table contains a deterministic main entry"
+        },
+        {
+          "name": "terminal_halt_instruction",
+          "passed": true,
+          "detail": "IR3 instruction stream ends with HALT"
+        },
+        {
+          "name": "resolved_control_flow_targets",
+          "passed": true,
+          "detail": "IR3 jump targets resolve to concrete instruction indices"
+        }
+      ]
+    }
+  ],
+  "isomorphism_ledger": [
+    {
+      "pass_id": "ir0_to_ir1",
+      "input_hash": "sha256:b24e6f48e4b1512863e66022b3089b01e5c9d5dcf37ba38a64037f49b1503669",
+      "output_hash": "sha256:f8099384de5b96dc13b1ae917f94be88014a5f7dc2dbc164b4d65b78bdd687a3",
+      "input_op_count": 1,
+      "output_op_count": 22
+    },
+    {
+      "pass_id": "ir1_to_ir2",
+      "input_hash": "sha256:f8099384de5b96dc13b1ae917f94be88014a5f7dc2dbc164b4d65b78bdd687a3",
+      "output_hash": "sha256:622302817cab34731745db0d21f9b7fd174855e0b730d57a692e08dac695a51b",
+      "input_op_count": 22,
+      "output_op_count": 22
+    },
+    {
+      "pass_id": "ir2_to_ir3",
+      "input_hash": "sha256:622302817cab34731745db0d21f9b7fd174855e0b730d57a692e08dac695a51b",
+      "output_hash": "sha256:b3631307dab9834e804ab8100feb675ab03609afac079416613d6e395c5078e0",
+      "input_op_count": 22,
+      "output_op_count": 19
+    }
+  ],
+  "events": [
+    {
+      "trace_id": "golden_test_for_loop_statement",
+      "decision_id": "decision_for_loop_statement",
+      "policy_id": "policy_for_loop_statement",
+      "component": "lowering_pipeline",
+      "event": "ir0_to_ir1_lowered",
+      "outcome": "pass",
+      "error_code": null
+    },
+    {
+      "trace_id": "golden_test_for_loop_statement",
+      "decision_id": "decision_for_loop_statement",
+      "policy_id": "policy_for_loop_statement",
+      "component": "lowering_pipeline",
+      "event": "ir1_to_ir2_lowered",
+      "outcome": "pass",
+      "error_code": null
+    },
+    {
+      "trace_id": "golden_test_for_loop_statement",
+      "decision_id": "decision_for_loop_statement",
+      "policy_id": "policy_for_loop_statement",
+      "component": "lowering_pipeline",
+      "event": "ir2_flow_check_completed",
+      "outcome": "pass",
+      "error_code": null
+    },
+    {
+      "trace_id": "golden_test_for_loop_statement",
+      "decision_id": "decision_for_loop_statement",
+      "policy_id": "policy_for_loop_statement",
+      "component": "lowering_pipeline",
+      "event": "ir2_to_ir3_lowered",
+      "outcome": "pass",
+      "error_code": null
+    }
+  ]
+}

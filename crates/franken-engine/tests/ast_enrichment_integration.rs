@@ -31,7 +31,7 @@ fn num(n: i64) -> Expression {
 }
 
 fn str_lit(s: &str) -> Expression {
-    Expression::StringLiteral(s.to_string())
+    Expression::StringLiteral(s.into())
 }
 
 fn expr_stmt(e: Expression) -> Statement {
@@ -100,7 +100,7 @@ fn enrichment_full_program_hash_deterministic_across_constructions() {
                         local: "React".to_string(),
                     },
                     binding: Some("React".to_string()),
-                    source: "react".to_string(),
+                    source: "react".into(),
                     span: span(0, 30),
                 }),
                 Statement::FunctionDeclaration(simple_func(
@@ -110,6 +110,7 @@ fn enrichment_full_program_hash_deterministic_across_constructions() {
                         argument: Some(Expression::Call {
                             callee: Box::new(id("h")),
                             arguments: vec![str_lit("div"), id("props")],
+                            span: None,
                         }),
                         span: s0(),
                     })],
@@ -137,7 +138,7 @@ fn enrichment_different_import_sources_produce_different_hashes() {
                     local: "x".to_string(),
                 },
                 binding: Some("x".to_string()),
-                source: src.to_string(),
+                source: src.into(),
                 span: s0(),
             })],
         )
@@ -213,6 +214,7 @@ fn enrichment_nested_function_declarations_hash_determinism() {
                 argument: Some(Expression::Call {
                     callee: Box::new(id("inner")),
                     arguments: vec![id("x")],
+                    span: None,
                 }),
                 span: s0(),
             }),
@@ -717,6 +719,7 @@ fn enrichment_try_catch_finally_full_serde() {
         block: block(vec![expr_stmt(Expression::Call {
             callee: Box::new(id("riskyOp")),
             arguments: vec![],
+            span: None,
         })]),
         handler: Some(CatchClause {
             parameter: Some("err".to_string()),
@@ -725,14 +728,17 @@ fn enrichment_try_catch_finally_full_serde() {
                     object: Box::new(id("console")),
                     property: Box::new(id("error")),
                     computed: false,
+                    span: None,
                 }),
                 arguments: vec![id("err")],
+                span: None,
             })]),
             span: s0(),
         }),
         finalizer: Some(block(vec![expr_stmt(Expression::Call {
             callee: Box::new(id("cleanup")),
             arguments: vec![],
+            span: None,
         })])),
         span: s0(),
     });
@@ -765,6 +771,7 @@ fn enrichment_switch_with_default_and_fallthrough_serde() {
                     expr_stmt(Expression::Call {
                         callee: Box::new(id("begin")),
                         arguments: vec![],
+                        span: None,
                     }),
                     Statement::Break(BreakStatement {
                         label: None,
@@ -802,14 +809,17 @@ fn enrichment_for_in_with_const_binding() {
     let stmt = ForInStatement {
         binding: BindingPattern::Identifier("key".to_string()),
         binding_kind: Some(VariableDeclarationKind::Const),
+        assignment_strictness: AssignmentStrictness::Sloppy,
         object: id("obj"),
         body: Box::new(expr_stmt(Expression::Call {
             callee: Box::new(Expression::Member {
                 object: Box::new(id("console")),
                 property: Box::new(id("log")),
                 computed: false,
+                span: None,
             }),
             arguments: vec![id("key")],
+            span: None,
         })),
         span: s0(),
     };
@@ -826,13 +836,16 @@ fn enrichment_for_of_without_binding_kind() {
             Some(BindingPattern::Identifier("v".to_string())),
         ]),
         binding_kind: None,
+        assignment_strictness: AssignmentStrictness::Sloppy,
         iterable: Expression::Call {
             callee: Box::new(Expression::Member {
                 object: Box::new(id("map")),
                 property: Box::new(id("entries")),
                 computed: false,
+                span: None,
             }),
             arguments: vec![],
+            span: None,
         },
         body: Box::new(Statement::Block(block(vec![]))),
         span: s0(),
@@ -872,6 +885,7 @@ fn enrichment_do_while_serde() {
             operator: AssignmentOperator::AddAssign,
             left: Box::new(id("sum")),
             right: Box::new(num(1)),
+            assignment_strictness: AssignmentStrictness::Sloppy,
         })),
         condition: Expression::Binary {
             operator: BinaryOperator::LessThan,
@@ -896,8 +910,10 @@ fn enrichment_optional_chaining_member_and_call() {
             object: Box::new(id("obj")),
             property: Box::new(id("method")),
             computed: false,
+            span: None,
         }),
         arguments: vec![num(1), num(2)],
+        span: None,
     };
     let json = serde_json::to_string(&expr).unwrap();
     let restored: Expression = serde_json::from_str(&json).unwrap();
@@ -910,6 +926,7 @@ fn enrichment_optional_member_computed() {
         object: Box::new(id("arr")),
         property: Box::new(num(0)),
         computed: true,
+        span: None,
     };
     let json = serde_json::to_string(&expr).unwrap();
     let restored: Expression = serde_json::from_str(&json).unwrap();
@@ -967,10 +984,12 @@ fn enrichment_object_literal_computed_key() {
         key: Expression::Call {
             callee: Box::new(id("Symbol")),
             arguments: vec![str_lit("key")],
+            span: None,
         },
         value: num(42),
         computed: true,
         shorthand: false,
+        kind: ObjectPropertyKind::Data,
     }]);
     let json = serde_json::to_string(&expr).unwrap();
     let restored: Expression = serde_json::from_str(&json).unwrap();
@@ -989,7 +1008,7 @@ fn enrichment_constants_are_stable() {
     );
     assert_eq!(
         CANONICAL_AST_SCHEMA_VERSION,
-        "franken-engine.parser-ast.schema.v1"
+        "franken-engine.parser-ast.schema.v6"
     );
     assert_eq!(CANONICAL_AST_HASH_ALGORITHM, "sha256");
     assert_eq!(CANONICAL_AST_HASH_PREFIX, "sha256:");
@@ -1051,7 +1070,7 @@ fn enrichment_realistic_module_round_trip() {
                     local: "React".to_string(),
                 },
                 binding: Some("React".to_string()),
-                source: "react".to_string(),
+                source: "react".into(),
                 span: span(0, 28),
             }),
             // import { useState } from 'react';
@@ -1060,7 +1079,7 @@ fn enrichment_realistic_module_round_trip() {
                     local: "useState".to_string(),
                 },
                 binding: Some("useState".to_string()),
-                source: "react".to_string(),
+                source: "react".into(),
                 span: span(29, 60),
             }),
             // const [count, setCount] = useState(0);
@@ -1074,6 +1093,7 @@ fn enrichment_realistic_module_round_trip() {
                     initializer: Some(Expression::Call {
                         callee: Box::new(id("useState")),
                         arguments: vec![num(0)],
+                        span: None,
                     }),
                     span: span(61, 95),
                 }],
@@ -1090,6 +1110,7 @@ fn enrichment_realistic_module_round_trip() {
                         left: Box::new(id("count")),
                         right: Box::new(num(1)),
                     }],
+                    span: None,
                 })],
             )),
             // export default increment;
@@ -1116,11 +1137,11 @@ fn enrichment_statement_span_returns_correct_for_all_18_variants() {
         Statement::Import(ImportDeclaration {
             clause: ImportClause::SideEffect,
             binding: None,
-            source: "m".to_string(),
+            source: "m".into(),
             span: target,
         }),
         Statement::Export(ExportDeclaration {
-            kind: ExportKind::NamedClause("x".to_string()),
+            kind: ExportKind::NamedClause("x".into()),
             span: target,
         }),
         Statement::VariableDeclaration(VariableDeclaration {
@@ -1197,6 +1218,7 @@ fn enrichment_statement_span_returns_correct_for_all_18_variants() {
         Statement::ForIn(ForInStatement {
             binding: BindingPattern::Identifier("k".to_string()),
             binding_kind: None,
+            assignment_strictness: AssignmentStrictness::Sloppy,
             object: Expression::NullLiteral,
             body: Box::new(expr_stmt(Expression::NullLiteral)),
             span: target,
@@ -1204,6 +1226,7 @@ fn enrichment_statement_span_returns_correct_for_all_18_variants() {
         Statement::ForOf(ForOfStatement {
             binding: BindingPattern::Identifier("v".to_string()),
             binding_kind: None,
+            assignment_strictness: AssignmentStrictness::Sloppy,
             iterable: Expression::NullLiteral,
             body: Box::new(expr_stmt(Expression::NullLiteral)),
             span: target,
@@ -1226,11 +1249,11 @@ fn enrichment_all_18_statement_canonical_kinds_unique() {
         Statement::Import(ImportDeclaration {
             clause: ImportClause::SideEffect,
             binding: None,
-            source: "m".to_string(),
+            source: "m".into(),
             span: s0(),
         }),
         Statement::Export(ExportDeclaration {
-            kind: ExportKind::NamedClause("x".to_string()),
+            kind: ExportKind::NamedClause("x".into()),
             span: s0(),
         }),
         Statement::VariableDeclaration(VariableDeclaration {
@@ -1304,6 +1327,7 @@ fn enrichment_all_18_statement_canonical_kinds_unique() {
         Statement::ForIn(ForInStatement {
             binding: BindingPattern::Identifier("k".to_string()),
             binding_kind: None,
+            assignment_strictness: AssignmentStrictness::Sloppy,
             object: Expression::NullLiteral,
             body: Box::new(expr_stmt(Expression::NullLiteral)),
             span: s0(),
@@ -1311,6 +1335,7 @@ fn enrichment_all_18_statement_canonical_kinds_unique() {
         Statement::ForOf(ForOfStatement {
             binding: BindingPattern::Identifier("v".to_string()),
             binding_kind: None,
+            assignment_strictness: AssignmentStrictness::Sloppy,
             iterable: Expression::NullLiteral,
             body: Box::new(expr_stmt(Expression::NullLiteral)),
             span: s0(),
@@ -1365,7 +1390,7 @@ fn enrichment_variable_declaration_kind_as_str() {
 fn enrichment_export_kind_default_vs_named_different_canonical() {
     use frankenengine_engine::deterministic_serde::CanonicalValue;
     let default = ExportKind::Default(id("x"));
-    let named = ExportKind::NamedClause("x".to_string());
+    let named = ExportKind::NamedClause("x".into());
     let cv1 = default.canonical_value();
     let cv2 = named.canonical_value();
     assert_ne!(cv1, cv2);
@@ -1479,6 +1504,7 @@ fn enrichment_conditional_with_call_chains() {
         consequent: Box::new(Expression::Call {
             callee: Box::new(id("x")),
             arguments: vec![],
+            span: None,
         }),
         alternate: Box::new(Expression::Identifier("x".to_string())),
     };
@@ -1497,6 +1523,7 @@ fn enrichment_object_pattern_property_computed_vs_shorthand() {
         key: Expression::Call {
             callee: Box::new(id("Symbol")),
             arguments: vec![str_lit("key")],
+            span: None,
         },
         value: BindingPattern::Identifier("val".to_string()),
         computed: true,
@@ -1525,6 +1552,7 @@ fn enrichment_await_deeply_nested() {
         Box::new(Expression::Call {
             callee: Box::new(id("fetch")),
             arguments: vec![str_lit("https://example.com")],
+            span: None,
         }),
     )))));
     let json = serde_json::to_string(&expr).unwrap();
@@ -1562,7 +1590,7 @@ fn enrichment_all_expression_canonical_kinds_unique() {
     use frankenengine_engine::deterministic_serde::CanonicalValue;
     let exprs: Vec<Expression> = vec![
         Expression::Identifier("a".to_string()),
-        Expression::StringLiteral("b".to_string()),
+        Expression::StringLiteral("b".into()),
         Expression::NumericLiteral(0),
         Expression::BooleanLiteral(true),
         Expression::NullLiteral,
@@ -1581,6 +1609,7 @@ fn enrichment_all_expression_canonical_kinds_unique() {
             operator: AssignmentOperator::Assign,
             left: Box::new(id("x")),
             right: Box::new(num(1)),
+            assignment_strictness: AssignmentStrictness::Sloppy,
         },
         Expression::Conditional {
             test: Box::new(Expression::BooleanLiteral(true)),
@@ -1590,20 +1619,24 @@ fn enrichment_all_expression_canonical_kinds_unique() {
         Expression::Call {
             callee: Box::new(id("f")),
             arguments: vec![],
+            span: None,
         },
         Expression::Member {
             object: Box::new(id("o")),
             property: Box::new(id("p")),
             computed: false,
+            span: None,
         },
         Expression::OptionalCall {
             callee: Box::new(id("f")),
             arguments: vec![],
+            span: None,
         },
         Expression::OptionalMember {
             object: Box::new(id("o")),
             property: Box::new(id("p")),
             computed: false,
+            span: None,
         },
         Expression::This,
         Expression::ArrayLiteral(vec![]),
@@ -1670,7 +1703,7 @@ fn enrichment_syntax_tree_with_all_statement_types_round_trips() {
                     local: "x".to_string(),
                 },
                 binding: Some("x".to_string()),
-                source: "mod".to_string(),
+                source: "mod".into(),
                 span: s0(),
             }),
             var_stmt("y", Some(num(1))),
@@ -1695,6 +1728,7 @@ fn enrichment_syntax_tree_with_all_statement_types_round_trips() {
             Statement::ForIn(ForInStatement {
                 binding: BindingPattern::Identifier("k".to_string()),
                 binding_kind: Some(VariableDeclarationKind::Const),
+                assignment_strictness: AssignmentStrictness::Sloppy,
                 object: id("obj"),
                 body: Box::new(expr_stmt(id("k"))),
                 span: s0(),
@@ -1702,6 +1736,7 @@ fn enrichment_syntax_tree_with_all_statement_types_round_trips() {
             Statement::ForOf(ForOfStatement {
                 binding: BindingPattern::Identifier("v".to_string()),
                 binding_kind: Some(VariableDeclarationKind::Let),
+                assignment_strictness: AssignmentStrictness::Sloppy,
                 iterable: id("arr"),
                 body: Box::new(expr_stmt(id("v"))),
                 span: s0(),

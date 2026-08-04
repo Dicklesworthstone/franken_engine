@@ -20,8 +20,6 @@ use frankenengine_extension_host::{
 };
 use serde::{Deserialize, Serialize};
 
-const GOLDEN: &str = include_str!("golden_vectors/hostcall_sink_policy_clearance_matrix_v1.json");
-
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 struct HostcallSinkPolicyClearanceMatrixGolden {
     fixture_schema_version: String,
@@ -80,14 +78,10 @@ fn hostcall_sink_policy_clearance_matrix_matches_golden_snapshot() {
     let expected = golden_fixture();
     let actual_json = serde_json::to_string_pretty(&expected).expect("serialize golden") + "\n";
 
-    assert_eq!(
-        actual_json, GOLDEN,
-        "HostcallSinkPolicy clearance matrix drifted from golden. \
-         If this change is intentional, re-emit the JSON next to this file."
-    );
+    insta::assert_snapshot!("hostcall_sink_policy_clearance_matrix", actual_json);
 
     let decoded: HostcallSinkPolicyClearanceMatrixGolden =
-        serde_json::from_str(GOLDEN).expect("golden fixture should decode");
+        serde_json::from_str(&actual_json).expect("golden fixture should decode");
     assert_eq!(decoded, expected);
     assert_eq!(decoded.matrix.len(), all_hostcall_types().len());
 }

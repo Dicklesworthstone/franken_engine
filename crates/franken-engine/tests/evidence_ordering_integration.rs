@@ -22,7 +22,7 @@
 
 use frankenengine_engine::evidence_ledger::{
     CandidateAction, ChosenAction, Constraint, DecisionType, EvidenceEntry, EvidenceEntryBuilder,
-    Witness,
+    LabFixtureEvidenceEntryBuilderExt as _, Witness,
 };
 use frankenengine_engine::evidence_ordering::{
     OrderingViolation, SizeBounds, TruncationMarker, dedup_witnesses, normalize_entry,

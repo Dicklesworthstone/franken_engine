@@ -27,9 +27,9 @@ use std::process::Command;
 use frankenengine_engine::evidence_ledger::{
     ArtifactRecord, CandidateAction, ChosenAction, Constraint, DecisionSemanticsAnnotations,
     DecisionType, EvidenceEmitter, EvidenceEntry, EvidenceEntryBuilder, EvidenceGraphEdgeKind,
-    EvidenceLedgerStitchingBundle, InMemoryLedger, LedgerError, SchemaVersionExt,
-    StitchingArtifactContext, Witness, current_schema_version, emit_default_stitching_bundle,
-    render_stitching_summary,
+    EvidenceLedgerStitchingBundle, InMemoryLedger, LabFixtureEvidenceEntryBuilderExt as _,
+    LabFixtureInMemoryLedgerExt as _, LedgerError, SchemaVersionExt, StitchingArtifactContext,
+    Witness, current_schema_version, emit_default_stitching_bundle, render_stitching_summary,
 };
 use frankenengine_engine::hindsight_boundary_capture::{
     BoundaryCaptureRecord, BoundaryCaptureSession, BoundaryContext,
@@ -366,11 +366,11 @@ fn chosen_action_serde_roundtrip() {
 // ===========================================================================
 
 #[test]
-fn current_schema_version_is_1_0_0() {
+fn current_schema_version_is_2_0_0() {
     let v = current_schema_version();
-    assert_eq!(v.major_val(), 1);
+    assert_eq!(v.major_val(), 2);
     assert_eq!(v.minor_val(), 0);
-    assert_eq!(v.to_string(), "1.0.0");
+    assert_eq!(v.to_string(), "2.0.0");
 }
 
 #[test]
@@ -731,12 +731,12 @@ fn ledger_error_schema_validation_failed_display() {
 #[test]
 fn ledger_error_incompatible_schema_display() {
     let err = LedgerError::IncompatibleSchema {
-        entry_version: frankenengine_engine::control_plane::SchemaVersion::new(2, 0, 0),
+        entry_version: frankenengine_engine::control_plane::SchemaVersion::new(3, 0, 0),
         reader_version: current_schema_version(),
     };
     assert_eq!(
         err.to_string(),
-        "incompatible schema: entry 2.0.0, reader 1.0.0"
+        "incompatible schema: entry 3.0.0, reader 2.0.0"
     );
 }
 
@@ -1227,7 +1227,7 @@ fn ledger_error_equality() {
 #[test]
 fn entry_schema_version_matches_current() {
     let entry = sample_entry();
-    assert_eq!(entry.schema_version.major, 1);
+    assert_eq!(entry.schema_version.major, 2);
     assert_eq!(entry.schema_version.minor, 0);
 }
 
@@ -1693,13 +1693,7 @@ fn evidence_ledger_cli_writes_real_artifacts_and_structured_logs() {
 // ---------------------------------------------------------------------------
 
 use regex::Regex;
-use std::path::Path;
 use std::sync::LazyLock;
-
-// golden_diag lives under tests/_support/ (bd-ub6x8.18); pulled in via #[path]
-// so cargo does not compile it as a standalone integration-test binary.
-#[path = "_support/golden_diag.rs"]
-mod golden_diag;
 
 // Hoisted scrub patterns (bd-ub6x8.13).
 static SCRUB_UUID: LazyLock<Regex> = LazyLock::new(|| {
@@ -1710,34 +1704,43 @@ static SCRUB_EVIDENCE_HASH: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r#""evidence_hash": "[0-9a-f]{64}""#).unwrap());
 static SCRUB_ENTRY_ID: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r#""entry_id": "[^"]+""#).unwrap());
+static SCRUB_EVIDENCE_KEY_ID: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r#""key_id": "[^"]+""#).unwrap());
+static SCRUB_EVIDENCE_VERIFICATION_KEY: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r#""verification_key": \{\s*"inner": \[[^\]]*\]\s*\}"#).unwrap());
+static SCRUB_EVIDENCE_SIGNATURE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#""signature": \{\s*"lower": \[[^\]]*\],\s*"upper": \[[^\]]*\]\s*\}"#).unwrap()
+});
 
-/// Assert evidence entry matches golden file with scrubbed dynamic values.
-/// UPDATE_GOLDENS + read-or-panic + .actual sweep is delegated to
-/// golden_diag::GoldenDiag (bd-ub6x8.3).
-fn assert_evidence_golden(test_name: &str, entry: &EvidenceEntry) {
-    let golden_path = Path::new("tests/golden/evidence_ledger").join(format!("{test_name}.golden"));
+/// Assert evidence entry matches its insta snapshot with scrubbed dynamic values.
+fn assert_evidence_snapshot(test_name: &str, entry: &EvidenceEntry) {
     let actual =
         serde_json::to_string_pretty(entry).expect("EvidenceEntry should serialize to JSON");
     let scrubbed_actual = scrub_evidence_dynamic_fields(&actual);
-    golden_diag::GoldenDiag {
-        framework_name: "Evidence ledger golden",
-        regen_env_var: "UPDATE_GOLDENS",
-    }
-    .assert_golden_match(&scrubbed_actual, &golden_path, test_name, None);
+    insta::assert_snapshot!(test_name, scrubbed_actual);
 }
 
 /// Scrub dynamic values from evidence entry JSON for stable golden comparison.
 fn scrub_evidence_dynamic_fields(json: &str) -> String {
     let mut scrubbed = json.to_string();
     scrubbed = SCRUB_UUID.replace_all(&scrubbed, "[UUID]").into_owned();
-    scrubbed = SCRUB_TIMESTAMP
-        .replace_all(&scrubbed, "[TIMESTAMP]")
-        .into_owned();
     scrubbed = SCRUB_EVIDENCE_HASH
         .replace_all(&scrubbed, r#""evidence_hash": "[HASH]""#)
         .into_owned();
     scrubbed = SCRUB_ENTRY_ID
         .replace_all(&scrubbed, r#""entry_id": "[ENTRY_ID]""#)
+        .into_owned();
+    scrubbed = SCRUB_EVIDENCE_KEY_ID
+        .replace_all(&scrubbed, r#""key_id": "[KEY_ID]""#)
+        .into_owned();
+    scrubbed = SCRUB_EVIDENCE_VERIFICATION_KEY
+        .replace_all(&scrubbed, r#""verification_key": "[VERIFICATION_KEY]""#)
+        .into_owned();
+    scrubbed = SCRUB_EVIDENCE_SIGNATURE
+        .replace_all(&scrubbed, r#""signature": "[SIGNATURE]""#)
+        .into_owned();
+    scrubbed = SCRUB_TIMESTAMP
+        .replace_all(&scrubbed, "[TIMESTAMP]")
         .into_owned();
     scrubbed
 }
@@ -1784,7 +1787,7 @@ fn golden_evidence_entry_security_action_sandbox() {
     .build()
     .expect("Evidence entry should build successfully");
 
-    assert_evidence_golden("security_action_sandbox", &entry);
+    assert_evidence_snapshot("security_action_sandbox", &entry);
 }
 
 #[test]
@@ -1818,7 +1821,7 @@ fn golden_evidence_entry_capability_decision_deny() {
     .build()
     .expect("Evidence entry should build successfully");
 
-    assert_evidence_golden("capability_decision_deny", &entry);
+    assert_evidence_snapshot("capability_decision_deny", &entry);
 }
 
 #[test]
@@ -1869,7 +1872,7 @@ fn golden_evidence_entry_policy_update() {
     .build()
     .expect("Evidence entry should build successfully");
 
-    assert_evidence_golden("policy_update", &entry);
+    assert_evidence_snapshot("policy_update", &entry);
 }
 
 #[test]
@@ -1918,7 +1921,7 @@ fn golden_evidence_entry_extension_lifecycle_terminate() {
     .build()
     .expect("Evidence entry should build successfully");
 
-    assert_evidence_golden("extension_lifecycle_terminate", &entry);
+    assert_evidence_snapshot("extension_lifecycle_terminate", &entry);
 }
 
 #[test]
@@ -1940,5 +1943,5 @@ fn golden_evidence_entry_minimal_contract_evaluation() {
     .build()
     .expect("Minimal evidence entry should build successfully");
 
-    assert_evidence_golden("minimal_contract_evaluation", &entry);
+    assert_evidence_snapshot("minimal_contract_evaluation", &entry);
 }

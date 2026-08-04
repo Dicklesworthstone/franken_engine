@@ -22,6 +22,7 @@ pub type RegistryResult<T> = Result<T, RegistryError>;
 pub enum ModuleSyntax {
     EsModule,
     CommonJs,
+    Wasm,
 }
 
 impl ModuleSyntax {
@@ -29,8 +30,13 @@ impl ModuleSyntax {
         match self {
             Self::EsModule => "esm",
             Self::CommonJs => "cjs",
+            Self::Wasm => "wasm",
         }
     }
+}
+
+pub fn wasm_module_required_capabilities() -> BTreeSet<RuntimeCapability> {
+    BTreeSet::from([RuntimeCapability::ModuleLoad, RuntimeCapability::VmDispatch])
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -122,6 +128,19 @@ impl ModuleDefinition {
         self.provenance_origin = provenance_origin.into();
         self
     }
+}
+
+fn apply_wasm_module_contract(
+    module_key: &str,
+    mut definition: ModuleDefinition,
+) -> ModuleDefinition {
+    if definition.syntax == ModuleSyntax::Wasm || module_key.trim().ends_with(".wasm") {
+        definition.syntax = ModuleSyntax::Wasm;
+        definition
+            .required_capabilities
+            .extend(wasm_module_required_capabilities());
+    }
+    definition
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -563,20 +582,33 @@ impl CapabilitySafeHostApiSurface {
             &[RuntimeCapability::ProcessSpawn],
             "Grant `process_spawn` capability before calling node:process.spawn.",
         );
-        surface.insert_descriptor(
-            "hostapi.node-crypto.random-bytes.v1",
-            "node:crypto",
-            "random_bytes",
-            &[RuntimeCapability::IdempotencyDerive],
-            "Grant `idempotency_derive` capability before calling node:crypto.random_bytes.",
-        );
-        surface.insert_descriptor(
-            "hostapi.node-crypto.sha256.v1",
-            "node:crypto",
-            "sha256",
-            &[RuntimeCapability::IdempotencyDerive],
-            "Grant `idempotency_derive` capability before calling node:crypto.sha256.",
-        );
+        for (descriptor_id, operation) in [
+            ("hostapi.node-crypto.create-hash.v1", "create_hash"),
+            ("hostapi.node-crypto.create-hmac.v1", "create_hmac"),
+            (
+                "hostapi.node-crypto.timing-safe-equal.v1",
+                "timing_safe_equal",
+            ),
+            ("hostapi.node-crypto.pbkdf2-sync.v1", "pbkdf2_sync"),
+            ("hostapi.node-crypto.pbkdf2.v1", "pbkdf2"),
+            ("hostapi.node-crypto.scrypt-sync.v1", "scrypt_sync"),
+            ("hostapi.node-crypto.create-cipheriv.v1", "create_cipheriv"),
+            (
+                "hostapi.node-crypto.create-decipheriv.v1",
+                "create_decipheriv",
+            ),
+            ("hostapi.node-crypto.get-hashes.v1", "get_hashes"),
+            ("hostapi.node-crypto.get-ciphers.v1", "get_ciphers"),
+            ("hostapi.node-crypto.constants.v1", "constants"),
+        ] {
+            surface.insert_descriptor(
+                descriptor_id,
+                "node:crypto",
+                operation,
+                &[RuntimeCapability::Builtin],
+                "Grant `builtin` capability before calling deterministic node:crypto compute operations.",
+            );
+        }
 
         surface
     }
@@ -1144,6 +1176,7 @@ impl DeterministicModuleResolver {
         if specifier.trim().is_empty() {
             return Err(RegistryError::empty_key());
         }
+        let definition = apply_wasm_module_contract(&specifier, definition);
         let id = format!("builtin:{specifier}");
         let record = ModuleRecord::from_definition(id, ModuleSourceKind::BuiltIn, definition);
         self.builtins.insert(specifier, record);
@@ -1169,6 +1202,7 @@ impl DeterministicModuleResolver {
             return Err(RegistryError::outside_root(&self.root_dir, &absolute_path));
         }
 
+        let definition = apply_wasm_module_contract(&absolute_path, definition);
         let record = ModuleRecord::from_definition(
             absolute_path.clone(),
             ModuleSourceKind::Workspace,
@@ -1192,6 +1226,7 @@ impl DeterministicModuleResolver {
             return Err(RegistryError::empty_key());
         }
 
+        let definition = apply_wasm_module_contract(&specifier, definition);
         let id = format!("external:{specifier}");
         let record =
             ModuleRecord::from_definition(id, ModuleSourceKind::ExternalRegistry, definition);
@@ -1727,7 +1762,7 @@ impl DeterministicModuleResolver {
 
         !matches!(
             self.referrer_module_syntax(referrer),
-            Some(ModuleSyntax::EsModule)
+            Some(ModuleSyntax::EsModule | ModuleSyntax::Wasm)
         )
     }
 }
@@ -1741,6 +1776,24 @@ impl ModuleResolver for DeterministicModuleResolver {
     ) -> ResolutionResult<ResolutionOutcome> {
         let (canonical_specifier, record, probe_sequence) =
             self.resolve_candidate(request, context)?;
+        if request.style == ImportStyle::Require && record.syntax == ModuleSyntax::Wasm {
+            return Err(Box::new(
+                ResolutionError::new(
+                    ResolutionErrorCode::UnsupportedSpecifier,
+                    format!(
+                        "require() of WebAssembly module '{}' is not supported; use import with explicit wasm capabilities",
+                        canonical_specifier
+                    ),
+                    context,
+                )
+                .with_resolution_attempt(
+                    request.specifier.clone(),
+                    Some(canonical_specifier.clone()),
+                    Some(record.provenance.kind),
+                    probe_sequence.clone(),
+                ),
+            ));
+        }
         if request.style == ImportStyle::Require
             && record.syntax == ModuleSyntax::EsModule
             && request.compatibility_mode != CompatibilityMode::BunCompat
@@ -2211,13 +2264,17 @@ fn external_referrer_directory(referrer: &str) -> String {
 }
 
 fn is_module_file_name(name: &str) -> bool {
-    name.ends_with(".mjs") || name.ends_with(".cjs") || name.ends_with(".js")
+    name.ends_with(".mjs")
+        || name.ends_with(".cjs")
+        || name.ends_with(".js")
+        || name.ends_with(".wasm")
 }
 
 fn strip_module_file_extension(name: &str) -> String {
     name.strip_suffix(".mjs")
         .or_else(|| name.strip_suffix(".cjs"))
         .or_else(|| name.strip_suffix(".js"))
+        .or_else(|| name.strip_suffix(".wasm"))
         .unwrap_or(name)
         .to_string()
 }
@@ -3789,6 +3846,7 @@ mod tests {
     fn module_syntax_as_str() {
         assert_eq!(ModuleSyntax::EsModule.as_str(), "esm");
         assert_eq!(ModuleSyntax::CommonJs.as_str(), "cjs");
+        assert_eq!(ModuleSyntax::Wasm.as_str(), "wasm");
     }
 
     #[test]
@@ -3896,7 +3954,11 @@ mod tests {
 
     #[test]
     fn module_syntax_serde_round_trip() {
-        for syntax in &[ModuleSyntax::EsModule, ModuleSyntax::CommonJs] {
+        for syntax in &[
+            ModuleSyntax::EsModule,
+            ModuleSyntax::CommonJs,
+            ModuleSyntax::Wasm,
+        ] {
             let json = serde_json::to_string(syntax).expect("serde serialization should succeed");
             let decoded: ModuleSyntax =
                 serde_json::from_str(&json).expect("deserialize known-valid JSON");
@@ -4034,6 +4096,7 @@ mod tests {
     #[test]
     fn module_syntax_ordering() {
         assert!(ModuleSyntax::EsModule < ModuleSyntax::CommonJs);
+        assert!(ModuleSyntax::CommonJs < ModuleSyntax::Wasm);
     }
 
     #[test]
@@ -4194,11 +4257,15 @@ mod tests {
 
     #[test]
     fn module_syntax_display_unique() {
-        let displays: BTreeSet<String> = [ModuleSyntax::EsModule, ModuleSyntax::CommonJs]
-            .iter()
-            .map(|s| s.as_str().to_string())
-            .collect();
-        assert_eq!(displays.len(), 2);
+        let displays: BTreeSet<String> = [
+            ModuleSyntax::EsModule,
+            ModuleSyntax::CommonJs,
+            ModuleSyntax::Wasm,
+        ]
+        .iter()
+        .map(|s| s.as_str().to_string())
+        .collect();
+        assert_eq!(displays.len(), 3);
     }
 
     #[test]
@@ -5559,8 +5626,42 @@ mod tests {
         assert!(surface.descriptor("node:fs", "write_file").is_some());
         assert!(surface.descriptor("node:net", "connect").is_some());
         assert!(surface.descriptor("node:process", "spawn").is_some());
-        assert!(surface.descriptor("node:crypto", "random_bytes").is_some());
-        assert!(surface.descriptor("node:crypto", "sha256").is_some());
+        let create_hash = surface
+            .descriptor("node:crypto", "create_hash")
+            .expect("deterministic hash descriptor");
+        assert_eq!(
+            create_hash.required_capabilities,
+            BTreeSet::from([RuntimeCapability::Builtin])
+        );
+        assert!(surface.descriptor("node:crypto", "create_hmac").is_some());
+        assert!(
+            surface
+                .descriptor("node:crypto", "timing_safe_equal")
+                .is_some()
+        );
+        assert!(surface.descriptor("node:crypto", "pbkdf2_sync").is_some());
+        assert!(surface.descriptor("node:crypto", "scrypt_sync").is_some());
+        assert!(
+            surface
+                .descriptor("node:crypto", "create_cipheriv")
+                .is_some()
+        );
+        assert!(
+            surface
+                .descriptor("node:crypto", "create_decipheriv")
+                .is_some()
+        );
+        assert!(surface.descriptor("node:crypto", "get_hashes").is_some());
+        assert!(surface.descriptor("node:crypto", "get_ciphers").is_some());
+        assert!(surface.descriptor("node:crypto", "constants").is_some());
+        assert!(
+            surface.descriptor("node:crypto", "random_int").is_none(),
+            "argument-blind host authorization must not overgrant entropy-producing randomInt"
+        );
+        assert!(
+            surface.descriptor("node:crypto", "random_bytes").is_none(),
+            "entropy-producing operations stay fail-closed until a trusted entropy capability exists"
+        );
     }
 
     #[test]

@@ -1,0 +1,2 @@
+cargo test -p frankenengine-engine --test fixture
+local fallback was used for a heavy proof command

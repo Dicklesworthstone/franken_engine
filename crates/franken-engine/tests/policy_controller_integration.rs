@@ -22,8 +22,8 @@ use std::collections::BTreeMap;
 
 use frankenengine_engine::evidence_ledger::DecisionType;
 use frankenengine_engine::policy_controller::{
-    ActionSelection, ControllerConfig, Guardrail, LossMatrix, PolicyController,
-    PolicyControllerError, Posterior,
+    ActionSelection, ControllerConfig, Guardrail, LabFixturePolicyControllerExt as _, LossMatrix,
+    PolicyController, PolicyControllerError, Posterior,
 };
 use frankenengine_engine::security_epoch::SecurityEpoch;
 

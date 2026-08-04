@@ -68,7 +68,7 @@ fn call_console_log_module() -> Ir3Module {
             Ir3Instruction::Halt,
         ],
     );
-    module.constant_pool.push("call gate audit".to_string());
+    module.constant_pool.push("call gate audit".into());
     module
 }
 

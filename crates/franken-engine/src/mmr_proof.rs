@@ -5,7 +5,10 @@
 //! the decision marker stream, enabling efficient cross-node verification
 //! without transmitting the full stream.
 //!
-//! Uses Tier 2 ContentHash for tree hashing.
+//! Uses Tier 2 ContentHash for tree hashing, with RFC 6962-style domain
+//! separation: leaf nodes hash as `H(0x00 || leaf_hash)` and interior nodes
+//! as `H(0x01 || left || right)`, so an interior node can never be
+//! reinterpreted as a leaf (second-preimage resistance across tree levels).
 //!
 //! Plan references: Section 10.11 item 29, 9G.9 (three-tier integrity +
 //! append-only decision stream), Top-10 #3, #10.
@@ -264,10 +267,14 @@ impl MerkleMountainRange {
 
     /// Append a leaf hash to the MMR.
     ///
+    /// The caller-provided hash is wrapped in the leaf domain
+    /// (`H(0x00 || leaf_hash)`) before being stored, so leaf nodes and
+    /// interior nodes occupy disjoint hash domains (RFC 6962).
+    ///
     /// Returns the leaf's MMR position.
     pub fn append(&mut self, leaf_hash: ContentHash) -> u64 {
         let leaf_pos = self.nodes.len() as u64;
-        self.nodes.push(leaf_hash);
+        self.nodes.push(hash_leaf(&leaf_hash));
         self.num_leaves += 1;
 
         // Merge with left siblings as needed to maintain the MMR invariant.
@@ -459,9 +466,10 @@ pub fn verify_inclusion(
     let size = mmr_size(proof.stream_length);
     let peaks = peak_positions(size);
 
-    // Walk up the tree using the proof hashes.
+    // Walk up the tree using the proof hashes, starting from the
+    // leaf-domain wrap of the caller's marker hash (mirrors `append`).
     let mut pos = leaf_to_pos(leaf_index);
-    let mut current_hash = *marker_hash;
+    let mut current_hash = hash_leaf(marker_hash);
     let mut proof_idx = 0;
     let mut height = 0u32;
 
@@ -617,9 +625,30 @@ pub fn verify_consistency(old_root: &ContentHash, proof: &MmrProof) -> Result<()
 // Hash helpers
 // ---------------------------------------------------------------------------
 
-/// Hash two child nodes to produce a parent hash.
+/// RFC 6962 domain-separation tag for leaf nodes.
+const LEAF_DOMAIN_TAG: u8 = 0x00;
+
+/// RFC 6962 domain-separation tag for interior nodes.
+const NODE_DOMAIN_TAG: u8 = 0x01;
+
+/// Wrap a caller-provided leaf hash in the leaf domain:
+/// `H(0x00 || leaf_hash)`.
+///
+/// Leaf preimages (33 bytes, tag `0x00`) and interior preimages (65 bytes,
+/// tag `0x01`) are disjoint, so no attacker-chosen leaf content can produce
+/// a node hash that collides with an interior node (second-preimage class).
+fn hash_leaf(leaf_hash: &ContentHash) -> ContentHash {
+    let mut preimage = Vec::with_capacity(33);
+    preimage.push(LEAF_DOMAIN_TAG);
+    preimage.extend_from_slice(leaf_hash.as_bytes());
+    ContentHash::compute(&preimage)
+}
+
+/// Hash two child nodes to produce a parent hash:
+/// `H(0x01 || left || right)`.
 fn hash_pair(left: &ContentHash, right: &ContentHash) -> ContentHash {
-    let mut preimage = Vec::with_capacity(64);
+    let mut preimage = Vec::with_capacity(65);
+    preimage.push(NODE_DOMAIN_TAG);
     preimage.extend_from_slice(left.as_bytes());
     preimage.extend_from_slice(right.as_bytes());
     ContentHash::compute(&preimage)
@@ -778,14 +807,65 @@ mod tests {
     }
 
     #[test]
-    fn single_leaf_root_is_leaf_hash() {
+    fn single_leaf_root_is_domain_wrapped_leaf_hash() {
         let mmr = build_mmr(1);
         // SAFETY: MMR with 1 element has valid structure, root_hash should succeed
-        assert_eq!(
-            mmr.root_hash()
-                .expect("operation should succeed for valid inputs"),
-            leaf_hash(0)
-        );
+        let root = mmr
+            .root_hash()
+            .expect("operation should succeed for valid inputs");
+        // The root is the leaf-domain wrap of the caller's hash, NOT the raw
+        // caller hash: leaves live in their own hash domain (RFC 6962).
+        assert_eq!(root, hash_leaf(&leaf_hash(0)));
+        assert_ne!(root, leaf_hash(0));
+    }
+
+    // -- Domain separation (RFC 6962 second-preimage class) --
+
+    #[test]
+    fn leaf_and_interior_hash_domains_are_disjoint() {
+        // Historic vulnerability: a leaf whose CONTENT is the 64-byte
+        // concatenation of two node hashes used to hash to exactly the
+        // interior-node hash of those children, letting an interior node be
+        // reinterpreted as a leaf. With domain tags the two can no longer
+        // collide.
+        let left = leaf_hash(1);
+        let right = leaf_hash(2);
+
+        // Attacker-chosen leaf content: the exact concatenation an interior
+        // node used to hash over before domain separation.
+        let mut crafted_content = Vec::with_capacity(64);
+        crafted_content.extend_from_slice(left.as_bytes());
+        crafted_content.extend_from_slice(right.as_bytes());
+        let crafted_leaf_hash = ContentHash::compute(&crafted_content);
+
+        let interior = hash_pair(&left, &right);
+        // The crafted hash itself no longer equals the interior hash
+        // (interior preimage now starts with the 0x01 tag) ...
+        assert_ne!(crafted_leaf_hash, interior);
+        // ... and even if the attacker could choose the caller-side hash
+        // freely, the stored leaf node is wrapped into the 0x00 domain.
+        assert_ne!(hash_leaf(&crafted_leaf_hash), interior);
+        assert_ne!(hash_leaf(&interior), interior);
+    }
+
+    #[test]
+    fn crafted_concatenation_leaf_does_not_forge_interior_node() {
+        // Build an MMR with two leaves; nodes[2] is their interior parent.
+        let mmr = build_mmr(2);
+        let interior = mmr.nodes[2];
+
+        // An attacker appends a leaf whose content bytes are the
+        // concatenation of the two stored child node hashes (the classic
+        // second-preimage construction).
+        let mut crafted_content = Vec::with_capacity(64);
+        crafted_content.extend_from_slice(mmr.nodes[0].as_bytes());
+        crafted_content.extend_from_slice(mmr.nodes[1].as_bytes());
+        let crafted = ContentHash::compute(&crafted_content);
+
+        let mut attacker_mmr = MerkleMountainRange::new(1);
+        attacker_mmr.append(crafted);
+        // The stored leaf node must NOT equal the honest interior node.
+        assert_ne!(attacker_mmr.nodes[0], interior);
     }
 
     // -- Position helpers --

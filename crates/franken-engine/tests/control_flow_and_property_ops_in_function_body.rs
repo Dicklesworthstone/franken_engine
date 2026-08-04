@@ -1,6 +1,7 @@
 use frankenengine_engine::ast::{
-    AssignmentOperator, BinaryOperator, BlockStatement, Expression, FunctionDeclaration, ParseGoal,
-    ReturnStatement, SourceSpan, Statement, SyntaxTree, UnaryOperator,
+    AssignmentOperator, AssignmentStrictness, BinaryOperator, BlockStatement, Expression,
+    FunctionDeclaration, ParseGoal, ReturnStatement, SourceSpan, Statement, SyntaxTree,
+    UnaryOperator,
 };
 use frankenengine_engine::hash_tiers::ContentHash;
 use frankenengine_engine::ir_contract::{Ir0Module, Ir3Instruction, Ir3Module};
@@ -83,6 +84,7 @@ fn test_optional_chaining_in_function_body() {
         object: Box::new(Expression::Identifier("obj".to_string())),
         property: Box::new(Expression::Identifier("prop".to_string())),
         computed: false,
+        span: None,
     };
 
     let func_decl = create_function_with_expression(optional_member);
@@ -113,6 +115,7 @@ fn test_nullish_coalescing_assignment_in_function_body() {
         operator: AssignmentOperator::NullishCoalescingAssign,
         left: Box::new(Expression::Identifier("a".to_string())),
         right: Box::new(Expression::Identifier("b".to_string())),
+        assignment_strictness: AssignmentStrictness::Sloppy,
     };
 
     let func_decl = create_function_with_expression(nullish_assign);
@@ -137,11 +140,14 @@ fn test_nested_optional_chaining() {
                 object: Box::new(Expression::Identifier("obj".to_string())),
                 property: Box::new(Expression::Identifier("prop".to_string())),
                 computed: false,
+                span: None,
             }),
             property: Box::new(Expression::Identifier("method".to_string())),
             computed: false,
+            span: None,
         }),
         arguments: vec![],
+        span: None,
     };
 
     let func_decl = create_function_with_expression(nested_optional);
@@ -167,6 +173,7 @@ fn test_control_flow_deterministic_lowering() {
             object: Box::new(Expression::Identifier("a".to_string())),
             property: Box::new(Expression::Identifier("b".to_string())),
             computed: false,
+            span: None,
         }),
         operator: BinaryOperator::NullishCoalescing,
         right: Box::new(Expression::Identifier("fallback".to_string())),
@@ -214,6 +221,7 @@ fn test_delete_simple_property() {
             object: Box::new(Expression::Identifier("obj".to_string())),
             property: Box::new(Expression::Identifier("prop".to_string())),
             computed: false,
+            span: None,
         }),
     };
 
@@ -239,6 +247,7 @@ fn test_delete_computed_property() {
             object: Box::new(Expression::Identifier("obj".to_string())),
             property: Box::new(Expression::Identifier("key".to_string())),
             computed: true,
+            span: None,
         }),
     };
 
@@ -265,9 +274,11 @@ fn test_delete_nested_property() {
                 object: Box::new(Expression::Identifier("obj".to_string())),
                 property: Box::new(Expression::Identifier("nested".to_string())),
                 computed: false,
+                span: None,
             }),
             property: Box::new(Expression::Identifier("prop".to_string())),
             computed: false,
+            span: None,
         }),
     };
 
@@ -299,8 +310,9 @@ fn test_property_operations_deterministic_lowering() {
         operator: UnaryOperator::Delete,
         argument: Box::new(Expression::Member {
             object: Box::new(Expression::Identifier("target".to_string())),
-            property: Box::new(Expression::StringLiteral("dynamicKey".to_string())),
+            property: Box::new(Expression::StringLiteral("dynamicKey".to_string().into())),
             computed: true,
+            span: None,
         }),
     };
 

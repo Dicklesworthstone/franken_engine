@@ -13,7 +13,8 @@
 //!   * parse  → [`CanonicalEs2020Parser`] (`ParseGoal::Script`),
 //!   * lower  → [`Ir0Module::from_syntax_tree`] + [`lower_ir0_to_ir3`] (the real pipeline),
 //!   * execute → [`HybridRouter::eval`],
-//! and returns a *normalized, comparison-stable* [`EngineEval`] triple
+//!
+//! It returns a *normalized, comparison-stable* [`EngineEval`] triple
 //! `(parse_outcome, ir_digest, exec_value)`.
 //!
 //! Downstream beads route the oracles through this adapter (bd-x9t1n.2 parser,
@@ -29,6 +30,7 @@
 //!     parse/lower failed); equal iff the lowered programs are byte-equal,
 //!   * `exec_value` — the engine's evaluation value string (`None` if eval
 //!     errored).
+//!
 //! Every engine error is mapped to a `Rejected`/`None` verdict — the adapter
 //! never panics, so relations fail closed rather than crashing the suite.
 

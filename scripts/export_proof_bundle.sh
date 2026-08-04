@@ -45,7 +45,10 @@ readonly BUNDLE_SCHEMA="franken-engine.proof-bundle.v1"
 readonly PROOF_SCHEMA="franken-engine.theorem-backed-compiler.proof.v1"
 readonly RECHECK_TOOL="scripts/run_rgc_theorem_backed_compiler.sh"
 # Proof-assistant version pins a third-party verifier must reproduce.
-readonly LEAN4_VERSION_PIN="leanprover/lean4:v4.9.0"
+# Lean pin tracks ADR-0007 (Lean 4 v4.7.0) and the installed elan toolchain
+# (leanprover/lean4:v4.7.0); the exporter is the source of truth a verifier
+# reproduces, so it must match the toolchain the proofs actually build under.
+readonly LEAN4_VERSION_PIN="leanprover/lean4:v4.7.0"
 readonly COQ_VERSION_PIN="coq-8.19.2"
 readonly ARTIFACT_ROOT="${EXPORT_PROOF_BUNDLE_ARTIFACT_ROOT:-${PROJECT_DIR}/artifacts/${TOOL_NAME}}"
 

@@ -29,11 +29,13 @@ run_check() {
   if command -v shellcheck >/dev/null 2>&1; then
     shellcheck -x "$doctor_script" "${BASH_SOURCE[0]}"
   fi
-  jq empty "$cases_json" "$contract_json" >/dev/null
+  jq empty "$cases_json" "$contract_json" "${fixture_root}/perf_rch_contract.json" >/dev/null
   jq -e '
     .schema_version == "franken-engine.swarm-artifact-doctor-fixtures.v1"
-    and (.cases | length) >= 7
+    and (.cases | length) >= 9
     and ([.cases[].case_id] | index("complete_bundle") != null)
+    and ([.cases[].case_id] | index("complete_perf_rch_closeout") != null)
+    and ([.cases[].case_id] | index("partial_perf_rch_no_verdict") != null)
     and ([.cases[].case_id] | index("missing_manifest") != null)
     and ([.cases[].case_id] | index("missing_commands") != null)
     and ([.cases[].case_id] | index("incomplete_replay_directory") != null)
@@ -59,7 +61,7 @@ assert_artifacts_exist() {
 run_case() {
   local case_json="$1"
   local tmp_root="$2"
-  local case_id output_dir expected_exit actual_exit use_contract
+  local case_id output_dir expected_exit actual_exit contract_spec case_contract
   local -a cmd
 
   case_id="$(jq -r '.case_id' <<<"$case_json")"
@@ -72,10 +74,22 @@ run_case() {
     --source-revision fixture-revision
     --output-dir "$output_dir"
   )
-  use_contract="$(jq -r 'if has("contract") then .contract else true end' <<<"$case_json")"
-  if [[ "$use_contract" == "true" ]]; then
-    cmd+=(--contract-json "$contract_json")
-  fi
+  contract_spec="$(jq -r 'if has("contract") then .contract else true end' <<<"$case_json")"
+  case "$contract_spec" in
+    true)
+      cmd+=(--contract-json "$contract_json")
+      ;;
+    false|null|"")
+      ;;
+    *)
+      if [[ "$contract_spec" = /* ]]; then
+        case_contract="$contract_spec"
+      else
+        case_contract="${fixture_root}/${contract_spec}"
+      fi
+      cmd+=(--contract-json "$case_contract")
+      ;;
+  esac
 
   expected_exit="$(jq -r '.expected.exit_code' <<<"$case_json")"
   set +e

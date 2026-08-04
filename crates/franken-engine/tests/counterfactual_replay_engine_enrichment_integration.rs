@@ -69,17 +69,16 @@ fn make_decision(index: u64, action: &str, outcome: i64) -> DecisionSnapshot {
 fn make_trace(decisions: Vec<DecisionSnapshot>) -> TraceRecord {
     let epoch = decisions.first().map(|d| d.epoch).unwrap_or(test_epoch());
     let start_tick = decisions.first().map(|d| d.tick).unwrap_or(100);
-    let mut recorder = TraceRecorder::new(RecorderConfig {
+    let mut recorder = TraceRecorder::new_lab(RecorderConfig {
         trace_id: "test-trace".to_string(),
         recording_mode: RecordingMode::Full,
         epoch,
         start_tick,
-        signing_key: b"test-key".to_vec(),
     });
     for d in decisions {
         recorder.record_decision(d);
     }
-    recorder.finalize()
+    recorder.finalize().expect("lab trace should finalize")
 }
 
 fn make_alternate_policy(id: &str, desc: &str) -> AlternatePolicy {
@@ -121,7 +120,7 @@ fn default_scope() -> ReplayScope {
 }
 
 fn default_engine() -> CounterfactualReplayEngine {
-    CounterfactualReplayEngine::new(ReplayEngineConfig::default())
+    CounterfactualReplayEngine::new_lab(ReplayEngineConfig::default())
 }
 
 fn simple_trace() -> TraceRecord {
@@ -224,10 +223,10 @@ fn json_field_names_replay_engine_config() {
         "regime_breakdown",
         "record_divergences",
         "max_divergences_per_policy",
-        "verify_integrity",
     ] {
         assert!(obj.contains_key(key), "missing {key}");
     }
+    assert!(!obj.contains_key("verify_integrity"));
 }
 
 // ===========================================================================
@@ -700,7 +699,6 @@ fn replay_engine_config_default_exact_values() {
     assert!(config.regime_breakdown);
     assert!(config.record_divergences);
     assert_eq!(config.max_divergences_per_policy, 100);
-    assert!(config.verify_integrity);
 }
 
 // ===========================================================================
@@ -854,7 +852,7 @@ fn config_no_regime_breakdown_still_succeeds() {
         ..Default::default()
     };
     let engine_config = config.clone();
-    let mut engine = CounterfactualReplayEngine::new(config);
+    let mut engine = CounterfactualReplayEngine::new_lab(config);
     assert!(!engine_config.regime_breakdown);
     let trace = simple_trace();
     let result = engine
@@ -879,7 +877,7 @@ fn config_custom_confidence_level() {
         confidence_millionths: 990_000,
         ..Default::default()
     };
-    let mut engine = CounterfactualReplayEngine::new(config);
+    let mut engine = CounterfactualReplayEngine::new_lab(config);
     let decisions: Vec<_> = (0..20)
         .map(|i| make_decision(i, "native", 500_000))
         .collect();
@@ -909,7 +907,7 @@ fn config_custom_baseline_policy_id() {
         baseline_policy_id: PolicyId("custom-baseline".into()),
         ..Default::default()
     };
-    let mut engine = CounterfactualReplayEngine::new(config);
+    let mut engine = CounterfactualReplayEngine::new_lab(config);
     let trace = simple_trace();
     let result = engine
         .compare(
@@ -935,7 +933,7 @@ fn config_max_divergences_cap() {
         max_divergences_per_policy: 2,
         ..Default::default()
     };
-    let mut engine = CounterfactualReplayEngine::new(config);
+    let mut engine = CounterfactualReplayEngine::new_lab(config);
     let decisions: Vec<_> = (0..10)
         .map(|i| make_decision(i, "native", 500_000))
         .collect();
@@ -967,7 +965,7 @@ fn config_record_divergences_disabled() {
         record_divergences: false,
         ..Default::default()
     };
-    let mut engine = CounterfactualReplayEngine::new(config);
+    let mut engine = CounterfactualReplayEngine::new_lab(config);
     let decisions: Vec<_> = (0..5)
         .map(|i| make_decision(i, "native", 500_000))
         .collect();
@@ -994,20 +992,20 @@ fn config_record_divergences_disabled() {
 // ===========================================================================
 
 #[test]
-fn config_verify_integrity_disabled() {
-    let config = ReplayEngineConfig {
-        verify_integrity: false,
-        ..Default::default()
-    };
-    let mut engine = CounterfactualReplayEngine::new(config);
-    let trace = simple_trace();
+fn trace_authentication_has_no_config_bypass() {
+    let mut engine = CounterfactualReplayEngine::new_lab(ReplayEngineConfig::default());
+    let mut trace = simple_trace();
+    trace.signature.producer_id = "attacker".to_string();
     let result = engine.compare(
         &[trace],
         &[make_alternate_policy("alt", "d")],
         &default_scope(),
         None,
     );
-    assert!(result.is_ok());
+    assert!(matches!(
+        result,
+        Err(ReplayEngineError::TraceIntegrityFailure { .. })
+    ));
 }
 
 // ===========================================================================
@@ -1063,17 +1061,20 @@ fn scope_single_tick() {
 fn scope_incident_filter_includes_matching() {
     let mut engine = default_engine();
 
-    let mut recorder = TraceRecorder::new(RecorderConfig {
+    let mut recorder = TraceRecorder::new_lab(RecorderConfig {
         trace_id: "incident-trace".to_string(),
         recording_mode: RecordingMode::Full,
         epoch: test_epoch(),
         start_tick: 100,
-        signing_key: b"test-key".to_vec(),
     });
     recorder.set_incident_id("INC-42".to_string());
-    recorder.record_decision(make_decision(0, "native", 800_000));
-    recorder.record_decision(make_decision(1, "wasm", 600_000));
-    let trace = recorder.finalize();
+    let mut first = make_decision(0, "native", 800_000);
+    first.trace_id = "incident-trace".to_string();
+    recorder.record_decision(first);
+    let mut second = make_decision(1, "wasm", 600_000);
+    second.trace_id = "incident-trace".to_string();
+    recorder.record_decision(second);
+    let trace = recorder.finalize().expect("lab trace should finalize");
 
     let scope = ReplayScope {
         incident_filter: {
@@ -1841,7 +1842,6 @@ fn config_all_nondefault_serde_roundtrip() {
         regime_breakdown: false,
         record_divergences: false,
         max_divergences_per_policy: 5,
-        verify_integrity: false,
     };
     let json = serde_json::to_string(&config).unwrap();
     let back: ReplayEngineConfig = serde_json::from_str(&json).unwrap();
@@ -2274,7 +2274,7 @@ fn config_accessor() {
         max_divergences_per_policy: 50,
         ..Default::default()
     };
-    let engine = CounterfactualReplayEngine::new(config.clone());
+    let engine = CounterfactualReplayEngine::new_lab(config.clone());
     assert_eq!(
         engine.config().baseline_policy_id,
         config.baseline_policy_id

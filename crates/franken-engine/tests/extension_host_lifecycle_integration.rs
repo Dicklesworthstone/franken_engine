@@ -261,14 +261,7 @@ fn push_cancellation_decision(
 #[test]
 fn authority_decision_sequence_matches_golden_snapshot() {
     let actual = extension_host_lifecycle_authority_decision_snapshot_json();
-    // bd-ub6x8.6.3: migrated from tests/golden_vectors/ to tests/golden/wire_vectors/.
-    let expected =
-        include_str!("golden/wire_vectors/extension_host_lifecycle_authority_decisions.json");
-    assert_eq!(
-        actual.as_bytes(),
-        expected.as_bytes(),
-        "extension_host_lifecycle authority sequence golden drifted"
-    );
+    insta::assert_snapshot!("authority_decision_sequence", actual);
 }
 
 // ===========================================================================

@@ -7,15 +7,9 @@
 //! compilation pipeline. Tests cover basic expressions, complex statements,
 //! declarations, module syntax, JSX/TSX, error recovery, and diagnostic output.
 
-use std::path::Path;
 use std::sync::LazyLock;
 
 use regex::Regex;
-
-// golden_diag lives under tests/_support/ (bd-ub6x8.18); pulled in via #[path]
-// so cargo does not compile it as a standalone integration-test binary.
-#[path = "_support/golden_diag.rs"]
-mod golden_diag;
 
 // Hoisted scrub patterns (bd-ub6x8.13). The canonical_hash regex is fixed;
 // the span-field regex is shared across the 6 span fields by anchoring the
@@ -29,7 +23,7 @@ static SCRUB_SPAN_FIELD: LazyLock<Regex> = LazyLock::new(|| {
     .unwrap()
 });
 
-use frankenengine_engine::ast::{ParseGoal, SyntaxTree};
+use frankenengine_engine::ast::{Expression, ParseGoal, Statement, SyntaxTree};
 use frankenengine_engine::parser::{
     CanonicalEs2020Parser, ParseError, ParserBudget, ParserMode, ParserOptions,
 };
@@ -78,31 +72,19 @@ fn scrub_ast_dynamic_fields(json: &str) -> String {
     scrubbed
 }
 
-/// Shared GoldenDiag instance for AST/parse-error golden assertions.
-/// Delegates UPDATE_GOLDENS gating, read-or-panic, and .actual sweep to
-/// golden_diag::GoldenDiag (bd-ub6x8.3).
-fn ast_golden_diag() -> golden_diag::GoldenDiag {
-    golden_diag::GoldenDiag {
-        framework_name: "AST parser golden",
-        regen_env_var: "UPDATE_GOLDENS",
-    }
-}
-
-/// Assert AST structure matches golden file with scrubbed dynamic values.
-fn assert_ast_golden(test_name: &str, tree: &SyntaxTree) {
-    let golden_path = Path::new("tests/golden/ast_parser").join(format!("{test_name}.golden"));
+/// Assert AST structure matches an insta snapshot with scrubbed dynamic values.
+fn assert_ast_snapshot(test_name: &str, tree: &SyntaxTree) {
     let actual = serde_json::to_string_pretty(tree).expect("SyntaxTree should serialize to JSON");
     let scrubbed_actual = scrub_ast_dynamic_fields(&actual);
-    ast_golden_diag().assert_golden_match(&scrubbed_actual, &golden_path, test_name, None);
+    insta::assert_snapshot!(test_name, scrubbed_actual);
 }
 
-/// Assert parse error matches golden file with scrubbed dynamic values.
-fn assert_parse_error_golden(test_name: &str, error: &ParseError) {
-    let golden_path =
-        Path::new("tests/golden/ast_parser").join(format!("{test_name}_error.golden"));
+/// Assert parse error output matches an insta snapshot with scrubbed dynamic values.
+fn assert_parse_error_snapshot(test_name: &str, error: &ParseError) {
     let actual = serde_json::to_string_pretty(error).expect("ParseError should serialize to JSON");
     let scrubbed_actual = scrub_ast_dynamic_fields(&actual);
-    ast_golden_diag().assert_golden_match(&scrubbed_actual, &golden_path, test_name, None);
+    let snapshot_name = format!("{test_name}_error");
+    insta::assert_snapshot!(snapshot_name, scrubbed_actual);
 }
 
 // ---------------------------------------------------------------------------
@@ -119,7 +101,7 @@ fn golden_ast_basic_literals() {
         .parse_with_options(source, ParseGoal::Script, &opts)
         .expect("Should parse basic literals");
 
-    assert_ast_golden("basic_literals", &tree);
+    assert_ast_snapshot("basic_literals", &tree);
 }
 
 #[test]
@@ -132,7 +114,7 @@ fn golden_ast_binary_expressions() {
         .parse_with_options(source, ParseGoal::Script, &opts)
         .expect("Should parse binary expressions");
 
-    assert_ast_golden("binary_expressions", &tree);
+    assert_ast_snapshot("binary_expressions", &tree);
 }
 
 #[test]
@@ -145,7 +127,7 @@ fn golden_ast_function_declaration() {
         .parse_with_options(source, ParseGoal::Script, &opts)
         .expect("Should parse function declaration");
 
-    assert_ast_golden("function_declaration", &tree);
+    assert_ast_snapshot("function_declaration", &tree);
 }
 
 #[test]
@@ -158,7 +140,7 @@ fn golden_ast_variable_declarations() {
         .parse_with_options(source, ParseGoal::Script, &opts)
         .expect("Should parse variable declarations");
 
-    assert_ast_golden("variable_declarations", &tree);
+    assert_ast_snapshot("variable_declarations", &tree);
 }
 
 #[test]
@@ -185,7 +167,7 @@ while (running) {
         .parse_with_options(source, ParseGoal::Script, &opts)
         .expect("Should parse control flow statements");
 
-    assert_ast_golden("control_flow", &tree);
+    assert_ast_snapshot("control_flow", &tree);
 }
 
 #[test]
@@ -206,7 +188,7 @@ try {
         .parse_with_options(source, ParseGoal::Script, &opts)
         .expect("Should parse try/catch/finally");
 
-    assert_ast_golden("try_catch_finally", &tree);
+    assert_ast_snapshot("try_catch_finally", &tree);
 }
 
 #[test]
@@ -228,7 +210,7 @@ export const config = {};
         .parse_with_options(source, ParseGoal::Module, &opts)
         .expect("Should parse module import/export");
 
-    assert_ast_golden("module_import_export", &tree);
+    assert_ast_snapshot("module_import_export", &tree);
 }
 
 #[test]
@@ -256,7 +238,7 @@ class Rectangle {
         .parse_with_options(source, ParseGoal::Script, &opts)
         .expect("Should parse class declaration");
 
-    assert_ast_golden("class_declaration", &tree);
+    assert_ast_snapshot("class_declaration", &tree);
 }
 
 #[test]
@@ -273,7 +255,7 @@ const { nested: { prop } } = deepObject;
         .parse_with_options(source, ParseGoal::Script, &opts)
         .expect("Should parse object destructuring");
 
-    assert_ast_golden("object_destructuring", &tree);
+    assert_ast_snapshot("object_destructuring", &tree);
 }
 
 #[test]
@@ -294,7 +276,7 @@ const async = async (x) => await process(x);
         .parse_with_options(source, ParseGoal::Script, &opts)
         .expect("Should parse arrow functions");
 
-    assert_ast_golden("arrow_functions", &tree);
+    assert_ast_snapshot("arrow_functions", &tree);
 }
 
 #[test]
@@ -315,7 +297,22 @@ const multiline = `
         .parse_with_options(source, ParseGoal::Script, &opts)
         .expect("Should parse template literals");
 
-    assert_ast_golden("template_literals", &tree);
+    let Statement::VariableDeclaration(multiline) = &tree.body[2] else {
+        panic!("expected multiline variable declaration");
+    };
+    let Some(Expression::TemplateLiteral {
+        quasis,
+        expressions,
+    }) = multiline.declarations[0].initializer.as_ref()
+    else {
+        panic!("expected multiline template literal initializer");
+    };
+    assert_eq!(quasis.len(), 2);
+    assert_eq!(quasis[0], "\n  Line 1\n  Line 2\n  Value: ");
+    assert_eq!(quasis[1], "\n");
+    assert_eq!(expressions.len(), 1);
+
+    assert_ast_snapshot("template_literals", &tree);
 }
 
 // ---------------------------------------------------------------------------
@@ -331,7 +328,7 @@ fn golden_parse_error_empty_source() {
         .parse_with_options("", ParseGoal::Script, &opts)
         .expect_err("Should fail on empty source");
 
-    assert_parse_error_golden("empty_source", &error);
+    assert_parse_error_snapshot("empty_source", &error);
 }
 
 #[test]
@@ -351,7 +348,7 @@ fn golden_parse_error_budget_exceeded() {
         .parse_with_options(large_source, ParseGoal::Script, &opts)
         .expect_err("Should fail on budget exceeded");
 
-    assert_parse_error_golden("budget_exceeded", &error);
+    assert_parse_error_snapshot("budget_exceeded", &error);
 }
 
 // ---------------------------------------------------------------------------
@@ -458,7 +455,7 @@ export default ApiClient;
         .parse_with_options(source, ParseGoal::Module, &opts)
         .expect("Should parse complex nested structure");
 
-    assert_ast_golden("complex_nested_structure", &tree);
+    assert_ast_snapshot("complex_nested_structure", &tree);
 }
 
 #[test]

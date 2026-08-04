@@ -14,7 +14,7 @@ cat >"${good_dir}/cargo-output.log" <<'GOOD_LOG'
 Selected worker: vmi-good at 192.0.2.10 (rust)
 INFO rch::transfer: Syncing /data/projects/franken_engine/crates/franken-engine-test-support -> /data/projects/franken_engine/crates/franken-engine-test-support on worker
    Compiling frankenengine-extension-host v0.1.0 (/data/projects/franken_engine/crates/franken-extension-host)
-   Compiling frankenengine-engine v0.1.0 (/data/projects/franken_engine/crates/franken-engine)
+   Compiling frankenengine-engine v0.2.0 (/data/projects/franken_engine/crates/franken-engine)
 GOOD_LOG
 
 cat >"${bad_dir}/cargo-output.log" <<'BAD_LOG'
@@ -24,7 +24,7 @@ BAD_LOG
 
 cat >"${exec_dir}/cargo-output.log" <<'EXEC_LOG'
 Selected worker: vmi-good at 192.0.2.10 (rust)
-   Compiling frankenengine-engine v0.1.0 (/data/projects/franken_engine/crates/franken-engine)
+   Compiling frankenengine-engine v0.2.0 (/data/projects/franken_engine/crates/franken-engine)
     Finished `test` profile [unoptimized + debuginfo] target(s) in 1.00s
      Running unittests src/lib.rs
 
@@ -36,7 +36,7 @@ EXEC_LOG
 
 cat >"${bad_dir}/no-execution.log" <<'NO_EXEC_LOG'
 Selected worker: vmi-good at 192.0.2.10 (rust)
-   Compiling frankenengine-engine v0.1.0 (/data/projects/franken_engine/crates/franken-engine)
+   Compiling frankenengine-engine v0.2.0 (/data/projects/franken_engine/crates/franken-engine)
     Finished `test` profile [unoptimized + debuginfo] target(s) in 1.00s
 NO_EXEC_LOG
 
@@ -166,11 +166,60 @@ NATIVE_ROUTE_ADVISORY
 FRANKEN_ENGINE_LIB_UNIT_EXPECTED_WORKER=vmi-good \
   "${repo_root}/scripts/rch_engine_lib_unit_smoke_gate.sh" --scan-log "${good_dir}/cargo-output.log" >/dev/null
 
-if ! "${repo_root}/scripts/rch_engine_lib_unit_smoke_gate.sh" --print-command | grep -q 'rch exec -- env'; then
-  echo "expected printed command to use rch exec -- env" >&2
+default_command="$("${repo_root}/scripts/rch_engine_lib_unit_smoke_gate.sh" --print-command)"
+if ! grep -Fq 'env -u CARGO_ENCODED_RUSTFLAGS rch exec -- env -u CARGO_ENCODED_RUSTFLAGS' <<<"$default_command"; then
+  echo "expected printed command to clear encoded flags on the rch client and worker" >&2
   echo "smoke artifacts: ${tmp_root}" >&2
   exit 1
 fi
+if ! grep -Fq -- 'RUSTFLAGS=-C\ linker=cc\ -Clinker-features=-lld' <<<"$default_command"; then
+  echo "expected default command to carry the system-cc implicit-LLD opt-out" >&2
+  echo "smoke artifacts: ${tmp_root}" >&2
+  exit 1
+fi
+
+# linker-policy-negative-fixtures-begin: hostile override composition probes
+custom_command="$(RUSTFLAGS='-C debuginfo=1' \
+  "${repo_root}/scripts/rch_engine_lib_unit_smoke_gate.sh" --print-command)"
+if ! grep -Fq -- 'RUSTFLAGS=-C\ debuginfo=1\ -Clinker-features=-lld' <<<"$custom_command"; then
+  echo "expected custom RUSTFLAGS to be preserved and composed with the linker policy" >&2
+  echo "smoke artifacts: ${tmp_root}" >&2
+  exit 1
+fi
+
+precomposed_command="$(RUSTFLAGS='-C debuginfo=1 -Clinker-features=-lld' \
+  "${repo_root}/scripts/rch_engine_lib_unit_smoke_gate.sh" --print-command)"
+if [[ "$(grep -Fo -- '-Clinker-features=-lld' <<<"$precomposed_command" | wc -l)" -ne 1 ]]; then
+  echo "expected a precomposed linker policy to remain single" >&2
+  echo "smoke artifacts: ${tmp_root}" >&2
+  exit 1
+fi
+
+hostile_later_enable_command="$(RUSTFLAGS='-Clinker-features=-lld -C linker-features=+lld' \
+  "${repo_root}/scripts/rch_engine_lib_unit_smoke_gate.sh" --print-command)"
+if [[ "$hostile_later_enable_command" != *'RUSTFLAGS=-Clinker-features=-lld\ -C\ linker-features=+lld\ -Clinker-features=-lld'* ]]; then
+  echo "expected a later +lld directive to force a final linker-policy opt-out" >&2
+  echo "smoke artifacts: ${tmp_root}" >&2
+  exit 1
+fi
+
+split_precomposed_command="$(RUSTFLAGS='-C linker-features=-lld -C debuginfo=1' \
+  "${repo_root}/scripts/rch_engine_lib_unit_smoke_gate.sh" --print-command)"
+if [[ "$(grep -Fo -- '-lld' <<<"$split_precomposed_command" | wc -l)" -ne 1 ]]; then
+  echo "expected an effective split-form linker policy to remain single" >&2
+  echo "smoke artifacts: ${tmp_root}" >&2
+  exit 1
+fi
+
+hostile_encoded_command="$(CARGO_ENCODED_RUSTFLAGS=$'-Clinker-features=-lld\x1f-Clinker-features=+lld' \
+  "${repo_root}/scripts/rch_engine_lib_unit_smoke_gate.sh" --print-command)"
+if ! grep -Fq -- 'env -u CARGO_ENCODED_RUSTFLAGS rch exec -- env -u CARGO_ENCODED_RUSTFLAGS' <<<"$hostile_encoded_command" \
+    || ! grep -Fq -- '-Clinker-features=-lld' <<<"$hostile_encoded_command"; then
+  echo "expected encoded flags to be cleared before the normalized policy command" >&2
+  echo "smoke artifacts: ${tmp_root}" >&2
+  exit 1
+fi
+# linker-policy-negative-fixtures-end
 
 if ! "${repo_root}/scripts/rch_engine_lib_unit_smoke_gate.sh" --print-execute-command | grep -q -- '-- --nocapture'; then
   echo "expected printed execute command to run the filtered test" >&2

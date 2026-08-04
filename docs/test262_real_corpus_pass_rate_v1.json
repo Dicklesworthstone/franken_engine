@@ -1,0 +1,29 @@
+{
+  "schema_version": "franken-engine.test262-real-corpus-pass-rate.v1",
+  "generated_at_utc": "2026-06-21T06:23:35Z",
+  "component": "franken_test262_runner --suite-path",
+  "owning_bead": "bd-sde5e.4.2",
+  "proof_state": "real_corpus_measured",
+  "claim_scope": "real_tc39_test262_es2020_normative",
+  "test262_source_repo": "tc39/test262",
+  "test262_commit": "d0c1b4555b03dd404873fd6422a4b5da00136500",
+  "selected_profile": "es2020-normative",
+  "sampling": "full ES2020-normative profile (no sampling)",
+  "sample_count_requested": null,
+  "runner_command": "franken_test262_runner --pins crates/franken-engine/tests/test262_conformance_pins.toml --profile crates/franken-engine/tests/test262_es2020_profile.toml --waivers crates/franken-engine/tests/test262_conformance_waivers.toml --suite-path <tc39/test262 checkout> --output-root <run-root>",
+  "denominator": 47157,
+  "passed": 120,
+  "failed": 47036,
+  "skipped": 0,
+  "waived": 1,
+  "timed_out": 0,
+  "crashed": 0,
+  "pass_rate_millionths": 2544,
+  "full_suite_claim_allowed": false,
+  "limitations": [
+    "every case the ES2020-normative profile selects (language/* + built-ins/*); this profile is a subset of the full official corpus (it excludes annexB, ECMA-402, and post-ES2020 proposals)",
+    "the harness pass criterion does not preload Test262 harness includes (assert.js, sta.js, propertyHelper.js), so positive tests that depend on them are counted as failures \u2014 the pass-rate is a conservative lower bound on conformance, not a spec-conformance score",
+    "full official Test262 pass-rate claims require harness-include support",
+    "profile excludes ECMA-402 and post-ES2020 proposal vectors"
+  ]
+}

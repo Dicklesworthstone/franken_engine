@@ -530,13 +530,54 @@ fn whitespace_mask(word: u64) -> u64 {
         | byte_eq_mask(word, 0x0C)
 }
 
+/// Per-lane "low-7-bit value >= `bound`", carry-free.
+///
+/// `low7` must already be masked to `0x7F` per lane. Adding `0x80 - bound` then
+/// sets a lane's high bit exactly when that lane's value reached `bound`, and
+/// cannot carry into the next lane because `0x7F + (0x80 - bound) <= 0xFF` for
+/// every `bound >= 0x00`. That bound is what makes this formulation lane-local
+/// where a plain `wrapping_sub` is not.
+#[inline]
+const fn ge_bound_mask(low7: u64, bound: u8) -> u64 {
+    low7.wrapping_add(broadcast(0x80 - bound)) & SWAR_HIGH_BITS
+}
+
+/// Per-lane ASCII range test `lo <= byte <= hi`, carry-free.
+///
+/// Both bounds must be `<= 0x7F`, which holds for every range this lexer tests.
+/// Lanes whose byte has the high bit set are excluded explicitly: they are
+/// outside any ASCII range by definition, and masking to 7 bits would otherwise
+/// alias `0x80 | c` onto `c`.
+#[inline]
+const fn ascii_range_mask(word: u64, raw: u64, lo: u8, hi: u8) -> u64 {
+    let low7 = word & !SWAR_HIGH_BITS;
+    let below_high = !raw & SWAR_HIGH_BITS;
+    let at_least_lo = ge_bound_mask(low7, lo);
+    let above_hi = ge_bound_mask(low7, hi + 1);
+    at_least_lo & !above_hi & SWAR_HIGH_BITS & below_high
+}
+
+// `wrapping_sub` across a u64 is NOT lane-local: a borrow out of lane i-1
+// corrupts lane i. The previous formulation
+//     ge_low = !word.wrapping_sub(low_bound) & high_bits
+// therefore disagreed with its own scalar reference. Exhaustive case analysis
+// over the lane transfer function (256 byte values x both borrow-in states, a
+// complete enumeration rather than a sample) found 4 disagreeing cases for the
+// digit range and 8 for the alpha range.
+//
+// Every one was a false NEGATIVE, and none occurred without an incoming borrow
+// -- i.e. never in lane 0. That is precisely why the lexer's OUTPUT was still
+// correct: `match_prefix_len` counts leading lanes and stops at the first clear
+// one, so a false negative only shortens the SWAR advance and the scalar tail
+// loop finishes the token. The bug cost throughput, not correctness.
+//
+// It is fixed rather than documented because that safety argument is a property
+// of the two current CALL SITES, not of these functions. `mask_first_set`,
+// `mask_popcount`, or any future vectorized builtin consuming these masks would
+// inherit a silent wrong answer. Under BRIDGE-18.10 a SWAR path must be
+// bit-identical to its portable reference on its own terms.
 fn digit_mask(word: u64) -> u64 {
-    let high_bits = 0x8080_8080_8080_8080_u64;
-    let low_bound = 0x3030_3030_3030_3030_u64;
-    let high_bound = 0x3939_3939_3939_3939_u64;
-    let ge_low = !word.wrapping_sub(low_bound) & high_bits;
-    let le_high = !high_bound.wrapping_sub(word) & high_bits;
-    ge_low & le_high
+    ascii_range_mask(word, word, b'0', b'9')
 }
 
 fn identifier_continue_mask(word: u64) -> u64 {
@@ -544,13 +585,10 @@ fn identifier_continue_mask(word: u64) -> u64 {
 }
 
 fn alpha_mask(word: u64) -> u64 {
-    let upper = word & !broadcast(0x20);
-    let high_bits = 0x8080_8080_8080_8080_u64;
-    let a_broadcast = broadcast(b'A');
-    let z_broadcast = broadcast(b'Z');
-    let ge_a = !upper.wrapping_sub(a_broadcast) & high_bits;
-    let le_z = !z_broadcast.wrapping_sub(upper) & high_bits;
-    ge_a & le_z
+    // Case-fold by clearing bit 5, then range-test against 'A'..='Z'. The raw
+    // word is passed separately so the high-bit exclusion is judged on the
+    // original byte: folding first would let `0xE1` masquerade as `0xC1`.
+    ascii_range_mask(word & !broadcast(0x20), word, b'A', b'Z')
 }
 
 #[cfg(test)]
@@ -1734,6 +1772,236 @@ mod tests {
             assert_eq!(is_all_whitespace_word(word), scalar_ws);
             assert_eq!(is_all_ident_continue_word(word), scalar_ident);
             assert_eq!(is_all_digit_word(word), scalar_digit);
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // BRIDGE-18.10: per-LANE SWAR/scalar bit-identity
+    // -----------------------------------------------------------------------
+    // The test above asserts only the all-eight-lanes aggregate, which for
+    // pseudo-random words is almost never true: P(all 8 ASCII whitespace) is
+    // about (6/256)^8, roughly 1.4e-13. Across its 20,000 iterations the
+    // interesting branch is essentially never taken, so it is overwhelmingly
+    // `assert_eq!(false, false)` and cannot observe a per-lane defect at all.
+    //
+    // It did not observe one. `digit_mask` and `alpha_mask` used a
+    // `wrapping_sub` range compare whose borrows crossed lane boundaries, so
+    // they disagreed with their scalar reference on individual lanes. The
+    // tests below compare lane by lane, which is the granularity the SWAR
+    // contract is actually stated at.
+
+    /// Reference implementations, deliberately written as the dumbest possible
+    /// byte loop. A subtle reference cannot witness a subtle bug.
+    fn scalar_mask_reference(word: u64, pred: fn(u8) -> bool) -> u64 {
+        let mut mask = 0u64;
+        for (index, byte) in word.to_le_bytes().iter().enumerate() {
+            if pred(*byte) {
+                mask |= 0x80_u64 << (index * 8);
+            }
+        }
+        mask
+    }
+
+    /// (label, SWAR mask under test, the byte predicate it must agree with).
+    type MaskCase = (&'static str, fn(u64) -> u64, fn(u8) -> bool);
+
+    fn mask_cases() -> Vec<MaskCase> {
+        vec![
+            ("digit", digit_mask, |b: u8| b.is_ascii_digit()),
+            ("alpha", alpha_mask, |b: u8| b.is_ascii_alphabetic()),
+            (
+                "identifier_continue",
+                identifier_continue_mask,
+                is_ident_continue,
+            ),
+            ("whitespace", whitespace_mask, |b: u8| {
+                matches!(b, b' ' | b'\t' | b'\n' | b'\r' | 0x0B | 0x0C)
+            }),
+        ]
+    }
+
+    #[test]
+    fn swar_masks_match_scalar_reference_in_every_lane_exhaustively() {
+        // Complete over the axis that matters: every byte value, in every lane,
+        // against fills chosen to sit on both sides of each range boundary so a
+        // borrow out of the neighbouring lane is actually provoked. 0x2F/0x3A
+        // and 0x40/0x5B are the off-by-one neighbours of '0'..'9' and 'A'..'Z'.
+        const FILLS: [u8; 8] = [0x00, 0xFF, 0x2F, 0x39, 0x3A, 0x40, 0x5B, 0x7F];
+
+        for (name, swar, pred) in mask_cases() {
+            for fill in FILLS {
+                for lane in 0..SWAR_WIDTH {
+                    for value in 0u16..=255 {
+                        let mut bytes = [fill; SWAR_WIDTH];
+                        bytes[lane] = value as u8;
+                        let word = u64::from_le_bytes(bytes);
+                        assert_eq!(
+                            swar(word),
+                            scalar_mask_reference(word, pred),
+                            "{name}: lane {lane} = {:#04x}, fill {fill:#04x}, word {word:#018x}",
+                            value as u8
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn swar_masks_match_scalar_reference_on_adversarial_words() {
+        // Words built only from boundary-adjacent bytes, so every lane is a
+        // near-miss and borrow chains run the full width of the word.
+        const ALPHABET: [u8; 16] = [
+            0x00, 0x2F, 0x30, 0x39, 0x3A, 0x40, 0x41, 0x5A, 0x5B, 0x5F, 0x60, 0x61, 0x7A, 0x7B,
+            0x80, 0xFF,
+        ];
+        let mut state = 0x243F_6A88_85A3_08D3_u64;
+        for (name, swar, pred) in mask_cases() {
+            for _ in 0..20_000 {
+                state ^= state >> 12;
+                state ^= state << 25;
+                state ^= state >> 27;
+                let draw = state.wrapping_mul(0x2545_F491_4F6C_DD1D_u64);
+                let mut bytes = [0u8; SWAR_WIDTH];
+                for (index, slot) in bytes.iter_mut().enumerate() {
+                    *slot = ALPHABET[((draw >> (index * 4)) & 0x0F) as usize];
+                }
+                let word = u64::from_le_bytes(bytes);
+                assert_eq!(
+                    swar(word),
+                    scalar_mask_reference(word, pred),
+                    "{name}: word {word:#018x}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn swar_range_masks_are_lane_local_under_borrow_pressure() {
+        // The specific regression. Lane 0 was always correct because it has no
+        // incoming borrow; the defect only ever appeared in a higher lane whose
+        // lower neighbour borrowed. Pin that shape directly so a future
+        // reformulation cannot quietly reintroduce it.
+        for (low, high, name) in [(b'0', b'9', "digit"), (b'A', b'Z', "alpha")] {
+            for neighbour in [0x00u8, 0x01, low - 1, 0x7F, 0xFF] {
+                let mut bytes = [neighbour; SWAR_WIDTH];
+                bytes[1] = low;
+                let word = u64::from_le_bytes(bytes);
+                let mask = if name == "digit" {
+                    digit_mask(word)
+                } else {
+                    alpha_mask(word)
+                };
+                assert_ne!(
+                    mask & (0x80_u64 << 8),
+                    0,
+                    "{name}: lane 1 holds {:#04x} (in range {low:#04x}..={high:#04x}) but the \
+                     mask reports it clear; lane 0 = {neighbour:#04x} borrowed across the boundary",
+                    bytes[1]
+                );
+            }
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // BRIDGE-18.10: length-boundary and unaligned-start differential
+    // -----------------------------------------------------------------------
+
+    /// Force the SWAR path on short inputs: the default 64-byte threshold means
+    /// nothing below it ever reaches the word loop, which is exactly where the
+    /// tail and boundary cases live.
+    fn swar_forced_config() -> LexerConfig {
+        LexerConfig {
+            swar_min_input_bytes: 0,
+            ..default_config()
+        }
+    }
+
+    /// Whole-output equality, not just the token vector. `find_mismatch`
+    /// compares only tokens, so a divergence in `bytes_scanned` or the budget
+    /// flag would pass a parity check while still being a divergence.
+    fn assert_lanes_agree(source: &[u8], label: &str) {
+        let config = swar_forced_config();
+        let swar = SwarLexer::lex(source, &config).expect("swar lex");
+        let scalar = ScalarLexer::lex(source, &config).expect("scalar lex");
+        assert_eq!(
+            swar.tokens, scalar.tokens,
+            "{label}: token divergence on {source:?}"
+        );
+        assert_eq!(
+            swar.bytes_scanned, scalar.bytes_scanned,
+            "{label}: bytes_scanned divergence on {source:?}"
+        );
+        assert_eq!(
+            swar.token_count, scalar.token_count,
+            "{label}: token_count divergence on {source:?}"
+        );
+    }
+
+    #[test]
+    fn swar_scalar_parity_across_every_length_through_five_words() {
+        // Sweeps 0..=40, crossing the 8/16/24/32 word boundaries and every
+        // +/-1 neighbour of each. Nothing in the suite covered this axis: the
+        // existing length tests use round numbers (200, 256, 1024) that are all
+        // multiples of 8 and therefore never exercise a ragged tail.
+        //
+        // 0x0B is excluded deliberately, not incidentally: SWAR treats vertical
+        // tab as whitespace while `u8::is_ascii_whitespace` does not, a known
+        // and separately asserted divergence (see the mixed-whitespace-types
+        // integration test). Including it here would make this test fail for a
+        // reason it is not about.
+        const CORPUS: &[u8] = b"ab_1 \t+={}\"x\\n09$zZ.;()[]<>!&|/*%^~?:,";
+        for len in 0..=40usize {
+            for offset in 0..CORPUS.len() {
+                let source: Vec<u8> = (0..len)
+                    .map(|i| CORPUS[(offset + i) % CORPUS.len()])
+                    .collect();
+                assert_lanes_agree(&source, &format!("len={len} offset={offset}"));
+            }
+        }
+    }
+
+    #[test]
+    fn swar_scalar_parity_on_unaligned_starts() {
+        // Same bytes, shifted so each token type begins at every phase modulo
+        // the word width. A tail bug that only fires when a token straddles a
+        // word boundary is invisible unless the phase is varied.
+        let base = b"identifier 12345 \"string\" ++ /* c */ 0x1F name2";
+        for pad in 0..=(2 * SWAR_WIDTH) {
+            let mut source = vec![b' '; pad];
+            source.extend_from_slice(base);
+            assert_lanes_agree(&source, &format!("pad={pad}"));
+            // And with the tail truncated, so the final word is ragged at every
+            // possible remainder.
+            for trim in 1..=SWAR_WIDTH {
+                if source.len() > trim {
+                    assert_lanes_agree(
+                        &source[..source.len() - trim],
+                        &format!("pad={pad} trim={trim}"),
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn swar_scalar_parity_on_word_boundary_straddling_tokens() {
+        // Each construct is placed so its *interior* sits on the boundary:
+        // a BigInt suffix, an escape, and a lone trailing backslash are all
+        // handled by a scalar tail that the SWAR loop hands off to, and the
+        // handoff index is what varies here.
+        for construct in [
+            &b"123n"[..],
+            &b"\"a\\\"b\""[..],
+            &b"\"trailing\\"[..],
+            &b"0123456789n"[..],
+            &b"a\\"[..],
+        ] {
+            for pad in 0..=(2 * SWAR_WIDTH) {
+                let mut source = vec![b' '; pad];
+                source.extend_from_slice(construct);
+                assert_lanes_agree(&source, &format!("construct={construct:?} pad={pad}"));
+            }
         }
     }
 

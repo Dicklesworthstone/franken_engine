@@ -1,0 +1,10 @@
+---
+source: tests/deterministic_serde_golden.rs
+expression: actual
+---
+{
+  "value": {
+    "String": "frankenengine"
+  },
+  "expected_sha256_hex": "09e6cb5266e4ebde599b5f4d43f3564791a55b787611da70ecd76775731c6798"
+}

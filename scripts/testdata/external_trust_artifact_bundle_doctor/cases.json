@@ -1,0 +1,245 @@
+[
+  {
+    "case_id": "healthy",
+    "bundle_path": "scripts/testdata/external_trust_artifact_bundle_doctor/healthy",
+    "expected_decision": "supported",
+    "expected_reason_codes": []
+  },
+  {
+    "case_id": "missing-member",
+    "bundle_path": "scripts/testdata/external_trust_artifact_bundle_doctor/missing_member",
+    "expected_decision": "fail_closed",
+    "expected_reason_codes": [
+      "missing_required_member"
+    ]
+  },
+  {
+    "case_id": "stale",
+    "bundle_path": "scripts/testdata/external_trust_artifact_bundle_doctor/stale",
+    "expected_decision": "degraded",
+    "expected_reason_codes": [
+      "stale_or_unfresh"
+    ]
+  },
+  {
+    "case_id": "malformed-freshness",
+    "bundle_path": "scripts/testdata/external_trust_artifact_bundle_doctor/malformed_freshness",
+    "expected_decision": "degraded",
+    "expected_reason_codes": [
+      "stale_or_unfresh"
+    ]
+  },
+  {
+    "case_id": "non-string-freshness",
+    "bundle_path": "scripts/testdata/external_trust_artifact_bundle_doctor/non_string_freshness",
+    "expected_decision": "degraded",
+    "expected_reason_codes": [
+      "stale_or_unfresh"
+    ]
+  },
+  {
+    "case_id": "primary-freshness-masked",
+    "bundle_path": "scripts/testdata/external_trust_artifact_bundle_doctor/primary_freshness_masked",
+    "expected_decision": "degraded",
+    "expected_reason_codes": [
+      "stale_or_unfresh"
+    ]
+  },
+  {
+    "case_id": "legacy-freshness-masked",
+    "bundle_path": "scripts/testdata/external_trust_artifact_bundle_doctor/legacy_freshness_masked",
+    "expected_decision": "degraded",
+    "expected_reason_codes": [
+      "stale_or_unfresh"
+    ]
+  },
+  {
+    "case_id": "malformed-manifest",
+    "bundle_path": "scripts/testdata/external_trust_artifact_bundle_doctor/malformed_manifest",
+    "expected_decision": "fail_closed",
+    "expected_reason_codes": [
+      "malformed_manifest"
+    ]
+  },
+  {
+    "case_id": "non-object-manifest",
+    "bundle_path": "scripts/testdata/external_trust_artifact_bundle_doctor/non_object_manifest",
+    "expected_decision": "fail_closed",
+    "expected_reason_codes": [
+      "malformed_manifest"
+    ]
+  },
+  {
+    "case_id": "mock-contaminated",
+    "bundle_path": "scripts/testdata/external_trust_artifact_bundle_doctor/mock_contaminated",
+    "expected_decision": "fail_closed",
+    "expected_reason_codes": [
+      "mock_contaminated"
+    ]
+  },
+  {
+    "case_id": "e8-explicit-refusal",
+    "bundle_path": "scripts/testdata/e8_refusal_ledger/unsupported_syntax_uncertified.json",
+    "expected_decision": "not_promotable",
+    "expected_reason_codes": [
+      "explicit_e8_uncertified_refusal"
+    ],
+    "expected_e8_refusal_ledger": {
+      "ledger_id": "e8-refusal-ledger-unsupported-syntax",
+      "result_class": "uncertified",
+      "analyzed_surface_count": 2,
+      "unanalyzed_surface_count": 1,
+      "degraded_surface_count": 0,
+      "refusal_codes": [
+        "unsupported_syntax_surface"
+      ],
+      "source_ref_ids": [
+        "parser-diagnostic"
+      ],
+      "remediation_contains": "Preserve ledger_id"
+    }
+  },
+  {
+    "case_id": "e8-malformed-refusal",
+    "bundle_path": "scripts/testdata/external_trust_artifact_bundle_doctor/malformed_e8_refusal_ledger",
+    "expected_decision": "fail_closed",
+    "expected_reason_codes": [
+      "malformed_e8_refusal_ledger"
+    ],
+    "expected_e8_refusal_ledger": {
+      "ledger_id": "e8-refusal-ledger-malformed",
+      "result_class": "uncertified",
+      "analyzed_surface_count": 2,
+      "unanalyzed_surface_count": 1,
+      "degraded_surface_count": 0,
+      "refusal_codes": [
+        "unsupported_syntax_surface"
+      ]
+    }
+  },
+  {
+    "case_id": "unsupported-schema",
+    "bundle_path": "scripts/testdata/external_trust_artifact_bundle_doctor/unsupported_schema",
+    "expected_decision": "unsupported",
+    "expected_reason_codes": [
+      "unsupported_schema"
+    ]
+  },
+  {
+    "case_id": "hash-mismatch",
+    "bundle_path": "scripts/testdata/external_trust_artifact_bundle_doctor/hash_mismatch",
+    "expected_decision": "fail_closed",
+    "expected_reason_codes": [
+      "hash_mismatch"
+    ]
+  },
+  {
+    "case_id": "path-escape",
+    "bundle_path": "scripts/testdata/external_trust_artifact_bundle_doctor/path_escape",
+    "expected_decision": "fail_closed",
+    "expected_reason_codes": [
+      "path_escape"
+    ]
+  },
+  {
+    "case_id": "local-fallback",
+    "bundle_path": "scripts/testdata/external_trust_artifact_bundle_doctor/local_fallback",
+    "expected_decision": "fail_closed",
+    "expected_reason_codes": [
+      "local_fallback_contaminated"
+    ]
+  },
+  {
+    "case_id": "fallback-command-contaminated",
+    "bundle_path": "scripts/testdata/external_trust_artifact_bundle_doctor/fallback_command_contaminated",
+    "expected_decision": "fail_closed",
+    "expected_reason_codes": [
+      "local_fallback_contaminated"
+    ]
+  },
+  {
+    "case_id": "refused-local-fallback",
+    "bundle_path": "scripts/testdata/external_trust_artifact_bundle_doctor/refused_local_fallback",
+    "expected_decision": "supported",
+    "expected_reason_codes": []
+  },
+  {
+    "case_id": "missing-replay",
+    "bundle_path": "scripts/testdata/external_trust_artifact_bundle_doctor/missing_replay",
+    "expected_decision": "fail_closed",
+    "expected_reason_codes": [
+      "replay_command_missing"
+    ]
+  },
+  {
+    "case_id": "invalid-replay-command",
+    "bundle_path": "scripts/testdata/external_trust_artifact_bundle_doctor/invalid_replay_command",
+    "expected_decision": "fail_closed",
+    "expected_reason_codes": [
+      "invalid_replay_command"
+    ]
+  },
+  {
+    "case_id": "empty-replay-command-masked",
+    "bundle_path": "scripts/testdata/external_trust_artifact_bundle_doctor/empty_replay_command_masked",
+    "expected_decision": "fail_closed",
+    "expected_reason_codes": [
+      "invalid_replay_command"
+    ]
+  },
+  {
+    "case_id": "empty-legacy-replay-command-masked",
+    "bundle_path": "scripts/testdata/external_trust_artifact_bundle_doctor/empty_legacy_replay_command_masked",
+    "expected_decision": "fail_closed",
+    "expected_reason_codes": [
+      "invalid_replay_command"
+    ]
+  },
+  {
+    "case_id": "invalid-required-member",
+    "bundle_path": "scripts/testdata/external_trust_artifact_bundle_doctor/invalid_required_member",
+    "expected_decision": "fail_closed",
+    "expected_reason_codes": [
+      "invalid_required_member"
+    ]
+  },
+  {
+    "case_id": "invalid-member-hash",
+    "bundle_path": "scripts/testdata/external_trust_artifact_bundle_doctor/invalid_member_hash",
+    "expected_decision": "fail_closed",
+    "expected_reason_codes": [
+      "invalid_required_member"
+    ]
+  },
+  {
+    "case_id": "invalid-hash-syntax-optional",
+    "bundle_path": "scripts/testdata/external_trust_artifact_bundle_doctor/invalid_hash_syntax_optional",
+    "expected_decision": "fail_closed",
+    "expected_reason_codes": [
+      "invalid_required_member"
+    ]
+  },
+  {
+    "case_id": "conflicting-member-hashes",
+    "bundle_path": "scripts/testdata/external_trust_artifact_bundle_doctor/conflicting_member_hashes",
+    "expected_decision": "fail_closed",
+    "expected_reason_codes": [
+      "invalid_required_member"
+    ]
+  },
+  {
+    "case_id": "invalid-required-flag",
+    "bundle_path": "scripts/testdata/external_trust_artifact_bundle_doctor/invalid_required_flag",
+    "expected_decision": "fail_closed",
+    "expected_reason_codes": [
+      "invalid_required_member",
+      "missing_required_member"
+    ]
+  },
+  {
+    "case_id": "toml-bundle",
+    "bundle_path": "scripts/testdata/external_trust_artifact_bundle_doctor/toml_bundle",
+    "expected_decision": "supported",
+    "expected_reason_codes": []
+  }
+]

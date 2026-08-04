@@ -15,7 +15,7 @@ use std::fs;
 use std::io::Cursor;
 
 use frankenengine_engine::ast::{
-    BinaryOperator, CANONICAL_AST_CONTRACT_VERSION, CANONICAL_AST_HASH_ALGORITHM,
+    BinaryOperator, BindingPattern, CANONICAL_AST_CONTRACT_VERSION, CANONICAL_AST_HASH_ALGORITHM,
     CANONICAL_AST_HASH_PREFIX, CANONICAL_AST_SCHEMA_VERSION, ExportKind, Expression, ParseGoal,
     SourceSpan, Statement, SyntaxTree, VariableDeclarationKind,
 };
@@ -33,6 +33,11 @@ use frankenengine_engine::parser::{
 fn single_line_source_span(source: &str) -> SourceSpan {
     let width = source.len() as u64;
     SourceSpan::new(0, width, 1, 1, 1, width + 1)
+}
+
+fn historical_schema_v2_root_span(mut tree: SyntaxTree) -> SyntaxTree {
+    tree.span.end_column = 1;
+    tree
 }
 
 #[test]
@@ -133,13 +138,60 @@ fn parser_supports_named_export_clause_forms() {
     assert!(matches!(
         &tree.body[1],
         Statement::Export(export)
-            if matches!(&export.kind, ExportKind::NamedClause(clause) if clause == "{ local as published }")
+            if matches!(&export.kind, ExportKind::NamedClause(clause)
+                if clause.canonical_head() == "{ local as published }" && clause.source().is_none())
     ));
     assert!(matches!(
         &tree.body[2],
         Statement::Export(export)
-            if matches!(&export.kind, ExportKind::NamedClause(clause) if clause == "{ default as dep } from \"pkg\"")
+            if matches!(&export.kind, ExportKind::NamedClause(clause)
+                if clause.canonical_head() == "{ default as dep }"
+                    && clause.source().and_then(|source| source.as_str()) == Some("pkg"))
     ));
+}
+
+#[test]
+fn parser_preserves_exact_import_and_reexport_sources_bd_lfq44() {
+    let parser = CanonicalEs2020Parser;
+    let tree = parser
+        .parse(
+            r#"import "\uD800";
+import "\uDC00";
+export { first } from "\uD800";
+export { second } from "\uDC00";"#,
+            ParseGoal::Module,
+        )
+        .expect("exact module sources should parse");
+
+    let import_source = |index| match &tree.body[index] {
+        Statement::Import(import) => &import.source,
+        other => panic!("expected import at {index}, got {other:?}"),
+    };
+    assert_eq!(import_source(0).code_units_vec(), vec![0xD800]);
+    assert_eq!(import_source(1).code_units_vec(), vec![0xDC00]);
+    assert_ne!(
+        tree.body[0].canonical_value(),
+        tree.body[1].canonical_value()
+    );
+
+    let export_source = |index| match &tree.body[index] {
+        Statement::Export(export) => match &export.kind {
+            ExportKind::NamedClause(clause) => clause.source().expect("re-export source"),
+            other => panic!("expected named export at {index}, got {other:?}"),
+        },
+        other => panic!("expected export at {index}, got {other:?}"),
+    };
+    assert_eq!(export_source(2).code_units_vec(), vec![0xD800]);
+    assert_eq!(export_source(3).code_units_vec(), vec![0xDC00]);
+    assert_ne!(
+        tree.body[2].canonical_value(),
+        tree.body[3].canonical_value()
+    );
+
+    let json = serde_json::to_string(&tree).unwrap();
+    assert!(json.contains(r#""$wtf16":[55296]"#));
+    assert!(json.contains(r#""$wtf16":[56320]"#));
+    assert_eq!(serde_json::from_str::<SyntaxTree>(&json).unwrap(), tree);
 }
 
 #[test]
@@ -209,7 +261,7 @@ fn canonical_ast_contract_metadata_is_versioned_and_stable() {
     );
     assert_eq!(
         CANONICAL_AST_SCHEMA_VERSION,
-        "franken-engine.parser-ast.schema.v1"
+        "franken-engine.parser-ast.schema.v6"
     );
     assert_eq!(CANONICAL_AST_HASH_ALGORITHM, "sha256");
     assert_eq!(CANONICAL_AST_HASH_PREFIX, "sha256:");
@@ -238,10 +290,51 @@ fn canonical_ast_hash_vector_script_numeric_signed_is_stable() {
     let tree = parser
         .parse("-7", ParseGoal::Script)
         .expect("script parse should succeed");
+    let historical = historical_schema_v2_root_span(tree.clone());
     assert_eq!(
-        tree.canonical_hash(),
+        historical.canonical_hash(),
         "sha256:d959b7cbce9a409871d9a288d6feb3c043bdf3ce6ee54ff39051909db432adc4"
     );
+    let historical_json = serde_json::to_string(&historical).unwrap();
+    let historical_reader: SyntaxTree = serde_json::from_str(&historical_json).unwrap();
+    assert_eq!(historical_reader, historical);
+    assert_eq!(
+        historical_reader.canonical_hash(),
+        "sha256:d959b7cbce9a409871d9a288d6feb3c043bdf3ce6ee54ff39051909db432adc4"
+    );
+    assert_eq!(
+        tree.canonical_hash(),
+        "sha256:8fbc2bb1f3f8fbf7c6e7fc08a89dc768a0ac973390555ecae9b215d442e604c7"
+    );
+}
+
+#[test]
+fn parser_root_span_ends_at_eof_byte_column_bd_4tt6s() {
+    let parser = CanonicalEs2020Parser;
+    let cases = [
+        ("alpha", 1, 6),
+        ("alpha\nbeta", 2, 5),
+        ("alpha\n", 2, 1),
+        ("alpha\r\nbeta", 2, 5),
+        ("alpha\r\n", 2, 1),
+        ("alpha\rbeta", 2, 5),
+        ("alpha\r", 2, 1),
+        ("alpha\u{2028}beta", 2, 5),
+        ("alpha\u{2028}", 2, 1),
+        ("alpha\u{2029}beta", 2, 5),
+        ("alpha\u{2029}", 2, 1),
+        ("'é'", 1, 5),
+        ("alpha  ", 1, 8),
+    ];
+
+    for (source, expected_line, expected_column) in cases {
+        let tree = parser
+            .parse(source, ParseGoal::Script)
+            .unwrap_or_else(|error| panic!("failed to parse {source:?}: {error}"));
+        assert_eq!(tree.span.end_offset, source.len() as u64, "{source:?}");
+        assert_eq!(tree.span.end_line, expected_line, "{source:?}");
+        assert_eq!(tree.span.end_column, expected_column, "{source:?}");
+    }
 }
 
 #[test]
@@ -251,8 +344,12 @@ fn canonical_ast_hash_vector_module_import_default_is_stable() {
         .parse("import dep from \"pkg\"", ParseGoal::Module)
         .expect("module parse should succeed");
     assert_eq!(
-        tree.canonical_hash(),
+        historical_schema_v2_root_span(tree.clone()).canonical_hash(),
         "sha256:184b65136745331fa73eb839c7d3e2d444cda607e80547a8a03b19e6c5779874"
+    );
+    assert_eq!(
+        tree.canonical_hash(),
+        "sha256:58af3ebe9640c16302cc30b9ac25be14d592d62ffd33595310a2cacf0a7c11be"
     );
 }
 
@@ -263,8 +360,12 @@ fn canonical_ast_hash_vector_module_export_default_is_stable() {
         .parse("export default true", ParseGoal::Module)
         .expect("module parse should succeed");
     assert_eq!(
-        tree.canonical_hash(),
+        historical_schema_v2_root_span(tree.clone()).canonical_hash(),
         "sha256:ebb993de589945a2cf22f17db58200599ae3e1e6c21cd33a0fc59eab99fd8ef6"
+    );
+    assert_eq!(
+        tree.canonical_hash(),
+        "sha256:3165b53e61ee5a66ab81a15b52e6ff84ebd4de83501dbb6e64629dbefe294b36"
     );
 }
 
@@ -305,10 +406,17 @@ fn canonical_parse_event_ir_hash_vector_script_numeric_signed_is_stable() {
     let tree = parser
         .parse("-7", ParseGoal::Script)
         .expect("script parse should succeed");
+    let historical = historical_schema_v2_root_span(tree.clone());
+    let historical_ir =
+        ParseEventIr::from_syntax_tree(&historical, "<inline>", ParserMode::ScalarReference);
+    assert_eq!(
+        historical_ir.canonical_hash(),
+        "sha256:23c6f89b4442da0d3ca21a3415901a6b19518f02f0b51b439cbb4aae0e70ea47"
+    );
     let ir = ParseEventIr::from_syntax_tree(&tree, "<inline>", ParserMode::ScalarReference);
     assert_eq!(
         ir.canonical_hash(),
-        "sha256:23c6f89b4442da0d3ca21a3415901a6b19518f02f0b51b439cbb4aae0e70ea47"
+        "sha256:522e9352308b7889660db5e62567d56f945e12db9e1018832e5f0d3360a4606a"
     );
 }
 
@@ -318,10 +426,17 @@ fn canonical_parse_event_ir_hash_vector_module_import_default_is_stable() {
     let tree = parser
         .parse("import dep from \"pkg\"", ParseGoal::Module)
         .expect("module parse should succeed");
+    let historical = historical_schema_v2_root_span(tree.clone());
+    let historical_ir =
+        ParseEventIr::from_syntax_tree(&historical, "<inline>", ParserMode::ScalarReference);
+    assert_eq!(
+        historical_ir.canonical_hash(),
+        "sha256:5f99807e7808b6fec21cb05479885b367161f1dcd1abac402cceafdc74593fea"
+    );
     let ir = ParseEventIr::from_syntax_tree(&tree, "<inline>", ParserMode::ScalarReference);
     assert_eq!(
         ir.canonical_hash(),
-        "sha256:5f99807e7808b6fec21cb05479885b367161f1dcd1abac402cceafdc74593fea"
+        "sha256:30d465df5f3fe1f9da76fd7cdd0a64efbbe1d5d8b3b33a052562f16765ede6c8"
     );
 }
 
@@ -1016,6 +1131,7 @@ fn parser_optional_chain_emits_member_expression() {
             object,
             property,
             computed,
+            ..
         } = init
         {
             assert!(!computed);
@@ -1041,6 +1157,7 @@ fn parser_optional_chain_emits_computed_member_expression() {
             object,
             property,
             computed,
+            ..
         } = init
         {
             assert!(*computed);
@@ -1062,7 +1179,10 @@ fn parser_optional_chain_emits_call_expression() {
         .expect("parse should succeed");
     if let Statement::VariableDeclaration(decl) = &tree.body[0] {
         let init = decl.declarations[0].initializer.as_ref().unwrap();
-        if let Expression::OptionalCall { callee, arguments } = init {
+        if let Expression::OptionalCall {
+            callee, arguments, ..
+        } = init
+        {
             assert!(matches!(callee.as_ref(), Expression::Identifier(name) if name == "maybeFn"));
             assert_eq!(arguments.len(), 2);
             assert!(
@@ -1095,7 +1215,10 @@ fn parser_optional_chain_supports_nested_package_style_expression() {
         {
             assert_eq!(*operator, BinaryOperator::NullishCoalescing);
             assert!(matches!(right.as_ref(), Expression::Identifier(name) if name == "fallback"));
-            if let Expression::OptionalCall { callee, arguments } = left.as_ref() {
+            if let Expression::OptionalCall {
+                callee, arguments, ..
+            } = left.as_ref()
+            {
                 assert!(
                     matches!(&arguments[..], [Expression::Identifier(argument)] if argument == "ctx")
                 );
@@ -1103,6 +1226,7 @@ fn parser_optional_chain_supports_nested_package_style_expression() {
                     object,
                     property,
                     computed,
+                    ..
                 } = callee.as_ref()
                 {
                     assert!(!computed);
@@ -1113,6 +1237,7 @@ fn parser_optional_chain_supports_nested_package_style_expression() {
                         object,
                         property,
                         computed,
+                        ..
                     } = object.as_ref()
                     {
                         assert!(*computed);
@@ -1360,37 +1485,89 @@ fn parser_tagged_meta_frontier_accepts_tagged_template_expressions() {
     let Statement::Expression(statement) = &tree.body[0] else {
         panic!("expected expression statement");
     };
-    let Expression::Call { callee, arguments } = &statement.expression else {
+    let Expression::Call {
+        callee, arguments, ..
+    } = &statement.expression
+    else {
         panic!("expected tagged template to parse as Call");
     };
     assert!(matches!(callee.as_ref(), Expression::Identifier(name) if name == "render"));
-    assert_eq!(arguments.len(), 1);
-    assert!(matches!(&arguments[0], Expression::TemplateLiteral { .. }));
+    // tag(stringsObject, ...substitutions): arg0 is the `.raw`-attaching IIFE
+    // wrapping the cooked array; then the `name` substitution (the desugar
+    // shape shipped with the String.raw work — mirrors the parser unit test
+    // tagged_template_expression_is_call_with_template_argument).
+    assert_eq!(arguments.len(), 2);
+    assert!(matches!(&arguments[0], Expression::Call { .. }));
+    assert!(matches!(&arguments[1], Expression::Identifier(n) if n == "name"));
     assert_eq!(statement.span, single_line_source_span(source));
 }
 
 #[test]
-fn parser_tagged_meta_frontier_rejects_new_target_meta_property() {
+fn parser_tagged_meta_frontier_accepts_new_target_meta_property() {
     let parser = CanonicalEs2020Parser;
     let source = "const target = new.target";
-    let err = parser
+    let tree = parser
         .parse(source, ParseGoal::Script)
-        .expect_err("new.target should fail");
-    assert_eq!(err.code, ParseErrorCode::UnsupportedSyntax);
-    assert_eq!(err.message, "new.target meta-property is not supported");
-    assert_eq!(err.span, Some(single_line_source_span(source)));
+        .expect("new.target should parse");
+    let Statement::VariableDeclaration(declaration) = &tree.body[0] else {
+        panic!("expected variable declaration for new.target source");
+    };
+    assert!(matches!(
+        declaration
+            .declarations
+            .first()
+            .and_then(|declarator| declarator.initializer.as_ref()),
+        Some(Expression::NewTarget)
+    ));
+    assert_eq!(tree.span, single_line_source_span(source));
 }
 
 #[test]
-fn parser_tagged_meta_frontier_rejects_import_meta_property() {
+fn parser_tagged_meta_frontier_accepts_import_meta_property() {
     let parser = CanonicalEs2020Parser;
     let source = "const meta = import.meta";
-    let err = parser
+    let tree = parser
         .parse(source, ParseGoal::Module)
-        .expect_err("import.meta should fail");
-    assert_eq!(err.code, ParseErrorCode::UnsupportedSyntax);
-    assert_eq!(err.message, "import.meta meta-property is not supported");
-    assert_eq!(err.span, Some(single_line_source_span(source)));
+        .expect("import.meta should parse in module goal");
+    let Statement::VariableDeclaration(declaration) = &tree.body[0] else {
+        panic!("expected variable declaration for import.meta source");
+    };
+    assert!(matches!(
+        declaration
+            .declarations
+            .first()
+            .and_then(|declarator| declarator.initializer.as_ref()),
+        Some(Expression::ImportMeta)
+    ));
+    assert_eq!(tree.span, single_line_source_span(source));
+}
+
+#[test]
+fn parser_tagged_meta_frontier_accepts_import_meta_member_access() {
+    let parser = CanonicalEs2020Parser;
+    let source = "const href = import.meta.url";
+    let tree = parser
+        .parse(source, ParseGoal::Module)
+        .expect("import.meta.url should parse in module goal");
+    let Statement::VariableDeclaration(declaration) = &tree.body[0] else {
+        panic!("expected variable declaration for import.meta.url source");
+    };
+    let Some(Expression::Member {
+        object,
+        property,
+        computed,
+        ..
+    }) = declaration
+        .declarations
+        .first()
+        .and_then(|declarator| declarator.initializer.as_ref())
+    else {
+        panic!("expected import.meta.url to parse as member expression");
+    };
+    assert!(matches!(object.as_ref(), Expression::ImportMeta));
+    assert!(matches!(property.as_ref(), Expression::Identifier(name) if name == "url"));
+    assert!(!computed);
+    assert_eq!(tree.span, single_line_source_span(source));
 }
 
 #[test]
@@ -1494,6 +1671,117 @@ fn parser_emits_binary_numeric_literal() {
     } else {
         panic!("expected VariableDeclaration");
     }
+}
+
+#[test]
+fn parser_legacy_decimal_escapes_follow_annex_b_in_sloppy_scripts_bd_xcqzp() {
+    let parser = CanonicalEs2020Parser;
+
+    for (source, expected_units) in [
+        (r#""\1""#, &[0x0001][..]),
+        (r#""\8""#, &[0x0038][..]),
+        (r#""\9""#, &[0x0039][..]),
+        (r#""\08""#, &[0x0000, 0x0038][..]),
+        (r#""\18""#, &[0x0001, 0x0038][..]),
+        (r#""\118""#, &[0x0009, 0x0038][..]),
+        (r#""\377""#, &[0x00FF][..]),
+        (r#""\400""#, &[0x0020, 0x0030][..]),
+        (r#""\478""#, &[0x0027, 0x0038][..]),
+    ] {
+        let tree = parser
+            .parse(source, ParseGoal::Script)
+            .unwrap_or_else(|error| panic!("sloppy {source:?} should parse: {error}"));
+        assert!(matches!(
+            tree.body.first(),
+            Some(Statement::Expression(expression))
+                if matches!(&expression.expression, Expression::StringLiteral(value)
+                    if value.code_units_vec() == expected_units)
+        ));
+    }
+
+    for source in [
+        r#"let value = "\118";"#,
+        r#"({"\1": value});"#,
+        r#"let {"\1": value} = source;"#,
+        r#"({ "\1"() {} });"#,
+        r#""use\x20strict"; "\1";"#,
+        r#""not a directive" + suffix; "use strict"; "\1";"#,
+        r#"{ "use strict"; "\1"; }"#,
+        r#"; "use strict"; "\1";"#,
+        "\"use strict\"\n+suffix; \"\\1\";",
+    ] {
+        parser
+            .parse(source, ParseGoal::Script)
+            .unwrap_or_else(|error| panic!("sloppy context should accept {source:?}: {error}"));
+    }
+
+    let binding_tree = parser
+        .parse(r#"let {"\1": value} = source;"#, ParseGoal::Script)
+        .expect("a sloppy quoted binding key should parse");
+    assert!(matches!(
+        binding_tree.body.first(),
+        Some(Statement::VariableDeclaration(declaration))
+            if matches!(&declaration.declarations[0].pattern,
+                BindingPattern::ObjectPattern(properties)
+                    if matches!(&properties[0].key, Expression::StringLiteral(value)
+                        if value.code_units_vec() == [0x0001]))
+    ));
+}
+
+#[test]
+fn parser_strict_and_module_code_reject_legacy_decimal_escapes_bd_xcqzp() {
+    let parser = CanonicalEs2020Parser;
+
+    for source in [
+        r#""use strict"; "\1";"#,
+        r#""prologue"; "use strict"; "\8";"#,
+        r#""\1"; "use strict";"#,
+        r#""use strict"; ({"\1": value});"#,
+        r#""use strict"; let {"\1": value} = source;"#,
+        r#""use strict"; ({ "\1"() {} });"#,
+        r#"function f() { "prologue"; "use strict"; return "\1"; }"#,
+        r#""use strict"; function f() { return "\1"; }"#,
+        r#"const f = () => { "use strict"; return "\1"; };"#,
+        r#"class C { method() { return "\1"; } }"#,
+        r#"function f(value = "\1") { "use strict"; }"#,
+        r#"const f = (value = "\1") => { "use strict"; };"#,
+        r#"class C { method(value = "\1") {} }"#,
+        r#"class C { "\1"() {} }"#,
+        r#"class C { ["\1"]() {} }"#,
+        r#"class C extends ("\1") {}"#,
+    ] {
+        let error = parser
+            .parse(source, ParseGoal::Script)
+            .expect_err("strict Script code must reject legacy decimal escapes");
+        assert_eq!(error.code, ParseErrorCode::UnsupportedSyntax, "{source:?}");
+    }
+
+    parser
+        .parse(r#"class C { "ok"() {} }"#, ParseGoal::Script)
+        .expect("an ordinary quoted class method name remains valid");
+    parser
+        .parse(r#"class C { ["ok"]() {} }"#, ParseGoal::Script)
+        .expect("an ordinary computed class method name remains valid");
+
+    for source in [
+        r#""\1";"#,
+        r#""\8";"#,
+        r#""\9";"#,
+        r#""\08";"#,
+        r#"let {"\1": value} = source;"#,
+    ] {
+        let error = parser
+            .parse(source, ParseGoal::Module)
+            .expect_err("Module code must reject legacy decimal escapes");
+        assert_eq!(error.code, ParseErrorCode::UnsupportedSyntax, "{source:?}");
+    }
+
+    parser
+        .parse(r#""use strict"; "\0";"#, ParseGoal::Script)
+        .expect("plain NUL escapes remain valid in strict Script code");
+    parser
+        .parse(r#""\0";"#, ParseGoal::Module)
+        .expect("plain NUL escapes remain valid in Module code");
 }
 
 // ---------------------------------------------------------------------------

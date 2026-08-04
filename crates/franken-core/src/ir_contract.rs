@@ -18,6 +18,11 @@ use crate::ast::{AssignmentOperator, BinaryOperator, SyntaxTree, UnaryOperator};
 use crate::deterministic_serde::{self, CanonicalValue};
 use crate::hash_tiers::ContentHash;
 use crate::ifc_artifacts::Label;
+use crate::js_string::JsString;
+
+fn is_false(value: &bool) -> bool {
+    !*value
+}
 
 // ---------------------------------------------------------------------------
 // Schema versioning
@@ -32,9 +37,26 @@ pub struct IrSchemaVersion {
 }
 
 impl IrSchemaVersion {
+    /// `0.10.0` adds the explicit `GeneratorBodyStart` boundary to serialized
+    /// IR1, IR2, and IR3 so generator invocation can initialize parameters before
+    /// suspending ahead of the body. `0.9.0` adds optional exact body-local
+    /// lexical metadata to serialized IR1 function operations so deferred
+    /// lowering preserves captured `let`/`const` semantics. `0.8.0` adds the
+    /// boundary-crossing `Continue`
+    /// reason to serialized IR1, IR2, and IR3 `IteratorClose` operations. Core
+    /// minors `0.6.0` and `0.7.0` are intentionally skipped because those
+    /// numeric versions identify incompatible `franken-engine` IR wires.
+    /// `0.5.0` widened IR1 static property keys to exact UTF-16 [`JsString`]
+    /// values. `0.4.0` widened IR1 module specifiers to exact UTF-16
+    /// [`JsString`] values. `0.3.0` adds dedicated object-rest
+    /// `CopyDataProperties` operations to IR1 and IR3. `0.2.0` widened
+    /// JavaScript literal carriers and the IR3 constant pool to exact UTF-16
+    /// [`JsString`] values. Historical
+    /// well-formed strings retain their plain-string JSON wire shape;
+    /// lone-surrogate values use `$wtf16`.
     pub const CURRENT: Self = Self {
         major: 0,
-        minor: 1,
+        minor: 10,
         patch: 0,
     };
 
@@ -242,6 +264,29 @@ impl ResolvedBinding {
     }
 }
 
+fn canonical_resolved_binding_array(bindings: &[ResolvedBinding]) -> CanonicalValue {
+    let mut bindings = bindings.to_vec();
+    bindings.sort_by(|left, right| {
+        left.binding_id
+            .cmp(&right.binding_id)
+            .then_with(|| left.name.cmp(&right.name))
+            .then_with(|| left.scope.depth.cmp(&right.scope.depth))
+            .then_with(|| left.scope.index.cmp(&right.scope.index))
+            .then_with(|| left.kind.as_str().cmp(right.kind.as_str()))
+    });
+    CanonicalValue::Array(
+        bindings
+            .iter()
+            .map(ResolvedBinding::canonical_value)
+            .collect(),
+    )
+}
+
+#[allow(clippy::box_collection)] // Matches the measured stack-bounding Ir1Op carrier.
+fn boxed_vec_option_is_none_or_empty<T>(values: &Option<Box<Vec<T>>>) -> bool {
+    values.as_ref().is_none_or(|values| values.is_empty())
+}
+
 /// Classification of bindings in IR1.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum BindingKind {
@@ -344,7 +389,7 @@ impl ScopeKind {
 /// computed members preserve the key on the value stack.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Ir1PropertyKey {
-    Static(String),
+    Static(JsString),
     Dynamic,
 }
 
@@ -368,7 +413,7 @@ impl Ir1PropertyKey {
                     "kind".to_string(),
                     CanonicalValue::String("static".to_string()),
                 );
-                map.insert("value".to_string(), CanonicalValue::String(key.clone()));
+                map.insert("value".to_string(), key.canonical_value());
             }
             Self::Dynamic => {
                 map.insert(
@@ -386,6 +431,8 @@ impl Ir1PropertyKey {
 pub enum IteratorCloseReason {
     /// Normal loop exit via `break`.
     Break,
+    /// A labelled `continue` crossing this iterator's loop boundary.
+    Continue,
     /// Early return from the enclosing function.
     Return,
     /// Exception thrown inside the loop body.
@@ -396,6 +443,7 @@ impl IteratorCloseReason {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Break => "break",
+            Self::Continue => "continue",
             Self::Return => "return",
             Self::Throw => "throw",
         }
@@ -404,6 +452,9 @@ impl IteratorCloseReason {
 
 /// IR1 operation — semantically resolved, position-independent.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+// The optional boxed metadata vector on function variants is intentionally a
+// thin pointer: storing Vec inline regressed recursive lowering's stack use.
+#[allow(clippy::box_collection)]
 pub enum Ir1Op {
     /// Load a literal value.
     LoadLiteral { value: Ir1Literal },
@@ -419,7 +470,7 @@ pub enum Ir1Op {
     /// Return from current function.
     Return,
     /// Import a module by specifier.
-    ImportModule { specifier: String },
+    ImportModule { specifier: JsString },
     /// Export a binding from the module.
     ExportBinding { name: String, binding_id: BindingId },
     /// Await an expression (async context).
@@ -427,6 +478,11 @@ pub enum Ir1Op {
     /// Yield a value from a generator function.  When `delegate` is true the
     /// operand is an iterable whose values are forwarded (`yield*`).
     Yield { delegate: bool },
+    /// Internal boundary between generator FunctionDeclarationInstantiation
+    /// (including parameter defaults) and evaluation of the generator body.
+    /// Generator invocation executes through this marker synchronously; the
+    /// first `.next()` resumes immediately after it.
+    GeneratorBodyStart,
     /// No-op placeholder.
     Nop,
     /// Binary operation: pop two operands, push result.
@@ -475,6 +531,13 @@ pub enum Ir1Op {
     /// Spread an object's properties into another object. Stack: [..., target, source] -> [..., target].
     /// Copies all enumerable own properties from source to target.
     SpreadIntoObject,
+    /// Copy enumerable own properties for object-rest binding semantics.
+    ///
+    /// Stack: `[..., target, source, excluded_0, ..., excluded_n]` ->
+    /// `[..., target]`. Excluded property keys are filtered before property
+    /// values are read; unlike object-literal spread, a nullish source is an
+    /// error.
+    CopyDataProperties { excluded_count: u32 },
     /// Throw the value on top-of-stack.
     Throw,
     /// Load `this` binding.
@@ -494,8 +557,29 @@ pub enum Ir1Op {
         /// the function body (free variables / upvalues).  The IR3
         /// lowering uses these to emit scope-chain capture instructions.
         free_vars: Vec<String>,
+        /// Body-scope binding ids paired index-wise with `free_vars`
+        /// (bd-snlhk): carries the exact id->name mapping so the deferred
+        /// IR3 pass never reconstructs it heuristically.
+        free_var_ids: Vec<BindingId>,
+        /// Enclosing-scope binding ids paired index-wise with `free_vars`.
+        /// These identify the exact captured binding when multiple lexical
+        /// scopes contain the same name. Legacy IR1 artifacts predate this
+        /// additive field and deserialize it as empty; lowering then rejects
+        /// captured functions whose parallel metadata vectors do not match.
+        #[serde(default)]
+        free_var_outer_ids: Vec<BindingId>,
+        /// Exact body-local lexical metadata for bindings captured by an
+        /// immediate child function. It survives detachment from the IR1 scope
+        /// tree for deferred IR3 lowering. Empty metadata remains wire-
+        /// compatible with historical IR1 artifacts.
+        #[serde(default, skip_serializing_if = "boxed_vec_option_is_none_or_empty")]
+        local_lexical_bindings: Option<Box<Vec<ResolvedBinding>>>,
         /// True when the source function is a generator (`function*`).
         is_generator: bool,
+        /// Index into `param_names` of the rest parameter (`...xs`), if any.
+        /// The interpreter binds this slot to an Array of trailing arguments.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        rest_param_index: Option<u32>,
     },
     /// Create a function value (expression position — arrow functions and
     /// function expressions).  The resulting value is pushed onto the stack.
@@ -505,8 +589,27 @@ pub enum Ir1Op {
         body_ops: Vec<Ir1Op>,
         /// Free variables from enclosing scope (see DeclareFunction).
         free_vars: Vec<String>,
+        /// Body-scope binding ids paired index-wise with `free_vars`
+        /// (see DeclareFunction; bd-snlhk).
+        free_var_ids: Vec<BindingId>,
+        /// Exact enclosing-scope binding ids paired with `free_vars` (see
+        /// DeclareFunction). See that variant for the legacy-artifact posture.
+        #[serde(default)]
+        free_var_outer_ids: Vec<BindingId>,
+        /// Exact captured body-local `let`/`const` metadata (see
+        /// DeclareFunction).
+        #[serde(default, skip_serializing_if = "boxed_vec_option_is_none_or_empty")]
+        local_lexical_bindings: Option<Box<Vec<ResolvedBinding>>>,
         /// True when the source function is a generator (`function*`).
         is_generator: bool,
+        /// True when this expression is an arrow rather than an ordinary
+        /// function expression. Omitted for `false` to preserve legacy
+        /// artifact and canonical-hash shapes.
+        #[serde(default, skip_serializing_if = "is_false")]
+        is_arrow: bool,
+        /// Index into `param_names` of the rest parameter (`...xs`), if any.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        rest_param_index: Option<u32>,
     },
     /// Begin a try block; on exception, jump to catch_label.
     /// If a finally block exists, `finally_label` points to its entry.
@@ -520,6 +623,9 @@ pub enum Ir1Op {
     EnterFinally,
     /// End a finally block.  Lowered to `Ir3Instruction::EndFinally`.
     EndFinally,
+    /// Discard the completion record owned by a finally block whose own
+    /// break/continue overrides that completion.
+    DiscardAbruptCompletion,
     /// Pop/discard top-of-stack value.
     Pop,
     /// Initialize a for..in enumeration: pop object from stack, push internal
@@ -607,10 +713,7 @@ impl Ir1Op {
                     "op".to_string(),
                     CanonicalValue::String("import_module".to_string()),
                 );
-                map.insert(
-                    "specifier".to_string(),
-                    CanonicalValue::String(specifier.clone()),
-                );
+                map.insert("specifier".to_string(), specifier.canonical_value());
             }
             Self::ExportBinding { name, binding_id } => {
                 map.insert(
@@ -635,6 +738,12 @@ impl Ir1Op {
                     CanonicalValue::String("yield".to_string()),
                 );
                 map.insert("delegate".to_string(), CanonicalValue::Bool(*delegate));
+            }
+            Self::GeneratorBodyStart => {
+                map.insert(
+                    "op".to_string(),
+                    CanonicalValue::String("generator_body_start".to_string()),
+                );
             }
             Self::Nop => {
                 map.insert("op".to_string(), CanonicalValue::String("nop".to_string()));
@@ -789,6 +898,16 @@ impl Ir1Op {
                     CanonicalValue::String("spread_into_object".to_string()),
                 );
             }
+            Self::CopyDataProperties { excluded_count } => {
+                map.insert(
+                    "op".to_string(),
+                    CanonicalValue::String("copy_data_properties".to_string()),
+                );
+                map.insert(
+                    "excluded_count".to_string(),
+                    CanonicalValue::U64(u64::from(*excluded_count)),
+                );
+            }
             Self::Throw => {
                 map.insert(
                     "op".to_string(),
@@ -819,7 +938,11 @@ impl Ir1Op {
                 param_names,
                 body_ops,
                 free_vars,
+                free_var_ids,
+                free_var_outer_ids,
+                local_lexical_bindings,
                 is_generator,
+                rest_param_index,
             } => {
                 map.insert(
                     "op".to_string(),
@@ -853,16 +976,54 @@ impl Ir1Op {
                     ),
                 );
                 map.insert(
+                    "free_var_ids".to_string(),
+                    CanonicalValue::Array(
+                        free_var_ids
+                            .iter()
+                            .map(|id| CanonicalValue::U64(u64::from(*id)))
+                            .collect(),
+                    ),
+                );
+                map.insert(
+                    "free_var_outer_ids".to_string(),
+                    CanonicalValue::Array(
+                        free_var_outer_ids
+                            .iter()
+                            .map(|id| CanonicalValue::U64(u64::from(*id)))
+                            .collect(),
+                    ),
+                );
+                if let Some(local_lexical_bindings) = local_lexical_bindings
+                    .as_deref()
+                    .filter(|bindings| !bindings.is_empty())
+                {
+                    map.insert(
+                        "local_lexical_bindings".to_string(),
+                        canonical_resolved_binding_array(local_lexical_bindings),
+                    );
+                }
+                map.insert(
                     "is_generator".to_string(),
                     CanonicalValue::Bool(*is_generator),
                 );
+                if let Some(rest_param_index) = rest_param_index {
+                    map.insert(
+                        "rest_param_index".to_string(),
+                        CanonicalValue::U64(u64::from(*rest_param_index)),
+                    );
+                }
             }
             Self::CreateFunction {
                 name,
                 param_names,
                 body_ops,
                 free_vars,
+                free_var_ids,
+                free_var_outer_ids,
+                local_lexical_bindings,
                 is_generator,
+                is_arrow,
+                rest_param_index,
             } => {
                 map.insert(
                     "op".to_string(),
@@ -896,9 +1057,45 @@ impl Ir1Op {
                     ),
                 );
                 map.insert(
+                    "free_var_ids".to_string(),
+                    CanonicalValue::Array(
+                        free_var_ids
+                            .iter()
+                            .map(|id| CanonicalValue::U64(u64::from(*id)))
+                            .collect(),
+                    ),
+                );
+                map.insert(
+                    "free_var_outer_ids".to_string(),
+                    CanonicalValue::Array(
+                        free_var_outer_ids
+                            .iter()
+                            .map(|id| CanonicalValue::U64(u64::from(*id)))
+                            .collect(),
+                    ),
+                );
+                if let Some(local_lexical_bindings) = local_lexical_bindings
+                    .as_deref()
+                    .filter(|bindings| !bindings.is_empty())
+                {
+                    map.insert(
+                        "local_lexical_bindings".to_string(),
+                        canonical_resolved_binding_array(local_lexical_bindings),
+                    );
+                }
+                map.insert(
                     "is_generator".to_string(),
                     CanonicalValue::Bool(*is_generator),
                 );
+                if *is_arrow {
+                    map.insert("is_arrow".to_string(), CanonicalValue::Bool(true));
+                }
+                if let Some(rest_param_index) = rest_param_index {
+                    map.insert(
+                        "rest_param_index".to_string(),
+                        CanonicalValue::U64(u64::from(*rest_param_index)),
+                    );
+                }
             }
             Self::BeginTry {
                 catch_label,
@@ -936,6 +1133,12 @@ impl Ir1Op {
                 map.insert(
                     "op".to_string(),
                     CanonicalValue::String("end_finally".to_string()),
+                );
+            }
+            Self::DiscardAbruptCompletion => {
+                map.insert(
+                    "op".to_string(),
+                    CanonicalValue::String("discard_abrupt_completion".to_string()),
                 );
             }
             Self::Pop => {
@@ -1028,7 +1231,7 @@ impl Ir1Op {
 /// Literal values in IR1.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Ir1Literal {
-    String(String),
+    String(JsString),
     Integer(i64),
     /// Floating-point literal stored as IEEE 754 bits for deterministic serde.
     Float(u64),
@@ -1046,7 +1249,7 @@ impl Ir1Literal {
                     "kind".to_string(),
                     CanonicalValue::String("string".to_string()),
                 );
-                map.insert("value".to_string(), CanonicalValue::String(value.clone()));
+                map.insert("value".to_string(), value.canonical_value());
             }
             Self::Integer(value) => {
                 map.insert(
@@ -1484,6 +1687,15 @@ pub enum Ir3Instruction {
     SpreadIntoArray { array: Reg, iterable: Reg },
     /// Spread an object's properties into another object: Object.assign(target, source).
     SpreadIntoObject { target: Reg, source: Reg },
+    /// Copy enumerable own properties from `source` to `target` for object-rest
+    /// binding semantics. `excluded` names keys that must be filtered before
+    /// reading values; `value_dst` is reserved for resumable property reads.
+    CopyDataProperties {
+        target: Reg,
+        source: Reg,
+        excluded: RegRange,
+        value_dst: Reg,
+    },
     /// Template literal concatenation: dst = parts[0] + parts[1] + ... + parts[N-1].
     /// Parts are interleaved quasi strings and expressions already loaded in registers.
     TemplateLiteral { parts: RegRange, dst: Reg },
@@ -1514,9 +1726,11 @@ pub enum Ir3Instruction {
     /// Mark entry into a finally block.  The runtime records whether
     /// execution arrived via normal completion or exception propagation.
     EnterFinally,
-    /// End a finally block.  If a pending exception exists, re-throw it;
-    /// otherwise continue to the next instruction.
+    /// End a finally block and propagate its owned completion record, if any.
     EndFinally,
+    /// Discard the owned completion record when a break/continue issued from
+    /// inside a finally body overrides it.
+    DiscardAbruptCompletion,
 
     // ── Closure / scope-chain instructions ────────────────────────────
     /// Create a closure from a function index and the current environment.
@@ -1560,6 +1774,9 @@ pub enum Ir3Instruction {
         function_index: u32,
         capture_count: u32,
     },
+    /// Suspend a freshly invoked generator after its parameter environment is
+    /// initialized but before any source body statement is evaluated.
+    GeneratorBodyStart,
     /// Yield a value from a generator.  Suspends execution and returns
     /// `{value, done: false}` to the caller.  When resumed via `.next(v)`,
     /// the injected value is placed in `resume_dst`.
@@ -1925,6 +2142,30 @@ impl Ir3Instruction {
                     CanonicalValue::U64(u64::from(*source)),
                 );
             }
+            Self::CopyDataProperties {
+                target,
+                source,
+                excluded,
+                value_dst,
+            } => {
+                map.insert(
+                    "op".to_string(),
+                    CanonicalValue::String("copy_data_properties".to_string()),
+                );
+                map.insert(
+                    "target".to_string(),
+                    CanonicalValue::U64(u64::from(*target)),
+                );
+                map.insert(
+                    "source".to_string(),
+                    CanonicalValue::U64(u64::from(*source)),
+                );
+                map.insert("excluded".to_string(), excluded.canonical_value());
+                map.insert(
+                    "value_dst".to_string(),
+                    CanonicalValue::U64(u64::from(*value_dst)),
+                );
+            }
             Self::TemplateLiteral { parts, dst } => {
                 map.insert(
                     "op".to_string(),
@@ -2007,6 +2248,12 @@ impl Ir3Instruction {
                 map.insert(
                     "op".to_string(),
                     CanonicalValue::String("end_finally".to_string()),
+                );
+            }
+            Self::DiscardAbruptCompletion => {
+                map.insert(
+                    "op".to_string(),
+                    CanonicalValue::String("discard_abrupt_completion".to_string()),
                 );
             }
             Self::Mod { dst, lhs, rhs } => {
@@ -2339,6 +2586,12 @@ impl Ir3Instruction {
                     CanonicalValue::U64(u64::from(*capture_count)),
                 );
             }
+            Self::GeneratorBodyStart => {
+                map.insert(
+                    "op".to_string(),
+                    CanonicalValue::String("generator_body_start".to_string()),
+                );
+            }
             Self::Yield {
                 value,
                 delegate,
@@ -2441,6 +2694,12 @@ pub struct Ir3FunctionDesc {
     pub name: Option<String>,
     /// Whether this function is a generator (function*).
     pub is_generator: bool,
+    /// Index into the parameter list of the rest parameter (`...xs`), if any.
+    /// Omitted from serialization and canonical encoding when absent so
+    /// non-rest IR3 descriptors remain byte-identical. Present values are
+    /// canonicalized because they change call semantics.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rest_param_index: Option<u32>,
 }
 
 impl Ir3FunctionDesc {
@@ -2469,6 +2728,12 @@ impl Ir3FunctionDesc {
                 None => CanonicalValue::Null,
             },
         );
+        if let Some(rest_param_index) = self.rest_param_index {
+            map.insert(
+                "rest_param_index".to_string(),
+                CanonicalValue::U64(u64::from(rest_param_index)),
+            );
+        }
         CanonicalValue::Map(map)
     }
 }
@@ -2520,8 +2785,8 @@ pub struct Ir3Module {
     pub header: IrHeader,
     /// Flat instruction array.
     pub instructions: Vec<Ir3Instruction>,
-    /// String constant pool.
-    pub constant_pool: Vec<String>,
+    /// Exact ECMAScript string constant pool.
+    pub constant_pool: Vec<JsString>,
     /// Function table with entry points and frame layout.
     pub function_table: Vec<Ir3FunctionDesc>,
     /// Proof-to-specialization linkage (if specialized).
@@ -2554,7 +2819,7 @@ impl Ir3Module {
             CanonicalValue::Array(
                 self.constant_pool
                     .iter()
-                    .map(|s| CanonicalValue::String(s.clone()))
+                    .map(JsString::canonical_value)
                     .collect(),
             ),
         );
@@ -2841,6 +3106,8 @@ impl Ir4Module {
 pub enum IrErrorCode {
     /// Schema version mismatch.
     SchemaVersionMismatch,
+    /// Generator parameter/body boundary is missing, duplicated, or misplaced.
+    InvalidGeneratorBoundary,
     /// Unexpected IR level.
     LevelMismatch,
     /// Source hash verification failed.
@@ -2859,6 +3126,7 @@ impl IrErrorCode {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::SchemaVersionMismatch => "IR_SCHEMA_VERSION_MISMATCH",
+            Self::InvalidGeneratorBoundary => "IR_INVALID_GENERATOR_BOUNDARY",
             Self::LevelMismatch => "IR_LEVEL_MISMATCH",
             Self::SourceHashMismatch => "IR_SOURCE_HASH_MISMATCH",
             Self::HashVerificationFailed => "IR_HASH_VERIFICATION_FAILED",
@@ -2907,6 +3175,7 @@ impl std::error::Error for IrError {}
 
 /// Verify that an IR0 module's content hash matches an expected value.
 pub fn verify_ir0_hash(module: &Ir0Module, expected: &ContentHash) -> Result<(), IrError> {
+    verify_schema_version(&module.header)?;
     let actual = module.content_hash();
     if &actual != expected {
         return Err(IrError::new(
@@ -2924,6 +3193,8 @@ pub fn verify_ir0_hash(module: &Ir0Module, expected: &ContentHash) -> Result<(),
 
 /// Verify that an IR1 module's source hash matches the expected IR0 hash.
 pub fn verify_ir1_source(module: &Ir1Module, ir0_hash: &ContentHash) -> Result<(), IrError> {
+    verify_schema_version(&module.header)?;
+    verify_ir1_generator_boundaries(module)?;
     match &module.header.source_hash {
         Some(source_hash) if source_hash == ir0_hash => Ok(()),
         Some(source_hash) => Err(IrError::new(
@@ -2945,6 +3216,8 @@ pub fn verify_ir1_source(module: &Ir1Module, ir0_hash: &ContentHash) -> Result<(
 
 /// Verify that an IR3 module has valid specialization linkage if present.
 pub fn verify_ir3_specialization(module: &Ir3Module) -> Result<(), IrError> {
+    verify_schema_version(&module.header)?;
+    verify_ir3_generator_boundaries(module)?;
     if let Some(spec) = &module.specialization {
         if spec.proof_input_ids.is_empty() {
             return Err(IrError::new(
@@ -2966,6 +3239,7 @@ pub fn verify_ir3_specialization(module: &Ir3Module) -> Result<(), IrError> {
 
 /// Verify that an IR4 witness is consistent with the IR3 module it was produced from.
 pub fn verify_ir4_linkage(witness: &Ir4Module, ir3_hash: &ContentHash) -> Result<(), IrError> {
+    verify_schema_version(&witness.header)?;
     if &witness.executed_ir3_hash != ir3_hash {
         return Err(IrError::new(
             IrErrorCode::WitnessIntegrityViolation,
@@ -3010,6 +3284,326 @@ pub fn verify_ir4_linkage(witness: &Ir4Module, ir3_hash: &ContentHash) -> Result
                 IrLevel::Ir4,
             ));
         }
+    }
+    Ok(())
+}
+
+/// Verify that an IR header can be read by the current core schema.
+///
+/// Major versions must match, older minor versions remain readable, future
+/// minor versions are rejected, incompatible peer-owned minor versions are
+/// rejected, and patch differences do not affect wire compatibility.
+pub fn verify_schema_version(header: &IrHeader) -> Result<(), IrError> {
+    let current = IrSchemaVersion::CURRENT;
+    let provided = &header.schema_version;
+
+    if current.major != provided.major {
+        return Err(IrError::new(
+            IrErrorCode::SchemaVersionMismatch,
+            format!(
+                "incompatible major version: current {}, provided {}",
+                current, provided
+            ),
+            header.level,
+        ));
+    }
+
+    // Core 0.6.0 and 0.7.0 never existed. Those numeric versions identify
+    // incompatible franken-engine IR shapes: engine 0.6 adds explicit
+    // unresolved-name operations, and engine 0.7 adds Continue on top of that
+    // divergent wire. Accepting either as a historical core artifact would
+    // make the schema gate ambiguous for the overlapping enum variants.
+    if provided.major == 0 && matches!(provided.minor, 6 | 7) {
+        return Err(IrError::new(
+            IrErrorCode::SchemaVersionMismatch,
+            format!(
+                "unsupported skipped core minor version: current {}, provided {}",
+                current, provided
+            ),
+            header.level,
+        ));
+    }
+
+    if current.minor < provided.minor {
+        return Err(IrError::new(
+            IrErrorCode::SchemaVersionMismatch,
+            format!(
+                "unsupported future minor version: current {}, provided {}",
+                current, provided
+            ),
+            header.level,
+        ));
+    }
+
+    Ok(())
+}
+
+const GENERATOR_BODY_BOUNDARY_SCHEMA_VERSION: IrSchemaVersion = IrSchemaVersion {
+    major: 0,
+    minor: 10,
+    patch: 0,
+};
+
+fn generator_body_boundary_required(version: IrSchemaVersion) -> bool {
+    version >= GENERATOR_BODY_BOUNDARY_SCHEMA_VERSION
+}
+
+fn invalid_generator_boundary(
+    level: IrLevel,
+    context: &str,
+    expected: usize,
+    actual: usize,
+) -> IrError {
+    IrError::new(
+        IrErrorCode::InvalidGeneratorBoundary,
+        format!(
+            "{context} must contain exactly {expected} generator_body_start marker(s), found {actual}"
+        ),
+        level,
+    )
+}
+
+fn verify_ir1_generator_sequence(
+    ops: &[Ir1Op],
+    schema_version: IrSchemaVersion,
+    level: IrLevel,
+    context: &str,
+    is_generator: bool,
+) -> Result<(), IrError> {
+    let boundary_required = generator_body_boundary_required(schema_version);
+    let expected = usize::from(boundary_required && is_generator);
+    let actual = ops
+        .iter()
+        .filter(|op| matches!(op, Ir1Op::GeneratorBodyStart))
+        .count();
+    if actual != expected {
+        return Err(invalid_generator_boundary(level, context, expected, actual));
+    }
+
+    if expected == 1 {
+        let boundary_index = ops
+            .iter()
+            .position(|op| matches!(op, Ir1Op::GeneratorBodyStart))
+            .expect("counted generator boundary must have an index");
+        if let Some(terminal_index) = ops
+            .iter()
+            .position(|op| matches!(op, Ir1Op::Yield { .. } | Ir1Op::Return))
+            && boundary_index > terminal_index
+        {
+            return Err(IrError::new(
+                IrErrorCode::InvalidGeneratorBoundary,
+                format!("{context} generator_body_start marker appears after a yield or return"),
+                level,
+            ));
+        }
+    }
+
+    for op in ops {
+        match op {
+            Ir1Op::DeclareFunction {
+                name,
+                body_ops,
+                is_generator,
+                ..
+            } => verify_ir1_generator_sequence(
+                body_ops,
+                schema_version,
+                level,
+                &format!("function {name}"),
+                *is_generator,
+            )?,
+            Ir1Op::CreateFunction {
+                name,
+                body_ops,
+                is_generator,
+                ..
+            } => verify_ir1_generator_sequence(
+                body_ops,
+                schema_version,
+                level,
+                &format!(
+                    "function expression {}",
+                    name.as_deref().unwrap_or("<anonymous>")
+                ),
+                *is_generator,
+            )?,
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+/// Verify the versioned generator parameter/body boundary contract in IR1.
+pub fn verify_ir1_generator_boundaries(module: &Ir1Module) -> Result<(), IrError> {
+    verify_ir1_generator_sequence(
+        &module.ops,
+        module.header.schema_version,
+        IrLevel::Ir1,
+        "IR1 module body",
+        false,
+    )
+}
+
+/// Verify the IR1 operations serialized inside IR2 retain the same versioned
+/// generator parameter/body boundary contract.
+pub fn verify_ir2_generator_boundaries(module: &Ir2Module) -> Result<(), IrError> {
+    let actual = module
+        .ops
+        .iter()
+        .filter(|op| matches!(&op.inner, Ir1Op::GeneratorBodyStart))
+        .count();
+    if actual != 0 {
+        return Err(invalid_generator_boundary(
+            IrLevel::Ir2,
+            "IR2 module body",
+            0,
+            actual,
+        ));
+    }
+
+    for op in &module.ops {
+        match &op.inner {
+            Ir1Op::DeclareFunction {
+                name,
+                body_ops,
+                is_generator,
+                ..
+            } => verify_ir1_generator_sequence(
+                body_ops,
+                module.header.schema_version,
+                IrLevel::Ir2,
+                &format!("function {name}"),
+                *is_generator,
+            )?,
+            Ir1Op::CreateFunction {
+                name,
+                body_ops,
+                is_generator,
+                ..
+            } => verify_ir1_generator_sequence(
+                body_ops,
+                module.header.schema_version,
+                IrLevel::Ir2,
+                &format!(
+                    "function expression {}",
+                    name.as_deref().unwrap_or("<anonymous>")
+                ),
+                *is_generator,
+            )?,
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+fn verify_ir3_generator_sequence(
+    instructions: &[Ir3Instruction],
+    boundary_required: bool,
+    context: &str,
+    is_generator: bool,
+) -> Result<(), IrError> {
+    let expected = usize::from(boundary_required && is_generator);
+    let actual = instructions
+        .iter()
+        .filter(|instruction| matches!(instruction, Ir3Instruction::GeneratorBodyStart))
+        .count();
+    if actual != expected {
+        return Err(invalid_generator_boundary(
+            IrLevel::Ir3,
+            context,
+            expected,
+            actual,
+        ));
+    }
+
+    if expected == 1 {
+        let boundary_index = instructions
+            .iter()
+            .position(|instruction| matches!(instruction, Ir3Instruction::GeneratorBodyStart))
+            .expect("counted generator boundary must have an index");
+        if let Some(terminal_index) = instructions.iter().position(|instruction| {
+            matches!(
+                instruction,
+                Ir3Instruction::Yield { .. } | Ir3Instruction::Return { .. } | Ir3Instruction::Halt
+            )
+        }) && boundary_index > terminal_index
+        {
+            return Err(IrError::new(
+                IrErrorCode::InvalidGeneratorBoundary,
+                format!(
+                    "{context} generator_body_start marker appears after a yield, return, or halt"
+                ),
+                IrLevel::Ir3,
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Verify each IR3 function owns the boundary shape required by its schema
+/// version. Current generator bodies have one marker; legacy generators and
+/// every non-generator region have none.
+pub fn verify_ir3_generator_boundaries(module: &Ir3Module) -> Result<(), IrError> {
+    let boundary_required = generator_body_boundary_required(module.header.schema_version);
+    let instruction_count = module.instructions.len();
+
+    if module.function_table.is_empty() {
+        return verify_ir3_generator_sequence(
+            &module.instructions,
+            boundary_required,
+            "IR3 module body",
+            false,
+        );
+    }
+
+    for pair in module.function_table.windows(2) {
+        if pair[0].entry >= pair[1].entry {
+            return Err(IrError::new(
+                IrErrorCode::InvalidGeneratorBoundary,
+                "IR3 function entries must be strictly increasing",
+                IrLevel::Ir3,
+            ));
+        }
+    }
+
+    let first_entry = module.function_table[0].entry as usize;
+    if first_entry > instruction_count {
+        return Err(IrError::new(
+            IrErrorCode::InvalidGeneratorBoundary,
+            "IR3 function entry exceeds the instruction stream",
+            IrLevel::Ir3,
+        ));
+    }
+    verify_ir3_generator_sequence(
+        &module.instructions[..first_entry],
+        boundary_required,
+        "IR3 module prefix",
+        false,
+    )?;
+
+    for (index, function) in module.function_table.iter().enumerate() {
+        let start = function.entry as usize;
+        let end = module
+            .function_table
+            .get(index + 1)
+            .map_or(instruction_count, |next| next.entry as usize);
+        if start > end || end > instruction_count {
+            return Err(IrError::new(
+                IrErrorCode::InvalidGeneratorBoundary,
+                format!("IR3 function {index} has an invalid instruction range"),
+                IrLevel::Ir3,
+            ));
+        }
+        let context = function.name.as_deref().map_or_else(
+            || format!("IR3 function {index}"),
+            |name| format!("IR3 function {name}"),
+        );
+        verify_ir3_generator_sequence(
+            &module.instructions[start..end],
+            boundary_required,
+            &context,
+            function.is_generator,
+        )?;
     }
     Ok(())
 }
@@ -3231,7 +3825,7 @@ mod tests {
 
     #[test]
     fn schema_version_display() {
-        assert_eq!(IrSchemaVersion::CURRENT.to_string(), "0.1.0");
+        assert_eq!(IrSchemaVersion::CURRENT.to_string(), "0.10.0");
     }
 
     #[test]
@@ -3243,10 +3837,581 @@ mod tests {
     }
 
     #[test]
+    fn schema_version_validation_enforces_core_compatibility_window_bd_vltnh() {
+        let header = |schema_version, level| IrHeader {
+            schema_version,
+            level,
+            source_hash: None,
+            source_label: "schema-check".to_string(),
+        };
+
+        assert!(verify_schema_version(&header(IrSchemaVersion::CURRENT, IrLevel::Ir3)).is_ok());
+        for minor in [1, 2, 3, 4, 5, 8, 9] {
+            assert!(
+                verify_schema_version(&header(
+                    IrSchemaVersion {
+                        major: IrSchemaVersion::CURRENT.major,
+                        minor,
+                        patch: u32::MAX,
+                    },
+                    IrLevel::Ir1,
+                ))
+                .is_ok(),
+                "core 0.10 readers retain compatibility with 0.{minor} artifacts"
+            );
+        }
+
+        for (version, level, expected_message) in [
+            (
+                IrSchemaVersion {
+                    major: IrSchemaVersion::CURRENT.major.saturating_add(1),
+                    minor: 0,
+                    patch: 0,
+                },
+                IrLevel::Ir2,
+                "incompatible major version",
+            ),
+            (
+                IrSchemaVersion {
+                    major: IrSchemaVersion::CURRENT.major,
+                    minor: IrSchemaVersion::CURRENT.minor.saturating_add(1),
+                    patch: 0,
+                },
+                IrLevel::Ir4,
+                "unsupported future minor version",
+            ),
+        ] {
+            let error = verify_schema_version(&header(version, level))
+                .expect_err("unsupported schema must fail closed");
+            assert_eq!(error.code, IrErrorCode::SchemaVersionMismatch);
+            assert_eq!(error.level, level);
+            assert!(error.message.contains(expected_message));
+        }
+    }
+
+    #[test]
+    fn schema_version_validation_rejects_skipped_engine_owned_minors_bd_t9n3s() {
+        for minor in [6, 7] {
+            let header = IrHeader {
+                schema_version: IrSchemaVersion {
+                    major: 0,
+                    minor,
+                    patch: u32::MAX,
+                },
+                level: IrLevel::Ir1,
+                source_hash: None,
+                source_label: "peer-engine-wire".to_string(),
+            };
+
+            let error = verify_schema_version(&header)
+                .expect_err("core readers must reject engine-owned IR minors");
+            assert_eq!(error.code, IrErrorCode::SchemaVersionMismatch);
+            assert_eq!(error.level, IrLevel::Ir1);
+            assert!(error.message.contains("skipped core minor"));
+            assert!(error.message.contains(&format!("0.{minor}.{}", u32::MAX)));
+        }
+    }
+
+    #[test]
+    fn verifier_entrypoints_enforce_schema_version_bd_093id() {
+        let source_hash = ContentHash::compute(b"schema-entrypoint");
+        let mut ir1 = Ir1Module::new(source_hash, "future-ir1.js");
+        ir1.header.schema_version = IrSchemaVersion {
+            major: 0,
+            minor: IrSchemaVersion::CURRENT.minor + 1,
+            patch: 0,
+        };
+        let mut verifier = IrVerifier::new();
+        let ir1_error = verifier
+            .verify_ir1(&ir1, &source_hash, "trace-future-ir1")
+            .expect_err("IR1 verifier must reject a future schema");
+        assert_eq!(ir1_error.code, IrErrorCode::SchemaVersionMismatch);
+
+        let mut ir3 = Ir3Module::new(source_hash, "peer-ir3.js");
+        ir3.header.schema_version = IrSchemaVersion {
+            major: 0,
+            minor: 7,
+            patch: 0,
+        };
+        let ir3_error = verifier
+            .verify_ir3(&ir3, "trace-peer-ir3")
+            .expect_err("IR3 verifier must reject a skipped peer-owned schema");
+        assert_eq!(ir3_error.code, IrErrorCode::SchemaVersionMismatch);
+    }
+
+    #[test]
+    fn current_ir3_generator_boundary_must_precede_yield_bd_093id() {
+        let source_hash = ContentHash::compute(b"misplaced-generator-boundary");
+        let mut ir3 = Ir3Module::new(source_hash, "misplaced-generator-boundary.js");
+        ir3.instructions = vec![
+            Ir3Instruction::LoadUndefined { dst: 0 },
+            Ir3Instruction::Yield {
+                value: 0,
+                delegate: false,
+                resume_dst: 1,
+            },
+            Ir3Instruction::GeneratorBodyStart,
+            Ir3Instruction::Return { value: 0 },
+        ];
+        ir3.function_table.push(Ir3FunctionDesc {
+            entry: 0,
+            arity: 0,
+            frame_size: 2,
+            name: Some("misplaced".to_string()),
+            is_generator: true,
+            rest_param_index: None,
+        });
+
+        let error = verify_ir3_generator_boundaries(&ir3)
+            .expect_err("a generator boundary after yield must fail structurally");
+        assert_eq!(error.code, IrErrorCode::InvalidGeneratorBoundary);
+        assert!(error.message.contains("appears after"));
+    }
+
+    #[test]
     fn schema_version_canonical_deterministic() {
         let a = IrSchemaVersion::CURRENT.canonical_value();
         let b = IrSchemaVersion::CURRENT.canonical_value();
         assert_eq!(a, b);
+    }
+
+    #[test]
+    fn iterator_close_reason_wire_and_canonical_coverage_bd_t9n3s() {
+        let reasons = [
+            (IteratorCloseReason::Break, "break", r#""Break""#),
+            (IteratorCloseReason::Continue, "continue", r#""Continue""#),
+            (IteratorCloseReason::Return, "return", r#""Return""#),
+            (IteratorCloseReason::Throw, "throw", r#""Throw""#),
+        ];
+
+        for (reason, canonical_name, serde_wire) in reasons {
+            assert_eq!(reason.as_str(), canonical_name);
+            assert_eq!(
+                serde_json::to_string(&reason).expect("close reason should serialize"),
+                serde_wire
+            );
+            assert_eq!(
+                serde_json::from_str::<IteratorCloseReason>(serde_wire)
+                    .expect("close reason should deserialize"),
+                reason
+            );
+
+            let ir1 = Ir1Op::IteratorClose { reason };
+            let CanonicalValue::Map(ir1_canonical) = ir1.canonical_value() else {
+                panic!("IR1 IteratorClose canonical form should be a map");
+            };
+            assert_eq!(
+                ir1_canonical.get("reason"),
+                Some(&CanonicalValue::String(canonical_name.to_string()))
+            );
+            let ir1_json = serde_json::to_string(&ir1).expect("IR1 close should serialize");
+            assert_eq!(
+                serde_json::from_str::<Ir1Op>(&ir1_json).expect("IR1 close should deserialize"),
+                ir1
+            );
+
+            let ir2 = Ir2Op {
+                inner: Ir1Op::IteratorClose { reason },
+                effect: EffectBoundary::WriteEffect,
+                required_capability: None,
+                flow: None,
+            };
+            let CanonicalValue::Map(ir2_canonical) = ir2.canonical_value() else {
+                panic!("IR2 IteratorClose canonical form should be a map");
+            };
+            let Some(CanonicalValue::Map(ir2_inner)) = ir2_canonical.get("inner") else {
+                panic!("IR2 IteratorClose should retain its canonical IR1 operation");
+            };
+            assert_eq!(
+                ir2_inner.get("reason"),
+                Some(&CanonicalValue::String(canonical_name.to_string()))
+            );
+            let ir2_json = serde_json::to_string(&ir2).expect("IR2 close should serialize");
+            assert_eq!(
+                serde_json::from_str::<Ir2Op>(&ir2_json).expect("IR2 close should deserialize"),
+                ir2
+            );
+
+            let ir3 = Ir3Instruction::IteratorClose {
+                iterator: 7,
+                reason,
+            };
+            let CanonicalValue::Map(ir3_canonical) = ir3.canonical_value() else {
+                panic!("IR3 IteratorClose canonical form should be a map");
+            };
+            assert_eq!(
+                ir3_canonical.get("reason"),
+                Some(&CanonicalValue::String(canonical_name.to_string()))
+            );
+            let ir3_json = serde_json::to_string(&ir3).expect("IR3 close should serialize");
+            assert_eq!(
+                serde_json::from_str::<Ir3Instruction>(&ir3_json)
+                    .expect("IR3 close should deserialize"),
+                ir3
+            );
+        }
+    }
+
+    #[test]
+    fn generator_body_start_wire_and_canonical_contract_bd_093id() {
+        let ir1 = Ir1Op::GeneratorBodyStart;
+        assert_eq!(
+            serde_json::to_string(&ir1).expect("IR1 boundary should serialize"),
+            r#""GeneratorBodyStart""#
+        );
+        let CanonicalValue::Map(ir1_canonical) = ir1.canonical_value() else {
+            panic!("IR1 generator boundary canonical form should be a map");
+        };
+        assert_eq!(
+            ir1_canonical.get("op"),
+            Some(&CanonicalValue::String("generator_body_start".to_string()))
+        );
+
+        let ir2 = Ir2Op {
+            inner: Ir1Op::GeneratorBodyStart,
+            effect: EffectBoundary::Pure,
+            required_capability: None,
+            flow: None,
+        };
+        let ir2_json = serde_json::to_value(&ir2).expect("IR2 boundary should serialize");
+        assert_eq!(
+            ir2_json.get("inner"),
+            Some(&serde_json::Value::String("GeneratorBodyStart".to_string()))
+        );
+        let CanonicalValue::Map(ir2_canonical) = ir2.canonical_value() else {
+            panic!("IR2 generator boundary canonical form should be a map");
+        };
+        let Some(CanonicalValue::Map(ir2_inner)) = ir2_canonical.get("inner") else {
+            panic!("IR2 generator boundary should retain its IR1 canonical form");
+        };
+        assert_eq!(
+            ir2_inner.get("op"),
+            Some(&CanonicalValue::String("generator_body_start".to_string()))
+        );
+
+        let ir3 = Ir3Instruction::GeneratorBodyStart;
+        assert_eq!(
+            serde_json::to_string(&ir3).expect("IR3 boundary should serialize"),
+            r#""GeneratorBodyStart""#
+        );
+        let CanonicalValue::Map(ir3_canonical) = ir3.canonical_value() else {
+            panic!("IR3 generator boundary canonical form should be a map");
+        };
+        assert_eq!(
+            ir3_canonical.get("op"),
+            Some(&CanonicalValue::String("generator_body_start".to_string()))
+        );
+    }
+
+    #[test]
+    fn ir1_import_module_preserves_ordinary_wire_bytes_bd_lfq44() {
+        let op = Ir1Op::ImportModule {
+            specifier: "pkg".into(),
+        };
+        let json = serde_json::to_string(&op).expect("serialize ordinary module import");
+        assert_eq!(json, r#"{"ImportModule":{"specifier":"pkg"}}"#);
+        assert_eq!(
+            serde_json::from_str::<Ir1Op>(&json).expect("read historical module import"),
+            op
+        );
+    }
+
+    #[test]
+    fn ir1_import_module_keeps_d800_and_dc00_distinct_bd_lfq44() {
+        let make = |unit| Ir1Op::ImportModule {
+            specifier: JsString::from_code_units(&[unit]),
+        };
+        let d800 = make(0xD800);
+        let dc00 = make(0xDC00);
+        let d800_json = serde_json::to_string(&d800).expect("serialize D800 module import");
+        let dc00_json = serde_json::to_string(&dc00).expect("serialize DC00 module import");
+
+        assert_eq!(
+            d800_json,
+            r#"{"ImportModule":{"specifier":{"$wtf16":[55296]}}}"#
+        );
+        assert_ne!(d800, dc00);
+        assert_ne!(d800.canonical_value(), dc00.canonical_value());
+        assert_ne!(d800_json, dc00_json);
+        assert_eq!(
+            serde_json::from_str::<Ir1Op>(&d800_json).expect("read D800 module import"),
+            d800
+        );
+        assert_eq!(
+            serde_json::from_str::<Ir1Op>(&dc00_json).expect("read DC00 module import"),
+            dc00
+        );
+    }
+
+    #[test]
+    fn ir1_static_property_key_preserves_ordinary_wire_bd_b12xs_6() {
+        let key = Ir1PropertyKey::Static("ordinary".into());
+        let json = serde_json::to_string(&key).expect("serialize ordinary static key");
+        assert_eq!(json, r#"{"Static":"ordinary"}"#);
+        assert_eq!(
+            serde_json::from_str::<Ir1PropertyKey>(&json)
+                .expect("read historical String static-key wire"),
+            key
+        );
+    }
+
+    #[test]
+    fn ir1_static_property_keys_keep_exact_units_distinct_bd_b12xs_6() {
+        let make = |unit| Ir1PropertyKey::Static(JsString::from_code_units(&[unit]));
+        let d800 = make(0xD800);
+        let d801 = make(0xD801);
+        let replacement = Ir1PropertyKey::Static("\u{FFFD}".into());
+
+        assert_ne!(d800, d801);
+        assert_ne!(d800, replacement);
+        assert_ne!(d800.canonical_value(), d801.canonical_value());
+        assert_ne!(d800.canonical_value(), replacement.canonical_value());
+
+        let d800_json = serde_json::to_string(&d800).expect("serialize D800 static key");
+        assert_eq!(d800_json, r#"{"Static":{"$wtf16":[55296]}}"#);
+        assert_eq!(
+            serde_json::from_str::<Ir1PropertyKey>(&d800_json).expect("round-trip D800 static key"),
+            d800
+        );
+    }
+
+    #[test]
+    fn copy_data_properties_wire_and_canonical_contract_bd_f1ixz() {
+        let ir1 = Ir1Op::CopyDataProperties { excluded_count: 2 };
+        let CanonicalValue::Map(ir1_canonical) = ir1.canonical_value() else {
+            panic!("IR1 CopyDataProperties canonical form should be a map");
+        };
+        assert_eq!(
+            ir1_canonical.get("op"),
+            Some(&CanonicalValue::String("copy_data_properties".to_string()))
+        );
+        assert_eq!(
+            ir1_canonical.get("excluded_count"),
+            Some(&CanonicalValue::U64(2))
+        );
+        assert_eq!(ir1_canonical.len(), 2);
+        let ir1_json = serde_json::to_string(&ir1).expect("IR1 operation should serialize");
+        assert_eq!(ir1_json, r#"{"CopyDataProperties":{"excluded_count":2}}"#);
+        assert_eq!(
+            serde_json::from_str::<Ir1Op>(&ir1_json).expect("IR1 operation should deserialize"),
+            ir1
+        );
+
+        let ir3 = Ir3Instruction::CopyDataProperties {
+            target: 1,
+            source: 2,
+            excluded: RegRange { start: 3, count: 2 },
+            value_dst: 5,
+        };
+        let CanonicalValue::Map(ir3_canonical) = ir3.canonical_value() else {
+            panic!("IR3 CopyDataProperties canonical form should be a map");
+        };
+        assert_eq!(
+            ir3_canonical.get("op"),
+            Some(&CanonicalValue::String("copy_data_properties".to_string()))
+        );
+        assert_eq!(ir3_canonical.get("target"), Some(&CanonicalValue::U64(1)));
+        assert_eq!(ir3_canonical.get("source"), Some(&CanonicalValue::U64(2)));
+        assert_eq!(
+            ir3_canonical.get("excluded"),
+            Some(&RegRange { start: 3, count: 2 }.canonical_value())
+        );
+        assert_eq!(
+            ir3_canonical.get("value_dst"),
+            Some(&CanonicalValue::U64(5))
+        );
+        assert_eq!(ir3_canonical.len(), 5);
+        let ir3_json = serde_json::to_string(&ir3).expect("IR3 instruction should serialize");
+        assert_eq!(
+            ir3_json,
+            r#"{"CopyDataProperties":{"target":1,"source":2,"excluded":{"start":3,"count":2},"value_dst":5}}"#
+        );
+        assert_eq!(
+            serde_json::from_str::<Ir3Instruction>(&ir3_json)
+                .expect("IR3 instruction should deserialize"),
+            ir3
+        );
+    }
+
+    #[test]
+    fn legacy_function_ops_default_missing_outer_capture_ids() {
+        let legacy_shapes = [
+            Ir1Op::DeclareFunction {
+                name: "f".to_string(),
+                binding_id: 7,
+                param_names: Vec::new(),
+                body_ops: Vec::new(),
+                free_vars: vec!["x".to_string()],
+                free_var_ids: vec![0],
+                free_var_outer_ids: vec![3],
+                local_lexical_bindings: None,
+                is_generator: false,
+                rest_param_index: Some(0),
+            },
+            Ir1Op::CreateFunction {
+                name: Some("g".to_string()),
+                param_names: Vec::new(),
+                body_ops: Vec::new(),
+                free_vars: vec!["y".to_string()],
+                free_var_ids: vec![1],
+                free_var_outer_ids: vec![4],
+                local_lexical_bindings: None,
+                is_generator: false,
+                is_arrow: false,
+                rest_param_index: Some(0),
+            },
+        ];
+
+        for op in legacy_shapes {
+            let CanonicalValue::Map(canonical) = op.canonical_value() else {
+                panic!("function op canonical form should be a map");
+            };
+            assert_eq!(
+                canonical.get("rest_param_index"),
+                Some(&CanonicalValue::U64(0))
+            );
+            let mut encoded = serde_json::to_value(op).expect("function op should serialize");
+            let payload = encoded
+                .as_object_mut()
+                .and_then(|root| root.values_mut().next())
+                .and_then(serde_json::Value::as_object_mut)
+                .expect("externally tagged function op payload");
+            assert!(payload.remove("free_var_outer_ids").is_some());
+            assert!(payload.get("local_lexical_bindings").is_none());
+            assert!(payload.remove("rest_param_index").is_some());
+
+            let restored: Ir1Op =
+                serde_json::from_value(encoded).expect("legacy function op should deserialize");
+            match restored {
+                Ir1Op::DeclareFunction {
+                    free_vars,
+                    free_var_outer_ids,
+                    local_lexical_bindings,
+                    rest_param_index,
+                    ..
+                }
+                | Ir1Op::CreateFunction {
+                    free_vars,
+                    free_var_outer_ids,
+                    local_lexical_bindings,
+                    rest_param_index,
+                    ..
+                } => {
+                    assert_eq!(free_vars.len(), 1);
+                    assert!(free_var_outer_ids.is_empty());
+                    assert!(local_lexical_bindings.is_none());
+                    assert_eq!(rest_param_index, None);
+                }
+                other => panic!("expected a function op, got {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn function_local_lexical_metadata_is_optional_roundtrippable_and_canonical_bd_uhf1m() {
+        fn function_op(declared: bool, local_lexical_bindings: Vec<ResolvedBinding>) -> Ir1Op {
+            let local_lexical_bindings =
+                (!local_lexical_bindings.is_empty()).then(|| Box::new(local_lexical_bindings));
+            if declared {
+                Ir1Op::DeclareFunction {
+                    name: "run".to_string(),
+                    binding_id: 0,
+                    param_names: Vec::new(),
+                    body_ops: Vec::new(),
+                    free_vars: Vec::new(),
+                    free_var_ids: Vec::new(),
+                    free_var_outer_ids: Vec::new(),
+                    local_lexical_bindings,
+                    is_generator: false,
+                    rest_param_index: None,
+                }
+            } else {
+                Ir1Op::CreateFunction {
+                    name: Some("run".to_string()),
+                    param_names: Vec::new(),
+                    body_ops: Vec::new(),
+                    free_vars: Vec::new(),
+                    free_var_ids: Vec::new(),
+                    free_var_outer_ids: Vec::new(),
+                    local_lexical_bindings,
+                    is_generator: false,
+                    is_arrow: false,
+                    rest_param_index: None,
+                }
+            }
+        }
+
+        let captured = vec![
+            ResolvedBinding {
+                name: "later".to_string(),
+                binding_id: 7,
+                scope: ScopeId { depth: 1, index: 0 },
+                kind: BindingKind::Let,
+            },
+            ResolvedBinding {
+                name: "fixed".to_string(),
+                binding_id: 3,
+                scope: ScopeId { depth: 1, index: 0 },
+                kind: BindingKind::Const,
+            },
+        ];
+
+        for declared in [false, true] {
+            let empty = function_op(declared, Vec::new());
+            let empty_json = serde_json::to_string(&empty).expect("serialize empty metadata");
+            assert!(!empty_json.contains("local_lexical_bindings"));
+            let CanonicalValue::Map(empty_fields) = empty.canonical_value() else {
+                panic!("function op canonical value must be a map");
+            };
+            assert!(!empty_fields.contains_key("local_lexical_bindings"));
+
+            let mut explicit_empty_json =
+                serde_json::to_value(&empty).expect("serialize empty function operation");
+            explicit_empty_json
+                .as_object_mut()
+                .and_then(|operation| operation.values_mut().next())
+                .and_then(serde_json::Value::as_object_mut)
+                .expect("externally tagged function op payload")
+                .insert(
+                    "local_lexical_bindings".to_string(),
+                    serde_json::Value::Array(Vec::new()),
+                );
+            let explicit_empty: Ir1Op = serde_json::from_value(explicit_empty_json)
+                .expect("deserialize explicit empty lexical metadata");
+            assert_eq!(explicit_empty.canonical_value(), empty.canonical_value());
+            assert!(
+                !serde_json::to_string(&explicit_empty)
+                    .expect("re-serialize explicit empty metadata")
+                    .contains("local_lexical_bindings"),
+                "explicit empty metadata must normalize to the absent wire posture"
+            );
+
+            let populated = function_op(declared, captured.clone());
+            let populated_json =
+                serde_json::to_string(&populated).expect("serialize lexical metadata");
+            assert!(populated_json.contains("local_lexical_bindings"));
+            assert_eq!(
+                serde_json::from_str::<Ir1Op>(&populated_json)
+                    .expect("round-trip lexical metadata"),
+                populated
+            );
+
+            let mut reversed = captured.clone();
+            reversed.reverse();
+            assert_eq!(
+                populated.canonical_value(),
+                function_op(declared, reversed).canonical_value(),
+                "metadata order must not affect canonical IR"
+            );
+
+            let mut changed_kind = captured.clone();
+            changed_kind[0].kind = BindingKind::Const;
+            assert_ne!(
+                populated.canonical_value(),
+                function_op(declared, changed_kind).canonical_value(),
+                "lexical kind participates in canonical IR"
+            );
+        }
     }
 
     // -- IR Level --
@@ -3406,7 +4571,7 @@ mod tests {
     fn ir1_all_ops_canonical() {
         let ops = vec![
             Ir1Op::LoadLiteral {
-                value: Ir1Literal::String("hello".to_string()),
+                value: Ir1Literal::String("hello".into()),
             },
             Ir1Op::LoadLiteral {
                 value: Ir1Literal::Integer(42),
@@ -3424,8 +4589,9 @@ mod tests {
             Ir1Op::StoreBinding { binding_id: 1 },
             Ir1Op::Call { arg_count: 2 },
             Ir1Op::Return,
+            Ir1Op::GeneratorBodyStart,
             Ir1Op::ImportModule {
-                specifier: "mod".to_string(),
+                specifier: "mod".into(),
             },
             Ir1Op::ExportBinding {
                 name: "x".to_string(),
@@ -3433,6 +4599,8 @@ mod tests {
             },
             Ir1Op::Await,
             Ir1Op::ArraySlice,
+            Ir1Op::CopyDataProperties { excluded_count: 2 },
+            Ir1Op::DiscardAbruptCompletion,
             Ir1Op::Nop,
         ];
         for op in &ops {
@@ -3548,6 +4716,7 @@ mod tests {
                 arity: 0,
                 frame_size: 3,
                 name: Some("main".to_string()),
+                rest_param_index: None,
             });
             ir3
         };
@@ -3636,6 +4805,7 @@ mod tests {
                 dst: 3,
             },
             Ir3Instruction::Return { value: 0 },
+            Ir3Instruction::GeneratorBodyStart,
             Ir3Instruction::HostCall {
                 capability: CapabilityTag("net:connect".to_string()),
                 args: RegRange { start: 0, count: 1 },
@@ -3655,6 +4825,12 @@ mod tests {
                 obj: 0,
                 key: 1,
                 dst: 2,
+            },
+            Ir3Instruction::CopyDataProperties {
+                target: 0,
+                source: 1,
+                excluded: RegRange { start: 2, count: 2 },
+                value_dst: 4,
             },
             Ir3Instruction::ImportModule {
                 specifier: 0,
@@ -3678,6 +4854,7 @@ mod tests {
             Ir3Instruction::EnterCatch { dst: 0 },
             Ir3Instruction::EnterFinally,
             Ir3Instruction::EndFinally,
+            Ir3Instruction::DiscardAbruptCompletion,
         ];
         for instr in &instructions {
             let cv = instr.canonical_value();
@@ -3692,12 +4869,32 @@ mod tests {
         ir3.instructions
             .push(Ir3Instruction::LoadInt { dst: 0, value: 42 });
         ir3.instructions.push(Ir3Instruction::Halt);
-        ir3.constant_pool.push("hello".to_string());
+        ir3.constant_pool.push("hello".into());
         ir3.required_capabilities
             .push(CapabilityTag("fs:read".to_string()));
         let json = serde_json::to_string(&ir3).unwrap();
         let restored: Ir3Module = serde_json::from_str(&json).unwrap();
         assert_eq!(ir3, restored);
+    }
+
+    #[test]
+    fn ir3_exact_string_pool_roundtrips_and_hashes_exact_units_bd_vltnh() {
+        let source_hash = ContentHash::compute(b"bd-vltnh");
+        let mut high_d800 = Ir3Module::new(source_hash, "d800.js");
+        high_d800
+            .constant_pool
+            .push(JsString::from_code_units(&[0xD800]));
+        let mut high_d801 = Ir3Module::new(source_hash, "d800.js");
+        high_d801
+            .constant_pool
+            .push(JsString::from_code_units(&[0xD801]));
+
+        let json = serde_json::to_string(&high_d800).unwrap();
+        assert_eq!(serde_json::from_str::<Ir3Module>(&json).unwrap(), high_d800);
+        assert_ne!(
+            deterministic_serde::encode_value(&high_d800.canonical_value()),
+            deterministic_serde::encode_value(&high_d801.canonical_value())
+        );
     }
 
     // -- IR4 --
@@ -4273,7 +5470,8 @@ mod tests {
     #[test]
     fn ir1_literal_serde_roundtrip() {
         for lit in [
-            Ir1Literal::String("hello".to_string()),
+            Ir1Literal::String("hello".into()),
+            Ir1Literal::String(JsString::from_code_units(&[0xD800])),
             Ir1Literal::Integer(i64::MIN),
             Ir1Literal::Integer(0),
             Ir1Literal::Boolean(true),
@@ -4341,10 +5539,35 @@ mod tests {
             frame_size: 8,
             name: Some("myFunc".to_string()),
             is_generator: false,
+            rest_param_index: None,
         };
         let json = serde_json::to_string(&desc).unwrap();
+        assert!(!json.contains("rest_param_index"));
         let restored: Ir3FunctionDesc = serde_json::from_str(&json).unwrap();
         assert_eq!(desc, restored);
+
+        let legacy_json =
+            r#"{"entry":1,"arity":1,"frame_size":2,"name":"legacy","is_generator":false}"#;
+        let legacy: Ir3FunctionDesc = serde_json::from_str(legacy_json).unwrap();
+        assert_eq!(legacy.rest_param_index, None);
+        assert_eq!(serde_json::to_string(&legacy).unwrap(), legacy_json);
+
+        let mut rest_desc = desc.clone();
+        rest_desc.rest_param_index = Some(1);
+        assert_ne!(rest_desc.canonical_value(), desc.canonical_value());
+        let CanonicalValue::Map(rest_canonical) = rest_desc.canonical_value() else {
+            panic!("function descriptor canonical form should be a map");
+        };
+        assert_eq!(
+            rest_canonical.get("rest_param_index"),
+            Some(&CanonicalValue::U64(1))
+        );
+        let rest_json = serde_json::to_string(&rest_desc).unwrap();
+        assert!(rest_json.contains("\"rest_param_index\":1"));
+        assert_eq!(
+            serde_json::from_str::<Ir3FunctionDesc>(&rest_json).unwrap(),
+            rest_desc
+        );
 
         // Test with None name
         let desc_anon = Ir3FunctionDesc { name: None, ..desc };
@@ -4581,20 +5804,23 @@ mod tests {
     fn ir1_op_serde_all_variants() {
         let ops = vec![
             Ir1Op::LoadLiteral {
-                value: Ir1Literal::String("s".to_string()),
+                value: Ir1Literal::String("s".into()),
             },
             Ir1Op::LoadBinding { binding_id: 0 },
             Ir1Op::StoreBinding { binding_id: 1 },
             Ir1Op::Call { arg_count: 3 },
             Ir1Op::Return,
+            Ir1Op::GeneratorBodyStart,
             Ir1Op::ImportModule {
-                specifier: "m".to_string(),
+                specifier: "m".into(),
             },
             Ir1Op::ExportBinding {
                 name: "x".to_string(),
                 binding_id: 0,
             },
             Ir1Op::Await,
+            Ir1Op::CopyDataProperties { excluded_count: 2 },
+            Ir1Op::DiscardAbruptCompletion,
             Ir1Op::Nop,
             Ir1Op::ForInInit,
             Ir1Op::ForInNext { done_label: 10 },
@@ -4602,6 +5828,9 @@ mod tests {
             Ir1Op::ForOfNext { done_label: 20 },
             Ir1Op::IteratorClose {
                 reason: IteratorCloseReason::Break,
+            },
+            Ir1Op::IteratorClose {
+                reason: IteratorCloseReason::Continue,
             },
             Ir1Op::IteratorClose {
                 reason: IteratorCloseReason::Return,
@@ -4693,6 +5922,7 @@ mod tests {
                 dst: 3,
             },
             Ir3Instruction::Return { value: 0 },
+            Ir3Instruction::GeneratorBodyStart,
             Ir3Instruction::HostCall {
                 capability: CapabilityTag("net:connect".to_string()),
                 args: RegRange { start: 0, count: 1 },
@@ -4712,6 +5942,12 @@ mod tests {
                 obj: 0,
                 key: 1,
                 dst: 2,
+            },
+            Ir3Instruction::CopyDataProperties {
+                target: 0,
+                source: 1,
+                excluded: RegRange { start: 2, count: 2 },
+                value_dst: 4,
             },
             Ir3Instruction::Halt,
             // Arithmetic
@@ -4836,6 +6072,7 @@ mod tests {
             Ir3Instruction::EnterCatch { dst: 5 },
             Ir3Instruction::EnterFinally,
             Ir3Instruction::EndFinally,
+            Ir3Instruction::DiscardAbruptCompletion,
         ];
         for instr in &instrs {
             let json = serde_json::to_string(instr).unwrap();
@@ -5053,7 +6290,7 @@ mod tests {
     fn schema_version_current_value() {
         let v = IrSchemaVersion::CURRENT;
         assert_eq!(v.major, 0);
-        assert_eq!(v.minor, 1);
+        assert_eq!(v.minor, 10);
         assert_eq!(v.patch, 0);
     }
 
@@ -5078,12 +6315,14 @@ mod tests {
             frame_size: 8,
             name: Some("main".to_string()),
             is_generator: false,
+            rest_param_index: None,
         };
         let cv = desc.canonical_value();
         if let CanonicalValue::Map(m) = cv {
             assert_eq!(m.get("entry"), Some(&CanonicalValue::U64(10)));
             assert_eq!(m.get("arity"), Some(&CanonicalValue::U64(2)));
             assert_eq!(m.get("frame_size"), Some(&CanonicalValue::U64(8)));
+            assert!(!m.contains_key("rest_param_index"));
             assert_eq!(
                 m.get("name"),
                 Some(&CanonicalValue::String("main".to_string()))
@@ -5101,6 +6340,7 @@ mod tests {
             frame_size: 4,
             name: None,
             is_generator: false,
+            rest_param_index: None,
         };
         let cv = desc.canonical_value();
         if let CanonicalValue::Map(m) = cv {
@@ -5256,6 +6496,7 @@ mod tests {
                 "call",
             ),
             (Ir3Instruction::Return { value: 0 }, "return"),
+            (Ir3Instruction::GeneratorBodyStart, "generator_body_start"),
             (
                 Ir3Instruction::HostCall {
                     capability: CapabilityTag("x".to_string()),
@@ -5287,6 +6528,15 @@ mod tests {
                     dst: 2,
                 },
                 "delete_property",
+            ),
+            (
+                Ir3Instruction::CopyDataProperties {
+                    target: 0,
+                    source: 1,
+                    excluded: RegRange { start: 2, count: 2 },
+                    value_dst: 4,
+                },
+                "copy_data_properties",
             ),
             (
                 Ir3Instruction::ArraySlice {
@@ -5467,7 +6717,7 @@ mod tests {
     #[test]
     fn ir1_literal_canonical_value_all_variants() {
         let cases: Vec<(Ir1Literal, &str)> = vec![
-            (Ir1Literal::String("hello".to_string()), "string"),
+            (Ir1Literal::String("hello".into()), "string"),
             (Ir1Literal::Integer(42), "integer"),
             (Ir1Literal::Boolean(false), "boolean"),
             (Ir1Literal::Null, "null"),
@@ -5545,6 +6795,7 @@ mod tests {
             frame_size: 8,
             name: Some("myFunc".to_string()),
             is_generator: false,
+            rest_param_index: None,
         };
         let cv = desc.canonical_value();
         if let CanonicalValue::Map(m) = cv {
@@ -5568,6 +6819,7 @@ mod tests {
             frame_size: 1,
             name: None,
             is_generator: false,
+            rest_param_index: None,
         };
         let cv = desc.canonical_value();
         if let CanonicalValue::Map(m) = cv {

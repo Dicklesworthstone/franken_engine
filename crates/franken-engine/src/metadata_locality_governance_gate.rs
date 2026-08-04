@@ -76,6 +76,11 @@ pub const MIN_SAMPLE_COUNT: u64 = 10;
 /// conditionally approved.
 const CONDITIONAL_MULTIPLIER: u64 = 1_500_000; // 1.5 in millionths
 
+fn update_len_prefixed(hasher: &mut Sha256, bytes: &[u8]) {
+    hasher.update((bytes.len() as u64).to_le_bytes());
+    hasher.update(bytes);
+}
+
 // ---------------------------------------------------------------------------
 // LocalityDomain
 // ---------------------------------------------------------------------------
@@ -488,12 +493,20 @@ impl PortabilityEvidence {
     pub fn content_hash(&self) -> ContentHash {
         let mut hasher = Sha256::new();
         hasher.update(b"portability_evidence");
+        // Length-prefix the adjacent free-form topologies and count-prefix the
+        // degradation_factors so the preimage is injective (without this,
+        // source+target could blur and the uncounted factor list could be
+        // re-segmented: ("ab","c") vs ("a","bc")).
+        hasher.update((self.source_topology.len() as u64).to_le_bytes());
         hasher.update(self.source_topology.as_bytes());
+        hasher.update((self.target_topology.len() as u64).to_le_bytes());
         hasher.update(self.target_topology.as_bytes());
         hasher.update(self.transferable_fraction.to_le_bytes());
         let mut sorted_factors = self.degradation_factors.clone();
         sorted_factors.sort();
+        hasher.update((sorted_factors.len() as u64).to_le_bytes());
         for factor in &sorted_factors {
+            hasher.update((factor.len() as u64).to_le_bytes());
             hasher.update(factor.as_bytes());
         }
         hasher.update(self.epoch.as_u64().to_le_bytes());
@@ -714,9 +727,9 @@ impl DecisionReceipt {
         let component = component.into();
         let mut hasher = Sha256::new();
         hasher.update(b"decision_receipt");
-        hasher.update(component.as_bytes());
+        update_len_prefixed(&mut hasher, component.as_bytes());
         hasher.update(epoch.as_u64().to_le_bytes());
-        hasher.update(decision.as_str().as_bytes());
+        update_len_prefixed(&mut hasher, decision.as_str().as_bytes());
         hasher.update(evidence_hash.as_bytes());
         let receipt_hash = ContentHash::compute(&hasher.finalize());
         Self {
@@ -1228,6 +1241,33 @@ mod tests {
         GateConfig::default()
     }
 
+    #[test]
+    fn portability_content_hash_injective_over_topologies_bd_igad8() {
+        // Regression (bd-igad8): source_topology + target_topology were adjacent
+        // free strings with no length prefix, so ("ab","c") aliased ("a","bc");
+        // the degradation_factors list was also uncounted.
+        let a = PortabilityEvidence::new("ab", "c", 900_000, vec![], test_epoch());
+        let b = PortabilityEvidence::new("a", "bc", 900_000, vec![], test_epoch());
+        assert_ne!(a.content_hash(), b.content_hash());
+
+        // Factor-list boundary: ["ab","c"] vs ["a","bc"] must differ too.
+        let f1 = PortabilityEvidence::new(
+            "x",
+            "y",
+            1,
+            vec!["ab".to_string(), "c".to_string()],
+            test_epoch(),
+        );
+        let f2 = PortabilityEvidence::new(
+            "x",
+            "y",
+            1,
+            vec!["a".to_string(), "bc".to_string()],
+            test_epoch(),
+        );
+        assert_ne!(f1.content_hash(), f2.content_hash());
+    }
+
     // --- LocalityDomain tests ---
 
     #[test]
@@ -1695,6 +1735,56 @@ mod tests {
         let a = DecisionReceipt::new(COMPONENT, test_epoch(), GovernanceDecision::Approve, hash);
         let b = DecisionReceipt::new(COMPONENT, test_epoch(), GovernanceDecision::Approve, hash);
         assert_eq!(a.receipt_hash, b.receipt_hash);
+    }
+
+    #[test]
+    fn decision_receipt_hash_len_prefixes_component_and_decision_bd_fn47f() {
+        fn old_unframed_preimage(
+            component: &str,
+            epoch: SecurityEpoch,
+            decision: GovernanceDecision,
+            evidence_hash: ContentHash,
+        ) -> Vec<u8> {
+            let mut bytes = Vec::new();
+            bytes.extend_from_slice(b"decision_receipt");
+            bytes.extend_from_slice(component.as_bytes());
+            bytes.extend_from_slice(&epoch.as_u64().to_le_bytes());
+            bytes.extend_from_slice(decision.as_str().as_bytes());
+            bytes.extend_from_slice(evidence_hash.as_bytes());
+            bytes
+        }
+
+        let evidence_hash = ContentHash::compute(b"bd-fn47f-metadata-locality-receipt");
+        let epoch_a = SecurityEpoch::from_raw(u64::from_le_bytes(*b"ABCDEFGH"));
+        let epoch_b = SecurityEpoch::from_raw(u64::from_le_bytes(*b"itional_"));
+        let receipt_a = DecisionReceipt::new(
+            "x",
+            epoch_a,
+            GovernanceDecision::ConditionalApprove,
+            evidence_hash,
+        );
+        let receipt_b = DecisionReceipt::new(
+            "xABCDEFGHcond",
+            epoch_b,
+            GovernanceDecision::Approve,
+            evidence_hash,
+        );
+
+        assert_eq!(
+            old_unframed_preimage(
+                &receipt_a.component,
+                receipt_a.epoch,
+                receipt_a.decision,
+                evidence_hash,
+            ),
+            old_unframed_preimage(
+                &receipt_b.component,
+                receipt_b.epoch,
+                receipt_b.decision,
+                evidence_hash,
+            )
+        );
+        assert_ne!(receipt_a.receipt_hash, receipt_b.receipt_hash);
     }
 
     // --- GateSummary tests ---

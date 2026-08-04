@@ -125,3 +125,49 @@ fn inline_call_and_index_on_new_result() {
         "7"
     );
 }
+
+/// bd-8enww.4.5 (YTBG-D5) AC3: string coercion of error objects is
+/// deterministic and follows Error.prototype.toString — `"<name>: <message>"`,
+/// or just the name when the message is empty. Covers concatenation (both
+/// operand orders) and template literals.
+#[test]
+fn error_object_string_coercion_is_deterministic() {
+    // Concatenation, both directions.
+    assert_eq!(eval_value(r#""" + new Error("boom")"#), "Error: boom");
+    assert_eq!(eval_value(r#"new Error("boom") + """#), "Error: boom");
+    // Template literal.
+    assert_eq!(eval_value(r#"`${new Error("boom")}`"#), "Error: boom");
+    // Subclasses carry their own name.
+    assert_eq!(
+        eval_value(r#"`${new TypeError("bad type")}`"#),
+        "TypeError: bad type"
+    );
+    assert_eq!(
+        eval_value(r#""" + new RangeError("out")"#),
+        "RangeError: out"
+    );
+    assert_eq!(
+        eval_value(r#"`${new ReferenceError("nope")}`"#),
+        "ReferenceError: nope"
+    );
+    // No message -> just the name (ES2020 §20.5.3.4).
+    assert_eq!(eval_value(r#""" + new Error()"#), "Error");
+    // Deterministic: identical inputs -> identical output.
+    assert_eq!(
+        eval_value(r#"`${new TypeError("x")}`"#),
+        eval_value(r#"`${new TypeError("x")}`"#)
+    );
+}
+
+/// A native runtime error, once caught as a JS value, coerces to a string that
+/// begins with its error name (`indexOf` avoids pinning the engine's exact
+/// diagnostic message text).
+#[test]
+fn caught_native_error_string_coercion_carries_name() {
+    assert_eq!(
+        eval_value(
+            r#"let r = -1; try { let o = null; o.p; } catch (e) { r = ("" + e).indexOf("TypeError"); } r"#
+        ),
+        "0"
+    );
+}

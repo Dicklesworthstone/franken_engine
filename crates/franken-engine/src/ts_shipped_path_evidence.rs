@@ -14,6 +14,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
+use crate::evidence_ledger::LabEvidenceAuthority;
 use crate::execution_orchestrator::{
     ExecutionOrchestrator, ExtensionPackage, OrchestratorConfig, OrchestratorError,
 };
@@ -366,7 +367,17 @@ pub fn run_shipped_path_corpus() -> TsShippedPathEvidenceInventory {
 }
 
 fn run_single_specimen(specimen: &ShippedPathSpecimen) -> ShippedPathSpecimenEvidence {
-    let mut orch = ExecutionOrchestrator::new(OrchestratorConfig::default());
+    let signing_identity = LabEvidenceAuthority::deterministic_fixture(
+        "franken-engine.lab.ts-shipped-path",
+        "rgc-204-shipped-path-v1",
+        crate::security_epoch::SecurityEpoch::GENESIS,
+    )
+    .expect("shipped-path lab identity must be derivable");
+    let mut orch = ExecutionOrchestrator::try_new_lab_with_authority(
+        OrchestratorConfig::default(),
+        signing_identity,
+    )
+    .expect("shipped-path lab orchestrator configuration must be valid");
 
     let package = ExtensionPackage {
         extension_id: format!("shipped-path-{}", specimen.specimen_id),

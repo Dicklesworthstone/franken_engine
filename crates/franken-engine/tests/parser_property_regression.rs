@@ -11,7 +11,8 @@
     clippy::manual_abs_diff
 )]
 
-use frankenengine_engine::ast::{ExportKind, ParseGoal, Statement, SyntaxTree};
+use frankenengine_engine::ast::{ExportKind, NamedExportClause, ParseGoal, Statement, SyntaxTree};
+use frankenengine_engine::js_string::JsString;
 use frankenengine_engine::parser::{
     CanonicalEs2020Parser, Es2020Parser, ParseBudgetKind, ParseErrorCode, ParserBudget, ParserMode,
     ParserOptions,
@@ -118,6 +119,14 @@ fn failure_context(test_name: &str, seed: u64, goal: ParseGoal, source: &str) ->
     .to_string()
 }
 
+fn module_source_signature(source: &JsString) -> String {
+    serde_json::to_string(source).expect("module source should serialize")
+}
+
+fn named_export_signature(clause: &NamedExportClause) -> String {
+    serde_json::to_string(clause).expect("named-export source should serialize")
+}
+
 fn semantic_signature(tree: &SyntaxTree) -> Vec<String> {
     tree.body
         .iter()
@@ -128,14 +137,17 @@ fn semantic_signature(tree: &SyntaxTree) -> Vec<String> {
             }
             Statement::Import(import_decl) => {
                 let binding = import_decl.binding.as_deref().unwrap_or("<none>");
-                format!("import:{binding}:{}", import_decl.source)
+                let source = module_source_signature(&import_decl.source);
+                format!("import:{binding}:{source}")
             }
             Statement::Export(export_decl) => match &export_decl.kind {
                 ExportKind::Default(expression) => {
                     let payload = serde_json::to_string(&expression.canonical_value()).unwrap();
                     format!("export_default:{payload}")
                 }
-                ExportKind::NamedClause(clause) => format!("export_named:{clause}"),
+                ExportKind::NamedClause(clause) => {
+                    format!("export_named:{}", named_export_signature(clause))
+                }
             },
             Statement::VariableDeclaration(_) => "variable_decl".to_string(),
             Statement::Block(_) => "block".to_string(),

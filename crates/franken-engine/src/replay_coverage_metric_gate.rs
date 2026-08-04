@@ -55,6 +55,23 @@ impl ReplayVerificationStatus {
     }
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReplayEnvelopeShape {
+    #[default]
+    LegacyPerEntry,
+    MerkleBatched,
+}
+
+impl ReplayEnvelopeShape {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::LegacyPerEntry => "legacy_per_entry",
+            Self::MerkleBatched => "merkle_batched",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SecurityDecisionReplayEvidence {
     pub decision_id: String,
@@ -68,6 +85,8 @@ pub struct SecurityDecisionReplayEvidence {
     pub actual_hash: String,
     pub replay_report_hash: String,
     pub replay_verified: bool, // Legacy field - use verification_status instead
+    #[serde(default)]
+    pub envelope_shape: ReplayEnvelopeShape,
     pub replay_command: String,
     pub replay_exit_code: i32,
     pub duration_ms: u64,
@@ -474,6 +493,7 @@ fn provisional_replay_evidence(
         replay_report_hash:
             "sha256:abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789".to_string(),
         replay_verified: true, // Legacy field - will be downgraded due to fake hashes
+        envelope_shape: ReplayEnvelopeShape::LegacyPerEntry,
         replay_command: format!(
             "frankenctl replay run --trace artifacts/replay_coverage_metric/traces/{decision_id}.json --mode strict"
         ),
@@ -508,6 +528,7 @@ pub struct ReplayCoverageStructuredEvent {
     pub security_critical: bool,
     pub replay_verified: bool,                         // Legacy field
     pub verification_status: ReplayVerificationStatus, // New evidence-based status
+    pub envelope_shape: ReplayEnvelopeShape,
     pub replay_trace_path: String,
     pub replay_report_path: String,
     pub expected_hash: String,
@@ -694,6 +715,7 @@ pub fn evaluate_replay_coverage_metric(
             security_critical: decision.security_critical,
             replay_verified: decision.replay_verified,
             verification_status,
+            envelope_shape: decision.envelope_shape,
             replay_trace_path: decision.replay_trace_path.clone(),
             replay_report_path: decision.replay_report_path.clone(),
             expected_hash: decision.expected_hash.clone(),
@@ -807,6 +829,7 @@ fn verified_replay_evidence(
         actual_hash: actual_hash.into(),
         replay_report_hash: report_hash.into(),
         replay_verified: true,
+        envelope_shape: ReplayEnvelopeShape::LegacyPerEntry,
         replay_command: format!(
             "frankenctl replay run --trace artifacts/replay_coverage_metric/traces/{decision_id}.json --mode strict"
         ),
@@ -889,6 +912,7 @@ mod tests {
             actual_hash: String::new(),
             replay_report_hash: String::new(),
             replay_verified: false,
+            envelope_shape: ReplayEnvelopeShape::LegacyPerEntry,
             replay_command: String::new(),
             replay_exit_code: 1,
             duration_ms: 0,
@@ -990,6 +1014,28 @@ mod tests {
                 .iter()
                 .all(|event| event.verification_status == ReplayVerificationStatus::Verified)
         );
+        assert!(
+            report
+                .events
+                .iter()
+                .any(|event| event.envelope_shape == ReplayEnvelopeShape::MerkleBatched)
+        );
+    }
+
+    #[test]
+    fn merkle_envelope_shape_is_reported_without_changing_coverage() {
+        let mut input = ReplayCoverageMetricInput::verified_fixture("rev-under-test");
+        input.decisions[0].envelope_shape = ReplayEnvelopeShape::MerkleBatched;
+
+        let report = evaluate_replay_coverage_metric(&input);
+
+        assert_eq!(report.decision, ReplayCoverageDecision::Pass);
+        assert_eq!(report.coverage_millionths, COVERAGE_SCALE_MILLIONTHS);
+        assert_eq!(
+            report.events[0].envelope_shape,
+            ReplayEnvelopeShape::MerkleBatched
+        );
+        assert_eq!(report.events[0].reason, "replay_artifact_verified");
     }
 
     #[test]

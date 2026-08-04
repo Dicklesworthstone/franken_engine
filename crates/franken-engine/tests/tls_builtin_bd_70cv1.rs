@@ -1,0 +1,349 @@
+//! bd-70cv1: hermetic Node `tls` semantics over the engine loopback kernel.
+//!
+//! These tests intentionally do not claim cryptographic TLS records or OS
+//! networking. They pin the finite API/verification/event surface exposed to
+//! guest code while preserving the ambient-authority boundary.
+
+use frankenengine_engine::HybridRouter;
+
+const TLS_MATERIAL: &str = r#"
+    const CERT = '-----BEGIN CERTIFICATE-----\nAQIDBA==\n-----END CERTIFICATE-----';
+    const KEY = 'engine-contained-private-key-marker';
+"#;
+
+fn eval_console(source: &str) -> String {
+    let mut engine = HybridRouter::default();
+    let outcome = engine
+        .eval(source)
+        .unwrap_or_else(|error| panic!("eval failed for {source:?}: {error}"));
+    outcome
+        .console_output
+        .iter()
+        .map(|entry| entry.message.clone())
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn eval_error(source: &str) -> String {
+    let mut engine = HybridRouter::default();
+    match engine.eval(source) {
+        Ok(outcome) => panic!("expected eval error for {source:?}, got {outcome:?}"),
+        Err(error) => error.to_string(),
+    }
+}
+
+#[test]
+fn static_tls_surface_is_deterministic_and_engine_contained() {
+    let source = r#"
+        const tls = require('node:tls');
+        const roots = tls.rootCertificates;
+        const ciphers = tls.getCiphers();
+        const context = tls.createSecureContext({});
+        console.log(Array.isArray(roots), roots[0].includes('BEGIN CERTIFICATE'));
+        console.log(Array.isArray(ciphers), ciphers.length > 0, ciphers[0] === ciphers[0].toLowerCase());
+        console.log(typeof context, tls.DEFAULT_MIN_VERSION);
+    "#;
+    assert_eq!(
+        eval_console(source),
+        "true true\ntrue true true\nobject TLSv1.2"
+    );
+}
+
+#[test]
+fn check_server_identity_returns_a_real_error_object_on_mismatch() {
+    let source = r#"
+        const tls = require('tls');
+        const cert = { subject: { CN: 'localhost' }, subjectaltname: 'DNS:localhost' };
+        const ok = tls.checkServerIdentity('localhost', cert);
+        const bad = tls.checkServerIdentity('other.example', cert);
+        const sanWins = tls.checkServerIdentity('localhost', {
+          subject: { CN: 'localhost' },
+          subjectaltname: 'DNS:other.example'
+        });
+        const dnsIp = tls.checkServerIdentity('127.0.0.1', {
+          subject: { CN: '127.0.0.1' },
+          subjectaltname: 'DNS:127.0.0.1'
+        });
+        const ipSan = tls.checkServerIdentity('127.0.0.1', {
+          subject: { CN: 'wrong.example' },
+          subjectaltname: 'IP Address:127.0.0.1'
+        });
+        console.log(ok === undefined, bad instanceof Error, bad.code);
+        console.log(sanWins instanceof Error, sanWins.code);
+        console.log(dnsIp instanceof Error, ipSan === undefined);
+    "#;
+    assert_eq!(
+        eval_console(source),
+        "true true ERR_TLS_CERT_ALTNAME_INVALID\n\
+         true ERR_TLS_CERT_ALTNAME_INVALID\n\
+         true true"
+    );
+}
+
+#[test]
+fn secure_events_gate_bidirectional_loopback_application_data() {
+    let source = format!(
+        r#"
+        {TLS_MATERIAL}
+        const tls = require('tls');
+        const server = tls.createServer({{ cert: CERT, key: KEY }}, socket => {{
+          socket.on('data', chunk => socket.end(String(chunk).toUpperCase()));
+        }});
+        server.on('secureConnection', socket => console.log('server:' + socket.encrypted));
+        server.listen(0, '127.0.0.1', () => {{
+          const client = tls.connect({{
+            port: server.address().port,
+            host: '127.0.0.1',
+            servername: 'localhost',
+            rejectUnauthorized: false
+          }}, () => {{
+            console.log('client:' + client.encrypted, 'authorized:' + client.authorized);
+            client.write('quiet');
+          }});
+          let body = '';
+          client.on('data', chunk => body += chunk);
+          client.on('end', () => {{ console.log(body); server.close(); }});
+        }});
+        "#
+    );
+    assert_eq!(
+        eval_console(&source),
+        "server:true\nclient:true authorized:false\nQUIET"
+    );
+}
+
+#[test]
+fn negotiated_metadata_and_session_methods_are_tls_shaped() {
+    let source = format!(
+        r#"
+        {TLS_MATERIAL}
+        const tls = require('tls');
+        const server = tls.createServer({{
+          cert: CERT,
+          key: KEY,
+          ALPNProtocols: ['h2', 'http/1.1']
+        }}, socket => {{ console.log('sni:' + socket.servername); socket.end(); }});
+        server.listen(0, '127.0.0.1', () => {{
+          const client = tls.connect({{
+            port: server.address().port,
+            host: '127.0.0.1',
+            servername: 'localhost',
+            ALPNProtocols: ['http/1.1'],
+            rejectUnauthorized: false
+          }}, () => {{
+            console.log(client.getProtocol(), client.getCipher().version, client.alpnProtocol);
+            console.log(client.isSessionReused(), client.getSession() === null);
+            console.log(Buffer.isBuffer(client.getPeerCertificate(true).raw));
+            client.end();
+          }});
+          client.on('close', () => server.close());
+        }});
+        "#
+    );
+    assert_eq!(
+        eval_console(&source),
+        "sni:localhost\nTLSv1.3 TLSv1.3 http/1.1\nfalse true\ntrue"
+    );
+}
+
+#[test]
+fn default_certificate_verification_fails_closed_before_secure_events() {
+    let source = format!(
+        r#"
+        {TLS_MATERIAL}
+        const tls = require('tls');
+        const server = tls.createServer({{ cert: CERT, key: KEY }}, () => console.log('unexpected-server'));
+        server.listen(0, '127.0.0.1', () => {{
+          const client = tls.connect({{ port: server.address().port, host: '127.0.0.1' }});
+          client.on('secureConnect', () => console.log('unexpected-client'));
+          client.on('data', () => console.log('unexpected-data'));
+          client.on('error', error => {{ console.log(error.code); server.close(); }});
+        }});
+        "#
+    );
+    assert_eq!(eval_console(&source), "DEPTH_ZERO_SELF_SIGNED_CERT");
+}
+
+#[test]
+fn plain_net_clients_cannot_cross_the_tls_server_boundary() {
+    let source = format!(
+        r#"
+        {TLS_MATERIAL}
+        const tls = require('tls');
+        const net = require('net');
+        const server = tls.createServer({{ cert: CERT, key: KEY }}, () => console.log('unexpected-secure'));
+        server.listen(0, '127.0.0.1', () => {{
+          const client = net.connect({{ port: server.address().port, host: '127.0.0.1' }});
+          client.on('connect', () => console.log('unexpected-plain-connect'));
+          client.on('error', error => {{ console.log(error.code); server.close(); }});
+        }});
+        "#
+    );
+    assert_eq!(eval_console(&source), "ERR_SSL_HTTP_REQUEST");
+}
+
+#[test]
+fn required_client_auth_fails_closed_without_a_trust_validator() {
+    let source = format!(
+        r#"
+        {TLS_MATERIAL}
+        const tls = require('tls');
+        const server = tls.createServer({{
+          cert: CERT,
+          key: KEY,
+          requestCert: true,
+          rejectUnauthorized: true
+        }}, () => console.log('unexpected-authorized-client'));
+        server.listen(0, '127.0.0.1', () => {{
+          const client = tls.connect({{
+            port: server.address().port,
+            host: '127.0.0.1',
+            rejectUnauthorized: false
+          }});
+          client.on('secureConnect', () => console.log('unexpected-secure-connect'));
+          client.on('error', error => {{ console.log(error.code); server.close(); }});
+        }});
+        "#
+    );
+    assert_eq!(eval_console(&source), "UNABLE_TO_VERIFY_LEAF_SIGNATURE");
+}
+
+#[test]
+fn tls_socket_is_a_net_socket_without_materializing_either_module() {
+    let source = format!(
+        r#"
+        {TLS_MATERIAL}
+        const tls = require('tls');
+        const net = require('net');
+        const server = tls.createServer({{ cert: CERT, key: KEY }}, socket => socket.end());
+        server.listen(0, '127.0.0.1', () => {{
+          const client = tls.connect({{
+            port: server.address().port,
+            host: '127.0.0.1',
+            rejectUnauthorized: false
+          }}, () => {{ console.log(client instanceof net.Socket); client.end(); }});
+          client.on('close', () => server.close());
+        }});
+        "#
+    );
+    assert_eq!(eval_console(&source), "true");
+}
+
+#[test]
+fn forged_tls_type_tag_is_not_a_net_socket() {
+    let source = r#"
+        const net = require('net');
+        const forged = { __type: 'TlsSocket' };
+        console.log(forged instanceof net.Socket);
+    "#;
+    assert_eq!(eval_console(source), "false");
+}
+
+#[test]
+fn pre_handshake_tls_metadata_is_unnegotiated() {
+    let source = r#"
+        const tls = require('tls');
+        const client = tls.connect({
+          port: 65535,
+          host: '127.0.0.1',
+          rejectUnauthorized: false
+        });
+        console.log(
+          client.getProtocol() === undefined,
+          client.getCipher() === undefined,
+          client.getSession() === undefined,
+          client.authorizationError === undefined
+        );
+        client.on('error', () => {});
+    "#;
+    assert_eq!(eval_console(source), "true true true true");
+}
+
+#[test]
+fn server_observes_tls_client_error_when_handshake_authentication_fails() {
+    let source = format!(
+        r#"
+        {TLS_MATERIAL}
+        const tls = require('tls');
+        const server = tls.createServer({{ cert: CERT, key: KEY }});
+        let outbound;
+        server.on('tlsClientError', (error, socket) => {{
+          console.log('server:' + error.code, socket.encrypted, socket !== outbound, socket.destroyed);
+          server.close();
+        }});
+        server.listen(0, '127.0.0.1', () => {{
+          outbound = tls.connect({{
+            port: server.address().port,
+            host: '127.0.0.1'
+          }});
+          outbound.on('error', error => console.log('client:' + error.code));
+        }});
+        "#
+    );
+    assert_eq!(
+        eval_console(&source),
+        "server:DEPTH_ZERO_SELF_SIGNED_CERT true true true\n\
+         client:DEPTH_ZERO_SELF_SIGNED_CERT"
+    );
+}
+
+#[test]
+fn supported_tls_alias_in_unshadowed_default_expression_executes() {
+    let source = r#"
+        const tls = require('tls');
+        function hasCiphers(value = tls.getCiphers()) {
+          return Array.isArray(value) && value.length > 0;
+        }
+        console.log(hasCiphers());
+    "#;
+    assert_eq!(eval_console(source), "true");
+}
+
+#[test]
+fn tls_option_strings_are_bounded_before_guest_controlled_allocation() {
+    let source = r#"
+        const tls = require('tls');
+        try {
+          tls.createServer({ ALPNProtocols: { length: 9223372036854775807 } });
+        } catch (error) {
+          console.log(error.name);
+        }
+        try {
+          tls.connect({
+            port: 1,
+            host: '127.0.0.1',
+            servername: 'x'.repeat(254),
+            rejectUnauthorized: false
+          });
+        } catch (error) {
+          console.log(error.name);
+        }
+    "#;
+    assert_eq!(eval_console(source), "RangeError\nRangeError");
+}
+
+#[test]
+fn unsupported_tls_possession_remains_ambient_refused() {
+    for source in [
+        "const tls = require('tls'); console.log('unreachable');",
+        "const tls = require('tls'); console.log(typeof tls.unknownExport);",
+        "const name = 'tls'; const tls = require(name); console.log(tls.getCiphers());",
+        "const tls = require('tls'); tls.getCiphers(); console.log(tls);",
+        "const tls = require('tls'); tls.connect = () => null; tls.connect({ port: 1 });",
+        "const tls = require('tls'); function f(tls) { return tls.getCiphers(); }",
+        "const tls = require('tls'); console.log(tls.connect);",
+        "const tls = require('tls'); tls = {}; tls.getCiphers();",
+        "const tls = require('tls'); const { connect } = tls; tls.getCiphers();",
+        "const tls = require('tls'); tls.getCiphers(); function f(value = tls) {}",
+        "const tls = require('tls'); tls.getCiphers(); const { value = tls } = {};",
+        "tls.getCiphers(); const tls = require('tls');",
+        "f(); const tls = require('tls'); function f() { return tls.getCiphers(); }",
+        "const ciphers = tls.getCiphers(), tls = require('tls');",
+    ] {
+        let error = eval_error(source);
+        assert!(
+            error.contains("ambient authority violation"),
+            "unsupported TLS possession must fail closed, got: {error}"
+        );
+    }
+}

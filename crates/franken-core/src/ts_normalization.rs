@@ -539,7 +539,7 @@ pub fn normalize_typescript_to_es2020(
     ));
     current = jsx_lowered;
 
-    let normalized_source = normalize_spacing(current);
+    let normalized_source = current;
     if normalized_source.trim().is_empty() {
         events.push(failure_event(
             trace_id,
@@ -900,15 +900,6 @@ fn class_declaration_uses_implements_clause(statement: &str) -> bool {
     }
 
     false
-}
-
-fn normalize_spacing(source: String) -> String {
-    source
-        .lines()
-        .map(str::trim)
-        .filter(|line| !line.is_empty())
-        .collect::<Vec<_>>()
-        .join("\n")
 }
 
 fn build_decision(step: &str, changed: bool, detail: &str) -> NormalizationDecision {
@@ -3617,7 +3608,7 @@ abstract class Base { }"#;
         assert!(output.normalized_source.ends_with(';'));
     }
 
-    // --- Helper functions ---
+    // --- Layout preservation and helper functions ---
 
     #[test]
     fn normalize_newlines_crlf_to_lf() {
@@ -3626,9 +3617,48 @@ abstract class Base { }"#;
     }
 
     #[test]
-    fn normalize_spacing_removes_blank_lines_and_trims() {
-        let result = normalize_spacing("  hello  \n\n  world  ".to_string());
-        assert_eq!(result, "hello\nworld");
+    fn typescript_normalization_preserves_runtime_template_bytes_bd_88rcn() {
+        let source = "const label: string = \"x\";\nconst value: string = `\n  alpha\\` ${label}\n\n    beta\n`;\nvalue;";
+        let output = normalize_typescript_to_es2020(
+            source,
+            &TsNormalizationConfig::default(),
+            "t",
+            "d",
+            "p",
+        )
+        .expect("runtime template TypeScript should normalize");
+
+        assert!(
+            output
+                .normalized_source
+                .contains("`\n  alpha\\` ${label}\n\n    beta\n`")
+        );
+    }
+
+    #[test]
+    fn typescript_normalization_preserves_ordinary_layout_bd_88rcn() {
+        let source = "const quoted: string = \"`\";  \n\nconst pattern: RegExp = /`/;\n// comment  \nconst value = 1;";
+        let output = normalize_typescript_to_es2020(
+            source,
+            &TsNormalizationConfig::default(),
+            "t",
+            "d",
+            "p",
+        )
+        .expect("ordinary TypeScript should normalize");
+
+        assert!(!output.normalized_source.contains(": string"));
+        assert!(!output.normalized_source.contains(": RegExp"));
+        assert!(
+            output
+                .normalized_source
+                .contains("\"`\";  \n\nconst pattern")
+        );
+        assert!(
+            output
+                .normalized_source
+                .contains("/`/;\n// comment  \nconst value")
+        );
     }
 
     #[test]

@@ -391,7 +391,7 @@ pub fn execute_quarantine_propagation_with_proof(
     let convergence_achieved = quarantine_state.is_converged(&evidence_hash, fleet.total_instances);
 
     let (acks_received, total_instances) = quarantine_state
-        .convergence_progress(&evidence_hash)
+        .convergence_progress(&evidence_hash, fleet.total_instances)
         .unwrap_or((0, fleet.total_instances));
 
     let convergence_percentage = if total_instances > 0 {
@@ -649,13 +649,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Example 1: High-severity malware detection
     println!("\n🚨 Example 1: Malware Detection Quarantine");
     let malware_event = SyntheticSecurityEvent::malware_detection_scenario();
-    let output_dir_1 = Path::new("/tmp/quarantine_example_malware");
+    // Relative path: `ProofArtifactPaths::standard` requires bundle-relative
+    // (non-absolute) run directories, and `tmp/` is gitignored.
+    let output_dir_1 = Path::new("tmp/quarantine_example_malware");
     execute_quarantine_propagation_with_proof(&malware_event, &fleet, output_dir_1)?;
 
     // Example 2: Medium-severity suspicious activity
     println!("\n⚠️  Example 2: Suspicious Activity Quarantine");
     let suspicious_event = SyntheticSecurityEvent::suspicious_activity_scenario();
-    let output_dir_2 = Path::new("/tmp/quarantine_example_suspicious");
+    let output_dir_2 = Path::new("tmp/quarantine_example_suspicious");
     execute_quarantine_propagation_with_proof(&suspicious_event, &fleet, output_dir_2)?;
 
     println!("\n✨ Live quarantine propagation examples completed successfully!");

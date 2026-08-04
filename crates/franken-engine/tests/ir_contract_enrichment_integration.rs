@@ -67,6 +67,7 @@ fn ir2(source_hash: ContentHash) -> Ir2Module {
         effect: EffectBoundary::Pure,
         required_capability: None,
         flow: None,
+        span: None,
     });
     m
 }
@@ -195,13 +196,13 @@ fn enrichment_verifier_emits_error_events_on_failure() {
 fn enrichment_schema_version_current() {
     let v = IrSchemaVersion::CURRENT;
     assert_eq!(v.major, 0);
-    assert_eq!(v.minor, 1);
+    assert_eq!(v.minor, 7);
     assert_eq!(v.patch, 0);
 }
 
 #[test]
 fn enrichment_schema_version_display() {
-    assert_eq!(IrSchemaVersion::CURRENT.to_string(), "0.1.0");
+    assert_eq!(IrSchemaVersion::CURRENT.to_string(), "0.7.0");
     let custom = IrSchemaVersion {
         major: 2,
         minor: 3,
@@ -444,7 +445,7 @@ fn enrichment_scope_kind_as_str_all_unique() {
 
 #[test]
 fn enrichment_ir1_property_key_serde() {
-    let static_key = Ir1PropertyKey::Static("name".to_string());
+    let static_key = Ir1PropertyKey::Static("name".into());
     let dynamic_key = Ir1PropertyKey::Dynamic;
     for key in &[static_key, dynamic_key] {
         let json = serde_json::to_string(key).unwrap();
@@ -461,6 +462,7 @@ fn enrichment_ir1_property_key_serde() {
 fn enrichment_iterator_close_reason_as_str_all() {
     let reasons = [
         (IteratorCloseReason::Break, "break"),
+        (IteratorCloseReason::Continue, "continue"),
         (IteratorCloseReason::Return, "return"),
         (IteratorCloseReason::Throw, "throw"),
     ];
@@ -469,7 +471,7 @@ fn enrichment_iterator_close_reason_as_str_all() {
         assert_eq!(reason.as_str(), *expected);
         assert!(seen.insert(reason.as_str()));
     }
-    assert_eq!(seen.len(), 3);
+    assert_eq!(seen.len(), 4);
 }
 
 // =========================================================================
@@ -479,7 +481,7 @@ fn enrichment_iterator_close_reason_as_str_all() {
 #[test]
 fn enrichment_ir1_literal_all_variants_serde() {
     let literals = vec![
-        Ir1Literal::String("hello".to_string()),
+        Ir1Literal::String("hello".into()),
         Ir1Literal::Integer(42),
         Ir1Literal::Integer(-1),
         Ir1Literal::Boolean(true),
@@ -511,7 +513,7 @@ fn enrichment_ir1_op_all_variants_serde_sample() {
         Ir1Op::Call { arg_count: 2 },
         Ir1Op::Return,
         Ir1Op::ImportModule {
-            specifier: "react".to_string(),
+            specifier: "react".into(),
         },
         Ir1Op::ExportBinding {
             name: "default".to_string(),
@@ -536,13 +538,13 @@ fn enrichment_ir1_op_all_variants_serde_sample() {
         Ir1Op::JumpIfTruthy { label_id: 3 },
         Ir1Op::JumpIfNullish { label_id: 4 },
         Ir1Op::GetProperty {
-            key: Ir1PropertyKey::Static("x".to_string()),
+            key: Ir1PropertyKey::Static("x".into()),
         },
         Ir1Op::SetProperty {
             key: Ir1PropertyKey::Dynamic,
         },
         Ir1Op::DeleteProperty {
-            key: Ir1PropertyKey::Static("y".to_string()),
+            key: Ir1PropertyKey::Static("y".into()),
         },
         Ir1Op::NewArray { count: 3 },
         Ir1Op::NewObject { count: 2 },
@@ -555,6 +557,9 @@ fn enrichment_ir1_op_all_variants_serde_sample() {
             body_ops: Vec::new(),
             free_vars: Vec::new(),
             free_var_ids: Vec::new(),
+            runtime_global_loads: Vec::new(),
+            child_captured_locals: Vec::new(),
+            local_lexical_bindings: Vec::new(),
             is_generator: false,
             is_async: false,
             rest_param_index: None,
@@ -663,6 +668,7 @@ fn enrichment_ir2_module_with_capability_and_flow() {
             sink_clearance: Label::Secret,
             declassification_required: true,
         }),
+        span: None,
     });
     m.required_capabilities
         .push(CapabilityTag("fs:read".to_string()));

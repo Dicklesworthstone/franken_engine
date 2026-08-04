@@ -14,6 +14,7 @@ original_args=("$@")
 mail_snapshot_json=""
 br_in_progress_json=""
 reservation_json=""
+identity_receipt_json=""
 
 usage() {
   cat >&2 <<'EOF'
@@ -27,6 +28,7 @@ Options:
   --mail-snapshot-json FILE
   --br-in-progress-json FILE
   --file-reservations-json FILE
+  --identity-reconciliation-receipt-json FILE
   --now-ts ISO8601_Z
   --ack-sla-seconds N
   --inactive-sla-seconds N
@@ -59,6 +61,10 @@ while [[ "$#" -gt 0 ]]; do
       ;;
     --file-reservations-json)
       reservation_json="${2:-}"
+      shift 2
+      ;;
+    --identity-reconciliation-receipt-json)
+      identity_receipt_json="${2:-}"
       shift 2
       ;;
     --now-ts)
@@ -130,6 +136,7 @@ validate_optional_json() {
 validate_optional_json "$mail_snapshot_json" "mail snapshot"
 validate_optional_json "$br_in_progress_json" "br in-progress"
 validate_optional_json "$reservation_json" "reservation snapshot"
+validate_optional_json "$identity_receipt_json" "identity reconciliation receipt"
 
 mkdir -p "$run_dir"
 report_json="${run_dir}/agent_mail_sla_report.json"
@@ -171,11 +178,18 @@ if [[ -n "$reservation_json" ]]; then
 else
   res_arg=(--argjson extra_reservations '[]')
 fi
+identity_arg=()
+if [[ -n "$identity_receipt_json" ]]; then
+  identity_arg=(--slurpfile identity_receipt "$identity_receipt_json")
+else
+  identity_arg=(--argjson identity_receipt '[]')
+fi
 
 jq -n \
   "${mail_arg[@]}" \
   "${br_arg[@]}" \
   "${res_arg[@]}" \
+  "${identity_arg[@]}" \
   --arg schema_version "franken-engine.agent-mail-sla-report.v1" \
   --arg source_revision "$source_revision" \
   --arg now_ts "$now_ts" \
@@ -185,6 +199,7 @@ jq -n \
   --arg mail_snapshot_json "$mail_snapshot_json" \
   --arg br_in_progress_json "$br_in_progress_json" \
   --arg reservation_json "$reservation_json" \
+  --arg identity_receipt_json "$identity_receipt_json" \
   --arg report_json "$report_json" \
   --arg panel_md "$panel_md" \
   --arg events_path "$events_path" \
@@ -221,6 +236,35 @@ jq -n \
     arr(mail_doc.agents // []);
   def message_rows:
     arr(mail_doc.messages // mail_doc.inbox // []);
+  def ack_attempt_rows:
+    arr(mail_doc.ack_attempts // mail_doc.acknowledgement_attempts // mail_doc.message_ack_attempts // []);
+  def identity_receipt_doc:
+    if ($identity_receipt | type) == "array" and ($identity_receipt | length) > 0 and (($identity_receipt[0] | type) == "object") then $identity_receipt[0] else null end;
+  def identity_receipt_anomalies:
+    arr(identity_receipt_doc.evidence.anomalies // identity_receipt_doc.anomalies // []);
+  def ids_equal($left; $right):
+    (($left // null) != null and ($right // null) != null and (($left | tostring) == ($right | tostring)));
+  def ack_error($a): (($a.error // $a.error_message // $a.detail // "") | tostring);
+  def ack_failed($a): (($a.success // $a.acknowledged // false) == false and ((ack_error($a) | length) > 0));
+  def ack_thread($a): ($a.thread_id // $a.bead_id // "");
+  def ack_bead($a): ($a.bead_id // "");
+  def receipt_matches_ack($a):
+    identity_receipt_doc != null and (
+      ids_equal(identity_receipt_doc.message_id; ($a.message_id // $a.id))
+      or (((identity_receipt_doc.thread_id // "") != "") and ((identity_receipt_doc.thread_id // "") == ack_thread($a)))
+      or (((identity_receipt_doc.bead_id // "") != "") and ((identity_receipt_doc.bead_id // "") == ack_bead($a)))
+      or any(identity_receipt_anomalies[]?;
+        ids_equal(.affected_entities.message_id; ($a.message_id // $a.id))
+        or (((.affected_entities.thread_id // "") != "") and ((.affected_entities.thread_id // "") == ack_thread($a)))
+        or (((.affected_entities.bead_id // "") != "") and ((.affected_entities.bead_id // "") == ack_bead($a)))
+      )
+    );
+  def receipt_contradicts_ack($a):
+    identity_receipt_doc != null and ack_failed($a) and (
+      ((identity_receipt_doc.decision // "") == "pass")
+      or ((identity_receipt_doc.evidence.failed_ack_attempt_count // -1) == 0)
+      or (receipt_matches_ack($a) | not)
+    );
   def reservation_rows:
     arr(mail_doc.reservations // []) + arr(extra_res_doc.reservations // extra_res_doc.file_reservations // []);
   def br_rows:
@@ -258,6 +302,32 @@ jq -n \
     | select(($m.ack_required // false) == true and (($m.acknowledged // $m.acknowledged_at // false) == false) and ($age != null and $age > $ack_sla_seconds))
     | diag("error"; "stale_ack_required_thread"; ($m.to_agent // $m.recipient // ""); ($m.thread_id // ""); ($m.bead_id // ""); "ack-required message age " + ($age | tostring) + "s exceeds SLA"; "Manually ping recipient or reassign the bead after coordination."; "high")
       + {message_age_seconds:$age}]
+    + [ack_attempt_rows[] as $a
+    | (ack_error($a)) as $ack_error
+    | select(ack_failed($a))
+    | ($a.message_id // $a.id // null) as $message_id
+    | diag("error"; "ack_attempt_failed"; ($a.agent_name // $a.recipient // $a.to_agent // ""); ($a.thread_id // ""); ($a.bead_id // ""); "ack attempt failed" + (if $message_id == null then "" else " for message " + ($message_id | tostring) end) + ": " + $ack_error; "Record a fallback receipt and repair Agent Mail identity/recipient state before treating the message as acknowledged."; "high")
+      + {
+          message_id:$message_id,
+          ack_error:$ack_error,
+          ack_attempted_at:($a.attempted_at // $a.created_ts // null),
+          identity_reconciliation_receipt_json:(if $identity_receipt_json == "" then null else $identity_receipt_json end),
+          identity_reconciliation_linked:receipt_matches_ack($a),
+          identity_reconciliation_decision:(identity_receipt_doc.decision // null),
+          identity_reconciliation_anomaly_classes:(identity_receipt_anomalies | map(.anomaly_class // .code // "unknown") | unique)
+        }]
+    + [ack_attempt_rows[] as $a
+    | select(ack_failed($a) and identity_receipt_doc == null)
+    | diag("warning"; "identity_reconciliation_receipt_missing"; ($a.agent_name // $a.recipient // $a.to_agent // ""); ($a.thread_id // ""); ($a.bead_id // ""); "failed acknowledgement attempt has no identity reconciliation receipt snapshot"; "Capture the identity reconciliation receipt before accepting ack repair evidence."; "medium")]
+    + [ack_attempt_rows[] as $a
+    | select(receipt_contradicts_ack($a))
+    | diag("error"; "identity_reconciliation_receipt_contradicts_ack_attempt"; ($a.agent_name // $a.recipient // $a.to_agent // ""); ($a.thread_id // ""); ($a.bead_id // ""); "identity reconciliation receipt contradicts the raw failed acknowledgement attempt"; "Reject the receipt and recapture the reconciler input snapshots before accepting the trace."; "high")
+      + {
+          identity_reconciliation_receipt_json:(if $identity_receipt_json == "" then null else $identity_receipt_json end),
+          identity_reconciliation_decision:(identity_receipt_doc.decision // null),
+          receipt_bead_id:(identity_receipt_doc.bead_id // null),
+          receipt_thread_id:(identity_receipt_doc.thread_id // null)
+        }]
     + [reservation_rows[] as $r
     | (reservation_expiry_age($r)) as $expiry_age
     | select($expiry_age != null and $expiry_age > 0)
@@ -289,6 +359,7 @@ jq -n \
       mail_snapshot_json:(if $mail_snapshot_json == "" then null else $mail_snapshot_json end),
       br_in_progress_json:(if $br_in_progress_json == "" then null else $br_in_progress_json end),
       reservation_json:(if $reservation_json == "" then null else $reservation_json end),
+      identity_reconciliation_receipt_json:(if $identity_receipt_json == "" then null else $identity_receipt_json end),
       decision:(if any($diagnostics[]; .severity == "error") then "blocked" elif any($diagnostics[]; .severity == "warning") then "degraded" else "pass" end),
       agents: agent_rows,
       message_count:(message_rows | length),

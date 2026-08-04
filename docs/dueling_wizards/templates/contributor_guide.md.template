@@ -1,0 +1,35 @@
+# Contributing: how to extend <Capability Name>
+
+> Contributor guide per DW.DOCS (bd-fqlfw.12). For contributor-facing capabilities (notably
+> the E4 intrinsic table). The goal: a human OR an AI agent can extend the capability from
+> this guide alone, without surgery on large files. Copy to
+> `docs/dueling_wizards/contributing/<cap>.md`.
+
+## The one-screen mental model
+<What the extension unit is — e.g. "one intrinsic-table row + one impl fn" — and why it is
+shaped that way. Name the single file(s) a contributor edits.>
+
+## Worked example (end-to-end)
+1. **Add the declaration.** <Show the exact row/registration to add, with every field
+   explained: name, receiver, arity, capability, IFC-propagation policy, conformance ref,
+   gap-inventory status.>
+   ```text
+   { name: "...", receiver: ..., arity: ..., capability: ..., ifc: ..., impl: ..., conformance: "...", gap_status: ... }
+   ```
+2. **Write the semantics by hand.** <Where the impl fn lives; the rule that semantics are
+   hand-written + individually tested while only glue is generated.>
+3. **Generated glue.** <What codegen produces (dispatch arm, name/ctor mapping, prototype
+   wiring, gap-inventory entry) so the contributor does not hand-edit those sites.>
+4. **Test it.** Unit test for the semantics; the conformance ref pulls the relevant test262
+   cases; run `./scripts/run_dw_<cap>.sh ci`.
+5. **Verify nothing else changed.** Parity goldens must be byte-identical except for the new
+   surface; the gap inventory updates by construction.
+
+## Rules that keep the system sound
+- Glue is generated; **semantics are never in generated code** (reviewers must see where
+  behavior comes from — load-bearing in a security runtime).
+- Migrate incrementally; the new path coexists with the legacy path until parity is proven.
+- IFC propagation is declared per-row, not hand-wired per-site (prevents under-tainting bugs).
+
+## Common pitfalls
+<One row per known gotcha.>

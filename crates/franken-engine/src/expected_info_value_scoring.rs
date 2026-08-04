@@ -427,7 +427,7 @@ mod tests {
             .map(|(id, p)| EivScore::compute(id, p, 0, epoch()))
             .collect();
         // Sort descending by EIV.
-        scores.sort_by(|a, b| b.eiv_millimillibits.cmp(&a.eiv_millimillibits));
+        scores.sort_by_key(|b| std::cmp::Reverse(b.eiv_millimillibits));
         // Highest should be uniform; lowest lopsided.
         assert_eq!(scores[0].moonshot_id, "m_uniform");
         assert_eq!(scores[2].moonshot_id, "m_lopsided");

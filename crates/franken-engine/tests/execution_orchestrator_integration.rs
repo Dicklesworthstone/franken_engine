@@ -31,9 +31,10 @@ use frankenengine_engine::declassification_pipeline::{
     DeclassificationPipeline, DeclassificationRequest, LossAssessment,
 };
 use frankenengine_engine::execution_cell::CellError;
+use frankenengine_engine::execution_orchestrator::LabFixtureExecutionOrchestratorExt as _;
 use frankenengine_engine::execution_orchestrator::{
-    ExecutionOrchestrator, ExtensionPackage, LossMatrixPreset, OrchestratorConfig,
-    OrchestratorError, OrchestratorResult,
+    EvidenceCompressionStatus, ExecutionOrchestrator, ExtensionPackage, LossMatrixPreset,
+    OrchestratorConfig, OrchestratorError, OrchestratorResult,
 };
 use frankenengine_engine::expected_loss_selector::ContainmentAction;
 use frankenengine_engine::ifc_artifacts::{
@@ -281,7 +282,7 @@ fn missing_package_capability_denies_orchestrated_hostcall_execution() {
         .execute(&pkg)
         .expect_err("hostcall should fail closed when package capability is missing");
 
-    match err {
+    match err.primary_error() {
         OrchestratorError::Interpreter(InterpreterError::CapabilityDenied { capability }) => {
             assert_eq!(capability, "net.write");
         }
@@ -365,11 +366,11 @@ fn unresolved_declassification_obligation_surfaces_operator_detail_on_execute_pa
     let err = orch
         .execute(&pkg)
         .expect_err("unresolved declassification should fail closed on the execute path");
-    match err {
+    match err.primary_error() {
         OrchestratorError::IfcRuntimeGuardBlocked { detail } => {
             assert!(detail.contains("unresolved IFC runtime obligations"));
             assert!(detail.contains("pending declassifications=1"));
-            assert_required_declassification_summary_in_detail(&detail, obligation);
+            assert_required_declassification_summary_in_detail(detail, obligation);
         }
         other => panic!("unexpected error: {other:?}"),
     }
@@ -414,11 +415,11 @@ fn staged_receipt_with_route_mismatch_fails_closed_after_preflight() {
     let err = orch
         .execute(&pkg)
         .expect_err("route-mismatched staged receipt must fail closed");
-    match err {
+    match err.primary_error() {
         OrchestratorError::IfcRuntimeGuardBlocked { detail } => {
             assert!(detail.contains("receipt-linked declassification failed"));
             assert!(detail.contains("route"));
-            assert_required_declassification_summary_in_detail(&detail, obligation);
+            assert_required_declassification_summary_in_detail(detail, obligation);
         }
         other => panic!("unexpected error: {other:?}"),
     }
@@ -463,11 +464,11 @@ fn failed_staged_receipt_with_decision_contract_mismatch_allows_clean_retry() {
     let first_err = orch
         .execute(&pkg)
         .expect_err("contract-mismatched staged receipt should fail closed");
-    match first_err {
+    match first_err.primary_error() {
         OrchestratorError::IfcRuntimeGuardBlocked { detail } => {
             assert!(detail.contains("receipt-linked declassification failed"));
             assert!(detail.contains("decision contract"));
-            assert_required_declassification_summary_in_detail(&detail, first_obligation);
+            assert_required_declassification_summary_in_detail(detail, first_obligation);
         }
         other => panic!("unexpected error: {other:?}"),
     }
@@ -538,11 +539,11 @@ fn failed_staged_receipt_with_source_label_mismatch_allows_clean_retry() {
     let first_err = orch
         .execute(&pkg)
         .expect_err("source-label-mismatched staged receipt should fail closed");
-    match first_err {
+    match first_err.primary_error() {
         OrchestratorError::IfcRuntimeGuardBlocked { detail } => {
             assert!(detail.contains("receipt-linked declassification failed"));
             assert!(detail.contains("source label does not match"));
-            assert_required_declassification_summary_in_detail(&detail, first_obligation);
+            assert_required_declassification_summary_in_detail(detail, first_obligation);
         }
         other => panic!("unexpected error: {other:?}"),
     }
@@ -613,11 +614,11 @@ fn failed_staged_receipt_with_sink_clearance_mismatch_allows_clean_retry() {
     let first_err = orch
         .execute(&pkg)
         .expect_err("sink-clearance-mismatched staged receipt should fail closed");
-    match first_err {
+    match first_err.primary_error() {
         OrchestratorError::IfcRuntimeGuardBlocked { detail } => {
             assert!(detail.contains("receipt-linked declassification failed"));
             assert!(detail.contains("sink clearance internal cannot flow"));
-            assert_required_declassification_summary_in_detail(&detail, first_obligation);
+            assert_required_declassification_summary_in_detail(detail, first_obligation);
         }
         other => panic!("unexpected error: {other:?}"),
     }
@@ -687,11 +688,11 @@ fn failed_staged_receipt_allows_clean_retry_via_fresh_preflight_and_receipt() {
     let first_err = orch
         .execute(&pkg)
         .expect_err("invalid staged receipt should fail closed");
-    match first_err {
+    match first_err.primary_error() {
         OrchestratorError::IfcRuntimeGuardBlocked { detail } => {
             assert!(detail.contains("receipt-linked declassification failed"));
             assert!(detail.contains("replay linkage does not match trace"));
-            assert_required_declassification_summary_in_detail(&detail, first_obligation);
+            assert_required_declassification_summary_in_detail(detail, first_obligation);
         }
         other => panic!("unexpected error: {other:?}"),
     }
@@ -748,7 +749,12 @@ fn e2e_result_has_cell_events() {
 fn e2e_result_has_finalize_result() {
     let mut orch = default_orch();
     let result = execute_simple(&mut orch);
-    assert!(result.finalize_result.is_some());
+    assert!(
+        result
+            .finalize_result
+            .as_ref()
+            .is_some_and(|done| done.success)
+    );
 }
 
 #[test]
@@ -761,18 +767,25 @@ fn low_cell_close_budget_returns_cell_budget_exhausted_error() {
     let err = orch
         .execute(&simple_package("ext-budget", "42"))
         .expect_err("close budget should fail fast");
+    let failure = err
+        .post_cell_failure()
+        .expect("cell-close failures must retain cleanup evidence");
 
-    match err {
+    match failure.primary_error.as_ref() {
         OrchestratorError::Cell(CellError::BudgetExhausted {
             requested_ms,
             remaining_ms,
             ..
         }) => {
-            assert_eq!(requested_ms, 2);
-            assert_eq!(remaining_ms, 1);
+            assert_eq!(*requested_ms, 2);
+            assert_eq!(*remaining_ms, 1);
         }
         other => panic!("unexpected error: {other:?}"),
     }
+    assert!(matches!(
+        failure.cleanup.close_error,
+        Some(CellError::BudgetExhausted { .. })
+    ));
 }
 
 #[test]
@@ -858,6 +871,10 @@ fn e2e_result_has_optimal_stopping_certificate() {
 fn e2e_result_has_evidence_compression_certificate() {
     let mut orch = default_orch();
     let result = execute_simple(&mut orch);
+    assert_eq!(
+        result.evidence_compression_status,
+        EvidenceCompressionStatus::Certified
+    );
     assert!(result.evidence_compression_certificate.is_some());
 }
 
@@ -1500,6 +1517,153 @@ fn compression_certificate_has_valid_fields() {
     assert!(cert.entropy_millibits_per_symbol >= 0);
     assert!(cert.shannon_lower_bound_bits >= 0);
     assert!(cert.achieved_bits >= 0);
+}
+
+#[test]
+fn high_cardinality_capabilities_preserve_certified_evidence_and_containment() {
+    let mut seen_symbols = BTreeSet::new();
+    let mut capabilities = Vec::new();
+    // Keep the legacy sketch symbols distinct too: this makes the public test
+    // reproduce the pre-fix 257-symbol coder failure deterministically.
+    for index in 0..20_000 {
+        let capability = format!("unknown-compression-capability-{index}");
+        let stable_symbol = capability.bytes().fold(0x811C9DC5_u32, |hash, byte| {
+            (hash ^ u32::from(byte)).wrapping_mul(0x01000193)
+        });
+        if seen_symbols.insert(1_000 + stable_symbol % 10_000) {
+            capabilities.push(capability);
+            if capabilities.len() == 257 {
+                break;
+            }
+        }
+    }
+    assert_eq!(capabilities.len(), 257);
+
+    let mut package = package_with_metadata(
+        "ext-high-cardinality-capabilities",
+        "const obj = { constructor: 1 }; obj.constructor;",
+        &[
+            ("guardplane.enable_instruction_hooks", "true"),
+            ("capability_witness.trust_level", "suspicious"),
+            ("capability_witness.confidence_millionths", "200000"),
+            ("capability_witness.denied_capabilities", "object.property"),
+        ],
+    );
+    package.capabilities = capabilities;
+
+    let mut orch = default_orch();
+    let result = orch
+        .execute(&package)
+        .expect("high-cardinality compression input should complete containment");
+
+    assert_eq!(
+        result.evidence_compression_status,
+        EvidenceCompressionStatus::Certified
+    );
+    let certificate = result
+        .evidence_compression_certificate
+        .as_ref()
+        .expect("certified compression should emit a certificate");
+    certificate
+        .verify_integrity()
+        .expect("emitted compression certificate should verify");
+    assert_ne!(result.containment_action, ContainmentAction::Allow);
+    let receipt = result
+        .containment_receipt
+        .as_ref()
+        .expect("non-allow action should emit a containment receipt");
+    assert_eq!(receipt.action, result.containment_action);
+    assert!(
+        result
+            .finalize_result
+            .as_ref()
+            .is_some_and(|done| done.success)
+    );
+    assert!(!result.cell_events.is_empty());
+    assert_eq!(orch.execution_count(), 1);
+
+    let metadata = &result.evidence_entries[0].metadata;
+    assert_eq!(
+        metadata
+            .get("evidence_compression_status")
+            .map(String::as_str),
+        Some("certified")
+    );
+    assert_eq!(
+        metadata.get("guardplane_hook_enabled").map(String::as_str),
+        Some("true")
+    );
+    assert!(metadata.contains_key("hook_requested_action"));
+    let sketch_hash = metadata
+        .get("evidence_compression_sketch_hash")
+        .expect("compression metadata should bind the complete sketch");
+    assert_eq!(sketch_hash.len(), 64);
+    assert!(sketch_hash.bytes().all(|byte| byte.is_ascii_hexdigit()));
+    let certificate_symbol_count = certificate.symbol_count.to_string();
+    assert_eq!(
+        metadata
+            .get("evidence_compression_symbol_count")
+            .map(String::as_str),
+        Some(certificate_symbol_count.as_str())
+    );
+    let alphabet_size = metadata["evidence_compression_alphabet_size"]
+        .parse::<usize>()
+        .expect("alphabet size metadata should be numeric");
+    assert!((1..=256).contains(&alphabet_size));
+    assert_eq!(
+        metadata.get("capabilities_count").map(String::as_str),
+        Some("257")
+    );
+}
+
+#[test]
+fn high_cardinality_hostcalls_preserve_certified_evidence_and_finalization() {
+    let source = (0..257)
+        .map(|index| format!(r#""hostcall<\"console:compression-{index}\">";"#))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let config = OrchestratorConfig {
+        force_lane: Some(LaneChoice::V8),
+        ..OrchestratorConfig::default()
+    };
+    let mut orch = ExecutionOrchestrator::new(config);
+
+    let result = orch
+        .execute(&simple_package("ext-high-cardinality-hostcalls", &source))
+        .expect("high-cardinality hostcall telemetry should complete execution");
+
+    assert_eq!(result.lane, LaneChoice::V8);
+    let telemetry = result.evidence_entries[0]
+        .witnesses
+        .iter()
+        .find(|witness| witness.witness_type == "execution_telemetry")
+        .expect("primary evidence should contain execution telemetry");
+    assert!(
+        telemetry
+            .value
+            .split_ascii_whitespace()
+            .any(|field| field == "hostcalls=257"),
+        "unexpected execution telemetry: {}",
+        telemetry.value
+    );
+    assert_eq!(
+        result.evidence_compression_status,
+        EvidenceCompressionStatus::Certified
+    );
+    result
+        .evidence_compression_certificate
+        .as_ref()
+        .expect("certified compression should emit a certificate")
+        .verify_integrity()
+        .expect("emitted compression certificate should verify");
+    assert!(
+        result
+            .finalize_result
+            .as_ref()
+            .is_some_and(|done| done.success)
+    );
+    assert!(!result.cell_events.is_empty());
+    assert_eq!(orch.execution_count(), 1);
 }
 
 // =========================================================================

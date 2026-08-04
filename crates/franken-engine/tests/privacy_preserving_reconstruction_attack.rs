@@ -126,11 +126,11 @@ fn reconstruction_attack_with_varying_fleet_size() {
 fn reconstruction_attack_against_differential_privacy() {
     let epoch = SecurityEpoch::from_raw(1000);
     let privacy_params = PrivacyParameters::new(1_000_000u64, 10u64).unwrap();
-    let mut privacy_budget = PrivacyBudget::new(50_000_000u64, 1000u64, epoch).unwrap();
-    let dp_aggregator = PrivacyPreservingAggregator::new(privacy_params.clone(), epoch);
+    let _privacy_budget = PrivacyBudget::new(50_000_000u64, 1000u64, epoch).unwrap();
+    let dp_aggregator = PrivacyPreservingAggregator::new(privacy_params, epoch);
 
     let mut rng = thread_rng();
-    let timestamp = Timestamp(1640995200000);
+    let _timestamp = Timestamp(1640995200000);
 
     // Create 10 participants with diverse posteriors
     let participants: Vec<NodeId> = (0..10)
@@ -143,14 +143,14 @@ fn reconstruction_attack_against_differential_privacy() {
     for attempt in 0..total_attempts {
         // Generate random but realistic posteriors for each participant
         let mut posteriors = Vec::new();
-        for i in 0..participants.len() {
+        for _i in 0..participants.len() {
             let posterior = generate_random_posterior(&mut rng);
             posteriors.push(posterior);
         }
 
         // Apply differential privacy to all contributions
         let mut private_deltas = Vec::new();
-        for (i, node_id) in participants.iter().enumerate() {
+        for (i, _node_id) in participants.iter().enumerate() {
             let delta = PosteriorDelta {
                 extension_id: format!("ext_{}", i),
                 delta_benign_millionths: 100_000,
@@ -164,7 +164,7 @@ fn reconstruction_attack_against_differential_privacy() {
 
             let private_delta = frankenengine_engine::differential_privacy_posterior::PrivatePosteriorDelta::from_delta(
                 delta.clone(),
-                privacy_params.clone(),
+                privacy_params,
                 format!("round_{}", i),
                 &mut DeterministicTestNoiseGenerator::new(),
             );
@@ -307,11 +307,11 @@ fn minimum_privacy_requirements_enforced() {
     // Test with minimum acceptable epsilon
     let min_privacy_params =
         PrivacyParameters::new((MINIMUM_EPSILON * 1_000_000.0) as u64, 1u64).unwrap();
-    let mut min_privacy_budget = PrivacyBudget::new(10_000_000u64, 10u64, epoch).unwrap();
-    let dp_aggregator = PrivacyPreservingAggregator::new(min_privacy_params.clone(), epoch);
+    let _min_privacy_budget = PrivacyBudget::new(10_000_000u64, 10u64, epoch).unwrap();
+    let dp_aggregator = PrivacyPreservingAggregator::new(min_privacy_params, epoch);
 
     let mut rng = thread_rng();
-    let timestamp = Timestamp(1640995200000);
+    let _timestamp = Timestamp(1640995200000);
 
     // Small fleet size (worst case for privacy)
     let participants: Vec<NodeId> = (0..3).map(|i| NodeId::new(format!("node_{}", i))).collect();
@@ -329,7 +329,7 @@ fn minimum_privacy_requirements_enforced() {
 
         // Apply minimum privacy protection
         let mut private_deltas = Vec::new();
-        for (i, node_id) in participants.iter().enumerate() {
+        for (i, _node_id) in participants.iter().enumerate() {
             let delta = PosteriorDelta {
                 extension_id: format!("ext_{}", i),
                 delta_benign_millionths: 100_000,
@@ -343,7 +343,7 @@ fn minimum_privacy_requirements_enforced() {
 
             let private_delta = frankenengine_engine::differential_privacy_posterior::PrivatePosteriorDelta::from_delta(
                 delta.clone(),
-                min_privacy_params.clone(),
+                min_privacy_params,
                 format!("round_{}", i),
                 &mut DeterministicTestNoiseGenerator::new(),
             );
@@ -417,11 +417,11 @@ fn attempt_reconstruction_attack(
     let privacy_params =
         PrivacyParameters::new((epsilon * 1_000_000.0) as u64, (delta * 1_000_000.0) as u64)
             .unwrap();
-    let mut privacy_budget = PrivacyBudget::new(100_000_000u64, 10_000u64, epoch).unwrap();
-    let dp_aggregator = PrivacyPreservingAggregator::new(privacy_params.clone(), epoch);
+    let _privacy_budget = PrivacyBudget::new(100_000_000u64, 10_000u64, epoch).unwrap();
+    let dp_aggregator = PrivacyPreservingAggregator::new(privacy_params, epoch);
 
     let mut rng = thread_rng();
-    let timestamp = Timestamp(1640995200000);
+    let _timestamp = Timestamp(1640995200000);
 
     let mut successful_attacks = 0;
 
@@ -438,7 +438,7 @@ fn attempt_reconstruction_attack(
 
         // Apply differential privacy
         let mut private_deltas = Vec::new();
-        for (i, node_id) in participants.iter().enumerate() {
+        for (i, _node_id) in participants.iter().enumerate() {
             let delta = PosteriorDelta {
                 extension_id: format!("ext_{}", i),
                 delta_benign_millionths: 100_000,
@@ -452,7 +452,7 @@ fn attempt_reconstruction_attack(
 
             let private_delta = frankenengine_engine::differential_privacy_posterior::PrivatePosteriorDelta::from_delta(
                 delta.clone(),
-                privacy_params.clone(),
+                privacy_params,
                 format!("round_{}", i),
                 &mut DeterministicTestNoiseGenerator::new(),
             );
@@ -555,11 +555,11 @@ fn simulate_collusion_attack(
     let privacy_params =
         PrivacyParameters::new((epsilon * 1_000_000.0) as u64, (delta * 1_000_000.0) as u64)
             .unwrap();
-    let mut privacy_budget = PrivacyBudget::new(100_000_000u64, 10_000u64, epoch).unwrap();
-    let dp_aggregator = PrivacyPreservingAggregator::new(privacy_params.clone(), epoch);
+    let _privacy_budget = PrivacyBudget::new(100_000_000u64, 10_000u64, epoch).unwrap();
+    let dp_aggregator = PrivacyPreservingAggregator::new(privacy_params, epoch);
 
     let mut rng = thread_rng();
-    let timestamp = Timestamp(1640995200000);
+    let _timestamp = Timestamp(1640995200000);
 
     let honest_count = (total_participants as f64 * honest_ratio) as usize;
     let mut successful_attacks = 0;
@@ -577,7 +577,7 @@ fn simulate_collusion_attack(
 
         // Apply differential privacy
         let mut private_deltas = Vec::new();
-        for (i, node_id) in participants.iter().enumerate() {
+        for (i, _node_id) in participants.iter().enumerate() {
             let delta = PosteriorDelta {
                 extension_id: format!("ext_{}", i),
                 delta_benign_millionths: 100_000,
@@ -591,7 +591,7 @@ fn simulate_collusion_attack(
 
             let private_delta = frankenengine_engine::differential_privacy_posterior::PrivatePosteriorDelta::from_delta(
                 delta.clone(),
-                privacy_params.clone(),
+                privacy_params,
                 format!("round_{}", i),
                 &mut DeterministicTestNoiseGenerator::new(),
             );
@@ -679,13 +679,13 @@ fn generate_random_posterior(rng: &mut impl Rng) -> BTreeMap<RiskLevel, u32> {
 fn privacy_budget_tracking_prevents_leakage() {
     let epoch = SecurityEpoch::from_raw(1000);
     let privacy_params = PrivacyParameters::new(1_000_000u64, 10u64).unwrap();
-    let mut privacy_budget = PrivacyBudget::new(5_000_000u64, 100u64, epoch).unwrap(); // Small budget
+    let _privacy_budget = PrivacyBudget::new(5_000_000u64, 100u64, epoch).unwrap(); // Small budget
 
     let mut rng = thread_rng();
-    let timestamp = Timestamp(1640995200000);
+    let _timestamp = Timestamp(1640995200000);
 
-    let node = NodeId::new("test_node".to_string());
-    let posterior = generate_random_posterior(&mut rng);
+    let _node = NodeId::new("test_node".to_string());
+    let _posterior = generate_random_posterior(&mut rng);
 
     let delta = PosteriorDelta {
         extension_id: "test_ext".to_string(),
@@ -704,7 +704,7 @@ fn privacy_budget_tracking_prevents_leakage() {
         let _result =
             frankenengine_engine::differential_privacy_posterior::PrivatePosteriorDelta::from_delta(
                 delta.clone(),
-                privacy_params.clone(),
+                privacy_params,
                 format!("test_round_{}", applications),
                 &mut DeterministicTestNoiseGenerator::new(),
             );

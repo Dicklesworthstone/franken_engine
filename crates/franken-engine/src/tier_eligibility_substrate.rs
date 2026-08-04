@@ -26,6 +26,24 @@ use sha2::{Digest, Sha256};
 use crate::hash_tiers::ContentHash;
 use crate::security_epoch::SecurityEpoch;
 
+/// Append a variable-length field to a `Sha256` content-hash preimage with a
+/// fixed-width `u64` length prefix.
+///
+/// The content hashes in this module commit to the identity of profiling
+/// records, so their preimages must be injective. Bare-concatenating adjacent
+/// variable-length `String` fields (or looping a `Vec` with no count prefix) is
+/// not injective — e.g. `profile_id="prof", function_id="123"` and
+/// `profile_id="pro", function_id="f123"` both serialize to `prof123`, letting
+/// two distinct records forge an identical hash. Length-prefixing every
+/// variable-length field and count-prefixing every collection removes the
+/// ambiguity; fixed-width fields (`u64` via `to_le_bytes`, single-byte bools,
+/// the 32-byte sub-hashes) are already self-delimiting. Cf. the same fix
+/// crate-wide in commits 7f500570 / 1d3e0542.
+fn hash_field(hasher: &mut Sha256, bytes: &[u8]) {
+    hasher.update((bytes.len() as u64).to_le_bytes());
+    hasher.update(bytes);
+}
+
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
@@ -222,9 +240,9 @@ impl ProbeRecord {
     /// Compute the content hash for this probe record.
     pub fn content_hash(&self) -> ContentHash {
         let mut hasher = Sha256::new();
-        hasher.update(self.probe_id.as_bytes());
-        hasher.update(self.kind.to_string().as_bytes());
-        hasher.update(self.site_id.as_bytes());
+        hash_field(&mut hasher, self.probe_id.as_bytes());
+        hash_field(&mut hasher, self.kind.to_string().as_bytes());
+        hash_field(&mut hasher, self.site_id.as_bytes());
         hasher.update(self.sample_count.to_le_bytes());
         hasher.update(self.value_millionths.to_le_bytes());
         let digest = hasher.finalize();
@@ -291,7 +309,7 @@ impl TierEligibilityPolicy {
     /// Compute the content hash of this policy.
     pub fn content_hash(&self) -> ContentHash {
         let mut hasher = Sha256::new();
-        hasher.update(self.policy_id.as_bytes());
+        hash_field(&mut hasher, self.policy_id.as_bytes());
         hasher.update(self.min_invocations.to_le_bytes());
         hasher.update(self.min_feedback_stability_millionths.to_le_bytes());
         hasher.update(self.deopt_cooldown_epochs.to_le_bytes());
@@ -404,17 +422,19 @@ impl TierProfile {
     /// Recompute the content hash from current state.
     pub fn rehash(&mut self) {
         let mut hasher = Sha256::new();
-        hasher.update(self.profile_id.as_bytes());
-        hasher.update(self.function_id.as_bytes());
-        hasher.update(self.current_tier.to_string().as_bytes());
+        hash_field(&mut hasher, self.profile_id.as_bytes());
+        hash_field(&mut hasher, self.function_id.as_bytes());
+        hash_field(&mut hasher, self.current_tier.to_string().as_bytes());
         hasher.update(self.invocation_count.to_le_bytes());
         hasher.update(self.deopt_count.to_le_bytes());
         hasher.update(self.last_transition_epoch.as_u64().to_le_bytes());
+        hasher.update((self.probes.len() as u64).to_le_bytes());
         for probe in &self.probes {
             hasher.update(probe.content_hash().as_bytes());
         }
+        hasher.update((self.deopt_events.len() as u64).to_le_bytes());
         for evt in &self.deopt_events {
-            hasher.update(evt.event_id.as_bytes());
+            hash_field(&mut hasher, evt.event_id.as_bytes());
             hasher.update(evt.counter.to_le_bytes());
         }
         let digest = hasher.finalize();
@@ -479,11 +499,12 @@ impl TierEligibilityVerdict {
     fn rehash(&mut self) {
         let mut hasher = Sha256::new();
         hasher.update(if self.eligible { b"1" } else { b"0" });
-        hasher.update(self.target_tier.to_string().as_bytes());
+        hash_field(&mut hasher, self.target_tier.to_string().as_bytes());
+        hasher.update((self.reasons.len() as u64).to_le_bytes());
         for r in &self.reasons {
-            hasher.update(r.to_string().as_bytes());
+            hash_field(&mut hasher, r.to_string().as_bytes());
         }
-        hasher.update(self.probe_summary.as_bytes());
+        hash_field(&mut hasher, self.probe_summary.as_bytes());
         hasher.update(self.confidence_millionths.to_le_bytes());
         let digest = hasher.finalize();
         let mut bytes = [0u8; 32];
@@ -534,14 +555,16 @@ impl TierEligibilityReport {
     /// Recompute content hash from current state.
     pub fn rehash(&mut self) {
         let mut hasher = Sha256::new();
-        hasher.update(self.report_id.as_bytes());
+        hash_field(&mut hasher, self.report_id.as_bytes());
         hasher.update(self.epoch.as_u64().to_le_bytes());
         hasher.update((self.total_functions as u64).to_le_bytes());
         hasher.update((self.eligible_count as u64).to_le_bytes());
         hasher.update(self.deopt_rate_millionths.to_le_bytes());
+        hasher.update((self.profiles.len() as u64).to_le_bytes());
         for p in &self.profiles {
             hasher.update(p.content_hash.as_bytes());
         }
+        hasher.update((self.verdicts.len() as u64).to_le_bytes());
         for v in &self.verdicts {
             hasher.update(v.content_hash.as_bytes());
         }
@@ -1512,6 +1535,21 @@ mod tests {
         profile.invocation_count = 999;
         profile.rehash();
         assert_ne!(profile.content_hash, h1);
+    }
+
+    #[test]
+    fn rehash_is_injective_across_id_field_boundary() {
+        // bd-87ndl: profile_id and function_id were bare-concatenated into the
+        // hash preimage with no length prefix, so ("prof","123") and
+        // ("pro","f123") both serialized to "prof123..." and collided.
+        // Length-prefixing each field pins them to distinct hashes (all other
+        // fields are equal — both are fresh Interpreted-tier profiles).
+        let a = TierProfile::new("prof", "123");
+        let b = TierProfile::new("pro", "f123");
+        assert_ne!(
+            a.content_hash, b.content_hash,
+            "profile_id/function_id field boundary must not collide"
+        );
     }
 
     // -- empty/edge cases --

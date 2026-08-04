@@ -7,6 +7,7 @@ use std::process::{Command, Output};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use frankenengine_engine::ast::ParseGoal;
+use frankenengine_engine::evidence_ledger::LabEvidenceAuthority;
 use frankenengine_engine::execution_orchestrator::{
     ExecutionOrchestrator, ExtensionPackage, OrchestratorConfig, OrchestratorError,
 };
@@ -1126,10 +1127,20 @@ fn run_library_run(specimen: &ParitySpecimen, source_path: &Path) -> InvocationR
         version: env!("CARGO_PKG_VERSION").to_string(),
         metadata,
     };
-    let mut orchestrator = ExecutionOrchestrator::new(OrchestratorConfig {
-        parse_goal: specimen.parse_goal,
-        ..OrchestratorConfig::default()
-    });
+    let signing_identity = LabEvidenceAuthority::deterministic_fixture(
+        "franken-engine.lab.shipped-path-parity",
+        PARITY_SCENARIO_ID,
+        SecurityEpoch::GENESIS,
+    )
+    .expect("shipped-path parity lab identity must be derivable");
+    let mut orchestrator = ExecutionOrchestrator::try_new_lab_with_authority(
+        OrchestratorConfig {
+            parse_goal: specimen.parse_goal,
+            ..OrchestratorConfig::default()
+        },
+        signing_identity,
+    )
+    .expect("shipped-path parity lab orchestrator configuration must be valid");
     let result = match orchestrator.execute(&package) {
         Ok(result) => result,
         Err(error) => {
@@ -1396,7 +1407,7 @@ fn compare_verify_compile_artifact_records(
 }
 
 fn classify_orchestrator_error(error: &OrchestratorError) -> FailureClass {
-    match error {
+    match error.primary_error() {
         OrchestratorError::Parse(_) | OrchestratorError::EmptySource => FailureClass::Parse,
         OrchestratorError::Lowering(_) => FailureClass::Lowering,
         OrchestratorError::TsNormalization(_) => FailureClass::SourceIngestion,
@@ -1414,6 +1425,9 @@ fn classify_orchestrator_error(error: &OrchestratorError) -> FailureClass {
         | OrchestratorError::InvalidConcurrencyEnvelope { .. }
         | OrchestratorError::EmptyExtensionId
         | OrchestratorError::PreparedExecutionContextMismatch { .. } => FailureClass::Runtime,
+        OrchestratorError::PostCellFailure(_) => {
+            unreachable!("primary_error recursively unwraps post-cell failures")
+        }
     }
 }
 

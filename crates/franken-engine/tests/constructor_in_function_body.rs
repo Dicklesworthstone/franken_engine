@@ -1,6 +1,7 @@
 use frankenengine_engine::ast::{
-    AssignmentOperator, BinaryOperator, BlockStatement, Expression, FunctionDeclaration,
-    ObjectProperty, ParseGoal, ReturnStatement, SourceSpan, Statement, SyntaxTree, UnaryOperator,
+    AssignmentOperator, AssignmentStrictness, BinaryOperator, BlockStatement, Expression,
+    FunctionDeclaration, ObjectProperty, ObjectPropertyKind, ParseGoal, ReturnStatement,
+    SourceSpan, Statement, SyntaxTree, UnaryOperator,
 };
 use frankenengine_engine::hash_tiers::ContentHash;
 use frankenengine_engine::ir_contract::{Ir0Module, Ir3Instruction, Ir3Module};
@@ -78,12 +79,13 @@ fn test_constructor_with_arguments() {
         callee: Box::new(Expression::Identifier("Foo".to_string())),
         arguments: vec![
             Expression::NumericLiteral(1),
-            Expression::StringLiteral("hello".to_string()),
+            Expression::StringLiteral("hello".to_string().into()),
             Expression::ObjectLiteral(vec![ObjectProperty {
                 key: Expression::Identifier("x".to_string()),
                 value: Expression::NumericLiteral(1),
                 computed: false,
                 shorthand: false,
+                kind: ObjectPropertyKind::Data,
             }]),
         ],
     };
@@ -145,6 +147,7 @@ fn test_constructor_stored_to_local() {
         operator: AssignmentOperator::Assign,
         left: Box::new(Expression::Identifier("x".to_string())),
         right: Box::new(constructor_call),
+        assignment_strictness: AssignmentStrictness::Sloppy,
     };
 
     let func_decl = create_function_with_constructor(assignment);
@@ -172,8 +175,10 @@ fn test_constructor_as_method_argument() {
             object: Box::new(Expression::Identifier("obj".to_string())),
             property: Box::new(Expression::Identifier("method".to_string())),
             computed: false,
+            span: None,
         }),
         arguments: vec![constructor_call],
+        span: None,
     };
 
     let func_decl = create_function_with_constructor(method_call);
@@ -208,9 +213,11 @@ fn test_constructor_chain_with_property_access() {
             object: Box::new(constructor_call),
             property: Box::new(Expression::Identifier("bar".to_string())),
             computed: false,
+            span: None,
         }),
         property: Box::new(Expression::Identifier("baz".to_string())),
         computed: false,
+        span: None,
     };
 
     let func_decl = create_function_with_constructor(property_chain);
@@ -238,7 +245,7 @@ fn test_constructor_deterministic_lowering() {
         callee: Box::new(Expression::Identifier("TestClass".to_string())),
         arguments: vec![
             Expression::NumericLiteral(42),
-            Expression::StringLiteral("test".to_string()),
+            Expression::StringLiteral("test".to_string().into()),
         ],
     };
 
@@ -304,6 +311,7 @@ fn test_delete_property_in_function() {
             object: Box::new(Expression::Identifier("obj".to_string())),
             property: Box::new(Expression::Identifier("prop".to_string())),
             computed: false,
+            span: None,
         }),
     };
 

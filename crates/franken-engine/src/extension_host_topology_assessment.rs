@@ -371,9 +371,9 @@ pub fn build_topology_promotion_assessment() -> TopologyPromotionAssessment {
             "repro.lock".to_string(),
         ],
         verification_commands: vec![
-            "rch exec -- cargo check -p frankenengine-engine --lib --bin franken_extension_host_topology_assessment".to_string(),
-            "rch exec 'env RUSTFLAGS=\"-C linker=cc\" cargo test -p frankenengine-engine --test extension_host_topology_assessment_cli'".to_string(),
-            "rch exec -- cargo clippy -p frankenengine-engine --lib --bin franken_extension_host_topology_assessment --test extension_host_topology_assessment_cli -- -D warnings".to_string(),
+            "./scripts/run_extension_host_topology_assessment.sh check".to_string(),
+            "./scripts/run_extension_host_topology_assessment.sh test".to_string(),
+            "./scripts/run_extension_host_topology_assessment.sh clippy".to_string(),
         ],
         content_hash: String::new(),
     };

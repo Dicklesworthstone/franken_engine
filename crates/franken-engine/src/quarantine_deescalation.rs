@@ -25,7 +25,7 @@ use crate::signature_preimage::{
     SIGNATURE_SENTINEL, Signature, SignaturePreimage, SigningKey, VerificationKey, sign_object,
     verify_signature,
 };
-use crate::tee_attestation_policy::{AttestationQuote, TeeAttestationPolicy, TeePlatform};
+use crate::tee_attestation_policy::AttestationQuote;
 use franken_engine_deterministic_trait::FixedLayout;
 
 // ---------------------------------------------------------------------------
@@ -34,11 +34,6 @@ use franken_engine_deterministic_trait::FixedLayout;
 
 const READMISSION_DECISION_SCHEMA_DEF: &[u8] = b"FrankenEngine.ReAdmissionDecision.v1";
 const READMISSION_RECEIPT_SCHEMA_DEF: &[u8] = b"FrankenEngine.ReAdmissionReceipt.v1";
-const QUARANTINE_DEESCALATION_ZONE: &str = "quarantine-deescalation";
-
-/// Fixed-point unit: 1_000_000 = 1.0 for deterministic decimal calculations.
-const MILLIONTHS: u64 = 1_000_000;
-
 fn readmission_decision_schema_id() -> SchemaId {
     SchemaId::from_definition(READMISSION_DECISION_SCHEMA_DEF)
 }
@@ -240,6 +235,7 @@ pub struct ReAdmissionDecision {
 
 impl ReAdmissionDecision {
     /// Creates a new re-admission decision.
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         epoch: SecurityEpoch,
         original_quarantine_id: EngineObjectId,
@@ -327,6 +323,7 @@ impl ReAdmissionDecision {
     }
 
     /// Computes content hash for deterministic ID generation.
+    #[allow(clippy::too_many_arguments)]
     fn compute_decision_content_hash(
         original_quarantine_id: &EngineObjectId,
         original_quarantine_reason: &QuarantineReason,
@@ -395,7 +392,7 @@ impl ReAdmissionReceipt {
             ObjectDomain::EvidenceRecord,
             "readmission_receipt",
             &schema_version,
-            &*decision.decision_id.as_bytes(),
+            decision.decision_id.as_bytes(),
         )
         .map_err(|e| {
             ReAdmissionError::IdGeneration(format!("Failed to derive receipt ID: {}", e))
@@ -435,15 +432,18 @@ impl ReAdmissionReceipt {
             ..self.clone()
         };
 
+        // A non-matching signature is the normal "invalid" outcome and must
+        // surface as Ok(false), not Err — the same Result<bool> contract that
+        // `ReAdmissionDecision::verify_signature` documents and pins. The old
+        // `.map(|_| true).map_err(..)?` shape propagated Ed25519's mismatch
+        // error through `?`, making the `Ok(false)` branch unreachable and
+        // tampered receipts indistinguishable from operational failures.
         let signature_valid = verify_signature(
             system_key,
             &unsigned.preimage_bytes(),
             &self.system_signature,
         )
-        .map(|_| true)
-        .map_err(|e| {
-            ReAdmissionError::Verification(format!("System signature verification failed: {}", e))
-        })?;
+        .is_ok();
 
         if !signature_valid {
             return Ok(false);
@@ -738,7 +738,7 @@ mod tests {
 
     #[test]
     fn test_readmission_receipt_creation_and_verification() {
-        let (operator_key, operator_verification_key) = make_test_keys();
+        let (operator_key, _operator_verification_key) = make_test_keys();
         let (system_key, system_verification_key) = make_test_keys();
         let epoch = SecurityEpoch::from_raw(42);
 
@@ -852,6 +852,49 @@ mod tests {
             receipt2
                 .verify(&system_verification_key)
                 .expect("Verification should not error")
+        );
+    }
+
+    #[test]
+    fn test_receipt_verify_wrong_key_is_ok_false_not_err() {
+        let (system_key, _) = make_test_keys();
+        let (operator_key, _) = make_test_keys();
+        let (_, wrong_verification_key) = make_test_keys();
+        let epoch = SecurityEpoch::from_raw(42);
+
+        let decision = ReAdmissionDecision::new(
+            epoch,
+            EngineObjectId::default(),
+            make_test_quarantine_reason(),
+            3600,
+            "operator-alice".to_string(),
+            AttestationStatus::Available {
+                quote: make_test_attestation_quote(),
+            },
+            800_000,
+            make_test_fallback_path(),
+            BTreeMap::new(),
+            &operator_key,
+        )
+        .expect("Decision creation should succeed");
+
+        let receipt = ReAdmissionReceipt::new(
+            epoch,
+            decision,
+            ReAdmissionReceipt::genesis_hash(),
+            1234567890,
+            &system_key,
+        )
+        .expect("Receipt creation should succeed");
+
+        // Invalid-signature is the normal "tampered/wrong key" outcome and
+        // must be Ok(false) (fail-closed but distinguishable from an
+        // operational error), matching ReAdmissionDecision::verify_signature.
+        assert!(
+            !receipt
+                .verify(&wrong_verification_key)
+                .expect("wrong key must yield Ok(false), not an error"),
+            "a receipt verified against the wrong system key must be invalid"
         );
     }
 

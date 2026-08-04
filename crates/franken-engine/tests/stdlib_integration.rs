@@ -349,9 +349,15 @@ fn string_at_handles_negative_and_non_bmp() {
     .unwrap();
     assert_eq!(result, JsValue::Str("o".into()));
 
-    let result =
-        exec_string_method(BuiltinId::StringPrototypeAt, "😀", &[JsValue::Int(0)]).unwrap();
-    assert_eq!(result, JsValue::Str("😀".into()));
+    // Unit-indexed (bd-3kvat): the astral char occupies indices 0..2, so
+    // index 2 is "b" (scalar indexing would have said undefined at 2).
+    let result = exec_string_method(
+        BuiltinId::StringPrototypeAt,
+        "😀b",
+        &[JsValue::Int(2 * FP_SCALE)],
+    )
+    .unwrap();
+    assert_eq!(result, JsValue::Str("b".into()));
 
     let result = exec_string_method(
         BuiltinId::StringPrototypeAt,
@@ -360,6 +366,18 @@ fn string_at_handles_negative_and_non_bmp() {
     )
     .unwrap();
     assert_eq!(result, JsValue::Undefined);
+}
+
+#[test]
+fn string_at_rejects_surrogate_split() {
+    // `"😀".at(0)` addresses the lead surrogate; the UTF-8-carried stdlib
+    // seam cannot represent it and fails closed (same posture as charAt).
+    let err =
+        exec_string_method(BuiltinId::StringPrototypeAt, "😀", &[JsValue::Int(0)]).unwrap_err();
+    assert!(
+        format!("{err}").contains("lone surrogates"),
+        "unexpected error: {err}"
+    );
 }
 
 #[test]

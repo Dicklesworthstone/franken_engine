@@ -1,0 +1,47 @@
+{
+  "schema_version": "franken-engine.red-team-scenario.v1",
+  "name": "promoted_globalthis_ambient_env_read",
+  "title": "globalThis ambient env read bypasses static capability scan",
+  "baseline_version": "node-bun-frankenengine-red-team-v1",
+  "attack_vector": "promoted_globalthis_ambient_env_read",
+  "cwe": [
+    "CWE-470",
+    "CWE-668"
+  ],
+  "payload": {
+    "program": "promoted_globalthis_ambient_env_read.js",
+    "entrypoint": "node promoted_globalthis_ambient_env_read.js",
+    "input": "attack program `promoted_globalthis_ambient_env_read`",
+    "success_criteria": "promoted_globalthis_ambient_env_read bypass reaches the protected authority"
+  },
+  "expected_outcome": {
+    "node": {
+      "outcome": "succeeds",
+      "observable": "process env surface reached via globalThis.process alias"
+    },
+    "bun": {
+      "outcome": "succeeds",
+      "observable": "process env surface reached via globalThis.process alias"
+    },
+    "frankenengine": {
+      "outcome": "fail_closed",
+      "observable": "capability-typed lowering rejects the globalThis.process member access with AmbientAuthorityViolation (EnvRead) before the alias is bound",
+      "denial_reason": "ambient_authority_via_globalthis_rejected"
+    }
+  },
+  "measurement": {
+    "success_signal": "attack_succeeded == true",
+    "failure_signal": "lowering refuses the ambient member access at compile time"
+  },
+  "reproduction": [
+    "node crates/franken-engine/tests/red_team_scenarios/promoted/promoted_globalthis_ambient_env_read.js"
+  ],
+  "provenance": {
+    "marker": "franken-engine:corpus-promotion:v1",
+    "repro_id": "mr-281eed0cda039aa7",
+    "minimized_from_bytes": 207,
+    "minimized_to_bytes": 35,
+    "reproduced_trials": 5,
+    "total_trials": 5
+  }
+}

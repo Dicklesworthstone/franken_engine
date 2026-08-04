@@ -520,6 +520,7 @@ pub struct ReplacementReceipt {
 
 impl ReplacementReceipt {
     /// Derive receipt ID from its contents.
+    #[allow(clippy::too_many_arguments)]
     pub fn derive_receipt_id(
         slot_id: &SlotId,
         old_slot_id: &SlotId,

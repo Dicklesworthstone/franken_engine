@@ -1558,7 +1558,7 @@ impl TraceFusionEngine {
             .iter()
             .filter(|r| matches!(r.outcome, FusionOutcome::Formed))
             .count() as u32;
-        let rejected_count = self.records.len() as u32 - formed_count;
+        let rejected_count = (self.records.len() as u32).saturating_sub(formed_count);
 
         TraceFusionDiagnostics {
             total_traces: total,

@@ -216,7 +216,7 @@ fn frankenctl_compile_and_run_artifacts_are_byte_identical_with_fixed_inputs() {
 
 #[test]
 fn source_all_variants() {
-    assert_eq!(NondeterminismSource::ALL.len(), 7);
+    assert_eq!(NondeterminismSource::ALL.len(), 11);
     for source in &NondeterminismSource::ALL {
         assert!(!source.as_str().is_empty());
     }
@@ -1410,7 +1410,7 @@ fn source_as_str_all_unique() {
         .iter()
         .map(|s| s.as_str())
         .collect();
-    assert_eq!(strs.len(), 7);
+    assert_eq!(strs.len(), 11);
 }
 
 #[test]

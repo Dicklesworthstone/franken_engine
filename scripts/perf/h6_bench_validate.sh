@@ -3,9 +3,9 @@ set -euo pipefail
 
 # PERF-H6.3 (bd-o4cbn.4.3): Bench validation for the H6 capacity-hint sweep.
 #
-# Builds `hot_paths` with the exact pass1 flags, runs the full Criterion group,
-# and compares every sub-bench against the saved pass1 baseline. Encodes the
-# H6.3 pass gate so the verdict is reproducible and reviewable.
+# Builds `hot_paths` with the current linker-policy successor flags, runs the
+# full Criterion group, and compares every sub-bench against historical pass1.
+# It encodes the H6.3 pass gate so the verdict is reproducible and reviewable.
 #
 # Pass criteria (all must hold), per bd-o4cbn.4.3:
 #   1. Cumulative drop across the 8 sub-benches >= 2 % (mean of per-bench Δ%).
@@ -32,6 +32,7 @@ PASS1_DIR="tests/artifacts/perf/20260520T214829Z-prof-pass1"
 CRIT_DIR="target/criterion"
 BEAD="bd-o4cbn.4.3"
 SCENARIO="h6_bench"
+CURRENT_RUSTFLAGS="-C force-frame-pointers=yes -C linker=cc -Clinker-features=-lld"
 
 # Capacity-hint sweep targets (H6.1 audit): these two must show >= 5 % drops.
 TARGETS=(iterator_protocol_trace scheduler_queue_commit)
@@ -59,11 +60,12 @@ VERDICT_ONLY=0
 
 if [[ "$VERDICT_ONLY" -eq 0 ]]; then
     # -----------------------------------------------------------------------
-    # 1. Build the bench with the identical pass1 flags.
+    # 1. Build with the current-policy successor to the historical pass1 flags.
     # -----------------------------------------------------------------------
-    echo "[h6.3] building hot_paths bench (pass1 flags)..."
+    echo "[h6.3] building hot_paths bench (current linker-policy flags)..."
+    env -u CARGO_ENCODED_RUSTFLAGS \
     RCH_CARGO_WRAPPER_BYPASS=1 \
-    RUSTFLAGS="-C force-frame-pointers=yes -C linker=cc" \
+    RUSTFLAGS="$CURRENT_RUSTFLAGS" \
     CARGO_INCREMENTAL=0 \
     "${CARGO:-/home/ubuntu/.cargo/bin/cargo}" bench --bench hot_paths --no-run
 
@@ -103,9 +105,9 @@ fi
 # ---------------------------------------------------------------------------
 # 4. Fingerprint for this run.
 # ---------------------------------------------------------------------------
-python3 - "$RUN_DIR" "$BEAD" "$PASS1_DIR" <<'PYFP'
+python3 - "$RUN_DIR" "$BEAD" "$PASS1_DIR" "$CURRENT_RUSTFLAGS" "$VERDICT_ONLY" <<'PYFP'
 import json, subprocess, sys, time, platform
-run_dir, bead, pass1_dir = sys.argv[1:4]
+run_dir, bead, pass1_dir, current_rustflags, verdict_only = sys.argv[1:6]
 def sh(*a):
     try:
         return subprocess.check_output(a, text=True, stderr=subprocess.DEVNULL).strip()
@@ -123,11 +125,22 @@ fp = {
         "kernel": platform.release(),
     },
     "toolchain": {"rustc": sh("rustc", "--version"), "python": platform.python_version()},
-    "build_flags": {
-        "RUSTFLAGS": "-C force-frame-pointers=yes -C linker=cc",
-        "CARGO_INCREMENTAL": "0",
-    },
 }
+if verdict_only == "0":
+    fp["build_flags"] = {
+        "RUSTFLAGS": current_rustflags,
+        "CARGO_ENCODED_RUSTFLAGS": None,
+        "CARGO_INCREMENTAL": "0",
+    }
+    fp["build_provenance"] = {
+        "status": "executed_build_command",
+        "effective_channel": "RUSTFLAGS",
+    }
+else:
+    fp["build_provenance"] = {
+        "status": "unknown",
+        "reason": "verdict-only mode reused Criterion artifacts without a bound source-run fingerprint",
+    }
 json.dump(fp, open(f"{run_dir}/fingerprint.json", "w"), indent=2)
 PYFP
 
@@ -183,12 +196,10 @@ fail_reasons = []
 # Pre-existing, separately-tracked regressions that this sweep did NOT introduce.
 # Reported (never hidden) but do not fail the gate. baseline_value_string_clone's
 # +15.93% vs pass1 was ATTRIBUTED in bd-o4cbn.15 to the global-allocator transition,
-# not a code change: the bench fn, the `Value` type, `ContentHash::compute`, and the
-# rustc build (1.97.0-nightly f53b654a8) are all byte-identical between pass1
-# (2026-05-20) and HEAD; the only deliberate change is mimalloc (added 2026-05-23 to
-# both benches/hot_paths.rs and bin/frankenctl.rs). pass1 was measured under the
-# system allocator on a quiet box; HEAD is mimalloc under swarm load. There is no
-# code regression to fix on this path. See docs/PERFORMANCE_BASELINE.md.
+# not a code change. pass1 was measured under the system allocator on a quiet box;
+# HEAD is mimalloc under swarm load. This script does not claim build-profile
+# symmetry with pass1; `honest_gate.sh` decides that separately from explicit
+# baseline and post fingerprints. See docs/PERFORMANCE_BASELINE.md.
 KNOWN_REGRESSIONS = {"baseline_value_string_clone": "bd-o4cbn.15"}
 
 for fn in benches:

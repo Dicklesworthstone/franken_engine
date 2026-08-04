@@ -42,6 +42,14 @@ use sha2::{Digest, Sha256};
 use crate::hash_tiers::ContentHash;
 use crate::security_epoch::SecurityEpoch;
 
+/// Feed `bytes` into `hasher` with a fixed-width `u64` length prefix so that
+/// adjacent variable-length fields cannot share a content-hash preimage
+/// (e.g. `left="ab", right="c"` must not collide with `left="a", right="bc"`).
+fn hash_len_prefixed(hasher: &mut Sha256, bytes: &[u8]) {
+    hasher.update((bytes.len() as u64).to_le_bytes());
+    hasher.update(bytes);
+}
+
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
@@ -338,13 +346,20 @@ impl IdentificationRefusal {
         epoch: SecurityEpoch,
     ) -> Self {
         let mut hasher = Sha256::new();
-        hasher.update(left_fingerprint.as_bytes());
-        hasher.update(right_fingerprint.as_bytes());
-        if let Some(fam) = &family {
-            hasher.update(fam.as_str().as_bytes());
+        hash_len_prefixed(&mut hasher, left_fingerprint.as_bytes());
+        hash_len_prefixed(&mut hasher, right_fingerprint.as_bytes());
+        // Explicit presence tag so `None` cannot alias `Some("")` and the
+        // family string cannot run into the following reason tags.
+        match &family {
+            Some(fam) => {
+                hasher.update([1u8]);
+                hash_len_prefixed(&mut hasher, fam.as_str().as_bytes());
+            }
+            None => hasher.update([0u8]),
         }
+        hasher.update((reasons.len() as u64).to_le_bytes());
         for r in &reasons {
-            hasher.update(r.tag().as_bytes());
+            hash_len_prefixed(&mut hasher, r.tag().as_bytes());
         }
         hasher.update(epoch.as_u64().to_le_bytes());
         let content_hash = ContentHash::compute(&hasher.finalize());
@@ -422,13 +437,13 @@ impl OrbitReduction {
     ) -> Self {
         let total_cost_millionths = steps.iter().map(|s| s.cost_millionths).sum();
         let mut hasher = Sha256::new();
-        hasher.update(family.as_str().as_bytes());
-        hasher.update(input_fingerprint.as_bytes());
-        hasher.update(canonical_fingerprint.as_bytes());
+        hash_len_prefixed(&mut hasher, family.as_str().as_bytes());
+        hash_len_prefixed(&mut hasher, input_fingerprint.as_bytes());
+        hash_len_prefixed(&mut hasher, canonical_fingerprint.as_bytes());
         hasher.update((steps.len() as u64).to_le_bytes());
         for step in &steps {
-            hasher.update(step.transformation.as_str().as_bytes());
-            hasher.update(step.result_fingerprint.as_bytes());
+            hash_len_prefixed(&mut hasher, step.transformation.as_str().as_bytes());
+            hash_len_prefixed(&mut hasher, step.result_fingerprint.as_bytes());
         }
         hasher.update(if converged { &[1u8] } else { &[0u8] });
         let content_hash = ContentHash::compute(&hasher.finalize());
@@ -1092,6 +1107,16 @@ mod tests {
             test_epoch(),
         );
         assert_ne!(r1.content_hash, r2.content_hash);
+    }
+
+    #[test]
+    fn identification_refusal_hash_is_injective_across_fingerprint_boundary() {
+        // ("ab","c") and ("a","bc") share the concatenation of the two
+        // fingerprints but are distinct refusals; length-prefixing must keep
+        // their content hashes apart (the boundary-shift collision).
+        let a = IdentificationRefusal::new("ab".into(), "c".into(), None, vec![], test_epoch());
+        let b = IdentificationRefusal::new("a".into(), "bc".into(), None, vec![], test_epoch());
+        assert_ne!(a.content_hash, b.content_hash);
     }
 
     #[test]

@@ -534,11 +534,11 @@ fn enrichment_bytes_used_grows_with_content() {
         goal: ParseGoal::Script,
         body: vec![
             Statement::Expression(ExpressionStatement {
-                expression: Expression::StringLiteral("a".repeat(500)),
+                expression: Expression::StringLiteral("a".repeat(500).into()),
                 span: test_span(),
             }),
             Statement::Expression(ExpressionStatement {
-                expression: Expression::StringLiteral("b".repeat(500)),
+                expression: Expression::StringLiteral("b".repeat(500).into()),
                 span: test_span(),
             }),
         ],

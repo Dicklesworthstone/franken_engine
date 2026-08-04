@@ -1,0 +1,85 @@
+{
+  "schema_version": "franken-engine.infrastructure-failure-signatures.v1",
+  "owning_bead": "bd-566x4",
+  "adr": "docs/adr/ADR-0012-evidence-freshness-model.md",
+  "purpose": "Machine-readable signatures that distinguish a verification command that COULD NOT RUN from one that ran and returned a real verdict. ADR-0012 section 5 separates regression from staleness but names only those two outcomes; a build whose target tree was deleted underneath it is neither. Reporting it as a regression points an operator at the claim when the fault is the machine.",
+  "contract": {
+    "fail_closed": "An infrastructure classification NEVER writes, refreshes, or promotes evidence. It is strictly a reporting distinction: the claim stays exactly as provisional as it would have been. Nothing here can create evidence.",
+    "conservative_default": "A non-zero exit that matches no signature is classified as a regression. Misreporting a real regression as infrastructure is the dangerous direction, so the burden of proof sits on the infrastructure claim.",
+    "single_match_sufficient": "Signatures are disjunctive. The first match decides, so ordering is by specificity."
+  },
+  "exit_code_rules": [
+    {
+      "id": "command_timeout",
+      "exit_code": 124,
+      "reason": "verification command exceeded its timeout and was killed before reaching a verdict",
+      "provenance": "scripts/reemit_evidence_receipts.py synthesises 124 on subprocess.TimeoutExpired; scripts/rch_all_target_cargo_proof_shard_runner.sh:593 already names this remote_command_timeout"
+    },
+    {
+      "id": "killed_by_oom",
+      "exit_code": 137,
+      "reason": "process received SIGKILL, characteristically the OOM killer under concurrent-agent memory pressure",
+      "provenance": "scripts/rch_all_target_cargo_proof_shard_runner.sh:369 remote_resource_exhaustion_detected"
+    }
+  ],
+  "signatures": [
+    {
+      "id": "target_dir_fingerprint_corruption",
+      "reason": "cargo target tree was deleted or truncated underneath a running build",
+      "regex": "failed to write [^\\n]*\\.fingerprint/[^\\n]*invoked\\.timestamp|could not parse/generate dep info|\\.fingerprint/[^\\s]+/(dep-[^\\s]+|invoked\\.timestamp)[^\\n]*No such file or directory|extern location for [^\\s]+ does not exist: [^\\s]+\\.rmeta",
+      "provenance": "scripts/rch_proof_failure_capsule.sh:245 target_dir_fingerprint_observed. This is the live 2026-07-26 reproducer: FE-CLAIM-006 and FE-CLAIM-022 both died this way against the shared /data/tmp/cargo-target."
+    },
+    {
+      "id": "disk_exhausted",
+      "reason": "no space left on device",
+      "regex": "No space left on device|StorageFull|os error 28",
+      "provenance": "scripts/run_security_conformance_runner.sh:98 rch_transient_infra_failure"
+    },
+    {
+      "id": "stale_crate_metadata",
+      "reason": "incremental cache or crate metadata left over from a different toolchain",
+      "regex": "\\berror\\[E0514\\]|\\berror\\[E0460\\]|\\berror\\[E0463\\]|found crate `[^`]+` compiled by an incompatible version",
+      "provenance": "README.md:2139 troubleshooting table. Documented in prose since the project began and matched by no code until this contract."
+    },
+    {
+      "id": "cargo_target_io_failure",
+      "reason": "cargo could not write its own build tree",
+      "regex": "error: failed to (write|remove|create|open) [^\\n]*(target|\\.fingerprint|/deps/)",
+      "provenance": "Generalisation of target_dir_fingerprint_corruption. Scoped to cargo's own error prefix AND a build-tree path so an ordinary test that fails writing a fixture is not swept up."
+    },
+    {
+      "id": "build_artifact_locked",
+      "reason": "build output held open by a concurrent process",
+      "regex": "Text file busy|os error 26"
+    },
+    {
+      "id": "transport_failure",
+      "reason": "remote-worker transport dropped mid-command",
+      "regex": "SSH command timed out|transport failure|connection reset by peer|broken pipe|network is unreachable",
+      "provenance": "scripts/run_security_conformance_runner.sh:98"
+    },
+    {
+      "id": "resource_exhaustion",
+      "reason": "process killed for resource exhaustion",
+      "regex": "signal: 9|SIGKILL|out of memory|Cannot allocate memory",
+      "provenance": "scripts/rch_all_target_cargo_proof_shard_runner.sh:369"
+    },
+    {
+      "id": "sibling_checkout_missing",
+      "reason": "a /dp sibling repository required at cargo resolution time is absent",
+      "regex": "failed to load manifest for (workspace member|dependency)|failed to read [^\\n]*/dp/[^\\n]*Cargo\\.toml",
+      "provenance": "bd-gw4cg: cargo resolves an optional path dependency's manifest even when the feature is off, so a missing /dp checkout fails at resolution, before any compilation. That is an environment state, not a claim regression."
+    },
+    {
+      "id": "toolchain_link_policy_mismatch",
+      "reason": "the linker could not resolve core/alloc intrinsics -- a toolchain or target-tree configuration fault, never a claim regression",
+      "regex": "undefined reference to `(core::fmt::write|core::panicking::panic|__rustc::__rust_(alloc|dealloc|no_alloc_shim_is_unstable_v2))|collect2: error: ld returned 1 exit status|rust-lld: error: undefined symbol: (core|alloc)::",
+      "provenance": "Live 2026-07-26 reproducer. FE-CLAIM-022 was launched with CARGO_TARGET_DIR pointed at a private warm tree, but reemit_evidence_receipts.py overrode it with its own default (./target). That tree is shared with other agents and held rlibs compiled under different RUSTFLAGS, so the nested Node-comparative build failed with `undefined reference to core::fmt::write` and `__rustc::__rust_alloc`. No signature matched, so ADR-0012 5.1's conservative default classified it as a REGRESSION of the lockstep-oracle claim -- exactly the false alarm on the most identity-critical surface that 5.1 exists to prevent. The override is fixed in the same commit; this signature covers the failure mode independently, because a mixed-RUSTFLAGS shared tree can arise without that specific bug.",
+      "why_this_is_never_a_regression": "These symbols are emitted by rustc, not by this repository. Engine source cannot cause `core::fmt::write` to be undefined at link time. The narrow anchoring is deliberate per ADR-0012 5.1 point 2: a broad match on `error: could not compile` would excuse real regressions, which is the dangerous direction."
+    }
+  ],
+  "known_divergence": {
+    "note": "scripts/rch_proof_failure_capsule.sh:245 carries its own copy of the target-dir regex and predates this contract. It is the sibling implementation for the rch proof lane and is NOT yet reading this file. Converging it is tracked separately so that a live proof lane is not refactored inside an evidence-freshness change.",
+    "tracked_by": "bd-566x4 follow-up"
+  }
+}

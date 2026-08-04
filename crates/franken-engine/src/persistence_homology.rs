@@ -277,7 +277,7 @@ impl PersistenceComputer {
         let diagram = PersistenceDiagram {
             schema_version: PERSISTENCE_DIAGRAM_SCHEMA_VERSION.to_string(),
             bars: filtered_bars,
-            source_graph_hash: graph.metadata.graph_hash.clone(),
+            source_graph_hash: graph.metadata.graph_hash,
             content_hash,
             authenticity_hash: AuthenticityHash::compute_keyed(
                 b"persistence_key",
@@ -294,13 +294,13 @@ impl PersistenceComputer {
         let mut filtration = Filtration::new(self.config.filter_type);
 
         // Add all nodes to the filtration
-        for (_, node) in &graph.nodes {
+        for node in graph.nodes.values() {
             let filter_value = self.compute_node_filter_value(node, graph)?;
             filtration.add_node(node.id, filter_value);
         }
 
         // Add all edges to the filtration
-        for (_, edge) in &graph.edges {
+        for edge in graph.edges.values() {
             let filter_value = self.compute_edge_filter_value(edge, graph)?;
             filtration.add_edge(edge.id, edge.source, edge.target, filter_value, edge.weight);
         }
@@ -538,7 +538,7 @@ impl Default for PersistenceComputer {
 #[derive(Debug, Clone)]
 struct Filtration {
     /// Type of filter applied.
-    filter_type: FilterType,
+    _filter_type: FilterType,
     /// Ordered simplices in the filtration.
     simplices: Vec<Simplex>,
 }
@@ -547,7 +547,7 @@ impl Filtration {
     /// Create a new empty filtration.
     fn new(filter_type: FilterType) -> Self {
         Self {
-            filter_type,
+            _filter_type: filter_type,
             simplices: Vec::new(),
         }
     }
@@ -577,8 +577,7 @@ impl Filtration {
 
     /// Sort simplices by filter value.
     fn sort(&mut self) {
-        self.simplices
-            .sort_by(|a, b| a.filter_value().cmp(&b.filter_value()));
+        self.simplices.sort_by_key(|a| a.filter_value());
     }
 
     /// Get the range of filter values.
@@ -1502,7 +1501,7 @@ mod tests {
 
     #[test]
     fn test_bars_to_points_conversion() {
-        let bars = vec![PersistenceBar {
+        let bars = [PersistenceBar {
             birth: FilterValue::from_millionths(100_000), // 0.1
             death: Some(FilterValue::from_millionths(300_000)), // 0.3
             dimension: 0,
@@ -1595,7 +1594,7 @@ mod tests {
 
     #[test]
     fn test_sum_total_persistence() {
-        let bars = vec![
+        let bars = [
             PersistenceBar {
                 birth: FilterValue::from_millionths(100_000),
                 death: Some(FilterValue::from_millionths(300_000)), // Persistence = 200_000
@@ -1629,7 +1628,7 @@ mod tests {
 
     #[test]
     fn test_infinite_bars_handling() {
-        let bars = vec![PersistenceBar {
+        let bars = [PersistenceBar {
             birth: FilterValue::from_millionths(100_000),
             death: None, // Infinite bar
             dimension: 1,

@@ -39,6 +39,18 @@ fn alt_master_key() -> Vec<u8> {
     b"alt-integration-master-key-32b!!".to_vec()
 }
 
+/// Length-prefixed encoding of one `(key, value)` entry, mirroring
+/// `DerivationContext::to_canonical_bytes` (`len(key) u64 LE || key ||
+/// len(value) u64 LE || value`).
+fn lp_entry(key: &str, value: &str) -> Vec<u8> {
+    let mut b = Vec::new();
+    b.extend_from_slice(&(key.len() as u64).to_le_bytes());
+    b.extend_from_slice(key.as_bytes());
+    b.extend_from_slice(&(value.len() as u64).to_le_bytes());
+    b.extend_from_slice(value.as_bytes());
+    b
+}
+
 // ===========================================================================
 // Section 1: KeyDomain — Display, separator, ALL, ordering
 // ===========================================================================
@@ -138,10 +150,7 @@ fn context_with_single_entry() {
     let ctx = DerivationContext::with("ext_id", "test-ext-001");
     assert_eq!(ctx.len(), 1);
     assert!(!ctx.is_empty());
-    let bytes = ctx.to_canonical_bytes();
-    assert!(bytes.contains(&b'='));
-    // Should be: "ext_id=test-ext-001"
-    assert_eq!(bytes, b"ext_id=test-ext-001");
+    assert_eq!(ctx.to_canonical_bytes(), lp_entry("ext_id", "test-ext-001"));
 }
 
 #[test]
@@ -171,9 +180,10 @@ fn context_canonical_bytes_sorted_by_key() {
     let mut ctx = DerivationContext::empty();
     ctx.add("beta", "2");
     ctx.add("alpha", "1");
-    let bytes = ctx.to_canonical_bytes();
-    // BTreeMap sorts by key: "alpha=1\0beta=2"
-    assert_eq!(bytes, b"alpha=1\0beta=2");
+    // BTreeMap sorts by key: alpha then beta, each length-prefixed.
+    let mut expected = lp_entry("alpha", "1");
+    expected.extend(lp_entry("beta", "2"));
+    assert_eq!(ctx.to_canonical_bytes(), expected);
 }
 
 #[test]
@@ -181,8 +191,7 @@ fn context_overwrite_existing_key() {
     let mut ctx = DerivationContext::with("key", "old_value");
     ctx.add("key", "new_value");
     assert_eq!(ctx.len(), 1);
-    let bytes = ctx.to_canonical_bytes();
-    assert_eq!(bytes, b"key=new_value");
+    assert_eq!(ctx.to_canonical_bytes(), lp_entry("key", "new_value"));
 }
 
 #[test]

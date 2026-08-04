@@ -9,7 +9,7 @@
 //! variable scoping in headers, break/continue semantics, and iterator protocol
 //! integration for for-in/for-of statements.
 
-use frankenengine_engine::HybridRouter;
+use frankenengine_engine::{EvalErrorCode, HybridRouter};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
@@ -576,6 +576,1282 @@ impl IterationStatementConformanceHarness {
 mod tests {
     use super::*;
 
+    fn eval_value_bd_5p1dp(source: &str) -> String {
+        let mut engine = HybridRouter::default();
+        engine
+            .eval(source)
+            .unwrap_or_else(|error| panic!("bd-5p1dp eval failed for {source:?}: {error}"))
+            .value
+            .to_string()
+    }
+
+    fn eval_error_bd_cu3sz(source: &str) -> String {
+        let mut engine = HybridRouter::default();
+        match engine.eval(source) {
+            Ok(value) => panic!("bd-cu3sz expected eval failure, got {}", value.value),
+            Err(error) => error.to_string(),
+        }
+    }
+
+    #[test]
+    fn bare_for_in_of_assignment_targets_observe_existing_bindings_bd_5p1dp() {
+        let cases = [
+            (
+                "for-in identifier",
+                "let key = ''; for (key in { alpha: 1, beta: 2 }) {} key;",
+                "beta",
+            ),
+            (
+                "for-in destructuring",
+                "let target = 'old'; for ({ missing: target } in { xy: 1 }) {} target === undefined;",
+                "true",
+            ),
+            (
+                "for-of identifier",
+                "let value = 0; for (value of [4, 7]) {} value;",
+                "7",
+            ),
+            (
+                "iterable reads existing target before assignment",
+                "let value = [1]; for (value of value) {} value;",
+                "1",
+            ),
+            (
+                "for-of destructuring",
+                "let left = 0; let right = 0; for ([left, right] of [[1, 2], [3, 4]]) {} left * 10 + right;",
+                "34",
+            ),
+            (
+                "nested default and rest assignment targets",
+                "let picked = 0; let rest = []; for ([{ p: picked } = { p: 9 }, ...rest] of [[undefined, 1, 2]]) {} picked * 10 + rest.length;",
+                "92",
+            ),
+            (
+                "assignment pattern may repeat a target",
+                "let value = 0; for ([value, value] of [[1, 2]]) {} value;",
+                "2",
+            ),
+            (
+                "nearest nested binding",
+                "let result = ''; let value = 'outer'; { let value = 'block'; for (value of ['inner']) {} result = value; } result + ':' + value;",
+                "inner:outer",
+            ),
+            (
+                "shared closure cell",
+                "let value = 0; let observe = () => value; for (value of [1, 2, 3]) {} observe();",
+                "3",
+            ),
+            (
+                "sloppy unresolved target",
+                "for (missing of [7]) {} missing;",
+                "7",
+            ),
+            (
+                "empty iterable does not assign const target",
+                "const fixed = 1; for (fixed of []) {} fixed;",
+                "1",
+            ),
+            (
+                "empty iterable does not enter target TDZ assignment",
+                "for (value of []) {} let value = 9; value;",
+                "9",
+            ),
+            (
+                "scope-routed const targets preserve shadow identity",
+                "const value = 1; for (value of []) {} { const value = 2; for (value of []) {} } value;",
+                "1",
+            ),
+            (
+                "explicit const head reinitializes per iteration",
+                "let total = 0; for (const item of [1, 2]) { if (false) item = 3; total += item; } total;",
+                "3",
+            ),
+            (
+                "break closes iterator after bare assignment",
+                r#"
+                    let value = -1;
+                    let iterator = {
+                        count: 0,
+                        closed: false,
+                        next() {
+                            return this.count < 10
+                                ? { value: this.count++, done: false }
+                                : { done: true };
+                        },
+                        return() {
+                            this.closed = true;
+                            return { done: true };
+                        }
+                    };
+                    let customIterable = {
+                        [Symbol.iterator]() { return iterator; }
+                    };
+                    for (value of customIterable) {
+                        if (value === 2) break;
+                    }
+                    (iterator.closed ? 10 : 0) + value;
+                "#,
+                "12",
+            ),
+        ];
+
+        for (label, source, expected) in cases {
+            assert_eq!(
+                eval_value_bd_5p1dp(source),
+                expected,
+                "{label} must use assignment semantics"
+            );
+        }
+    }
+
+    #[test]
+    fn bare_for_in_of_assignment_enforces_const_and_tdz_bd_5p1dp() {
+        let cases = [
+            (
+                "for-of const assignment",
+                "const fixed = 1; for (fixed of [2]) {}",
+                "assignment to constant variable",
+            ),
+            (
+                "captured const assignment",
+                "const fixed = 1; let observe = () => fixed; for (fixed of [2]) {}",
+                "assignment to constant variable",
+            ),
+            (
+                "for-in const assignment",
+                "const fixed = ''; for (fixed in { key: 1 }) {}",
+                "assignment to constant variable",
+            ),
+            (
+                "for-of assignment before lexical declaration",
+                "for (value of [1]) {} let value = 9;",
+                "before initialization",
+            ),
+            (
+                "for-in assignment before lexical declaration",
+                "for (value in { key: 1 }) {} let value = 9;",
+                "before initialization",
+            ),
+        ];
+
+        for (label, source, expected_message) in cases {
+            let mut engine = HybridRouter::default();
+            let error = engine.eval(source).unwrap_err();
+            assert_eq!(
+                error.code,
+                EvalErrorCode::RuntimeFault,
+                "{label} must fail at runtime, not during parsing or lowering: {error}"
+            );
+            assert!(
+                error.message.contains(expected_message),
+                "{label} must report {expected_message:?} when the first yielded value is assigned: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn bare_loop_targets_observe_strictness_and_empty_iteration_bd_0k19b() {
+        let cases = [
+            (
+                "strict empty for-of performs no put",
+                r#""use strict"; for (missing_empty_of_bd_0k19b of []) {} typeof missing_empty_of_bd_0k19b;"#,
+                "undefined",
+            ),
+            (
+                "strict empty for-in performs no put",
+                r#""use strict"; for (missing_empty_in_bd_0k19b in {}) {} typeof missing_empty_in_bd_0k19b;"#,
+                "undefined",
+            ),
+            (
+                "sloppy destructuring creates globals left to right",
+                "for ([left_global_bd_0k19b, right_global_bd_0k19b] of [[2, 3]]) {} left_global_bd_0k19b * 10 + right_global_bd_0k19b;",
+                "23",
+            ),
+            (
+                "sloppy for-in destructuring creates an unresolved global",
+                "for ({ length: key_length_bd_0k19b } in { xy: 1 }) {} key_length_bd_0k19b;",
+                "2",
+            ),
+            (
+                "strict destructuring keeps prior resolved writes",
+                r#""use strict"; let existing_bd_0k19b = 0; let caught = false; try { for ([existing_bd_0k19b, missing_destructure_bd_0k19b] of [[4, 5]]) {} } catch (error) { caught = true; } existing_bd_0k19b + ":" + caught;"#,
+                "4:true",
+            ),
+            (
+                "destructuring freezes its target before a default initializer",
+                r#""use strict"; let caught = false; let make = Function("default_created_bd_0k19b = 1; return 2;"); try { for ([default_created_bd_0k19b = make()] of [[undefined]]) {} } catch (error) { caught = true; } caught + ":" + default_created_bd_0k19b;"#,
+                "true:1",
+            ),
+            (
+                "empty destructuring runs neither default nor put",
+                r#""use strict"; let side = 0; for ([missing_default_bd_0k19b = (side = 1)] of []) {} side + ":" + typeof missing_default_bd_0k19b;"#,
+                "0:undefined",
+            ),
+        ];
+
+        for (label, source, expected) in cases {
+            assert_eq!(eval_value_bd_5p1dp(source), expected, "{label}");
+        }
+
+        for (label, source, missing_name) in [
+            (
+                "strict for-of identifier",
+                r#""use strict"; for (missing_for_of_bd_0k19b of [7]) {}"#,
+                "missing_for_of_bd_0k19b",
+            ),
+            (
+                "strict for-in identifier",
+                r#""use strict"; for (missing_for_in_bd_0k19b in { key: 1 }) {}"#,
+                "missing_for_in_bd_0k19b",
+            ),
+            (
+                "strict destructuring identifier",
+                r#""use strict"; for ([missing_destructure_error_bd_0k19b] of [[5]]) {}"#,
+                "missing_destructure_error_bd_0k19b",
+            ),
+        ] {
+            let mut engine = HybridRouter::default();
+            let error = engine.eval(source).unwrap_err();
+            assert_eq!(error.code, EvalErrorCode::RuntimeFault, "{label}: {error}");
+            assert!(
+                error
+                    .message
+                    .contains(&format!("{missing_name} is not defined")),
+                "{label} must report the unresolved loop-head target: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn strict_for_of_head_reference_error_closes_iterator_once_bd_0k19b() {
+        assert_eq!(
+            eval_value_bd_5p1dp(
+                r#"
+                    "use strict";
+                    let iterator = {
+                        closed: 0,
+                        next() { return { value: 7, done: false }; },
+                        return() {
+                            this.closed++;
+                            return { done: true };
+                        }
+                    };
+                    let iterable = { [Symbol.iterator]() { return iterator; } };
+                    let caught = false;
+                    try {
+                        for (missing_close_bd_0k19b of iterable) {}
+                    } catch (error) {
+                        caught = true;
+                    }
+                    caught + ":" + iterator.closed;
+                "#,
+            ),
+            "true:1",
+            "a strict unresolved loop-head put must close before propagating"
+        );
+    }
+
+    #[test]
+    fn abrupt_for_of_head_assignment_closes_iterator_bd_cu3sz() {
+        let cases = [
+            (
+                "const assignment",
+                r#"
+                    let iterator = {
+                        closed: 0,
+                        next() { return { value: 2, done: false }; },
+                        return() {
+                            this.closed++;
+                            return { done: true };
+                        }
+                    };
+                    let iterable = { [Symbol.iterator]() { return iterator; } };
+                    let caught = false;
+                    try {
+                        const fixed = 1;
+                        for (fixed of iterable) {}
+                    } catch (error) {
+                        caught = true;
+                    }
+                    (caught ? 10 : 0) + iterator.closed;
+                "#,
+                "11",
+            ),
+            (
+                "temporal dead zone",
+                r#"
+                    let iterator = {
+                        closed: 0,
+                        next() { return { value: 2, done: false }; },
+                        return() {
+                            this.closed++;
+                            return { done: true };
+                        }
+                    };
+                    let iterable = { [Symbol.iterator]() { return iterator; } };
+                    let caught = false;
+                    try {
+                        for (value of iterable) {}
+                        let value = 9;
+                    } catch (error) {
+                        caught = true;
+                    }
+                    (caught ? 10 : 0) + iterator.closed;
+                "#,
+                "11",
+            ),
+            (
+                "function-local const assignment",
+                r#"
+                    function run() {
+                        let iterator = {
+                            closed: 0,
+                            next() { return { value: 2, done: false }; },
+                            return() {
+                                this.closed++;
+                                return { done: true };
+                            }
+                        };
+                        let iterable = { [Symbol.iterator]() { return iterator; } };
+                        let caught = false;
+                        try {
+                            const fixed = 1;
+                            for (fixed of iterable) {}
+                        } catch (error) {
+                            caught = true;
+                        }
+                        return (caught ? 10 : 0) + iterator.closed;
+                    }
+                    run();
+                "#,
+                "11",
+            ),
+        ];
+
+        for (label, source, expected) in cases {
+            assert_eq!(
+                eval_value_bd_5p1dp(source),
+                expected,
+                "{label} must close the iterator before propagating the head error"
+            );
+        }
+
+        let diagnostics = [
+            (
+                "const assignment",
+                r#"
+                    let iterator = {
+                        next() { return { value: 2, done: false }; },
+                        return() { return { done: true }; }
+                    };
+                    let iterable = { [Symbol.iterator]() { return iterator; } };
+                    const fixed = 1;
+                    for (fixed of iterable) {}
+                "#,
+                "assignment to constant variable",
+            ),
+            (
+                "temporal dead zone",
+                r#"
+                    let iterator = {
+                        next() { return { value: 2, done: false }; },
+                        return() { return { done: true }; }
+                    };
+                    let iterable = { [Symbol.iterator]() { return iterator; } };
+                    for (value of iterable) {}
+                    let value = 9;
+                "#,
+                "before initialization",
+            ),
+        ];
+        for (label, source, expected) in diagnostics {
+            let error = eval_error_bd_cu3sz(source);
+            assert!(
+                error.contains(expected),
+                "{label} must preserve its original diagnostic after close: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn abrupt_destructuring_head_closes_after_prior_targets_bd_cu3sz() {
+        assert_eq!(
+            eval_value_bd_5p1dp(
+                r#"
+                    let left = 0;
+                    const fixed = 9;
+                    let iterator = {
+                        closed: 0,
+                        next() { return { value: [1, 2], done: false }; },
+                        return() {
+                            this.closed++;
+                            return { done: true };
+                        }
+                    };
+                    let iterable = { [Symbol.iterator]() { return iterator; } };
+                    let caught = false;
+                    try {
+                        for ([left, fixed] of iterable) {}
+                    } catch (error) {
+                        caught = true;
+                    }
+                    left * 100 + (caught ? 10 : 0) + iterator.closed;
+                "#,
+            ),
+            "111",
+            "destructuring must retain earlier stores, close once, then propagate the later error"
+        );
+    }
+
+    #[test]
+    fn abrupt_head_error_wins_over_iterator_return_failures_bd_cu3sz() {
+        assert_eq!(
+            eval_value_bd_5p1dp(
+                r#"
+                    let iterator = {
+                        closed: 0,
+                        next() { return { value: 2, done: false }; },
+                        return() {
+                            this.closed++;
+                            throw new Error("close-error");
+                        }
+                    };
+                    let iterable = { [Symbol.iterator]() { return iterator; } };
+                    let original_error = false;
+                    try {
+                        const fixed = 1;
+                        for (fixed of iterable) {}
+                    } catch (error) {
+                        original_error = true;
+                    }
+                    (original_error ? 10 : 0) + iterator.closed;
+                "#,
+            ),
+            "11",
+            "IteratorClose with a throw completion must preserve the original head error"
+        );
+        assert_eq!(
+            eval_value_bd_5p1dp(
+                r#"
+                    let iterator = {
+                        closed: 0,
+                        next() { return { value: 2, done: false }; },
+                        return() {
+                            this.closed++;
+                            return 0;
+                        }
+                    };
+                    let iterable = { [Symbol.iterator]() { return iterator; } };
+                    let original_error = false;
+                    try {
+                        const fixed = 1;
+                        for (fixed of iterable) {}
+                    } catch (error) {
+                        original_error = true;
+                    }
+                    (original_error ? 10 : 0) + iterator.closed;
+                "#,
+            ),
+            "11",
+            "a non-object close result must not replace the original head error"
+        );
+
+        let precedence_cases = [
+            (
+                "throwing return",
+                r#"
+                    let iterator = {
+                        next() { return { value: 2, done: false }; },
+                        return() { throw new Error("close-error"); }
+                    };
+                    let iterable = { [Symbol.iterator]() { return iterator; } };
+                    const fixed = 1;
+                    for (fixed of iterable) {}
+                "#,
+                "close-error",
+            ),
+            (
+                "non-object return",
+                r#"
+                    let iterator = {
+                        next() { return { value: 2, done: false }; },
+                        return() { return 0; }
+                    };
+                    let iterable = { [Symbol.iterator]() { return iterator; } };
+                    const fixed = 1;
+                    for (fixed of iterable) {}
+                "#,
+                "object returned by iterator.return",
+            ),
+        ];
+        for (label, source, displaced_diagnostic) in precedence_cases {
+            let error = eval_error_bd_cu3sz(source);
+            assert!(
+                error.contains("assignment to constant variable"),
+                "{label} must preserve the original assignment failure: {error}"
+            );
+            assert!(
+                !error.contains(displaced_diagnostic),
+                "{label} must not replace the original failure: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn non_abrupt_unresolved_head_exhausts_without_closing_bd_cu3sz() {
+        assert_eq!(
+            eval_value_bd_5p1dp(
+                r#"
+                    let iterator = {
+                        step: 0,
+                        closed: 0,
+                        next() {
+                            return this.step++ === 0
+                                ? { value: 7, done: false }
+                                : { done: true };
+                        },
+                        return() {
+                            this.closed++;
+                            return { done: true };
+                        }
+                    };
+                    let iterable = { [Symbol.iterator]() { return iterator; } };
+                    for (missing of iterable) { continue; }
+                    missing * 10 + iterator.closed;
+                "#,
+            ),
+            "70",
+            "sloppy unresolved assignment is normal completion and must not close"
+        );
+    }
+
+    #[test]
+    fn for_of_body_throw_closes_once_and_preserves_original_bd_g73mg() {
+        for mode in ["ok", "throw", "primitive"] {
+            let source = format!(
+                r#"
+                    let closeMode = "{mode}";
+                    let iterator = {{
+                        closed: 0,
+                        step: 0,
+                        next() {{
+                            return this.step++ === 0
+                                ? {{ value: 1, done: false }}
+                                : {{ done: true }};
+                        }},
+                        return() {{
+                            this.closed++;
+                            if (closeMode === "throw") throw new Error("close-error");
+                            if (closeMode === "primitive") return 0;
+                            return {{ done: true }};
+                        }}
+                    }};
+                    let iterable = {{ [Symbol.iterator]() {{ return iterator; }} }};
+                    function run() {{
+                        try {{
+                            for (const value of iterable) {{
+                                throw new Error("body-error");
+                            }}
+                        }} catch (error) {{
+                            return error.message + ":" + iterator.closed;
+                        }}
+                    }}
+                    run();
+                "#,
+            );
+            assert_eq!(
+                eval_value_bd_5p1dp(&source),
+                "body-error:1",
+                "{mode}: a Throw completion must dominate iterator.return failure"
+            );
+        }
+    }
+
+    #[test]
+    fn for_of_function_return_close_precedence_bd_g73mg() {
+        for (mode, expected) in [
+            ("ok", "value:1"),
+            ("throw", "close-error:1"),
+            ("primitive", "TypeError:1"),
+        ] {
+            let source = format!(
+                r#"
+                    let closeMode = "{mode}";
+                    let iterator = {{
+                        closed: 0,
+                        next() {{ return {{ value: 1, done: false }}; }},
+                        return() {{
+                            this.closed++;
+                            if (closeMode === "throw") throw new Error("close-error");
+                            if (closeMode === "primitive") return 0;
+                            return {{ done: true }};
+                        }}
+                    }};
+                    let iterable = {{ [Symbol.iterator]() {{ return iterator; }} }};
+                    function run() {{
+                        try {{
+                            for (const value of iterable) {{ return "value"; }}
+                            return "miss";
+                        }} catch (error) {{
+                            return error.message === "close-error" ? "close-error" : error.name;
+                        }}
+                    }}
+                    run() + ":" + iterator.closed;
+                "#,
+            );
+            assert_eq!(eval_value_bd_5p1dp(&source), expected, "{mode}");
+        }
+
+        assert_eq!(
+            eval_value_bd_5p1dp(
+                r#"
+                    let iterator = {
+                        closed: 0,
+                        next() { return { value: 1, done: false }; },
+                        return() { this.closed++; return 0; }
+                    };
+                    let iterable = { [Symbol.iterator]() { return iterator; } };
+                    function run() {
+                        let observed = "none";
+                        try {
+                            for (const value of iterable) { return "stale"; }
+                        } catch (error) {
+                            observed = error.name;
+                        } finally {
+                            observed += ":finally";
+                        }
+                        return observed + ":after";
+                    }
+                    run() + ":" + iterator.closed;
+                "#,
+            ),
+            "TypeError:finally:after:1",
+            "a caught close failure must not resurrect the displaced return"
+        );
+
+        assert_eq!(
+            eval_value_bd_5p1dp(
+                r#"
+                    let iterator = {
+                        closed: 0,
+                        next() { return { value: 1, done: false }; },
+                        return() { this.closed++; throw new Error("close-error"); }
+                    };
+                    let iterable = { [Symbol.iterator]() { return iterator; } };
+                    function run() {
+                        try {
+                            for (const value of iterable) {
+                                try { throw new Error("body-error"); }
+                                finally { return "stale"; }
+                            }
+                        } catch (error) {
+                            return error.message;
+                        }
+                    }
+                    run() + ":" + iterator.closed;
+                "#,
+            ),
+            "close-error:1",
+            "a return from finally overrides the body throw, then close failure overrides return"
+        );
+    }
+
+    #[test]
+    fn for_of_close_accepts_callable_and_promise_results_bd_g73mg() {
+        assert_eq!(
+            eval_value_bd_5p1dp(
+                r#"
+                    let iterator = {
+                        closed: 0,
+                        next() { return { value: 1, done: false }; },
+                        return() { this.closed++; return function() {}; }
+                    };
+                    let iterable = { [Symbol.iterator]() { return iterator; } };
+                    function run() {
+                        for (const value of iterable) { return "value"; }
+                        return "miss";
+                    }
+                    run() + ":" + iterator.closed;
+                "#,
+            ),
+            "value:1",
+            "a callable iterator.return result is an ECMAScript object"
+        );
+
+        assert_eq!(
+            eval_value_bd_5p1dp(
+                r#"
+                    let iterator = {
+                        closed: 0,
+                        next() { return { value: 1, done: false }; },
+                        return() { this.closed++; return Promise.resolve(0); }
+                    };
+                    let iterable = { [Symbol.iterator]() { return iterator; } };
+                    for (const value of iterable) { break; }
+                    iterator.closed;
+                "#,
+            ),
+            "1",
+            "a Promise iterator.return result is an ECMAScript object"
+        );
+    }
+
+    #[test]
+    fn for_of_close_accepts_representative_source_object_like_carriers_bd_7vfkc() {
+        for (case, prelude, result_expression) in [
+            ("ordinary object", "", "{}"),
+            (
+                "ordinary function",
+                "function ordinary() { return 1; }",
+                "ordinary",
+            ),
+            (
+                "capturing closure",
+                "let captured = 1; let closure = function() { return captured; };",
+                "closure",
+            ),
+            ("builtin function", "", "Array.isArray"),
+            ("Promise", "", "Promise.resolve(0)"),
+            ("iterator", "", "[1][Symbol.iterator]()"),
+            (
+                "generator object",
+                "function* values() { yield 1; } let generator = values();",
+                "generator",
+            ),
+            (
+                "generator function",
+                "function* values() { yield 1; }",
+                "values",
+            ),
+            (
+                "async function",
+                "async function asyncValue() { return 1; }",
+                "asyncValue",
+            ),
+            (
+                "async generator object",
+                "async function* asyncValues() { yield 1; } let asyncGenerator = asyncValues();",
+                "asyncGenerator",
+            ),
+            (
+                "async generator function",
+                "async function* asyncValues() { yield 1; }",
+                "asyncValues",
+            ),
+        ] {
+            let source = r#"
+                    __PRELUDE__
+                    let iterator = {
+                        closed: 0,
+                        next() { return { value: 1, done: false }; },
+                        return() {
+                            this.closed++;
+                            return __RESULT_EXPRESSION__;
+                        }
+                    };
+                    let iterable = { [Symbol.iterator]() { return iterator; } };
+                    for (const value of iterable) { break; }
+                    iterator.closed;
+                "#
+            .replace("__PRELUDE__", prelude)
+            .replace("__RESULT_EXPRESSION__", result_expression);
+            assert_eq!(
+                eval_value_bd_5p1dp(&source),
+                "1",
+                "{case}: every ECMAScript object-like return carrier must be accepted"
+            );
+        }
+    }
+
+    #[test]
+    fn for_of_close_rejects_every_source_primitive_carrier_bd_7vfkc() {
+        for (case, result_expression) in [
+            ("undefined", "undefined"),
+            ("null", "null"),
+            ("boolean", "false"),
+            ("integer number", "0"),
+            ("floating-point number", "0.5"),
+            ("bigint", "1n"),
+            ("string", "'primitive'"),
+            ("symbol", "Symbol('primitive')"),
+        ] {
+            let source = r#"
+                    let iterator = {
+                        closed: 0,
+                        next() { return { value: 1, done: false }; },
+                        return() {
+                            this.closed++;
+                            return __RESULT_EXPRESSION__;
+                        }
+                    };
+                    let iterable = { [Symbol.iterator]() { return iterator; } };
+                    function run() {
+                        try {
+                            for (const value of iterable) { break; }
+                            return "miss";
+                        } catch (error) {
+                            return error.name;
+                        }
+                    }
+                    run() + ":" + iterator.closed;
+                "#
+            .replace("__RESULT_EXPRESSION__", result_expression);
+            assert_eq!(
+                eval_value_bd_5p1dp(&source),
+                "TypeError:1",
+                "{case}: a primitive return must throw TypeError after exactly one close call"
+            );
+        }
+    }
+
+    #[test]
+    fn for_of_throw_completion_wins_and_closes_once_bd_7vfkc() {
+        for (case, return_body) in [
+            ("primitive return", "return 0;"),
+            ("throwing return", "throw new Error('close-error');"),
+        ] {
+            let source = r#"
+                    let iterator = {
+                        closed: 0,
+                        next() { return { value: 1, done: false }; },
+                        return() {
+                            this.closed++;
+                            __RETURN_BODY__
+                        }
+                    };
+                    let iterable = { [Symbol.iterator]() { return iterator; } };
+                    function run() {
+                        try {
+                            for (const value of iterable) {
+                                throw new Error("body-error");
+                            }
+                            return "miss";
+                        } catch (error) {
+                            return error.message;
+                        }
+                    }
+                    run() + ":" + iterator.closed;
+                "#
+            .replace("__RETURN_BODY__", return_body);
+            assert_eq!(
+                eval_value_bd_5p1dp(&source),
+                "body-error:1",
+                "{case}: Throw completion must win while iterator.return is called once"
+            );
+        }
+    }
+
+    #[test]
+    fn for_of_crossing_labels_close_innermost_first_bd_g73mg() {
+        assert_eq!(
+            eval_value_bd_5p1dp(
+                r#"
+                    let trace = "";
+                    function make(name) {
+                        let step = 0;
+                        return {
+                            next() {
+                                return step++ === 0
+                                    ? { value: name, done: false }
+                                    : { done: true };
+                            },
+                            return() {
+                                trace += name + ",";
+                                return { done: true };
+                            },
+                            [Symbol.iterator]() { return this; }
+                        };
+                    }
+                    outer: for (const outerValue of make("outer")) {
+                        for (const innerValue of make("inner")) { break outer; }
+                    }
+                    trace;
+                "#,
+            ),
+            "inner,outer,",
+            "break outer must close every crossed iterator innermost-first"
+        );
+
+        assert_eq!(
+            eval_value_bd_5p1dp(
+                r#"
+                    let trace = "";
+                    function make(name) {
+                        let step = 0;
+                        return {
+                            next() {
+                                return step++ === 0
+                                    ? { value: name, done: false }
+                                    : { done: true };
+                            },
+                            return() {
+                                trace += name + ",";
+                                return { done: true };
+                            },
+                            [Symbol.iterator]() { return this; }
+                        };
+                    }
+                    outer: for (const outerValue of make("outer")) {
+                        for (const innerValue of make("inner")) { continue outer; }
+                    }
+                    trace;
+                "#,
+            ),
+            "inner,",
+            "continue outer closes crossed inner iterators but not the target iterator"
+        );
+    }
+
+    #[test]
+    fn for_of_crossing_label_close_failure_promotes_to_throw_bd_g73mg() {
+        for exit in ["break outer", "continue outer"] {
+            let source = format!(
+                r#"
+                    let trace = "";
+                    function make(name) {{
+                        let step = 0;
+                        return {{
+                            next() {{
+                                return step++ === 0
+                                    ? {{ value: name, done: false }}
+                                    : {{ done: true }};
+                            }},
+                            return() {{
+                                trace += name + ",";
+                                throw new Error(name + "-close");
+                            }},
+                            [Symbol.iterator]() {{ return this; }}
+                        }};
+                    }}
+                    function run() {{
+                        try {{
+                            outer: for (const outerValue of make("outer")) {{
+                                for (const innerValue of make("inner")) {{ {exit}; }}
+                            }}
+                            return trace + "miss";
+                        }} catch (error) {{
+                            return trace + "caught:" + error.message;
+                        }}
+                    }}
+                    run();
+                "#,
+            );
+            assert_eq!(
+                eval_value_bd_5p1dp(&source),
+                "inner,outer,caught:inner-close",
+                "{exit}: an inner close failure becomes Throw while crossing the outer iterator"
+            );
+        }
+    }
+
+    #[test]
+    fn for_of_non_crossing_and_step_failures_do_not_close_bd_g73mg() {
+        assert_eq!(
+            eval_value_bd_5p1dp(
+                r#"
+                    let iterator = {
+                        closed: 0,
+                        step: 0,
+                        next() {
+                            return this.step++ === 0
+                                ? { value: 1, done: false }
+                                : { done: true };
+                        },
+                        return() { this.closed++; return { done: true }; }
+                    };
+                    let iterable = { [Symbol.iterator]() { return iterator; } };
+                    for (const value of iterable) {
+                        inner: { break inner; }
+                        continue;
+                    }
+                    iterator.closed;
+                "#,
+            ),
+            "0",
+            "inner-label break, same-loop continue, and exhaustion must not close"
+        );
+
+        assert_eq!(
+            eval_value_bd_5p1dp(
+                r#"
+                    let iterator = {
+                        closed: 0,
+                        next() { throw new Error("next-error"); },
+                        return() { this.closed++; return { done: true }; }
+                    };
+                    let iterable = { [Symbol.iterator]() { return iterator; } };
+                    try { for (const value of iterable) {} } catch (error) {}
+                    iterator.closed;
+                "#,
+            ),
+            "0",
+            "IteratorStep failure occurs before the body guard and must not close"
+        );
+
+        assert_eq!(
+            eval_value_bd_5p1dp(
+                r#"
+                    let iterator = {
+                        closed: 0,
+                        next() {
+                            return {
+                                done: false,
+                                get value() { throw new Error("value-error"); }
+                            };
+                        },
+                        return() { this.closed++; return { done: true }; }
+                    };
+                    let iterable = { [Symbol.iterator]() { return iterator; } };
+                    function run() {
+                        try { for (const value of iterable) {} } catch (error) {
+                            return error.message + ":" + iterator.closed;
+                        }
+                    }
+                    run();
+                "#,
+            ),
+            "value-error:0",
+            "IteratorValue failure occurs before the body guard and must not close"
+        );
+    }
+
+    #[test]
+    fn for_of_close_runs_after_source_finally_bd_g73mg() {
+        assert_eq!(
+            eval_value_bd_5p1dp(
+                r#"
+                    let trace = "";
+                    let iterator = {
+                        next() { return { value: 1, done: false }; },
+                        return() { trace += "close,"; return { done: true }; }
+                    };
+                    let iterable = { [Symbol.iterator]() { return iterator; } };
+                    function run() {
+                        for (const value of iterable) {
+                            try { return "value"; }
+                            finally { trace += "finally,"; }
+                        }
+                    }
+                    run();
+                    trace;
+                "#,
+            ),
+            "finally,close,",
+            "source finally must run before IteratorClose on return"
+        );
+
+        assert_eq!(
+            eval_value_bd_5p1dp(
+                r#"
+                    let trace = "";
+                    let iterator = {
+                        next() { return { value: 1, done: false }; },
+                        return() { trace += "close,"; return { done: true }; }
+                    };
+                    let iterable = { [Symbol.iterator]() { return iterator; } };
+                    try {
+                        for (const value of iterable) {
+                            try { trace += "body,"; throw new Error("body-error"); }
+                            finally { trace += "finally,"; }
+                        }
+                    } catch (error) {
+                        trace += "catch,";
+                    }
+                    trace;
+                "#,
+            ),
+            "body,finally,close,catch,",
+            "source finally must run before IteratorClose and outer catch on throw"
+        );
+    }
+
+    #[test]
+    fn for_of_close_failure_respects_active_finally_ownership_bd_g73mg() {
+        for (close_body, error_value, expected) in [
+            (
+                r#"throw new Error("close-error");"#,
+                "error.message",
+                "caught:close-error,after,old:1",
+            ),
+            (r#"return 0;"#, "error.name", "caught:TypeError,after,old:1"),
+        ] {
+            assert_eq!(
+                eval_value_bd_5p1dp(&format!(
+                    r#"
+                        let trace = "";
+                        let closed = 0;
+                        let step = 0;
+                        let iterator = {{
+                            next() {{
+                                return step++ === 0
+                                    ? {{ value: 1, done: false }}
+                                    : {{ done: true }};
+                            }},
+                            return() {{ closed++; {close_body} }}
+                        }};
+                        let iterable = {{ [Symbol.iterator]() {{ return iterator; }} }};
+                        function run() {{
+                            try {{ return "old"; }}
+                            finally {{
+                                try {{ for (const value of iterable) {{ break; }} }}
+                                catch (error) {{
+                                    trace += "caught:" + {error_value} + ",";
+                                }}
+                                trace += "after,";
+                            }}
+                        }}
+                        let value = run();
+                        trace + value + ":" + closed;
+                    "#
+                )),
+                expected,
+                "a catch inside the active finalizer must preserve its older return"
+            );
+        }
+
+        for (close_body, error_value, expected) in [
+            (
+                r#"throw new Error("close-error");"#,
+                "error.message",
+                "close-error:next:cleanup:after:1",
+            ),
+            (
+                r#"return 0;"#,
+                "error.name",
+                "TypeError:next:cleanup:after:1",
+            ),
+        ] {
+            assert_eq!(
+                eval_value_bd_5p1dp(&format!(
+                    r#"
+                        let closed = 0;
+                        let step = 0;
+                        let iterator = {{
+                            next() {{
+                                return step++ === 0
+                                    ? {{ value: 1, done: false }}
+                                    : {{ done: true }};
+                            }},
+                            return() {{ closed++; {close_body} }}
+                        }};
+                        let iterable = {{ [Symbol.iterator]() {{ return iterator; }} }};
+                        function run() {{
+                            try {{ return "old"; }}
+                            finally {{ for (const value of iterable) {{ break; }} }}
+                        }}
+                        function observe() {{
+                            try {{ run(); }} catch (error) {{ return {error_value} + ":"; }}
+                        }}
+                        let trace = observe();
+                        try {{ trace += "next:"; }} finally {{ trace += "cleanup:"; }}
+                        trace + "after:" + closed;
+                    "#
+                )),
+                expected,
+                "a close failure escaping the finalizer must replace its older return"
+            );
+        }
+    }
+
+    #[test]
+    fn function_local_iteration_targets_preserve_binding_identity_bd_pimva() {
+        let cases = [
+            (
+                "function-local const with empty iterable",
+                "function run() { const fixed = 1; for (fixed of []) {} return fixed; } run();",
+                "1",
+            ),
+            (
+                "function-local predeclaration with empty iterable",
+                "function run() { for (value of []) {} let value = 9; return value; } run();",
+                "9",
+            ),
+            (
+                "nearest nested function-local binding",
+                "function run() { const value = 'outer'; let result = ''; { let value = 'block'; for (value of ['inner']) {} result = value; } return result + ':' + value; } run();",
+                "inner:outer",
+            ),
+            (
+                "function-local shared closure cell",
+                "function run() { let value = 0; let observe = () => value; for (value of [1, 2, 3]) {} return observe(); } run();",
+                "3",
+            ),
+            (
+                "explicit function-local const head creates fresh per-iteration cells",
+                "function run() { let first; let second; for (const item of [1, 2]) { if (item === 1) { first = () => item; } else { second = () => item; } } return first() * 10 + second(); } run();",
+                "12",
+            ),
+            (
+                "function-expression destructuring assignment",
+                "let run = function () { let left = 0; let right = 0; for ([left, right] of [[3, 4]]) {} return left * 10 + right; }; run();",
+                "34",
+            ),
+        ];
+
+        for (label, source, expected) in cases {
+            assert_eq!(
+                eval_value_bd_5p1dp(source),
+                expected,
+                "{label} must preserve the exact deferred-frame binding"
+            );
+        }
+    }
+
+    #[test]
+    fn function_local_iteration_targets_enforce_const_and_tdz_bd_pimva() {
+        let cases = [
+            (
+                "function-local for-of const assignment",
+                "function run() { const fixed = 1; for (fixed of [2]) {} } run();",
+                "assignment to constant variable",
+            ),
+            (
+                "arrow-local for-in const assignment",
+                "let run = () => { const fixed = ''; for (fixed in { key: 1 }) {} }; run();",
+                "assignment to constant variable",
+            ),
+            (
+                "function-local assignment before lexical declaration",
+                "function run() { for (value of [1]) {} let value = 9; } run();",
+                "before initialization",
+            ),
+            (
+                "function-local const TDZ precedes immutability",
+                "function run() { for (value of [1]) {} const value = 9; } run();",
+                "before initialization",
+            ),
+            (
+                "function-local destructuring const assignment",
+                "function run() { const fixed = 1; for ([fixed] of [[2]]) {} } run();",
+                "assignment to constant variable",
+            ),
+            (
+                "captured function-local const assignment",
+                "function run() { const fixed = 1; let observe = () => fixed; for (fixed of [2]) {} return observe(); } run();",
+                "assignment to constant variable",
+            ),
+            (
+                "nested-scope function-local const assignment",
+                "function run() { let value = 1; { const value = 2; for (value of [3]) {} } return value; } run();",
+                "assignment to constant variable",
+            ),
+        ];
+
+        for (label, source, expected_message) in cases {
+            let mut engine = HybridRouter::default();
+            let error = engine.eval(source).unwrap_err();
+            assert_eq!(
+                error.code,
+                EvalErrorCode::RuntimeFault,
+                "{label} must fail at runtime, not during parsing or lowering: {error}"
+            );
+            assert!(
+                error.message.contains(expected_message),
+                "{label} must report {expected_message:?}: {error}"
+            );
+        }
+    }
+
     /// Smoke test: the parser must at least accept this statement form. A
     /// `ParseError` means the grammar is unsupported (a real gap); a runtime
     /// `Fail` is an execution gap, not a parser gap, and is tolerated here.
@@ -855,7 +2131,10 @@ fn iteration_statements_test262_conformance_integration() {
     /// then routed a throw from the iterator's `next()` through the enclosing
     /// try/catch (ForOfNext re-routes the exception that `invoke_inline_method_call`
     /// captures) and declared function-body builtin capabilities, promoting
-    /// `for-of-iterator-throw-handling` — DISC-009 fully RESOLVED.)
+    /// `for-of-iterator-throw-handling`. That repaired next-error catchability,
+    /// not IteratorClose. bd-cu3sz later closed on loop-head assignment failure;
+    /// bd-g73mg completed DISC-009 for body Throw, function Return, and labelled
+    /// exits while keeping next/value failure and natural exhaustion non-closing.
     /// Each entry pairs the test id with the tracking bead and the
     /// `ECMA262_DISCREPANCIES.md` row that documents the gap (bd-xkbrm FIND-5).
     /// Keep alphabetised by test id. When the engine repairs a gap, move the id

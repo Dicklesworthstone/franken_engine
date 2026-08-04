@@ -143,9 +143,15 @@ fn operator_command_description_nonempty() {
 }
 
 #[test]
-fn operator_command_none_shipped() {
-    for cmd in ReactOperatorCommand::ALL {
-        assert!(!cmd.is_shipped());
+fn operator_command_only_compile_is_shipped() {
+    assert!(ReactOperatorCommand::ReactCompile.is_shipped());
+    for cmd in [
+        ReactOperatorCommand::ReactBuild,
+        ReactOperatorCommand::ReactVerify,
+        ReactOperatorCommand::ReactDoctor,
+        ReactOperatorCommand::ReactStatus,
+    ] {
+        assert!(!cmd.is_shipped(), "{cmd} should remain unshipped");
     }
 }
 

@@ -66,12 +66,21 @@ pub enum EffectKind {
     ClockRead = 10,
     /// Read or seed the host CSPRNG (`random.read`).
     RandomRead = 11,
+    /// Read the benign *shape* of the ambient `process` object
+    /// (`process.shape_read`): side-effect-free descriptors such as
+    /// `process.argv`, `process.platform`, `process.version`, `process.pid`,
+    /// and a bare `process` object load. Distinct from [`Self::EnvRead`], which
+    /// covers environment *variable value* reads (`process.env.SECRET`): a
+    /// trusted top-level eval context may be granted process-shape reads while
+    /// still being denied env-value reads. Untrusted extension lowering is
+    /// granted neither (deny-all).
+    ProcessShapeRead = 12,
 }
 
 impl EffectKind {
     /// All variants in declaration order. New variants append at the end —
     /// schema bumps required.
-    pub const ALL: [Self; 12] = [
+    pub const ALL: [Self; 13] = [
         Self::FsRead,
         Self::FsWrite,
         Self::NetConnect,
@@ -84,6 +93,7 @@ impl EffectKind {
         Self::Global,
         Self::ClockRead,
         Self::RandomRead,
+        Self::ProcessShapeRead,
     ];
 
     /// Stable string id used in claim-to-proof matrix entries and
@@ -102,6 +112,7 @@ impl EffectKind {
             Self::Global => "runtime.global",
             Self::ClockRead => "clock.read",
             Self::RandomRead => "random.read",
+            Self::ProcessShapeRead => "process.shape_read",
         }
     }
 
@@ -124,12 +135,15 @@ impl fmt::Display for EffectKind {
 /// declarator intended (e.g. an `Inherited` policy that ends up empty
 /// because the calling scope was empty, vs. an explicitly empty
 /// `Declared`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum EffectPolicy {
     /// The function has no declared capabilities and was assigned an empty
     /// effect set at lowering time. The default for top-level scripts that
     /// do not opt into any capability surface.
+    #[default]
     Empty,
     /// The function inherits its calling scope's effect set. The default
     /// for closures whose declarator does not explicitly narrow or widen.
@@ -316,12 +330,6 @@ impl EffectAnnotation {
     }
 }
 
-impl Default for EffectPolicy {
-    fn default() -> Self {
-        Self::Empty
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -330,7 +338,7 @@ mod tests {
 
     #[test]
     fn effect_kind_all_count_matches_variants() {
-        assert_eq!(EffectKind::ALL.len(), 12);
+        assert_eq!(EffectKind::ALL.len(), 13);
     }
 
     #[test]

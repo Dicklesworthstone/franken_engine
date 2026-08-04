@@ -26,7 +26,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use frankenengine_engine::fleet_immune_protocol::{
-    ContainmentAction, ContainmentIntent, DeterministicPrecedence, ErasureCodingPlan,
+    ContainmentAction, ContainmentIntent, DeterministicPrecedence, ErasureCodingPlan, ErasureShard,
     ErasureShardRole, EvidenceAccumulator, EvidencePacket, FleetMessage, FleetProtocolState,
     GossipConfig, HeartbeatLiveness, MessageSignature, NodeHealthTracker, NodeId,
     NodeSequenceTracker, ProtocolError, ProtocolVersion, QuorumCheckpoint, ReconciliationRequest,
@@ -43,6 +43,17 @@ fn mk_sig(node: &str) -> MessageSignature {
         signer: NodeId::new(node),
         hash: AuthenticityHash::compute_keyed(node.as_bytes(), b"integ-test"),
     }
+}
+
+fn reauthenticate_erasure_shard(shard: &mut ErasureShard) {
+    shard.shard_hash = shard.recompute_shard_hash();
+    shard.signature = MessageSignature {
+        signer: shard.origin_node.clone(),
+        hash: AuthenticityHash::compute_keyed(
+            shard.origin_node.as_str().as_bytes(),
+            shard.shard_hash.as_bytes(),
+        ),
+    };
 }
 
 fn mk_evidence(node: &str, ext: &str, seq: u64, delta: i64) -> EvidencePacket {
@@ -1818,6 +1829,272 @@ fn erasure_encoding_rejects_two_missing_data_shards() {
 
     let err = reconstruct_erasure_payload(&available).unwrap_err();
     assert!(matches!(err, ProtocolError::ErasureDecodeFailed { .. }));
+}
+
+#[test]
+fn erasure_reconstruction_collapses_only_exact_duplicates_in_any_order() {
+    let payload = b"canonical duplicate shard evidence";
+    let shards = encode_erasure_shards(
+        "payload-duplicates",
+        NodeId::new("origin"),
+        50,
+        500_000,
+        payload,
+        ErasureCodingPlan::new(2, 3).unwrap(),
+    )
+    .unwrap();
+    let exact_duplicate = shards[0].clone();
+    let forward = vec![
+        shards[0].clone(),
+        exact_duplicate.clone(),
+        shards[1].clone(),
+    ];
+    let reverse = vec![exact_duplicate, shards[1].clone(), shards[0].clone()];
+
+    assert_eq!(reconstruct_erasure_payload(&forward).unwrap(), payload);
+    assert_eq!(reconstruct_erasure_payload(&reverse).unwrap(), payload);
+
+    for mutation in ["origin", "sequence", "timestamp"] {
+        let mut conflict = shards[0].clone();
+        match mutation {
+            "origin" => conflict.origin_node = NodeId::new("other-origin"),
+            "sequence" => conflict.sequence += 1,
+            "timestamp" => conflict.timestamp_ns += 1,
+            _ => unreachable!(),
+        }
+        reauthenticate_erasure_shard(&mut conflict);
+
+        for candidates in [
+            vec![shards[0].clone(), conflict.clone(), shards[1].clone()],
+            vec![conflict.clone(), shards[1].clone(), shards[0].clone()],
+        ] {
+            assert!(matches!(
+                reconstruct_erasure_payload(&candidates),
+                Err(ProtocolError::ErasureDecodeFailed { .. })
+            ));
+        }
+    }
+}
+
+#[test]
+fn erasure_reconstruction_rejects_mixed_distinct_index_provenance() {
+    let payload = b"one coherent origin sequence base and timestamp";
+    let shards = encode_erasure_shards(
+        "payload-provenance",
+        NodeId::new("origin"),
+        60,
+        600_000,
+        payload,
+        ErasureCodingPlan::new(2, 3).unwrap(),
+    )
+    .unwrap();
+
+    for mutation in ["origin", "sequence", "timestamp"] {
+        let mut conflict = shards[1].clone();
+        match mutation {
+            "origin" => conflict.origin_node = NodeId::new("other-origin"),
+            "sequence" => conflict.sequence += 1,
+            "timestamp" => conflict.timestamp_ns += 1,
+            _ => unreachable!(),
+        }
+        reauthenticate_erasure_shard(&mut conflict);
+
+        for candidates in [
+            vec![shards[0].clone(), conflict.clone()],
+            vec![conflict.clone(), shards[0].clone()],
+        ] {
+            assert!(matches!(
+                reconstruct_erasure_payload(&candidates),
+                Err(ProtocolError::ErasureDecodeFailed { .. })
+            ));
+        }
+    }
+
+    for candidates in [
+        vec![shards[0].clone(), shards[1].clone()],
+        vec![shards[1].clone(), shards[0].clone()],
+    ] {
+        assert_eq!(reconstruct_erasure_payload(&candidates).unwrap(), payload);
+    }
+}
+
+#[test]
+fn erasure_reconstruction_rejects_conflicting_same_index_parity_provenance() {
+    let shards = encode_erasure_shards(
+        "payload-parity-provenance",
+        NodeId::new("origin"),
+        70,
+        700_000,
+        b"parity duplicate provenance",
+        ErasureCodingPlan::new(2, 3).unwrap(),
+    )
+    .unwrap();
+    let mut conflict = shards[2].clone();
+    conflict.timestamp_ns += 1;
+    reauthenticate_erasure_shard(&mut conflict);
+
+    for candidates in [
+        vec![shards[1].clone(), shards[2].clone(), conflict.clone()],
+        vec![conflict, shards[2].clone(), shards[1].clone()],
+    ] {
+        assert!(matches!(
+            reconstruct_erasure_payload(&candidates),
+            Err(ProtocolError::ErasureDecodeFailed { .. })
+        ));
+    }
+}
+
+#[test]
+fn erasure_encoding_rejects_sequence_overflow_without_output_or_state_mutation() {
+    let plan = ErasureCodingPlan::new(1, 2).unwrap();
+    assert!(matches!(
+        encode_erasure_shards(
+            "payload-overflow",
+            NodeId::new("origin"),
+            u64::MAX,
+            800_000,
+            b"overflow",
+            plan,
+        ),
+        Err(ProtocolError::ErasureDecodeFailed { .. })
+    ));
+
+    let mut state = mk_fleet("coordinator");
+    state.local_sequence = u64::MAX;
+    let before = state.local_sequence;
+    assert!(matches!(
+        state.encode_evidence_for_erasure_gossip(
+            &mk_evidence("node-a", "ext-overflow", 1, 1),
+            800_000,
+        ),
+        Err(ProtocolError::ErasureDecodeFailed { .. })
+    ));
+    assert_eq!(state.local_sequence, before);
+}
+
+#[test]
+fn legacy_erasure_encoder_is_pinned_to_exact_protocol_v1_0() {
+    let shards = encode_erasure_shards(
+        "payload-legacy-version",
+        NodeId::new("origin"),
+        75,
+        750_000,
+        b"legacy encoder version pin",
+        ErasureCodingPlan::new(2, 3).unwrap(),
+    )
+    .unwrap();
+
+    assert!(
+        shards
+            .iter()
+            .all(|shard| shard.protocol_version == ProtocolVersion::V1)
+    );
+}
+
+#[test]
+fn non_v1_0_state_cannot_downgrade_to_legacy_erasure_gossip() {
+    let packet = mk_evidence("node-a", "ext-no-downgrade", 1, 1);
+    for version in [
+        ProtocolVersion { major: 1, minor: 1 },
+        ProtocolVersion::V2,
+        ProtocolVersion { major: 2, minor: 1 },
+    ] {
+        let mut state = mk_fleet("coordinator");
+        state.protocol_version = version;
+        state.local_sequence = 17;
+
+        assert!(matches!(
+            state.encode_evidence_for_erasure_gossip(&packet, 850_000),
+            Err(ProtocolError::ErasureDecodeFailed { ref reason, .. })
+                if reason.contains("cannot emit legacy erasure gossip")
+        ));
+        assert_eq!(state.local_sequence, 17);
+    }
+}
+
+#[test]
+fn non_v1_0_evidence_cannot_tunnel_through_legacy_erasure_gossip() {
+    for version in [
+        ProtocolVersion { major: 1, minor: 1 },
+        ProtocolVersion::V2,
+        ProtocolVersion { major: 2, minor: 1 },
+    ] {
+        let mut packet = mk_evidence("node-a", "ext-no-tunnel", 1, 1);
+        packet.protocol_version = version;
+        let mut state = mk_fleet("coordinator");
+        state.local_sequence = 23;
+
+        assert!(matches!(
+            state.encode_evidence_for_erasure_gossip(&packet, 875_000),
+            Err(ProtocolError::ErasureDecodeFailed { ref reason, .. })
+                if reason.contains("cannot emit legacy erasure gossip")
+        ));
+        assert_eq!(state.local_sequence, 23);
+    }
+}
+
+#[test]
+fn erasure_state_rejects_wrong_legacy_tag_before_replay_mutation() {
+    let mut shard = encode_erasure_shards(
+        "payload-wrong-tag",
+        NodeId::new("origin"),
+        80,
+        900_000,
+        b"wrong legacy tag",
+        ErasureCodingPlan::new(1, 1).unwrap(),
+    )
+    .unwrap()
+    .remove(0);
+    shard.signature.hash =
+        AuthenticityHash::compute_keyed(b"wrong-key", shard.shard_hash.as_bytes());
+    let mut state = mk_fleet("receiver");
+    let before = state.sequence_tracker.last_sequence(&shard.origin_node);
+
+    assert!(matches!(
+        state.process_erasure_shard(&shard),
+        Err(ProtocolError::ErasureDecodeFailed { .. })
+    ));
+    assert_eq!(
+        state.sequence_tracker.last_sequence(&shard.origin_node),
+        before
+    );
+}
+
+#[test]
+fn erasure_state_rejects_every_non_v1_0_version_before_replay_mutation() {
+    let legacy = encode_erasure_shards(
+        "payload-v2-state-gate",
+        NodeId::new("origin"),
+        90,
+        950_000,
+        b"trusted registry required before state use",
+        ErasureCodingPlan::new(1, 1).unwrap(),
+    )
+    .unwrap()
+    .remove(0);
+
+    for version in [
+        ProtocolVersion { major: 1, minor: 1 },
+        ProtocolVersion::V2,
+        ProtocolVersion { major: 2, minor: 1 },
+    ] {
+        let mut shard = legacy.clone();
+        shard.protocol_version = version;
+        reauthenticate_erasure_shard(&mut shard);
+        let mut state = mk_fleet("receiver");
+        state.protocol_version = version;
+        let before = state.sequence_tracker.last_sequence(&shard.origin_node);
+
+        assert!(matches!(
+            state.process_erasure_shard(&shard),
+            Err(ProtocolError::ErasureDecodeFailed { ref reason, .. })
+                if reason.contains("non-v1.0")
+        ));
+        assert_eq!(
+            state.sequence_tracker.last_sequence(&shard.origin_node),
+            before
+        );
+    }
 }
 
 #[test]

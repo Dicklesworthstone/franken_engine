@@ -1,0 +1,62 @@
+{
+  "schema_version": "franken-engine.semantic-fidelity-vectors.v1",
+  "suite_id": "semfid-suite-malformed-hash",
+  "owning_bead": "bd-mihky.4",
+  "description": "Intentionally malformed semantic-fidelity suite for validator fail-closed smoke tests.",
+  "determinism_policy": {
+    "ordering": "lexicographic_by_vector_id_then_route_id",
+    "hash_preimage": "length_prefixed_utf8_fields_v1",
+    "duplicate_vector_id_policy": "fail_closed"
+  },
+  "vectors": [
+    {
+      "vector_id": "semfid-malformed-source-hash-repeat-negative",
+      "semantic_family": "validator_negative",
+      "description": "Wrong source hash must fail closed before execution.",
+      "source": {
+        "kind": "inline_source",
+        "parse_goal": "script",
+        "inline_source": "\"x\".repeat(-1);"
+      },
+      "route_under_test": {
+        "route_id": "oracle.node.malformed-source-hash",
+        "route_kind": "node_oracle",
+        "external_runtime": "node"
+      },
+      "oracle_routes": [],
+      "expectation": {
+        "kind": "js_error",
+        "error_class": "RangeError"
+      },
+      "analyzed_scope": {
+        "scope_status": "malformed_fixture",
+        "claim_policy": "validator_negative_test",
+        "notes": "The source hash is intentionally wrong for bd-mihky.4 validation evidence."
+      },
+      "hashes": {
+        "source_sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+        "route_metadata_sha256": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+        "expectation_sha256": "sha256:3333333333333333333333333333333333333333333333333333333333333333"
+      },
+      "provenance": {
+        "bead_refs": [
+          "bd-mihky.4"
+        ],
+        "source_refs": [
+          {
+            "path": "scripts/semantic_fidelity_workbench.py"
+          }
+        ]
+      },
+      "remediation": {
+        "failure_reason_codes": [
+          "source_hash_mismatch"
+        ],
+        "existing_bead_refs": [
+          "bd-mihky.4"
+        ],
+        "suggested_next_action": "fix_fixture_hash"
+      }
+    }
+  ]
+}

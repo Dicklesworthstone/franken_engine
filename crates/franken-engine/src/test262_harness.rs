@@ -131,13 +131,23 @@ impl Test262Harness {
         self.walk_test_directory(&self.test262_path.join("test"), &mut test_cases)?;
 
         // Filter by profile include/exclude patterns
-        let filtered: Vec<Test262TestCase> = test_cases
+        let mut filtered: Vec<Test262TestCase> = test_cases
             .into_iter()
             .filter(|test| {
+                // `*_FIXTURE.js` files are helper modules imported by real tests, not
+                // tests themselves (they carry no frontmatter); never run them.
+                if test.file_path.ends_with("_FIXTURE.js") {
+                    return false;
+                }
                 let decision = self.profile.classify(&test.file_path);
                 matches!(decision, ProfileDecision::Included)
             })
             .collect();
+
+        // `fs::read_dir` order is platform-dependent, so sort by the (test/-relative)
+        // path to make extraction — and any `truncate`-based sampling on top of it —
+        // deterministic and reproducible across hosts.
+        filtered.sort_by(|a, b| a.file_path.cmp(&b.file_path));
 
         Ok(filtered)
     }
@@ -267,12 +277,19 @@ impl Test262Harness {
         let content = fs::read_to_string(file_path)
             .map_err(|e| Test262HarnessError::IoError(e.to_string()))?;
 
-        // Extract relative path from Test262 repo root
-        let relative_path = file_path
-            .strip_prefix(&self.test262_path)
-            .map_err(|_| {
-                Test262HarnessError::PathError("Test file not under Test262 repo".to_string())
-            })?
+        // Extract the path relative to the Test262 `test/` directory, so it matches
+        // the profile include/exclude patterns (`language/*`, `built-ins/*`) and the
+        // canonical case-vector `test_id` format (e.g. "language/expressions/arrow.js").
+        // The profile and the `test_id`s are relative to `test/`, not the repo root,
+        // so a bare `strip_prefix(repo_root)` would leave a `test/` segment that
+        // matches no include pattern and silently classifies every real case as
+        // NotSelected (the bug that made the real corpus yield zero vectors).
+        let from_repo_root = file_path.strip_prefix(&self.test262_path).map_err(|_| {
+            Test262HarnessError::PathError("Test file not under Test262 repo".to_string())
+        })?;
+        let relative_path = from_repo_root
+            .strip_prefix("test")
+            .unwrap_or(from_repo_root)
             .to_string_lossy()
             .to_string();
 
@@ -301,25 +318,31 @@ impl Test262Harness {
 
     /// Split Test262 file into frontmatter and source code.
     fn split_frontmatter(&self, content: &str) -> Result<(String, String), Test262HarnessError> {
-        // Test262 files start with /*--- frontmatter ---*/
+        // The Test262 frontmatter is a `/*--- … ---*/` block near the top of the
+        // file. Real suite files prefix it with a copyright/license comment block
+        // (e.g. `// Copyright … `), so the marker is NOT at byte 0 — a
+        // `starts_with` check rejects essentially the entire real corpus (the bug
+        // that, together with the `test/`-prefix path issue, made the live suite
+        // yield zero vectors). Locate the opening marker wherever it sits.
         const OPEN: &str = "/*---";
         const CLOSE: &str = "---*/";
 
-        if !content.starts_with(OPEN) {
-            return Err(Test262HarnessError::ParseError(
-                "Missing Test262 frontmatter".to_string(),
-            ));
-        }
+        let open_offset = content.find(OPEN).ok_or_else(|| {
+            Test262HarnessError::ParseError("Missing Test262 frontmatter".to_string())
+        })?;
 
         // Search for the closing marker AFTER the opening one. Otherwise inputs
         // like "/*-----*/" hit a `---*/` substring that overlaps with `/*---`
         // and produce a frontmatter slice with start > end (panic on indexing).
-        let after_open = &content[OPEN.len()..];
+        let after_open = &content[open_offset + OPEN.len()..];
         let close_offset = after_open
             .find(CLOSE)
             .ok_or_else(|| Test262HarnessError::ParseError("Malformed frontmatter".to_string()))?;
 
         let frontmatter = after_open[..close_offset].to_string();
+        // The executable test body is everything after the closing marker. The
+        // pre-frontmatter license block is comments only, so dropping it does not
+        // change execution semantics.
         let source = after_open[close_offset + CLOSE.len()..].to_string();
 
         Ok((frontmatter, source))
@@ -477,6 +500,26 @@ mod tests {
         assert!(front.contains("esid: sec-test"));
         assert!(front.contains("description: example"));
         assert_eq!(source, "\nconst answer = 42;\n");
+    }
+
+    #[test]
+    fn split_frontmatter_finds_marker_after_leading_license_comment() {
+        // Regression for CEI D.2 (bd-sde5e.4.2): real tc39/test262 files begin with
+        // a `// Copyright …` license block *before* the `/*--- … ---*/` frontmatter,
+        // so a `starts_with` check rejected essentially the entire real corpus
+        // (zero extracted vectors). The marker must be located wherever it sits.
+        let h = harness();
+        let content = "// Copyright 2009 the Sputnik authors. All rights reserved.\n\
+                       // This code is governed by the BSD license.\n\n\
+                       /*---\nesid: 11.6.1\ndescription: real-style header\n---*/\n\
+                       if (true + true !== 2) { throw new Error(); }\n";
+        let (front, source) = h
+            .split_frontmatter(content)
+            .expect("marker after a leading comment block must still split");
+        assert!(front.contains("esid: 11.6.1"));
+        assert!(source.contains("if (true + true !== 2)"));
+        // The pre-frontmatter license comments are dropped (comments only).
+        assert!(!source.contains("Copyright"));
     }
 
     #[test]

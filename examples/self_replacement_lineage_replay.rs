@@ -12,22 +12,17 @@
 //! chain integrity including content hash linkage.
 
 use frankenengine_engine::{
-    engine_object_id::{self, EngineObjectId, ObjectDomain},
-    pre_signed_demotion_fallback::{
-        DemotionTrigger, FallbackStatus, PreSignedFallbackStore, PromotionId,
-    },
+    pre_signed_demotion_fallback::{PreSignedFallbackStore, PromotionId},
     proof_ingestion::ProofValidationStatus,
     security_epoch::SecurityEpoch,
     self_replacement::{
-        CreateReceiptInput, DelegateCellManifest, DelegateType, ReplacementReceipt,
-        SandboxConfiguration, SchemaVersion, SignatureBundle, ValidationArtifactKind,
+        ReplacementReceipt, SchemaVersion, SignatureBundle, ValidationArtifactKind,
         ValidationArtifactRef,
     },
-    signature_preimage::{Signature, SigningKey, VerificationKey},
-    slot_registry::{AuthorityEnvelope, SlotId},
+    signature_preimage::{Signature, SigningKey},
+    slot_registry::SlotId,
 };
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
 
 #[derive(Debug, Serialize, Deserialize)]
 struct LineageChainEntry {
@@ -53,7 +48,7 @@ fn create_test_signing_key() -> SigningKey {
 
 /// Create a test slot ID.
 fn create_test_slot_id(suffix: &str) -> SlotId {
-    SlotId::new(&format!("test_slot_{}", suffix)).expect("valid slot ID")
+    SlotId::new(format!("test_slot_{}", suffix)).expect("valid slot ID")
 }
 
 /// Create a validation artifact reference.
@@ -71,8 +66,8 @@ fn create_validation_artifact_ref(
 
 /// Create a signature bundle for testing.
 fn create_test_signature_bundle() -> SignatureBundle {
-    let signing_key = create_test_signing_key();
-    let signature = Signature::from_bytes([0u8; 64]);
+    let _signing_key = create_test_signing_key();
+    let _signature = Signature::from_bytes([0u8; 64]);
 
     SignatureBundle {
         threshold: 1,
@@ -81,6 +76,7 @@ fn create_test_signature_bundle() -> SignatureBundle {
 }
 
 /// Create a replacement receipt for the lineage chain.
+#[allow(clippy::too_many_arguments)]
 fn create_replacement_receipt(
     old_slot_id: &SlotId,
     new_slot_id: &SlotId,
@@ -151,14 +147,14 @@ fn create_lineage_chain() -> Result<LineageChain, Box<dyn std::error::Error>> {
     let mut entries = Vec::new();
 
     // Chain: delegate -> native_v1 -> native_v2 -> native_v3
-    let replacements = vec![
+    let replacements = [
         ("delegate_impl", "native_impl_v1"),
         ("native_impl_v1", "native_impl_v2"),
         ("native_impl_v2", "native_impl_v3"),
     ];
 
     for (step, (old_impl, new_impl)) in replacements.iter().enumerate() {
-        let timestamp = base_timestamp + (step as u64 * 3600_000_000_000); // 1 hour apart
+        let timestamp = base_timestamp + (step as u64 * 3_600_000_000_000); // 1 hour apart
         let old_slot = create_test_slot_id(&format!("slot_{}", step));
         let new_slot = create_test_slot_id(&format!("slot_{}", step + 1));
         let old_digest = format!("digest_{}_{:08x}", old_impl, step * 0x1000);
@@ -303,11 +299,11 @@ fn test_demotion_fallback_integration(
 ) -> Result<(), Box<dyn std::error::Error>> {
     println!("🛡️  Testing pre-signed demotion fallback integration...");
 
-    let mut fallback_store = PreSignedFallbackStore::new();
+    let fallback_store = PreSignedFallbackStore::new();
 
     for (i, entry) in chain.entries.iter().enumerate() {
-        let receipt = &entry.receipt;
-        let promotion_id = PromotionId::try_new(&format!("promotion_{}", i))?;
+        let _receipt = &entry.receipt;
+        let promotion_id = PromotionId::try_new(format!("promotion_{}", i))?;
 
         // Verify that for each replacement, a demotion fallback would be available
         // (In real usage, this would be checked before promotion)
@@ -340,7 +336,7 @@ fn generate_lineage_report(chain: &LineageChain) {
 
     if let Some(last_entry) = chain.entries.last() {
         let duration_ns = last_entry.receipt.timestamp_ns - chain.chain_start_timestamp_ns;
-        let duration_hours = duration_ns as f64 / 3600_000_000_000.0;
+        let duration_hours = duration_ns as f64 / 3_600_000_000_000.0;
         println!("Chain duration: {:.2} hours", duration_hours);
     }
 
@@ -380,11 +376,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Verify lineage integrity
     verify_lineage_chain(&chain)?;
-    println!("");
+    println!();
 
     // Test demotion fallback integration
     test_demotion_fallback_integration(&chain)?;
-    println!("");
+    println!();
 
     // Generate summary report
     generate_lineage_report(&chain);

@@ -1,0 +1,130 @@
+{
+  "schema_version": "franken-engine.semantic-fidelity-vectors.v1",
+  "suite_id": "semfid-suite-runner-minimal",
+  "owning_bead": "bd-mihky.3",
+  "description": "Minimal runner self-check suite for semantic-fidelity artifact generation.",
+  "determinism_policy": {
+    "ordering": "lexicographic_by_vector_id_then_route_id",
+    "hash_preimage": "length_prefixed_utf8_fields_v1",
+    "duplicate_vector_id_policy": "fail_closed"
+  },
+  "vectors": [
+    {
+      "vector_id": "semfid-node-string-repeat-negative-count",
+      "semantic_family": "string_repeat_range",
+      "description": "Node oracle confirms String.prototype.repeat negative count throws RangeError.",
+      "source": {
+        "kind": "inline_source",
+        "parse_goal": "script",
+        "inline_source": "\"x\".repeat(-1);"
+      },
+      "route_under_test": {
+        "route_id": "oracle.node.string-repeat-negative",
+        "route_kind": "node_oracle",
+        "external_runtime": "node",
+        "source_refs": [
+          {
+            "path": "scripts/lockstep_runtime_adapter_node.mjs"
+          }
+        ]
+      },
+      "oracle_routes": [],
+      "expectation": {
+        "kind": "js_error",
+        "error_class": "RangeError",
+        "catchable": true
+      },
+      "analyzed_scope": {
+        "scope_status": "analyzed",
+        "claim_policy": "regression_guard_only",
+        "notes": "External oracle seed for bd-8tsdh string repeat RangeError behavior."
+      },
+      "hashes": {
+        "source_sha256": "sha256:2ceb802d7b4abb586b6e84d93c583d5a2648bed7f11739b5035811b83148d81b",
+        "route_metadata_sha256": "sha256:e145edb6811e4884658694aea888653ecded1a4a6050005684653a372dd93268",
+        "expectation_sha256": "sha256:e3cc6e889fef1326c02daeb5fef76001dcc473659fe01334e1d041b6611f66aa"
+      },
+      "provenance": {
+        "bead_refs": [
+          "bd-8tsdh",
+          "bd-mihky.1"
+        ],
+        "source_refs": [
+          {
+            "path": "crates/franken-engine/tests/string_prototype_methods_part2_bd9a8cz1.rs",
+            "symbol": "repeat_negative_count_is_range_error_bd_8tsdh"
+          }
+        ]
+      },
+      "remediation": {
+        "failure_reason_codes": [
+          "expected_error_class_mismatch",
+          "route_disagreement"
+        ],
+        "existing_bead_refs": [
+          "bd-xulus"
+        ],
+        "suggested_next_action": "link_existing_bead"
+      }
+    },
+    {
+      "vector_id": "semfid-source-eval-string-repeat-negative-count",
+      "semantic_family": "string_repeat_range",
+      "description": "Franken source-eval route for String.prototype.repeat negative count; adapter wiring lands after runner bootstrap.",
+      "source": {
+        "kind": "inline_source",
+        "parse_goal": "script",
+        "inline_source": "\"x\".repeat(-1);"
+      },
+      "route_under_test": {
+        "route_id": "eval.quickjs.string-repeat-negative",
+        "route_kind": "source_eval",
+        "engine_lane": "quickjs_inspired"
+      },
+      "oracle_routes": [
+        {
+          "route_id": "oracle.node.string-repeat-negative",
+          "route_kind": "node_oracle",
+          "external_runtime": "node"
+        }
+      ],
+      "expectation": {
+        "kind": "expected_unknown",
+        "reason_code": "unsupported_route",
+        "consumer_action": "record_and_continue",
+        "notes": "Runner bootstrap does not invoke FrankenEngine binaries; bd-mihky.3 records the route shape and bd-mihky.4/.6 can wire execution."
+      },
+      "analyzed_scope": {
+        "scope_status": "expected_unknown",
+        "claim_policy": "no_claim_strengthening",
+        "notes": "Route shape is known; executable Franken adapter is out of scope for this bootstrap runner."
+      },
+      "hashes": {
+        "source_sha256": "sha256:2ceb802d7b4abb586b6e84d93c583d5a2648bed7f11739b5035811b83148d81b",
+        "route_metadata_sha256": "sha256:bbf0eea5e47148dd1b86ec3cf43cc316169260398b87db9ba92d9babbc59e3f3",
+        "expectation_sha256": "sha256:bfc6b1f84f6579c75c1a7178338df0e51f07266fbf2e355543c284980cc4e631"
+      },
+      "provenance": {
+        "bead_refs": [
+          "bd-8tsdh",
+          "bd-xulus",
+          "bd-mihky.1"
+        ],
+        "source_refs": [
+          {
+            "path": "docs/SEMANTIC_FIDELITY_WORKBENCH_INVENTORY.md"
+          }
+        ]
+      },
+      "remediation": {
+        "failure_reason_codes": [
+          "unsupported_route"
+        ],
+        "existing_bead_refs": [
+          "bd-mihky.3"
+        ],
+        "suggested_next_action": "record_degraded_oracle"
+      }
+    }
+  ]
+}

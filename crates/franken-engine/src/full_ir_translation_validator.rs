@@ -368,30 +368,28 @@ impl FullIrValidationContext {
 
     /// Verify that all global invariants hold.
     ///
-    /// **bd-1lw7r.8 honesty note**: every `GlobalInvariantType` arm currently
-    /// rubber-stamps `true`. That's a placeholder, not a real discharge —
-    /// the actual verification would invoke a theorem prover or a type-system
-    /// checker over the merged IR. Consult
-    /// [`VerificationMethod::is_runner_wired`] (sibling enum in
-    /// `statement_translation_validator`) before claiming any of these
-    /// invariants has been formally proven. The structural well-formedness
-    /// checks earlier in the pipeline (`validate_transformation_step` at
-    /// line ~314, which rejects vacuous lemmas and no-op transitions) remain
-    /// honest — only this *global-invariant* verifier is the rubber stamp.
+    /// **bd-bnx59 / bd-1lw7r.8 honesty note**: there is no theorem prover or
+    /// type-system checker wired into this global-invariant path yet. The
+    /// structural well-formedness checks earlier in the pipeline
+    /// (`validate_transformation_step`) remain useful, but global invariants
+    /// fail closed until a discipline-specific backend is integrated.
     fn verify_global_invariants(&mut self) -> bool {
+        if self.global_invariants.is_empty() {
+            return false;
+        }
+
+        let mut all_verified = true;
+
         for invariant in &self.global_invariants {
-            // FIXME (bd-1lw7r.8): rubber-stamp until a real prover/checker is
-            // wired. Each arm should route to its discipline-appropriate
-            // backend (Z3 for SemanticEquivalence / TypeSafety, region-based
-            // analysis for VariableLifetimeCorrectness, etc.) when that
-            // infrastructure lands under bd-cixqu.7 Track G.
+            // Fail closed until each invariant type has a real backend
+            // (Z3/theorem prover, type checker, region analysis, etc.).
             let verification_success = match invariant.invariant_type {
-                GlobalInvariantType::TypeSafety => true,
-                GlobalInvariantType::MemorySafety => true,
-                GlobalInvariantType::CapabilityConfinement => true,
-                GlobalInvariantType::SemanticEquivalence => true,
-                GlobalInvariantType::ControlFlowIntegrity => true,
-                GlobalInvariantType::VariableLifetimeCorrectness => true,
+                GlobalInvariantType::TypeSafety => false,
+                GlobalInvariantType::MemorySafety => false,
+                GlobalInvariantType::CapabilityConfinement => false,
+                GlobalInvariantType::SemanticEquivalence => false,
+                GlobalInvariantType::ControlFlowIntegrity => false,
+                GlobalInvariantType::VariableLifetimeCorrectness => false,
             };
 
             self.verification_coverage
@@ -399,10 +397,11 @@ impl FullIrValidationContext {
                 .insert(invariant.invariant_type.clone(), verification_success);
 
             if !verification_success {
-                return false;
+                all_verified = false;
             }
         }
-        true
+
+        all_verified
     }
 
     /// Check if complete coverage has been achieved.
@@ -773,14 +772,16 @@ impl FeatureWitness {
         Ok(())
     }
 
-    /// G.6.D: every iterator acquisition (`ForOfInit`/`ForInInit`) must be matched
-    /// by an `IteratorClose` so the close obligation is discharged on every exit
-    /// path (break/return/throw). A missing close leaks the iterator.
+    /// G.6.D: every modelled abrupt `for..of` boundary (`ForOfInit`) must be
+    /// matched by an `IteratorClose`. `for..in` does not use the iterator
+    /// protocol and therefore must not contribute a close obligation. The
+    /// compact count model covers one close per crossed boundary; target-aware
+    /// nested labelled-continue behavior lives in the dedicated G.6.D model.
     fn check_iterator_close_obligation(&self) -> Result<(), String> {
         let opens = self
             .opcodes
             .iter()
-            .filter(|o| matches!(o, FeatureOpcode::ForOfInit | FeatureOpcode::ForInInit))
+            .filter(|o| matches!(o, FeatureOpcode::ForOfInit))
             .count();
         let closes = self
             .opcodes
@@ -799,10 +800,10 @@ impl FeatureWitness {
     /// authorized against; stripping the capability witness must REJECT.
     fn check_capability_witness(&self) -> Result<(), String> {
         for op in &self.opcodes {
-            if let FeatureOpcode::HostCall { capability } = op {
-                if capability.trim().is_empty() {
-                    return Err("hostcall lowered without a capability witness".into());
-                }
+            if let FeatureOpcode::HostCall { capability } = op
+                && capability.trim().is_empty()
+            {
+                return Err("hostcall lowered without a capability witness".into());
             }
         }
         Ok(())
@@ -815,12 +816,12 @@ impl FeatureWitness {
         let mut current: BTreeMap<String, u8> = BTreeMap::new();
         for op in &self.opcodes {
             if let FeatureOpcode::IfcLabel { var, level } = op {
-                if let Some(prev) = current.get(var) {
-                    if *level < *prev {
-                        return Err(format!(
-                            "IFC label downgrade on `{var}`: {prev} -> {level} (implicit declassification)"
-                        ));
-                    }
+                if let Some(prev) = current.get(var)
+                    && *level < *prev
+                {
+                    return Err(format!(
+                        "IFC label downgrade on `{var}`: {prev} -> {level} (implicit declassification)"
+                    ));
                 }
                 current.insert(var.clone(), *level);
             }
@@ -1014,8 +1015,8 @@ fn feature_obligation_text(
             VerificationMethod::SymbolicExecution,
         ),
         FeatureClass::IteratorProtocol => (
-            "source closes the iterator on every break/return/throw exit path",
-            "lowered IR3 discharges an IteratorClose obligation for each acquisition",
+            "source closes each crossed for-of iterator on break/boundary-crossing continue/return/throw and never closes for-in",
+            "lowered IR3 discharges one IteratorClose obligation per modelled for-of boundary",
             VerificationMethod::ModelChecking,
         ),
         FeatureClass::Hostcalls => (
@@ -1071,12 +1072,18 @@ pub fn break_witness(witness: &FeatureWitness) -> FeatureWitness {
             opcodes.insert(0, FeatureOpcode::GeneratorResume);
         }
         FeatureClass::IteratorProtocol => {
-            // Drop the iterator close: the classic "optimized-away" leak.
+            // Drop a required for-of close. A for-in witness instead gains an
+            // invalid close, proving that enumeration does not use the
+            // iterator protocol.
             if let Some(pos) = opcodes
                 .iter()
                 .position(|o| matches!(o, FeatureOpcode::IteratorClose { .. }))
             {
                 opcodes.remove(pos);
+            } else {
+                opcodes.push(FeatureOpcode::IteratorClose {
+                    reason: IteratorCloseReason::Break,
+                });
             }
         }
         FeatureClass::Hostcalls => {
@@ -1111,7 +1118,9 @@ pub fn break_witness(witness: &FeatureWitness) -> FeatureWitness {
 /// Produces ≥50 programs spread across all six G.6 sub-tracks, covering the
 /// variants called out in the acceptance criteria (nested try, try-without-
 /// finally, throw in finally/catch, await in try/finally, yield*, for-in/for-of
-/// with break/return/throw exits, capability-gated hostcalls, and IFC flows).
+/// with break/boundary-crossing continue/return/throw exits,
+/// capability-gated hostcalls, and IFC flows).
+#[allow(clippy::vec_init_then_push)]
 pub fn generate_feature_programs() -> Vec<FeatureWitness> {
     use FeatureOpcode as Op;
     let mut programs = Vec::new();
@@ -1309,9 +1318,10 @@ pub fn generate_feature_programs() -> Vec<FeatureWitness> {
         ));
     }
 
-    // ---- G.6.D: iterator protocol (12 programs) ----------------------------
+    // ---- G.6.D: iterator protocol (15 programs) ----------------------------
     let close_reasons = [
         IteratorCloseReason::Break,
+        IteratorCloseReason::Continue,
         IteratorCloseReason::Return,
         IteratorCloseReason::Throw,
     ];
@@ -1324,19 +1334,25 @@ pub fn generate_feature_programs() -> Vec<FeatureWitness> {
         programs.push(FeatureWitness::new(
             format!("for_in_{}", reason.as_str()),
             FeatureClass::IteratorProtocol,
-            vec![Op::ForInInit, Op::ForInNext, Op::IteratorClose { reason }],
+            vec![Op::ForInInit, Op::ForInNext],
         ));
-        programs.push(FeatureWitness::new(
-            format!("nested_for_of_{}", reason.as_str()),
-            FeatureClass::IteratorProtocol,
-            vec![
-                Op::ForOfInit,
-                Op::ForOfInit,
-                Op::ForOfNext,
-                Op::IteratorClose { reason },
-                Op::IteratorClose { reason },
-            ],
-        ));
+        // The count-only witness cannot encode a labelled continue's target.
+        // Nested break/return/throw cross both represented boundaries; nested
+        // continue is covered by the target-aware G.6.D model and executable
+        // regression, where only the crossed inner iterator closes.
+        if reason != IteratorCloseReason::Continue {
+            programs.push(FeatureWitness::new(
+                format!("nested_for_of_{}", reason.as_str()),
+                FeatureClass::IteratorProtocol,
+                vec![
+                    Op::ForOfInit,
+                    Op::ForOfInit,
+                    Op::ForOfNext,
+                    Op::IteratorClose { reason },
+                    Op::IteratorClose { reason },
+                ],
+            ));
+        }
         programs.push(FeatureWitness::new(
             format!("for_of_with_await_{}", reason.as_str()),
             FeatureClass::IteratorProtocol,
@@ -1488,6 +1504,18 @@ mod tests {
     }
 
     #[test]
+    fn empty_global_invariant_set_fails_closed() {
+        let mut ctx = FullIrValidationContext::new();
+
+        assert!(!ctx.verify_global_invariants());
+        assert!(
+            ctx.verification_coverage
+                .global_invariant_coverage
+                .is_empty()
+        );
+    }
+
+    #[test]
     fn full_pipeline_validation() {
         let mut ctx = FullIrValidationContext::new();
 
@@ -1526,13 +1554,14 @@ mod tests {
         ctx.generate_global_invariants().unwrap();
 
         let result = ctx.validate_full_pipeline();
-        assert!(result.pipeline_validation_successful);
+        assert!(!result.pipeline_validation_successful);
         assert_eq!(result.verified_transformation_steps, 3);
         assert!(
             result
                 .expression_validation_result
                 .semantic_preservation_proven
         );
+        assert!(!result.global_invariants_maintained);
     }
 
     #[test]

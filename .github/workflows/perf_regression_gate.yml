@@ -8,17 +8,13 @@ name: Perf Regression Gate
 on:
   pull_request:
     paths:
-      - 'crates/franken-engine/src/baseline_interpreter.rs'
-      - 'crates/franken-engine/src/lowering_pipeline.rs'
-      - 'crates/franken-engine/src/parser_arena.rs'
-      - 'crates/franken-engine/src/evidence_ledger.rs'
-      - 'crates/franken-engine/src/deterministic_serde.rs'
-      - 'crates/franken-engine/src/engine_object_id.rs'
-      - 'crates/franken-engine/src/hash_tiers.rs'
+      - '.cargo/**'
+      - '.github/workflows/**'
+      - 'scripts/**'
+      - 'runbooks/scripts/**'
+      - 'crates/franken-engine/src/**'
       - 'crates/franken-engine/benches/**'
       - '**/*.bench.rs'
-      - 'scripts/perf/regression_gate.sh'
-      - '.github/workflows/perf_regression_gate.yml'
   workflow_dispatch:
 
 jobs:
@@ -28,9 +24,8 @@ jobs:
     timeout-minutes: 60
     env:
       RUSTUP_TOOLCHAIN: nightly
-      # Canonical bench build flags (keep in sync with the local profiling pass).
+      # Canonical bench build setting (keep in sync with the local profiling pass).
       CARGO_INCREMENTAL: '0'
-      RUSTFLAGS: '-C linker=cc'
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -49,6 +44,9 @@ jobs:
 
       - name: Ensure jq present
         run: jq --version || (sudo apt-get update && sudo apt-get install -y jq)
+
+      - name: Verify system-cc implicit-LLD opt-out
+        run: scripts/e2e/cargo_linker_policy_smoke.sh
 
       - name: Build bench (canonical flags)
         run: cargo bench --bench hot_paths --no-run

@@ -50,6 +50,15 @@ const MAX_SCOPE_LEN: usize = 128;
 /// Maximum length of an extension name (bytes).
 const MAX_NAME_LEN: usize = 128;
 
+fn append_len_prefixed(buf: &mut Vec<u8>, bytes: &[u8]) {
+    buf.extend_from_slice(&(bytes.len() as u64).to_le_bytes());
+    buf.extend_from_slice(bytes);
+}
+
+fn append_count(buf: &mut Vec<u8>, count: usize) {
+    buf.extend_from_slice(&(count as u64).to_le_bytes());
+}
+
 // ---------------------------------------------------------------------------
 // RegistryError
 // ---------------------------------------------------------------------------
@@ -261,14 +270,25 @@ impl BuildDescriptor {
 
     /// Compute a canonical content hash of this descriptor.
     pub fn content_hash(&self) -> ContentHash {
+        // Injective preimage: ContentHash fields are fixed-width, but the
+        // free-form `toolchain_version` must be length-prefixed (it sits
+        // between two fixed hashes), and the `build_flags` / `dependency_hashes`
+        // collections must be count-prefixed with each variable field
+        // length-prefixed, so e.g. build_flags ["ab","c"] cannot alias
+        // ["a","bc"] and the two collections cannot blur across their boundary.
         let mut buf = Vec::new();
         buf.extend_from_slice(self.toolchain_hash.as_bytes());
+        buf.extend_from_slice(&(self.toolchain_version.len() as u64).to_le_bytes());
         buf.extend_from_slice(self.toolchain_version.as_bytes());
         buf.extend_from_slice(self.source_hash.as_bytes());
+        buf.extend_from_slice(&(self.build_flags.len() as u64).to_le_bytes());
         for flag in &self.build_flags {
+            buf.extend_from_slice(&(flag.len() as u64).to_le_bytes());
             buf.extend_from_slice(flag.as_bytes());
         }
+        buf.extend_from_slice(&(self.dependency_hashes.len() as u64).to_le_bytes());
         for (dep_name, dep_hash) in &self.dependency_hashes {
+            buf.extend_from_slice(&(dep_name.len() as u64).to_le_bytes());
             buf.extend_from_slice(dep_name.as_bytes());
             buf.extend_from_slice(dep_hash.as_bytes());
         }
@@ -346,10 +366,8 @@ impl ExtensionManifest {
     /// Compute the canonical unsigned bytes for signing.
     pub fn unsigned_bytes(&self) -> Vec<u8> {
         let mut buf = Vec::new();
-        buf.extend_from_slice(self.scope.as_bytes());
-        buf.push(0);
-        buf.extend_from_slice(self.name.as_bytes());
-        buf.push(0);
+        append_len_prefixed(&mut buf, self.scope.as_bytes());
+        append_len_prefixed(&mut buf, self.name.as_bytes());
         buf.extend_from_slice(&self.version.major.to_le_bytes());
         buf.extend_from_slice(&self.version.minor.to_le_bytes());
         buf.extend_from_slice(&self.version.patch.to_le_bytes());
@@ -358,27 +376,27 @@ impl ExtensionManifest {
         // Sort capabilities by name for insertion-order independence.
         let mut sorted_caps: Vec<_> = self.capabilities.iter().collect();
         sorted_caps.sort_by(|a, b| a.name.cmp(&b.name));
+        append_count(&mut buf, sorted_caps.len());
         for cap in &sorted_caps {
-            buf.extend_from_slice(cap.name.as_bytes());
-            buf.push(0);
-            buf.extend_from_slice(cap.justification.as_bytes());
+            append_len_prefixed(&mut buf, cap.name.as_bytes());
+            append_len_prefixed(&mut buf, cap.justification.as_bytes());
             buf.push(u8::from(cap.optional));
         }
         buf.extend_from_slice(self.artifacts_root_hash.as_bytes());
         buf.extend_from_slice(self.build.content_hash().as_bytes());
-        buf.extend_from_slice(self.description.as_bytes());
-        buf.push(0); // separator between description and license
+        append_len_prefixed(&mut buf, self.description.as_bytes());
         match &self.license {
             Some(lic) => {
                 buf.push(1); // present marker
-                buf.extend_from_slice(lic.as_bytes());
+                append_len_prefixed(&mut buf, lic.as_bytes());
             }
             None => {
                 buf.push(0); // absent marker
             }
         }
+        append_count(&mut buf, self.dependencies.len());
         for (dep_name, dep_ver) in &self.dependencies {
-            buf.extend_from_slice(dep_name.as_bytes());
+            append_len_prefixed(&mut buf, dep_name.as_bytes());
             buf.extend_from_slice(&dep_ver.major.to_le_bytes());
             buf.extend_from_slice(&dep_ver.minor.to_le_bytes());
             buf.extend_from_slice(&dep_ver.patch.to_le_bytes());
@@ -393,8 +411,7 @@ impl ExtensionManifest {
         let mut sorted_arts: Vec<_> = self.artifacts.iter().collect();
         sorted_arts.sort_by(|a, b| a.path.cmp(&b.path));
         for art in &sorted_arts {
-            buf.extend_from_slice(art.path.as_bytes());
-            buf.push(0);
+            append_len_prefixed(&mut buf, art.path.as_bytes());
             buf.extend_from_slice(art.content_hash.as_bytes());
             buf.extend_from_slice(&art.size_bytes.to_le_bytes());
         }
@@ -1463,16 +1480,7 @@ mod tests {
         publisher_key: &VerificationKey,
     ) -> ExtensionManifest {
         let artifacts = vec![test_artifact()];
-        let mut buf = Vec::new();
-        for art in &artifacts {
-            buf.extend_from_slice(art.path.as_bytes());
-            buf.push(0);
-            buf.extend_from_slice(art.content_hash.as_bytes());
-            buf.extend_from_slice(&art.size_bytes.to_le_bytes());
-        }
-        let artifacts_root_hash = ContentHash::compute(&buf);
-
-        ExtensionManifest {
+        let mut manifest = ExtensionManifest {
             scope: scope.to_string(),
             name: name.to_string(),
             version,
@@ -1481,11 +1489,13 @@ mod tests {
             capabilities: vec![test_capability()],
             artifacts,
             build: test_build_descriptor(),
-            artifacts_root_hash,
+            artifacts_root_hash: ContentHash::compute(b"placeholder"),
             description: "A test extension".to_string(),
             license: Some("MIT".to_string()),
             dependencies: BTreeMap::new(),
-        }
+        };
+        manifest.artifacts_root_hash = manifest.compute_artifacts_root();
+        manifest
     }
 
     fn setup_registry_with_publisher() -> (
@@ -2733,6 +2743,49 @@ mod tests {
         bd1.build_flags.push("--debug".to_string());
         let h2 = bd1.content_hash();
         assert_ne!(h1, h2);
+    }
+
+    #[test]
+    fn build_descriptor_content_hash_injective_over_flags_bd_2qma0() {
+        // Regression (bd-2qma0): build_flags were concatenated into the
+        // preimage with no count or length prefix, so a different split of the
+        // same bytes collided — ["ab","c"] aliased ["a","bc"]. The count +
+        // length prefixes must keep them distinct.
+        let mut a = test_build_descriptor();
+        a.build_flags = vec!["ab".to_string(), "c".to_string()];
+        let mut b = test_build_descriptor();
+        b.build_flags = vec!["a".to_string(), "bc".to_string()];
+        assert_ne!(a.content_hash(), b.content_hash());
+
+        // And a single flag "abc" must differ from two flags ["ab","c"]
+        // (count prefix distinguishes arity).
+        let mut one = test_build_descriptor();
+        one.build_flags = vec!["abc".to_string()];
+        assert_ne!(a.content_hash(), one.content_hash());
+    }
+
+    #[test]
+    fn manifest_unsigned_bytes_injective_over_capability_boundaries_bd_fn47f() {
+        // Regression (bd-fn47f): capability names and justifications are free-form
+        // manifest fields. A 0x00-delimited preimage made these two distinct
+        // capability declarations collide byte-for-byte:
+        // name="a\0b", justification="" vs name="a", justification="b\0".
+        let (_, pub_id, _, vk) = setup_registry_with_publisher();
+        let version = PackageVersion::new(1, 0, 0);
+        let mut left = build_manifest("testorg", "ext", version, &pub_id, &vk);
+        let mut right = build_manifest("testorg", "ext", version, &pub_id, &vk);
+        left.capabilities = vec![CapabilityDeclaration {
+            name: "a\0b".to_string(),
+            justification: String::new(),
+            optional: false,
+        }];
+        right.capabilities = vec![CapabilityDeclaration {
+            name: "a".to_string(),
+            justification: "b\0".to_string(),
+            optional: false,
+        }];
+
+        assert_ne!(left.unsigned_bytes(), right.unsigned_bytes());
     }
 
     #[test]

@@ -65,8 +65,70 @@ run_check() {
     || record_failure "gate script must define detect_reproducibility_bundle"
   grep -Fq 'ClaimMatrixError::MissingReproducibilityBundle' "$gate_script" \
     || record_failure "gate script must emit the stable error code"
+  # bd-sde5e.2.3: the committed (git-tracked) requirement must be wired.
+  grep -Fq 'repro_lock_committed' "$gate_script" \
+    || record_failure "gate script must define repro_lock_committed (bd-sde5e.2.3)"
 
   record_pass "fixture shape and gate-script wiring"
+}
+
+# bd-sde5e.2.3 (CEI-B.3): prove the gate requires a COMMITTED (git-tracked)
+# repro.lock, not merely an on-disk one. Copies the with_lock fixture to an
+# untracked temp location and asserts the same claim is now rejected, then that
+# the explicit override re-accepts it.
+run_committed_check() {
+  local out="${1:-$(mktemp -d "${TMPDIR:-/tmp}/claim-repro-committed.XXXXXX")}"
+
+  local untracked_root
+  untracked_root="$(mktemp -d "${TMPDIR:-/tmp}/claim-repro-untracked.XXXXXX")"
+  cp -r "${fixture_root}/with_lock" "${untracked_root}/with_lock"
+
+  # Sanity: the copied lock must genuinely be untracked.
+  if git ls-files --error-unmatch -- "${untracked_root}/with_lock/repro.lock" >/dev/null 2>&1; then
+    record_failure "temp repro.lock unexpectedly git-tracked; cannot test committed requirement"
+    return
+  fi
+
+  local variant_matrix="${out}/variant_matrix.json"
+  jq --arg ap "${untracked_root}/with_lock" '
+    .claims = [ .claims[] | select(.claim_id == "REPRO-LOCK-WITH") | .artifact_path = $ap ]
+  ' "$matrix_json" >"$variant_matrix"
+
+  # 1) Default: an on-disk-but-untracked lock must be REJECTED.
+  set +e
+  CLAIM_TO_PROOF_MATRIX_PATH="$variant_matrix" \
+    CLAIM_TO_PROOF_MATRIX_ARTIFACT_ROOT="${out}/reject" \
+    "$gate_script" ci >"${out}/reject.log" 2>&1
+  set -e
+  local report
+  report="$(grep -oE 'claim_to_proof_matrix_gate_report=.*' "${out}/reject.log" | tail -1 | cut -d= -f2-)"
+  if [[ -n "$report" && -f "$report" ]] && jq -e '
+      .events[]
+      | select(.claim_id == "REPRO-LOCK-WITH")
+      | (.status == "fail")
+        and (.reason | contains("ClaimMatrixError::MissingReproducibilityBundle"))
+    ' "$report" >/dev/null; then
+    record_pass "untracked repro.lock rejected — committed lock required (bd-sde5e.2.3)"
+  else
+    record_failure "untracked repro.lock was NOT rejected (report=${report:-none})"
+  fi
+
+  # 2) Explicit override: the same on-disk lock is accepted.
+  set +e
+  CLAIM_TO_PROOF_MATRIX_ALLOW_UNTRACKED_REPRO_LOCK=1 \
+    CLAIM_TO_PROOF_MATRIX_PATH="$variant_matrix" \
+    CLAIM_TO_PROOF_MATRIX_ARTIFACT_ROOT="${out}/allow" \
+    "$gate_script" ci >"${out}/allow.log" 2>&1
+  set -e
+  local report2
+  report2="$(grep -oE 'claim_to_proof_matrix_gate_report=.*' "${out}/allow.log" | tail -1 | cut -d= -f2-)"
+  if [[ -n "$report2" && -f "$report2" ]] && jq -e '
+      .events[] | select(.claim_id == "REPRO-LOCK-WITH") | .status == "pass"
+    ' "$report2" >/dev/null; then
+    record_pass "override accepts on-disk lock (CLAIM_TO_PROOF_MATRIX_ALLOW_UNTRACKED_REPRO_LOCK=1)"
+  else
+    record_failure "override did not accept the on-disk lock (report=${report2:-none})"
+  fi
 }
 
 # `run` mode actually invokes the gate against the fixture matrix and
@@ -135,6 +197,7 @@ case "${1:-check}" in
     if [[ "$failures" -eq 0 ]]; then
       output_dir="${2:-$(mktemp -d "${TMPDIR:-/tmp}/claim-repro-lock-smoke.XXXXXX")}"
       run_smoke "$output_dir"
+      run_committed_check "$output_dir"
       printf 'claim_to_proof_matrix_repro_lock_smoke_artifacts=%s\n' "$output_dir"
     fi
     ;;

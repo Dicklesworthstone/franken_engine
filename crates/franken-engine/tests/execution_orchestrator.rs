@@ -15,11 +15,17 @@
 
 use std::collections::BTreeMap;
 
+use frankenengine_engine::evidence_ledger::{
+    EvidenceChainArtifact, EvidenceEmitter, InMemoryLedger, RuntimeEvidenceAuthority,
+};
+use frankenengine_engine::execution_orchestrator::LabFixtureExecutionOrchestratorExt as _;
 use frankenengine_engine::execution_orchestrator::{
-    ExecutionOrchestrator, ExtensionPackage, LossMatrixPreset, OrchestratorConfig,
-    OrchestratorError,
+    EvidenceChainCommitState, ExecutionOrchestrator, ExtensionPackage, LossMatrixPreset,
+    OrchestratorConfig, OrchestratorError, UNCOMMITTED_EVIDENCE_CHAIN_EVIDENCE_SCHEMA_VERSION,
+    UncommittedEvidenceChainEvidence,
 };
 use frankenengine_engine::security_epoch::SecurityEpoch;
+use frankenengine_engine::signature_preimage::SigningKey;
 
 fn simple_package(id: &str, source: &str) -> ExtensionPackage {
     ExtensionPackage {
@@ -144,6 +150,381 @@ fn evidence_entries_contain_required_fields() {
     assert!(!entry.chosen_action.action_name.is_empty());
     assert!(!entry.witnesses.is_empty());
     assert!(!entry.metadata.is_empty());
+}
+
+#[test]
+fn bd_90u6o_normal_orchestrator_e2e_uses_runtime_owned_signer() {
+    let historical_public_key = SigningKey::from_bytes([0x7B; 32])
+        .expect("historical source-known key")
+        .verification_key();
+    let authority = RuntimeEvidenceAuthority::generate_runtime_owned(
+        "bd-90u6o-normal-runtime",
+        SecurityEpoch::from_raw(1),
+        1,
+        None,
+    )
+    .expect("runtime authority");
+    let mut orchestrator = ExecutionOrchestrator::try_new_with_runtime_authority(
+        OrchestratorConfig::default(),
+        authority,
+    )
+    .expect("normal orchestrator");
+    let result = orchestrator
+        .execute(&simple_package("bd-90u6o-normal", "42"))
+        .expect("normal orchestrator execution");
+    let trusted_identity = orchestrator.evidence_verification_identity();
+    let ledger_id = orchestrator.evidence_ledger_id().to_string();
+
+    assert!(!result.evidence_entries.is_empty());
+    for entry in &result.evidence_entries {
+        let envelope = entry.signed_envelope();
+        assert_eq!(
+            envelope.producer_id, "bd-90u6o-normal-runtime",
+            "normal execution must use the orchestrator-owned identity"
+        );
+        assert_ne!(
+            envelope.verification_key, historical_public_key,
+            "the repository-known historical seed must not authenticate runtime evidence"
+        );
+        assert_eq!(envelope.signed_epoch, result.epoch);
+        assert_eq!(envelope.key_provenance.activation_epoch, result.epoch);
+        assert_eq!(envelope.key_provenance.rotation_sequence, 1);
+        assert!(envelope.key_provenance.previous_key_id.is_none());
+        assert_eq!(envelope.producer_id, trusted_identity.producer_id);
+        assert_eq!(envelope.key_provenance, trusted_identity.key_provenance);
+        assert_eq!(envelope.verification_key, trusted_identity.verification_key);
+    }
+    let chain_artifact = EvidenceChainArtifact::new(
+        result.evidence_entries.clone(),
+        result.evidence_chain_receipt.clone(),
+    );
+    chain_artifact
+        .verify_genesis(&trusted_identity, &ledger_id, &result.trace_id)
+        .expect("normal runtime must seal its exact evidence batch");
+    assert_eq!(result.evidence_chain_receipt.first_sequence(), 0);
+    assert!(
+        result
+            .evidence_chain_receipt
+            .previous_chain_hash()
+            .is_none()
+    );
+    assert_eq!(
+        orchestrator.ledger().evidence_chain_head(),
+        Some(result.evidence_chain_receipt.head_chain_hash.as_str())
+    );
+}
+
+#[test]
+fn bd_90u6o_explicit_identity_preserves_entry_replay_but_not_chain_namespace() {
+    let identity = RuntimeEvidenceAuthority::from_signing_key(
+        "bd-90u6o-recorded-runtime",
+        SigningKey::from_bytes([0x42; 32]).expect("non-zero test key"),
+        SecurityEpoch::from_raw(1),
+        1,
+        None,
+    )
+    .expect("recorded test identity");
+    let config = OrchestratorConfig::default();
+    let mut first =
+        ExecutionOrchestrator::try_new_with_runtime_authority(config.clone(), identity.clone())
+            .expect("first orchestrator");
+    let mut replay = ExecutionOrchestrator::try_new_with_runtime_authority(config, identity)
+        .expect("replay orchestrator");
+    let package = simple_package("bd-90u6o-replay", "42");
+
+    let first_result = first.execute(&package).expect("first execution");
+    let replay_result = replay.execute(&package).expect("replay execution");
+    let recorded_public_identity = first.evidence_verification_identity();
+    let serialized_identity =
+        serde_json::to_vec(&recorded_public_identity).expect("serialize public replay identity");
+    let restored_public_identity =
+        serde_json::from_slice(&serialized_identity).expect("deserialize public replay identity");
+    assert_eq!(recorded_public_identity, restored_public_identity);
+    assert_eq!(
+        first_result.evidence_entries, replay_result.evidence_entries,
+        "the same explicitly supplied signing identity must reproduce byte-stable evidence"
+    );
+    assert_ne!(
+        first.evidence_chain_instance_id(),
+        replay.evidence_chain_instance_id(),
+        "independent production instances must receive distinct chain namespaces"
+    );
+    assert_ne!(
+        first.evidence_ledger_id(),
+        replay.evidence_ledger_id(),
+        "independent production instances must not fork one ledger id at genesis"
+    );
+    assert_ne!(
+        first_result.evidence_chain_receipt, replay_result.evidence_chain_receipt,
+        "the signed receipt must bind the unique chain namespace"
+    );
+}
+
+#[test]
+fn bd_8yhg4_reused_orchestrator_extends_one_contiguous_evidence_chain() {
+    let authority = RuntimeEvidenceAuthority::from_signing_key(
+        "bd-8yhg4-recorded-runtime",
+        SigningKey::from_bytes([0x43; 32]).expect("non-zero test key"),
+        SecurityEpoch::from_raw(1),
+        1,
+        None,
+    )
+    .expect("recorded test identity");
+    let mut orchestrator = ExecutionOrchestrator::try_new_with_runtime_authority(
+        OrchestratorConfig::default(),
+        authority,
+    )
+    .expect("orchestrator");
+
+    let first = orchestrator
+        .execute(&simple_package("bd-8yhg4-first", "40 + 1"))
+        .expect("first execution");
+    let second = orchestrator
+        .execute(&simple_package("bd-8yhg4-second", "40 + 2"))
+        .expect("second execution");
+
+    assert_eq!(
+        second.evidence_chain_receipt.first_sequence(),
+        first.evidence_entries.len() as u64
+    );
+    assert_eq!(
+        second.evidence_chain_receipt.previous_chain_hash(),
+        Some(first.evidence_chain_receipt.head_chain_hash.as_str())
+    );
+    second
+        .evidence_chain_receipt
+        .verify_exact_batch(
+            &second.evidence_entries,
+            &second.evidence_verification_identity,
+            orchestrator.evidence_ledger_id(),
+            &second.trace_id,
+            first.evidence_entries.len() as u64,
+            Some(first.evidence_chain_receipt.head_chain_hash.as_str()),
+        )
+        .expect("second execution must extend the first exact batch");
+    assert_eq!(
+        orchestrator.ledger().evidence_chain_head(),
+        Some(second.evidence_chain_receipt.head_chain_hash.as_str())
+    );
+}
+
+#[test]
+fn bd_8yhg4_production_instances_cannot_fork_one_genesis_namespace() {
+    let authority = RuntimeEvidenceAuthority::from_signing_key(
+        "bd-8yhg4-instance-runtime",
+        SigningKey::from_bytes([0x45; 32]).expect("non-zero test key"),
+        SecurityEpoch::from_raw(1),
+        1,
+        None,
+    )
+    .expect("recorded test identity");
+    let first = ExecutionOrchestrator::try_new_with_runtime_authority(
+        OrchestratorConfig::default(),
+        authority.clone(),
+    )
+    .expect("first orchestrator");
+    let second = ExecutionOrchestrator::try_new_with_runtime_authority(
+        OrchestratorConfig::default(),
+        authority,
+    )
+    .expect("second orchestrator");
+
+    assert_ne!(
+        first.evidence_chain_instance_id(),
+        second.evidence_chain_instance_id()
+    );
+    assert_ne!(first.evidence_ledger_id(), second.evidence_ledger_id());
+}
+
+#[test]
+fn bd_8yhg4_cell_close_failure_does_not_commit_the_staged_receipt() {
+    let authority = RuntimeEvidenceAuthority::from_signing_key(
+        "bd-8yhg4-close-runtime",
+        SigningKey::from_bytes([0x46; 32]).expect("non-zero test key"),
+        SecurityEpoch::from_raw(1),
+        1,
+        None,
+    )
+    .expect("recorded test identity");
+    let trusted_identity = authority.verification_identity();
+    let config = OrchestratorConfig {
+        cell_close_budget_ms: 1,
+        ..OrchestratorConfig::default()
+    };
+    let mut orchestrator = ExecutionOrchestrator::try_new_with_runtime_authority(config, authority)
+        .expect("orchestrator");
+
+    let error = orchestrator
+        .execute(&simple_package("bd-8yhg4-close", "42"))
+        .expect_err("cell close must exhaust the one-millisecond budget");
+    assert!(error.post_cell_failure().is_some());
+    let staged = error
+        .uncommitted_evidence_chain()
+        .expect("close failure must return the exact signed uncommitted batch");
+    assert_eq!(
+        staged.schema_version,
+        UNCOMMITTED_EVIDENCE_CHAIN_EVIDENCE_SCHEMA_VERSION
+    );
+    assert_eq!(staged.commit_state, EvidenceChainCommitState::Uncommitted);
+    assert_eq!(
+        staged.chain_instance_id,
+        orchestrator.evidence_chain_instance_id()
+    );
+    staged
+        .artifact
+        .verify_genesis(
+            &trusted_identity,
+            orchestrator.evidence_ledger_id(),
+            &staged.artifact.receipt.run_id,
+        )
+        .expect("staged failure artifact must retain its valid signature and chain position");
+    let encoded = serde_json::to_vec(staged).expect("uncommitted evidence must serialize");
+    let decoded: UncommittedEvidenceChainEvidence =
+        serde_json::from_slice(&encoded).expect("uncommitted evidence must round-trip");
+    decoded
+        .verify_with_context(
+            &trusted_identity,
+            orchestrator.evidence_chain_instance_id(),
+            orchestrator.evidence_ledger_id(),
+            &decoded.artifact.receipt.run_id,
+            0,
+            None,
+        )
+        .expect("round-tripped uncommitted evidence must validate");
+    let mut wrong_schema = decoded;
+    wrong_schema.schema_version = "franken-engine.uncommitted-evidence-chain-evidence.v999".into();
+    assert!(
+        wrong_schema
+            .verify_with_context(
+                &trusted_identity,
+                orchestrator.evidence_chain_instance_id(),
+                orchestrator.evidence_ledger_id(),
+                &wrong_schema.artifact.receipt.run_id,
+                0,
+                None,
+            )
+            .is_err(),
+        "unknown uncommitted-evidence schemas must fail closed"
+    );
+    assert!(orchestrator.ledger().is_empty());
+    assert_eq!(orchestrator.ledger().evidence_chain_next_sequence(), 0);
+    assert!(orchestrator.ledger().evidence_chain_head().is_none());
+}
+
+#[test]
+fn bd_8yhg4_external_artifact_and_bound_ledger_reject_all_chain_mutations() {
+    let authority = RuntimeEvidenceAuthority::from_signing_key(
+        "bd-8yhg4-adversarial-runtime",
+        SigningKey::from_bytes([0x44; 32]).expect("non-zero test key"),
+        SecurityEpoch::from_raw(1),
+        1,
+        None,
+    )
+    .expect("recorded test identity");
+    let mut orchestrator = ExecutionOrchestrator::try_new_with_runtime_authority(
+        OrchestratorConfig::default(),
+        authority,
+    )
+    .expect("orchestrator");
+    let result = orchestrator
+        .execute(&package_with_metadata(
+            "bd-8yhg4-adversarial",
+            "const obj = { value: 42 }; obj.value;",
+            &[
+                ("guardplane.enable_instruction_hooks", "true"),
+                ("capability_witness.trust_level", "trusted"),
+                ("capability_witness.confidence_millionths", "990000"),
+                (
+                    "capability_witness.required_capabilities",
+                    "object.property,alloc.object",
+                ),
+            ],
+        ))
+        .expect("execution");
+    assert!(
+        result.evidence_entries.len() > 1,
+        "reorder fixture must emit a multi-entry guardplane batch"
+    );
+    let trusted_identity = result.evidence_verification_identity.clone();
+    let ledger_id = orchestrator.evidence_ledger_id().to_string();
+    let artifact = EvidenceChainArtifact::new(
+        result.evidence_entries.clone(),
+        result.evidence_chain_receipt.clone(),
+    );
+    artifact
+        .verify_genesis(&trusted_identity, &ledger_id, &result.trace_id)
+        .expect("untampered exact artifact");
+
+    let mut missing = artifact.clone();
+    missing.entries.pop();
+    assert!(
+        missing
+            .verify_genesis(&trusted_identity, &ledger_id, &result.trace_id)
+            .is_err()
+    );
+
+    let mut duplicate = artifact.clone();
+    duplicate.entries.push(duplicate.entries[0].clone());
+    assert!(
+        duplicate
+            .verify_genesis(&trusted_identity, &ledger_id, &result.trace_id)
+            .is_err()
+    );
+
+    let mut reordered = artifact.clone();
+    reordered.entries.reverse();
+    reordered.receipt.links.reverse();
+    assert!(
+        reordered
+            .verify_genesis(&trusted_identity, &ledger_id, &result.trace_id)
+            .is_err()
+    );
+
+    let mut tampered = artifact.clone();
+    tampered.receipt.links[0].sequence = 99;
+    assert!(
+        tampered
+            .verify_genesis(&trusted_identity, &ledger_id, &result.trace_id)
+            .is_err()
+    );
+    assert!(
+        artifact
+            .verify_genesis(&trusted_identity, "foreign-ledger", &result.trace_id)
+            .is_err()
+    );
+    assert!(
+        artifact
+            .verify_genesis(&trusted_identity, &ledger_id, "foreign-run")
+            .is_err()
+    );
+
+    let mut ledger =
+        InMemoryLedger::for_verification_identity(result.epoch, &trusted_identity).expect("ledger");
+    ledger
+        .bind_evidence_chain(&ledger_id)
+        .expect("bind expected chain");
+    assert!(
+        ledger.emit(result.evidence_entries[0].clone()).is_err(),
+        "bound ledgers must reject the legacy unreceipted API"
+    );
+    assert!(
+        ledger
+            .emit_chained_batch(tampered.entries.clone(), tampered.receipt.clone())
+            .is_err()
+    );
+    assert_eq!(ledger.len(), 0, "rejected receipt must not append entries");
+    assert!(
+        ledger.evidence_chain_head().is_none(),
+        "rejected receipt must not advance the head"
+    );
+    ledger
+        .emit_chained_batch(artifact.entries.clone(), artifact.receipt.clone())
+        .expect("valid exact batch");
+    assert_eq!(ledger.len(), result.evidence_entries.len());
+    assert_eq!(
+        ledger.evidence_chain_head(),
+        Some(artifact.receipt.head_chain_hash.as_str())
+    );
 }
 
 #[test]
@@ -363,7 +744,7 @@ fn execute_blocks_unresolved_ifc_runtime_checkpoint_before_interpreter() {
     let err = orch
         .execute(&pkg)
         .expect_err("unresolved runtime checkpoint must fail closed");
-    match err {
+    match err.primary_error() {
         OrchestratorError::IfcRuntimeGuardBlocked { detail } => {
             assert!(detail.contains("runtime checkpoints=1"));
             assert!(detail.contains("hostcall.invoke"));
@@ -581,7 +962,9 @@ fn orchestrator_error_debug_is_nonempty() {
 // ────────────────────────────────────────────────────────────────────────────
 
 use frankenengine_engine::ast::ParseGoal;
-use frankenengine_engine::baseline_interpreter::LaneChoice;
+use frankenengine_engine::baseline_interpreter::{
+    InterpreterError, LaneChoice, ModuleResolutionFailureReason,
+};
 use frankenengine_engine::expected_loss_selector::ContainmentAction;
 use frankenengine_engine::ts_normalization::SourceLanguage;
 
@@ -648,6 +1031,132 @@ fn source_file_ts_triggers_ts_normalization_pathway() {
         SourceLanguage::TypeScript
     );
     assert!(result.source_ingestion.normalization_applied);
+}
+
+#[test]
+fn source_file_basename_resolves_relative_imports_in_both_lanes_bd_fw7zd_4() {
+    let current_dir = std::env::current_dir().expect("read test working directory");
+    let fixture =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/perf_h2/input.js");
+    let relative_fixture = fixture
+        .strip_prefix(&current_dir)
+        .expect("fixture must be below the Cargo test working directory")
+        .to_string_lossy()
+        .replace('\\', "/");
+    let source = format!("import './{relative_fixture}'; 42;");
+
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        let config = OrchestratorConfig {
+            force_lane: Some(lane),
+            parse_goal: ParseGoal::Module,
+            ..OrchestratorConfig::default()
+        };
+        let mut package = simple_package("ext-basename-import", &source);
+        package.source_file = Some("entry.mjs".to_string());
+
+        let result = ExecutionOrchestrator::new(config)
+            .execute(&package)
+            .unwrap_or_else(|error| panic!("{lane:?} relative import failed: {error}"));
+        assert_eq!(result.lane, lane);
+    }
+}
+
+#[test]
+fn source_file_basename_keeps_parent_import_outside_cached_root_bd_fw7zd_4() {
+    let current_dir = std::env::current_dir()
+        .expect("read test working directory")
+        .canonicalize()
+        .expect("canonicalize test working directory");
+    let workspace_manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../Cargo.toml")
+        .canonicalize()
+        .expect("workspace manifest must exist");
+    assert!(
+        !workspace_manifest.starts_with(&current_dir),
+        "escape fixture must be outside the basename-derived module root"
+    );
+
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        let config = OrchestratorConfig {
+            force_lane: Some(lane),
+            parse_goal: ParseGoal::Module,
+            ..OrchestratorConfig::default()
+        };
+        let mut package = simple_package("ext-basename-escape", "import '../../Cargo.toml';");
+        package.source_file = Some("entry.mjs".to_string());
+
+        let error = ExecutionOrchestrator::new(config)
+            .execute(&package)
+            .expect_err("parent import outside cached root must be refused");
+        assert!(
+            matches!(
+                error.primary_error(),
+                OrchestratorError::Interpreter(InterpreterError::ModuleResolutionFailed {
+                    reason: ModuleResolutionFailureReason::Other(reason),
+                    ..
+                }) if reason.contains("escapes module root")
+            ),
+            "{lane:?} must reject the parent import at the containment boundary"
+        );
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn source_file_basename_rejects_in_root_symlink_escape_bd_fw7zd_4() {
+    use std::os::unix::fs::symlink;
+
+    let current_dir = std::env::current_dir()
+        .expect("read test working directory")
+        .canonicalize()
+        .expect("canonicalize test working directory");
+    let in_root = tempfile::Builder::new()
+        .prefix("bd-fw7zd-4-in-root-")
+        .tempdir_in(&current_dir)
+        .expect("create in-root scratch directory");
+    let outside = tempfile::tempdir().expect("create outside scratch directory");
+    let outside_module = outside.path().join("outside.mjs");
+    std::fs::write(&outside_module, "export const escaped = true;").expect("write outside module");
+    assert!(
+        !outside_module
+            .canonicalize()
+            .expect("canonicalize outside module")
+            .starts_with(&current_dir),
+        "symlink target must be outside the basename-derived module root"
+    );
+
+    let link = in_root.path().join("escape.mjs");
+    symlink(&outside_module, &link).expect("create in-root symlink to outside module");
+    let relative_link = link
+        .strip_prefix(&current_dir)
+        .expect("symlink must be created below the module root")
+        .to_string_lossy()
+        .replace('\\', "/");
+    let source = format!("import './{relative_link}';");
+
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        let config = OrchestratorConfig {
+            force_lane: Some(lane),
+            parse_goal: ParseGoal::Module,
+            ..OrchestratorConfig::default()
+        };
+        let mut package = simple_package("ext-basename-symlink-escape", &source);
+        package.source_file = Some("entry.mjs".to_string());
+
+        let error = ExecutionOrchestrator::new(config)
+            .execute(&package)
+            .expect_err("symlink import outside cached root must be refused");
+        assert!(
+            matches!(
+                error.primary_error(),
+                OrchestratorError::Interpreter(InterpreterError::ModuleResolutionFailed {
+                    reason: ModuleResolutionFailureReason::Other(reason),
+                    ..
+                }) if reason.contains("escapes module root")
+            ),
+            "{lane:?} must reject the symlink target at the canonical boundary"
+        );
+    }
 }
 
 // -- OrchestratorResult field coverage ----------------------------------------
@@ -1407,6 +1916,45 @@ fn evidence_compression_certificate_overhead_ratio_non_negative() {
     if let Some(cert) = &result.evidence_compression_certificate {
         assert!(cert.overhead_ratio_millionths >= 0);
     }
+}
+
+#[test]
+fn evidence_compression_certificate_identities_are_bound_to_evidence_metadata() {
+    let mut orch = ExecutionOrchestrator::with_defaults();
+    let pkg = simple_package("ext-compression-bindings", "42");
+    let result = orch.execute(&pkg).expect("execute");
+    let cert = result
+        .evidence_compression_certificate
+        .as_ref()
+        .expect("evidence compression certificate");
+    cert.verify_integrity()
+        .expect("issued certificate should be internally valid");
+    let metadata = &result.evidence_entries[0].metadata;
+    let certificate_hash = cert.certificate_hash.to_hex();
+    let artifact_hash = cert.compressed_artifact_hash.to_hex();
+    let content_hash = cert.content_hash.to_hex();
+    let model_hash = cert.model_hash.to_hex();
+
+    assert_eq!(
+        metadata.get("evidence_compression_certificate_schema"),
+        Some(&cert.schema)
+    );
+    assert_eq!(
+        metadata.get("evidence_compression_certificate_hash"),
+        Some(&certificate_hash)
+    );
+    assert_eq!(
+        metadata.get("evidence_compressed_artifact_hash"),
+        Some(&artifact_hash)
+    );
+    assert_eq!(
+        metadata.get("evidence_compressed_content_hash"),
+        Some(&content_hash)
+    );
+    assert_eq!(
+        metadata.get("evidence_compression_model_hash"),
+        Some(&model_hash)
+    );
 }
 
 // -- OrchestratorConfig cell_close_budget_ms edge case ------------------------

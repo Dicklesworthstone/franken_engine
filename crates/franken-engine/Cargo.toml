@@ -1,6 +1,6 @@
 [package]
 name = "frankenengine-engine"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 
 [lib]
@@ -23,6 +23,10 @@ name = "frankenctl"
 path = "src/bin/frankenctl.rs"
 
 [[bin]]
+name = "franken-lsp"
+path = "src/bin/franken_lsp.rs"
+
+[[bin]]
 name = "franken-decision-demo"
 path = "src/bin/franken_decision_demo.rs"
 
@@ -33,6 +37,10 @@ path = "src/bin/franken_quarantine_mesh_demo.rs"
 [[bin]]
 name = "runtime-lockstep-orchestrator"
 path = "src/bin/runtime_lockstep_orchestrator.rs"
+
+[[example]]
+name = "live_guardplane_decision_example"
+path = "../../examples/live_guardplane_decision_example.rs"
 
 [[example]]
 name = "live_ifc_declassification_example"
@@ -58,8 +66,23 @@ path = "benches/hot_paths.rs"
 harness = false
 
 [[bench]]
+name = "evidence_ledger_batch"
+path = "benches/evidence_ledger_batch.rs"
+harness = false
+
+[[bench]]
 name = "denominator_scoring"
 path = "benches/denominator_scoring.rs"
+harness = false
+
+[[bench]]
+name = "sme_vs_propagation"
+path = "benches/sme_vs_propagation.rs"
+harness = false
+
+[[bench]]
+name = "erasure_vs_replication"
+path = "benches/erasure_vs_replication.rs"
 harness = false
 
 [[test]]
@@ -91,6 +114,10 @@ required-features = ["__moved_to_frankenengine_control_plane_integration_tests"]
 name = "cx_threading_integration"
 path = "tests/cx_threading_integration.rs"
 required-features = ["__moved_to_frankenengine_control_plane_integration_tests"]
+
+[[test]]
+name = "erasure_bandwidth_accounting_integration"
+path = "tests/erasure_bandwidth_accounting_integration.rs"
 
 [[test]]
 name = "evidence_emission_enrichment_integration"
@@ -183,11 +210,49 @@ path = "tests/safety_decision_router_integration.rs"
 required-features = ["__moved_to_frankenengine_control_plane_integration_tests"]
 
 [features]
-default = ["asupersync-integration"]
+default = [
+    "asupersync-integration",
+    "sibling-persistence",
+    "sibling-service-api",
+    "sibling-dataframes",
+]
 asupersync-integration = [
     "dep:franken-kernel",
     "dep:franken-decision",
     "dep:franken-evidence",
+]
+# The three features below gate every optional sibling registry dependency, so
+# `--no-default-features` is a genuine no-siblings build (bd-ndpm2, bd-gw4cg).
+#
+# Each is ON by default: a normal `cargo build` consumes the published sibling
+# crates without requiring their `/dp` source checkouts. Turning one OFF removes
+# that family from the dependency graph entirely and compiles out the consuming
+# surface. Nothing is stubbed or simulated — the affected API simply does not
+# exist, and the one runtime path that would otherwise silently degrade (Parquet
+# evidence export) fails closed with a typed error instead of emitting a lesser
+# artifact under the same name.
+
+# sqlmodel_rust typed persistence, and through it frankensqlite.
+# `cargo tree -e normal -i fsqlite` shows sqlmodel-frankensqlite is the *only*
+# edge that pulls fsqlite, so clearing this feature drops both families at once.
+# Gates: typed_persistence_models typed-session API, storage_adapter's
+# FleetTrustStateFrankensqliteBackend and FleetAuthoritySql-for-transaction impl.
+sibling-persistence = [
+    "dep:sqlmodel",
+    "dep:sqlmodel-core",
+    "dep:sqlmodel-frankensqlite",
+]
+# fastapi_rust service/API control surface (ADR-0002).
+# Gates: policy_controller::service_endpoint_template.
+sibling-service-api = ["dep:fastapi-core"]
+# frankenpandas evidence-frame primitives.
+# Gates: the Parquet evidence-export path in governance_hooks.
+sibling-dataframes = [
+    "dep:fp-io",
+    "dep:fp-frame",
+    "dep:fp-columnar",
+    "dep:fp-index",
+    "dep:fp-types",
 ]
 certified_rewrite_optimizer_integration = []
 # Do not enable this feature in normal engine validation. The listed
@@ -195,14 +260,6 @@ certified_rewrite_optimizer_integration = []
 # frankenengine-control-plane-integration-tests package, which supplies
 # frankenengine-test-support without making engine lib-unit tests compile it.
 __moved_to_frankenengine_control_plane_integration_tests = []
-# Opt-in re-enable of the baseline_interpreter in-source #[cfg(test)] module
-# that references a legacy lower-level API (`BaselineInterpreter::new`,
-# `Ir3Instruction::CallBuiltin{,Id}`, `execute_instruction`, `set_register`,
-# `test_ir3_module`, etc.). The module was broken at merge-base into main and
-# is tracked by bd-2j7uk; gating it keeps the lib-test target compilable while
-# the repair effort is pending. Enable with `--features legacy_lib_tests_bd_2j7uk`
-# to attempt to compile the legacy tests.
-legacy_lib_tests_bd_2j7uk = []
 # Temporary profiling feature for H4.1 deterministic_serde::encode_into phase analysis.
 # Adds #[inline(never)] sentinels around encode phases for perf attribution.
 # NEVER enable in production builds - measurement-only.
@@ -225,24 +282,36 @@ tee-test-mock = []
 tee-real-sdk = []
 
 [dependencies]
-# NOTE: frankenengine-core dependency temporarily removed — franken-core crate
-# is mid-modularization (cb049273) and does not yet compile. franken-engine
-# does not reference any frankenengine_core:: paths, so the dep is currently
-# unused. Re-add once the extraction stabilizes.
-serde = { version = "1.0", features = ["derive"] }
+frankenengine-core = { path = "../franken-core" }
+serde = { version = "1.0", features = ["derive", "rc"] }
 serde_json = { version = "1.0", features = ["unbounded_depth"] }
 proc-macro2 = { version = "1.0", features = ["span-locations"] }
 proptest = "1.6"
 regex = "1.0"
+ryu-js = "1.0"
+url = "2.5.8"
 sha2 = "0.10"
+sha1 = "0.10.6"
+md-5 = "0.10.6"
+hmac = "0.12"
+pbkdf2 = "0.12.2"
+scrypt = { version = "0.11.0", default-features = false }
+aes = { version = "0.8.4", features = ["zeroize"] }
+aes-gcm = { version = "0.10.3", default-features = false, features = ["aes", "zeroize"] }
+ghash = { version = "0.5.1", default-features = false, features = ["zeroize"] }
+polyval = { version = "0.6.2", default-features = false, features = ["zeroize"] }
+cbc = "0.1.2"
+ctr = "0.9.2"
+zeroize = "1.8"
 flate2 = "1.1"
+zlib-rs = { version = "0.6.3", default-features = false, features = ["std", "rust-allocator"] }
 lz4_flex = "0.11"
 zstd = "0.13"
 subtle = "2.6"
-hmac = "0.12"
 ed25519-dalek = "2.0"
 rand = "0.8"
 hex = "0.4"
+base64 = "0.22"
 mimalloc = { version = "0.1", default-features = false }
 chrono = { version = "0.4", features = ["serde"] }
 thiserror = "2.0"
@@ -250,9 +319,9 @@ uuid = { version = "1.16", features = ["v7", "serde"] }
 syn = { version = "2.0", features = ["full", "visit"] }
 toml = "0.8"
 clap = { version = "4.5", features = ["derive"] }
-sqlmodel = { path = "/dp/sqlmodel_rust/crates/sqlmodel" }
-sqlmodel-core = { path = "/dp/sqlmodel_rust/crates/sqlmodel-core" }
-sqlmodel-frankensqlite = { path = "/dp/sqlmodel_rust/crates/sqlmodel-frankensqlite" }
+sqlmodel = { version = "0.3.1", optional = true }
+sqlmodel-core = { version = "0.3.1", optional = true }
+sqlmodel-frankensqlite = { version = "0.3.1", optional = true }
 franken-engine-deterministic-trait = { path = "../franken-engine-deterministic-trait" }
 franken-engine-deterministic-derive = { path = "../franken-engine-deterministic-derive" }
 franken-engine-fixed-layout-derive = { path = "../franken-engine-fixed-layout-derive" }
@@ -262,15 +331,15 @@ rustix = { version = "1.1", features = ["event", "fs", "process", "time"] }
 wait4 = "0.1"
 wait-timeout = "0.2"
 frankenengine-extension-host = { path = "../franken-extension-host" }
-fastapi-core = { path = "/dp/fastapi_rust/crates/fastapi-core" }
+fastapi-core = { version = "0.3.1", optional = true }
 franken-kernel = { version = "0.3.4", optional = true }
 franken-decision = { version = "0.3.4", optional = true }
 franken-evidence = { version = "0.3.4", optional = true }
-fp-io = { path = "/dp/frankenpandas/crates/fp-io", default-features = false }
-fp-frame = { path = "/dp/frankenpandas/crates/fp-frame" }
-fp-columnar = { path = "/dp/frankenpandas/crates/fp-columnar" }
-fp-index = { path = "/dp/frankenpandas/crates/fp-index" }
-fp-types = { path = "/dp/frankenpandas/crates/fp-types" }
+fp-io = { version = "0.2.0", default-features = false, optional = true }
+fp-frame = { version = "0.2.0", optional = true }
+fp-columnar = { version = "0.2.0", optional = true }
+fp-index = { version = "0.2.0", optional = true }
+fp-types = { version = "0.2.0", optional = true }
 # Bonawitz 2017 secure aggregation primitive (T.3). The QQ.2 protocol module
 # (`secure_aggregation.rs`) wraps this vetted sibling crate rather than inlining
 # ad-hoc cryptography.
@@ -281,7 +350,16 @@ dp = { path = "../dp" }
 # crate's integration tests (e.g. fleet_quarantine_integration.rs) without
 # leaking it into the default/production build. Dev-dependencies are not pulled
 # by `cargo build`/`--release`, so the mock stays out of prod (bd-bg9l1.2).
-frankenengine-engine = { path = ".", features = ["tee-test-mock"] }
+#
+# `default-features = false` is load-bearing (bd-ndpm2): without it this entry
+# re-enables `default` during feature unification, so `cargo test
+# --no-default-features` silently rebuilt every `/dp` sibling and the gate's
+# standalone-test lane proved nothing. Requesting only `tee-test-mock` here
+# leaves an ordinary `cargo test` unchanged — the lib target still brings
+# `default` in — while letting the standalone lane actually be standalone.
+frankenengine-engine = { path = ".", default-features = false, features = [
+    "tee-test-mock",
+] }
 criterion = { version = "0.5", features = ["html_reports"] }
 tempfile = "3.0"
 tracing = "0.1"

@@ -22,15 +22,16 @@
 use std::collections::BTreeSet;
 
 use frankenengine_engine::ast::{
-    BindingPattern, ExportDeclaration, ExportKind, Expression, ExpressionStatement, ImportClause,
-    ImportDeclaration, ParseGoal, SourceSpan, Statement, SyntaxTree, VariableDeclaration,
-    VariableDeclarationKind, VariableDeclarator,
+    AssignmentStrictness, BindingPattern, ExportDeclaration, ExportKind, Expression,
+    ExpressionStatement, ImportClause, ImportDeclaration, NamedExportClause, ParseGoal, SourceSpan,
+    Statement, SyntaxTree, VariableDeclaration, VariableDeclarationKind, VariableDeclarator,
 };
 use frankenengine_engine::hash_tiers::ContentHash;
 use frankenengine_engine::ifc_artifacts::Label;
 use frankenengine_engine::ir_contract::{
     EffectBoundary, Ir0Module, Ir1Literal, Ir1Module, Ir1Op, Ir3Instruction, IrLevel,
 };
+use frankenengine_engine::js_string::JsString;
 use frankenengine_engine::lowering_pipeline::{
     InvariantCheck, IsomorphismLedgerEntry, LoweringContext, LoweringEvent, LoweringPassResult,
     LoweringPipelineError, LoweringPipelineOutput, PassWitness, lower_ir0_to_ir1, lower_ir0_to_ir3,
@@ -63,7 +64,7 @@ fn script_ir0_string(value: &str) -> Ir0Module {
     let tree = SyntaxTree {
         goal: ParseGoal::Script,
         body: vec![Statement::Expression(ExpressionStatement {
-            expression: Expression::StringLiteral(value.to_string()),
+            expression: Expression::StringLiteral(value.to_string().into()),
             span: span(),
         })],
         span: span(),
@@ -90,7 +91,7 @@ fn module_ir0_import(source: &str, binding: Option<&str>) -> Ir0Module {
                 },
                 None => ImportClause::SideEffect,
             },
-            source: source.to_string(),
+            source: source.into(),
             binding: binding.map(|s| s.to_string()),
             span: span(),
         })],
@@ -115,7 +116,7 @@ fn module_ir0_named_export(clause: &str) -> Ir0Module {
     let tree = SyntaxTree {
         goal: ParseGoal::Module,
         body: vec![Statement::Export(ExportDeclaration {
-            kind: ExportKind::NamedClause(clause.to_string()),
+            kind: ExportKind::NamedClause(clause.into()),
             span: span(),
         })],
         span: span(),
@@ -484,18 +485,21 @@ fn ir0_to_ir1_identifier_expression() {
     let ir0 = Ir0Module::from_syntax_tree(tree, "ident.js");
     let result = lower_ir0_to_ir1(&ir0).expect("should succeed");
 
-    let has_load_binding = result
-        .module
-        .ops
-        .iter()
-        .any(|op| matches!(op, Ir1Op::LoadBinding { .. }));
-    assert!(has_load_binding);
+    let has_dynamic_load =
+        result.module.ops.iter().any(
+            |op| matches!(op, Ir1Op::LoadName { name, allow_missing: false } if name == "myVar"),
+        );
+    assert!(has_dynamic_load);
 
-    // Check scope has binding named "myVar"
-    assert!(!result.module.scopes.is_empty());
-    let root_scope = &result.module.scopes[0];
-    let has_binding = root_scope.bindings.iter().any(|b| b.name == "myVar");
-    assert!(has_binding);
+    assert!(
+        result
+            .module
+            .scopes
+            .iter()
+            .flat_map(|scope| scope.bindings.iter())
+            .all(|binding| binding.name != "myVar"),
+        "an unresolved identifier read must not synthesize a lexical binding"
+    );
 }
 
 #[test]
@@ -514,7 +518,7 @@ fn ir0_to_ir1_import_with_binding() {
         .module
         .ops
         .iter()
-        .any(|op| matches!(op, Ir1Op::ImportModule { specifier } if specifier == "lodash"));
+        .any(|op| matches!(op, Ir1Op::ImportModule { specifier } if specifier.as_str() == Some("lodash")));
     assert!(has_import);
 
     let has_store = result
@@ -532,7 +536,7 @@ fn ir0_to_ir1_import_without_binding() {
 
     let has_import =
         result.module.ops.iter().any(
-            |op| matches!(op, Ir1Op::ImportModule { specifier } if specifier == "side-effects"),
+            |op| matches!(op, Ir1Op::ImportModule { specifier } if specifier.as_str() == Some("side-effects")),
         );
     assert!(has_import);
 
@@ -553,6 +557,59 @@ fn ir0_to_ir1_import_without_binding() {
     }
     // Regardless, verify the import was found
     assert!(import_idx < result.module.ops.len());
+}
+
+#[test]
+fn exact_import_and_reexport_sources_survive_full_lowering_bd_lfq44() {
+    let import_source = JsString::from_code_units(&[0xD800]);
+    let reexport_source = JsString::from_code_units(&[0xDC00]);
+    let tree = SyntaxTree {
+        goal: ParseGoal::Module,
+        body: vec![
+            Statement::Import(ImportDeclaration {
+                clause: ImportClause::SideEffect,
+                binding: None,
+                source: import_source.clone(),
+                span: span(),
+            }),
+            Statement::Export(ExportDeclaration {
+                kind: ExportKind::NamedClause(NamedExportClause::new(
+                    "{ value }",
+                    Some(reexport_source.clone()),
+                )),
+                span: span(),
+            }),
+        ],
+        span: span(),
+    };
+    let ir0 = Ir0Module::from_syntax_tree(tree, "exact-module-sources.mjs");
+    let output = lower_ir0_to_ir3(&ir0, &ctx()).expect("exact sources should lower");
+
+    let specifiers: Vec<&JsString> = output
+        .ir1
+        .ops
+        .iter()
+        .filter_map(|op| match op {
+            Ir1Op::ImportModule { specifier } => Some(specifier),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(specifiers, vec![&import_source, &reexport_source]);
+    assert_ne!(specifiers[0], specifiers[1]);
+    assert!(
+        output
+            .ir3
+            .constant_pool
+            .iter()
+            .any(|value| value == &import_source)
+    );
+    assert!(
+        output
+            .ir3
+            .constant_pool
+            .iter()
+            .any(|value| value == &reexport_source)
+    );
 }
 
 #[test]
@@ -586,7 +643,7 @@ fn ir0_to_ir1_named_export_known_binding_reuses_id() {
         body: vec![
             const_decl("foo", 1),
             Statement::Export(ExportDeclaration {
-                kind: ExportKind::NamedClause("{ foo as published }".to_string()),
+                kind: ExportKind::NamedClause("{ foo as published }".into()),
                 span: span(),
             }),
         ],
@@ -775,7 +832,7 @@ fn ir1_to_ir2_classifies_explicit_hostcall_as_hostcall_effect() {
 fn ir1_to_ir2_classifies_import_as_read_effect() {
     let mut ir1 = Ir1Module::new(ContentHash::compute(b"test-ir0"), "import_test.js");
     ir1.ops.push(Ir1Op::ImportModule {
-        specifier: "lodash".to_string(),
+        specifier: "lodash".into(),
     });
     ir1.ops.push(Ir1Op::Return);
 
@@ -798,7 +855,7 @@ fn ir1_to_ir2_classifies_import_as_read_effect() {
 fn ir1_to_ir2_flow_annotation_for_secret_string() {
     let mut ir1 = Ir1Module::new(ContentHash::compute(b"test-ir0"), "secret_test.js");
     ir1.ops.push(Ir1Op::LoadLiteral {
-        value: Ir1Literal::String("my_secret_token".to_string()),
+        value: Ir1Literal::String("my_secret_token".to_string().into()),
     });
     ir1.ops.push(Ir1Op::HostCall {
         capability: "hostcall.invoke".to_string(),
@@ -848,7 +905,7 @@ fn ir1_to_ir2_invariant_checks_include_flow_metrics() {
 fn ir1_to_ir2_hostcall_string_literal_extracts_capability() {
     let mut ir1 = Ir1Module::new(ContentHash::compute(b"test-ir0"), "hostcall_extract.js");
     ir1.ops.push(Ir1Op::LoadLiteral {
-        value: Ir1Literal::String("hostcall<\"fs.read\">".to_string()),
+        value: Ir1Literal::String("hostcall<\"fs.read\">".to_string().into()),
     });
     ir1.ops.push(Ir1Op::Return);
 
@@ -871,7 +928,7 @@ fn ir1_to_ir2_hostcall_string_literal_extracts_capability() {
 fn ir1_to_ir2_required_capabilities_collected() {
     let mut ir1 = Ir1Module::new(ContentHash::compute(b"test-ir0"), "caps_test.js");
     ir1.ops.push(Ir1Op::ImportModule {
-        specifier: "lodash".to_string(),
+        specifier: "lodash".into(),
     });
     ir1.ops.push(Ir1Op::HostCall {
         capability: "hostcall.invoke".to_string(),
@@ -949,7 +1006,8 @@ fn ir2_to_ir3_string_literal_goes_to_constant_pool() {
         result
             .module
             .constant_pool
-            .contains(&"hello world".to_string()),
+            .iter()
+            .any(|value| value == "hello world"),
         "constant pool should contain the string literal"
     );
 
@@ -984,7 +1042,11 @@ fn ir2_to_ir3_import_module_emits_load_str_for_specifier() {
     let result = lower_ir2_to_ir3(&ir2).expect("ir2->ir3");
 
     assert!(
-        result.module.constant_pool.contains(&"lodash".to_string()),
+        result
+            .module
+            .constant_pool
+            .iter()
+            .any(|value| value == "lodash"),
         "constant pool should contain the import specifier"
     );
 }
@@ -1099,7 +1161,7 @@ fn ir2_to_ir3_witness_invariant_checks() {
 fn dynamic_hostcall_inserts_ifc_runtime_guard() {
     let mut ir1 = Ir1Module::new(ContentHash::compute(b"flow-ir0"), "dynamic_flow.js");
     ir1.ops.push(Ir1Op::LoadLiteral {
-        value: Ir1Literal::String("secret_token".to_string()),
+        value: Ir1Literal::String("secret_token".to_string().into()),
     });
     ir1.ops.push(Ir1Op::HostCall {
         capability: "hostcall.invoke".to_string(),
@@ -1147,7 +1209,7 @@ fn dynamic_hostcall_inserts_ifc_runtime_guard() {
 fn static_hostcall_skips_ifc_runtime_guard() {
     let mut ir1 = Ir1Module::new(ContentHash::compute(b"flow-ir0"), "static_flow.js");
     ir1.ops.push(Ir1Op::LoadLiteral {
-        value: Ir1Literal::String("hostcall<\"fs.read\">".to_string()),
+        value: Ir1Literal::String("hostcall<\"fs.read\">".to_string().into()),
     });
     ir1.ops.push(Ir1Op::Return);
 
@@ -1174,7 +1236,7 @@ fn static_hostcall_skips_ifc_runtime_guard() {
 fn public_data_through_hostcall_no_guard() {
     let mut ir1 = Ir1Module::new(ContentHash::compute(b"flow-ir0"), "public_flow.js");
     ir1.ops.push(Ir1Op::LoadLiteral {
-        value: Ir1Literal::String("hello world".to_string()),
+        value: Ir1Literal::String("hello world".to_string().into()),
     });
     ir1.ops.push(Ir1Op::HostCall {
         capability: "hostcall.invoke".to_string(),
@@ -1261,7 +1323,7 @@ fn full_pipeline_module_with_import_and_export() {
                 clause: ImportClause::Default {
                     local: "_".to_string(),
                 },
-                source: "lodash".to_string(),
+                source: "lodash".into(),
                 binding: Some("_".to_string()),
                 span: span(),
             }),
@@ -1304,7 +1366,8 @@ fn full_pipeline_string_literal_in_constant_pool() {
         output
             .ir3
             .constant_pool
-            .contains(&"test string".to_string())
+            .iter()
+            .any(|value| value == "test string")
     );
 }
 
@@ -1318,7 +1381,7 @@ fn full_pipeline_all_literal_types() {
                 span: span(),
             }),
             Statement::Expression(ExpressionStatement {
-                expression: Expression::StringLiteral("str".to_string()),
+                expression: Expression::StringLiteral("str".to_string().into()),
                 span: span(),
             }),
             Statement::Expression(ExpressionStatement {
@@ -1597,7 +1660,7 @@ fn import_then_export_then_expression_complex_module() {
                 clause: ImportClause::Default {
                     local: "React".to_string(),
                 },
-                source: "react".to_string(),
+                source: "react".into(),
                 binding: Some("React".to_string()),
                 span: span(),
             }),
@@ -1605,7 +1668,7 @@ fn import_then_export_then_expression_complex_module() {
                 clause: ImportClause::Default {
                     local: "_".to_string(),
                 },
-                source: "lodash".to_string(),
+                source: "lodash".into(),
                 binding: Some("_".to_string()),
                 span: span(),
             }),
@@ -1613,6 +1676,7 @@ fn import_then_export_then_expression_complex_module() {
                 expression: Expression::Call {
                     callee: Box::new(Expression::Identifier("sink".to_string())),
                     arguments: vec![Expression::Identifier("React".to_string())],
+                    span: None,
                 },
                 span: span(),
             }),
@@ -1627,8 +1691,20 @@ fn import_then_export_then_expression_complex_module() {
     let output = run_full_pipeline(&ir0);
 
     // Both imports should appear in constant pool
-    assert!(output.ir3.constant_pool.contains(&"react".to_string()));
-    assert!(output.ir3.constant_pool.contains(&"lodash".to_string()));
+    assert!(
+        output
+            .ir3
+            .constant_pool
+            .iter()
+            .any(|value| value == "react")
+    );
+    assert!(
+        output
+            .ir3
+            .constant_pool
+            .iter()
+            .any(|value| value == "lodash")
+    );
 
     // Should have hostcall for the explicit sink call.
     let has_hostcall = output
@@ -1644,9 +1720,14 @@ fn await_chain_through_pipeline() {
     let tree = SyntaxTree {
         goal: ParseGoal::Script,
         body: vec![
+            // This test exercises await-chain LOWERING mechanics, so the
+            // awaited identifiers must not collide with the ambient-authority
+            // gate (bare `fetch` is NetConnect-gated and fail-closed-rejected
+            // at lowering; the fixture predated that gate — dormant-target
+            // staleness found while landing bd-fqlfw.1.2).
             Statement::Expression(ExpressionStatement {
                 expression: Expression::Await(Box::new(Expression::Identifier(
-                    "fetch".to_string(),
+                    "response".to_string(),
                 ))),
                 span: span(),
             }),
@@ -1679,11 +1760,13 @@ fn secret_data_in_module_export_requires_declassification() {
         goal: ParseGoal::Module,
         body: vec![
             Statement::Expression(ExpressionStatement {
-                expression: Expression::StringLiteral("my_password_hash".to_string()),
+                expression: Expression::StringLiteral("my_password_hash".to_string().into()),
                 span: span(),
             }),
             Statement::Export(ExportDeclaration {
-                kind: ExportKind::Default(Expression::StringLiteral("API_KEY_value".to_string())),
+                kind: ExportKind::Default(Expression::StringLiteral(
+                    "API_KEY_value".to_string().into(),
+                )),
                 span: span(),
             }),
         ],
@@ -1714,7 +1797,7 @@ fn pipeline_with_hostcall_marker_in_string() {
     let tree = SyntaxTree {
         goal: ParseGoal::Script,
         body: vec![Statement::Expression(ExpressionStatement {
-            expression: Expression::StringLiteral("hostcall<\"net.write\">".to_string()),
+            expression: Expression::StringLiteral("hostcall<\"net.write\">".to_string().into()),
             span: span(),
         })],
         span: span(),
@@ -1741,7 +1824,7 @@ fn pipeline_required_capabilities_aggregate_in_ir3() {
                 clause: ImportClause::Default {
                     local: "fs".to_string(),
                 },
-                source: "fs".to_string(),
+                source: "fs".into(),
                 binding: Some("fs".to_string()),
                 span: span(),
             }),
@@ -1749,6 +1832,7 @@ fn pipeline_required_capabilities_aggregate_in_ir3() {
                 expression: Expression::Call {
                     callee: Box::new(Expression::Identifier("sink".to_string())),
                     arguments: vec![Expression::Identifier("fs".to_string())],
+                    span: None,
                 },
                 span: span(),
             }),
@@ -1780,11 +1864,11 @@ fn multiple_exports_pipeline() {
             const_decl("foo", 1),
             const_decl("bar", 2),
             Statement::Export(ExportDeclaration {
-                kind: ExportKind::NamedClause("{ foo }".to_string()),
+                kind: ExportKind::NamedClause("{ foo }".into()),
                 span: span(),
             }),
             Statement::Export(ExportDeclaration {
-                kind: ExportKind::NamedClause("{ bar }".to_string()),
+                kind: ExportKind::NamedClause("{ bar }".into()),
                 span: span(),
             }),
         ],
@@ -1917,15 +2001,15 @@ fn constant_pool_deduplicates_identical_strings() {
         goal: ParseGoal::Script,
         body: vec![
             Statement::Expression(ExpressionStatement {
-                expression: Expression::StringLiteral("hello".to_string()),
+                expression: Expression::StringLiteral("hello".to_string().into()),
                 span: span(),
             }),
             Statement::Expression(ExpressionStatement {
-                expression: Expression::StringLiteral("hello".to_string()),
+                expression: Expression::StringLiteral("hello".to_string().into()),
                 span: span(),
             }),
             Statement::Expression(ExpressionStatement {
-                expression: Expression::StringLiteral("world".to_string()),
+                expression: Expression::StringLiteral("world".to_string().into()),
                 span: span(),
             }),
         ],
@@ -1939,10 +2023,16 @@ fn constant_pool_deduplicates_identical_strings() {
         .ir3
         .constant_pool
         .iter()
-        .filter(|s| s.as_str() == "hello")
+        .filter(|s| s.as_str() == Some("hello"))
         .count();
     assert_eq!(hello_count, 1, "constant pool should deduplicate 'hello'");
-    assert!(output.ir3.constant_pool.contains(&"world".to_string()));
+    assert!(
+        output
+            .ir3
+            .constant_pool
+            .iter()
+            .any(|value| value == "world")
+    );
 }
 
 // ============================================================================
@@ -2090,6 +2180,7 @@ fn for_in_ir0(binding_kind: Option<VariableDeclarationKind>) -> Ir0Module {
         body: vec![Statement::ForIn(ForInStatement {
             binding: BindingPattern::Identifier("k".into()),
             binding_kind,
+            assignment_strictness: AssignmentStrictness::Sloppy,
             object: Expression::Identifier("obj".into()),
             body: Box::new(Statement::Expression(ExpressionStatement {
                 expression: Expression::Identifier("k".into()),
@@ -2108,6 +2199,7 @@ fn for_of_ir0(binding_kind: Option<VariableDeclarationKind>) -> Ir0Module {
         body: vec![Statement::ForOf(ForOfStatement {
             binding: BindingPattern::Identifier("v".into()),
             binding_kind,
+            assignment_strictness: AssignmentStrictness::Sloppy,
             iterable: Expression::Identifier("arr".into()),
             body: Box::new(Statement::Expression(ExpressionStatement {
                 expression: Expression::Identifier("v".into()),
@@ -2130,7 +2222,7 @@ fn for_in_lowering_produces_for_in_init_and_next() {
 }
 
 #[test]
-fn for_in_lowering_no_binding_kind_defaults_to_let() {
+fn for_in_lowering_no_binding_kind_uses_sloppy_dynamic_write_bd_0k19b() {
     let ir0 = for_in_ir0(None);
     let result = lower_ir0_to_ir1(&ir0).expect("for-in None binding_kind");
     assert!(
@@ -2139,6 +2231,20 @@ fn for_in_lowering_no_binding_kind_defaults_to_let() {
             .ops
             .iter()
             .any(|op| matches!(op, Ir1Op::ForInInit))
+    );
+    assert!(
+        result
+            .module
+            .ops
+            .iter()
+            .any(|op| matches!(op, Ir1Op::PutName { name, strict: false } if name == "k"))
+    );
+    assert!(
+        result.module.scopes[0]
+            .bindings
+            .iter()
+            .all(|binding| binding.name != "k"),
+        "a bare loop target is an assignment reference, not an implicit declaration"
     );
 }
 
@@ -2182,7 +2288,7 @@ fn for_of_lowering_produces_for_of_init_next_and_close() {
 }
 
 #[test]
-fn for_of_close_reason_is_break() {
+fn for_of_close_reasons_cover_break_return_and_throw() {
     let ir0 = for_of_ir0(Some(VariableDeclarationKind::Let));
     let result = lower_ir0_to_ir1(&ir0).expect("for-of break close");
     let close_ops: Vec<_> = result
@@ -2197,7 +2303,14 @@ fn for_of_close_reason_is_break() {
             }
         })
         .collect();
-    assert_eq!(close_ops, vec![IteratorCloseReason::Break]);
+    assert_eq!(
+        close_ops,
+        vec![
+            IteratorCloseReason::Break,
+            IteratorCloseReason::Return,
+            IteratorCloseReason::Throw,
+        ]
+    );
 }
 
 #[test]
@@ -2214,7 +2327,7 @@ fn for_of_lowering_var_binding() {
 }
 
 #[test]
-fn for_of_lowering_no_binding_kind() {
+fn for_of_lowering_no_binding_kind_uses_sloppy_dynamic_write_bd_0k19b() {
     let ir0 = for_of_ir0(None);
     let result = lower_ir0_to_ir1(&ir0).expect("for-of None binding_kind");
     assert!(
@@ -2223,6 +2336,20 @@ fn for_of_lowering_no_binding_kind() {
             .ops
             .iter()
             .any(|op| matches!(op, Ir1Op::ForOfInit))
+    );
+    assert!(
+        result
+            .module
+            .ops
+            .iter()
+            .any(|op| matches!(op, Ir1Op::PutName { name, strict: false } if name == "v"))
+    );
+    assert!(
+        result.module.scopes[0]
+            .bindings
+            .iter()
+            .all(|binding| binding.name != "v"),
+        "a bare loop target is an assignment reference, not an implicit declaration"
     );
 }
 
@@ -2362,6 +2489,7 @@ fn for_of_ir1_serde_roundtrip() {
 fn iterator_close_reason_serde_roundtrip() {
     let reasons = vec![
         IteratorCloseReason::Break,
+        IteratorCloseReason::Continue,
         IteratorCloseReason::Return,
         IteratorCloseReason::Throw,
     ];

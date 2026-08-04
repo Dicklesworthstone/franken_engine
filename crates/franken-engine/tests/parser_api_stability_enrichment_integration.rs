@@ -283,15 +283,17 @@ fn enrichment_golden_v1_all_fields_non_empty() {
 }
 
 #[test]
-fn enrichment_golden_v1_matches_live() {
-    let g = GoldenVersionVector::v1();
+fn enrichment_golden_current_matches_live() {
+    let g = GoldenVersionVector::current();
+    assert_eq!(g, GoldenVersionVector::v6());
+    assert_eq!(g.ast_schema, "franken-engine.parser-ast.schema.v6");
     let mismatches = g.check_against_live();
     assert!(mismatches.is_empty(), "mismatches: {:?}", mismatches);
 }
 
 #[test]
-fn enrichment_golden_v1_detects_drift_in_multiple_fields() {
-    let mut g = GoldenVersionVector::v1();
+fn enrichment_golden_current_detects_drift_in_multiple_fields() {
+    let mut g = GoldenVersionVector::current();
     g.ast_contract = "wrong".into();
     g.event_ir_schema = "wrong".into();
     let mismatches = g.check_against_live();

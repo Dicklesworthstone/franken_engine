@@ -3,8 +3,6 @@
 use frankenengine_extension_host::GuardplanePolicyAction;
 use serde::{Deserialize, Serialize};
 
-const GOLDEN: &str = include_str!("golden_vectors/guardplane_policy_action_fallback_v1.json");
-
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 struct GuardplanePolicyActionFallbackGolden {
     fixture_schema_version: String,
@@ -60,10 +58,10 @@ fn guardplane_policy_action_fallback_mapping_matches_golden_snapshot() {
     let expected = golden_fixture();
     let actual_json = serde_json::to_string_pretty(&expected).expect("serialize golden") + "\n";
 
-    assert_eq!(actual_json, GOLDEN);
+    insta::assert_snapshot!("guardplane_policy_action_fallback_mapping", actual_json);
 
     let decoded: GuardplanePolicyActionFallbackGolden =
-        serde_json::from_str(GOLDEN).expect("golden fixture should decode");
+        serde_json::from_str(&actual_json).expect("golden fixture should decode");
     assert_eq!(decoded, expected);
     assert_eq!(decoded.action_cases.len(), policy_actions().len());
 }

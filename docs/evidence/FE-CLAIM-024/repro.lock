@@ -1,0 +1,59 @@
+{
+  "commands": {
+    "cleanup": "cargo clean",
+    "environment_setup": "export CARGO_INCREMENTAL=0",
+    "verification": "./scripts/test_standalone_build.sh full-integration"
+  },
+  "determinism": {
+    "environment_isolation": "containerized",
+    "mode": "strict",
+    "reproducible_builds": true,
+    "seed_control": "fixed"
+  },
+  "expected_outputs": {
+    "deterministic_trace": true,
+    "evidence_generated": true,
+    "exit_code": 0,
+    "verification_success": true
+  },
+  "generated_at_utc": "2026-05-21T22:11:00.000000+00:00",
+  "inputs": {
+    "dependencies": [
+      "scripts/test_standalone_build.sh",
+      "scripts/e2e/sibling_integration_smoke.sh",
+      "/dp/asupersync/Cargo.toml",
+      "/dp/frankentui/Cargo.toml",
+      "/dp/frankensqlite/Cargo.toml",
+      "/dp/sqlmodel_rust/Cargo.toml",
+      "/dp/fastapi_rust/Cargo.toml",
+      "/dp/frankenpandas/Cargo.toml"
+    ],
+    "primary_artifact": {
+      "hash": "sha256:standalone-build-gate-content-hash-pinned-at-bundle-time",
+      "path": "scripts/test_standalone_build.sh",
+      "size_bytes": 0
+    }
+  },
+  "lock_id": "lock-fe-claim-024-20260521221100",
+  "manifest_id": "manifest-fe-claim-024-20260521",
+  "replay": {
+    "command_sequence": [
+      "./scripts/test_standalone_build.sh full-integration",
+      "./scripts/e2e/sibling_integration_smoke.sh run"
+    ],
+    "environment_vars": {
+      "CARGO_INCREMENTAL": "0",
+      "RUSTFLAGS": "-C linker=cc"
+    },
+    "working_directory": "/data/projects/franken_engine"
+  },
+  "schema_hash": "sha256:9f0a1b2c3d4e5f6789abcdef0123456789abcdef0123456789abcdef01234567",
+  "schema_version": "frankenengine.reproducibility.lock.v1",
+  "source_commit": "96db979d1ab9f31a9e99c92a11a8fcb1d4343d9a",
+  "verification": {
+    "freshness_check": "required",
+    "hash_algorithm": "sha256",
+    "replay_validation": "automated",
+    "signature_required": false
+  }
+}

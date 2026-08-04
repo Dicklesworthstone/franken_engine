@@ -19,7 +19,7 @@ cd "${repo_root}"
 echo "Running live capability rejection integration tests..."
 
 # Run the integration tests that generate proof artifacts
-if rch exec 'env CARGO_INCREMENTAL=0 RUSTFLAGS="-C linker=cc" cargo test test_capability_rejection_proof_artifacts --lib --nocapture' > "${artifact_dir}/test_output.log" 2>&1; then
+if env -u CARGO_ENCODED_RUSTFLAGS rch exec 'env -u CARGO_ENCODED_RUSTFLAGS CARGO_INCREMENTAL=0 RUSTFLAGS="-C linker=cc -Clinker-features=-lld" cargo test test_capability_rejection_proof_artifacts --lib --nocapture' > "${artifact_dir}/test_output.log" 2>&1; then
     echo "✅ Capability rejection tests passed"
 else
     echo "❌ Capability rejection tests failed - see ${artifact_dir}/test_output.log"
@@ -29,7 +29,7 @@ fi
 echo "Running additional capability enforcement validation..."
 
 # Run all capability-related tests
-if rch exec 'env CARGO_INCREMENTAL=0 RUSTFLAGS="-C linker=cc" cargo test capability --lib' > "${artifact_dir}/capability_tests.log" 2>&1; then
+if env -u CARGO_ENCODED_RUSTFLAGS rch exec 'env -u CARGO_ENCODED_RUSTFLAGS CARGO_INCREMENTAL=0 RUSTFLAGS="-C linker=cc -Clinker-features=-lld" cargo test capability --lib' > "${artifact_dir}/capability_tests.log" 2>&1; then
     echo "✅ All capability tests passed"
 else
     echo "❌ Some capability tests failed - see ${artifact_dir}/capability_tests.log"

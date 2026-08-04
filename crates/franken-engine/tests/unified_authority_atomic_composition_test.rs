@@ -13,7 +13,6 @@
 #![allow(clippy::too_many_arguments)]
 
 use frankenengine_engine::flow_lattice::LabelClass;
-use frankenengine_engine::security_epoch::SecurityEpoch;
 use frankenengine_engine::unified_authority_algebra::{
     AuthorityLattice, BudgetEnvelope, CapabilityKind, CapabilitySet,
 };
@@ -57,7 +56,7 @@ impl MockConcurrentAuthorityContext {
         // are read as a consistent snapshot
         let ifc = self.ifc_label.read().unwrap().clone();
         let caps = self.capability_set.read().unwrap().clone();
-        let budget = self.budget_envelope.read().unwrap().clone();
+        let budget = *self.budget_envelope.read().unwrap();
 
         // Log atomic access
         self.access_log
@@ -90,7 +89,7 @@ impl MockConcurrentAuthorityContext {
         thread::sleep(Duration::from_millis(1));
 
         // Read budget third
-        let budget = self.budget_envelope.read().unwrap().clone();
+        let budget = *self.budget_envelope.read().unwrap();
         self.access_log
             .lock()
             .unwrap()
@@ -255,8 +254,8 @@ fn test_atomic_composition_consistency_under_concurrent_updates() {
     });
 
     // Collect results
-    let (atomic_result, atomic_log) = atomic_handle.join().unwrap();
-    let (sequential_result, sequential_log) = sequential_handle.join().unwrap();
+    let (_atomic_result, atomic_log) = atomic_handle.join().unwrap();
+    let (_sequential_result, sequential_log) = sequential_handle.join().unwrap();
 
     // Verify atomic behavior is consistent
     // (Either consistently passes or consistently fails based on timing)

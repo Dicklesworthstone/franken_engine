@@ -1,0 +1,23 @@
+---
+source: crates/franken-engine/tests/golden_lowering.rs
+expression: actual
+---
+# franken-engine lowering IR3 golden
+# Update with:
+#   INSTA_UPDATE=always cargo test -p frankenengine-engine --test golden_lowering
+# Then review with `cargo insta review` and commit tests/snapshots/.
+case: async_function
+goal: Script
+source:
+  async function load() { return 1; }
+
+constant_pool:
+  <empty>
+
+instructions:
+  0000: {"CreateAsyncFunction":{"dst":1,"function_index":1,"capture_count":0}}
+  0001: {"Move":{"dst":0,"src":1}}
+  0002: {"Return":{"value":0}}
+  0003: "Halt"
+  0004: {"LoadInt":{"dst":0,"value":1}}
+  0005: {"Return":{"value":0}}

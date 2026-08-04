@@ -25,10 +25,11 @@ use frankenengine_engine::ir_contract::{
     BindingKind, CapabilityTag, EffectBoundary, ExecutionOutcome, FlowAnnotation,
     HostcallDecisionRecord, Ir0Module, Ir1Literal, Ir1Module, Ir1Op, Ir2Module, Ir2Op,
     Ir3FunctionDesc, Ir3Instruction, Ir3Module, Ir4Module, IrContractEvent, IrError, IrErrorCode,
-    IrLevel, IrSchemaVersion, IrVerifier, RegRange, ResolvedBinding, ScopeId, ScopeKind, ScopeNode,
-    SpecializationLinkage, WitnessEvent, WitnessEventKind, error_code, verify_ir0_hash,
-    verify_ir1_source, verify_ir3_specialization, verify_ir4_linkage,
+    IrHeader, IrLevel, IrSchemaVersion, IrVerifier, RegRange, ResolvedBinding, ScopeId, ScopeKind,
+    ScopeNode, SpecializationLinkage, WitnessEvent, WitnessEventKind, error_code, verify_ir0_hash,
+    verify_ir1_source, verify_ir3_specialization, verify_ir4_linkage, verify_schema_version,
 };
+use frankenengine_engine::js_string::JsString;
 
 // ============================================================================
 // Helpers
@@ -88,6 +89,7 @@ fn make_ir2(source_hash: ContentHash) -> Ir2Module {
         effect: EffectBoundary::Pure,
         required_capability: None,
         flow: None,
+        span: None,
     });
     ir2.ops.push(Ir2Op {
         inner: Ir1Op::Call { arg_count: 1 },
@@ -98,6 +100,7 @@ fn make_ir2(source_hash: ContentHash) -> Ir2Module {
             sink_clearance: Label::Internal,
             declassification_required: false,
         }),
+        span: None,
     });
     ir2.required_capabilities
         .push(CapabilityTag("fs:read".to_string()));
@@ -117,7 +120,7 @@ fn make_ir3(source_hash: ContentHash) -> Ir3Module {
     });
     ir3.instructions.push(Ir3Instruction::Return { value: 2 });
     ir3.instructions.push(Ir3Instruction::Halt);
-    ir3.constant_pool.push("hello".to_string());
+    ir3.constant_pool.push("hello".into());
     ir3.function_table.push(Ir3FunctionDesc {
         entry: 0,
         arity: 0,
@@ -179,13 +182,13 @@ fn build_full_pipeline() -> (Ir0Module, Ir1Module, Ir2Module, Ir3Module, Ir4Modu
 fn schema_version_current_values() {
     let v = IrSchemaVersion::CURRENT;
     assert_eq!(v.major, 0);
-    assert_eq!(v.minor, 1);
+    assert_eq!(v.minor, 7);
     assert_eq!(v.patch, 0);
 }
 
 #[test]
 fn schema_version_display() {
-    assert_eq!(IrSchemaVersion::CURRENT.to_string(), "0.1.0");
+    assert_eq!(IrSchemaVersion::CURRENT.to_string(), "0.7.0");
     let custom = IrSchemaVersion {
         major: 2,
         minor: 3,
@@ -240,6 +243,34 @@ fn schema_version_ordering() {
     };
     assert!(v010 < v020);
     assert!(v020 < v100);
+}
+
+#[test]
+fn schema_version_070_accepts_engine_history_but_rejects_core_owned_050_bd_g73mg() {
+    let header = |minor| IrHeader {
+        schema_version: IrSchemaVersion {
+            major: 0,
+            minor,
+            patch: 0,
+        },
+        level: IrLevel::Ir1,
+        source_hash: None,
+        source_label: "compat.mjs".to_string(),
+    };
+
+    assert!(verify_schema_version(&header(1)).is_ok());
+    assert!(verify_schema_version(&header(2)).is_ok());
+    assert!(verify_schema_version(&header(3)).is_ok());
+    verify_schema_version(&header(4)).expect("historical 0.4 minor must remain accepted");
+    let skipped = verify_schema_version(&header(5))
+        .expect_err("core-owned 0.5 must not be accepted as an engine artifact");
+    assert_eq!(skipped.code, IrErrorCode::SchemaVersionMismatch);
+    assert!(skipped.message.contains("skipped engine minor"));
+    verify_schema_version(&header(6)).expect("historical 0.6 minor must remain accepted");
+    verify_schema_version(&header(7)).expect("current minor must be accepted");
+    let error = verify_schema_version(&header(8)).expect_err("future minor must be rejected");
+    assert_eq!(error.code, IrErrorCode::SchemaVersionMismatch);
+    assert!(error.message.contains("0.7.0"));
 }
 
 // ============================================================================
@@ -472,7 +503,7 @@ fn scope_node_serde_roundtrip() {
 #[test]
 fn ir1_literal_all_variants_canonical_and_serde() {
     let literals = vec![
-        Ir1Literal::String("hello world".to_string()),
+        Ir1Literal::String("hello world".into()),
         Ir1Literal::Integer(i64::MAX),
         Ir1Literal::Integer(i64::MIN),
         Ir1Literal::Integer(0),
@@ -501,7 +532,7 @@ fn ir1_literal_all_variants_canonical_and_serde() {
 fn ir1_op_all_variants_canonical() {
     let ops = vec![
         Ir1Op::LoadLiteral {
-            value: Ir1Literal::String("test".to_string()),
+            value: Ir1Literal::String("test".into()),
         },
         Ir1Op::LoadLiteral {
             value: Ir1Literal::Integer(99),
@@ -520,7 +551,7 @@ fn ir1_op_all_variants_canonical() {
         Ir1Op::Call { arg_count: 5 },
         Ir1Op::Return,
         Ir1Op::ImportModule {
-            specifier: "./module.js".to_string(),
+            specifier: "./module.js".into(),
         },
         Ir1Op::ExportBinding {
             name: "default".to_string(),
@@ -540,14 +571,14 @@ fn ir1_op_all_variants_canonical() {
 fn ir1_op_serde_roundtrip_all_variants() {
     let ops = vec![
         Ir1Op::LoadLiteral {
-            value: Ir1Literal::String("x".to_string()),
+            value: Ir1Literal::String("x".into()),
         },
         Ir1Op::LoadBinding { binding_id: 42 },
         Ir1Op::StoreBinding { binding_id: 7 },
         Ir1Op::Call { arg_count: 0 },
         Ir1Op::Return,
         Ir1Op::ImportModule {
-            specifier: "mod".to_string(),
+            specifier: "mod".into(),
         },
         Ir1Op::ExportBinding {
             name: "y".to_string(),
@@ -561,6 +592,36 @@ fn ir1_op_serde_roundtrip_all_variants() {
         let restored: Ir1Op = serde_json::from_str(&json).unwrap();
         assert_eq!(*op, restored);
     }
+}
+
+#[test]
+fn ir1_import_module_wire_preserves_ordinary_and_exact_sources_bd_lfq44() {
+    let ordinary = Ir1Op::ImportModule {
+        specifier: "pkg".into(),
+    };
+    assert_eq!(
+        serde_json::to_string(&ordinary).unwrap(),
+        r#"{"ImportModule":{"specifier":"pkg"}}"#
+    );
+
+    let exact = |unit| Ir1Op::ImportModule {
+        specifier: JsString::from_code_units(&[unit]),
+    };
+    let d800 = exact(0xD800);
+    let dc00 = exact(0xDC00);
+    assert_eq!(
+        serde_json::to_string(&d800).unwrap(),
+        r#"{"ImportModule":{"specifier":{"$wtf16":[55296]}}}"#
+    );
+    assert_ne!(d800.canonical_value(), dc00.canonical_value());
+    assert_ne!(
+        serde_json::to_string(&d800).unwrap(),
+        serde_json::to_string(&dc00).unwrap()
+    );
+    assert_eq!(
+        serde_json::from_str::<Ir1Op>(&serde_json::to_string(&d800).unwrap()).unwrap(),
+        d800
+    );
 }
 
 // ============================================================================
@@ -666,6 +727,7 @@ fn ir2_op_pure_no_capability_no_flow() {
         effect: EffectBoundary::Pure,
         required_capability: None,
         flow: None,
+        span: None,
     };
     let cv1 = op.canonical_value();
     let cv2 = op.canonical_value();
@@ -683,6 +745,7 @@ fn ir2_op_with_capability_and_flow() {
             sink_clearance: Label::Secret,
             declassification_required: false,
         }),
+        span: None,
     };
     let cv1 = op.canonical_value();
     let cv2 = op.canonical_value();
@@ -698,6 +761,7 @@ fn ir2_op_serde_roundtrip() {
         effect: EffectBoundary::ReadEffect,
         required_capability: Some(CapabilityTag("db:read".to_string())),
         flow: None,
+        span: None,
     };
     let json = serde_json::to_string(&op).unwrap();
     let restored: Ir2Op = serde_json::from_str(&json).unwrap();
@@ -1253,6 +1317,7 @@ fn ir2_different_effects_produce_different_hashes() {
         effect: EffectBoundary::Pure,
         required_capability: None,
         flow: None,
+        span: None,
     });
     let mut b = Ir2Module::new(src, "test.js");
     b.ops.push(Ir2Op {
@@ -1260,6 +1325,7 @@ fn ir2_different_effects_produce_different_hashes() {
         effect: EffectBoundary::WriteEffect,
         required_capability: None,
         flow: None,
+        span: None,
     });
     assert_ne!(a.content_hash(), b.content_hash());
 }
@@ -1480,7 +1546,7 @@ fn ir_error_construction() {
 fn ir_error_display_format() {
     let err = IrError::new(
         IrErrorCode::SchemaVersionMismatch,
-        "expected 0.1.0",
+        "expected 0.3.0",
         IrLevel::Ir1,
     );
     let display = err.to_string();
@@ -1489,7 +1555,7 @@ fn ir_error_display_format() {
         display.contains("IR_SCHEMA_VERSION_MISMATCH"),
         "display={display}"
     );
-    assert!(display.contains("expected 0.1.0"), "display={display}");
+    assert!(display.contains("expected 0.3.0"), "display={display}");
 }
 
 #[test]
@@ -1632,6 +1698,7 @@ fn verify_ir1_source_fails_for_missing_source_hash() {
         },
         scopes: vec![],
         ops: vec![],
+        op_spans: vec![],
     };
     let expected = ContentHash::compute(b"something");
     let err = verify_ir1_source(&ir1, &expected).unwrap_err();
@@ -2217,12 +2284,36 @@ fn ir3_large_constant_pool() {
     let src = ContentHash::compute(b"src");
     let mut ir3 = Ir3Module::new(src, "large-pool.js");
     for i in 0..100 {
-        ir3.constant_pool.push(format!("string_{i}"));
+        ir3.constant_pool.push(format!("string_{i}").into());
     }
     let json = serde_json::to_string(&ir3).unwrap();
     let restored: Ir3Module = serde_json::from_str(&json).unwrap();
     assert_eq!(ir3, restored);
     assert_eq!(ir3.content_hash(), restored.content_hash());
+}
+
+#[test]
+fn ir3_exact_constant_pool_roundtrips_and_distinguishes_units_bd_vltnh() {
+    let source_hash = ContentHash::compute(b"bd-vltnh-integration");
+    let mut high_d800 = Ir3Module::new(source_hash, "exact.js");
+    high_d800
+        .constant_pool
+        .push(JsString::from_code_units(&[0xD800]));
+    let mut high_d801 = Ir3Module::new(source_hash, "exact.js");
+    high_d801
+        .constant_pool
+        .push(JsString::from_code_units(&[0xD801]));
+
+    let json = serde_json::to_vec(&high_d800).expect("serialize exact IR3 pool");
+    assert!(
+        json.windows(br#"{"$wtf16":[55296]}"#.len())
+            .any(|window| window == br#"{"$wtf16":[55296]}"#)
+    );
+    assert_eq!(
+        serde_json::from_slice::<Ir3Module>(&json).expect("deserialize exact IR3 pool"),
+        high_d800
+    );
+    assert_ne!(high_d800.content_hash(), high_d801.content_hash());
 }
 
 #[test]
@@ -2302,6 +2393,7 @@ fn capability_tag_flows_from_ir2_to_ir3() {
         effect: EffectBoundary::NetworkEffect,
         required_capability: Some(cap.clone()),
         flow: None,
+        span: None,
     });
     ir2.required_capabilities.push(cap.clone());
 
@@ -2382,6 +2474,7 @@ fn ir2_with_all_effect_boundaries() {
             effect: eb,
             required_capability: None,
             flow: None,
+            span: None,
         });
     }
     assert_eq!(ir2.ops.len(), 6);
@@ -2411,6 +2504,7 @@ fn ir2_flow_annotation_with_all_label_types() {
                 sink_clearance: Label::Public,
                 declassification_required: false,
             }),
+            span: None,
         });
     }
     let json = serde_json::to_string(&ir2).unwrap();
@@ -2543,7 +2637,7 @@ fn ir3_property_access_instructions() {
         dst: 3,
     });
     ir3.instructions.push(Ir3Instruction::Halt);
-    ir3.constant_pool.push("prop".to_string());
+    ir3.constant_pool.push("prop".into());
 
     let json = serde_json::to_string(&ir3).unwrap();
     let restored: Ir3Module = serde_json::from_str(&json).unwrap();

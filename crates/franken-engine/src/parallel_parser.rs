@@ -68,10 +68,6 @@ struct CanonicalEncoder {
 }
 
 impl CanonicalEncoder {
-    fn new() -> Self {
-        Self { buffer: Vec::new() }
-    }
-
     fn with_capacity(capacity: usize) -> Self {
         Self {
             buffer: Vec::with_capacity(capacity),
@@ -633,14 +629,28 @@ fn compute_merge_witness_hash(
 }
 
 /// Repair boundary tokens where a multi-character token was split across chunks.
-/// Adjacent tokens that overlap or are contiguous with the same kind are merged.
+/// Same-kind tokens whose absolute spans genuinely OVERLAP are merged.
+///
+/// The predicate is strict overlap (`end > start`), NOT contiguity
+/// (`end >= start`): chunk plans are depth-aware boundary-aligned, so two
+/// tokens from *different* chunks can never overlap in healthy operation —
+/// overlap only signals a seam anomaly worth coalescing. Contiguous
+/// same-kind tokens, by contrast, are ordinary adjacent tokens: `f(x);`
+/// lexes `)` and `;` as two contiguous `Punctuation` tokens, and the old
+/// `>=` predicate merged every such pair stream-wide, corrupting the
+/// parallel token stream for essentially all real source. With the default
+/// `always_check_parity=true` that corruption surfaced as a guaranteed
+/// parity mismatch — the parallel lane lexed the input, then the serial
+/// parity reference, then the serial fallback (3x work) and never returned
+/// `ParserMode::Parallel`; with parity disabled it returned the corrupted
+/// stream.
 pub fn repair_boundary_tokens(tokens: &mut Vec<Token>) {
     if tokens.len() < 2 {
         return;
     }
     let mut write = 0;
     for read in 1..tokens.len() {
-        if tokens[write].kind == tokens[read].kind && tokens[write].end >= tokens[read].start {
+        if tokens[write].kind == tokens[read].kind && tokens[write].end > tokens[read].start {
             // Merge: extend the write token to cover both.
             tokens[write].end = tokens[write].end.max(tokens[read].end);
         } else {
@@ -4275,6 +4285,68 @@ mod tests {
             err,
             TranscriptReplayError::DuplicateChunkReference { .. }
         ));
+    }
+
+    #[test]
+    fn repair_boundary_tokens_does_not_merge_contiguous_distinct_tokens() {
+        // `f(x);` lexes `)` at [3,4) and `;` at [4,5): contiguous, same kind
+        // (Punctuation), but two distinct tokens. The repair must NOT merge
+        // them — the old `end >= start` predicate did, corrupting the merged
+        // stream for any source containing adjacent punctuation and forcing
+        // a parity failover on essentially every parallel parse.
+        let mut tokens = vec![
+            Token {
+                kind: TokenKind::Punctuation,
+                start: 3,
+                end: 4,
+            },
+            Token {
+                kind: TokenKind::Punctuation,
+                start: 4,
+                end: 5,
+            },
+        ];
+        repair_boundary_tokens(&mut tokens);
+        assert_eq!(
+            tokens.len(),
+            2,
+            "contiguous same-kind tokens are distinct tokens, not a split token"
+        );
+        assert_eq!((tokens[0].start, tokens[0].end), (3, 4));
+        assert_eq!((tokens[1].start, tokens[1].end), (4, 5));
+    }
+
+    #[test]
+    fn parallel_parse_survives_contiguous_punctuation() {
+        // Real-world source is full of contiguous same-kind punctuation
+        // (`);`, `((`, `[]=`). The parallel lane must produce a token stream
+        // that passes parity against serial and actually stay in parallel
+        // mode — before the repair-predicate fix it always fell back with
+        // FallbackCause::ParityFailure on source like this.
+        let mut source = String::new();
+        for i in 0..100 {
+            source.push_str(&format!("f{i}(x{i});\n"));
+        }
+        let config = small_config();
+        let input = make_input(&source, &config);
+        let output = parse(&input).expect("parallel parse of plain calls should succeed");
+
+        assert!(
+            output.parity_result.as_ref().is_none_or(|p| p.parity_ok),
+            "parallel token stream must match the serial reference, got {:?}",
+            output.parity_result
+        );
+        // The bug signature was specifically a parity failover; a
+        // budget-exhausted fallback under machine load is environmental and
+        // not what this regression test pins.
+        assert!(
+            !matches!(
+                output.fallback_cause,
+                Some(FallbackCause::ParityFailure { .. })
+            ),
+            "contiguous punctuation must not force a parity failover (cause: {:?})",
+            output.fallback_cause
+        );
     }
 
     #[test]

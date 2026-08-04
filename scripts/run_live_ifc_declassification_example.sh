@@ -19,7 +19,7 @@ cd "${repo_root}"
 echo "Running live IFC/declassification integration tests..."
 
 # Run the integration tests that generate proof artifacts
-if rch exec 'env CARGO_INCREMENTAL=0 RUSTFLAGS="-C linker=cc" cargo test test_ifc_declassification_proof_artifacts --lib --nocapture' > "${artifact_dir}/test_output.log" 2>&1; then
+if env -u CARGO_ENCODED_RUSTFLAGS rch exec 'env -u CARGO_ENCODED_RUSTFLAGS CARGO_INCREMENTAL=0 RUSTFLAGS="-C linker=cc -Clinker-features=-lld" cargo test test_ifc_declassification_proof_artifacts --lib --nocapture' > "${artifact_dir}/test_output.log" 2>&1; then
     echo "✅ IFC declassification tests passed"
 else
     echo "❌ IFC declassification tests failed - see ${artifact_dir}/test_output.log"
@@ -37,7 +37,7 @@ fi
 echo "Running additional IFC validation..."
 
 # Run IFC-related tests
-if rch exec 'env CARGO_INCREMENTAL=0 RUSTFLAGS="-C linker=cc" cargo test ifc --lib' > "${artifact_dir}/ifc_tests.log" 2>&1; then
+if env -u CARGO_ENCODED_RUSTFLAGS rch exec 'env -u CARGO_ENCODED_RUSTFLAGS CARGO_INCREMENTAL=0 RUSTFLAGS="-C linker=cc -Clinker-features=-lld" cargo test ifc --lib' > "${artifact_dir}/ifc_tests.log" 2>&1; then
     echo "✅ All IFC tests passed"
 else
     echo "❌ Some IFC tests failed - see ${artifact_dir}/ifc_tests.log"

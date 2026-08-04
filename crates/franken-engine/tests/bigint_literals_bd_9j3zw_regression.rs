@@ -6,7 +6,7 @@ use frankenengine_engine::HybridRouter;
 fn eval(src: &str) -> String {
     let mut engine = HybridRouter::default();
     match engine.eval(src) {
-        Ok(output) => format!("{}", output.value),
+        Ok(output) => output.value.to_string(),
         Err(err) => format!("ERR={}", err.to_string().lines().next().unwrap_or("")),
     }
 }

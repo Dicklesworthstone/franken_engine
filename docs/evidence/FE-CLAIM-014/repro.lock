@@ -1,0 +1,57 @@
+{
+  "commands": {
+    "cleanup": "cargo clean",
+    "environment_setup": "export CARGO_INCREMENTAL=0",
+    "verification": "./scripts/run_rgc_production_feature_catalog.sh ci"
+  },
+  "determinism": {
+    "environment_isolation": "containerized",
+    "mode": "strict",
+    "reproducible_builds": true,
+    "seed_control": "fixed"
+  },
+  "expected_outputs": {
+    "deterministic_trace": true,
+    "evidence_generated": true,
+    "exit_code": 0,
+    "verification_success": true
+  },
+  "generated_at_utc": "2026-05-21T21:32:00.000000+00:00",
+  "inputs": {
+    "dependencies": [
+      "docs/production_feature_catalog_v1.json",
+      "artifacts/production_feature_catalog/signed_ifc_declassification/",
+      "artifacts/production_feature_catalog/deterministic_replay/",
+      "artifacts/production_feature_catalog/red_team_compromise_rate/",
+      "scripts/run_rgc_production_feature_catalog.sh",
+      "scripts/e2e/rgc_production_feature_catalog_replay.sh"
+    ],
+    "primary_artifact": {
+      "hash": "sha256:catalog-content-hash-pinned-at-bundle-time",
+      "path": "scripts/run_rgc_production_feature_catalog.sh",
+      "size_bytes": 0
+    }
+  },
+  "lock_id": "lock-fe-claim-014-20260521213200",
+  "manifest_id": "manifest-fe-claim-014-20260521",
+  "replay": {
+    "command_sequence": [
+      "./scripts/run_rgc_production_feature_catalog.sh ci",
+      "./scripts/e2e/rgc_production_feature_catalog_replay.sh ci"
+    ],
+    "environment_vars": {
+      "CARGO_INCREMENTAL": "0",
+      "RUSTFLAGS": "-C linker=cc"
+    },
+    "working_directory": "/data/projects/franken_engine"
+  },
+  "schema_hash": "sha256:9f0a1b2c3d4e5f6789abcdef0123456789abcdef0123456789abcdef01234567",
+  "schema_version": "frankenengine.reproducibility.lock.v1",
+  "source_commit": "4aa34886fafc0accd9087f1e91d26816d4d0912f",
+  "verification": {
+    "freshness_check": "required",
+    "hash_algorithm": "sha256",
+    "replay_validation": "automated",
+    "signature_required": false
+  }
+}

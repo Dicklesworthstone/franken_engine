@@ -904,6 +904,7 @@ fn workspace_relative_path_resolves_against_root() {
 fn module_syntax_as_str_variants() {
     assert_eq!(ModuleSyntax::EsModule.as_str(), "esm");
     assert_eq!(ModuleSyntax::CommonJs.as_str(), "cjs");
+    assert_eq!(ModuleSyntax::Wasm.as_str(), "wasm");
 }
 
 #[test]
@@ -916,7 +917,11 @@ fn import_style_as_str_variants() {
 
 #[test]
 fn module_syntax_serde_roundtrip() {
-    for syntax in [ModuleSyntax::EsModule, ModuleSyntax::CommonJs] {
+    for syntax in [
+        ModuleSyntax::EsModule,
+        ModuleSyntax::CommonJs,
+        ModuleSyntax::Wasm,
+    ] {
         let json = serde_json::to_string(&syntax).unwrap();
         let recovered: ModuleSyntax = serde_json::from_str(&json).unwrap();
         assert_eq!(recovered, syntax);

@@ -259,10 +259,11 @@ fn cvar_reset_clears_state() {
 // ===========================================================================
 
 #[test]
-fn conformal_starts_calibrated() {
+fn conformal_starts_uncalibrated_fails_closed() {
     let cal = ConformalCalibrator::new(ConformalConfig::default());
-    // Vacuously calibrated before any observations
-    assert!(cal.is_calibrated());
+    // bd-sde5e.5.1 (CEI-E.1): no observations means coverage cannot be measured,
+    // so calibration must fail closed rather than be assumed.
+    assert!(!cal.is_calibrated());
     assert_eq!(cal.total_predictions(), 0);
 }
 
@@ -976,8 +977,9 @@ fn conformal_is_calibrated_respects_min_observations() {
     for i in 0..10 {
         cal.record(epoch(i + 1), false);
     }
-    // Should still be "calibrated" due to insufficient data
-    assert!(cal.is_calibrated());
+    // bd-sde5e.5.1 (CEI-E.1): below the observation floor calibration fails
+    // closed — the calibrator cannot assert a guarantee it has not measured.
+    assert!(!cal.is_calibrated());
 }
 
 // ===========================================================================

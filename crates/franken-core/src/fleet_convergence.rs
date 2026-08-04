@@ -32,6 +32,27 @@ use crate::security_epoch::SecurityEpoch;
 use crate::spectral_fleet_convergence::{ConvergenceCertificate, GossipTopology, SpectralAnalyzer};
 
 // ---------------------------------------------------------------------------
+// Signing/hash preimage helpers
+// ---------------------------------------------------------------------------
+//
+// Preimages that are signed or content-hashed must be *injective*: distinct
+// logical inputs must never share a preimage. Concatenating adjacent free-form
+// `String`s, or looping over a collection with no count marker, breaks that —
+// `("ab","c")` collides with `("a","bc")`. These helpers append self-delimiting
+// fields; fixed-width fields (numerics) need no prefix.
+
+/// Append `bytes` with a fixed-width `u64` little-endian length prefix.
+fn push_len_prefixed(buf: &mut Vec<u8>, bytes: &[u8]) {
+    buf.extend_from_slice(&(bytes.len() as u64).to_le_bytes());
+    buf.extend_from_slice(bytes);
+}
+
+/// Append a `u64` little-endian count prefix for a collection.
+fn push_count(buf: &mut Vec<u8>, count: usize) {
+    buf.extend_from_slice(&(count as u64).to_le_bytes());
+}
+
+// ---------------------------------------------------------------------------
 // ContainmentThresholds — policy-defined decision thresholds
 // ---------------------------------------------------------------------------
 
@@ -236,19 +257,25 @@ pub struct ContainmentReceipt {
 impl ContainmentReceipt {
     /// Compute the signing preimage for this receipt.
     pub fn signing_preimage(&self) -> Vec<u8> {
+        // Injective preimage: the free-form id fields are length-prefixed and
+        // the evidence_ids collection is count-prefixed so distinct receipts
+        // can never share a signing preimage (e.g. action_id="ab",ext="c" must
+        // not alias action_id="a",ext="bc", and evidence_ids ["ab","c"] must
+        // not alias ["a","bc"]). Fixed-width fields need no prefix.
         let mut preimage = Vec::new();
-        preimage.extend_from_slice(self.action_id.as_bytes());
-        preimage.extend_from_slice(self.extension_id.as_bytes());
+        push_len_prefixed(&mut preimage, self.action_id.as_bytes());
+        push_len_prefixed(&mut preimage, self.extension_id.as_bytes());
         preimage.extend_from_slice(&[self.action_type.severity()]);
         // Sort evidence_ids for determinism before signing.
         let mut sorted_evidence = self.evidence_ids.clone();
         sorted_evidence.sort();
+        push_count(&mut preimage, sorted_evidence.len());
         for eid in &sorted_evidence {
-            preimage.extend_from_slice(eid.as_bytes());
+            push_len_prefixed(&mut preimage, eid.as_bytes());
         }
         preimage.extend_from_slice(&self.posterior_snapshot.to_le_bytes());
         preimage.extend_from_slice(&self.policy_version.to_le_bytes());
-        preimage.extend_from_slice(self.node_id.as_str().as_bytes());
+        push_len_prefixed(&mut preimage, self.node_id.as_str().as_bytes());
         preimage.extend_from_slice(&self.epoch.as_u64().to_le_bytes());
         preimage.extend_from_slice(&self.timestamp_ns.to_le_bytes());
         preimage.push(u8::from(self.degraded_mode));
@@ -975,13 +1002,19 @@ impl ConvergenceEngine {
     }
 
     /// Record reconciliation conflict during partition healing.
+    ///
+    /// Returns the deterministically resolved action (severity-max of local
+    /// and remote — commutative and idempotent, so safe under anti-entropy
+    /// replays). Recording alone does NOT apply the resolution; use
+    /// [`Self::apply_reconciliation_conflict`] for the in-tree apply path
+    /// (bd-80d2l).
     pub fn record_reconciliation_conflict(
         &mut self,
         conflicting_extension: &str,
         local_action: ContainmentAction,
         remote_action: ContainmentAction,
         timestamp_ns: u64,
-    ) {
+    ) -> ContainmentAction {
         if let PartitionMode::Healing(ref mut info) = self.partition_mode {
             info.conflict_count = info.conflict_count.saturating_add(1);
         }
@@ -1002,6 +1035,39 @@ impl ConvergenceEngine {
             timestamp_ns,
             fields,
         );
+        resolved
+    }
+
+    /// Record a reconciliation conflict AND apply the resolved action through
+    /// [`Self::execute_decision`] (bd-80d2l): partition-heal reconciliation
+    /// previously computed the severity-max resolution but only emitted it as
+    /// an event string, leaving the apply side to out-of-tree consumers.
+    /// Execution inherits `execute_decision`'s idempotency and
+    /// monotonic-escalation guards, so a stale lower-severity resolution can
+    /// never downgrade an already-executed higher action.
+    pub fn apply_reconciliation_conflict(
+        &mut self,
+        conflicting_extension: &str,
+        local_action: ContainmentAction,
+        remote_action: ContainmentAction,
+        timestamp_ns: u64,
+    ) -> (ContainmentAction, Option<ContainmentReceipt>) {
+        let resolved = self.record_reconciliation_conflict(
+            conflicting_extension,
+            local_action,
+            remote_action,
+            timestamp_ns,
+        );
+        let decision = ConvergenceDecision {
+            extension_id: conflicting_extension.to_string(),
+            action: resolved,
+            posterior_delta: 0, // Reconciliation-driven, not threshold-driven.
+            crossed_threshold: None,
+            degraded_mode: !matches!(self.partition_mode, PartitionMode::Normal),
+            evidence_count: 0,
+        };
+        let receipt = self.execute_decision(&decision, timestamp_ns);
+        (resolved, receipt)
     }
 
     /// Get all events of a specific type.
@@ -1875,6 +1941,69 @@ mod tests {
         assert_eq!(conflicts.len(), 1);
     }
 
+    /// bd-80d2l: the recorder must RETURN the severity-max resolution so
+    /// callers no longer re-derive it from the event string.
+    #[test]
+    fn engine_reconciliation_conflict_returns_severity_max() {
+        let mut engine = test_engine("local");
+        let resolved = engine.record_reconciliation_conflict(
+            "ext-1",
+            ContainmentAction::Sandbox,
+            ContainmentAction::Terminate,
+            11_000_000_000,
+        );
+        assert_eq!(resolved, ContainmentAction::Terminate);
+        // Commutative: swapping local/remote yields the same resolution.
+        let swapped = engine.record_reconciliation_conflict(
+            "ext-1",
+            ContainmentAction::Terminate,
+            ContainmentAction::Sandbox,
+            12_000_000_000,
+        );
+        assert_eq!(swapped, ContainmentAction::Terminate);
+    }
+
+    /// bd-80d2l: the apply variant executes the resolved action through
+    /// execute_decision (in-tree apply path for partition-heal
+    /// reconciliation) and inherits its monotonic-escalation guard.
+    #[test]
+    fn engine_apply_reconciliation_conflict_executes_resolution() {
+        let mut engine = test_engine("local");
+        let (resolved, receipt) = engine.apply_reconciliation_conflict(
+            "ext-1",
+            ContainmentAction::Sandbox,
+            ContainmentAction::Terminate,
+            11_000_000_000,
+        );
+        assert_eq!(resolved, ContainmentAction::Terminate);
+        let receipt = receipt.expect("first reconciliation apply should execute");
+        assert_eq!(receipt.action_type, ContainmentAction::Terminate);
+        assert_eq!(
+            engine.action_registry.highest_executed_action("ext-1"),
+            ContainmentAction::Terminate
+        );
+
+        // A later, lower-severity reconciliation (stale partition remnant)
+        // must record but NOT downgrade the executed action. Suspend sits
+        // strictly below the already-executed Terminate on the ladder
+        // (allow < challenge < sandbox < suspend < terminate < quarantine).
+        let (resolved2, receipt2) = engine.apply_reconciliation_conflict(
+            "ext-1",
+            ContainmentAction::Sandbox,
+            ContainmentAction::Suspend,
+            12_000_000_000,
+        );
+        assert_eq!(resolved2, ContainmentAction::Suspend);
+        assert!(
+            receipt2.is_none(),
+            "stale lower-severity resolution must not re-execute"
+        );
+        assert_eq!(
+            engine.action_registry.highest_executed_action("ext-1"),
+            ContainmentAction::Terminate
+        );
+    }
+
     // -- ConvergenceEngine: telemetry --
 
     #[test]
@@ -2328,6 +2457,34 @@ mod tests {
         let mut other = base.clone();
         other.extension_id = "ext-2".into();
         assert_ne!(base.signing_preimage(), other.signing_preimage());
+    }
+
+    #[test]
+    fn receipt_signing_preimage_injective_across_id_and_evidence_boundaries_bd_133bg() {
+        // Regression (bd-133bg): action_id+extension_id were concatenated with
+        // no length prefix and evidence_ids looped with no count prefix, so
+        // distinct receipts could share a signing preimage (-> same signature).
+        let mk = |action_id: &str, extension_id: &str, evidence: Vec<&str>| {
+            ContainmentReceipt {
+                action_id: action_id.into(),
+                extension_id: extension_id.into(),
+                action_type: ContainmentAction::Sandbox,
+                evidence_ids: evidence.into_iter().map(String::from).collect(),
+                posterior_snapshot: 300_000,
+                policy_version: 1,
+                node_id: test_node("local"),
+                epoch: SecurityEpoch::GENESIS,
+                timestamp_ns: 1_000,
+                degraded_mode: false,
+                escalation_depth: 0,
+                signature: AuthenticityHash::compute_keyed(b"k", b"v"),
+            }
+            .signing_preimage()
+        };
+        // id boundary: ("ab","c") must not alias ("a","bc").
+        assert_ne!(mk("ab", "c", vec![]), mk("a", "bc", vec![]));
+        // evidence-list boundary: ["ab","c"] must not alias ["a","bc"].
+        assert_ne!(mk("x", "y", vec!["ab", "c"]), mk("x", "y", vec!["a", "bc"]));
     }
 
     #[test]

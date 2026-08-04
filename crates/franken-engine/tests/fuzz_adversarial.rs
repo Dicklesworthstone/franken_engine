@@ -11,28 +11,10 @@
     clippy::manual_abs_diff
 )]
 
+use insta::Settings;
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
-
-// Golden file testing imports
-use regex::Regex;
-use std::sync::LazyLock;
-
-// golden_diag lives under tests/_support/ (bd-ub6x8.18); pulled in via #[path]
-// so cargo does not compile it as a standalone integration-test binary.
-#[path = "_support/golden_diag.rs"]
-mod golden_diag;
-
-// Hoisted scrub patterns (bd-ub6x8.13).
-static SCRUB_SHA256: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"sha256:[a-f0-9]{64}").unwrap());
-static SCRUB_TRACE_ID: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"trace-[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}").unwrap()
-});
-static SCRUB_DECISION_ID: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"parser-[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}").unwrap()
-});
 
 use frankenengine_engine::capability::RuntimeCapability;
 use frankenengine_engine::capability_token::{
@@ -1310,31 +1292,25 @@ struct DeterminismCheckSummary {
     repeat_event_ir_hash_matches: bool,
 }
 
-/// Golden file testing infrastructure.
-/// UPDATE_GOLDENS + read-or-panic + .actual sweep is delegated to
-/// golden_diag::GoldenDiag (bd-ub6x8.3).
-fn assert_golden_parser_boundary(test_name: &str, output: &ParserBoundaryOutput) {
-    let golden_path = Path::new("tests/golden/parser_boundary").join(format!("{test_name}.json"));
+/// Parser-boundary golden snapshots use insta-native filters rather than the
+/// older GoldenDiag read-or-panic helper.
+fn assert_parser_boundary_snapshot(test_name: &str, output: &ParserBoundaryOutput) {
     let actual = serde_json::to_string_pretty(output).unwrap();
-    let scrubbed_actual = scrub_parser_output(&actual);
-    golden_diag::GoldenDiag {
-        framework_name: "Parser boundary golden",
-        regen_env_var: "UPDATE_GOLDENS",
-    }
-    .assert_golden_match(&scrubbed_actual, &golden_path, test_name, None);
-}
 
-/// Scrub non-deterministic values from parser output
-fn scrub_parser_output(output: &str) -> String {
-    let mut scrubbed = output.to_string();
-    scrubbed = SCRUB_SHA256.replace_all(&scrubbed, "[HASH]").into_owned();
-    scrubbed = SCRUB_TRACE_ID
-        .replace_all(&scrubbed, "[TRACE_ID]")
-        .into_owned();
-    scrubbed = SCRUB_DECISION_ID
-        .replace_all(&scrubbed, "[DECISION_ID]")
-        .into_owned();
-    scrubbed
+    let mut settings = Settings::clone_current();
+    settings.add_filter(r"sha256:[a-f0-9]{64}", "[HASH]");
+    settings.add_filter(
+        r"trace-[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}",
+        "[TRACE_ID]",
+    );
+    settings.add_filter(
+        r"parser-[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}",
+        "[DECISION_ID]",
+    );
+
+    settings.bind(|| {
+        insta::assert_snapshot!(test_name, actual);
+    });
 }
 
 /// Capture parser boundary output for golden testing
@@ -1456,7 +1432,7 @@ fn golden_parser_boundary_success_simple_script() {
     ];
 
     let output = capture_parser_boundary_output(&data);
-    assert_golden_parser_boundary("simple_script_success", &output);
+    assert_parser_boundary_snapshot("simple_script_success", &output);
 }
 
 /// Golden test for parse error case
@@ -1474,7 +1450,7 @@ fn golden_parser_boundary_error_malformed_syntax() {
     ];
 
     let output = capture_parser_boundary_output(&data);
-    assert_golden_parser_boundary("malformed_syntax_error", &output);
+    assert_parser_boundary_snapshot("malformed_syntax_error", &output);
 }
 
 /// Golden test for module with imports/exports
@@ -1494,5 +1470,5 @@ fn golden_parser_boundary_module_with_exports() {
     ];
 
     let output = capture_parser_boundary_output(&data);
-    assert_golden_parser_boundary("module_with_exports", &output);
+    assert_parser_boundary_snapshot("module_with_exports", &output);
 }

@@ -23,6 +23,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
+use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -40,6 +41,8 @@ pub const BEAD_ID: &str = "bd-1lsy.7.7.2";
 pub const RECEIPT_SCHEMA_VERSION: &str = "franken-engine.tv-receipt.v1";
 pub const CHAIN_SCHEMA_VERSION: &str = "franken-engine.tv-receipt-chain.v1";
 pub const SUMMARY_SCHEMA_VERSION: &str = "franken-engine.tv-receipt-summary.v1";
+pub const RECEIPT_PROOF_JSON_SCHEMA_VERSION: &str =
+    "franken-engine.translation-validation-receipt-proof-json.v1";
 
 /// Maximum receipts retained in a chain before pruning.
 pub const MAX_CHAIN_LENGTH: usize = 4096;
@@ -512,6 +515,178 @@ impl TranslationValidationReceipt {
 
     fn has_valid_content_hash(&self) -> bool {
         self.content_hash == self.expected_content_hash()
+    }
+
+    /// Convert this receipt into the flat proof/counterexample JSON witness
+    /// consumed by gate pipelines.
+    pub fn to_proof_json_witness(&self) -> ReceiptProofJsonWitness {
+        ReceiptProofJsonWitness::from_receipt(self)
+    }
+}
+
+/// Gate-facing JSON witness derived from a translation-validation receipt.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReceiptProofJsonWitness {
+    /// Schema id for this witness shape.
+    pub schema_version: String,
+    /// Optimization covered by the receipt.
+    pub optimization_id: String,
+    /// Receipt sequence in its chain.
+    pub receipt_sequence: u64,
+    /// Content hash of the source receipt.
+    pub receipt_content_hash: String,
+    /// Normalized verdict: `proven`, `counterexample`, or `unavailable`.
+    pub verdict: String,
+    /// Proof mode when the verdict is proven.
+    pub proof_mode: Option<String>,
+    /// Proof evidence content hash when available.
+    pub proof_evidence_hash: Option<String>,
+    /// Counterexample hash when the verdict is disproven.
+    pub counterexample_hash: Option<String>,
+    /// Divergence or fail-closed reason.
+    pub reason: Option<String>,
+    /// Deterministic ticks spent or consumed by the validator.
+    pub verification_ticks: u64,
+    /// Security epoch at receipt creation.
+    pub security_epoch: SecurityEpoch,
+    /// Deterministic timestamp ticks at receipt creation.
+    pub timestamp_ticks: u64,
+    /// Deterministic content hash over the witness body.
+    pub content_hash: String,
+}
+
+impl ReceiptProofJsonWitness {
+    /// Build a witness from an existing receipt.
+    pub fn from_receipt(receipt: &TranslationValidationReceipt) -> Self {
+        let (verdict, proof_mode, proof_evidence_hash, counterexample_hash, reason, ticks) =
+            match &receipt.verdict {
+                ReceiptVerdict::Proven { evidence } => (
+                    "proven".to_string(),
+                    Some(evidence.mode.to_string()),
+                    Some(evidence.content_hash().to_hex()),
+                    None,
+                    None,
+                    evidence.verification_ticks,
+                ),
+                ReceiptVerdict::Disproven {
+                    counterexample_hash,
+                    divergence,
+                } => (
+                    "counterexample".to_string(),
+                    None,
+                    None,
+                    Some(counterexample_hash.to_hex()),
+                    Some(divergence.clone()),
+                    0,
+                ),
+                ReceiptVerdict::Inconclusive {
+                    reason,
+                    budget_consumed_ticks,
+                    ..
+                } => (
+                    "unavailable".to_string(),
+                    None,
+                    None,
+                    None,
+                    Some(reason.clone()),
+                    *budget_consumed_ticks,
+                ),
+            };
+
+        let mut witness = Self {
+            schema_version: RECEIPT_PROOF_JSON_SCHEMA_VERSION.to_string(),
+            optimization_id: receipt.optimization_id.clone(),
+            receipt_sequence: receipt.sequence,
+            receipt_content_hash: receipt.content_hash.to_hex(),
+            verdict,
+            proof_mode,
+            proof_evidence_hash,
+            counterexample_hash,
+            reason,
+            verification_ticks: ticks,
+            security_epoch: receipt.epoch,
+            timestamp_ticks: receipt.timestamp_ticks,
+            content_hash: String::new(),
+        };
+        witness.content_hash = witness.compute_content_hash();
+        witness
+    }
+
+    /// Recompute and verify the witness content hash.
+    pub fn verify_content_hash(&self) -> bool {
+        self.content_hash == self.compute_content_hash()
+    }
+
+    /// Deterministic hash over all witness fields except `content_hash`.
+    pub fn compute_content_hash(&self) -> String {
+        let mut hasher = Sha256::new();
+        hash_str(&mut hasher, &self.schema_version);
+        hash_str(&mut hasher, &self.optimization_id);
+        hash_u64(&mut hasher, self.receipt_sequence);
+        hash_str(&mut hasher, &self.receipt_content_hash);
+        hash_str(&mut hasher, &self.verdict);
+        hash_optional_str(&mut hasher, self.proof_mode.as_deref());
+        hash_optional_str(&mut hasher, self.proof_evidence_hash.as_deref());
+        hash_optional_str(&mut hasher, self.counterexample_hash.as_deref());
+        hash_optional_str(&mut hasher, self.reason.as_deref());
+        hash_u64(&mut hasher, self.verification_ticks);
+        hash_u64(&mut hasher, self.security_epoch.as_u64());
+        hash_u64(&mut hasher, self.timestamp_ticks);
+        hex::encode(hasher.finalize())
+    }
+}
+
+/// Result returned after writing a receipt-level proof JSON witness.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EmittedReceiptProofJsonWitness {
+    /// Path to the emitted JSON artifact.
+    pub path: PathBuf,
+    /// Artifact content hash.
+    pub content_hash: String,
+    /// Normalized verdict written to the artifact.
+    pub verdict: String,
+}
+
+/// Write `<optimization-id>.proof.json` for a translation-validation receipt.
+pub fn emit_receipt_proof_json_witness(
+    receipt: &TranslationValidationReceipt,
+    bundle_dir: &Path,
+) -> std::io::Result<EmittedReceiptProofJsonWitness> {
+    std::fs::create_dir_all(bundle_dir)?;
+    let witness = receipt.to_proof_json_witness();
+    let file_stem = sanitize_witness_file_stem(&receipt.optimization_id);
+    let path = bundle_dir.join(format!("{file_stem}.proof.json"));
+    let json = serde_json::to_vec_pretty(&witness).map_err(std::io::Error::other)?;
+    std::fs::write(&path, json)?;
+    Ok(EmittedReceiptProofJsonWitness {
+        path,
+        content_hash: witness.content_hash,
+        verdict: witness.verdict,
+    })
+}
+
+fn hash_optional_str(hasher: &mut Sha256, value: Option<&str>) {
+    hash_bool(hasher, value.is_some());
+    if let Some(value) = value {
+        hash_str(hasher, value);
+    }
+}
+
+fn sanitize_witness_file_stem(value: &str) -> String {
+    let stem: String = value
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    if stem.is_empty() {
+        "translation-validation-receipt".to_string()
+    } else {
+        stem
     }
 }
 
@@ -1844,6 +2019,126 @@ mod tests {
         .sign(key);
 
         assert!(!receipt.verify_signature(key));
+    }
+
+    #[test]
+    fn test_receipt_proof_json_witness_for_proven_verdict() {
+        let receipt = TranslationValidationReceipt::new(
+            1,
+            "opt-proven",
+            None,
+            test_epoch(),
+            1000,
+            test_hash(b"baseline"),
+            test_hash(b"optimized"),
+            vec![test_rule("r1", -100_000)],
+            proven_verdict(),
+            "cm",
+        );
+
+        let witness = receipt.to_proof_json_witness();
+
+        assert_eq!(witness.schema_version, RECEIPT_PROOF_JSON_SCHEMA_VERSION);
+        assert_eq!(witness.verdict, "proven");
+        assert_eq!(witness.proof_mode.as_deref(), Some("symbolic"));
+        assert!(witness.proof_evidence_hash.is_some());
+        assert!(witness.counterexample_hash.is_none());
+        assert!(witness.reason.is_none());
+        assert!(witness.verify_content_hash());
+    }
+
+    #[test]
+    fn test_receipt_proof_json_witness_for_counterexample_verdict() {
+        let receipt = TranslationValidationReceipt::new(
+            1,
+            "opt-counterexample",
+            None,
+            test_epoch(),
+            1000,
+            test_hash(b"baseline"),
+            test_hash(b"optimized"),
+            vec![test_rule("r1", -100_000)],
+            disproven_verdict(),
+            "cm",
+        );
+
+        let witness = receipt.to_proof_json_witness();
+
+        assert_eq!(witness.verdict, "counterexample");
+        assert!(witness.proof_mode.is_none());
+        assert!(witness.proof_evidence_hash.is_none());
+        assert!(witness.counterexample_hash.is_some());
+        assert_eq!(
+            witness.reason.as_deref(),
+            Some("output mismatch on input #7")
+        );
+        assert!(witness.verify_content_hash());
+
+        let mut tampered = witness.clone();
+        tampered.reason = Some("changed".to_string());
+        assert!(!tampered.verify_content_hash());
+    }
+
+    #[test]
+    fn test_receipt_proof_json_witness_for_unavailable_verdict() {
+        let receipt = TranslationValidationReceipt::new(
+            1,
+            "opt-unavailable",
+            None,
+            test_epoch(),
+            1000,
+            test_hash(b"baseline"),
+            test_hash(b"optimized"),
+            vec![test_rule("r1", -100_000)],
+            inconclusive_verdict(),
+            "cm",
+        );
+
+        let witness = receipt.to_proof_json_witness();
+
+        assert_eq!(witness.verdict, "unavailable");
+        assert_eq!(witness.reason.as_deref(), Some("solver timeout"));
+        assert_eq!(witness.verification_ticks, 10_000_000);
+        assert!(witness.counterexample_hash.is_none());
+        assert!(witness.verify_content_hash());
+    }
+
+    #[test]
+    fn test_emit_receipt_proof_json_witness_writes_sanitized_file() {
+        let receipt = TranslationValidationReceipt::new(
+            1,
+            "opt/receipt witness",
+            None,
+            test_epoch(),
+            1000,
+            test_hash(b"baseline"),
+            test_hash(b"optimized"),
+            vec![test_rule("r1", -100_000)],
+            disproven_verdict(),
+            "cm",
+        );
+        let output_dir = std::env::temp_dir().join(format!(
+            "tv_receipt_witness_{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("system clock")
+                .as_nanos()
+        ));
+
+        let emitted = emit_receipt_proof_json_witness(&receipt, &output_dir)
+            .expect("receipt witness should be written");
+
+        assert_eq!(
+            emitted.path.file_name().and_then(|name| name.to_str()),
+            Some("opt_receipt_witness.proof.json")
+        );
+        assert_eq!(emitted.verdict, "counterexample");
+
+        let json = std::fs::read_to_string(&emitted.path).expect("read emitted witness");
+        let parsed: ReceiptProofJsonWitness =
+            serde_json::from_str(&json).expect("valid receipt witness json");
+        assert_eq!(parsed.content_hash, emitted.content_hash);
+        assert!(parsed.verify_content_hash());
     }
 
     #[test]

@@ -11,7 +11,7 @@ use frankenengine_engine::bayesian_posterior::{Evidence, Posterior, RiskState};
 use frankenengine_engine::federated_posterior_aggregation::{
     AggregatedPosteriorUpdate, AggregationCoordinator, AggregationState,
     FEDERATED_AGGREGATION_API_VERSION, FederatedAggregationError, LocalPosteriorProvider,
-    MAX_AGGREGATION_PARTICIPANTS, MIN_AGGREGATION_PARTICIPANTS, PosteriorDelta,
+    MAX_AGGREGATION_PARTICIPANTS, PosteriorDelta,
 };
 use frankenengine_engine::fleet_immune_protocol::NodeId;
 use frankenengine_engine::security_epoch::SecurityEpoch;
@@ -89,12 +89,14 @@ fn local_posterior_provider_manages_extension_state() {
     assert!(delta.delta_benign_millionths < 0); // Decreased belief in benign
     assert!(delta.delta_malicious_millionths > 0); // Increased belief in malicious
 
-    // Verify local posterior was updated
-    let local_posterior = provider.get_local_posterior("extension_1").unwrap();
-    assert!(local_posterior.p_malicious > 10_000); // More than default 1%
+    // Verify local posterior was updated.
+    let suspicious_posterior = provider.get_local_posterior("extension_1").unwrap().clone();
+    assert!(suspicious_posterior.p_malicious > 10_000); // More than default 1%
 
-    // Create evidence indicating normal behavior
-    let benign_evidence = Evidence {
+    // Create below-threshold normal evidence. The shared likelihood model treats
+    // this as neutral evidence (all state likelihoods stay at 1.0), so it should
+    // not undo previously observed suspicious evidence.
+    let neutral_evidence = Evidence {
         extension_id: "extension_1".to_string(),
         hostcall_rate_millionths: 500_000,  // Normal call rate
         distinct_capabilities: 2,           // Few capabilities
@@ -104,15 +106,21 @@ fn local_posterior_provider_manages_extension_state() {
         epoch: SecurityEpoch::from_raw(1),
     };
 
-    // Update with benign evidence
-    let benign_delta = provider
-        .update_local_posterior("extension_1", &benign_evidence, 800_000)
+    // Update with neutral evidence.
+    let neutral_delta = provider
+        .update_local_posterior("extension_1", &neutral_evidence, 800_000)
         .unwrap();
 
-    // Verify delta reflects decreased suspicion
-    assert!(benign_delta.is_valid());
-    assert!(benign_delta.delta_benign_millionths > 0); // Increased belief in benign
-    assert!(benign_delta.delta_malicious_millionths < 0); // Decreased belief in malicious
+    // Verify neutral evidence is recorded without changing the posterior.
+    assert!(neutral_delta.is_valid());
+    assert_eq!(neutral_delta.delta_benign_millionths, 0);
+    assert_eq!(neutral_delta.delta_anomalous_millionths, 0);
+    assert_eq!(neutral_delta.delta_malicious_millionths, 0);
+    assert_eq!(neutral_delta.delta_unknown_millionths, 0);
+    assert_eq!(
+        provider.get_local_posterior("extension_1").unwrap(),
+        &suspicious_posterior
+    );
 }
 
 /// Test aggregation coordinator manages multi-node federated learning rounds.
@@ -252,7 +260,7 @@ fn end_to_end_federated_learning_workflow() {
         .unwrap();
 
     // Each node observes different evidence about the suspicious extension
-    let evidence_observations = vec![
+    let evidence_observations = [
         // Node 1: High resource usage, moderate call rate
         Evidence {
             extension_id: "suspicious_crypto_extension".to_string(),
@@ -306,7 +314,7 @@ fn end_to_end_federated_learning_workflow() {
     ];
 
     // Confidence weights for each node (based on their reliability/track record)
-    let confidence_weights = vec![900_000, 850_000, 800_000, 750_000, 880_000];
+    let confidence_weights = [900_000, 850_000, 800_000, 750_000, 880_000];
 
     // Each node updates its local posterior and generates a delta
     let mut computed_deltas = Vec::new();
@@ -352,14 +360,14 @@ fn end_to_end_federated_learning_workflow() {
     assert_eq!(aggregated_update.epoch, SecurityEpoch::from_raw(10));
 
     // Apply aggregated update to each node's local state
-    for (_, provider) in fleet_providers.iter_mut() {
+    for provider in fleet_providers.values_mut() {
         provider
             .apply_aggregated_update(&aggregated_update)
             .unwrap();
     }
 
     // Verify that all nodes now have updated posteriors reflecting fleet-wide learning
-    for (_, provider) in fleet_providers.iter() {
+    for provider in fleet_providers.values() {
         let updated_posterior = provider
             .get_local_posterior("suspicious_crypto_extension")
             .unwrap();
@@ -393,7 +401,7 @@ fn aggregated_posterior_update_mathematical_properties() {
         participant_count: 4,
         evidence_fingerprint: frankenengine_engine::hash_tiers::ContentHash::compute(b"test"),
         epoch: SecurityEpoch::from_raw(1),
-        aggregation_timestamp_ns: 1640995200_000_000_000,
+        aggregation_timestamp_ns: 1_640_995_200_000_000_000,
     };
 
     let updated_posterior = aggregated.apply_to_posterior(&initial_posterior);

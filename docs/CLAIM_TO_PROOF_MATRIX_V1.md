@@ -32,9 +32,13 @@ artifacts and `scripts/real_hot_path_proof_contract_gate.sh` validates the
 deterministic command, rch worker, target-dir, digest, metric, and proof-state
 contract.
 
-That lane does not promote the Node/Bun denominator claim. `FE-CLAIM-010`
-remains `target` until fresh Node and Bun denominator artifacts satisfy the
-benchmark denominator contract. Artifacts containing `hot_paths_simulation` or
+That lane does not promote the Node/Bun denominator claim. A measured,
+fairness-compliant Node/Bun denominator is now linked at
+`docs/perf/e2_denominator_bundle_v1` (bd-fqlfw.2.6/2.7), but it shows the native
+baseline interpreter at ~1087x slower than Node and ~1264x slower than Bun
+(`meets_3x_floor=false` for both). `FE-CLAIM-010` therefore remains `target` -
+the engine does not yet clear the >= 3x floor, and promotion to observed would
+require it to actually do so. Artifacts containing `hot_paths_simulation` or
 `MockCertificate` are fixture-only and the gate rejects them as backing evidence
 for observed performance claims.
 
@@ -48,15 +52,17 @@ Operator workflow, failure triage, and comparison steps live in
 | `FE-CLAIM-001` | runtime | `README.md:17` | `observed` | allow observed native-runtime wording with release-gate caveat | `bd-1qkrc` |
 | `FE-CLAIM-002` | security | `README.md:137` | `observed` | allow observed probabilistic guardplane with live decision artifacts | `bd-1ypps` |
 | `FE-CLAIM-003` | replay | `README.md:138` | `observed` | allow observed replay coverage, counterfactual replay support, and fixed-input CLI artifact proof | `bd-2488a` |
-| `FE-CLAIM-004` | security | `README.md:139` | `observed` | allow observed signed-decision-receipt surface via A.1-A.3 (receipt proof handle, transparency log + MMR proofs, TEE attestation policy + live quote) cross-referenced by the RGC gate + replay (`bd-cixqu.1.4`) | `bd-1qkrc` |
+| `FE-CLAIM-004` | security | `README.md:139` | `observed` | allow observed signed-decision-receipt surface: receipt proof handle (`bd-cixqu.1.1`) + transparency log with MMR inclusion/consistency proofs (`bd-cixqu.1.2`), cross-referenced by the RGC gate + replay (`bd-cixqu.1.4`). TEE attestation split out to `FE-CLAIM-004-TEE` by CEI-C.1 | `bd-1qkrc` |
+| `FE-CLAIM-004-TEE` | security | `README.md:139` | `hypothesis` | downgrade until a real TEE SDK + live-quote proof artifacts ship — `tee_live_quote.rs` simulates every quote by default (`tee-real-sdk` unwired) | `bd-sde5e.3.1` |
 | `FE-CLAIM-005` | operations | `README.md:140` | `target` | downgrade until live quarantine propagation proof exists | `bd-ls22h` |
-| `FE-CLAIM-006` | security | `README.md:141` | `observed` | compile-time capability-typed rejection via C.1-C.4 (effect_set IR2, lowering refusal, 16-scenario red-team corpus, RGC gate + replay) | `bd-cixqu.3.5` |
+| `FE-CLAIM-006` | security | `README.md:141` | `observed` | compile-time capability-typed ambient-authority rejection on the shipped hostcall/import edges (effect_set IR2, lowering refusal, 16-scenario red-team corpus, RGC gate + replay). The end-to-end TS-to-IR contract over all ambient constructs is TARGETED (CEI-C.2) | `bd-cixqu.3.5` |
+| `FE-CLAIM-TEST262` | conformance | `README.md:545` | `target` | downgrade until full tc39/test262 corpus conformance — the shipped gate runs a provisional checked-in subset (`full_suite_claim_allowed=false`) | `bd-sde5e.4.1` |
 | `FE-CLAIM-007` | operations | `README.md:93-99` | `observed` | allow documented CLI smoke workflow reference | `bd-3tsah` |
-| `FE-CLAIM-008` | operations | `README.md:2346` | `observed` | allow unsupported-surfaces support policy wording | `bd-1qkrc` |
-| `FE-CLAIM-009` | evidence | `README.md:213` | `observed` | gate refuses OBSERVED state without repro.lock (bd-cixqu.4.3); all OBSERVED rows have reproducibility bundles | `bd-cixqu.4.4` |
-| `FE-CLAIM-010` | performance | `docs/plans/PLAN_TO_CREATE_FRANKEN_ENGINE.md:56-58` | `target` | downgrade until live Node/Bun denominator artifacts replace targeted placeholder throughput evidence | `bd-y6v8s` |
+| `FE-CLAIM-008` | operations | `README.md:2422` | `observed` | allow unsupported-surfaces support policy wording | `bd-1qkrc` |
+| `FE-CLAIM-009` | evidence | `README.md:215` | `observed` | gate refuses OBSERVED state without repro.lock (bd-cixqu.4.3); all OBSERVED rows have reproducibility bundles | `bd-cixqu.4.4` |
+| `FE-CLAIM-010` | performance | `docs/plans/PLAN_TO_CREATE_FRANKEN_ENGINE.md:56-58` | `target` | measured denominator linked (`docs/perf/e2_denominator_bundle_v1`); engine ~1087x/1264x slower than Node/Bun, `meets_3x_floor=false`, so stays target | `bd-y6v8s` |
 | `FE-CLAIM-011` | security | `docs/plans/PLAN_TO_CREATE_FRANKEN_ENGINE.md:58` | `observed` | allow observed red-team compromise-rate comparison with baseline validation | `bd-1vwza` |
-| `FE-CLAIM-012` | security | `docs/plans/PLAN_TO_CREATE_FRANKEN_ENGINE.md:59-60` | `observed` | allow observed signal-to-action timestamp computation with latency artifacts | `bd-38mby` |
+| `FE-CLAIM-012` | security | `docs/plans/PLAN_TO_CREATE_FRANKEN_ENGINE.md:59-60` | `target` | downgraded observed->target (CEI B.2): no production-measured containment-latency artifact; the gate fails closed without `CONTAINMENT_LATENCY_METRIC_INPUT` | `bd-38mby` |
 | `FE-CLAIM-013` | replay | `docs/plans/PLAN_TO_CREATE_FRANKEN_ENGINE.md:60` | `observed` | allow observed replay coverage gate plus byte-identical fixed-input CLI artifact proof | `bd-2488a` |
 | `FE-CLAIM-014` | capability | `docs/plans/PLAN_TO_CREATE_FRANKEN_ENGINE.md:61` | `observed` | three named production feature proof bundles ship (IFC declassification, deterministic replay, red-team compromise rate) — F.5 gate `scripts/run_rgc_production_feature_catalog.sh` validates all three with per-feature sha256 manifest hashes | `bd-cixqu.6.6` |
 | `FE-CLAIM-015` | ifc | `docs/plans/PLAN_TO_CREATE_FRANKEN_ENGINE.md:96` | `observed` | allow observed IFC with signed declassification receipts | `bd-dpfvh` |
@@ -66,7 +72,11 @@ Operator workflow, failure triage, and comparison steps live in
 | `FE-CLAIM-019` | optimization | `docs/plans/PLAN_TO_CREATE_FRANKEN_ENGINE.md:636` | `hypothesis` | STAY_HYPOTHESIS (G.10): `optimization_proof_carriers.rs` returns Verified unconditionally — no real model checker or differential oracle | `bd-csnqb` |
 | `FE-CLAIM-020` | policy | `docs/plans/PLAN_TO_CREATE_FRANKEN_ENGINE.md:744` | `hypothesis` | STAY_HYPOTHESIS (G.10): end-to-end compiler composes 018/019/021 and inherits their simulated verdicts | `bd-csnqb` |
 | `FE-CLAIM-021` | policy | `docs/plans/PLAN_TO_CREATE_FRANKEN_ENGINE.md:828-898` | `hypothesis` | STAY_HYPOTHESIS (G.10): Policy Theorem Engine monotonicity/non-interference/attenuation checks are simulated, not solver-backed | `bd-csnqb` |
-| `FE-CLAIM-024` | integration | `README.md:2054` | `observed` | sibling-repo integration verification across all 6 declared siblings (bd-cixqu.13.1 full-integration lane records pass/skipped/failed per sibling) | `bd-cixqu.13.3` |
+| `FE-CLAIM-022` | runtime | `README.md:1408` | `observed` | cross-runtime lockstep oracle (Node/Bun differential harness, divergence taxonomy, RGC gate + replay); the real Node lane runs against `/usr/bin/nodejs` (CEI B.2) | `bd-cixqu.9` |
+| `FE-CLAIM-023` | reproducibility | `README.md:1768` | `target` | downgraded observed->target (CEI B.2): cross-platform identical-hash evidence (Linux/macOS/Windows × x64/arm64) requires the multi-platform CI matrix; a single host backs only the Linux×x64 lane | `bd-cixqu.11.7` |
+| `FE-CLAIM-024` | integration | `README.md:2116` | `observed` | sibling-repo integration verification across all 6 declared siblings (bd-cixqu.13.1 full-integration lane records pass/skipped/failed per sibling) | `bd-cixqu.13.3` |
+| `FE-CLAIM-025` | evidence | `README.md:2491` | `observed` | CEI H.2 reflexive soundness: the integrity capstone composes the A.1/A.3 lattice + H.1 Merkle ledger + wording gate + D.3 Test262 posture; 025's own row is ledger-committed, the A.5 adversarial corpus rejects over-promotion fixtures, and the G.3 no-mock drill reddens the capstone on any injected over-promotion; H.4 machine-checks the state<=ceiling(tier) meta-soundness lemma in Lean 4 (proofs/lean4/ClaimEvidenceSoundness.lean, scripts/run_cei_soundness_lean_proof.sh, sorryAx-free) | `bd-sde5e.8.2` |
+| `FE-CLAIM-026` | conformance | `docs/plans/PLAN_TO_CREATE_FRANKEN_ENGINE.md:1419-1432` | `target` | weighted ES2020 coverage summary linked (`docs/coverage/es2020_coverage_summary_bundle_v1`, bd-fqlfw.7.4); the engine EXECUTES 6201/47514 = ~13.05% of the observable surface (executed = evaluated without an engine error / correctly rejected; NOT a conformance pass-rate — the stricter harness-based conformance is far lower, ~0.25%, `docs/test262_real_corpus_pass_rate_v1.json`); weakest view `builtin` (~1.67%); six weighted views + a floor prevent a single gamed percentage, so stays target | `bd-fqlfw.7.4` |
 
 ## Failure Output
 

@@ -12,9 +12,15 @@
 //! of the argument register values, and a deterministic timestamp sourced from
 //! the interpreter's instruction counter (so two replays produce byte-identical
 //! records). The live recorder is exposed via `InterpreterCore::hostcall_telemetry`.
-//! [`crate::forensic_replayer::IncidentTrace::with_telemetry_log`] copies the
-//! recorder's records into an incident trace's `telemetry_log`, giving the
-//! Probabilistic Guardplane the runtime evidence feed it expects.
+//! [`crate::forensic_replayer::IncidentTrace::with_telemetry_recorder`] copies
+//! the recorder's records and drop counts into an incident trace, giving the
+//! Probabilistic Guardplane a completeness-aware runtime evidence feed.
+//! A zero drop count proves only that every record submitted by an instrumented
+//! dispatch site was retained; each policy-relevant dispatch family must still
+//! route through a telemetry wrapper. `module:require` and `module:import`
+//! joined that covered set in bd-juz83. Capability denials happen before
+//! dispatch and remain in the hostcall decision log rather than this
+//! post-dispatch stream.
 //!
 //! Plan reference: Section 10.5, item 3.
 //! Cross-refs: 9A.2 (Probabilistic Guardplane), 9E.9 (normative
@@ -34,6 +40,11 @@ use crate::security_epoch::SecurityEpoch;
 // ---------------------------------------------------------------------------
 
 const TELEMETRY_SCHEMA_DEF: &[u8] = b"hostcall-telemetry-schema-v1";
+
+/// Domain separator for completeness evidence mixed into recorder and
+/// snapshot hashes. The suffix is omitted entirely for a clean stream so
+/// hashes produced before drop accounting remain byte-for-byte stable.
+const TELEMETRY_DROP_COUNTS_HASH_DOMAIN: &[u8] = b"telemetry-drop-counts-v1";
 
 /// Default bounded channel capacity.
 const DEFAULT_CHANNEL_CAPACITY: usize = 8192;
@@ -70,6 +81,8 @@ pub enum HostcallType {
     Builtin,
     /// Internal promise/microtask machinery (`promise:resolve`, `promise:all`, …).
     Promise,
+    /// Module loading (`module:require`, `module:import`).
+    ModuleLoad,
 }
 
 impl fmt::Display for HostcallType {
@@ -89,6 +102,7 @@ impl fmt::Display for HostcallType {
             Self::Console => "console",
             Self::Builtin => "builtin",
             Self::Promise => "promise",
+            Self::ModuleLoad => "module-load",
         };
         f.write_str(s)
     }
@@ -106,6 +120,11 @@ impl HostcallType {
             Self::TimerCreate
         } else if tag.starts_with("promise:") {
             Self::Promise
+        } else if matches!(
+            tag,
+            "module:require" | "module:import" | "module.import" | "module_load"
+        ) {
+            Self::ModuleLoad
         } else if tag.starts_with("number:") || tag.starts_with("builtin:") {
             Self::Builtin
         } else if tag == "fs:read" || tag == "fs.read" || tag == "fs_read" {
@@ -120,10 +139,6 @@ impl HostcallType {
             Self::EnvRead
         } else if tag == "heap_allocate" {
             Self::MemAlloc
-        } else if tag == "ifc.check_flow" {
-            Self::Builtin
-        } else if tag.starts_with("module:") || tag.starts_with("module.") || tag == "module_load" {
-            Self::Builtin
         } else {
             Self::Builtin
         }
@@ -212,7 +227,9 @@ pub struct HostcallTelemetryRecord {
     pub extension_id: String,
     /// Category of hostcall.
     pub hostcall_type: HostcallType,
-    /// Capability exercised by this hostcall.
+    /// Capability class exercised by this hostcall. This classifies the
+    /// operation; consult the hostcall decision log to prove that a live gate
+    /// granted it (some non-HostCall IR effects are not yet gated).
     pub capability_used: RuntimeCapability,
     /// SHA-256 hash of the call arguments (privacy-preserving).
     pub arguments_hash: ContentHash,
@@ -402,10 +419,17 @@ pub struct TelemetrySnapshot {
     pub record_id_at_snapshot: Option<u64>,
     /// Number of records in the log at snapshot time.
     pub record_count: u64,
-    /// Content hash of all records up to this point (rolling hash).
+    /// Content hash of all retained records up to this point and, when any
+    /// submissions were refused, the per-reason drop counts. Zero-drop
+    /// snapshots retain the historical retained-record rolling hash.
     pub rolling_hash: ContentHash,
     /// Security epoch at snapshot time.
     pub epoch: SecurityEpoch,
+    /// Per-reason counts of records refused before snapshot time. The default
+    /// preserves compatibility with snapshots persisted before this field
+    /// existed (bd-7sn6n).
+    #[serde(default)]
+    pub drop_counts: TelemetryDropCounts,
 }
 
 // ---------------------------------------------------------------------------
@@ -440,6 +464,7 @@ impl Default for RecorderConfig {
 /// - `timestamp_ns` is monotonically non-decreasing.
 /// - Append-only log with bounded capacity (backpressure on full).
 /// - Supports snapshot/checkpoint for replay alignment.
+///
 /// Per-reason counts of telemetry records the recorder refused to append
 /// (and therefore dropped). Each [`TelemetryRecorder::record`] call that
 /// returns `Err(TelemetryError::…)` increments the matching counter BEFORE
@@ -455,6 +480,7 @@ impl Default for RecorderConfig {
 /// guardplane observes is incomplete and must not be treated as a clean,
 /// event-free stream.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct TelemetryDropCounts {
     /// Records dropped because the channel was at capacity (backpressure).
     pub channel_full: u64,
@@ -610,8 +636,9 @@ impl TelemetryRecorder {
                 None
             },
             record_count: self.records.len() as u64,
-            rolling_hash: self.rolling_hash,
+            rolling_hash: rolling_hash_with_drop_counts(self.rolling_hash, self.dropped),
             epoch: self.current_epoch,
+            drop_counts: self.dropped,
         };
         self.snapshots.push(snap.clone());
         snap
@@ -658,14 +685,15 @@ impl TelemetryRecorder {
     }
 
     /// Total telemetry records dropped across all reasons (see
-    /// [`Self::drop_counts`]). Zero on a healthy, complete stream.
+    /// [`Self::drop_counts`]). Zero means all submitted records were retained;
+    /// dispatch-site capture coverage is established separately.
     pub fn dropped_records(&self) -> u64 {
         self.dropped.total()
     }
 
-    /// Whether the recorder has dropped any record — i.e. the telemetry
-    /// stream is incomplete and the guardplane must not read an absence of
-    /// events as an absence of activity.
+    /// Whether the recorder has dropped any submitted record. A true result
+    /// makes the telemetry stream incomplete; a false result does not by
+    /// itself prove that every dispatch family is instrumented.
     pub fn has_dropped_records(&self) -> bool {
         self.dropped.any()
     }
@@ -685,8 +713,13 @@ impl TelemetryRecorder {
         &self.snapshots
     }
 
-    /// Compute the overall content hash of all records.
+    /// Compute the overall content hash of all records and any observed drops.
     /// Records are sorted by record_id for insertion-order independence.
+    ///
+    /// Zero-drop recorder streams retain their historical hash. Streams with
+    /// refused submissions add a domain-separated drop-count suffix so a
+    /// retained record prefix cannot hash identically after a refused
+    /// security-relevant tail (bd-0332s).
     pub fn content_hash(&self) -> ContentHash {
         let mut buf = Vec::new();
         let mut sorted: Vec<_> = self.records.iter().collect();
@@ -694,6 +727,9 @@ impl TelemetryRecorder {
         for record in &sorted {
             buf.extend_from_slice(&record.record_id.to_le_bytes());
             buf.extend_from_slice(record.content_hash.as_bytes());
+        }
+        if self.dropped.any() {
+            append_drop_counts_hash_suffix(&mut buf, self.dropped);
         }
         ContentHash::compute(&buf)
     }
@@ -708,6 +744,31 @@ impl TelemetryRecorder {
         }
         tampered
     }
+}
+
+fn append_drop_counts_hash_suffix(buf: &mut Vec<u8>, drop_counts: TelemetryDropCounts) {
+    buf.extend_from_slice(TELEMETRY_DROP_COUNTS_HASH_DOMAIN);
+    buf.extend_from_slice(&drop_counts.channel_full.to_le_bytes());
+    buf.extend_from_slice(&drop_counts.monotonicity_violation.to_le_bytes());
+    buf.extend_from_slice(&drop_counts.empty_extension_id.to_le_bytes());
+}
+
+fn rolling_hash_with_drop_counts(
+    retained_records_hash: ContentHash,
+    drop_counts: TelemetryDropCounts,
+) -> ContentHash {
+    if !drop_counts.any() {
+        return retained_records_hash;
+    }
+
+    let mut buf = Vec::with_capacity(
+        retained_records_hash.as_bytes().len()
+            + TELEMETRY_DROP_COUNTS_HASH_DOMAIN.len()
+            + 3 * std::mem::size_of::<u64>(),
+    );
+    buf.extend_from_slice(retained_records_hash.as_bytes());
+    append_drop_counts_hash_suffix(&mut buf, drop_counts);
+    ContentHash::compute(&buf)
 }
 
 // ---------------------------------------------------------------------------
@@ -931,6 +992,7 @@ mod tests {
         assert_eq!(HostcallType::Console.to_string(), "console");
         assert_eq!(HostcallType::Builtin.to_string(), "builtin");
         assert_eq!(HostcallType::Promise.to_string(), "promise");
+        assert_eq!(HostcallType::ModuleLoad.to_string(), "module-load");
     }
 
     #[test]
@@ -946,6 +1008,22 @@ mod tests {
         assert_eq!(
             HostcallType::from_capability_tag("promise:all"),
             HostcallType::Promise
+        );
+        assert_eq!(
+            HostcallType::from_capability_tag("module:require"),
+            HostcallType::ModuleLoad
+        );
+        assert_eq!(
+            HostcallType::from_capability_tag("module:import"),
+            HostcallType::ModuleLoad
+        );
+        assert_eq!(
+            HostcallType::from_capability_tag("module.import"),
+            HostcallType::ModuleLoad
+        );
+        assert_eq!(
+            HostcallType::from_capability_tag("module_load"),
+            HostcallType::ModuleLoad
         );
         assert_eq!(
             HostcallType::from_capability_tag("number:parse_int"),
@@ -992,6 +1070,7 @@ mod tests {
             HostcallType::Console,
             HostcallType::Builtin,
             HostcallType::Promise,
+            HostcallType::ModuleLoad,
         ] {
             // SAFETY: HostcallType derives Serialize and has no non-serializable fields.
             // to_string on derived Serialize types only fails on writer errors (impossible with String).
@@ -1507,6 +1586,70 @@ mod tests {
         let restored: TelemetrySnapshot =
             serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(snap, restored);
+    }
+
+    #[test]
+    fn clean_snapshot_preserves_legacy_rolling_hash() {
+        let mut recorder = test_recorder();
+        recorder
+            .record(1000, test_input("ext-001", HostcallType::FsRead))
+            .expect("operation should succeed for valid inputs");
+        let legacy_rolling_hash = *recorder.rolling_hash();
+
+        let snapshot = recorder.snapshot();
+
+        assert_eq!(snapshot.rolling_hash, legacy_rolling_hash);
+        assert_eq!(snapshot.drop_counts, TelemetryDropCounts::default());
+    }
+
+    #[test]
+    fn overflow_snapshot_persists_drop_counts_and_hashes_them() {
+        let mut recorder = small_recorder(1);
+        recorder
+            .record(1, test_input("ext-001", HostcallType::FsRead))
+            .expect("first record fits");
+        let clean_snapshot = recorder.snapshot();
+        assert!(matches!(
+            recorder.record(2, test_input("ext-001", HostcallType::FsWrite)),
+            Err(TelemetryError::ChannelFull)
+        ));
+
+        let incomplete_snapshot = recorder.snapshot();
+        assert_eq!(
+            incomplete_snapshot.record_count,
+            clean_snapshot.record_count
+        );
+        assert_eq!(incomplete_snapshot.drop_counts.channel_full, 1);
+        assert_ne!(
+            incomplete_snapshot.rolling_hash,
+            clean_snapshot.rolling_hash
+        );
+
+        let json = serde_json::to_string(&incomplete_snapshot).expect("serialize snapshot");
+        let restored: TelemetrySnapshot =
+            serde_json::from_str(&json).expect("deserialize snapshot");
+        assert_eq!(restored, incomplete_snapshot);
+    }
+
+    #[test]
+    fn legacy_snapshot_without_drop_counts_defaults_to_clean() {
+        let mut recorder = test_recorder();
+        recorder
+            .record(1000, test_input("ext-001", HostcallType::FsRead))
+            .expect("operation should succeed for valid inputs");
+        let snapshot = recorder.snapshot();
+        let mut value = serde_json::to_value(&snapshot).expect("serialize snapshot");
+        value
+            .as_object_mut()
+            .expect("snapshot serializes as a JSON object")
+            .remove("drop_counts");
+
+        let restored: TelemetrySnapshot =
+            serde_json::from_value(value).expect("legacy snapshot must deserialize");
+
+        assert_eq!(restored.drop_counts, TelemetryDropCounts::default());
+        assert_eq!(restored.rolling_hash, snapshot.rolling_hash);
+        assert_eq!(restored.record_count, snapshot.record_count);
     }
 
     // -----------------------------------------------------------------------
@@ -2353,6 +2496,7 @@ mod tests {
         recorder
             .record(2, test_input("ext-001", HostcallType::FsRead))
             .unwrap();
+        let complete_prefix_hash = recorder.content_hash();
 
         // Mirror the production swallow: `let _ = recorder.record(...)`.
         let dropped = test_input("attacker", HostcallType::FsWrite);
@@ -2369,6 +2513,11 @@ mod tests {
         assert_eq!(recorder.drop_counts().channel_full, 1);
         assert_eq!(recorder.drop_counts().monotonicity_violation, 0);
         assert_eq!(recorder.drop_counts().empty_extension_id, 0);
+        assert_ne!(
+            recorder.content_hash(),
+            complete_prefix_hash,
+            "a refused tail must change the completeness-aware recorder hash"
+        );
 
         // A second overflow accumulates (monotonic signal).
         let _ = recorder.record(4, test_input("attacker", HostcallType::FsWrite));
@@ -2461,5 +2610,14 @@ mod tests {
             serde_json::from_value(value).expect("legacy recorder must deserialize");
         assert_eq!(restored.dropped_records(), 0);
         assert!(!restored.has_dropped_records());
+    }
+
+    #[test]
+    fn partial_drop_counts_json_defaults_missing_reasons() {
+        let counts: TelemetryDropCounts =
+            serde_json::from_str(r#"{"channel_full":3}"#).expect("decode partial drop counts");
+        assert_eq!(counts.channel_full, 3);
+        assert_eq!(counts.monotonicity_violation, 0);
+        assert_eq!(counts.empty_extension_id, 0);
     }
 }

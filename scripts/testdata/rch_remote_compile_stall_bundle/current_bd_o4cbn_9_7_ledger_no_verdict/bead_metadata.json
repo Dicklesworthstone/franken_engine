@@ -1,0 +1,8 @@
+[
+  {
+    "id": "bd-o4cbn.9.7",
+    "title": "PERF-ALIEN-1.7: Cross-repo handoff compat - franken_node must consume Merkle envelopes",
+    "status": "blocked",
+    "assignee": "BrightRaven"
+  }
+]

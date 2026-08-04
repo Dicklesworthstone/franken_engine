@@ -1,0 +1,60 @@
+{
+  "allowed_state": "observed",
+  "bundle_dir": "docs/evidence/FE-CLAIM-025",
+  "bundle_files": [
+    {
+      "git_tracked": true,
+      "path": "docs/evidence/FE-CLAIM-025/env.json",
+      "role": "bundle_file",
+      "sha256": "9084768ba7aacc061777c3436a38408068c36347f960e626e6be0a5923d8d910",
+      "size_bytes": 986,
+      "source": "worktree"
+    },
+    {
+      "git_tracked": true,
+      "path": "docs/evidence/FE-CLAIM-025/manifest.json",
+      "role": "bundle_file",
+      "sha256": "b101e38a203681635c989c4bb3bdc7e04665408cda7d898fa60727b6c46a3af7",
+      "size_bytes": 2184,
+      "source": "worktree"
+    },
+    {
+      "git_tracked": true,
+      "path": "docs/evidence/FE-CLAIM-025/repro.lock",
+      "role": "repro_lock",
+      "sha256": "2fdee1ca3fe0ad438f48289ca368175b5991717f8117a3164fc4a4ae19cbffa5",
+      "size_bytes": 1650,
+      "source": "worktree"
+    }
+  ],
+  "claim_id": "FE-CLAIM-025",
+  "generated_at_utc": "2026-06-21T04:20:21.838857+00:00",
+  "hash_algorithm": "sha256",
+  "owning_bead": "bd-sde5e.8.2",
+  "receipt": {
+    "backfilled": false,
+    "generated_by": "live adversarial-corpus test run (SwiftSquirrel, CEI H.2 bd-sde5e.8.2): 4/4 passed",
+    "receipt_sha256": "de6a12ba0b5e944139d47b399231d208061fcbb25dd9b04badfea401f2a7126e",
+    "verification_result": "passed"
+  },
+  "repro_lock": {
+    "git_tracked": true,
+    "path": "docs/evidence/FE-CLAIM-025/repro.lock",
+    "role": "repro_lock",
+    "sha256": "2fdee1ca3fe0ad438f48289ca368175b5991717f8117a3164fc4a4ae19cbffa5",
+    "size_bytes": 1650,
+    "source": "worktree"
+  },
+  "schema_version": "franken-engine.evidence-manifest.v1",
+  "source_commit": "7521b74d1e311e005ea734c5fff0353bf79dda10",
+  "verifiable_inputs": [
+    {
+      "git_tracked": true,
+      "path": "crates/franken-engine/tests/claim_evidence_adversarial_corpus.rs",
+      "role": "primary_artifact",
+      "sha256": "f0c41551197890b131a32260b3a63a8f95ceccfcafb99edfdd8f8e390c5361b7",
+      "size_bytes": 6893,
+      "source": "head_blob"
+    }
+  ]
+}

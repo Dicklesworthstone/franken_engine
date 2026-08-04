@@ -229,9 +229,8 @@ fn export_named_clause() {
         .expect("named export");
     match &tree.body[0] {
         Statement::Export(decl) => {
-            assert!(
-                matches!(&decl.kind, ExportKind::NamedClause(clause) if clause == "{ foo, bar }")
-            );
+            assert!(matches!(&decl.kind, ExportKind::NamedClause(clause)
+                    if clause.canonical_head() == "{ foo, bar }" && clause.source().is_none()));
         }
         _ => panic!("expected export"),
     }

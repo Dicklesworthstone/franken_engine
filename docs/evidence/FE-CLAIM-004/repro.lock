@@ -1,0 +1,53 @@
+{
+  "commands": {
+    "cleanup": "cargo clean",
+    "environment_setup": "export CARGO_INCREMENTAL=0",
+    "verification": "./scripts/run_rgc_signed_decision_receipt.sh ci"
+  },
+  "determinism": {
+    "environment_isolation": "containerized",
+    "mode": "strict",
+    "reproducible_builds": true,
+    "seed_control": "fixed"
+  },
+  "expected_outputs": {
+    "deterministic_trace": true,
+    "evidence_generated": true,
+    "exit_code": 0,
+    "verification_success": true
+  },
+  "generated_at_utc": "2026-05-25T01:28:51.091200+00:00",
+  "inputs": {
+    "dependencies": [
+      "Cargo.toml",
+      "Cargo.lock",
+      "crates/franken-engine/Cargo.toml"
+    ],
+    "primary_artifact": {
+      "hash": "92fe7f952d0baa307ebb77267ae4b653da2d4b24afd5d3c526a1617f22ca803c",
+      "path": "scripts/run_rgc_signed_decision_receipt.sh",
+      "size_bytes": 11190
+    }
+  },
+  "lock_id": "lock-fe-claim-004-20260525012851",
+  "manifest_id": "manifest-fe-claim-004-20260525",
+  "replay": {
+    "command_sequence": [
+      "./scripts/run_rgc_signed_decision_receipt.sh ci"
+    ],
+    "environment_vars": {
+      "CARGO_INCREMENTAL": "0",
+      "RUSTFLAGS": "-C linker=cc"
+    },
+    "working_directory": "/data/projects/franken_engine"
+  },
+  "schema_hash": "sha256:9f0a1b2c3d4e5f6789abcdef0123456789abcdef0123456789abcdef01234567",
+  "schema_version": "frankenengine.reproducibility.lock.v1",
+  "source_commit": "87651f49ebfd1e956ddb5b037ce655e5f9cdb24a",
+  "verification": {
+    "freshness_check": "required",
+    "hash_algorithm": "sha256",
+    "replay_validation": "automated",
+    "signature_required": false
+  }
+}

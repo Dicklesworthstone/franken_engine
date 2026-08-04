@@ -7,9 +7,6 @@ use frankenengine_extension_host::{
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
-const GOLDEN: &str = include_str!("golden_vectors/delegate_policy_wire_v1.json");
-const GOLDEN_CASES: &str = include_str!("golden_vectors/delegate_policy_wire_cases_v1.json");
-
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 struct DelegatePolicyWireFixture {
     fixture_schema_version: String,
@@ -191,9 +188,9 @@ fn delegate_policy_wire_v1_matches_golden_snapshot() {
     let expected = fixture();
     let actual_json = serde_json::to_string_pretty(&expected).expect("serialize fixture") + "\n";
 
-    assert_eq!(actual_json, GOLDEN);
+    insta::assert_snapshot!("delegate_policy_wire_v1", actual_json);
     let decoded: DelegatePolicyWireFixture =
-        serde_json::from_str(GOLDEN).expect("golden fixture should decode");
+        serde_json::from_str(&actual_json).expect("golden fixture should decode");
     assert_eq!(decoded, expected);
 }
 
@@ -202,9 +199,9 @@ fn delegate_policy_wire_case_set_matches_golden_snapshot() {
     let expected = case_set();
     let actual_json = serde_json::to_string_pretty(&expected).expect("serialize cases") + "\n";
 
-    assert_eq!(actual_json, GOLDEN_CASES);
+    insta::assert_snapshot!("delegate_policy_wire_case_set", actual_json);
     let decoded: DelegatePolicyWireCaseSet =
-        serde_json::from_str(GOLDEN_CASES).expect("golden case set should decode");
+        serde_json::from_str(&actual_json).expect("golden case set should decode");
     assert_eq!(decoded, expected);
 
     let case_count = decoded.delegate_cell_policy_cases.len()

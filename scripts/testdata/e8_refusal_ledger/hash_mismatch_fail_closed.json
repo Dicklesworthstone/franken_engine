@@ -1,0 +1,42 @@
+{
+  "schema_version": "franken-engine.e8-refusal-ledger.v1",
+  "ledger_id": "e8-refusal-ledger-hash-mismatch",
+  "run_id": "frankenctl-run-hash-mismatch",
+  "contract_id": "contract-e8-hash-mismatch",
+  "result_class": "fail_closed",
+  "threat_model_scope": "explicit_flow_ifc_v1",
+  "certifier_input_allowed": false,
+  "positive_non_use_claim_allowed": false,
+  "must_block_certificate": true,
+  "analyzed_surface_count": 1,
+  "unanalyzed_surface_count": 0,
+  "degraded_surface_count": 0,
+  "refusal_codes": [
+    {
+      "code": "run_input_hash_mismatch",
+      "class": "fail_closed",
+      "source_ref_id": "data-contract-error",
+      "remediation": "fix the contract source hash or rerun against the intended source"
+    }
+  ],
+  "source_refs": [
+    {
+      "id": "data-contract-error",
+      "surface": "data_contract_binding",
+      "path": "crates/franken-engine/src/data_contract.rs",
+      "symbol": "DataContractError::RunInputContentHashMismatch"
+    }
+  ],
+  "evidence_refs": [
+    {
+      "id": "run-source",
+      "kind": "source_hash",
+      "status": "malformed",
+      "artifact_path": "artifacts/e8/hash_mismatch/source_hash.json"
+    }
+  ],
+  "remediation_actions": [
+    "repair the contract source hash",
+    "rerun frankenctl with the audited source file"
+  ]
+}

@@ -181,9 +181,136 @@ array_to_json() {
   printf '%s\n' "$@" | jq -R . | jq -s .
 }
 
-is_allowed_env() {
+# Split the direct `env` prefix without evaluating it. This deliberately handles
+# only the simple shell quoting used by proof command text: whitespace-separated
+# words, single/double quotes, and backslash escapes. It never performs command,
+# parameter, glob, or arithmetic expansion.
+declare -a simple_shell_words=()
+split_simple_shell_words() {
+  local input="$1"
+  local char=""
+  local word=""
+  local state="unquoted"
+  local escaped="false"
+  local word_started="false"
+  local unsafe_expansion="false"
+  local index
+
+  simple_shell_words=()
+  for ((index = 0; index < ${#input}; index += 1)); do
+    char="${input:index:1}"
+    case "$state" in
+      unquoted)
+        if [[ "$escaped" == "true" ]]; then
+          word+="$char"
+          escaped="false"
+          word_started="true"
+        elif [[ "$char" == "\\" ]]; then
+          escaped="true"
+          word_started="true"
+        elif [[ "$char" == "'" ]]; then
+          state="single"
+          word_started="true"
+        elif [[ "$char" == '"' ]]; then
+          state="double"
+          word_started="true"
+        elif [[ "$char" == '$' || "$char" == '`' || "$char" == ';' ||
+          "$char" == '&' || "$char" == '|' || "$char" == '<' ||
+          "$char" == '>' || "$char" == '(' || "$char" == ')' ||
+          "$char" == '*' || "$char" == '?' || "$char" == '[' ||
+          "$char" == ']' || "$char" == '{' || "$char" == '}' ||
+          "$char" == '#' || "$char" == '~' ]]; then
+          unsafe_expansion="true"
+          word+="$char"
+          word_started="true"
+        elif [[ "$char" =~ [[:space:]] ]]; then
+          if [[ "$word_started" == "true" ]]; then
+            simple_shell_words+=("$word")
+            word=""
+            word_started="false"
+          fi
+        else
+          word+="$char"
+          word_started="true"
+        fi
+        ;;
+      single)
+        if [[ "$char" == "'" ]]; then
+          state="unquoted"
+        else
+          word+="$char"
+        fi
+        ;;
+      double)
+        if [[ "$escaped" == "true" ]]; then
+          word+="$char"
+          escaped="false"
+        elif [[ "$char" == "\\" ]]; then
+          escaped="true"
+        elif [[ "$char" == '"' ]]; then
+          state="unquoted"
+        elif [[ "$char" == '$' || "$char" == '`' ]]; then
+          unsafe_expansion="true"
+          word+="$char"
+        else
+          word+="$char"
+        fi
+        ;;
+    esac
+  done
+
+  if [[ "$escaped" == "true" || "$state" != "unquoted" || "$unsafe_expansion" == "true" ]]; then
+    return 1
+  fi
+  if [[ "$word_started" == "true" ]]; then
+    simple_shell_words+=("$word")
+  fi
+}
+
+rustflags_has_effective_linker_policy() {
+  local rustflags="$1"
+  local -a rustflag_tokens=()
+  local index
+  local effective_state="unset"
+
+  read -r -a rustflag_tokens <<<"$rustflags"
+  for ((index = 0; index < ${#rustflag_tokens[@]}; index += 1)); do
+    case "${rustflag_tokens[index]}" in
+      -Clinker-features=-lld)
+        effective_state="disabled"
+        ;;
+      -Clinker-features=*)
+        effective_state="other"
+        ;;
+      -C)
+        case "${rustflag_tokens[index + 1]:-}" in
+          linker-features=-lld)
+            effective_state="disabled"
+            ;;
+          linker-features=*)
+            effective_state="other"
+            ;;
+        esac
+        ;;
+    esac
+  done
+  [[ "$effective_state" == "disabled" ]]
+}
+
+is_allowed_remote_env() {
   case "$1" in
-    CARGO_TARGET_DIR|CARGO_INCREMENTAL|CARGO_BUILD_JOBS|CARGO_PROFILE_DEV_DEBUG|RCH_VISIBILITY|RCH_PRIORITY|RCH_DAEMON_WAIT_RESPONSE_TIMEOUT_SECS|RUSTFLAGS|RUSTUP_TOOLCHAIN)
+    CARGO_TARGET_DIR|CARGO_INCREMENTAL|CARGO_BUILD_JOBS|CARGO_PROFILE_DEV_DEBUG|RUSTFLAGS|RUSTUP_TOOLCHAIN)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+is_allowed_client_env() {
+  case "$1" in
+    RCH_VISIBILITY|RCH_PRIORITY|RCH_DAEMON_WAIT_RESPONSE_TIMEOUT_SECS|RCH_REQUIRE_REMOTE|RCH_QUEUE_WHEN_BUSY|RCH_TEST_TIMEOUT_SEC|RCH_BUILD_TIMEOUT_SEC)
       return 0
       ;;
     *)
@@ -204,10 +331,11 @@ normalize_command() {
 normalized_command="$(normalize_command "$command_text")"
 safe_bead="$(safe_token "$bead_id")"
 safe_target_dir="/tmp/rch_target_franken_engine_${safe_bead}"
-safe_env_prefix="CARGO_TARGET_DIR=${safe_target_dir} CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1"
+safe_client_prefix="env -u CARGO_ENCODED_RUSTFLAGS"
 if [[ "$evidence_requires_visibility" == "true" ]]; then
-  safe_env_prefix="${safe_env_prefix} RCH_VISIBILITY=verbose"
+  safe_client_prefix="${safe_client_prefix} RCH_VISIBILITY=verbose"
 fi
+safe_env_prefix="CARGO_TARGET_DIR=${safe_target_dir} CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1"
 
 command_kind="unknown"
 if [[ "$normalized_command" =~ (^|[[:space:]])cargo[[:space:]]+test([[:space:]]|$) ]]; then
@@ -237,10 +365,29 @@ if [[ "$command_kind" =~ ^cargo_(test|check|clippy|build|run|bench)$ ]]; then
   heavy_cargo="true"
 fi
 
+client_encoded_rustflags_cleared="false"
+remote_encoded_rustflags_cleared="false"
+client_env_parse_ok="true"
+transport_command="$normalized_command"
+client_env_segment=""
+
+if [[ "$normalized_command" == "env -u CARGO_ENCODED_RUSTFLAGS "* ]]; then
+  client_encoded_rustflags_cleared="true"
+  client_remainder="${normalized_command#env -u CARGO_ENCODED_RUSTFLAGS }"
+  if [[ "$client_remainder" == rch\ exec* ]]; then
+    transport_command="$client_remainder"
+  elif [[ "$client_remainder" == *" rch exec "* ]]; then
+    client_env_segment="${client_remainder%% rch exec *}"
+    transport_command="rch exec ${client_remainder#* rch exec }"
+  else
+    client_env_parse_ok="false"
+  fi
+fi
+
 transport="unknown"
-if [[ "$normalized_command" =~ ^rch[[:space:]]+exec[[:space:]]+--[[:space:]]+env[[:space:]] ]]; then
+if [[ "$transport_command" =~ ^rch[[:space:]]+exec[[:space:]]+--[[:space:]]+env[[:space:]] ]]; then
   transport="rch_direct_env"
-elif [[ "$normalized_command" =~ ^rch[[:space:]]+exec[[:space:]]+--([[:space:]]|$) ]]; then
+elif [[ "$transport_command" =~ ^rch[[:space:]]+exec[[:space:]]+--([[:space:]]|$) ]]; then
   transport="rch_direct_no_env"
 elif [[ "$normalized_command" =~ ^(bash|sh|zsh)[[:space:]]+-(lc|c)[[:space:]] ]]; then
   transport="shell_wrapper"
@@ -260,40 +407,103 @@ fi
 
 pasteable_command=""
 if [[ -n "$cargo_suffix" ]]; then
-  pasteable_command="rch exec -- env ${safe_env_prefix} ${cargo_suffix}"
+  pasteable_command="${safe_client_prefix} rch exec -- env -u CARGO_ENCODED_RUSTFLAGS ${safe_env_prefix} ${cargo_suffix}"
 fi
 
 declare -a env_assignments=()
 declare -a unsupported_env=()
-if [[ "$transport" == "rch_direct_env" && "$normalized_command" == *" cargo "* ]]; then
-  env_segment="${normalized_command#rch exec -- env }"
-  env_segment="${env_segment%% cargo *}"
-  for token in $env_segment; do
-    if [[ "$token" == *=* ]]; then
+declare -a client_env_assignments=()
+declare -a remote_env_assignments=()
+rustflags_present="false"
+rustflags_linker_policy_composed="false"
+env_prefix_parse_ok="true"
+has_visibility="false"
+visibility_value=""
+if [[ -n "$client_env_segment" ]]; then
+  if split_simple_shell_words "$client_env_segment"; then
+    for token in "${simple_shell_words[@]}"; do
+      if [[ "$token" != *=* ]]; then
+        client_env_parse_ok="false"
+        continue
+      fi
       env_name="${token%%=*}"
+      client_env_assignments+=("$env_name")
       env_assignments+=("$env_name")
-      if ! is_allowed_env "$env_name"; then
+      if ! is_allowed_client_env "$env_name"; then
         unsupported_env+=("$env_name")
       fi
-    fi
-  done
+      if [[ "$env_name" == "RCH_VISIBILITY" ]]; then
+        visibility_value="${token#*=}"
+        if [[ -n "$visibility_value" ]]; then
+          has_visibility="true"
+        fi
+      fi
+    done
+  else
+    client_env_parse_ok="false"
+  fi
 fi
 
 has_target_dir="false"
 target_dir_value=""
 target_dir_correlates_with_bead="false"
-if [[ "$normalized_command" == *"CARGO_TARGET_DIR="* ]]; then
-  has_target_dir="true"
-  if [[ "$normalized_command" =~ CARGO_TARGET_DIR=([^[:space:]]+) ]]; then
-    target_dir_value="${BASH_REMATCH[1]}"
-    if [[ "$(safe_token "$target_dir_value")" == *"$safe_bead"* ]]; then
-      target_dir_correlates_with_bead="true"
+if [[ "$transport" == "rch_direct_env" && "$transport_command" == *" cargo "* ]]; then
+  env_segment="${transport_command#rch exec -- env }"
+  if [[ "$env_segment" == "-u CARGO_ENCODED_RUSTFLAGS "* ]]; then
+    remote_encoded_rustflags_cleared="true"
+  fi
+  if split_simple_shell_words "$env_segment"; then
+    cargo_seen="false"
+    token_index=0
+    if [[ "${simple_shell_words[0]:-}" == "-u" \
+      && "${simple_shell_words[1]:-}" == "CARGO_ENCODED_RUSTFLAGS" ]]; then
+      remote_encoded_rustflags_cleared="true"
+      token_index=2
     fi
+    for ((; token_index < ${#simple_shell_words[@]}; token_index += 1)); do
+      token="${simple_shell_words[token_index]}"
+      if [[ "$token" == "cargo" ]]; then
+        cargo_seen="true"
+        break
+      fi
+      if [[ "$token" != *=* ]]; then
+        env_prefix_parse_ok="false"
+        continue
+      fi
+      env_name="${token%%=*}"
+      env_value="${token#*=}"
+      remote_env_assignments+=("$env_name")
+      env_assignments+=("$env_name")
+      if ! is_allowed_remote_env "$env_name"; then
+        unsupported_env+=("$env_name")
+      fi
+      case "$env_name" in
+        CARGO_TARGET_DIR)
+          has_target_dir="true"
+          target_dir_value="$env_value"
+          ;;
+        RUSTFLAGS)
+          rustflags_present="true"
+          rustflags_linker_policy_composed="false"
+          if rustflags_has_effective_linker_policy "$env_value"; then
+            rustflags_linker_policy_composed="true"
+          fi
+          ;;
+      esac
+    done
+    if [[ "$cargo_seen" != "true" ]]; then
+      env_prefix_parse_ok="false"
+    fi
+  else
+    env_prefix_parse_ok="false"
   fi
 fi
-has_visibility="false"
-if [[ "$normalized_command" == *"RCH_VISIBILITY="* ]]; then
-  has_visibility="true"
+if [[ "$client_env_parse_ok" != "true" ]]; then
+  env_prefix_parse_ok="false"
+fi
+if [[ "$has_target_dir" == "true" \
+  && "$(safe_token "$target_dir_value")" == *"$safe_bead"* ]]; then
+  target_dir_correlates_with_bead="true"
 fi
 
 decision="needs_human_review"
@@ -319,7 +529,20 @@ elif [[ "$heavy_cargo" == "false" && "$transport" == "read_only" ]]; then
   remediation="Command is non-heavy/read-only; it may be used as lightweight evidence without RCH or Cargo execution."
   exit_code=0
 elif [[ "$heavy_cargo" == "true" && ( "$transport" == "rch_direct_env" || "$transport" == "rch_direct_no_env" ) ]]; then
-  if [[ "$has_target_dir" != "true" ]]; then
+  if [[ "$client_encoded_rustflags_cleared" != "true" \
+    || "$remote_encoded_rustflags_cleared" != "true" ]]; then
+    decision="proof_unsafe"
+    reason_code="missing_encoded_rustflags_clear"
+    remediation="Clear CARGO_ENCODED_RUSTFLAGS on both the RCH client and worker before scheduling proof: ${pasteable_command}"
+  elif [[ "$env_prefix_parse_ok" != "true" ]]; then
+    decision="proof_unsafe"
+    reason_code="unsupported_env_syntax"
+    remediation="Use only allowlisted NAME=value assignments after the required remote env -u CARGO_ENCODED_RUSTFLAGS prefix: ${pasteable_command}"
+  elif [[ "${#unsupported_env[@]}" -gt 0 ]]; then
+    decision="proof_unsafe"
+    reason_code="unsupported_env_leakage"
+    remediation="Remove unsupported env assignments ($(join_by_comma "${unsupported_env[@]}")) and use the allowlisted shape: ${pasteable_command}"
+  elif [[ "$has_target_dir" != "true" ]]; then
     decision="proof_unsafe"
     reason_code="missing_target_dir_policy"
     remediation="Add an isolated target dir before scheduling proof: ${pasteable_command}"
@@ -327,10 +550,10 @@ elif [[ "$heavy_cargo" == "true" && ( "$transport" == "rch_direct_env" || "$tran
     decision="proof_unsafe"
     reason_code="target_dir_bead_mismatch"
     remediation="Use a target dir correlated with bead ${bead_id}: ${pasteable_command}"
-  elif [[ "${#unsupported_env[@]}" -gt 0 ]]; then
+  elif [[ "$rustflags_present" == "true" && "$rustflags_linker_policy_composed" != "true" ]]; then
     decision="proof_unsafe"
-    reason_code="unsupported_env_leakage"
-    remediation="Remove unsupported env assignments ($(join_by_comma "${unsupported_env[@]}")) and use the allowlisted shape: ${pasteable_command}"
+    reason_code="uncomposed_rustflags_override"
+    remediation="Omit RUSTFLAGS to inherit .cargo/config.toml, or include the exact -Clinker-features=-lld token (the two-token -C linker-features=-lld form is also accepted): ${pasteable_command}"
   elif [[ "$evidence_requires_visibility" == "true" && "$has_visibility" != "true" ]]; then
     decision="proof_unsafe"
     reason_code="missing_rch_visibility"
@@ -339,7 +562,7 @@ elif [[ "$heavy_cargo" == "true" && ( "$transport" == "rch_direct_env" || "$tran
     decision="proof_safe"
     reason_code="direct_rch_cargo_proof"
     pasteable_command="$normalized_command"
-    remediation="Command is preflight-safe; preserve the direct rch exec -- env shape, CARGO_TARGET_DIR, and env allowlist when scheduling proof."
+    remediation="Command is preflight-safe; preserve both encoded-flag clears, direct rch exec -- env argv, CARGO_TARGET_DIR, and the client/remote env allowlists when scheduling proof."
     exit_code=0
   fi
 elif [[ "$heavy_cargo" == "true" ]]; then
@@ -350,6 +573,8 @@ fi
 
 env_assignments_json="$(array_to_json "${env_assignments[@]}")"
 unsupported_env_json="$(array_to_json "${unsupported_env[@]}")"
+client_env_assignments_json="$(array_to_json "${client_env_assignments[@]}")"
+remote_env_assignments_json="$(array_to_json "${remote_env_assignments[@]}")"
 
 write_event "preflight.started" "ok" "$case_id"
 
@@ -371,9 +596,16 @@ jq -n \
   --arg target_dir_correlates_with_bead "$target_dir_correlates_with_bead" \
   --argjson env_assignments "$env_assignments_json" \
   --argjson unsupported_env "$unsupported_env_json" \
+  --argjson client_env_assignments "$client_env_assignments_json" \
+  --argjson remote_env_assignments "$remote_env_assignments_json" \
+  --arg client_encoded_rustflags_cleared "$client_encoded_rustflags_cleared" \
+  --arg remote_encoded_rustflags_cleared "$remote_encoded_rustflags_cleared" \
   --arg evidence_requires_visibility "$evidence_requires_visibility" \
   --arg has_target_dir "$has_target_dir" \
   --arg has_visibility "$has_visibility" \
+  --arg rustflags_present "$rustflags_present" \
+  --arg rustflags_linker_policy_composed "$rustflags_linker_policy_composed" \
+  --arg env_prefix_parse_ok "$env_prefix_parse_ok" \
   --arg heavy_cargo "$heavy_cargo" \
   --arg preflight_path "$preflight_path" \
   --arg manifest_path "$manifest_path" \
@@ -395,11 +627,18 @@ jq -n \
       heavy_cargo: ($heavy_cargo == "true"),
       env_assignments: $env_assignments,
       unsupported_env: $unsupported_env,
+      client_env_assignments: $client_env_assignments,
+      remote_env_assignments: $remote_env_assignments,
+      client_encoded_rustflags_cleared: ($client_encoded_rustflags_cleared == "true"),
+      remote_encoded_rustflags_cleared: ($remote_encoded_rustflags_cleared == "true"),
       has_target_dir: ($has_target_dir == "true"),
       target_dir: (if $target_dir_value == "" then null else $target_dir_value end),
       target_dir_correlates_with_bead: ($target_dir_correlates_with_bead == "true"),
       evidence_requires_visibility: ($evidence_requires_visibility == "true"),
-      has_visibility: ($has_visibility == "true")
+      has_visibility: ($has_visibility == "true"),
+      has_rustflags_override: ($rustflags_present == "true"),
+      rustflags_linker_policy_composed: ($rustflags_linker_policy_composed == "true"),
+      env_prefix_parse_ok: ($env_prefix_parse_ok == "true")
     },
     remediation: $remediation,
     pasteable_command: (if $pasteable_command == "" then null else $pasteable_command end),

@@ -63,6 +63,11 @@
           "tasks_timed_out": 0
         }
       ],
+      "telemetry_drop_counts": {
+        "channel_full": 0,
+        "monotonicity_violation": 0,
+        "empty_extension_id": 0
+      },
       "logs": [
         {
           "trace_id": "trace-frankenctl-doctor",
@@ -78,7 +83,12 @@
     "evidence_summary": {
       "total_records": 0,
       "counts_by_kind": {},
-      "counts_by_severity": {}
+      "counts_by_severity": {},
+      "telemetry_drop_counts": {
+        "channel_full": 0,
+        "monotonicity_violation": 0,
+        "empty_extension_id": 0
+      }
     },
     "support_bundle": {
       "filter": {
@@ -102,11 +112,16 @@
       },
       "index": {
         "schema_version": "franken-engine.runtime-diagnostics.support-bundle.v1",
-        "bundle_id": "bundle-bb747e9ab55cbb93",
+        "bundle_id": "bundle-5cd6645c74c78582",
         "trace_id": "trace-frankenctl-doctor",
         "decision_id": "decision-frankenctl-doctor",
         "policy_id": "policy-frankenctl-doctor",
         "total_records": 0,
+        "telemetry_drop_counts": {
+          "channel_full": 0,
+          "monotonicity_violation": 0,
+          "empty_extension_id": 0
+        },
         "total_redacted_fields": 0,
         "files": [
           {
@@ -125,19 +140,39 @@
             "bytes": 0
           },
           {
+            "path": "support_bundle/evidence_summary.json",
+            "sha256": "76e5b6485d37e63e9f512170f48675885459321edabf9cfc1dffa8d26b682389",
+            "bytes": 194
+          },
+          {
+            "path": "support_bundle/leak_fixture_matrix.json",
+            "sha256": "e15d054a18d42a7481319bc26c292a6b9ba8a395b7c5b5a254334485e9501117",
+            "bytes": 2371
+          },
+          {
+            "path": "support_bundle/privacy_verdict_summary.md",
+            "sha256": "98ba5a12b34e602a87dfbb08b84272a6a52e84828bf08d453178dcd3641eb2f3",
+            "bytes": 1159
+          },
+          {
+            "path": "support_bundle/redaction_audit_report.json",
+            "sha256": "dd59a1c3e3f89aadc48b84432b54f12bcefd36d6045380526a80e8c28136d79d",
+            "bytes": 824
+          },
+          {
             "path": "support_bundle/run_manifest.json",
-            "sha256": "56c7e10d9c3967105d896bacf40066ccad4a4c47c36e26ebd44b4d669214fc4b",
-            "bytes": 438
+            "sha256": "e4457596087e31388d7d7416c6bb54983f165b474568d167002cfb3735aa41d1",
+            "bytes": 556
           },
           {
             "path": "support_bundle/runtime_diagnostics.json",
-            "sha256": "25e13eddbe868358f85c4d585a96f37e9e41e94a5b2cc0632182ab1b38a86e04",
-            "bytes": 984
+            "sha256": "bfc076adfa12ac6ee58000ac984a7a136f69cb5a4d72bd7478e230abed45ae5a",
+            "bytes": 1102
           },
           {
             "path": "support_bundle/summary.md",
-            "sha256": "e9554fea301fec7fc54c6b18e8765933395f844bd397373100f62f9e7f9f89de",
-            "bytes": 471
+            "sha256": "03289033b5f7bc8314e1f01b58de4ee47fe73f188a0b45fb1085a23c1721cc6f",
+            "bytes": 624
           }
         ],
         "reproducible_commands": [
@@ -167,30 +202,159 @@
           "bytes": 0
         },
         {
+          "path": "support_bundle/evidence_summary.json",
+          "content": "{\n  \"total_records\": 0,\n  \"counts_by_kind\": {},\n  \"counts_by_severity\": {},\n  \"telemetry_drop_counts\": {\n    \"channel_full\": 0,\n    \"monotonicity_violation\": 0,\n    \"empty_extension_id\": 0\n  }\n}",
+          "sha256": "76e5b6485d37e63e9f512170f48675885459321edabf9cfc1dffa8d26b682389",
+          "bytes": 194
+        },
+        {
           "path": "support_bundle/index.json",
-          "content": "{\n  \"schema_version\": \"franken-engine.runtime-diagnostics.support-bundle.v1\",\n  \"bundle_id\": \"bundle-bb747e9ab55cbb93\",\n  \"trace_id\": \"trace-frankenctl-doctor\",\n  \"decision_id\": \"decision-frankenctl-doctor\",\n  \"policy_id\": \"policy-frankenctl-doctor\",\n  \"total_records\": 0,\n  \"total_redacted_fields\": 0,\n  \"files\": [\n    {\n      \"path\": \"support_bundle/commands.txt\",\n      \"sha256\": \"81af7108922db405b88926daf056f4821f7406d9f17062f65a39d7d904abf7b4\",\n      \"bytes\": 229\n    },\n    {\n      \"path\": \"support_bundle/events.jsonl\",\n      \"sha256\": \"d7d733b8729069400c9c0ec46c980a721287b52d7b8d3fd7127583860e9ba661\",\n      \"bytes\": 445\n    },\n    {\n      \"path\": \"support_bundle/evidence_records.jsonl\",\n      \"sha256\": \"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\",\n      \"bytes\": 0\n    },\n    {\n      \"path\": \"support_bundle/run_manifest.json\",\n      \"sha256\": \"56c7e10d9c3967105d896bacf40066ccad4a4c47c36e26ebd44b4d669214fc4b\",\n      \"bytes\": 438\n    },\n    {\n      \"path\": \"support_bundle/runtime_diagnostics.json\",\n      \"sha256\": \"25e13eddbe868358f85c4d585a96f37e9e41e94a5b2cc0632182ab1b38a86e04\",\n      \"bytes\": 984\n    },\n    {\n      \"path\": \"support_bundle/summary.md\",\n      \"sha256\": \"e9554fea301fec7fc54c6b18e8765933395f844bd397373100f62f9e7f9f89de\",\n      \"bytes\": 471\n    }\n  ],\n  \"reproducible_commands\": [\n    \"runtime_diagnostics diagnostics --input <path> --summary\",\n    \"runtime_diagnostics export-evidence --input <path> --summary\",\n    \"runtime_diagnostics support-bundle --input <path> --summary\",\n    \"runtime_diagnostics doctor --input <path> --summary\"\n  ]\n}",
-          "sha256": "61d5c9cabe6397948113b178c4924c018bbffd7dcd4eaacab3cf40354649b478",
-          "bytes": 1600
+          "content": "{\n  \"schema_version\": \"franken-engine.runtime-diagnostics.support-bundle.v1\",\n  \"bundle_id\": \"bundle-5cd6645c74c78582\",\n  \"trace_id\": \"trace-frankenctl-doctor\",\n  \"decision_id\": \"decision-frankenctl-doctor\",\n  \"policy_id\": \"policy-frankenctl-doctor\",\n  \"total_records\": 0,\n  \"telemetry_drop_counts\": {\n    \"channel_full\": 0,\n    \"monotonicity_violation\": 0,\n    \"empty_extension_id\": 0\n  },\n  \"total_redacted_fields\": 0,\n  \"files\": [\n    {\n      \"path\": \"support_bundle/commands.txt\",\n      \"sha256\": \"81af7108922db405b88926daf056f4821f7406d9f17062f65a39d7d904abf7b4\",\n      \"bytes\": 229\n    },\n    {\n      \"path\": \"support_bundle/events.jsonl\",\n      \"sha256\": \"d7d733b8729069400c9c0ec46c980a721287b52d7b8d3fd7127583860e9ba661\",\n      \"bytes\": 445\n    },\n    {\n      \"path\": \"support_bundle/evidence_records.jsonl\",\n      \"sha256\": \"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\",\n      \"bytes\": 0\n    },\n    {\n      \"path\": \"support_bundle/evidence_summary.json\",\n      \"sha256\": \"76e5b6485d37e63e9f512170f48675885459321edabf9cfc1dffa8d26b682389\",\n      \"bytes\": 194\n    },\n    {\n      \"path\": \"support_bundle/leak_fixture_matrix.json\",\n      \"sha256\": \"e15d054a18d42a7481319bc26c292a6b9ba8a395b7c5b5a254334485e9501117\",\n      \"bytes\": 2371\n    },\n    {\n      \"path\": \"support_bundle/privacy_verdict_summary.md\",\n      \"sha256\": \"98ba5a12b34e602a87dfbb08b84272a6a52e84828bf08d453178dcd3641eb2f3\",\n      \"bytes\": 1159\n    },\n    {\n      \"path\": \"support_bundle/redaction_audit_report.json\",\n      \"sha256\": \"dd59a1c3e3f89aadc48b84432b54f12bcefd36d6045380526a80e8c28136d79d\",\n      \"bytes\": 824\n    },\n    {\n      \"path\": \"support_bundle/run_manifest.json\",\n      \"sha256\": \"e4457596087e31388d7d7416c6bb54983f165b474568d167002cfb3735aa41d1\",\n      \"bytes\": 556\n    },\n    {\n      \"path\": \"support_bundle/runtime_diagnostics.json\",\n      \"sha256\": \"bfc076adfa12ac6ee58000ac984a7a136f69cb5a4d72bd7478e230abed45ae5a\",\n      \"bytes\": 1102\n    },\n    {\n      \"path\": \"support_bundle/summary.md\",\n      \"sha256\": \"03289033b5f7bc8314e1f01b58de4ee47fe73f188a0b45fb1085a23c1721cc6f\",\n      \"bytes\": 624\n    }\n  ],\n  \"reproducible_commands\": [\n    \"runtime_diagnostics diagnostics --input <path> --summary\",\n    \"runtime_diagnostics export-evidence --input <path> --summary\",\n    \"runtime_diagnostics support-bundle --input <path> --summary\",\n    \"runtime_diagnostics doctor --input <path> --summary\"\n  ]\n}",
+          "sha256": "9dee1d9d3db4f7cb0e44c3ab3d7bc9b66366d15b5b97ca98b15556b537dde760",
+          "bytes": 2415
+        },
+        {
+          "path": "support_bundle/leak_fixture_matrix.json",
+          "content": "[\n  {\n    \"fixture_id\": \"rgc-065-access-token-inline\",\n    \"detector\": \"secret_pattern:access_token_inline\",\n    \"description\": \"Inline access-token assignments must not appear in shareable artifacts.\",\n    \"status\": \"pass\",\n    \"matched_count\": 0,\n    \"matched_paths\": []\n  },\n  {\n    \"fixture_id\": \"rgc-065-api-key-inline\",\n    \"detector\": \"secret_pattern:api_key_inline\",\n    \"description\": \"Inline API key assignments must not appear in shareable artifacts.\",\n    \"status\": \"pass\",\n    \"matched_count\": 0,\n    \"matched_paths\": []\n  },\n  {\n    \"fixture_id\": \"rgc-065-aws-access-key-id\",\n    \"detector\": \"secret_pattern:aws_access_key_id\",\n    \"description\": \"AWS access-key identifiers must not appear in shareable artifacts.\",\n    \"status\": \"pass\",\n    \"matched_count\": 0,\n    \"matched_paths\": []\n  },\n  {\n    \"fixture_id\": \"rgc-065-bearer-token\",\n    \"detector\": \"secret_pattern:bearer_token\",\n    \"description\": \"Bearer credentials must not appear in shareable artifacts.\",\n    \"status\": \"pass\",\n    \"matched_count\": 0,\n    \"matched_paths\": []\n  },\n  {\n    \"fixture_id\": \"rgc-065-github-personal-token\",\n    \"detector\": \"secret_pattern:github_personal_token\",\n    \"description\": \"GitHub personal-access tokens must not appear in shareable artifacts.\",\n    \"status\": \"pass\",\n    \"matched_count\": 0,\n    \"matched_paths\": []\n  },\n  {\n    \"fixture_id\": \"rgc-065-password-inline\",\n    \"detector\": \"secret_pattern:password_inline\",\n    \"description\": \"Inline password assignments must not appear in shareable artifacts.\",\n    \"status\": \"pass\",\n    \"matched_count\": 0,\n    \"matched_paths\": []\n  },\n  {\n    \"fixture_id\": \"rgc-065-secret-inline\",\n    \"detector\": \"secret_pattern:secret_inline\",\n    \"description\": \"Inline secret assignments must not appear in shareable artifacts.\",\n    \"status\": \"pass\",\n    \"matched_count\": 0,\n    \"matched_paths\": []\n  },\n  {\n    \"fixture_id\": \"rgc-065-sensitive-key-redaction\",\n    \"detector\": \"sensitive_key_unredacted\",\n    \"description\": \"Sensitive artifact fields must contain an approved redaction marker or hash.\",\n    \"status\": \"pass\",\n    \"matched_count\": 0,\n    \"matched_paths\": []\n  },\n  {\n    \"fixture_id\": \"rgc-065-slack-token\",\n    \"detector\": \"secret_pattern:slack_token\",\n    \"description\": \"Slack tokens must not appear in shareable artifacts.\",\n    \"status\": \"pass\",\n    \"matched_count\": 0,\n    \"matched_paths\": []\n  }\n]",
+          "sha256": "e15d054a18d42a7481319bc26c292a6b9ba8a395b7c5b5a254334485e9501117",
+          "bytes": 2371
+        },
+        {
+          "path": "support_bundle/privacy_verdict_summary.md",
+          "content": "# Privacy Verification Summary\n\n- schema_version: `franken-engine.runtime-diagnostics.privacy-verification.v1`\n- artifact_scope: `support_bundle`\n- verdict: `pass`\n- scanned_artifacts: `7`\n- total_findings: `0`\n\n## Leak Fixture Matrix\n\n- `rgc-065-access-token-inline` detector=`secret_pattern:access_token_inline` status=`pass` matched_count=`0`\n- `rgc-065-api-key-inline` detector=`secret_pattern:api_key_inline` status=`pass` matched_count=`0`\n- `rgc-065-aws-access-key-id` detector=`secret_pattern:aws_access_key_id` status=`pass` matched_count=`0`\n- `rgc-065-bearer-token` detector=`secret_pattern:bearer_token` status=`pass` matched_count=`0`\n- `rgc-065-github-personal-token` detector=`secret_pattern:github_personal_token` status=`pass` matched_count=`0`\n- `rgc-065-password-inline` detector=`secret_pattern:password_inline` status=`pass` matched_count=`0`\n- `rgc-065-secret-inline` detector=`secret_pattern:secret_inline` status=`pass` matched_count=`0`\n- `rgc-065-sensitive-key-redaction` detector=`sensitive_key_unredacted` status=`pass` matched_count=`0`\n- `rgc-065-slack-token` detector=`secret_pattern:slack_token` status=`pass` matched_count=`0`",
+          "sha256": "98ba5a12b34e602a87dfbb08b84272a6a52e84828bf08d453178dcd3641eb2f3",
+          "bytes": 1159
+        },
+        {
+          "path": "support_bundle/redaction_audit_report.json",
+          "content": "{\n  \"schema_version\": \"franken-engine.runtime-diagnostics.privacy-verification.v1\",\n  \"artifact_scope\": \"support_bundle\",\n  \"verdict\": \"pass\",\n  \"scanned_artifacts\": [\n    \"support_bundle/commands.txt\",\n    \"support_bundle/events.jsonl\",\n    \"support_bundle/evidence_records.jsonl\",\n    \"support_bundle/evidence_summary.json\",\n    \"support_bundle/run_manifest.json\",\n    \"support_bundle/runtime_diagnostics.json\",\n    \"support_bundle/summary.md\"\n  ],\n  \"total_findings\": 0,\n  \"detector_counts\": {},\n  \"findings\": [],\n  \"logs\": [\n    {\n      \"trace_id\": \"trace-frankenctl-doctor\",\n      \"decision_id\": \"decision-frankenctl-doctor\",\n      \"policy_id\": \"policy-frankenctl-doctor\",\n      \"component\": \"runtime_diagnostics_cli\",\n      \"event\": \"privacy_verification\",\n      \"outcome\": \"pass\",\n      \"error_code\": null\n    }\n  ]\n}",
+          "sha256": "dd59a1c3e3f89aadc48b84432b54f12bcefd36d6045380526a80e8c28136d79d",
+          "bytes": 824
         },
         {
           "path": "support_bundle/run_manifest.json",
-          "content": "{\n  \"decision_id\": \"decision-frankenctl-doctor\",\n  \"filter\": {\n    \"decision_type\": null,\n    \"end_timestamp_ns\": null,\n    \"extension_id\": null,\n    \"severity\": null,\n    \"start_timestamp_ns\": null,\n    \"trace_id\": null\n  },\n  \"policy_id\": \"policy-frankenctl-doctor\",\n  \"schema_version\": \"franken-engine.runtime-diagnostics.support-bundle.v1\",\n  \"total_records\": 0,\n  \"total_redacted_fields\": 0,\n  \"trace_id\": \"trace-frankenctl-doctor\"\n}",
-          "sha256": "56c7e10d9c3967105d896bacf40066ccad4a4c47c36e26ebd44b4d669214fc4b",
-          "bytes": 438
+          "content": "{\n  \"schema_version\": \"franken-engine.runtime-diagnostics.support-bundle.v1\",\n  \"trace_id\": \"trace-frankenctl-doctor\",\n  \"decision_id\": \"decision-frankenctl-doctor\",\n  \"policy_id\": \"policy-frankenctl-doctor\",\n  \"total_records\": 0,\n  \"telemetry_drop_counts\": {\n    \"channel_full\": 0,\n    \"monotonicity_violation\": 0,\n    \"empty_extension_id\": 0\n  },\n  \"total_redacted_fields\": 0,\n  \"filter\": {\n    \"extension_id\": null,\n    \"trace_id\": null,\n    \"start_timestamp_ns\": null,\n    \"end_timestamp_ns\": null,\n    \"severity\": null,\n    \"decision_type\": null\n  }\n}",
+          "sha256": "e4457596087e31388d7d7416c6bb54983f165b474568d167002cfb3735aa41d1",
+          "bytes": 556
         },
         {
           "path": "support_bundle/runtime_diagnostics.json",
-          "content": "{\n  \"snapshot_timestamp_ns\": 42000,\n  \"loaded_extensions\": [\n    {\n      \"extension_id\": \"ext-doctor\",\n      \"containment_state\": \"Running\"\n    }\n  ],\n  \"active_policies\": [\n    \"policy-main\"\n  ],\n  \"security_epoch\": 7,\n  \"gc_pressure\": [\n    {\n      \"extension_id\": \"ext-doctor\",\n      \"used_bytes\": 128,\n      \"budget_bytes\": 1024,\n      \"pressure_millionths\": 125000,\n      \"over_budget\": false\n    }\n  ],\n  \"scheduler_lanes\": [\n    {\n      \"lane\": \"ready\",\n      \"queue_depth\": 1,\n      \"max_depth\": 8,\n      \"utilization_millionths\": 125000,\n      \"tasks_submitted\": 3,\n      \"tasks_scheduled\": 3,\n      \"tasks_completed\": 3,\n      \"tasks_timed_out\": 0\n    }\n  ],\n  \"logs\": [\n    {\n      \"trace_id\": \"trace-frankenctl-doctor\",\n      \"decision_id\": \"decision-frankenctl-doctor\",\n      \"policy_id\": \"policy-frankenctl-doctor\",\n      \"component\": \"runtime_diagnostics_cli\",\n      \"event\": \"runtime_diagnostics_snapshot\",\n      \"outcome\": \"pass\",\n      \"error_code\": null\n    }\n  ]\n}",
-          "sha256": "25e13eddbe868358f85c4d585a96f37e9e41e94a5b2cc0632182ab1b38a86e04",
-          "bytes": 984
+          "content": "{\n  \"snapshot_timestamp_ns\": 42000,\n  \"loaded_extensions\": [\n    {\n      \"extension_id\": \"ext-doctor\",\n      \"containment_state\": \"Running\"\n    }\n  ],\n  \"active_policies\": [\n    \"policy-main\"\n  ],\n  \"security_epoch\": 7,\n  \"gc_pressure\": [\n    {\n      \"extension_id\": \"ext-doctor\",\n      \"used_bytes\": 128,\n      \"budget_bytes\": 1024,\n      \"pressure_millionths\": 125000,\n      \"over_budget\": false\n    }\n  ],\n  \"scheduler_lanes\": [\n    {\n      \"lane\": \"ready\",\n      \"queue_depth\": 1,\n      \"max_depth\": 8,\n      \"utilization_millionths\": 125000,\n      \"tasks_submitted\": 3,\n      \"tasks_scheduled\": 3,\n      \"tasks_completed\": 3,\n      \"tasks_timed_out\": 0\n    }\n  ],\n  \"telemetry_drop_counts\": {\n    \"channel_full\": 0,\n    \"monotonicity_violation\": 0,\n    \"empty_extension_id\": 0\n  },\n  \"logs\": [\n    {\n      \"trace_id\": \"trace-frankenctl-doctor\",\n      \"decision_id\": \"decision-frankenctl-doctor\",\n      \"policy_id\": \"policy-frankenctl-doctor\",\n      \"component\": \"runtime_diagnostics_cli\",\n      \"event\": \"runtime_diagnostics_snapshot\",\n      \"outcome\": \"pass\",\n      \"error_code\": null\n    }\n  ]\n}",
+          "sha256": "bfc076adfa12ac6ee58000ac984a7a136f69cb5a4d72bd7478e230abed45ae5a",
+          "bytes": 1102
         },
         {
           "path": "support_bundle/summary.md",
-          "content": "# Runtime Support Bundle Summary\n\n- trace_id: `trace-frankenctl-doctor`\n- decision_id: `decision-frankenctl-doctor`\n- policy_id: `policy-frankenctl-doctor`\n- total_records: `0`\n- total_redacted_fields: `0`\n\n## Repro Commands\n\n- `runtime_diagnostics diagnostics --input <path> --summary`\n- `runtime_diagnostics export-evidence --input <path> --summary`\n- `runtime_diagnostics support-bundle --input <path> --summary`\n- `runtime_diagnostics doctor --input <path> --summary`",
-          "sha256": "e9554fea301fec7fc54c6b18e8765933395f844bd397373100f62f9e7f9f89de",
-          "bytes": 471
+          "content": "# Runtime Support Bundle Summary\n\n- trace_id: `trace-frankenctl-doctor`\n- decision_id: `decision-frankenctl-doctor`\n- policy_id: `policy-frankenctl-doctor`\n- total_records: `0`\n- telemetry_drops_total: `0`\n- telemetry_drops_channel_full: `0`\n- telemetry_drops_monotonicity_violation: `0`\n- telemetry_drops_empty_extension_id: `0`\n- total_redacted_fields: `0`\n\n## Repro Commands\n\n- `runtime_diagnostics diagnostics --input <path> --summary`\n- `runtime_diagnostics export-evidence --input <path> --summary`\n- `runtime_diagnostics support-bundle --input <path> --summary`\n- `runtime_diagnostics doctor --input <path> --summary`",
+          "sha256": "03289033b5f7bc8314e1f01b58de4ee47fe73f188a0b45fb1085a23c1721cc6f",
+          "bytes": 624
         }
       ],
+      "privacy_verification": {
+        "redaction_audit_report": {
+          "schema_version": "franken-engine.runtime-diagnostics.privacy-verification.v1",
+          "artifact_scope": "support_bundle",
+          "verdict": "pass",
+          "scanned_artifacts": [
+            "support_bundle/commands.txt",
+            "support_bundle/events.jsonl",
+            "support_bundle/evidence_records.jsonl",
+            "support_bundle/evidence_summary.json",
+            "support_bundle/run_manifest.json",
+            "support_bundle/runtime_diagnostics.json",
+            "support_bundle/summary.md"
+          ],
+          "total_findings": 0,
+          "detector_counts": {},
+          "findings": [],
+          "logs": [
+            {
+              "trace_id": "trace-frankenctl-doctor",
+              "decision_id": "decision-frankenctl-doctor",
+              "policy_id": "policy-frankenctl-doctor",
+              "component": "runtime_diagnostics_cli",
+              "event": "privacy_verification",
+              "outcome": "pass",
+              "error_code": null
+            }
+          ]
+        },
+        "leak_fixture_matrix": [
+          {
+            "fixture_id": "rgc-065-access-token-inline",
+            "detector": "secret_pattern:access_token_inline",
+            "description": "Inline access-token assignments must not appear in shareable artifacts.",
+            "status": "pass",
+            "matched_count": 0,
+            "matched_paths": []
+          },
+          {
+            "fixture_id": "rgc-065-api-key-inline",
+            "detector": "secret_pattern:api_key_inline",
+            "description": "Inline API key assignments must not appear in shareable artifacts.",
+            "status": "pass",
+            "matched_count": 0,
+            "matched_paths": []
+          },
+          {
+            "fixture_id": "rgc-065-aws-access-key-id",
+            "detector": "secret_pattern:aws_access_key_id",
+            "description": "AWS access-key identifiers must not appear in shareable artifacts.",
+            "status": "pass",
+            "matched_count": 0,
+            "matched_paths": []
+          },
+          {
+            "fixture_id": "rgc-065-bearer-token",
+            "detector": "secret_pattern:bearer_token",
+            "description": "Bearer credentials must not appear in shareable artifacts.",
+            "status": "pass",
+            "matched_count": 0,
+            "matched_paths": []
+          },
+          {
+            "fixture_id": "rgc-065-github-personal-token",
+            "detector": "secret_pattern:github_personal_token",
+            "description": "GitHub personal-access tokens must not appear in shareable artifacts.",
+            "status": "pass",
+            "matched_count": 0,
+            "matched_paths": []
+          },
+          {
+            "fixture_id": "rgc-065-password-inline",
+            "detector": "secret_pattern:password_inline",
+            "description": "Inline password assignments must not appear in shareable artifacts.",
+            "status": "pass",
+            "matched_count": 0,
+            "matched_paths": []
+          },
+          {
+            "fixture_id": "rgc-065-secret-inline",
+            "detector": "secret_pattern:secret_inline",
+            "description": "Inline secret assignments must not appear in shareable artifacts.",
+            "status": "pass",
+            "matched_count": 0,
+            "matched_paths": []
+          },
+          {
+            "fixture_id": "rgc-065-sensitive-key-redaction",
+            "detector": "sensitive_key_unredacted",
+            "description": "Sensitive artifact fields must contain an approved redaction marker or hash.",
+            "status": "pass",
+            "matched_count": 0,
+            "matched_paths": []
+          },
+          {
+            "fixture_id": "rgc-065-slack-token",
+            "detector": "secret_pattern:slack_token",
+            "description": "Slack tokens must not appear in shareable artifacts.",
+            "status": "pass",
+            "matched_count": 0,
+            "matched_paths": []
+          }
+        ],
+        "privacy_verdict_summary_md": "# Privacy Verification Summary\n\n- schema_version: `franken-engine.runtime-diagnostics.privacy-verification.v1`\n- artifact_scope: `support_bundle`\n- verdict: `pass`\n- scanned_artifacts: `7`\n- total_findings: `0`\n\n## Leak Fixture Matrix\n\n- `rgc-065-access-token-inline` detector=`secret_pattern:access_token_inline` status=`pass` matched_count=`0`\n- `rgc-065-api-key-inline` detector=`secret_pattern:api_key_inline` status=`pass` matched_count=`0`\n- `rgc-065-aws-access-key-id` detector=`secret_pattern:aws_access_key_id` status=`pass` matched_count=`0`\n- `rgc-065-bearer-token` detector=`secret_pattern:bearer_token` status=`pass` matched_count=`0`\n- `rgc-065-github-personal-token` detector=`secret_pattern:github_personal_token` status=`pass` matched_count=`0`\n- `rgc-065-password-inline` detector=`secret_pattern:password_inline` status=`pass` matched_count=`0`\n- `rgc-065-secret-inline` detector=`secret_pattern:secret_inline` status=`pass` matched_count=`0`\n- `rgc-065-sensitive-key-redaction` detector=`sensitive_key_unredacted` status=`pass` matched_count=`0`\n- `rgc-065-slack-token` detector=`secret_pattern:slack_token` status=`pass` matched_count=`0`"
+      },
       "logs": [
         {
           "trace_id": "trace-frankenctl-doctor",
@@ -331,6 +495,7 @@
       }
     ]
   },
+  "artifact_bundle": null,
   "observability_mode": {
     "mode_id": "default_capture",
     "capture_semantics": "default_mixed_capture",

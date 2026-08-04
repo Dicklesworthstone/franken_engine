@@ -13,12 +13,50 @@ artifact_root="${PARSER_ORACLE_MISSING_ARTIFACT_WRITER_ARTIFACT_ROOT:-artifacts/
 timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
 target_namespace="${mode}_$$"
 target_dir="${CARGO_TARGET_DIR:-${root_dir}/target_rch_parser_oracle_missing_artifact_writer_${target_namespace}}"
-writer_rustflags="${RUSTFLAGS-}"
-if [[ -n "${writer_rustflags}" ]] && [[ "${writer_rustflags}" != *"-C linker=cc"* ]]; then
-  writer_rustflags="${writer_rustflags} -C linker=cc"
-else
-  writer_rustflags="-C linker=cc"
+
+parser_rustflags_have_linker_policy() {
+  local rustflags="${1-}"
+  local -a tokens=()
+  local index
+  local effective_state="unset"
+
+  read -r -a tokens <<<"$rustflags"
+  for index in "${!tokens[@]}"; do
+    case "${tokens[$index]}" in
+      -Clinker-features=-lld) effective_state="disabled" ;;
+      -Clinker-features=*) effective_state="other" ;;
+      -C)
+        case "${tokens[$((index + 1))]:-}" in
+          linker-features=-lld) effective_state="disabled" ;;
+          linker-features=*) effective_state="other" ;;
+        esac
+        ;;
+    esac
+  done
+  [[ "$effective_state" == "disabled" ]]
+}
+
+parser_compose_linker_policy_rustflags() {
+  local rustflags="${1-}"
+
+  if parser_rustflags_have_linker_policy "$rustflags"; then
+    printf '%s' "$rustflags"
+  elif [[ -n "$rustflags" ]]; then
+    printf '%s %s' "$rustflags" '-Clinker-features=-lld'
+  else
+    printf '%s' '-Clinker-features=-lld'
+  fi
+}
+
+writer_flags="${RUSTFLAGS-}"
+if [[ -z "${writer_flags}" ]]; then
+  writer_flags="-C linker=cc"
+elif [[ "${writer_flags}" != *"-C linker=cc"* ]] &&
+     [[ "${writer_flags}" != *"-Clinker=cc"* ]]; then
+  writer_flags="${writer_flags} -C linker=cc"
 fi
+writer_flags="$(parser_compose_linker_policy_rustflags "$writer_flags")"
+printf -v writer_flags_shell '%q' "${writer_flags}"
 run_dir="${artifact_root}/${timestamp}"
 manifest_path="${run_dir}/run_manifest.json"
 trace_ids_path="${run_dir}/trace_ids.json"
@@ -41,7 +79,7 @@ decision_id="decision-parser-oracle-missing-artifact-writer-${timestamp}"
 policy_id="policy-parser-oracle-missing-artifact-writer-v1"
 component="parser_oracle_missing_artifact_writer_gate"
 scenario_id="rgc-920g2"
-replay_command="./scripts/e2e/parser_oracle_missing_artifact_writer_replay.sh ${mode}"
+replay_command="env -u CARGO_ENCODED_RUSTFLAGS RUSTFLAGS=${writer_flags_shell} ./scripts/e2e/parser_oracle_missing_artifact_writer_replay.sh ${mode}"
 
 declare -a commands_run=()
 declare -a validation_errors=()
@@ -64,11 +102,11 @@ json_array_from_args() {
 }
 
 run_rch() {
-  timeout "${rch_timeout_seconds}" \
-    rch exec -- env \
+  env -u CARGO_ENCODED_RUSTFLAGS timeout "${rch_timeout_seconds}" \
+    rch exec -- env -u CARGO_ENCODED_RUSTFLAGS \
     "RUSTUP_TOOLCHAIN=${toolchain}" \
     "CARGO_TARGET_DIR=${target_dir}" \
-    "RUSTFLAGS=${writer_rustflags}" \
+    "RUSTFLAGS=${writer_flags}" \
     "CARGO_BUILD_JOBS=${cargo_build_jobs}" \
     "CARGO_INCREMENTAL=${cargo_incremental}" \
     "$@"
@@ -260,9 +298,10 @@ run_receipt_scenario() {
   local exit_code="$3"
   local fixture_state="$4"
   local reason_override="${5:-}"
+  local exercise_supporting_artifacts="${6:-false}"
   local scenario_dir="${run_dir}/scenarios/${scenario_name}"
 
-  commands_run+=("scenario:${scenario_name}:${mode_value}:${fixture_state}:${reason_override:-auto}")
+  commands_run+=("scenario:${scenario_name}:${mode_value}:${fixture_state}:${reason_override:-auto}:${exercise_supporting_artifacts}")
   mkdir -p "${scenario_dir}"
 
   ROOT_DIR="${root_dir}" \
@@ -271,6 +310,7 @@ run_receipt_scenario() {
   SCENARIO_EXIT_CODE="${exit_code}" \
   SCENARIO_FIXTURE_STATE="${fixture_state}" \
   SCENARIO_REASON_OVERRIDE="${reason_override}" \
+  SCENARIO_EXERCISE_SUPPORTING_ARTIFACTS="${exercise_supporting_artifacts}" \
     bash <<'EOF'
 set -euo pipefail
 
@@ -330,6 +370,12 @@ else
 fi
 
 write_missing_artifact_receipt "${SCENARIO_EXIT_CODE}"
+
+if [[ "${SCENARIO_EXERCISE_SUPPORTING_ARTIFACTS}" == "true" ]]; then
+  rustc() { printf '%s\n' 'rustc parser-oracle-writer-test-stub'; }
+  cargo() { printf '%s\n' 'cargo parser-oracle-writer-test-stub'; }
+  write_supporting_artifacts 2>"${run_dir}/write_supporting_artifacts.stderr"
+fi
 EOF
 
   printf '%s\n' "${scenario_dir}"
@@ -350,6 +396,7 @@ record_scenario_result() {
   local expected_missing_json actual_missing_json
   local receipt_present legacy_baseline legacy_relation_report legacy_relation_events legacy_evidence legacy_digest
   local receipt_json result_json
+  local supporting_stderr_path supporting_proof_note_path
 
   step_logs+=("${scenario_log_path}")
   step_log_index=$((step_log_index + 1))
@@ -389,6 +436,37 @@ record_scenario_result() {
       errors+=("missing_artifacts mismatch")
     fi
   fi
+
+  case "${scenario_name}" in
+    missing_unexpected_absence | all_artifacts_present)
+      supporting_stderr_path="${scenario_dir}/write_supporting_artifacts.stderr"
+      supporting_proof_note_path="${scenario_dir}/proof_note.md"
+
+      if [[ ! -f "${supporting_stderr_path}" ]]; then
+        errors+=("supporting-artifact branch was not exercised")
+      elif [[ -s "${supporting_stderr_path}" ]]; then
+        errors+=("supporting-artifact branch wrote unexpected stderr")
+      fi
+
+      if [[ ! -s "${supporting_proof_note_path}" ]]; then
+        errors+=("supporting-artifact branch did not write proof_note.md")
+      elif [[ "${scenario_name}" == "missing_unexpected_absence" ]]; then
+        if ! rg -q --fixed-strings '## Missing-Artifact Receipt' "${supporting_proof_note_path}"; then
+          errors+=("receipt-present branch did not write the missing-artifact proof note")
+        fi
+        if rg -q --fixed-strings '## Drift Summary' "${supporting_proof_note_path}"; then
+          errors+=("receipt-present branch incorrectly wrote a drift summary")
+        fi
+      else
+        if ! rg -q --fixed-strings '## Drift Summary' "${supporting_proof_note_path}"; then
+          errors+=("receipt-absent branch did not write the drift-summary proof note")
+        fi
+        if rg -q --fixed-strings '## Missing-Artifact Receipt' "${supporting_proof_note_path}"; then
+          errors+=("receipt-absent branch incorrectly wrote a missing-artifact note")
+        fi
+      fi
+      ;;
+  esac
 
   if [[ "${receipt_present}" == true ]]; then
     receipt_json="$(jq -c '.' "${receipt_path}")"
@@ -566,7 +644,7 @@ run_local_scenarios() {
     "fail_closed" \
     "baseline.json,relation_report.json,relation_events.jsonl,metamorphic_evidence.jsonl,drift_digest.md"
 
-  scenario_dir="$(run_receipt_scenario "missing_unexpected_absence" "ci" "0" "relation_only")"
+  scenario_dir="$(run_receipt_scenario "missing_unexpected_absence" "ci" "0" "relation_only" "" "true")"
   record_scenario_result \
     "missing_unexpected_absence" \
     "${scenario_dir}" \
@@ -582,7 +660,7 @@ run_local_scenarios() {
     "${scenario_dir}" \
     "baseline.json,relation_report.json,relation_events.jsonl,metamorphic_evidence.jsonl,drift_digest.md"
 
-  scenario_dir="$(run_receipt_scenario "all_artifacts_present" "ci" "0" "all_artifacts")"
+  scenario_dir="$(run_receipt_scenario "all_artifacts_present" "ci" "0" "all_artifacts" "" "true")"
   record_scenario_result \
     "all_artifacts_present" \
     "${scenario_dir}" \

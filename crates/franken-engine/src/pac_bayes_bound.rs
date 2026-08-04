@@ -364,7 +364,7 @@ fn catoni_upper_bound_millionths(
 }
 
 fn exp_neg_millionths(exponent_millionths: u64) -> u64 {
-    let clamped = exponent_millionths.min((40 * MILLION) as u64) as i64;
+    let clamped = exponent_millionths.min(40 * MILLION) as i64;
     fixed_point_exp_millionths(-clamped)
 }
 

@@ -57,7 +57,7 @@ fn gc_object_id_from_u64(n: u64) -> frankenengine_engine::gc::GcObjectId {
 #[test]
 fn enrichment_gc_object_id_display_from_allocation() {
     let mut heap = ExtensionHeap::new("ext".into());
-    let id = heap.allocate(10);
+    let id = heap.allocate(10).expect("allocation should succeed");
     assert_eq!(id.to_string(), "obj-0");
     assert_eq!(id.as_u64(), 0);
 }
@@ -277,8 +277,8 @@ fn enrichment_gc_event_serde_roundtrip() {
 fn enrichment_heap_allocate_and_count() {
     let mut heap = ExtensionHeap::new("ext".into());
     assert_eq!(heap.object_count(), 0);
-    let id1 = heap.allocate(100);
-    let id2 = heap.allocate(200);
+    let id1 = heap.allocate(100).expect("allocation should succeed");
+    let id2 = heap.allocate(200).expect("allocation should succeed");
     assert_eq!(heap.object_count(), 2);
     assert_eq!(heap.total_bytes(), 300);
     assert!(heap.contains(id1));
@@ -288,9 +288,9 @@ fn enrichment_heap_allocate_and_count() {
 #[test]
 fn enrichment_heap_monotonic_ids() {
     let mut heap = ExtensionHeap::new("ext".into());
-    let a = heap.allocate(10);
-    let b = heap.allocate(20);
-    let c = heap.allocate(30);
+    let a = heap.allocate(10).expect("allocation should succeed");
+    let b = heap.allocate(20).expect("allocation should succeed");
+    let c = heap.allocate(30).expect("allocation should succeed");
     assert_eq!(a.as_u64(), 0);
     assert_eq!(b.as_u64(), 1);
     assert_eq!(c.as_u64(), 2);
@@ -299,8 +299,8 @@ fn enrichment_heap_monotonic_ids() {
 #[test]
 fn enrichment_heap_add_reference_and_get() {
     let mut heap = ExtensionHeap::new("ext".into());
-    let a = heap.allocate(10);
-    let b = heap.allocate(20);
+    let a = heap.allocate(10).expect("allocation should succeed");
+    let b = heap.allocate(20).expect("allocation should succeed");
     heap.add_reference(a, b).unwrap();
     let obj = heap.get(a).unwrap();
     assert!(obj.references.contains(&b));
@@ -309,7 +309,7 @@ fn enrichment_heap_add_reference_and_get() {
 #[test]
 fn enrichment_heap_add_reference_nonexistent_from() {
     let mut heap = ExtensionHeap::new("ext".into());
-    let valid = heap.allocate(10);
+    let valid = heap.allocate(10).expect("allocation should succeed");
     // Use a fake ID via serde for the 'from' param (which doesn't exist in heap)
     let fake = gc_object_id_from_u64(999);
     assert!(matches!(
@@ -321,8 +321,8 @@ fn enrichment_heap_add_reference_nonexistent_from() {
 #[test]
 fn enrichment_heap_serde_roundtrip() {
     let mut heap = ExtensionHeap::new("serde-ext".into());
-    let a = heap.allocate(100);
-    let b = heap.allocate(200);
+    let a = heap.allocate(100).expect("allocation should succeed");
+    let b = heap.allocate(200).expect("allocation should succeed");
     heap.add_reference(a, b).unwrap();
     heap.unroot(b).unwrap();
     let json = serde_json::to_string(&heap).unwrap();

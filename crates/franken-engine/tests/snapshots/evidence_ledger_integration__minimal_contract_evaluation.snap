@@ -1,0 +1,47 @@
+---
+source: tests/evidence_ledger_integration.rs
+expression: scrubbed_actual
+---
+{
+  "schema_version": {
+    "major": 2,
+    "minor": 0,
+    "patch": 0
+  },
+  "entry_id": "[ENTRY_ID]",
+  "trace_id": "trace-minimal-005",
+  "decision_id": "decision-minimal-005",
+  "policy_id": "policy-minimal",
+  "epoch_id": 0,
+  "timestamp_ns": 0,
+  "decision_type": "ContractEvaluation",
+  "candidates": [
+    {
+      "action_name": "default",
+      "expected_loss_millionths": 0,
+      "filtered": false,
+      "filter_reason": null
+    }
+  ],
+  "constraints": [],
+  "chosen_action": {
+    "action_name": "default",
+    "expected_loss_millionths": 0,
+    "rationale": "no action required"
+  },
+  "witnesses": [],
+  "evidence_hash": "[HASH]",
+  "signed_envelope": {
+    "producer_id": "franken-engine.evidence-ledger.builder",
+    "key_provenance": {
+      "authority_class": "lab_fixture",
+      "key_id": "[KEY_ID]",
+      "activation_epoch": 0,
+      "rotation_sequence": 1
+    },
+    "signed_epoch": 0,
+    "verification_key": "[VERIFICATION_KEY]",
+    "signature": "[SIGNATURE]"
+  },
+  "metadata": {}
+}

@@ -1108,16 +1108,9 @@ fn enrichment_manifest(
     publisher_key: &VerificationKey,
 ) -> ExtensionManifest {
     let artifacts = vec![enrichment_artifact("main.fir")];
-    let mut buf = Vec::new();
-    for art in &artifacts {
-        buf.extend_from_slice(art.path.as_bytes());
-        buf.push(0);
-        buf.extend_from_slice(art.content_hash.as_bytes());
-        buf.extend_from_slice(&art.size_bytes.to_le_bytes());
-    }
-    let artifacts_root_hash = ContentHash::compute(&buf);
-
-    ExtensionManifest {
+    // bd-fn47f: compute the artifacts root via ExtensionManifest::compute_artifacts_root
+    // (what the registry verifies with) rather than an inline copy of the old preimage.
+    let mut manifest = ExtensionManifest {
         scope: scope.to_string(),
         name: name.to_string(),
         version,
@@ -1126,11 +1119,13 @@ fn enrichment_manifest(
         capabilities: vec![enrichment_capability("net:outbound")],
         artifacts,
         build: enrichment_build_descriptor(),
-        artifacts_root_hash,
+        artifacts_root_hash: ContentHash::compute(b"placeholder"),
         description: format!("Test extension @{scope}/{name}"),
         license: Some("MIT".to_string()),
         dependencies: BTreeMap::new(),
-    }
+    };
+    manifest.artifacts_root_hash = manifest.compute_artifacts_root();
+    manifest
 }
 
 fn enrichment_publish(
@@ -1332,14 +1327,7 @@ fn enrichment_one_over_max_artifacts_rejected() {
     m.artifacts = (0..1025)
         .map(|i| enrichment_artifact(&format!("file_{i}.dat")))
         .collect();
-    let mut buf = Vec::new();
-    for art in &m.artifacts {
-        buf.extend_from_slice(art.path.as_bytes());
-        buf.push(0);
-        buf.extend_from_slice(art.content_hash.as_bytes());
-        buf.extend_from_slice(&art.size_bytes.to_le_bytes());
-    }
-    m.artifacts_root_hash = ContentHash::compute(&buf);
+    m.artifacts_root_hash = m.compute_artifacts_root();
     let result = enrichment_publish(&mut reg, &m, &sk);
     assert!(matches!(
         result,

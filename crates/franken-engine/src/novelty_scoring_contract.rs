@@ -314,7 +314,7 @@ pub struct SemanticSimilarityMatch {
     pub distance_millionths: u64,
     /// Number of exactly equal feature slots.
     pub shared_feature_count: usize,
-    /// Number of feature slots compared.
+    /// Number of active feature slots compared.
     pub compared_feature_count: usize,
     /// Whether the source bytes were byte-identical.
     pub source_hash_match: bool,
@@ -365,33 +365,37 @@ pub fn semantic_similarity_match(
         };
     }
 
-    let compared_feature_count = candidate
+    let feature_slots = candidate
         .feature_vector
         .len()
         .max(existing.feature_vector.len());
-    if compared_feature_count == 0 {
-        return SemanticSimilarityMatch {
-            existing_candidate_id: existing.candidate_id.clone(),
-            similarity_millionths: 0,
-            distance_millionths: MILLIONTHS,
-            shared_feature_count: 0,
-            compared_feature_count,
-            source_hash_match,
-        };
-    }
-
     let mut total_distance: u128 = 0;
     let mut shared_feature_count = 0usize;
-    for i in 0..compared_feature_count {
+    let mut compared_feature_count = 0usize;
+    for i in 0..feature_slots {
         let candidate_value = candidate.feature_vector.get(i).copied().unwrap_or(0);
         let existing_value = existing.feature_vector.get(i).copied().unwrap_or(0);
         let candidate_value = candidate_value.min(MILLIONTHS);
         let existing_value = existing_value.min(MILLIONTHS);
+        if candidate_value == 0 && existing_value == 0 {
+            continue;
+        }
+        compared_feature_count += 1;
         if candidate_value == existing_value {
             shared_feature_count += 1;
         }
         total_distance =
             total_distance.saturating_add(candidate_value.abs_diff(existing_value).into());
+    }
+    if compared_feature_count == 0 {
+        return SemanticSimilarityMatch {
+            existing_candidate_id: existing.candidate_id.clone(),
+            similarity_millionths: 0,
+            distance_millionths: MILLIONTHS,
+            shared_feature_count,
+            compared_feature_count,
+            source_hash_match,
+        };
     }
 
     let max_distance = (compared_feature_count as u128).saturating_mul(MILLIONTHS.into());
@@ -1929,6 +1933,44 @@ mod tests {
         let prior = vec![sample_candidate("p", 5_000, vec![500_000])];
         let gain = compute_information_gain(&candidate, &prior);
         assert_eq!(gain, 0);
+    }
+
+    // --- Semantic novelty tests ---
+
+    #[test]
+    fn semantic_similarity_ignores_jointly_zero_sparse_features() {
+        let prior = sample_candidate("prior_zero", 9_000, vec![0, 0, 0, 0, 0, 0, 0, 0]);
+        let candidate = sample_candidate(
+            "obstruction_material",
+            1_000,
+            vec![0, 0, 900_000, 0, 0, 0, 0, 0],
+        );
+
+        let report = classify_semantic_novelty(&candidate, &[prior]);
+        let nearest = report.nearest.as_ref().expect("nearest match recorded");
+
+        assert_eq!(nearest.compared_feature_count, 1);
+        assert!(
+            nearest.similarity_millionths < DEFAULT_SEMANTIC_NEAR_DUPLICATE_THRESHOLD_MILLIONTHS,
+            "jointly-zero sparse dimensions must not dominate material active-feature distance"
+        );
+        assert_eq!(report.verdict, SemanticNoveltyVerdict::Novel);
+    }
+
+    #[test]
+    fn semantic_similarity_still_flags_close_active_feature_duplicate() {
+        let prior = sample_candidate("prior_obstruction", 9_000, vec![0, 0, 850_000, 0]);
+        let candidate = sample_candidate("same_obstruction_lane", 1_000, vec![0, 0, 900_000, 0]);
+
+        let report = classify_semantic_novelty(&candidate, &[prior]);
+        let nearest = report.nearest.as_ref().expect("nearest match recorded");
+
+        assert_eq!(nearest.compared_feature_count, 1);
+        assert!(
+            nearest.similarity_millionths >= DEFAULT_SEMANTIC_DUPLICATE_THRESHOLD_MILLIONTHS,
+            "close active-feature matches should still be treated as duplicates"
+        );
+        assert_eq!(report.verdict, SemanticNoveltyVerdict::Duplicate);
     }
 
     // --- Batch scoring tests ---

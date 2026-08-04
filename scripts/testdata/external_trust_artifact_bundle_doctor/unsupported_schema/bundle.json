@@ -1,0 +1,17 @@
+{
+  "schema_version": "franken-engine.future-proof-bundle.v99",
+  "bundle_type": "future",
+  "bundle_id": "unsupported-schema-bundle",
+  "fresh_until_utc": "2035-01-01T00:00:00Z",
+  "required_members": [
+    {
+      "path": "events.jsonl"
+    },
+    {
+      "path": "commands.txt"
+    }
+  ],
+  "replay_commands": [
+    "rch exec -- env CARGO_TARGET_DIR=/tmp/rch_target_external_trust_fixture cargo test -p frankenengine-engine --test fixture"
+  ]
+}

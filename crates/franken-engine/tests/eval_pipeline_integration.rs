@@ -26,9 +26,9 @@
 )]
 
 use frankenengine_engine::ast::{
-    AssignmentOperator, BindingPattern, Expression, ExpressionStatement, ObjectProperty, ParseGoal,
-    SourceSpan, Statement, SyntaxTree, VariableDeclaration, VariableDeclarationKind,
-    VariableDeclarator,
+    AssignmentOperator, AssignmentStrictness, BindingPattern, Expression, ExpressionStatement,
+    ObjectProperty, ObjectPropertyKind, ParseGoal, SourceSpan, Statement, SyntaxTree,
+    VariableDeclaration, VariableDeclarationKind, VariableDeclarator,
 };
 use frankenengine_engine::baseline_interpreter::{LaneChoice, LaneRouter, Value};
 use frankenengine_engine::ir_contract::Ir0Module;
@@ -203,6 +203,34 @@ fn quickjs_eval_normalizes_typescript_and_reports_source_ingestion() {
         outcome.source_ingestion.original_source_hash,
         outcome.source_ingestion.normalized_source_hash
     );
+}
+
+#[test]
+fn typescript_eval_preserves_multiline_template_interpolation_bd_88rcn() {
+    let source = "const label: string = \"x\";\nconst value: string = `\n  alpha ${label}\n\n    beta\n`; value;";
+    let expected = "\n  alpha x\n\n    beta\n";
+
+    let mut quickjs = QuickJsInspiredNativeEngine;
+    let quickjs_outcome = quickjs
+        .eval(source)
+        .expect("quickjs lane should evaluate normalized TypeScript template");
+    assert_eq!(quickjs_outcome.value, expected);
+    assert_eq!(
+        quickjs_outcome.source_ingestion.source_language,
+        SourceLanguage::TypeScript
+    );
+    assert!(quickjs_outcome.source_ingestion.normalization_applied);
+
+    let mut v8 = V8InspiredNativeEngine;
+    let v8_outcome = v8
+        .eval(source)
+        .expect("v8 lane should evaluate normalized TypeScript template");
+    assert_eq!(v8_outcome.value, expected);
+    assert_eq!(
+        v8_outcome.source_ingestion.source_language,
+        SourceLanguage::TypeScript
+    );
+    assert!(v8_outcome.source_ingestion.normalization_applied);
 }
 
 #[test]
@@ -507,7 +535,9 @@ fn ir3_execution_of_numeric_literal() {
 fn ir3_execution_of_string_literal() {
     let tree = make_tree(
         ParseGoal::Script,
-        vec![expr_stmt(Expression::StringLiteral("hello".to_string()))],
+        vec![expr_stmt(Expression::StringLiteral(
+            "hello".to_string().into(),
+        ))],
     );
     let ir0 = Ir0Module::from_syntax_tree(tree, "str.js");
     let ctx = LoweringContext::new("trace-str", "decision-str", "policy-str");
@@ -594,7 +624,7 @@ fn ir3_execution_of_logical_compound_member_assignment_preserves_result_semantic
             body.push(var_decl(
                 VariableDeclarationKind::Const,
                 "key",
-                Some(Expression::StringLiteral("x".to_string())),
+                Some(Expression::StringLiteral("x".to_string().into())),
             ));
         }
         body.push(var_decl(
@@ -605,6 +635,7 @@ fn ir3_execution_of_logical_compound_member_assignment_preserves_result_semantic
                 value: initial,
                 computed: false,
                 shorthand: false,
+                kind: ObjectPropertyKind::Data,
             }])),
         ));
         body.push(expr_stmt(Expression::Assignment {
@@ -617,8 +648,10 @@ fn ir3_execution_of_logical_compound_member_assignment_preserves_result_semantic
                     Expression::Identifier("x".to_string())
                 }),
                 computed,
+                span: None,
             }),
             right: Box::new(rhs),
+            assignment_strictness: AssignmentStrictness::Sloppy,
         }));
         body.push(expr_stmt(Expression::Member {
             object: Box::new(Expression::Identifier("obj".to_string())),
@@ -628,6 +661,7 @@ fn ir3_execution_of_logical_compound_member_assignment_preserves_result_semantic
                 Expression::Identifier("x".to_string())
             }),
             computed,
+            span: None,
         }));
 
         let ir0 = Ir0Module::from_syntax_tree(make_tree(ParseGoal::Script, body), "member.js");
@@ -680,7 +714,7 @@ fn ir3_execution_is_deterministic() {
             var_decl(
                 VariableDeclarationKind::Let,
                 "b",
-                Some(Expression::StringLiteral("test".to_string())),
+                Some(Expression::StringLiteral("test".to_string().into())),
             ),
         ],
     );
@@ -867,7 +901,7 @@ fn mixed_literal_types_execute_successfully() {
             var_decl(
                 VariableDeclarationKind::Let,
                 "s",
-                Some(Expression::StringLiteral("hi".to_string())),
+                Some(Expression::StringLiteral("hi".to_string().into())),
             ),
             var_decl(
                 VariableDeclarationKind::Let,

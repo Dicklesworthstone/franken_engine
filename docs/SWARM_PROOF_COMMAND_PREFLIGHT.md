@@ -8,9 +8,10 @@ never executes the command under inspection.
 
 ## Decisions
 
-- `proof_safe`: direct `rch exec -- env ... cargo ...` proof with an isolated
-  `CARGO_TARGET_DIR`, only allowlisted env names, and required visibility
-  context when requested.
+- `proof_safe`: direct `rch exec -- env ... cargo ...` proof with
+  `CARGO_ENCODED_RUSTFLAGS` cleared on the RCH client and worker, an isolated
+  `CARGO_TARGET_DIR`, only allowlisted env names, an effective `RUSTFLAGS`
+  opt-out when one is present, and required client-side visibility context.
 - `proof_unsafe`: a command shape that must not be used as proof evidence.
 - `needs_human_review`: a command shape outside the cheap classifier contract.
 - `non_heavy_read_only`: lightweight gates such as `jq`, `bash -n`, `shellcheck`,
@@ -25,11 +26,16 @@ The preflight rejects:
 
 - shell-wrapped Cargo or RCH commands such as `bash -lc "rch exec -- cargo ..."`
 - bare local Cargo
+- heavy RCH Cargo commands that do not clear `CARGO_ENCODED_RUSTFLAGS` on both
+  the client and worker
 - heavy RCH Cargo commands without `CARGO_TARGET_DIR=...`
 - heavy RCH Cargo commands whose `CARGO_TARGET_DIR` cannot be correlated with
   the supplied bead id after safe-token normalization
-- unsupported env leakage inside `rch exec -- env`
-- missing `RCH_VISIBILITY=...` when captured evidence requires visibility
+- unsupported env leakage or non-assignment options inside the remote
+  `rch exec -- env` prefix
+- a `RUSTFLAGS` override that does not preserve the checked-in linker opt-out
+- missing or empty `RCH_VISIBILITY=...` when captured evidence requires visibility
+- shell expansion, redirection, globbing, or command-separator syntax in the direct command text
 - unrecognized heavy command shapes
 
 Every rejection includes remediation text and, when possible, a pasteable direct
@@ -50,6 +56,29 @@ The checked-in machine-readable matrix lives in
 | `clippy_all_targets` | `cargo clippy --all-targets -- -D warnings` lint gate | `/tmp/rch_target_franken_engine_<safe_bead_id>_clippy_all_targets` |
 | `release_gate` | release-grade cargo proof or reproduce gate | `/tmp/rch_target_franken_engine_<safe_bead_id>_release` |
 
+Canonical commands omit `RUSTFLAGS` and inherit the linker policy checked into
+`.cargo/config.toml`. `RUSTFLAGS` remains allowlisted and part of warm-target
+cache identity when an exceptional command needs custom Rust flags. Because an
+environment override replaces the checked-in target rustflags, every such
+override must leave `-Clinker-features=-lld` as the final effective
+`linker-features` setting; for example,
+`RUSTFLAGS='-C debuginfo=0 -Clinker-features=-lld'`. A linker-only override such
+as `RUSTFLAGS='-C linker=cc'` is not canonical. Matching is token-exact: the
+single token `-Clinker-features=-lld` and the two-token form
+`-C linker-features=-lld` are accepted, while an embedded substring such as
+`-Cmetadata=-Clinker-features=-lld` is rejected. A later
+`-Clinker-features=+lld` also rejects the command because rustc applies the
+later setting. The direct-env parser supports
+simple single/double quoting and backslash escapes without evaluating command
+text.
+
+`CARGO_ENCODED_RUSTFLAGS` assignments remain intentionally unsupported by this
+preflight surface. Canonical commands explicitly unset it twice:
+`env -u CARGO_ENCODED_RUSTFLAGS` wraps the RCH client, and the remote argv
+begins `env -u CARGO_ENCODED_RUSTFLAGS`. Both clears are required so an
+ambient client value or worker-side value cannot replace the checked-in target
+rustflags.
+
 For heavy Cargo proof, the target dir must encode the bead id. The preflight
 normalizes both values to alphanumeric/underscore tokens before comparing them,
 so either dash or underscore separators are acceptable, but unrelated names such
@@ -62,19 +91,19 @@ is already active for another bead.
 Focused unit example:
 
 ```bash
-rch exec -- env RUSTUP_TOOLCHAIN=nightly CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_bd_7eefz_async_gen CARGO_INCREMENTAL=0 RUSTFLAGS='-C linker=cc' CARGO_BUILD_JOBS=1 cargo test -p frankenengine-engine --lib async_generator_next_fails_closed_for_suspended_body -- --nocapture
+env -u CARGO_ENCODED_RUSTFLAGS rch exec -- env -u CARGO_ENCODED_RUSTFLAGS RUSTUP_TOOLCHAIN=nightly CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_bd_7eefz_async_gen CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p frankenengine-engine --lib async_generator_next_fails_closed_for_suspended_body -- --nocapture
 ```
 
 All-targets example:
 
 ```bash
-rch exec -- env RUSTUP_TOOLCHAIN=nightly CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_bd_zy517_all_targets CARGO_INCREMENTAL=0 RUSTFLAGS='-C linker=cc' CARGO_BUILD_JOBS=1 cargo check --all-targets
+env -u CARGO_ENCODED_RUSTFLAGS rch exec -- env -u CARGO_ENCODED_RUSTFLAGS RUSTUP_TOOLCHAIN=nightly CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_bd_zy517_all_targets CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo check --all-targets
 ```
 
 ## Inputs
 
 ```bash
-./scripts/swarm_proof_command_preflight.sh --command 'rch exec -- env CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_bd cargo test -p frankenengine-engine --lib'
+./scripts/swarm_proof_command_preflight.sh --command 'env -u CARGO_ENCODED_RUSTFLAGS rch exec -- env -u CARGO_ENCODED_RUSTFLAGS CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_bd cargo test -p frankenengine-engine --lib'
 ```
 
 `--command-json` expects one command object with `command`, optional `case_id`,

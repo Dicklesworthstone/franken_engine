@@ -21,7 +21,7 @@ use frankenengine_engine::benchmark_evidence_bundle::{
 use frankenengine_engine::engine_object_id::EngineObjectId;
 use frankenengine_engine::evidence_ledger::{
     CandidateAction, ChosenAction, Constraint, DecisionType, EvidenceEmitter, EvidenceEntryBuilder,
-    InMemoryLedger, Witness,
+    InMemoryLedger, LabEvidenceAuthority, Witness,
 };
 use frankenengine_engine::hash_tiers::ContentHash;
 use frankenengine_engine::ir_contract::Ir0Module;
@@ -236,13 +236,21 @@ fn evidence_environment() -> EnvironmentSnapshot {
 
 fn real_runtime_evidence_digest() -> ContentHash {
     let epoch = SecurityEpoch::from_raw(9);
-    let mut ledger = InMemoryLedger::new();
-    let entry = EvidenceEntryBuilder::new(
+    let authority = LabEvidenceAuthority::deterministic_fixture(
+        "franken-engine.hot-path-benchmark",
+        "hot-path-evidence-benchmark-v2",
+        epoch,
+    )
+    .expect("benchmark lab authority");
+    let mut ledger =
+        InMemoryLedger::for_lab_authority(epoch, &authority).expect("benchmark lab ledger");
+    let entry = EvidenceEntryBuilder::new_with_lab_authority(
         "trace-hot-path-evidence",
         "decision-hot-path-evidence",
         "policy-hot-path-evidence",
         epoch,
         DecisionType::ContractEvaluation,
+        &authority,
     )
     .timestamp_ns(1_700_000_000_000_000_001)
     .candidate(CandidateAction::new(

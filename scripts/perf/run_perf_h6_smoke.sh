@@ -12,7 +12,7 @@ set -euo pipefail
 # `What counts as a perf win` gate in docs/PERFORMANCE_BASELINE.md).
 #
 # Three checks, each fail-closed:
-#   1. BUILD     — the `hot_paths` bench compiles with the canonical pass1
+#   1. BUILD     — the `hot_paths` bench compiles with current linker-policy
 #                  flags (capacity-hint sweep is in the build).
 #   2. BENCH     — the two H6 target sub-benches (iterator_protocol_trace,
 #                  scheduler_queue_commit) execute under a short Criterion
@@ -76,6 +76,7 @@ PREREQS=(
 )
 
 CARGO="${CARGO:-/home/ubuntu/.cargo/bin/cargo}"
+CURRENT_RUSTFLAGS="-C force-frame-pointers=yes -C linker=cc -Clinker-features=-lld"
 BUILD_RC=0
 BENCH_RC=0
 INTEG_RC=0
@@ -117,12 +118,13 @@ if [[ "$PREREQ_OK" -ne 1 && "$MODE" != "self-check" ]]; then
 fi
 
 # ---------------------------------------------------------------------------
-# 1. BUILD — bench compiles with canonical pass1 flags (full mode only).
+# 1. BUILD — bench compiles with current linker-policy flags (full mode only).
 # ---------------------------------------------------------------------------
 if [[ "$MODE" == "full" ]]; then
-    echo "[h6.4] building hot_paths bench (pass1 flags)..."
-    if RCH_CARGO_WRAPPER_BYPASS=1 \
-        RUSTFLAGS="-C force-frame-pointers=yes -C linker=cc" \
+    echo "[h6.4] building hot_paths bench (current linker-policy flags)..."
+    if env -u CARGO_ENCODED_RUSTFLAGS \
+        RCH_CARGO_WRAPPER_BYPASS=1 \
+        RUSTFLAGS="$CURRENT_RUSTFLAGS" \
         CARGO_INCREMENTAL=0 \
         "$CARGO" bench --bench hot_paths --no-run > "$RUN_DIR/build.log" 2>&1; then
         BUILD_STATUS="pass"
@@ -172,9 +174,9 @@ fi
 # ---------------------------------------------------------------------------
 # 4. Fingerprint.
 # ---------------------------------------------------------------------------
-python3 - "$RUN_DIR" "$BEAD" <<'PYFP'
+python3 - "$RUN_DIR" "$BEAD" "$CURRENT_RUSTFLAGS" "$MODE" "$BUILD_STATUS" <<'PYFP'
 import json, subprocess, sys, time, platform
-run_dir, bead = sys.argv[1:3]
+run_dir, bead, current_rustflags, mode, build_status = sys.argv[1:6]
 def sh(*a):
     try:
         return subprocess.check_output(a, text=True, stderr=subprocess.DEVNULL).strip()
@@ -191,11 +193,22 @@ fp = {
         "kernel": platform.release(),
     },
     "toolchain": {"rustc": sh("rustc", "--version"), "python": platform.python_version()},
-    "build_flags": {
-        "RUSTFLAGS": "-C force-frame-pointers=yes -C linker=cc",
-        "CARGO_INCREMENTAL": "0",
-    },
 }
+if mode == "full" and build_status == "pass":
+    fp["build_flags"] = {
+        "RUSTFLAGS": current_rustflags,
+        "CARGO_ENCODED_RUSTFLAGS": None,
+        "CARGO_INCREMENTAL": "0",
+    }
+    fp["build_provenance"] = {
+        "status": "executed_build_command",
+        "effective_channel": "RUSTFLAGS",
+    }
+else:
+    fp["build_provenance"] = {
+        "status": "unknown",
+        "reason": f"bench build not executed successfully (mode={mode}, build_status={build_status})",
+    }
 json.dump(fp, open(f"{run_dir}/fingerprint.json", "w"), indent=2)
 PYFP
 
@@ -267,7 +280,7 @@ with open(os.path.join(run_dir, "summary.md"), "w") as f:
     f.write(f"Bead: {bead} · mode `{mode}` · generated {now} · git `{git_sha[:12]}`\n\n")
     f.write("| check | what it proves | status |\n")
     f.write("|---|---|---|\n")
-    f.write(f"| build | `hot_paths` compiles with pass1 flags | {build_status} |\n")
+    f.write(f"| build | `hot_paths` compiles with current linker-policy flags | {build_status} |\n")
     f.write(f"| bench | {', '.join(targets)} execute (short budget) | {bench_status} |\n")
     f.write(f"| integration | `frankenctl run` output == pre-H6 golden | {integ_status} |\n")
     f.write(f"\n**Overall: {'PASS' if all_pass else 'FAIL'}**\n\n")

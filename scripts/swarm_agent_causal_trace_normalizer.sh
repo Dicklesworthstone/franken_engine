@@ -23,6 +23,7 @@ git_closeout_commits_json=""
 rch_validation_artifacts_json=""
 validation_commands_json=""
 operator_status_json=""
+identity_reconciliation_receipt_json=""
 
 usage() {
   cat >&2 <<'EOF'
@@ -50,6 +51,7 @@ Optional:
   --rch-validation-artifacts-json FILE
   --validation-commands-json FILE
   --operator-status-json FILE
+  --identity-reconciliation-receipt-json FILE
   --source-revision REV
   --output-dir DIR
 
@@ -134,6 +136,10 @@ while [[ "$#" -gt 0 ]]; do
       operator_status_json="${2:-}"
       shift 2
       ;;
+    --identity-reconciliation-receipt-json)
+      identity_reconciliation_receipt_json="${2:-}"
+      shift 2
+      ;;
     --output-dir)
       run_dir="${2:-}"
       shift 2
@@ -192,6 +198,7 @@ git_commits_normalized="${run_dir}/git_closeout_commits.normalized.json"
 rch_artifacts_normalized="${run_dir}/rch_validation_artifacts.normalized.json"
 validation_commands_normalized="${run_dir}/validation_commands.normalized.json"
 operator_status_normalized="${run_dir}/operator_status.normalized.json"
+identity_receipt_normalized="${run_dir}/identity_reconciliation_receipt.normalized.json"
 
 printf './scripts/swarm_agent_causal_trace_normalizer.sh' >"$commands_path"
 for arg in "${original_args[@]}"; do
@@ -263,6 +270,27 @@ normalize_optional_json() {
   emit_event "source_loaded" "$label"
 }
 
+normalize_identity_receipt_json() {
+  local input="$1"
+  local output="$2"
+  local label="$3"
+  if [[ -z "$input" ]]; then
+    printf '{}\n' | jq -cS . >"$output"
+    return
+  fi
+  if [[ ! -f "$input" ]]; then
+    printf '{}\n' | jq -cS . >"$output"
+    record_degraded "optional_snapshot_missing" "${label} path does not exist: ${input}"
+    return
+  fi
+  if ! jq -cS . "$input" >"$output"; then
+    printf '{}\n' | jq -cS . >"$output"
+    record_degraded "optional_snapshot_malformed" "${label} was malformed JSON"
+    return
+  fi
+  emit_event "source_loaded" "$label"
+}
+
 normalize_required_json "$br_issue_json" "$br_issue_normalized" "br issue snapshot"
 normalize_optional_json "$br_ready_json" "$br_ready_normalized" "br ready/list snapshot" '{"issues":[]}'
 normalize_optional_json "$br_sync_status_json" "$br_sync_status_normalized" "br sync status snapshot" '{}'
@@ -276,6 +304,7 @@ normalize_optional_json "$git_closeout_commits_json" "$git_commits_normalized" "
 normalize_optional_json "$rch_validation_artifacts_json" "$rch_artifacts_normalized" "RCH validation artifact snapshot" '{"artifacts":[]}'
 normalize_optional_json "$validation_commands_json" "$validation_commands_normalized" "validation command transcript snapshot" '{"commands":[]}'
 normalize_optional_json "$operator_status_json" "$operator_status_normalized" "operator status snapshot" '{}'
+normalize_identity_receipt_json "$identity_reconciliation_receipt_json" "$identity_receipt_normalized" "identity reconciliation receipt snapshot"
 
 jq 'if type == "array" then .[0] elif (type == "object" and has("issues")) then .issues[0] else . end' \
   "$br_issue_normalized" >"$br_issue_core"
@@ -307,6 +336,56 @@ if jq -e '
   ] | length > 0
 ' --arg bead "$bead_id" "$messages_normalized" >/dev/null; then
   record_fail_closed "ack_required_message_unacknowledged" "ack_required message in bead thread lacks acknowledgement evidence"
+fi
+
+ack_failure_count="$(jq '
+  def arr($v): if ($v | type) == "array" then $v else [] end;
+  def ack_rows:
+    if type == "object" and has("ack_attempts") then arr(.ack_attempts)
+    elif type == "object" and has("acknowledgement_attempts") then arr(.acknowledgement_attempts)
+    elif type == "object" and has("message_ack_attempts") then arr(.message_ack_attempts)
+    else [] end;
+  [ack_rows[]
+    | select(((.thread_id // "") == $bead) or ((.bead_id // "") == $bead) or ((.subject // "") | contains($bead)))
+    | select(((.success // .acknowledged // false) == false) and (((.error // .error_message // .detail // "") | length) > 0))
+  ] | length
+' --arg bead "$bead_id" "$messages_normalized")"
+if [[ "$ack_failure_count" -gt 0 ]]; then
+  record_fail_closed "ack_attempt_failed" "Agent Mail acknowledgement attempt failed for this bead thread"
+  if ! jq -e 'type == "object" and (.schema_version // "") == "franken-engine.swarm-agent-mail-identity-reconciliation-receipt.v1"' "$identity_receipt_normalized" >/dev/null; then
+    record_degraded "identity_reconciliation_receipt_missing" "failed acknowledgement attempt lacks identity reconciliation receipt evidence"
+  elif jq -e '
+    def arr($v): if ($v | type) == "array" then $v else [] end;
+    def ack_rows:
+      if type == "object" and has("ack_attempts") then arr(.ack_attempts)
+      elif type == "object" and has("acknowledgement_attempts") then arr(.acknowledgement_attempts)
+      elif type == "object" and has("message_ack_attempts") then arr(.message_ack_attempts)
+      else [] end;
+    def ids_equal($left; $right):
+      (($left // null) != null and ($right // null) != null and (($left | tostring) == ($right | tostring)));
+    def raw_error($a): (($a.error // $a.error_message // $a.detail // "") | tostring);
+    def failed($a): (($a.success // $a.acknowledged // false) == false and ((raw_error($a) | length) > 0));
+    def receipt: $identity[0];
+    def receipt_anomalies: arr(receipt.evidence.anomalies // receipt.anomalies // []);
+    def ack_thread($a): ($a.thread_id // $a.bead_id // "");
+    def ack_bead($a): ($a.bead_id // "");
+    def receipt_matches($a):
+      ids_equal(receipt.message_id; ($a.message_id // $a.id))
+      or (((receipt.thread_id // "") != "") and ((receipt.thread_id // "") == ack_thread($a)))
+      or (((receipt.bead_id // "") != "") and ((receipt.bead_id // "") == ack_bead($a)))
+      or any(receipt_anomalies[]?;
+        ids_equal(.affected_entities.message_id; ($a.message_id // $a.id))
+        or (((.affected_entities.thread_id // "") != "") and ((.affected_entities.thread_id // "") == ack_thread($a)))
+        or (((.affected_entities.bead_id // "") != "") and ((.affected_entities.bead_id // "") == ack_bead($a)))
+      );
+    [ack_rows[]
+      | select(((.thread_id // "") == $bead) or ((.bead_id // "") == $bead) or ((.subject // "") | contains($bead)))
+      | select(failed(.))
+      | select(((receipt.decision // "") == "pass") or ((receipt.evidence.failed_ack_attempt_count // -1) == 0) or (receipt_matches(.) | not))
+    ] | length > 0
+  ' --arg bead "$bead_id" --slurpfile identity "$identity_receipt_normalized" "$messages_normalized" >/dev/null; then
+    record_fail_closed "identity_reconciliation_receipt_contradicts_ack_attempt" "identity reconciliation receipt contradicts raw acknowledgement failure evidence"
+  fi
 fi
 
 if jq -e '
@@ -395,6 +474,7 @@ jq -n \
   --arg rch_validation_artifacts_json "$rch_validation_artifacts_json" \
   --arg validation_commands_json "$validation_commands_json" \
   --arg operator_status_json "$operator_status_json" \
+  --arg identity_reconciliation_receipt_json "$identity_reconciliation_receipt_json" \
   '{
     schema_version:"franken-engine.swarm-agent-causal-trace-input.v1",
     bead_id:$bead_id,
@@ -413,7 +493,8 @@ jq -n \
       git_closeout_commits_json:$git_closeout_commits_json,
       rch_validation_artifacts_json:$rch_validation_artifacts_json,
       validation_commands_json:$validation_commands_json,
-      operator_status_json:$operator_status_json
+      operator_status_json:$operator_status_json,
+      identity_reconciliation_receipt_json:$identity_reconciliation_receipt_json
     }
   }' >"$trace_input_path"
 
@@ -423,7 +504,8 @@ for source_id in \
   br_issue_json br_ready_json br_sync_status_json bv_actionable_plan_json \
   agent_mail_profiles_json agent_mail_messages_json file_reservations_json \
   declared_write_set_json git_status_json git_closeout_commits_json \
-  rch_validation_artifacts_json validation_commands_json operator_status_json
+  rch_validation_artifacts_json validation_commands_json operator_status_json \
+  identity_reconciliation_receipt_json
 do
   normalized_var="${source_id}"
   normalized_path=""
@@ -441,6 +523,7 @@ do
     rch_validation_artifacts_json) normalized_path="$rch_artifacts_normalized" ;;
     validation_commands_json) normalized_path="$validation_commands_normalized" ;;
     operator_status_json) normalized_path="$operator_status_normalized" ;;
+    identity_reconciliation_receipt_json) normalized_path="$identity_receipt_normalized" ;;
   esac
   jq -cn \
     --arg source_id "$source_id" \
@@ -484,6 +567,7 @@ jq -n \
   --slurpfile commits "$git_commits_normalized" \
   --slurpfile validations "$validation_commands_normalized" \
   --slurpfile rch "$rch_artifacts_normalized" \
+  --slurpfile identity_receipt "$identity_receipt_normalized" \
   --slurpfile degraded "$degraded_reasons_json" \
   --slurpfile fail_closed "$fail_closed_reasons_json" \
   --arg bead_id "$bead_id" \
@@ -492,7 +576,7 @@ jq -n \
   --arg decision "$decision" '
   def rows($x; $field):
     if ($x | type) == "array" then $x
-    elif ($x | type) == "object" and ($x | has($field)) then $x[$field]
+    elif ($x | type) == "object" and ($x | has($field)) and (($x[$field] // null) | type) == "array" then $x[$field]
     elif ($x | type) == "object" and ($x | has("result")) then $x.result
     else [] end;
   def event($type; $source; $idx; $row):
@@ -517,10 +601,14 @@ jq -n \
   ]
   + ([rows($profiles[0]; "agents") | to_entries[] | event("agent_profile"; "agent_mail_profiles_json"; .key; .value)])
   + ([rows($messages[0]; "messages") | to_entries[] | event("mail_message"; "agent_mail_messages_json"; .key; .value)])
+  + ([rows($messages[0]; "ack_attempts") + rows($messages[0]; "acknowledgement_attempts") + rows($messages[0]; "message_ack_attempts") | to_entries[] | event("ack_attempt"; "agent_mail_messages_json"; .key; .value)])
   + ([rows($reservations[0]; "reservations") | to_entries[] | event("file_reservation"; "file_reservations_json"; .key; .value)])
   + ([rows($commits[0]; "commits") | to_entries[] | event("git_commit"; "git_closeout_commits_json"; .key; .value)])
   + ([rows($validations[0]; "commands") | to_entries[] | event("validation_command"; "validation_commands_json"; .key; .value)])
   + ([rows($rch[0]; "artifacts") | to_entries[] | event("rch_proof_artifact"; "rch_validation_artifacts_json"; .key; .value)])
+  + (if (($identity_receipt[0].schema_version // "") == "franken-engine.swarm-agent-mail-identity-reconciliation-receipt.v1") then
+      [event("identity_reconciliation_receipt"; "identity_reconciliation_receipt_json"; 0; $identity_receipt[0])]
+    else [] end)
   | {
       schema_version:"franken-engine.swarm-agent-causal-trace-event-set.v1",
       bead_id:$bead_id,

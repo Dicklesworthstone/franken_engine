@@ -26,8 +26,8 @@ use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use frankenengine_engine::baseline_interpreter::{
-    ConsoleLevel, ExecutionResult, HeapObject, InterpreterConfig, InterpreterCore,
-    InterpreterError, InterpreterEvent, LaneChoice, LaneReason, LaneRouter,
+    ConsoleLevel, ExecutionResult, GeneratedCodeEventKind, HeapObject, InterpreterConfig,
+    InterpreterCore, InterpreterError, InterpreterEvent, LaneChoice, LaneReason, LaneRouter,
     ModuleResolutionFailureReason, ObjectId, QuickJsLane, V8Lane, Value,
 };
 use frankenengine_engine::capability::RuntimeCapability;
@@ -62,7 +62,7 @@ fn test_module(instructions: Vec<Ir3Instruction>) -> Ir3Module {
 
 fn test_module_with_pool(instructions: Vec<Ir3Instruction>, pool: Vec<String>) -> Ir3Module {
     let mut m = test_module(instructions);
-    m.constant_pool = pool;
+    m.constant_pool = pool.into_iter().map(Into::into).collect();
     m
 }
 
@@ -162,6 +162,103 @@ fn assert_both_lanes_value(module: &Ir3Module, expected: Value, label: &str) {
 
     let v8 = v8_run(module).unwrap();
     assert_eq!(v8.value, expected, "v8 mismatch for {label}");
+}
+
+fn builtin_test_config() -> InterpreterConfig {
+    let mut config = baseline_test_config();
+    config
+        .granted_capabilities
+        .insert(RuntimeCapability::Builtin);
+    config
+}
+
+fn builtin_test_v8_config() -> InterpreterConfig {
+    let mut config = baseline_test_v8_config();
+    config
+        .granted_capabilities
+        .insert(RuntimeCapability::Builtin);
+    config
+}
+
+fn qjs_run_with_builtin(module: &Ir3Module) -> Result<ExecutionResult, InterpreterError> {
+    QuickJsLane::with_config(builtin_test_config()).execute(module, "builtin-integ-trace")
+}
+
+fn v8_run_with_builtin(module: &Ir3Module) -> Result<ExecutionResult, InterpreterError> {
+    V8Lane::with_config(builtin_test_v8_config()).execute(module, "builtin-integ-trace")
+}
+
+fn assert_both_builtin_lanes_value(module: &Ir3Module, expected: Value, label: &str) {
+    let qjs = qjs_run_with_builtin(module).unwrap();
+    assert_eq!(qjs.value, expected.clone(), "quickjs mismatch for {label}");
+
+    let v8 = v8_run_with_builtin(module).unwrap();
+    assert_eq!(v8.value, expected, "v8 mismatch for {label}");
+}
+
+fn assert_lane_range_error(
+    result: Result<ExecutionResult, InterpreterError>,
+    lane: &str,
+    label: &str,
+) {
+    match result {
+        Err(InterpreterError::RangeError { message }) => {
+            assert!(
+                !message.is_empty(),
+                "{lane} RangeError message was empty for {label}"
+            );
+        }
+        Err(err) => panic!("{lane} should throw RangeError for {label}, got {err:?}"),
+        Ok(result) => panic!(
+            "{lane} should throw RangeError for {label}, returned {:?}",
+            result.value
+        ),
+    }
+}
+
+fn assert_both_builtin_lanes_range_error(module: &Ir3Module, label: &str) {
+    assert_lane_range_error(qjs_run_with_builtin(module), "quickjs", label);
+    assert_lane_range_error(v8_run_with_builtin(module), "v8", label);
+}
+
+fn call_builtin_math_random(dst: u32) -> Ir3Instruction {
+    Ir3Instruction::HostCall {
+        capability: CapabilityTag("builtin:MathRandom".to_string()),
+        args: RegRange { start: 0, count: 0 },
+        dst,
+    }
+}
+
+fn call_builtin_number_to_string(dst: u32) -> Ir3Instruction {
+    Ir3Instruction::HostCall {
+        capability: CapabilityTag("builtin:NumberPrototypeToString".to_string()),
+        args: RegRange { start: 0, count: 2 },
+        dst,
+    }
+}
+
+fn call_builtin_number_to_fixed(dst: u32) -> Ir3Instruction {
+    Ir3Instruction::HostCall {
+        capability: CapabilityTag("builtin:NumberPrototypeToFixed".to_string()),
+        args: RegRange { start: 0, count: 2 },
+        dst,
+    }
+}
+
+fn call_builtin_number_to_exponential(dst: u32) -> Ir3Instruction {
+    Ir3Instruction::HostCall {
+        capability: CapabilityTag("builtin:NumberPrototypeToExponential".to_string()),
+        args: RegRange { start: 0, count: 2 },
+        dst,
+    }
+}
+
+fn call_builtin_number_to_precision(dst: u32) -> Ir3Instruction {
+    Ir3Instruction::HostCall {
+        capability: CapabilityTag("builtin:NumberPrototypeToPrecision".to_string()),
+        args: RegRange { start: 0, count: 2 },
+        dst,
+    }
 }
 
 fn temp_module_dir(prefix: &str) -> PathBuf {
@@ -2134,6 +2231,907 @@ fn import_module_executes_and_returns_export() {
         .execute(&module, "module-import-trace")
         .expect("execute");
     assert_eq!(result.value, Value::Int(7));
+}
+
+#[test]
+fn imported_closure_calls_use_the_exporting_module_function_table() {
+    let root = temp_module_dir("module_import_callable_origin");
+    fs::create_dir_all(&root).expect("create module root");
+    let dep_path = root.join("dep.mjs");
+    fs::write(
+        &dep_path,
+        "const base = 40; export function plus(value) { return base + value; }",
+    )
+    .expect("write callable dependency");
+
+    // The dependency lowers `plus` to function-table index 1. Deliberately
+    // install an unrelated index-1 function in the importer: without module
+    // provenance the raw imported closure would jump here and return 99.
+    let mut module = test_module_with_pool(
+        vec![
+            Ir3Instruction::LoadStr {
+                dst: 0,
+                pool_index: 0,
+            },
+            Ir3Instruction::ImportModule {
+                specifier: 0,
+                dst: 1,
+            },
+            Ir3Instruction::LoadStr {
+                dst: 2,
+                pool_index: 1,
+            },
+            Ir3Instruction::GetProperty {
+                obj: 1,
+                key: 2,
+                dst: 3,
+            },
+            Ir3Instruction::LoadInt { dst: 4, value: 2 },
+            Ir3Instruction::Call {
+                callee: 3,
+                args: RegRange { start: 4, count: 1 },
+                dst: 5,
+            },
+            Ir3Instruction::LoadInt { dst: 4, value: 3 },
+            Ir3Instruction::CallMethod {
+                receiver: 1,
+                callee: 3,
+                args: RegRange { start: 4, count: 1 },
+                dst: 6,
+            },
+            Ir3Instruction::Add {
+                dst: 7,
+                lhs: 5,
+                rhs: 6,
+            },
+            Ir3Instruction::Return { value: 7 },
+            Ir3Instruction::LoadUndefined { dst: 0 },
+            Ir3Instruction::Return { value: 0 },
+            Ir3Instruction::LoadInt { dst: 0, value: 99 },
+            Ir3Instruction::Return { value: 0 },
+        ],
+        vec!["./dep.mjs".to_string(), "plus".to_string()],
+    );
+    module.function_table = vec![
+        Ir3FunctionDesc {
+            name: Some("main".to_string()),
+            entry: 10,
+            arity: 0,
+            frame_size: 8,
+            is_generator: false,
+            rest_param_index: None,
+        },
+        Ir3FunctionDesc {
+            name: Some("wrong_importer_function".to_string()),
+            entry: 12,
+            arity: 1,
+            frame_size: 8,
+            is_generator: false,
+            rest_param_index: None,
+        },
+    ];
+    module.header.source_label = root.join("main.mjs").display().to_string();
+
+    let mut config = InterpreterConfig::quickjs_defaults();
+    config.module_root = Some(root.display().to_string());
+    config.granted_capabilities = capabilities_with([RuntimeCapability::ModuleLoad]);
+    let result = QuickJsLane::with_config(config)
+        .execute(&module, "module-import-callable-origin-trace")
+        .expect("execute imported closure calls");
+    assert_eq!(result.value, Value::Int(85));
+}
+
+fn write_constructor_owner_module(root: &std::path::Path) {
+    fs::write(
+        root.join("constructor_owner.mjs"),
+        "export function Widget(value) {\n\
+           this.value = value;\n\
+           this.targetMatches = new.target === Widget;\n\
+         }\n\
+         Widget.prototype.score = function() {\n\
+           return this.targetMatches && this instanceof Widget ? this.value : -1;\n\
+         };",
+    )
+    .expect("write imported constructor dependency");
+}
+
+fn colliding_constructor_importer(
+    instructions: Vec<Ir3Instruction>,
+    root: &std::path::Path,
+) -> Ir3Module {
+    let mut module = test_module_with_pool(
+        instructions,
+        vec![
+            "./constructor_owner.mjs".to_string(),
+            "Widget".to_string(),
+            "score".to_string(),
+        ],
+    );
+    module.function_table = vec![
+        Ir3FunctionDesc {
+            name: Some("main".to_string()),
+            entry: u32::try_from(module.instructions.len()).expect("test instruction count"),
+            arity: 0,
+            frame_size: 12,
+            is_generator: false,
+            rest_param_index: None,
+        },
+        Ir3FunctionDesc {
+            name: Some("wrong_importer_constructor".to_string()),
+            entry: u32::try_from(module.instructions.len()).expect("test instruction count"),
+            arity: 1,
+            frame_size: 12,
+            is_generator: false,
+            rest_param_index: None,
+        },
+    ];
+    module.header.source_label = root.join("main.mjs").display().to_string();
+    module
+}
+
+#[test]
+fn imported_direct_constructor_uses_owner_prototype_and_new_target_bd_fw7zd_7() {
+    let root = temp_module_dir("module_import_direct_constructor_owner");
+    fs::create_dir_all(&root).expect("create module root");
+    write_constructor_owner_module(&root);
+
+    let module = colliding_constructor_importer(
+        vec![
+            Ir3Instruction::LoadStr {
+                dst: 0,
+                pool_index: 0,
+            },
+            Ir3Instruction::ImportModule {
+                specifier: 0,
+                dst: 1,
+            },
+            Ir3Instruction::LoadStr {
+                dst: 2,
+                pool_index: 1,
+            },
+            Ir3Instruction::GetProperty {
+                obj: 1,
+                key: 2,
+                dst: 3,
+            },
+            Ir3Instruction::LoadInt { dst: 4, value: 42 },
+            Ir3Instruction::Construct {
+                callee: 3,
+                args: RegRange { start: 4, count: 1 },
+                dst: 5,
+            },
+            Ir3Instruction::LoadStr {
+                dst: 6,
+                pool_index: 2,
+            },
+            Ir3Instruction::GetProperty {
+                obj: 5,
+                key: 6,
+                dst: 7,
+            },
+            Ir3Instruction::CallMethod {
+                receiver: 5,
+                callee: 7,
+                args: RegRange { start: 8, count: 0 },
+                dst: 9,
+            },
+            Ir3Instruction::Return { value: 9 },
+        ],
+        &root,
+    );
+
+    let mut config = InterpreterConfig::quickjs_defaults();
+    config.module_root = Some(root.display().to_string());
+    config.granted_capabilities = capabilities_with([RuntimeCapability::ModuleLoad]);
+    let result = QuickJsLane::with_config(config)
+        .execute(&module, "module-import-direct-constructor-owner-trace")
+        .expect("execute imported direct constructor");
+    assert_eq!(result.value, Value::Int(42));
+}
+
+#[test]
+fn imported_reflect_construct_uses_owner_prototype_and_new_target_bd_fw7zd_7() {
+    let root = temp_module_dir("module_import_reflect_constructor_owner");
+    fs::create_dir_all(&root).expect("create module root");
+    write_constructor_owner_module(&root);
+
+    let module = colliding_constructor_importer(
+        vec![
+            Ir3Instruction::LoadStr {
+                dst: 0,
+                pool_index: 0,
+            },
+            Ir3Instruction::ImportModule {
+                specifier: 0,
+                dst: 1,
+            },
+            Ir3Instruction::LoadStr {
+                dst: 2,
+                pool_index: 1,
+            },
+            Ir3Instruction::GetProperty {
+                obj: 1,
+                key: 2,
+                dst: 3,
+            },
+            Ir3Instruction::NewArray { dst: 4 },
+            Ir3Instruction::LoadInt { dst: 5, value: 43 },
+            Ir3Instruction::ArrayPush {
+                array: 4,
+                element: 5,
+            },
+            Ir3Instruction::HostCall {
+                capability: CapabilityTag("builtin:ReflectConstruct".to_string()),
+                args: RegRange { start: 3, count: 2 },
+                dst: 6,
+            },
+            Ir3Instruction::LoadStr {
+                dst: 7,
+                pool_index: 2,
+            },
+            Ir3Instruction::GetProperty {
+                obj: 6,
+                key: 7,
+                dst: 8,
+            },
+            Ir3Instruction::CallMethod {
+                receiver: 6,
+                callee: 8,
+                args: RegRange {
+                    start: 10,
+                    count: 0,
+                },
+                dst: 9,
+            },
+            Ir3Instruction::Return { value: 9 },
+        ],
+        &root,
+    );
+
+    let mut config = InterpreterConfig::quickjs_defaults();
+    config.module_root = Some(root.display().to_string());
+    config.granted_capabilities =
+        capabilities_with([RuntimeCapability::ModuleLoad, RuntimeCapability::Builtin]);
+    let result = QuickJsLane::with_config(config)
+        .execute(&module, "module-import-reflect-constructor-owner-trace")
+        .expect("execute imported Reflect.construct");
+    assert_eq!(result.value, Value::Int(43));
+}
+
+#[test]
+fn imported_generators_resume_against_the_exporting_module_function_table_bd_fw7zd_6() {
+    let root = temp_module_dir("module_import_generator_origin");
+    fs::create_dir_all(&root).expect("create module root");
+    fs::write(
+        root.join("dep.mjs"),
+        "export function* sequence(value) { yield value + 40; return value + 41; }",
+    )
+    .expect("write generator dependency");
+
+    // The dependency lowers `sequence` to function-table index 1. Install a
+    // colliding importer function at that index: both the initial `.next()`
+    // and the post-yield resume must remain bound to the retained dependency
+    // program for direct and method-style construction.
+    let mut module = test_module_with_pool(
+        vec![
+            Ir3Instruction::LoadStr {
+                dst: 0,
+                pool_index: 0,
+            },
+            Ir3Instruction::ImportModule {
+                specifier: 0,
+                dst: 1,
+            },
+            Ir3Instruction::LoadStr {
+                dst: 2,
+                pool_index: 1,
+            },
+            Ir3Instruction::GetProperty {
+                obj: 1,
+                key: 2,
+                dst: 3,
+            },
+            Ir3Instruction::LoadInt { dst: 4, value: 2 },
+            Ir3Instruction::Call {
+                callee: 3,
+                args: RegRange { start: 4, count: 1 },
+                dst: 5,
+            },
+            Ir3Instruction::Call {
+                callee: 5,
+                args: RegRange {
+                    start: 16,
+                    count: 0,
+                },
+                dst: 6,
+            },
+            Ir3Instruction::LoadStr {
+                dst: 7,
+                pool_index: 2,
+            },
+            Ir3Instruction::GetProperty {
+                obj: 6,
+                key: 7,
+                dst: 8,
+            },
+            Ir3Instruction::LoadInt { dst: 4, value: 3 },
+            Ir3Instruction::CallMethod {
+                receiver: 1,
+                callee: 3,
+                args: RegRange { start: 4, count: 1 },
+                dst: 9,
+            },
+            Ir3Instruction::Call {
+                callee: 9,
+                args: RegRange {
+                    start: 16,
+                    count: 0,
+                },
+                dst: 10,
+            },
+            Ir3Instruction::GetProperty {
+                obj: 10,
+                key: 7,
+                dst: 11,
+            },
+            Ir3Instruction::Call {
+                callee: 5,
+                args: RegRange {
+                    start: 16,
+                    count: 0,
+                },
+                dst: 12,
+            },
+            Ir3Instruction::GetProperty {
+                obj: 12,
+                key: 7,
+                dst: 13,
+            },
+            Ir3Instruction::Add {
+                dst: 14,
+                lhs: 8,
+                rhs: 11,
+            },
+            Ir3Instruction::Add {
+                dst: 15,
+                lhs: 14,
+                rhs: 13,
+            },
+            Ir3Instruction::Return { value: 15 },
+            Ir3Instruction::LoadUndefined { dst: 0 },
+            Ir3Instruction::Return { value: 0 },
+            Ir3Instruction::LoadInt { dst: 0, value: 999 },
+            Ir3Instruction::Return { value: 0 },
+        ],
+        vec![
+            "./dep.mjs".to_string(),
+            "sequence".to_string(),
+            "value".to_string(),
+        ],
+    );
+    module.function_table = vec![
+        Ir3FunctionDesc {
+            name: Some("main".to_string()),
+            entry: 18,
+            arity: 0,
+            frame_size: 16,
+            is_generator: false,
+            rest_param_index: None,
+        },
+        Ir3FunctionDesc {
+            name: Some("wrong_importer_function".to_string()),
+            entry: 20,
+            arity: 1,
+            frame_size: 16,
+            is_generator: true,
+            rest_param_index: None,
+        },
+    ];
+    module.header.source_label = root.join("main.mjs").display().to_string();
+
+    let mut config = InterpreterConfig::quickjs_defaults();
+    config.module_root = Some(root.display().to_string());
+    config.granted_capabilities = capabilities_with([RuntimeCapability::ModuleLoad]);
+    let result = QuickJsLane::with_config(config)
+        .execute(&module, "module-import-generator-origin-trace")
+        .expect("execute imported generator calls and resumptions");
+    assert_eq!(result.value, Value::Int(128));
+}
+
+#[test]
+fn imported_async_functions_use_the_exporting_module_for_direct_and_method_calls_bd_fw7zd_6() {
+    let root = temp_module_dir("module_import_async_origin");
+    fs::create_dir_all(&root).expect("create module root");
+    fs::write(
+        root.join("dep.mjs"),
+        "export async function plus(value) { return value + 40; }",
+    )
+    .expect("write async dependency");
+
+    let mut module = test_module_with_pool(
+        vec![
+            Ir3Instruction::LoadStr {
+                dst: 0,
+                pool_index: 0,
+            },
+            Ir3Instruction::ImportModule {
+                specifier: 0,
+                dst: 1,
+            },
+            Ir3Instruction::LoadStr {
+                dst: 2,
+                pool_index: 1,
+            },
+            Ir3Instruction::GetProperty {
+                obj: 1,
+                key: 2,
+                dst: 3,
+            },
+            Ir3Instruction::LoadInt { dst: 4, value: 2 },
+            Ir3Instruction::Call {
+                callee: 3,
+                args: RegRange { start: 4, count: 1 },
+                dst: 5,
+            },
+            Ir3Instruction::ModuleAwaitValue { promise_reg: 5 },
+            Ir3Instruction::LoadInt { dst: 4, value: 3 },
+            Ir3Instruction::CallMethod {
+                receiver: 1,
+                callee: 3,
+                args: RegRange { start: 4, count: 1 },
+                dst: 6,
+            },
+            Ir3Instruction::ModuleAwaitValue { promise_reg: 6 },
+            Ir3Instruction::Add {
+                dst: 7,
+                lhs: 5,
+                rhs: 6,
+            },
+            Ir3Instruction::Return { value: 7 },
+            Ir3Instruction::LoadUndefined { dst: 0 },
+            Ir3Instruction::Return { value: 0 },
+            Ir3Instruction::LoadInt { dst: 0, value: 999 },
+            Ir3Instruction::Return { value: 0 },
+        ],
+        vec!["./dep.mjs".to_string(), "plus".to_string()],
+    );
+    module.function_table = vec![
+        Ir3FunctionDesc {
+            name: Some("main".to_string()),
+            entry: 12,
+            arity: 0,
+            frame_size: 8,
+            is_generator: false,
+            rest_param_index: None,
+        },
+        Ir3FunctionDesc {
+            name: Some("wrong_importer_async".to_string()),
+            entry: 14,
+            arity: 1,
+            frame_size: 8,
+            is_generator: false,
+            rest_param_index: None,
+        },
+    ];
+    module.header.source_label = root.join("main.mjs").display().to_string();
+
+    let mut config = InterpreterConfig::quickjs_defaults();
+    config.module_root = Some(root.display().to_string());
+    config.granted_capabilities = capabilities_with([RuntimeCapability::ModuleLoad]);
+    let result = QuickJsLane::with_config(config)
+        .execute(&module, "module-import-async-origin-trace")
+        .expect("execute and await imported async direct and method calls");
+    assert_eq!(result.value, Value::Int(85));
+}
+
+#[test]
+fn imported_dynamic_function_artifacts_use_canonical_realm_across_call_forms_bd_fw7zd_8_3() {
+    let root = temp_module_dir("module_import_generated_callable");
+    fs::create_dir_all(&root).expect("create module root");
+    fs::write(
+        root.join("dep.mjs"),
+        "const RealmFunction = Function;\n\
+         const ownerOnly = 777;\n\
+         function poisonOwnerGlobals() {\n\
+           console = 1; performance = 2; Function = 3; Math = 4;\n\
+         }\n\
+         export function makeAdder() {\n\
+           const generated = RealmFunction('value', \"return Math.max(value + 35, 0) + (typeof console === 'object' && typeof performance === 'object' && typeof Function === 'undefined' && typeof process === 'undefined' && typeof require === 'undefined' && typeof ownerOnly === 'undefined' && typeof callerOnly === 'undefined' ? 0 : 1000);\");\n\
+           poisonOwnerGlobals();\n\
+           return generated;\n\
+         }\n\
+         export function makeMethod() {\n\
+           const generated = RealmFunction('value', \"return this.base + value + (typeof console === 'object' && typeof performance === 'object' && typeof Function === 'undefined' && typeof process === 'undefined' && typeof require === 'undefined' && typeof ownerOnly === 'undefined' && typeof callerOnly === 'undefined' ? 0 : 1000);\");\n\
+           poisonOwnerGlobals();\n\
+           return generated;\n\
+         }\n\
+         export function makeDeferred() {\n\
+           const generated = RealmFunction('value', \"return value + 40 + (typeof console === 'object' && typeof performance === 'object' && typeof Function === 'undefined' && typeof process === 'undefined' && typeof require === 'undefined' && typeof ownerOnly === 'undefined' && typeof callerOnly === 'undefined' ? 0 : 1000);\");\n\
+           poisonOwnerGlobals();\n\
+           return function later() { return generated(2); };\n\
+         }",
+    )
+    .expect("write generated-callable dependency");
+    fs::write(
+        root.join("other.mjs"),
+        "export function makeOther() { return Function('return 4;'); }",
+    )
+    .expect("write second generated-callable dependency");
+
+    let mut module = test_module_with_pool(
+        vec![
+            Ir3Instruction::LoadStr {
+                dst: 0,
+                pool_index: 0,
+            },
+            Ir3Instruction::ImportModule {
+                specifier: 0,
+                dst: 1,
+            },
+            Ir3Instruction::LoadStr {
+                dst: 2,
+                pool_index: 1,
+            },
+            Ir3Instruction::GetProperty {
+                obj: 1,
+                key: 2,
+                dst: 3,
+            },
+            Ir3Instruction::Call {
+                callee: 3,
+                args: RegRange { start: 4, count: 0 },
+                dst: 4,
+            },
+            Ir3Instruction::LoadInt { dst: 15, value: -1 },
+            Ir3Instruction::PutName {
+                src: 15,
+                name_pool_index: 8,
+                strict: true,
+            },
+            Ir3Instruction::PutName {
+                src: 15,
+                name_pool_index: 9,
+                strict: true,
+            },
+            Ir3Instruction::PutName {
+                src: 15,
+                name_pool_index: 10,
+                strict: true,
+            },
+            Ir3Instruction::PutName {
+                src: 15,
+                name_pool_index: 11,
+                strict: true,
+            },
+            Ir3Instruction::DeclareBinding {
+                name_pool_index: 12,
+                kind: 0,
+            },
+            Ir3Instruction::LoadInt {
+                dst: 15,
+                value: 999,
+            },
+            Ir3Instruction::InitBinding {
+                name_pool_index: 12,
+                src: 15,
+            },
+            Ir3Instruction::LoadInt { dst: 5, value: 7 },
+            Ir3Instruction::Call {
+                callee: 4,
+                args: RegRange { start: 5, count: 1 },
+                dst: 6,
+            },
+            Ir3Instruction::LoadStr {
+                dst: 2,
+                pool_index: 2,
+            },
+            Ir3Instruction::GetProperty {
+                obj: 1,
+                key: 2,
+                dst: 3,
+            },
+            Ir3Instruction::Call {
+                callee: 3,
+                args: RegRange { start: 4, count: 0 },
+                dst: 4,
+            },
+            Ir3Instruction::NewObject { dst: 7 },
+            Ir3Instruction::LoadStr {
+                dst: 8,
+                pool_index: 3,
+            },
+            Ir3Instruction::LoadInt { dst: 9, value: 40 },
+            Ir3Instruction::SetProperty {
+                obj: 7,
+                key: 8,
+                val: 9,
+            },
+            Ir3Instruction::LoadStr {
+                dst: 8,
+                pool_index: 4,
+            },
+            Ir3Instruction::SetProperty {
+                obj: 7,
+                key: 8,
+                val: 4,
+            },
+            Ir3Instruction::GetProperty {
+                obj: 7,
+                key: 8,
+                dst: 10,
+            },
+            Ir3Instruction::LoadInt { dst: 11, value: 2 },
+            Ir3Instruction::CallMethod {
+                receiver: 7,
+                callee: 10,
+                args: RegRange {
+                    start: 11,
+                    count: 1,
+                },
+                dst: 12,
+            },
+            Ir3Instruction::LoadStr {
+                dst: 2,
+                pool_index: 5,
+            },
+            Ir3Instruction::GetProperty {
+                obj: 1,
+                key: 2,
+                dst: 3,
+            },
+            Ir3Instruction::Call {
+                callee: 3,
+                args: RegRange { start: 4, count: 0 },
+                dst: 4,
+            },
+            Ir3Instruction::Call {
+                callee: 4,
+                args: RegRange { start: 5, count: 0 },
+                dst: 13,
+            },
+            Ir3Instruction::LoadStr {
+                dst: 0,
+                pool_index: 6,
+            },
+            Ir3Instruction::ImportModule {
+                specifier: 0,
+                dst: 14,
+            },
+            Ir3Instruction::LoadStr {
+                dst: 2,
+                pool_index: 7,
+            },
+            Ir3Instruction::GetProperty {
+                obj: 14,
+                key: 2,
+                dst: 3,
+            },
+            Ir3Instruction::Call {
+                callee: 3,
+                args: RegRange { start: 4, count: 0 },
+                dst: 4,
+            },
+            Ir3Instruction::Call {
+                callee: 4,
+                args: RegRange { start: 5, count: 0 },
+                dst: 14,
+            },
+            Ir3Instruction::Add {
+                dst: 15,
+                lhs: 6,
+                rhs: 12,
+            },
+            Ir3Instruction::Add {
+                dst: 15,
+                lhs: 15,
+                rhs: 13,
+            },
+            Ir3Instruction::Add {
+                dst: 15,
+                lhs: 15,
+                rhs: 14,
+            },
+            Ir3Instruction::Return { value: 15 },
+        ],
+        vec![
+            "./dep.mjs".to_string(),
+            "makeAdder".to_string(),
+            "makeMethod".to_string(),
+            "base".to_string(),
+            "fn".to_string(),
+            "makeDeferred".to_string(),
+            "./other.mjs".to_string(),
+            "makeOther".to_string(),
+            "console".to_string(),
+            "performance".to_string(),
+            "Function".to_string(),
+            "Math".to_string(),
+            "callerOnly".to_string(),
+        ],
+    );
+    module.header.source_label = root.join("main.mjs").display().to_string();
+
+    let mut config = InterpreterConfig::quickjs_defaults();
+    config.module_root = Some(root.display().to_string());
+    config.granted_capabilities =
+        capabilities_with([RuntimeCapability::ModuleLoad, RuntimeCapability::Builtin]);
+    let result = QuickJsLane::with_config(config)
+        .execute(&module, "module-import-generated-callable-trace")
+        .expect("execute owner-scoped generated artifacts after foreign wrappers unwind");
+    assert_eq!(result.value, Value::Int(130));
+    assert_eq!(
+        result
+            .generated_code_audit
+            .iter()
+            .filter(|entry| entry.kind == GeneratedCodeEventKind::Constructed)
+            .count(),
+        4
+    );
+    assert_eq!(
+        result
+            .generated_code_audit
+            .iter()
+            .filter(|entry| entry.kind == GeneratedCodeEventKind::Invoked)
+            .count(),
+        4
+    );
+    assert!(
+        result.generated_code_audit.iter().all(|entry| {
+            entry.construction_site == root.join("dep.mjs").display().to_string()
+                || entry.construction_site == root.join("other.mjs").display().to_string()
+        }),
+        "every generated artifact must retain its defining module provenance: {:?}",
+        result.generated_code_audit
+    );
+}
+
+#[test]
+fn generated_nested_closure_keeps_artifact_program_after_wrapper_unwinds_bd_fw7zd_8_1() {
+    let root = temp_module_dir("module_import_generated_nested_closure");
+    fs::create_dir_all(&root).expect("create module root");
+    fs::write(
+        root.join("dep.mjs"),
+        "export function wrong0() { return 900; }\n\
+         export function wrong1() { return 901; }\n\
+         export function wrong2() { return 902; }\n\
+         export function makeNested() {\n\
+           return Function('return function nested() { return 73; };')();\n\
+         }",
+    )
+    .expect("write generated nested-closure dependency");
+
+    let mut module = test_module_with_pool(
+        vec![
+            Ir3Instruction::LoadStr {
+                dst: 0,
+                pool_index: 0,
+            },
+            Ir3Instruction::ImportModule {
+                specifier: 0,
+                dst: 1,
+            },
+            Ir3Instruction::LoadStr {
+                dst: 2,
+                pool_index: 1,
+            },
+            Ir3Instruction::GetProperty {
+                obj: 1,
+                key: 2,
+                dst: 3,
+            },
+            Ir3Instruction::Call {
+                callee: 3,
+                args: RegRange { start: 4, count: 0 },
+                dst: 4,
+            },
+            Ir3Instruction::Call {
+                callee: 4,
+                args: RegRange { start: 5, count: 0 },
+                dst: 5,
+            },
+            Ir3Instruction::Return { value: 5 },
+        ],
+        vec!["./dep.mjs".to_string(), "makeNested".to_string()],
+    );
+    module.header.source_label = root.join("main.mjs").display().to_string();
+
+    let mut config = InterpreterConfig::quickjs_defaults();
+    config.module_root = Some(root.display().to_string());
+    config.granted_capabilities =
+        capabilities_with([RuntimeCapability::ModuleLoad, RuntimeCapability::Builtin]);
+    let result = QuickJsLane::with_config(config)
+        .execute(&module, "module-import-generated-nested-closure-trace")
+        .expect("returned nested closure must execute the generated artifact program");
+    assert_eq!(
+        result.value,
+        Value::Int(73),
+        "the nested generated function index must not resolve against dep.mjs's ordinary table"
+    );
+    assert_eq!(
+        result
+            .generated_code_audit
+            .iter()
+            .filter(|entry| entry.kind == GeneratedCodeEventKind::Constructed)
+            .count(),
+        1
+    );
+    assert_eq!(
+        result
+            .generated_code_audit
+            .iter()
+            .filter(|entry| entry.kind == GeneratedCodeEventKind::Invoked)
+            .count(),
+        1
+    );
+    assert!(
+        result
+            .generated_code_audit
+            .iter()
+            .all(|entry| { entry.construction_site == root.join("dep.mjs").display().to_string() })
+    );
+}
+
+#[test]
+fn alternating_cross_module_recursion_preserves_effective_depth_limit() {
+    let root = temp_module_dir("module_import_cross_recursion_depth");
+    fs::create_dir_all(&root).expect("create module root");
+    fs::write(
+        root.join("a.mjs"),
+        "import { bounce } from './b.mjs';\n\
+         export function start(n) {\n\
+           if (n <= 0) return 0;\n\
+           return bounce(n, start);\n\
+         }",
+    )
+    .expect("write recursive module a");
+    fs::write(
+        root.join("b.mjs"),
+        "export function bounce(n, callback) { return callback(n - 1); }",
+    )
+    .expect("write recursive module b");
+
+    let mut module = test_module_with_pool(
+        vec![
+            Ir3Instruction::LoadStr {
+                dst: 0,
+                pool_index: 0,
+            },
+            Ir3Instruction::ImportModule {
+                specifier: 0,
+                dst: 1,
+            },
+            Ir3Instruction::LoadStr {
+                dst: 2,
+                pool_index: 1,
+            },
+            Ir3Instruction::GetProperty {
+                obj: 1,
+                key: 2,
+                dst: 3,
+            },
+            Ir3Instruction::LoadInt { dst: 4, value: 20 },
+            Ir3Instruction::Call {
+                callee: 3,
+                args: RegRange { start: 4, count: 1 },
+                dst: 5,
+            },
+            Ir3Instruction::Return { value: 5 },
+        ],
+        vec!["./a.mjs".to_string(), "start".to_string()],
+    );
+    module.header.source_label = root.join("main.mjs").display().to_string();
+
+    let mut config = InterpreterConfig::quickjs_defaults();
+    config.module_root = Some(root.display().to_string());
+    config.max_call_depth = 8;
+    config.granted_capabilities = capabilities_with([RuntimeCapability::ModuleLoad]);
+    let error = QuickJsLane::with_config(config)
+        .execute(&module, "module-import-cross-recursion-depth-trace")
+        .expect_err("alternating module recursion must remain depth-bounded");
+    assert!(
+        matches!(error, InterpreterError::StackOverflow { max: 8, .. }),
+        "unexpected recursion containment error: {error:?}"
+    );
 }
 
 #[test]
@@ -10515,34 +11513,140 @@ fn console_output_hostcall_bounds_capability_based() {
 // Builtin Deduplication Tests (bd-kn1yy)
 // ============================================================================
 
-// Tests previously exercised builtin-ID deduplication invariants by building
-// IR3 modules with a direct `Ir3Instruction::CallFunction { func_index, ... }`
-// opcode plus legacy `Ir3FunctionDesc { name, param_count, local_count,
-// body_start }` entries. The IR contract has since moved to a register-based
-// calling convention (`Ir3Instruction::Call { callee, args, dst }`) and the
-// function descriptor now carries `{ entry, arity, frame_size, name }` — the
-// old construction no longer compiles. The equivalent invariants (exactly one
-// match arm for each builtin, no duplicate IDs) are enforced by the
-// source-scanning tests in `array_*_duplicate_removal_regression.rs` and
-// friends, so these tests are stubbed and ignored until someone ports them to
-// the new calling convention.
+// These regressions used to be empty `#[ignore]` stubs after the IR calling
+// convention moved away from `CallFunction`. Keep this integration target
+// executable by driving the current builtin hostcall path directly.
 
 #[test]
-#[ignore = "API-drift stub: Ir3Instruction::CallFunction was replaced by Call{callee,args,dst}; body never updated. Builtin-dedup invariants are covered by array_foreach_duplicate_removal_regression.rs and array_some_duplicate_removal_regression.rs. Empty body — delete or rewrite for the new calling convention (bd-c13nb)"]
 fn math_random_builtin_ids_produce_deterministic_results() {
-    // stub: see module-level comment above.
+    let module = test_module(vec![
+        call_builtin_math_random(0),
+        call_builtin_math_random(1),
+        call_builtin_math_random(2),
+        Ir3Instruction::Return { value: 0 },
+    ]);
+
+    let qjs_first = qjs_run_with_builtin(&module).unwrap();
+    let qjs_second = qjs_run_with_builtin(&module).unwrap();
+    let v8 = v8_run_with_builtin(&module).unwrap();
+
+    assert_eq!(qjs_first.value, qjs_second.value);
+    assert_eq!(qjs_first.value, v8.value);
+    let Value::Float(value) = qjs_first.value else {
+        panic!("Math.random should return a float");
+    };
+    assert!(
+        value.inner() >= 0.0 && value.inner() < 1.0,
+        "Math.random value must be in [0, 1), got {}",
+        value.inner()
+    );
+    assert!(value.inner().is_finite());
 }
 
 #[test]
-#[ignore = "API-drift stub: same as above — Ir3Instruction::CallFunction replaced by Call{callee,args,dst}; body never updated. Number.toString radix coverage lives in stdlib_integration.rs and stdlib_enrichment_integration.rs. Empty body — delete or rewrite (bd-c13nb)"]
 fn number_to_string_builtin_ids_consistent_radix_handling() {
-    // stub: see module-level comment above.
+    for (number, radix, expected) in [
+        (42, 2, "101010"),
+        (42, 8, "52"),
+        (42, 10, "42"),
+        (255, 16, "ff"),
+        (1000, 36, "rs"),
+        (-42, 16, "-2a"),
+    ] {
+        let module = test_module(vec![
+            Ir3Instruction::LoadInt {
+                dst: 0,
+                value: number,
+            },
+            Ir3Instruction::LoadInt {
+                dst: 1,
+                value: radix,
+            },
+            call_builtin_number_to_string(2),
+            Ir3Instruction::Return { value: 2 },
+        ]);
+        assert_both_builtin_lanes_value(
+            &module,
+            Value::str(expected),
+            &format!("Number.toString({number}, {radix})"),
+        );
+    }
 }
 
 #[test]
-#[ignore = "API-drift stub: same as above — Ir3Instruction::CallFunction replaced by Call{callee,args,dst}; body never updated. Number.toString invalid-radix behavior lives in stdlib_integration.rs / stdlib_enrichment_integration.rs. Empty body — delete or rewrite (bd-c13nb)"]
 fn number_to_string_invalid_radix_handling() {
-    // stub: see module-level comment above.
+    for radix in [0, 1, 37] {
+        let module = test_module(vec![
+            Ir3Instruction::LoadInt { dst: 0, value: 42 },
+            Ir3Instruction::LoadInt {
+                dst: 1,
+                value: radix,
+            },
+            call_builtin_number_to_string(2),
+            Ir3Instruction::Return { value: 2 },
+        ]);
+        assert_both_builtin_lanes_range_error(
+            &module,
+            &format!("Number.toString invalid radix {radix}"),
+        );
+    }
+}
+
+#[test]
+fn number_to_fixed_invalid_digits_throw_range_error() {
+    for digits in [-1, 101] {
+        let module = test_module(vec![
+            Ir3Instruction::LoadInt { dst: 0, value: 42 },
+            Ir3Instruction::LoadInt {
+                dst: 1,
+                value: digits,
+            },
+            call_builtin_number_to_fixed(2),
+            Ir3Instruction::Return { value: 2 },
+        ]);
+        assert_both_builtin_lanes_range_error(
+            &module,
+            &format!("Number.toFixed invalid digits {digits}"),
+        );
+    }
+}
+
+#[test]
+fn number_to_exponential_invalid_fraction_digits_throw_range_error() {
+    for digits in [-1, 101] {
+        let module = test_module(vec![
+            Ir3Instruction::LoadInt { dst: 0, value: 42 },
+            Ir3Instruction::LoadInt {
+                dst: 1,
+                value: digits,
+            },
+            call_builtin_number_to_exponential(2),
+            Ir3Instruction::Return { value: 2 },
+        ]);
+        assert_both_builtin_lanes_range_error(
+            &module,
+            &format!("Number.toExponential invalid fractionDigits {digits}"),
+        );
+    }
+}
+
+#[test]
+fn number_to_precision_invalid_precision_throw_range_error() {
+    for precision in [0, 101] {
+        let module = test_module(vec![
+            Ir3Instruction::LoadInt { dst: 0, value: 42 },
+            Ir3Instruction::LoadInt {
+                dst: 1,
+                value: precision,
+            },
+            call_builtin_number_to_precision(2),
+            Ir3Instruction::Return { value: 2 },
+        ]);
+        assert_both_builtin_lanes_range_error(
+            &module,
+            &format!("Number.toPrecision invalid precision {precision}"),
+        );
+    }
 }
 
 // Regression tests for recent fix(baseline_interpreter) commits

@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
+# shellcheck disable=SC2016
 set -euo pipefail
 
 root_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$root_dir"
+# shellcheck source=scripts/lib/proof_artifact_contract.sh
 source "${root_dir}/scripts/lib/proof_artifact_contract.sh"
 
 mode="${1:-ci}"
@@ -89,6 +91,32 @@ validate_input_and_detect_placeholders() {
   if [[ "$invalid_hash_count" -gt 0 ]]; then
     echo "Error: $invalid_hash_count replay decision(s) contain malformed sha256 hashes" >&2
     input_validation_failure_count=$((input_validation_failure_count + invalid_hash_count))
+  fi
+
+  invalid_envelope_shape_count="$(jq -r '[.decisions[] | select((.envelope_shape // "legacy_per_entry") as $shape | ($shape != "legacy_per_entry" and $shape != "merkle_batched"))] | length' < "$input_path")"
+  if [[ "$invalid_envelope_shape_count" -gt 0 ]]; then
+    echo "Error: $invalid_envelope_shape_count replay decision(s) contain unsupported envelope_shape values" >&2
+    input_validation_failure_count=$((input_validation_failure_count + invalid_envelope_shape_count))
+  fi
+
+  invalid_merkle_metadata_count="$(jq -r '
+    [
+      .decisions[]
+      | select((.envelope_shape // "legacy_per_entry") == "merkle_batched")
+      | select(
+          ((.merkle_batch_id // "") | length) == 0
+          or ((.merkle_root_hash // "") | test("^sha256:[0-9a-f]{64}$") | not)
+          or ((.merkle_root_signature_hash // "") | test("^sha256:[0-9a-f]{64}$") | not)
+          or ((.merkle_leaf_index | type) != "number")
+          or ((.merkle_tree_size | type) != "number")
+          or (.merkle_leaf_index < 0)
+          or (.merkle_tree_size <= .merkle_leaf_index)
+        )
+    ] | length
+  ' < "$input_path")"
+  if [[ "$invalid_merkle_metadata_count" -gt 0 ]]; then
+    echo "Error: $invalid_merkle_metadata_count Merkle-batched replay decision(s) lack required envelope metadata" >&2
+    input_validation_failure_count=$((input_validation_failure_count + invalid_merkle_metadata_count))
   fi
 
   unverified_evidence_count="$(jq -r '[.decisions[] | select(.security_critical == true) | select((.replay_verified != true) or (.replay_exit_code != 0) or (.expected_hash != .actual_hash) or ((.verification_status // "") != "verified") or ((.evidence_bead_id // "") == "") or ((.evidence_commit_hash // "") == "") or ((.evidence_test_name // "") == ""))] | length' < "$input_path")"
@@ -182,13 +210,17 @@ write_bundle() {
   local commands_path="${bundle_dir}/commands.txt"
   local summary_path="${bundle_dir}/summary.md"
   local decisions_path="${bundle_dir}/decisions.jsonl"
+  local envelope_shapes_path="${bundle_dir}/envelope_shapes.json"
   local verification_command="./scripts/run_replay_coverage_metric_gate.sh ${mode} ${input_path}"
+  local manifest_path="${bundle_dir}/manifest.json"
+  local run_manifest_path="${bundle_dir}/run_manifest.json"
   local coverage_numerator
   local coverage_denominator
   local coverage_millionths
   local decision
   local reason
   local details_hash
+  local envelope_shapes_hash
   local failure_count
 
   # Validate input and detect placeholders
@@ -197,7 +229,7 @@ write_bundle() {
   mkdir -p "$bundle_dir"
 
   # Extract decisions from input fixture
-  jq -c '.decisions[]' < "$input_path" > "$decisions_path"
+  jq -c '.decisions[] | . + {envelope_shape: (.envelope_shape // "legacy_per_entry")}' < "$input_path" > "$decisions_path"
 
   if [[ "$fail_one" == "true" ]]; then
     # Simulate one failure by marking one decision as uncovered.
@@ -213,6 +245,32 @@ write_bundle() {
   else
     coverage_millionths=$(( (coverage_numerator * 1000000) / coverage_denominator ))
   fi
+
+  jq -s '
+    def shape: (.envelope_shape // "legacy_per_entry");
+    {
+      schema_version: "franken-engine.replay-coverage-envelope-shapes.v1",
+      component: "replay_coverage_metric_gate",
+      bead_id: "bd-o4cbn.9.4",
+      envelope_shape_counts: (
+        map(shape)
+        | group_by(.)
+        | map({envelope_shape: .[0], count: length})
+      ),
+      decisions: map({
+        decision_id,
+        decision_kind,
+        trace_id,
+        envelope_shape: shape,
+        merkle_batch_id: (.merkle_batch_id // null),
+        merkle_root_hash: (.merkle_root_hash // null),
+        merkle_leaf_index: (.merkle_leaf_index // null),
+        merkle_tree_size: (.merkle_tree_size // null),
+        merkle_root_signature_hash: (.merkle_root_signature_hash // null)
+      })
+    }
+  ' "$decisions_path" >"$envelope_shapes_path"
+  envelope_shapes_hash="$(proof_contract_sha256_file "$envelope_shapes_path")"
 
   # Determine outcome. Any evidence-quality failure blocks observed coverage.
   if [[ "$input_validation_failure_count" -gt 0 ]]; then
@@ -245,6 +303,7 @@ write_bundle() {
     --argjson total "$coverage_denominator" \
     --argjson covered "$coverage_numerator" \
     --argjson coverage "$coverage_millionths" \
+    --slurpfile envelope_shapes "$envelope_shapes_path" \
     '{
       schema_version: $schema_version,
       component: $component,
@@ -254,6 +313,7 @@ write_bundle() {
       total_security_critical_decisions: $total,
       replay_backed_security_critical_decisions: $covered,
       coverage_millionths: $coverage,
+      envelope_shapes: $envelope_shapes[0].decisions,
       decisions: .
     }' "$decisions_path" >"$details_path"
   details_hash="sha256:$(proof_contract_sha256_file "$details_path")"
@@ -320,6 +380,7 @@ write_bundle() {
         replay_mode: $decision.replay_mode,
         security_critical: $decision.security_critical,
         replay_verified: $decision.replay_verified,
+        envelope_shape: ($decision.envelope_shape // "legacy_per_entry"),
         replay_trace_path: $decision.replay_trace_path,
         replay_report_path: $decision.replay_report_path,
         expected_hash: $decision.expected_hash,
@@ -352,6 +413,7 @@ write_bundle() {
     --arg decision "$decision" \
     --arg reason "$reason" \
     --slurpfile events "$events_path" \
+    --slurpfile envelope_shapes "$envelope_shapes_path" \
     '{
       schema_version: $schema_version,
       component: $component,
@@ -363,6 +425,7 @@ write_bundle() {
       decision: $decision,
       reason: $reason,
       uncovered_decision_ids: [$events[] | select(.decision == "uncovered") | .decision_id],
+      envelope_shapes: $envelope_shapes[0].decisions,
       events: $events
     }' >"$metric_report_path"
 
@@ -372,6 +435,7 @@ write_bundle() {
     printf -- '- Decision: `%s`\n' "$decision"
     printf -- '- Coverage: `%s` / `%s` security-critical decisions (`%s` millionths)\n' \
       "$coverage_numerator" "$coverage_denominator" "$coverage_millionths"
+    printf -- '- Envelope shapes: `%s`\n' "$(jq -r '.envelope_shape_counts | map(.envelope_shape + "=" + (.count | tostring)) | join(", ")' "$envelope_shapes_path")"
     printf -- '- Metric artifact: `%s`\n' "$(proof_contract_repo_relative_path "$metric_path")"
     printf -- '- Shared proof manifest: `%s`\n' "$(proof_contract_repo_relative_path "${bundle_dir}/manifest.json")"
     printf '\n'
@@ -392,8 +456,26 @@ write_bundle() {
     "disruptive_floor.security_decision_replay_coverage_100pct" \
     "$failure_count"
 
+  jq \
+    --arg envelope_shapes_json "$(proof_contract_repo_relative_path "$envelope_shapes_path")" \
+    --arg envelope_shapes_sha256 "$envelope_shapes_hash" \
+    --arg run_manifest_json "$(proof_contract_repo_relative_path "$run_manifest_path")" \
+    --slurpfile envelope_shapes "$envelope_shapes_path" \
+    '.artifact_paths.envelope_shapes_json = $envelope_shapes_json
+      | .artifact_paths.run_manifest_json = $run_manifest_json
+      | .envelope_shapes = $envelope_shapes[0].decisions
+      | .generated_artifacts += [{
+          path: $envelope_shapes_json,
+          sha256: $envelope_shapes_sha256,
+          role: "replay_envelope_shape_inventory"
+        }]' \
+    "$manifest_path" >"${manifest_path}.tmp"
+  mv "${manifest_path}.tmp" "$manifest_path"
+  cp "$manifest_path" "$run_manifest_path"
+
   echo "replay_coverage_metric_artifact=${metric_path}"
   echo "replay_coverage_proof_manifest=${bundle_dir}/manifest.json"
+  echo "replay_coverage_run_manifest=${run_manifest_path}"
 }
 
 case "$mode" in

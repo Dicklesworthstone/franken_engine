@@ -1,0 +1,333 @@
+---
+source: crates/franken-engine/tests/ast_parser_golden_integration.rs
+expression: scrubbed_actual
+---
+{
+  "goal": "Script",
+  "body": [
+    {
+      "If": {
+        "condition": {
+          "Identifier": "condition"
+        },
+        "consequent": {
+          "Block": {
+            "body": [
+              {
+                "Expression": {
+                  "expression": {
+                    "Call": {
+                      "callee": {
+                        "Member": {
+                          "object": {
+                            "Identifier": "console"
+                          },
+                          "property": {
+                            "Identifier": "log"
+                          },
+                          "computed": false,
+                          "span": {
+                            "start_offset": "[START_OFFSET]",
+                            "end_offset": "[END_OFFSET]",
+                            "start_line": "[START_LINE]",
+                            "start_column": "[START_COLUMN]",
+                            "end_line": "[END_LINE]",
+                            "end_column": "[END_COLUMN]"
+                          }
+                        }
+                      },
+                      "arguments": [
+                        {
+                          "StringLiteral": "true"
+                        }
+                      ],
+                      "span": {
+                        "start_offset": "[START_OFFSET]",
+                        "end_offset": "[END_OFFSET]",
+                        "start_line": "[START_LINE]",
+                        "start_column": "[START_COLUMN]",
+                        "end_line": "[END_LINE]",
+                        "end_column": "[END_COLUMN]"
+                      }
+                    }
+                  },
+                  "span": {
+                    "start_offset": "[START_OFFSET]",
+                    "end_offset": "[END_OFFSET]",
+                    "start_line": "[START_LINE]",
+                    "start_column": "[START_COLUMN]",
+                    "end_line": "[END_LINE]",
+                    "end_column": "[END_COLUMN]"
+                  }
+                }
+              }
+            ],
+            "span": {
+              "start_offset": "[START_OFFSET]",
+              "end_offset": "[END_OFFSET]",
+              "start_line": "[START_LINE]",
+              "start_column": "[START_COLUMN]",
+              "end_line": "[END_LINE]",
+              "end_column": "[END_COLUMN]"
+            }
+          }
+        },
+        "alternate": {
+          "Block": {
+            "body": [
+              {
+                "Expression": {
+                  "expression": {
+                    "Call": {
+                      "callee": {
+                        "Member": {
+                          "object": {
+                            "Identifier": "console"
+                          },
+                          "property": {
+                            "Identifier": "log"
+                          },
+                          "computed": false,
+                          "span": {
+                            "start_offset": "[START_OFFSET]",
+                            "end_offset": "[END_OFFSET]",
+                            "start_line": "[START_LINE]",
+                            "start_column": "[START_COLUMN]",
+                            "end_line": "[END_LINE]",
+                            "end_column": "[END_COLUMN]"
+                          }
+                        }
+                      },
+                      "arguments": [
+                        {
+                          "StringLiteral": "false"
+                        }
+                      ],
+                      "span": {
+                        "start_offset": "[START_OFFSET]",
+                        "end_offset": "[END_OFFSET]",
+                        "start_line": "[START_LINE]",
+                        "start_column": "[START_COLUMN]",
+                        "end_line": "[END_LINE]",
+                        "end_column": "[END_COLUMN]"
+                      }
+                    }
+                  },
+                  "span": {
+                    "start_offset": "[START_OFFSET]",
+                    "end_offset": "[END_OFFSET]",
+                    "start_line": "[START_LINE]",
+                    "start_column": "[START_COLUMN]",
+                    "end_line": "[END_LINE]",
+                    "end_column": "[END_COLUMN]"
+                  }
+                }
+              }
+            ],
+            "span": {
+              "start_offset": "[START_OFFSET]",
+              "end_offset": "[END_OFFSET]",
+              "start_line": "[START_LINE]",
+              "start_column": "[START_COLUMN]",
+              "end_line": "[END_LINE]",
+              "end_column": "[END_COLUMN]"
+            }
+          }
+        },
+        "span": {
+          "start_offset": "[START_OFFSET]",
+          "end_offset": "[END_OFFSET]",
+          "start_line": "[START_LINE]",
+          "start_column": "[START_COLUMN]",
+          "end_line": "[END_LINE]",
+          "end_column": "[END_COLUMN]"
+        }
+      }
+    },
+    {
+      "For": {
+        "init": {
+          "VariableDeclaration": {
+            "kind": "Let",
+            "declarations": [
+              {
+                "pattern": {
+                  "Identifier": "i"
+                },
+                "initializer": {
+                  "NumericLiteral": 0
+                },
+                "span": {
+                  "start_offset": "[START_OFFSET]",
+                  "end_offset": "[END_OFFSET]",
+                  "start_line": "[START_LINE]",
+                  "start_column": "[START_COLUMN]",
+                  "end_line": "[END_LINE]",
+                  "end_column": "[END_COLUMN]"
+                }
+              }
+            ],
+            "span": {
+              "start_offset": "[START_OFFSET]",
+              "end_offset": "[END_OFFSET]",
+              "start_line": "[START_LINE]",
+              "start_column": "[START_COLUMN]",
+              "end_line": "[END_LINE]",
+              "end_column": "[END_COLUMN]"
+            }
+          }
+        },
+        "condition": {
+          "Binary": {
+            "operator": "LessThan",
+            "left": {
+              "Identifier": "i"
+            },
+            "right": {
+              "NumericLiteral": 10
+            }
+          }
+        },
+        "update": {
+          "Binary": {
+            "operator": "Subtract",
+            "left": {
+              "Assignment": {
+                "operator": "AddAssign",
+                "left": {
+                  "Identifier": "i"
+                },
+                "right": {
+                  "NumericLiteral": 1
+                },
+                "assignment_strictness": "sloppy"
+              }
+            },
+            "right": {
+              "NumericLiteral": 1
+            }
+          }
+        },
+        "body": {
+          "Block": {
+            "body": [
+              {
+                "Expression": {
+                  "expression": {
+                    "Call": {
+                      "callee": {
+                        "Identifier": "process"
+                      },
+                      "arguments": [
+                        {
+                          "Identifier": "i"
+                        }
+                      ],
+                      "span": {
+                        "start_offset": "[START_OFFSET]",
+                        "end_offset": "[END_OFFSET]",
+                        "start_line": "[START_LINE]",
+                        "start_column": "[START_COLUMN]",
+                        "end_line": "[END_LINE]",
+                        "end_column": "[END_COLUMN]"
+                      }
+                    }
+                  },
+                  "span": {
+                    "start_offset": "[START_OFFSET]",
+                    "end_offset": "[END_OFFSET]",
+                    "start_line": "[START_LINE]",
+                    "start_column": "[START_COLUMN]",
+                    "end_line": "[END_LINE]",
+                    "end_column": "[END_COLUMN]"
+                  }
+                }
+              }
+            ],
+            "span": {
+              "start_offset": "[START_OFFSET]",
+              "end_offset": "[END_OFFSET]",
+              "start_line": "[START_LINE]",
+              "start_column": "[START_COLUMN]",
+              "end_line": "[END_LINE]",
+              "end_column": "[END_COLUMN]"
+            }
+          }
+        },
+        "span": {
+          "start_offset": "[START_OFFSET]",
+          "end_offset": "[END_OFFSET]",
+          "start_line": "[START_LINE]",
+          "start_column": "[START_COLUMN]",
+          "end_line": "[END_LINE]",
+          "end_column": "[END_COLUMN]"
+        }
+      }
+    },
+    {
+      "While": {
+        "condition": {
+          "Identifier": "running"
+        },
+        "body": {
+          "Block": {
+            "body": [
+              {
+                "Expression": {
+                  "expression": {
+                    "Call": {
+                      "callee": {
+                        "Identifier": "work"
+                      },
+                      "arguments": [],
+                      "span": {
+                        "start_offset": "[START_OFFSET]",
+                        "end_offset": "[END_OFFSET]",
+                        "start_line": "[START_LINE]",
+                        "start_column": "[START_COLUMN]",
+                        "end_line": "[END_LINE]",
+                        "end_column": "[END_COLUMN]"
+                      }
+                    }
+                  },
+                  "span": {
+                    "start_offset": "[START_OFFSET]",
+                    "end_offset": "[END_OFFSET]",
+                    "start_line": "[START_LINE]",
+                    "start_column": "[START_COLUMN]",
+                    "end_line": "[END_LINE]",
+                    "end_column": "[END_COLUMN]"
+                  }
+                }
+              }
+            ],
+            "span": {
+              "start_offset": "[START_OFFSET]",
+              "end_offset": "[END_OFFSET]",
+              "start_line": "[START_LINE]",
+              "start_column": "[START_COLUMN]",
+              "end_line": "[END_LINE]",
+              "end_column": "[END_COLUMN]"
+            }
+          }
+        },
+        "span": {
+          "start_offset": "[START_OFFSET]",
+          "end_offset": "[END_OFFSET]",
+          "start_line": "[START_LINE]",
+          "start_column": "[START_COLUMN]",
+          "end_line": "[END_LINE]",
+          "end_column": "[END_COLUMN]"
+        }
+      }
+    }
+  ],
+  "span": {
+    "start_offset": "[START_OFFSET]",
+    "end_offset": "[END_OFFSET]",
+    "start_line": "[START_LINE]",
+    "start_column": "[START_COLUMN]",
+    "end_line": "[END_LINE]",
+    "end_column": "[END_COLUMN]"
+  }
+}

@@ -1,0 +1,10 @@
+{
+  "workers": [
+    {
+      "worker_id": "vmi1167313",
+      "status": "healthy",
+      "projects_root_ok": true,
+      "nightly_available": true
+    }
+  ]
+}

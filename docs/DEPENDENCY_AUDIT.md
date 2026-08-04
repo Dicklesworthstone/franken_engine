@@ -1,5 +1,11 @@
 # Cross-Repo Dependency Audit
 
+> **Historical snapshot — superseded by `bd-gw4cg`.** This file preserves the
+> 2026-04-16 audit input and must not be read as the live dependency topology.
+> The current manifest has zero `/dp` dependency sources; the registry-backed
+> contract and operator commands live in
+> [`CROSS_REPO_DEPENDENCY_ISOLATION_V1.md`](./CROSS_REPO_DEPENDENCY_ISOLATION_V1.md).
+
 **Generated:** 2026-04-16T13:42:00Z  
 **Bead:** RC-6 Cross-Repo Dependency Isolation
 

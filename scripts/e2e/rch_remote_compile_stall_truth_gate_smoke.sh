@@ -16,18 +16,31 @@ record_failure() {
 }
 
 run_check() {
+  local fixture_dir
+
   bash -n "$truth_gate" "${BASH_SOURCE[0]}"
   shellcheck -x "$truth_gate" "${BASH_SOURCE[0]}"
   jq empty "$contract_json" "$suite_json" >/dev/null
 
   find "$fixture_root" -type f -name '*.json' -print0 | xargs -0 -n1 jq empty >/dev/null
+  while IFS= read -r fixture_dir; do
+    [[ -d "${root_dir}/${fixture_dir}" ]] || {
+      record_failure "fixture directory missing: ${fixture_dir}"
+      return 1
+    }
+    find "${root_dir}/${fixture_dir}" -type f -name '*.json' -print0 | xargs -0 -n1 jq empty >/dev/null
+  done < <(jq -r '.cases[].fixture_dir' "$suite_json" | sort -u)
+
   jq -e '
     .schema_version == "franken-engine.rch-remote-compile-stall-truth-gate-suite.v1"
-    and (.cases | length) == 4
+    and (.cases | length) >= 4
     and any(.cases[]; .category == "healthy_remote_completion")
     and any(.cases[]; .category == "explicit_timeout")
     and any(.cases[]; .category == "fresh_heartbeat_frozen_progress_stall")
     and any(.cases[]; .category == "local_fallback_contamination")
+    and any(.cases[]; .case_id == "current_bd_o4cbn_9_7_ledger_no_verdict")
+    and any(.cases[]; .case_id == "current_bd_o4cbn_1_4_h1_bench_no_verdict")
+    and any(.cases[]; .case_id == "current_bd_fqlfw_2_4_perf_arm_no_verdict_degraded")
   ' "$suite_json" >/dev/null
 
   record_pass "shell syntax, shellcheck, and fixture JSON"
@@ -35,12 +48,15 @@ run_check() {
 
 assert_report() {
   local report_path="$1"
+  local expected_case_count
 
-  jq -e '
+  expected_case_count="$(jq '.cases | length' "$suite_json")"
+
+  jq -e --argjson expected_case_count "$expected_case_count" '
     .schema_version == "franken-engine.rch-remote-compile-stall-truth-gate-report.v1"
     and .decision == "pass"
-    and .case_count == 4
-    and .passed_count == 4
+    and .case_count == $expected_case_count
+    and .passed_count == $expected_case_count
     and .failed_count == 0
     and .required_coverage.healthy_remote_completion == true
     and .required_coverage.explicit_timeout == true
@@ -56,6 +72,9 @@ assert_report() {
     and any(.cases[]; .case_id == "transport_timeout_check_lib" and .actual.final_verdict == "transport_timeout" and .actual.truth_state == "degraded")
     and any(.cases[]; .case_id == "fresh_heartbeat_frozen_progress_test" and .actual.final_verdict == "fresh_heartbeat_frozen_progress_stall" and .actual.truth_state == "degraded")
     and any(.cases[]; .case_id == "contaminated_local_fallback_check_lib" and .actual.final_verdict == "contaminated_local_fallback" and .actual.truth_state == "contaminated")
+    and any(.cases[]; .case_id == "current_bd_o4cbn_9_7_ledger_no_verdict" and .actual.final_verdict == "fresh_heartbeat_frozen_progress_stall" and .actual.truth_state == "confirmed" and .actual.source_evidence == false)
+    and any(.cases[]; .case_id == "current_bd_o4cbn_1_4_h1_bench_no_verdict" and .actual.final_verdict == "fresh_heartbeat_frozen_progress_stall" and .actual.truth_state == "confirmed" and .actual.source_evidence == false)
+    and any(.cases[]; .case_id == "current_bd_fqlfw_2_4_perf_arm_no_verdict_degraded" and .actual.final_verdict == "missing_remote_proof" and .actual.truth_state == "degraded" and .actual.source_evidence == false)
   ' "$report_path" >/dev/null
 }
 

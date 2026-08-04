@@ -8,10 +8,8 @@
 //! `LoadScoped(name)` from the captured scope chain (not the old register/
 //! `LoadBinding` path OliveLake instrumented), so self-binding the function's own
 //! name in `captured_env` at `CreateClosure` to the freshly-created closure makes
-//! self-recursion and named-function-expression recursion resolve. The three
-//! self-recursion cases below are now active. Mutual recursion (`ev`/`od`) still
-//! needs by-reference capture / declaration hoisting (siblings are captured before
-//! they are assigned) and remains `#[ignore]`d.
+//! self-recursion and named-function-expression recursion resolve. The regression
+//! cases below also cover sibling mutual recursion via shared declaration capture.
 
 use frankenengine_engine::HybridRouter;
 
@@ -60,7 +58,6 @@ fn named_function_expression_recursion() {
 }
 
 #[test]
-#[ignore = "bd-g0aok: mutual recursion needs function-declaration hoisting in lowering (separate from the self-binding fix)"]
 fn mutual_recursion_even_odd() {
     assert_eq!(
         eval_value(

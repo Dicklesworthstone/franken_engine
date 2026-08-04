@@ -374,6 +374,30 @@ impl PromiseStore {
         handle
     }
 
+    /// Roll back the most recent still-pending creation when an enclosing
+    /// interpreter transaction refuses before publishing the Promise.
+    pub(crate) fn rollback_last_created(&mut self, handle: PromiseHandle) -> bool {
+        let is_last_pending = self.promises.last().is_some_and(|record| {
+            record.handle == handle
+                && matches!(record.state, PromiseState::Pending)
+                && record.reactions.is_empty()
+        });
+        let has_matching_witness = matches!(
+            self.witness.last(),
+            Some(WitnessEvent::PromiseCreated {
+                handle: witness_handle,
+                ..
+            }) if *witness_handle == handle
+        );
+        if !is_last_pending || !has_matching_witness {
+            return false;
+        }
+        self.promises.pop();
+        self.witness.pop();
+        self.next_seq = self.next_seq.saturating_sub(1);
+        true
+    }
+
     /// Get a Promise by handle.
     pub fn get(&self, handle: PromiseHandle) -> Result<&PromiseRecord, PromiseError> {
         self.promises
@@ -403,7 +427,7 @@ impl PromiseStore {
 
         // Drain reactions before mutating state to avoid borrow issues.
         let record = self.get_mut(handle)?;
-        let reactions: Vec<PromiseReaction> = record.reactions.drain(..).collect();
+        let reactions: Vec<PromiseReaction> = std::mem::take(&mut record.reactions);
         record.state = PromiseState::Fulfilled(value.clone());
         record.label = label.clone();
 
@@ -416,11 +440,12 @@ impl PromiseStore {
         // Enqueue only the fulfill reactions for a fulfilled promise.
         for reaction in reactions {
             if reaction.kind == ReactionKind::Fulfill {
+                let effective_label = label.join(&reaction.label);
                 queue.enqueue(Microtask::PromiseReaction {
                     handler: reaction.handler,
                     argument: value.clone(),
                     result_promise: reaction.result_promise,
-                    label: label.clone(),
+                    label: effective_label,
                 });
             }
         }
@@ -442,13 +467,14 @@ impl PromiseStore {
         }
 
         let record = self.get_mut(handle)?;
-        let reactions: Vec<PromiseReaction> = record.reactions.drain(..).collect();
-        let has_reject_handler = reactions
-            .iter()
-            .any(|r| r.kind == ReactionKind::Reject && r.handler.is_some());
+        let reactions: Vec<PromiseReaction> = std::mem::take(&mut record.reactions);
+        let rejection_handled = record.rejection_handled
+            || reactions
+                .iter()
+                .any(|reaction| reaction.kind == ReactionKind::Reject);
         record.state = PromiseState::Rejected(reason.clone());
         record.label = label.clone();
-        record.rejection_handled = has_reject_handler;
+        record.rejection_handled = rejection_handled;
 
         self.witness.push(WitnessEvent::PromiseRejected {
             handle,
@@ -459,18 +485,19 @@ impl PromiseStore {
         // Enqueue only the reject reactions for a rejected promise.
         for reaction in reactions {
             if reaction.kind == ReactionKind::Reject {
+                let effective_label = label.join(&reaction.label);
                 if reaction.handler.is_some() {
                     queue.enqueue(Microtask::PromiseReaction {
                         handler: reaction.handler,
                         argument: reason.clone(),
                         result_promise: reaction.result_promise,
-                        label: label.clone(),
+                        label: effective_label,
                     });
                 } else {
                     queue.enqueue(Microtask::PromiseRejection {
                         reason: reason.clone(),
                         result_promise: reaction.result_promise,
-                        label: label.clone(),
+                        label: effective_label,
                     });
                 }
             }
@@ -493,6 +520,7 @@ impl PromiseStore {
     ) -> Result<PromiseHandle, PromiseError> {
         let record = self.get(handle)?;
         let state = record.state.clone();
+        let settlement_label = record.label.clone();
         let result_promise = self.create();
 
         match state {
@@ -512,33 +540,90 @@ impl PromiseStore {
                 });
             }
             PromiseState::Fulfilled(value) => {
+                let effective_label = settlement_label.join(&label);
                 queue.enqueue(Microtask::PromiseReaction {
                     handler: on_fulfilled,
                     argument: value,
                     result_promise,
-                    label,
+                    label: effective_label,
                 });
             }
             PromiseState::Rejected(reason) => {
-                // Only explicit onRejected handlers mark rejection as handled.
-                if on_rejected.is_some() {
-                    let record = self.get_mut(handle)?;
-                    record.rejection_handled = true;
-                }
+                let effective_label = settlement_label.join(&label);
                 if on_rejected.is_some() {
                     queue.enqueue(Microtask::PromiseReaction {
                         handler: on_rejected,
                         argument: reason,
                         result_promise,
-                        label,
+                        label: effective_label,
                     });
                 } else {
                     queue.enqueue(Microtask::PromiseRejection {
                         reason,
                         result_promise,
-                        label,
+                        label: effective_label,
                     });
                 }
+            }
+        }
+
+        // PerformPromiseThen marks the source handled even when the rejection
+        // callback is the implicit thrower. In that case the queued rejection
+        // job transfers any unhandled rejection to `result_promise`.
+        self.get_mut(handle)?.rejection_handled = true;
+
+        Ok(result_promise)
+    }
+
+    /// Register the internal identity/thrower reactions used by `await`.
+    ///
+    /// Await has no user-visible closure handle, but rejection still resumes the
+    /// suspended async execution context. Keeping this separate from
+    /// `.then(None, None)` lets the interpreter distinguish that internal
+    /// continuation from an ordinary implicit rejection transfer.
+    pub fn then_for_await(
+        &mut self,
+        handle: PromiseHandle,
+        label: Label,
+        queue: &mut MicrotaskQueue,
+    ) -> Result<PromiseHandle, PromiseError> {
+        let record = self.get(handle)?;
+        let state = record.state.clone();
+        let settlement_label = record.label.clone();
+        let result_promise = self.create();
+
+        match state {
+            PromiseState::Pending => {
+                let record = self.get_mut(handle)?;
+                record.rejection_handled = true;
+                record.reactions.push(PromiseReaction {
+                    kind: ReactionKind::Fulfill,
+                    handler: None,
+                    result_promise,
+                    label: label.clone(),
+                });
+                record.reactions.push(PromiseReaction {
+                    kind: ReactionKind::Reject,
+                    handler: None,
+                    result_promise,
+                    label,
+                });
+            }
+            PromiseState::Fulfilled(value) => {
+                queue.enqueue(Microtask::PromiseReaction {
+                    handler: None,
+                    argument: value,
+                    result_promise,
+                    label: settlement_label.join(&label),
+                });
+            }
+            PromiseState::Rejected(reason) => {
+                self.get_mut(handle)?.rejection_handled = true;
+                queue.enqueue(Microtask::PromiseRejection {
+                    reason,
+                    result_promise,
+                    label: settlement_label.join(&label),
+                });
             }
         }
 
@@ -1373,7 +1458,7 @@ mod tests {
     }
 
     fn js_str(s: &str) -> JsValue {
-        JsValue::Str(s.to_string())
+        JsValue::str(s)
     }
 
     // ----- Promise state machine -----
@@ -1382,9 +1467,37 @@ mod tests {
     fn new_promise_is_pending() {
         let mut store = PromiseStore::new();
         let h = store.create();
-        let p = store.get(h).expect("operation should succeed for valid inputs");
+        let p = store
+            .get(h)
+            .expect("operation should succeed for valid inputs");
         assert_eq!(p.state, PromiseState::Pending);
         assert!(!p.state.is_settled());
+    }
+
+    #[test]
+    fn fresh_promise_rollback_restores_store_witness_and_sequence_bd_ur3tk_8() {
+        let mut store = PromiseStore::new();
+        let first = store.create();
+        assert_eq!(first, PromiseHandle(0));
+        assert_eq!(store.len(), 1);
+        assert!(matches!(
+            store.witness_log(),
+            [WitnessEvent::PromiseCreated { handle, seq: 0 }] if *handle == first
+        ));
+
+        assert!(store.rollback_last_created(first));
+        assert_eq!(store.len(), 0);
+        assert!(store.witness_log().is_empty());
+        assert!(!store.rollback_last_created(first));
+
+        let reused = store.create();
+        assert_eq!(reused, first);
+        let mut queue = MicrotaskQueue::new();
+        store
+            .fulfill(reused, js_int(7), Label::Public, &mut queue)
+            .expect("settling the reused handle should succeed");
+        assert!(!store.rollback_last_created(reused));
+        assert_eq!(store.len(), 1);
     }
 
     #[test]
@@ -1395,7 +1508,9 @@ mod tests {
         store
             .fulfill(h, js_int(42), Label::Public, &mut queue)
             .expect("operation should succeed for valid inputs");
-        let p = store.get(h).expect("operation should succeed for valid inputs");
+        let p = store
+            .get(h)
+            .expect("operation should succeed for valid inputs");
         assert_eq!(p.state, PromiseState::Fulfilled(js_int(42)));
         assert!(p.state.is_fulfilled());
     }
@@ -1408,7 +1523,9 @@ mod tests {
         store
             .reject(h, js_str("error"), Label::Public, &mut queue)
             .expect("operation should succeed for valid inputs");
-        let p = store.get(h).expect("operation should succeed for valid inputs");
+        let p = store
+            .get(h)
+            .expect("operation should succeed for valid inputs");
         assert_eq!(p.state, PromiseState::Rejected(js_str("error")));
         assert!(p.state.is_rejected());
     }
@@ -1472,7 +1589,9 @@ mod tests {
         assert!(queue.is_empty());
 
         // Reactions registered.
-        let p = store.get(h).expect("operation should succeed for valid inputs");
+        let p = store
+            .get(h)
+            .expect("operation should succeed for valid inputs");
         assert_eq!(p.reactions.len(), 2);
 
         // Result promise exists.
@@ -1542,7 +1661,9 @@ mod tests {
         let mut store = PromiseStore::new();
         let mut queue = MicrotaskQueue::new();
         let h = store.resolve(js_int(7), Label::Public, &mut queue);
-        let p = store.get(h).expect("operation should succeed for valid inputs");
+        let p = store
+            .get(h)
+            .expect("operation should succeed for valid inputs");
         assert!(p.state.is_fulfilled());
     }
 
@@ -1551,7 +1672,9 @@ mod tests {
         let mut store = PromiseStore::new();
         let mut queue = MicrotaskQueue::new();
         let h = store.reject_with(js_str("boom"), Label::Public, &mut queue);
-        let p = store.get(h).expect("operation should succeed for valid inputs");
+        let p = store
+            .get(h)
+            .expect("operation should succeed for valid inputs");
         assert!(p.state.is_rejected());
     }
 
@@ -1962,20 +2085,81 @@ mod tests {
     }
 
     #[test]
-    fn rejection_without_on_rejected_registered_before_reject_remains_unhandled() {
+    fn rejection_without_on_rejected_registered_before_reject_transfers_to_result() {
         let mut store = PromiseStore::new();
         let mut queue = MicrotaskQueue::new();
-        let h = store.create();
+        let source = store.create();
 
-        // Register only onFulfilled; this must not mark a future rejection handled.
-        store
-            .then(h, Some(ClosureHandle(7)), None, Label::Public, &mut queue)
+        let result = store
+            .then(
+                source,
+                Some(ClosureHandle(7)),
+                None,
+                Label::Public,
+                &mut queue,
+            )
             .expect("operation should succeed for valid inputs");
+        assert!(
+            store
+                .get(source)
+                .expect("source promise should remain valid")
+                .rejection_handled
+        );
         store
-            .reject(h, js_str("still_unhandled"), Label::Public, &mut queue)
+            .reject(source, js_str("transferred"), Label::Public, &mut queue)
             .expect("operation should succeed for valid inputs");
 
-        assert_eq!(store.unhandled_rejections(), vec![h]);
+        assert!(store.unhandled_rejections().is_empty());
+        let Microtask::PromiseRejection {
+            reason,
+            result_promise,
+            label,
+        } = queue.dequeue().expect("thrower job should be queued")
+        else {
+            panic!("expected rejection propagation job");
+        };
+        assert_eq!(result_promise, result);
+        store
+            .reject(result_promise, reason, label, &mut queue)
+            .expect("propagated result should reject");
+        assert_eq!(store.unhandled_rejections(), vec![result]);
+    }
+
+    #[test]
+    fn legacy_pending_then_snapshot_marks_source_handled_on_rejection() {
+        let mut store = PromiseStore::new();
+        let mut queue = MicrotaskQueue::new();
+        let source = store.create();
+        let result = store
+            .then(
+                source,
+                Some(ClosureHandle(7)),
+                None,
+                Label::Public,
+                &mut queue,
+            )
+            .expect("operation should succeed for valid inputs");
+
+        let mut wire = serde_json::to_value(&store).expect("promise store should serialize");
+        wire["promises"][source.0 as usize]["rejection_handled"] = serde_json::json!(false);
+        let mut restored: PromiseStore =
+            serde_json::from_value(wire).expect("legacy promise store should deserialize");
+        assert!(
+            !restored
+                .get(source)
+                .expect("restored source promise should remain valid")
+                .rejection_handled
+        );
+        restored
+            .reject(source, js_str("legacy"), Label::Public, &mut queue)
+            .expect("legacy pending source should reject");
+
+        assert!(restored.unhandled_rejections().is_empty());
+        assert!(matches!(
+            queue.dequeue(),
+            Some(Microtask::PromiseRejection { result_promise, .. })
+                if result_promise == result
+        ));
     }
 
     #[test]
@@ -1998,19 +2182,38 @@ mod tests {
     }
 
     #[test]
-    fn then_on_rejected_without_on_rejected_does_not_mark_handled() {
+    fn then_on_rejected_without_on_rejected_transfers_to_result() {
         let mut store = PromiseStore::new();
         let mut queue = MicrotaskQueue::new();
-        let h = store.create();
+        let source = store.create();
         store
-            .reject(h, js_str("err"), Label::Public, &mut queue)
+            .reject(source, js_str("err"), Label::Public, &mut queue)
             .expect("operation should succeed for valid inputs");
-        assert_eq!(store.unhandled_rejections(), vec![h]);
+        assert_eq!(store.unhandled_rejections(), vec![source]);
 
-        store
-            .then(h, Some(ClosureHandle(1)), None, Label::Public, &mut queue)
+        let result = store
+            .then(
+                source,
+                Some(ClosureHandle(1)),
+                None,
+                Label::Public,
+                &mut queue,
+            )
             .expect("operation should succeed for valid inputs");
-        assert_eq!(store.unhandled_rejections(), vec![h]);
+        assert!(store.unhandled_rejections().is_empty());
+        let Microtask::PromiseRejection {
+            reason,
+            result_promise,
+            label,
+        } = queue.dequeue().expect("thrower job should be queued")
+        else {
+            panic!("expected rejection propagation job");
+        };
+        assert_eq!(result_promise, result);
+        store
+            .reject(result_promise, reason, label, &mut queue)
+            .expect("propagated result should reject");
+        assert_eq!(store.unhandled_rejections(), vec![result]);
     }
 
     // ----- IFC label propagation -----
@@ -2023,8 +2226,83 @@ mod tests {
         store
             .fulfill(h, js_str("secret_data"), Label::Secret, &mut queue)
             .expect("operation should succeed for valid inputs");
-        let p = store.get(h).expect("operation should succeed for valid inputs");
+        let p = store
+            .get(h)
+            .expect("operation should succeed for valid inputs");
         assert_eq!(p.label, Label::Secret);
+    }
+
+    #[test]
+    fn settled_then_joins_settlement_and_registration_labels_bd_ur3tk_13() {
+        let mut store = PromiseStore::new();
+        let mut queue = MicrotaskQueue::new();
+
+        let fulfilled = store.create();
+        store
+            .fulfill(fulfilled, js_str("secret-value"), Label::Secret, &mut queue)
+            .expect("source Promise should settle");
+        store
+            .then(fulfilled, None, None, Label::Public, &mut queue)
+            .expect("settled Promise should accept a reaction");
+        assert!(matches!(
+            queue.dequeue(),
+            Some(Microtask::PromiseReaction {
+                label: Label::Secret,
+                ..
+            })
+        ));
+
+        let rejected = store.create();
+        store
+            .reject(rejected, js_str("secret-reason"), Label::Secret, &mut queue)
+            .expect("source Promise should reject");
+        store
+            .then(rejected, None, None, Label::Public, &mut queue)
+            .expect("rejected Promise should accept a reaction");
+        assert!(matches!(
+            queue.dequeue(),
+            Some(Microtask::PromiseRejection {
+                label: Label::Secret,
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn pending_then_joins_registration_and_later_settlement_labels_bd_ur3tk_13() {
+        let mut store = PromiseStore::new();
+        let mut queue = MicrotaskQueue::new();
+        let custom = Label::Custom {
+            name: "tenant-promise".to_string(),
+            level: 4,
+        };
+
+        let fulfilled = store.create();
+        store
+            .then(fulfilled, None, None, custom.clone(), &mut queue)
+            .expect("pending Promise should accept a reaction");
+        store
+            .fulfill(fulfilled, js_int(7), Label::Public, &mut queue)
+            .expect("pending Promise should fulfill");
+        assert!(matches!(
+            queue.dequeue(),
+            Some(Microtask::PromiseReaction { label, .. }) if label == custom
+        ));
+
+        let rejected = store.create();
+        store
+            .then(rejected, None, None, Label::Secret, &mut queue)
+            .expect("pending Promise should accept a rejection reaction");
+        store
+            .reject(rejected, js_str("public-reason"), Label::Public, &mut queue)
+            .expect("pending Promise should reject");
+        assert!(matches!(
+            queue.dequeue(),
+            Some(Microtask::PromiseRejection {
+                label: Label::Secret,
+                ..
+            })
+        ));
     }
 
     // ----- Witness events -----
@@ -2116,8 +2394,7 @@ mod tests {
             label: Label::Internal,
         };
         let json = serde_json::to_string(&task).expect("serialization should succeed");
-        let back: Microtask =
-            serde_json::from_str(&json).expect("deserialization should succeed");
+        let back: Microtask = serde_json::from_str(&json).expect("deserialization should succeed");
         assert_eq!(back, task);
     }
 
@@ -2241,7 +2518,9 @@ mod tests {
             .expect("operation should succeed for valid inputs");
         assert_ne!(r1, r2);
         // Both register reactions on the same pending promise.
-        let record = store.get(p).expect("operation should succeed for valid inputs");
+        let record = store
+            .get(p)
+            .expect("operation should succeed for valid inputs");
         assert_eq!(record.reactions.len(), 4); // 2 per .then (fulfill + reject)
     }
 
@@ -2457,8 +2736,7 @@ mod tests {
             label: Label::Internal,
         };
         let json = serde_json::to_string(&task).expect("serialization should succeed");
-        let back: Macrotask =
-            serde_json::from_str(&json).expect("deserialization should succeed");
+        let back: Macrotask = serde_json::from_str(&json).expect("deserialization should succeed");
         assert_eq!(back, task);
     }
 

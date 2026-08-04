@@ -1,0 +1,207 @@
+{
+  "schema_version": "franken-engine.semantic-fidelity-vectors.v1",
+  "suite_id": "semfid-suite-runner-classification",
+  "owning_bead": "bd-mihky.3",
+  "description": "Runner classification smoke suite with pass, fail, and degraded outcomes.",
+  "determinism_policy": {
+    "ordering": "lexicographic_by_vector_id_then_route_id",
+    "hash_preimage": "length_prefixed_utf8_fields_v1",
+    "duplicate_vector_id_policy": "fail_closed"
+  },
+  "vectors": [
+    {
+      "vector_id": "semfid-classification-01-pass-range-error",
+      "semantic_family": "runner_classification",
+      "description": "External Node oracle produces the expected RangeError.",
+      "source": {
+        "kind": "inline_source",
+        "parse_goal": "script",
+        "inline_source": "\"x\".repeat(-1);"
+      },
+      "route_under_test": {
+        "route_id": "oracle.node.classification.pass-range-error",
+        "route_kind": "node_oracle",
+        "external_runtime": "node"
+      },
+      "oracle_routes": [],
+      "expectation": {
+        "kind": "js_error",
+        "error_class": "RangeError"
+      },
+      "analyzed_scope": {
+        "scope_status": "analyzed",
+        "claim_policy": "runner_classification_only",
+        "notes": "This vector proves the runner classifies matching JS error outcomes as passed."
+      },
+      "hashes": {
+        "source_sha256": "sha256:2ceb802d7b4abb586b6e84d93c583d5a2648bed7f11739b5035811b83148d81b",
+        "route_metadata_sha256": "sha256:fc7995ac8e16a981dfa3d520d7d805e0158e0f7648a5f03421890c7eb60f44c4",
+        "expectation_sha256": "sha256:a6ecec83d2be19f2566cedcd876ac6ff1a13039f3224314b91af37fb181478ec"
+      },
+      "provenance": {
+        "bead_refs": [
+          "bd-mihky.3"
+        ],
+        "source_refs": [
+          {
+            "path": "scripts/semantic_fidelity_workbench.py"
+          }
+        ]
+      },
+      "remediation": {
+        "failure_reason_codes": [
+          "expected_error_class_mismatch"
+        ],
+        "existing_bead_refs": [
+          "bd-mihky.3"
+        ],
+        "suggested_next_action": "fix_runner_classification"
+      }
+    },
+    {
+      "vector_id": "semfid-classification-02-fail-error-class",
+      "semantic_family": "runner_classification",
+      "description": "External Node oracle produces RangeError while the fixture expects TypeError.",
+      "source": {
+        "kind": "inline_source",
+        "parse_goal": "script",
+        "inline_source": "\"x\".repeat(-1);"
+      },
+      "route_under_test": {
+        "route_id": "oracle.node.classification.fail-error-class",
+        "route_kind": "node_oracle",
+        "external_runtime": "node"
+      },
+      "oracle_routes": [],
+      "expectation": {
+        "kind": "js_error",
+        "error_class": "TypeError"
+      },
+      "analyzed_scope": {
+        "scope_status": "analyzed",
+        "claim_policy": "runner_classification_only",
+        "notes": "This vector proves the runner fail-closes on error-class mismatch."
+      },
+      "hashes": {
+        "source_sha256": "sha256:2ceb802d7b4abb586b6e84d93c583d5a2648bed7f11739b5035811b83148d81b",
+        "route_metadata_sha256": "sha256:1ee7eabf334d6764152fb6fb392796a8c7e16e1ea915385eb709d1ffd7e0018c",
+        "expectation_sha256": "sha256:65bc38bd315cc4bb02b683a56cb4b8de61b9da6cab0bfe89911d0179ebb87de8"
+      },
+      "provenance": {
+        "bead_refs": [
+          "bd-mihky.3"
+        ],
+        "source_refs": [
+          {
+            "path": "scripts/semantic_fidelity_workbench.py"
+          }
+        ]
+      },
+      "remediation": {
+        "failure_reason_codes": [
+          "expected_error_class_mismatch"
+        ],
+        "existing_bead_refs": [
+          "bd-mihky.3"
+        ],
+        "suggested_next_action": "fix_runner_classification"
+      }
+    },
+    {
+      "vector_id": "semfid-classification-03-degraded-missing-runtime",
+      "semantic_family": "runner_classification",
+      "description": "Missing external runtime emits a degraded receipt instead of pass/fail confusion.",
+      "source": {
+        "kind": "inline_source",
+        "parse_goal": "script",
+        "inline_source": "\"x\".repeat(-1);"
+      },
+      "route_under_test": {
+        "route_id": "oracle.node.classification.degraded-missing-runtime",
+        "route_kind": "node_oracle",
+        "external_runtime": "semfid-runtime-that-is-not-installed"
+      },
+      "oracle_routes": [],
+      "expectation": {
+        "kind": "js_error",
+        "error_class": "RangeError"
+      },
+      "analyzed_scope": {
+        "scope_status": "analyzed",
+        "claim_policy": "runner_classification_only",
+        "notes": "This vector proves absent optional external oracles are degraded receipts."
+      },
+      "hashes": {
+        "source_sha256": "sha256:2ceb802d7b4abb586b6e84d93c583d5a2648bed7f11739b5035811b83148d81b",
+        "route_metadata_sha256": "sha256:7eb492979daba8d96ff08ff078cf914f87c5ec334448341b63f3bda5149f9d08",
+        "expectation_sha256": "sha256:a6ecec83d2be19f2566cedcd876ac6ff1a13039f3224314b91af37fb181478ec"
+      },
+      "provenance": {
+        "bead_refs": [
+          "bd-mihky.3"
+        ],
+        "source_refs": [
+          {
+            "path": "scripts/semantic_fidelity_workbench.py"
+          }
+        ]
+      },
+      "remediation": {
+        "failure_reason_codes": [
+          "external_oracle_unavailable"
+        ],
+        "existing_bead_refs": [
+          "bd-mihky.3"
+        ],
+        "suggested_next_action": "install_or_mark_optional_runtime"
+      }
+    },
+    {
+      "vector_id": "semfid-classification-04-fail-new-drift",
+      "semantic_family": "runner_classification_new_drift",
+      "description": "External Node oracle produces RangeError while the fixture expects TypeError and no existing bead is linked.",
+      "source": {
+        "kind": "inline_source",
+        "parse_goal": "script",
+        "inline_source": "\"x\".repeat(-1);"
+      },
+      "route_under_test": {
+        "route_id": "oracle.node.classification.new-drift",
+        "route_kind": "node_oracle",
+        "external_runtime": "node"
+      },
+      "oracle_routes": [],
+      "expectation": {
+        "kind": "js_error",
+        "error_class": "TypeError"
+      },
+      "analyzed_scope": {
+        "scope_status": "analyzed",
+        "claim_policy": "runner_classification_only",
+        "notes": "This vector proves auto-triage suggests a new bead when confirmed drift lacks existing bead refs."
+      },
+      "hashes": {
+        "source_sha256": "sha256:2ceb802d7b4abb586b6e84d93c583d5a2648bed7f11739b5035811b83148d81b",
+        "route_metadata_sha256": "sha256:183ce582ff6d8df375a1a46d0e5d9ef397749b0463a76bfa68963459a0b55583",
+        "expectation_sha256": "sha256:65bc38bd315cc4bb02b683a56cb4b8de61b9da6cab0bfe89911d0179ebb87de8"
+      },
+      "provenance": {
+        "bead_refs": [
+          "bd-mihky.8"
+        ],
+        "source_refs": [
+          {
+            "path": "scripts/semantic_fidelity_workbench.py"
+          }
+        ]
+      },
+      "remediation": {
+        "failure_reason_codes": [
+          "expected_error_class_mismatch"
+        ],
+        "existing_bead_refs": [],
+        "suggested_next_action": "propose_followup_bead"
+      }
+    }
+  ]
+}

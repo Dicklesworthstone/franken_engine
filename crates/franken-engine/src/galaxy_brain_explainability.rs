@@ -20,8 +20,14 @@ use std::fmt;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
+use crate::deterministic_serde::{CanonicalValue, SchemaHash};
+use crate::engine_object_id::ObjectDomain;
 use crate::runtime_decision_theory::{DemotionReason, LaneAction, LaneId, RegimeLabel};
 use crate::security_epoch::SecurityEpoch;
+use crate::signature_preimage::{
+    SIGNATURE_SENTINEL, Signature, SignatureError, SignaturePreimage, SigningKey, VerificationKey,
+    sign_object, verify_signature,
+};
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -1211,6 +1217,360 @@ impl ExplanationBuilder {
     fn constraints(mut self, cs: Vec<ConstraintInteraction>) -> Self {
         self.constraints = cs;
         self
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Narration receipt — franken-engine.narration-receipt.v1 (Track X.2)
+// ---------------------------------------------------------------------------
+
+/// Schema version for signed narration receipts.
+pub const NARRATION_RECEIPT_SCHEMA_VERSION: &str = "franken-engine.narration-receipt.v1";
+
+/// Exact number of counterfactual summaries a receipt carries.
+pub const NARRATION_COUNTERFACTUAL_COUNT: usize = 3;
+
+fn narration_receipt_schema() -> &'static SchemaHash {
+    use std::sync::LazyLock;
+    static HASH: LazyLock<SchemaHash> =
+        LazyLock::new(|| SchemaHash::from_definition(NARRATION_RECEIPT_SCHEMA_VERSION.as_bytes()));
+    &HASH
+}
+
+fn append_len_prefixed(buf: &mut Vec<u8>, bytes: &[u8]) {
+    buf.extend_from_slice(&(bytes.len() as u64).to_be_bytes());
+    buf.extend_from_slice(bytes);
+}
+
+/// Signature bundle binding a narration receipt to its producer.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NarrationSignatureBundle {
+    /// Hex id of the signing verification key.
+    pub signer_key_id: String,
+    /// Hex SHA-256 of the receipt's canonical unsigned bytes.
+    pub content_hash_hex: String,
+    /// Ed25519 signature over the canonical preimage.
+    pub signature: Signature,
+}
+
+/// A signed, replay-anchored narration receipt: the incident narrative as a
+/// verifiable evidence artifact rather than free-form text.
+///
+/// `narrative_text_canonical` is exactly the [`ConstrainedNarrative::text`]
+/// produced by [`generate_constrained_narrative`] — the single canonicalizer
+/// the X.3 replay check reproduces byte-for-byte.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NarrationReceipt {
+    /// Schema version (`franken-engine.narration-receipt.v1`).
+    pub schema_version: String,
+    /// Decision this narration explains.
+    pub decision_id: String,
+    /// Byte-identical canonical narrative text (the ONE canonicalizer).
+    pub narrative_text_canonical: String,
+    /// [`ConstrainedNarrative::content_hash`] of the canonical text.
+    pub narrative_content_hash: String,
+    /// Deterministic rendering of the posterior path (factor order = map order).
+    pub posterior_path_summary: String,
+    /// Exactly three counterfactual summaries (nearest by absolute loss delta).
+    pub counterfactual_summaries: [String; 3],
+    /// Deterministic recommended next operator action.
+    pub recommended_action_text: String,
+    /// Producer signature bundle.
+    pub signature_bundle: NarrationSignatureBundle,
+}
+
+/// Fail-closed narration receipt errors.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum NarrationReceiptError {
+    /// The explanation carries fewer counterfactuals than the schema requires.
+    InsufficientCounterfactuals {
+        /// Counterfactuals available.
+        found: usize,
+        /// Required count.
+        required: usize,
+    },
+    /// The receipt declares a different schema version.
+    SchemaVersionMismatch {
+        /// Version found on the receipt.
+        found: String,
+    },
+    /// Recomputed canonical content hash differs from the bundle.
+    ContentHashMismatch,
+    /// The canonical narrative text does not hash to `narrative_content_hash`.
+    NarrativeHashMismatch,
+    /// Signature creation or verification failed.
+    Signature(String),
+}
+
+impl fmt::Display for NarrationReceiptError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::InsufficientCounterfactuals { found, required } => write!(
+                f,
+                "insufficient counterfactuals: found {found}, required {required}"
+            ),
+            Self::SchemaVersionMismatch { found } => {
+                write!(f, "schema version mismatch: found {found}")
+            }
+            Self::ContentHashMismatch => write!(f, "canonical content hash mismatch"),
+            Self::NarrativeHashMismatch => write!(f, "narrative content hash mismatch"),
+            Self::Signature(msg) => write!(f, "signature error: {msg}"),
+        }
+    }
+}
+
+impl std::error::Error for NarrationReceiptError {}
+
+impl From<SignatureError> for NarrationReceiptError {
+    fn from(err: SignatureError) -> Self {
+        Self::Signature(format!("{err:?}"))
+    }
+}
+
+/// Verification report per the bd-cixqu.45 logging discipline: the canonical
+/// bytes (length + hash) and the signature verification result are surfaced
+/// for structured logging by the caller.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NarrationVerificationReport {
+    /// Length of the canonical unsigned byte string that was hashed.
+    pub canonical_byte_len: u64,
+    /// Hex SHA-256 of the canonical unsigned bytes.
+    pub content_hash_hex: String,
+    /// Whether the Ed25519 signature verified.
+    pub signature_valid: bool,
+    /// Whether the narrative text hashed to `narrative_content_hash`.
+    pub narrative_hash_valid: bool,
+}
+
+impl SignaturePreimage for NarrationReceipt {
+    fn signature_domain(&self) -> ObjectDomain {
+        ObjectDomain::EvidenceRecord
+    }
+
+    fn signature_schema(&self) -> &SchemaHash {
+        narration_receipt_schema()
+    }
+
+    fn unsigned_view(&self) -> CanonicalValue {
+        CanonicalValue::Bytes(self.canonical_unsigned_bytes())
+    }
+}
+
+impl NarrationReceipt {
+    /// Canonical unsigned serialization: fixed field order, every
+    /// variable-length field length-prefixed. Excludes the signature bundle
+    /// so the content hash and signature are non-circular.
+    pub fn canonical_unsigned_bytes(&self) -> Vec<u8> {
+        let mut buf = Vec::new();
+        append_len_prefixed(&mut buf, self.schema_version.as_bytes());
+        append_len_prefixed(&mut buf, self.decision_id.as_bytes());
+        append_len_prefixed(&mut buf, self.narrative_text_canonical.as_bytes());
+        append_len_prefixed(&mut buf, self.narrative_content_hash.as_bytes());
+        append_len_prefixed(&mut buf, self.posterior_path_summary.as_bytes());
+        for summary in &self.counterfactual_summaries {
+            append_len_prefixed(&mut buf, summary.as_bytes());
+        }
+        append_len_prefixed(&mut buf, self.recommended_action_text.as_bytes());
+        buf
+    }
+
+    fn compute_content_hash_hex(&self) -> String {
+        let mut hasher = Sha256::new();
+        hasher.update(self.canonical_unsigned_bytes());
+        hex::encode(hasher.finalize())
+    }
+
+    fn narrative_hash_hex(text: &str) -> String {
+        let mut hasher = Sha256::new();
+        hasher.update(NARRATIVE_SCHEMA_VERSION.as_bytes());
+        hasher.update(text.as_bytes());
+        let hash = hasher.finalize();
+        hex::encode(&hash[..16])
+    }
+
+    /// Build and sign a narration receipt from a decision explanation.
+    ///
+    /// The narrative text is produced by the explanation's constrained
+    /// narrative (the single Track X canonicalizer). Requires at least
+    /// [`NARRATION_COUNTERFACTUAL_COUNT`] counterfactuals; the three nearest
+    /// by absolute loss delta are summarized (fail-closed otherwise).
+    pub fn from_explanation(
+        explanation: &DecisionExplanation,
+        policy: NarrativeGrammarPolicy,
+        signing_key: &SigningKey,
+    ) -> Result<Self, NarrationReceiptError> {
+        if explanation.counterfactuals.len() < NARRATION_COUNTERFACTUAL_COUNT {
+            return Err(NarrationReceiptError::InsufficientCounterfactuals {
+                found: explanation.counterfactuals.len(),
+                required: NARRATION_COUNTERFACTUAL_COUNT,
+            });
+        }
+        let narrative = explanation.constrained_narrative(policy);
+
+        let mut nearest: Vec<&CounterfactualOutcome> = explanation.counterfactuals.iter().collect();
+        nearest.sort_by_key(|cf| {
+            (
+                cf.loss_delta_millionths.saturating_abs(),
+                cf.loss_delta_millionths,
+                cf.action.to_string(),
+            )
+        });
+        let summaries: Vec<String> = nearest
+            .iter()
+            .take(NARRATION_COUNTERFACTUAL_COUNT)
+            .map(|cf| render_counterfactual_summary(cf))
+            .collect();
+        let counterfactual_summaries: [String; 3] = summaries
+            .try_into()
+            .expect("exactly three summaries were taken");
+
+        let mut receipt = Self {
+            schema_version: NARRATION_RECEIPT_SCHEMA_VERSION.to_string(),
+            decision_id: explanation.decision_id.clone(),
+            narrative_text_canonical: narrative.text,
+            narrative_content_hash: narrative.content_hash,
+            posterior_path_summary: render_posterior_path(&explanation.posterior_millionths),
+            counterfactual_summaries,
+            recommended_action_text: render_recommended_action(explanation),
+            signature_bundle: NarrationSignatureBundle {
+                signer_key_id: signing_key.verification_key().to_hex(),
+                content_hash_hex: String::new(),
+                signature: Signature::from_bytes(SIGNATURE_SENTINEL),
+            },
+        };
+        receipt.signature_bundle.content_hash_hex = receipt.compute_content_hash_hex();
+        receipt.signature_bundle.signature = sign_object(&receipt, signing_key)?;
+        Ok(receipt)
+    }
+
+    /// Fail-closed verification: schema version, canonical content hash,
+    /// Ed25519 signature, and the narrative-text binding must all hold.
+    /// Returns the loggable verification report on success.
+    pub fn verify(
+        &self,
+        key: &VerificationKey,
+    ) -> Result<NarrationVerificationReport, NarrationReceiptError> {
+        if self.schema_version != NARRATION_RECEIPT_SCHEMA_VERSION {
+            return Err(NarrationReceiptError::SchemaVersionMismatch {
+                found: self.schema_version.clone(),
+            });
+        }
+        let canonical = self.canonical_unsigned_bytes();
+        let content_hash_hex = self.compute_content_hash_hex();
+        if content_hash_hex != self.signature_bundle.content_hash_hex {
+            return Err(NarrationReceiptError::ContentHashMismatch);
+        }
+        verify_signature(
+            key,
+            &self.preimage_bytes(),
+            &self.signature_bundle.signature,
+        )?;
+        if Self::narrative_hash_hex(&self.narrative_text_canonical) != self.narrative_content_hash {
+            return Err(NarrationReceiptError::NarrativeHashMismatch);
+        }
+        Ok(NarrationVerificationReport {
+            canonical_byte_len: canonical.len() as u64,
+            content_hash_hex,
+            signature_valid: true,
+            narrative_hash_valid: true,
+        })
+    }
+}
+
+fn render_posterior_path(posterior: &BTreeMap<String, i64>) -> String {
+    if posterior.is_empty() {
+        return "posterior_path(empty)".to_string();
+    }
+    let parts: Vec<String> = posterior
+        .iter()
+        .map(|(factor, value)| format!("{}={}", grammar_atom(factor), value))
+        .collect();
+    format!("posterior_path({})", parts.join(";"))
+}
+
+fn render_counterfactual_summary(cf: &CounterfactualOutcome) -> String {
+    format!(
+        "counterfactual(action={},predicted_loss_millionths={},loss_delta_millionths={},guardrail={})",
+        grammar_atom(&cf.action.to_string()),
+        cf.predicted_loss_millionths,
+        cf.loss_delta_millionths,
+        cf.would_trigger_guardrail
+    )
+}
+
+fn render_recommended_action(explanation: &DecisionExplanation) -> String {
+    format!(
+        "recommended_action(kind={},loss_millionths={},rationale={})",
+        grammar_atom(&explanation.chosen_action.to_string()),
+        explanation.chosen_loss_millionths,
+        grammar_atom(&explanation.rationale)
+    )
+}
+
+// ---------------------------------------------------------------------------
+// Narration replay check — byte-identical narration or a diff (Track X.3)
+// ---------------------------------------------------------------------------
+
+/// Verdict of replaying a decision's narration against its original receipt.
+///
+/// Byte-for-byte identity is the load-bearing contract: anything else means
+/// the narration is storytelling, not reproducible evidence.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "verdict", rename_all = "snake_case")]
+pub enum NarrationReplayVerdict {
+    /// The replayed narration is byte-identical to the original.
+    Identical {
+        /// The shared narrative content hash.
+        narrative_content_hash: String,
+    },
+    /// The replayed narration diverged from the original.
+    Divergent {
+        /// Narrative content hash recorded on the original receipt.
+        original_hash: String,
+        /// Narrative content hash of the replayed narration.
+        replayed_hash: String,
+        /// Byte index of the first divergence (== common prefix length).
+        first_divergence_index: u64,
+        /// Original narration length in bytes.
+        original_len: u64,
+        /// Replayed narration length in bytes.
+        replayed_len: u64,
+    },
+}
+
+impl NarrationReplayVerdict {
+    /// Whether the replay reproduced the narration byte-for-byte.
+    pub fn is_identical(&self) -> bool {
+        matches!(self, Self::Identical { .. })
+    }
+}
+
+/// Compare an original narration receipt against a replayed constrained
+/// narrative. Identity requires both byte-identical text and a matching
+/// narrative content hash; any difference yields a diff-bearing verdict.
+pub fn narration_replay_check(
+    original: &NarrationReceipt,
+    replayed: &ConstrainedNarrative,
+) -> NarrationReplayVerdict {
+    let original_bytes = original.narrative_text_canonical.as_bytes();
+    let replayed_bytes = replayed.text.as_bytes();
+    if original_bytes == replayed_bytes && original.narrative_content_hash == replayed.content_hash
+    {
+        return NarrationReplayVerdict::Identical {
+            narrative_content_hash: replayed.content_hash.clone(),
+        };
+    }
+    let first_divergence_index = original_bytes
+        .iter()
+        .zip(replayed_bytes.iter())
+        .take_while(|(a, b)| a == b)
+        .count() as u64;
+    NarrationReplayVerdict::Divergent {
+        original_hash: original.narrative_content_hash.clone(),
+        replayed_hash: replayed.content_hash.clone(),
+        first_divergence_index,
+        original_len: original_bytes.len() as u64,
+        replayed_len: replayed_bytes.len() as u64,
     }
 }
 
@@ -3085,5 +3445,347 @@ mod tests {
         assert_eq!(idx.by_domain(DecisionDomain::LaneRouting).len(), 1);
         assert_eq!(idx.by_domain(DecisionDomain::Fallback).len(), 1);
         assert_eq!(idx.by_domain(DecisionDomain::Security).len(), 1);
+    }
+
+    // ── Narration receipt (franken-engine.narration-receipt.v1) ──────
+
+    fn receipt_signing_key(seed: u8) -> SigningKey {
+        let mut bytes = [0u8; 32];
+        bytes[0] = seed;
+        bytes[31] = seed.wrapping_add(1);
+        SigningKey::from_bytes(bytes).expect("non-zero key")
+    }
+
+    fn receipt_counterfactual(lane: &str, delta: i64, guardrail: bool) -> CounterfactualOutcome {
+        CounterfactualOutcome {
+            action: LaneAction::RouteTo(test_lane(lane)),
+            predicted_loss_millionths: 100_000 + delta,
+            loss_delta_millionths: delta,
+            would_trigger_guardrail: guardrail,
+            narrative: format!("cf-{lane}"),
+        }
+    }
+
+    fn receipt_explanation() -> DecisionExplanation {
+        ExplanationBuilder::new(
+            "d-receipt-1".to_string(),
+            test_epoch(),
+            DecisionDomain::Security,
+        )
+        .verbosity(VerbosityLevel::GalaxyBrain)
+        .regime(RegimeLabel::Elevated)
+        .chosen(LaneAction::RouteTo(test_lane("js")), 100_000)
+        .rationale("contain the exfiltration pattern".to_string())
+        .counterfactual(receipt_counterfactual("near", 10_000, false))
+        .counterfactual(receipt_counterfactual("mid", -50_000, false))
+        .counterfactual(receipt_counterfactual("far", 100_000, true))
+        .counterfactual(receipt_counterfactual("farthest", -200_000, true))
+        .posterior("compromise".to_string(), 720_000)
+        .posterior("benign_drift".to_string(), 180_000)
+        .confidence(880_000)
+        .build()
+        .expect("builder should produce a valid value")
+    }
+
+    fn build_receipt(key: &SigningKey) -> NarrationReceipt {
+        NarrationReceipt::from_explanation(
+            &receipt_explanation(),
+            NarrativeGrammarPolicy::default(),
+            key,
+        )
+        .expect("receipt builds")
+    }
+
+    #[test]
+    fn narration_receipt_roundtrip_verifies() {
+        let key = receipt_signing_key(61);
+        let receipt = build_receipt(&key);
+        let report = receipt
+            .verify(&key.verification_key())
+            .expect("verification succeeds");
+        assert!(report.signature_valid);
+        assert!(report.narrative_hash_valid);
+        assert!(report.canonical_byte_len > 0);
+        assert_eq!(
+            report.content_hash_hex,
+            receipt.signature_bundle.content_hash_hex
+        );
+        assert_eq!(receipt.schema_version, NARRATION_RECEIPT_SCHEMA_VERSION);
+        assert_eq!(receipt.decision_id, "d-receipt-1");
+        assert_eq!(
+            receipt.signature_bundle.signer_key_id,
+            key.verification_key().to_hex()
+        );
+    }
+
+    #[test]
+    fn narration_receipt_binds_the_one_canonicalizer() {
+        let key = receipt_signing_key(61);
+        let receipt = build_receipt(&key);
+        let narrative =
+            receipt_explanation().constrained_narrative(NarrativeGrammarPolicy::default());
+        assert_eq!(receipt.narrative_text_canonical, narrative.text);
+        assert_eq!(receipt.narrative_content_hash, narrative.content_hash);
+    }
+
+    #[test]
+    fn narration_receipt_reserialization_is_byte_identical() {
+        let key = receipt_signing_key(61);
+        let receipt_a = build_receipt(&key);
+        let receipt_b = build_receipt(&key);
+        assert_eq!(receipt_a, receipt_b);
+        assert_eq!(
+            receipt_a.canonical_unsigned_bytes(),
+            receipt_b.canonical_unsigned_bytes()
+        );
+
+        let json_a = serde_json::to_string(&receipt_a).expect("serializes");
+        let roundtripped: NarrationReceipt = serde_json::from_str(&json_a).expect("deserializes");
+        let json_b = serde_json::to_string(&roundtripped).expect("re-serializes");
+        assert_eq!(json_a, json_b);
+        assert!(
+            roundtripped
+                .verify(&key.verification_key())
+                .expect("still verifies")
+                .signature_valid
+        );
+    }
+
+    #[test]
+    fn narration_receipt_tampered_narrative_fails_closed() {
+        let key = receipt_signing_key(61);
+        let mut receipt = build_receipt(&key);
+        receipt.narrative_text_canonical.push_str("-tampered");
+        assert_eq!(
+            receipt.verify(&key.verification_key()).unwrap_err(),
+            NarrationReceiptError::ContentHashMismatch
+        );
+    }
+
+    #[test]
+    fn narration_receipt_tampered_decision_id_fails_closed() {
+        let key = receipt_signing_key(61);
+        let mut receipt = build_receipt(&key);
+        receipt.decision_id = "d-other".to_string();
+        assert_eq!(
+            receipt.verify(&key.verification_key()).unwrap_err(),
+            NarrationReceiptError::ContentHashMismatch
+        );
+    }
+
+    #[test]
+    fn narration_receipt_forged_narrative_hash_is_caught() {
+        // An internally-consistent forgery: wrong narrative hash, but content
+        // hash recomputed and re-signed with the trusted key. The narrative
+        // binding check still refuses.
+        let key = receipt_signing_key(61);
+        let mut receipt = build_receipt(&key);
+        receipt.narrative_content_hash = "00000000000000000000000000000000".to_string();
+        receipt.signature_bundle.content_hash_hex = String::new();
+        receipt.signature_bundle.content_hash_hex = {
+            let mut hasher = Sha256::new();
+            hasher.update(receipt.canonical_unsigned_bytes());
+            hex::encode(hasher.finalize())
+        };
+        receipt.signature_bundle.signature = sign_object(&receipt, &key).expect("forgery can sign");
+        assert_eq!(
+            receipt.verify(&key.verification_key()).unwrap_err(),
+            NarrationReceiptError::NarrativeHashMismatch
+        );
+    }
+
+    #[test]
+    fn narration_receipt_wrong_key_fails_closed() {
+        let key = receipt_signing_key(61);
+        let other = receipt_signing_key(62);
+        let receipt = build_receipt(&key);
+        assert!(matches!(
+            receipt.verify(&other.verification_key()).unwrap_err(),
+            NarrationReceiptError::Signature(_)
+        ));
+    }
+
+    #[test]
+    fn narration_receipt_requires_three_counterfactuals() {
+        let key = receipt_signing_key(61);
+        let expl = ExplanationBuilder::new(
+            "d-two-cf".to_string(),
+            test_epoch(),
+            DecisionDomain::Security,
+        )
+        .chosen(LaneAction::FallbackSafe, 0)
+        .rationale("two counterfactuals only".to_string())
+        .counterfactual(receipt_counterfactual("a", 10_000, false))
+        .counterfactual(receipt_counterfactual("b", 20_000, false))
+        .build()
+        .expect("builder should produce a valid value");
+        assert_eq!(
+            NarrationReceipt::from_explanation(&expl, NarrativeGrammarPolicy::default(), &key)
+                .unwrap_err(),
+            NarrationReceiptError::InsufficientCounterfactuals {
+                found: 2,
+                required: 3
+            }
+        );
+    }
+
+    #[test]
+    fn narration_receipt_selects_three_nearest_counterfactuals() {
+        let key = receipt_signing_key(61);
+        let receipt = build_receipt(&key);
+        // |10_000| < |-50_000| < |100_000| < |-200_000|: "farthest" is cut.
+        let joined = receipt.counterfactual_summaries.join("|");
+        assert!(joined.contains("loss_delta_millionths=10000"));
+        assert!(joined.contains("loss_delta_millionths=-50000"));
+        assert!(joined.contains("loss_delta_millionths=100000"));
+        assert!(!joined.contains("loss_delta_millionths=-200000"));
+    }
+
+    #[test]
+    fn narration_receipt_schema_version_mismatch_refused() {
+        let key = receipt_signing_key(61);
+        let mut receipt = build_receipt(&key);
+        receipt.schema_version = "franken-engine.narration-receipt.v0".to_string();
+        receipt.signature_bundle.content_hash_hex = {
+            let mut hasher = Sha256::new();
+            hasher.update(receipt.canonical_unsigned_bytes());
+            hex::encode(hasher.finalize())
+        };
+        receipt.signature_bundle.signature = sign_object(&receipt, &key).expect("forgery can sign");
+        assert!(matches!(
+            receipt.verify(&key.verification_key()).unwrap_err(),
+            NarrationReceiptError::SchemaVersionMismatch { .. }
+        ));
+    }
+
+    #[test]
+    fn narration_receipt_posterior_path_is_deterministic() {
+        let key = receipt_signing_key(61);
+        let receipt = build_receipt(&key);
+        // BTreeMap order: benign_drift before compromise.
+        assert_eq!(
+            receipt.posterior_path_summary,
+            "posterior_path(benign_drift=180000;compromise=720000)"
+        );
+
+        let empty_expl = ExplanationBuilder::new(
+            "d-empty-posterior".to_string(),
+            test_epoch(),
+            DecisionDomain::Fallback,
+        )
+        .chosen(LaneAction::FallbackSafe, 0)
+        .rationale("no posterior recorded".to_string())
+        .counterfactual(receipt_counterfactual("a", 1, false))
+        .counterfactual(receipt_counterfactual("b", 2, false))
+        .counterfactual(receipt_counterfactual("c", 3, false))
+        .build()
+        .expect("builder should produce a valid value");
+        let empty_receipt = NarrationReceipt::from_explanation(
+            &empty_expl,
+            NarrativeGrammarPolicy::default(),
+            &key,
+        )
+        .expect("receipt builds");
+        assert_eq!(
+            empty_receipt.posterior_path_summary,
+            "posterior_path(empty)"
+        );
+    }
+
+    #[test]
+    fn narration_receipt_recommended_action_is_deterministic() {
+        let key = receipt_signing_key(61);
+        let receipt = build_receipt(&key);
+        assert!(
+            receipt
+                .recommended_action_text
+                .starts_with("recommended_action(kind=")
+        );
+        assert!(
+            receipt
+                .recommended_action_text
+                .contains("loss_millionths=100000")
+        );
+        assert!(
+            receipt
+                .recommended_action_text
+                .contains("rationale=contain_the_exfiltration_pattern")
+        );
+    }
+
+    // ── Narration replay check (Track X.3) ───────────────────────
+
+    #[test]
+    fn narration_replay_identical_when_regenerated_from_same_inputs() {
+        let key = receipt_signing_key(61);
+        let receipt = build_receipt(&key);
+        let replayed =
+            receipt_explanation().constrained_narrative(NarrativeGrammarPolicy::default());
+        let verdict = narration_replay_check(&receipt, &replayed);
+        assert!(verdict.is_identical());
+        assert_eq!(
+            verdict,
+            NarrationReplayVerdict::Identical {
+                narrative_content_hash: receipt.narrative_content_hash.clone(),
+            }
+        );
+    }
+
+    #[test]
+    fn narration_replay_divergence_reports_first_byte_and_hashes() {
+        let key = receipt_signing_key(61);
+        let receipt = build_receipt(&key);
+        // Perturb the decision input: a different chosen loss changes the
+        // rendered narration.
+        let mut perturbed = receipt_explanation();
+        perturbed.chosen_loss_millionths += 1;
+        let replayed = perturbed.constrained_narrative(NarrativeGrammarPolicy::default());
+        match narration_replay_check(&receipt, &replayed) {
+            NarrationReplayVerdict::Divergent {
+                original_hash,
+                replayed_hash,
+                first_divergence_index,
+                original_len,
+                replayed_len,
+            } => {
+                assert_eq!(original_hash, receipt.narrative_content_hash);
+                assert_eq!(replayed_hash, replayed.content_hash);
+                assert_ne!(original_hash, replayed_hash);
+                assert!(first_divergence_index < original_len.max(replayed_len));
+                let common = receipt
+                    .narrative_text_canonical
+                    .as_bytes()
+                    .iter()
+                    .zip(replayed.text.as_bytes())
+                    .take_while(|(a, b)| a == b)
+                    .count() as u64;
+                assert_eq!(first_divergence_index, common);
+            }
+            other => panic!("expected divergence, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn narration_replay_hash_mismatch_alone_is_divergent() {
+        // Same text but a receipt whose recorded narrative hash was forged:
+        // identity requires BOTH byte equality and hash agreement.
+        let key = receipt_signing_key(61);
+        let mut receipt = build_receipt(&key);
+        receipt.narrative_content_hash = "00000000000000000000000000000000".to_string();
+        let replayed =
+            receipt_explanation().constrained_narrative(NarrativeGrammarPolicy::default());
+        let verdict = narration_replay_check(&receipt, &replayed);
+        assert!(!verdict.is_identical());
+    }
+
+    #[test]
+    fn narration_replay_verdict_serializes_for_gate_report() {
+        let verdict = NarrationReplayVerdict::Identical {
+            narrative_content_hash: "abcd".to_string(),
+        };
+        let json = serde_json::to_string(&verdict).expect("serializes");
+        assert!(json.contains("\"verdict\":\"identical\""));
+        let back: NarrationReplayVerdict = serde_json::from_str(&json).expect("deserializes");
+        assert_eq!(back, verdict);
     }
 }

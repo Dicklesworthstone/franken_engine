@@ -46,6 +46,19 @@ fn archive_path(archive_root: &str, relative_path: &str) -> String {
     )
 }
 
+fn hash_field(preimage: &mut Vec<u8>, bytes: &[u8]) {
+    preimage.extend_from_slice(&(bytes.len() as u64).to_le_bytes());
+    preimage.extend_from_slice(bytes);
+}
+
+fn hash_collection_len(preimage: &mut Vec<u8>, len: usize) {
+    preimage.extend_from_slice(&(len as u64).to_le_bytes());
+}
+
+fn hash_bool(preimage: &mut Vec<u8>, value: bool) {
+    preimage.push(u8::from(value));
+}
+
 // ---------------------------------------------------------------------------
 // CategoryShiftCapability
 // ---------------------------------------------------------------------------
@@ -166,29 +179,37 @@ impl CategoryShiftClaim {
     }
 
     pub fn compute_hash(&self) -> ContentHash {
+        let mut preimage = Vec::new();
         let mut source_beads = self.source_beads.clone();
         source_beads.sort();
-        let canonical = [
-            self.claim_id.clone(),
-            self.capability.as_str().to_string(),
-            self.claim_statement.clone(),
-            self.evidence_summary.clone(),
-            self.evidence_bundle_ref.clone(),
-            self.evidence_hash.to_string(),
-            {
-                let mut sorted_repro = self.reproduction_instructions.clone();
-                sorted_repro.sort();
-                sorted_repro.join("||")
-            },
-            source_beads.join("|"),
-            {
-                let mut sorted_caveats = self.caveats.clone();
-                sorted_caveats.sort();
-                sorted_caveats.join("||")
-            },
-        ]
-        .join("|");
-        ContentHash::compute(canonical.as_bytes())
+        let mut sorted_repro = self.reproduction_instructions.clone();
+        sorted_repro.sort();
+        let mut sorted_caveats = self.caveats.clone();
+        sorted_caveats.sort();
+
+        hash_field(&mut preimage, self.claim_id.as_bytes());
+        hash_field(&mut preimage, self.capability.as_str().as_bytes());
+        hash_field(&mut preimage, self.claim_statement.as_bytes());
+        hash_field(&mut preimage, self.evidence_summary.as_bytes());
+        hash_field(&mut preimage, self.evidence_bundle_ref.as_bytes());
+        hash_field(&mut preimage, self.evidence_hash.to_string().as_bytes());
+
+        hash_collection_len(&mut preimage, sorted_repro.len());
+        for step in &sorted_repro {
+            hash_field(&mut preimage, step.as_bytes());
+        }
+
+        hash_collection_len(&mut preimage, source_beads.len());
+        for bead in &source_beads {
+            hash_field(&mut preimage, bead.as_bytes());
+        }
+
+        hash_collection_len(&mut preimage, sorted_caveats.len());
+        for caveat in &sorted_caveats {
+            hash_field(&mut preimage, caveat.as_bytes());
+        }
+
+        ContentHash::compute(&preimage)
     }
 }
 
@@ -278,13 +299,13 @@ impl PrerequisiteGateRecord {
     }
 
     pub fn compute_hash(&self) -> ContentHash {
-        ContentHash::compute(
-            format!(
-                "{}|{}|{}|{}|{}",
-                self.bead_id, self.artifact_manifest, self.artifact_hash, self.summary, self.passed
-            )
-            .as_bytes(),
-        )
+        let mut preimage = Vec::new();
+        hash_field(&mut preimage, self.bead_id.as_bytes());
+        hash_field(&mut preimage, self.artifact_manifest.as_bytes());
+        hash_field(&mut preimage, self.artifact_hash.to_string().as_bytes());
+        hash_field(&mut preimage, self.summary.as_bytes());
+        hash_bool(&mut preimage, self.passed);
+        ContentHash::compute(&preimage)
     }
 }
 
@@ -320,13 +341,12 @@ impl PublishedArtifact {
     }
 
     pub fn compute_hash(&self) -> ContentHash {
-        ContentHash::compute(
-            format!(
-                "{}|{}|{}|{}",
-                self.artifact_id, self.relative_path, self.kind, self.content_hash
-            )
-            .as_bytes(),
-        )
+        let mut preimage = Vec::new();
+        hash_field(&mut preimage, self.artifact_id.as_bytes());
+        hash_field(&mut preimage, self.relative_path.as_bytes());
+        hash_field(&mut preimage, self.kind.as_bytes());
+        hash_field(&mut preimage, self.content_hash.to_string().as_bytes());
+        ContentHash::compute(&preimage)
     }
 }
 
@@ -381,28 +401,30 @@ pub struct CategoryShiftReport {
 
 impl CategoryShiftReport {
     pub fn compute_hash(&self) -> ContentHash {
-        let mut parts = vec![
-            self.schema_version.clone(),
-            self.component.clone(),
-            self.bead_id.clone(),
-            self.policy_id.clone(),
-            self.report_version.clone(),
-            self.candidate_id.clone(),
-            self.generated_at_utc.clone(),
-            self.archive_root.clone(),
-            self.scorecard_result_hash.to_string(),
-            self.scorecard_outcome.clone(),
-        ];
+        let mut preimage = Vec::new();
 
+        hash_field(&mut preimage, self.schema_version.as_bytes());
+        hash_field(&mut preimage, self.component.as_bytes());
+        hash_field(&mut preimage, self.bead_id.as_bytes());
+        hash_field(&mut preimage, self.policy_id.as_bytes());
+        hash_field(&mut preimage, self.report_version.as_bytes());
+        hash_field(&mut preimage, self.candidate_id.as_bytes());
+        hash_field(&mut preimage, self.generated_at_utc.as_bytes());
+        hash_field(&mut preimage, self.archive_root.as_bytes());
+        hash_field(
+            &mut preimage,
+            self.scorecard_result_hash.to_string().as_bytes(),
+        );
+        hash_field(&mut preimage, self.scorecard_outcome.as_bytes());
+
+        hash_collection_len(&mut preimage, self.dimension_summaries.len());
         for (dimension, summary) in &self.dimension_summaries {
-            parts.push(format!(
-                "{dimension}:{}:{}:{}:{}:{}",
-                summary.raw_score_millionths,
-                summary.floor_millionths,
-                summary.target_millionths,
-                summary.meets_floor,
-                summary.meets_target
-            ));
+            hash_field(&mut preimage, dimension.as_bytes());
+            preimage.extend_from_slice(&summary.raw_score_millionths.to_le_bytes());
+            preimage.extend_from_slice(&summary.floor_millionths.to_le_bytes());
+            preimage.extend_from_slice(&summary.target_millionths.to_le_bytes());
+            hash_bool(&mut preimage, summary.meets_floor);
+            hash_bool(&mut preimage, summary.meets_target);
         }
 
         {
@@ -412,26 +434,36 @@ impl CategoryShiftReport {
                 .map(|c| c.compute_hash().to_string())
                 .collect();
             sorted_claim_hashes.sort();
+            hash_collection_len(&mut preimage, sorted_claim_hashes.len());
             for h in sorted_claim_hashes {
-                parts.push(h);
+                hash_field(&mut preimage, h.as_bytes());
             }
         }
 
-        parts.push(self.methodology.summary.clone());
+        hash_field(&mut preimage, self.methodology.summary.as_bytes());
         {
             let mut sf = self.methodology.statistical_frameworks.clone();
             sf.sort();
-            parts.push(sf.join("|"));
+            hash_collection_len(&mut preimage, sf.len());
+            for item in &sf {
+                hash_field(&mut preimage, item.as_bytes());
+            }
         }
         {
             let mut vm = self.methodology.validation_methodology.clone();
             vm.sort();
-            parts.push(vm.join("|"));
+            hash_collection_len(&mut preimage, vm.len());
+            for item in &vm {
+                hash_field(&mut preimage, item.as_bytes());
+            }
         }
         {
             let mut lm = self.methodology.limitations.clone();
             lm.sort();
-            parts.push(lm.join("|"));
+            hash_collection_len(&mut preimage, lm.len());
+            for item in &lm {
+                hash_field(&mut preimage, item.as_bytes());
+            }
         }
 
         {
@@ -441,8 +473,9 @@ impl CategoryShiftReport {
                 .map(|g| g.compute_hash().to_string())
                 .collect();
             sorted_gate_hashes.sort();
+            hash_collection_len(&mut preimage, sorted_gate_hashes.len());
             for h in sorted_gate_hashes {
-                parts.push(h);
+                hash_field(&mut preimage, h.as_bytes());
             }
         }
 
@@ -453,29 +486,31 @@ impl CategoryShiftReport {
                 .map(|a| a.compute_hash().to_string())
                 .collect();
             sorted_artifact_hashes.sort();
+            hash_collection_len(&mut preimage, sorted_artifact_hashes.len());
             for h in sorted_artifact_hashes {
-                parts.push(h);
+                hash_field(&mut preimage, h.as_bytes());
             }
         }
 
         {
-            let mut sorted_reviews: Vec<_> = self
-                .peer_reviews
-                .iter()
-                .map(|review| {
-                    format!(
-                        "{}:{}:{}:{}",
-                        review.reviewer_id, review.reviewed_at_utc, review.approved, review.notes
-                    )
-                })
-                .collect();
-            sorted_reviews.sort();
-            for r in sorted_reviews {
-                parts.push(r);
+            let mut sorted_reviews: Vec<_> = self.peer_reviews.iter().collect();
+            sorted_reviews.sort_by(|left, right| {
+                left.reviewer_id
+                    .cmp(&right.reviewer_id)
+                    .then_with(|| left.reviewed_at_utc.cmp(&right.reviewed_at_utc))
+                    .then_with(|| left.approved.cmp(&right.approved))
+                    .then_with(|| left.notes.cmp(&right.notes))
+            });
+            hash_collection_len(&mut preimage, sorted_reviews.len());
+            for review in sorted_reviews {
+                hash_field(&mut preimage, review.reviewer_id.as_bytes());
+                hash_field(&mut preimage, review.reviewed_at_utc.as_bytes());
+                hash_bool(&mut preimage, review.approved);
+                hash_field(&mut preimage, review.notes.as_bytes());
             }
         }
 
-        ContentHash::compute(parts.join("|").as_bytes())
+        ContentHash::compute(&preimage)
     }
 
     pub fn to_json_pretty(&self) -> Result<String, serde_json::Error> {
@@ -1480,6 +1515,54 @@ mod tests {
         let r2 = build_category_shift_report(valid_input())
             .expect("operation should succeed for valid inputs");
         assert_eq!(r1.publication_hash, r2.publication_hash);
+    }
+
+    #[test]
+    fn build_report_publication_hash_is_injective_for_peer_review_fields() {
+        let mut split_reviewed_at = valid_input();
+        split_reviewed_at.peer_reviews[0] = PeerReviewSignoff {
+            reviewer_id: "reviewer-a".to_string(),
+            reviewed_at_utc: "2026-03-13T00:00:00Z:approved".to_string(),
+            approved: true,
+            notes: "notes-a".to_string(),
+        };
+
+        let mut split_reviewer_id = valid_input();
+        split_reviewer_id.peer_reviews[0] = PeerReviewSignoff {
+            reviewer_id: "reviewer-a:2026-03-13T00:00:00Z".to_string(),
+            reviewed_at_utc: "approved".to_string(),
+            approved: true,
+            notes: "notes-a".to_string(),
+        };
+
+        let legacy_split_reviewed_at = format!(
+            "{}:{}:{}:{}",
+            split_reviewed_at.peer_reviews[0].reviewer_id,
+            split_reviewed_at.peer_reviews[0].reviewed_at_utc,
+            split_reviewed_at.peer_reviews[0].approved,
+            split_reviewed_at.peer_reviews[0].notes
+        );
+        let legacy_split_reviewer_id = format!(
+            "{}:{}:{}:{}",
+            split_reviewer_id.peer_reviews[0].reviewer_id,
+            split_reviewer_id.peer_reviews[0].reviewed_at_utc,
+            split_reviewer_id.peer_reviews[0].approved,
+            split_reviewer_id.peer_reviews[0].notes
+        );
+        assert_eq!(
+            legacy_split_reviewed_at, legacy_split_reviewer_id,
+            "test setup must model the old delimiter-joined peer-review collision"
+        );
+
+        let split_reviewed_at_report = build_category_shift_report(split_reviewed_at)
+            .expect("operation should succeed for valid inputs");
+        let split_reviewer_id_report = build_category_shift_report(split_reviewer_id)
+            .expect("operation should succeed for valid inputs");
+
+        assert_ne!(
+            split_reviewed_at_report.publication_hash, split_reviewer_id_report.publication_hash,
+            "peer-review field boundaries must remain part of the publication hash"
+        );
     }
 
     #[test]

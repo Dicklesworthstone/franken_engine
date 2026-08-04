@@ -1,0 +1,6 @@
+{
+  "schema_version": "franken-engine.proof-artifact-bundle.v1",
+  "bundle_type": "proof_artifact",
+  "required_members": [
+    {"path": "events.jsonl"}
+  ],

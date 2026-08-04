@@ -50,10 +50,45 @@ write_common_fixtures() {
   jq -n '{schema_version:"franken-engine.swarm-predictive-dashboard.v1", status:"ok"}' >"${dir}/operator_status.json"
 }
 
+write_identity_receipt() {
+  local dir="$1"
+  local decision="${2:-fail_closed}"
+  local bead="${3:-bd-trace}"
+  local thread="${4:-bd-trace}"
+  local message_id="${5:-1}"
+  local failed_count="${6:-1}"
+  jq -n \
+    --arg decision "$decision" \
+    --arg bead "$bead" \
+    --arg thread "$thread" \
+    --argjson message_id "$message_id" \
+    --argjson failed_count "$failed_count" \
+    '{
+      schema_version:"franken-engine.swarm-agent-mail-identity-reconciliation-receipt.v1",
+      decision:$decision,
+      bead_id:$bead,
+      thread_id:$thread,
+      raw_error:"MessageRecipient not found: 739:1",
+      evidence:{
+        failed_ack_attempt_count:$failed_count,
+        anomalies:[{
+          anomaly_class:"stale_message_recipient_row",
+          severity:"fail_closed",
+          raw_error:"MessageRecipient not found: 739:1",
+          affected_entities:{
+            message_id:$message_id,
+            thread_id:$thread,
+            bead_id:$bead
+          }
+        }]
+      }
+    }' >"${dir}/identity_receipt.json"
+}
+
 run_normalizer() {
   local fixture_dir="$1"
   local output_dir="$2"
-  "$normalizer" \
+  local args=(
     --bead-id bd-trace \
     --agent-name AgentAlpha \
     --source-revision fixture-rev \
@@ -69,8 +104,12 @@ run_normalizer() {
     --git-closeout-commits-json "${fixture_dir}/commits.json" \
     --rch-validation-artifacts-json "${fixture_dir}/rch.json" \
     --validation-commands-json "${fixture_dir}/validation.json" \
-    --operator-status-json "${fixture_dir}/operator_status.json" \
-    --output-dir "$output_dir" >/dev/null
+    --operator-status-json "${fixture_dir}/operator_status.json"
+  )
+  if [[ -f "${fixture_dir}/identity_receipt.json" ]]; then
+    args+=(--identity-reconciliation-receipt-json "${fixture_dir}/identity_receipt.json")
+  fi
+  "$normalizer" "${args[@]}" --output-dir "$output_dir" >/dev/null
 }
 
 expect_fail_closed() {
@@ -107,6 +146,9 @@ run_selftest() {
   local ownership_conflict="${tmp_root}/ownership_conflict"
   local missing_commit="${tmp_root}/missing_commit"
   local unacked="${tmp_root}/unacked"
+  local ack_failed="${tmp_root}/ack_failed"
+  local ack_missing_receipt="${tmp_root}/ack_missing_receipt"
+  local ack_bad_receipt="${tmp_root}/ack_bad_receipt"
 
   rm -rf "$tmp_root"
   mkdir -p "$tmp_root"
@@ -151,6 +193,52 @@ run_selftest() {
   mv "${unacked}/messages.tmp" "${unacked}/messages.json"
   expect_fail_closed "$unacked" "${unacked}/out"
   jq -e 'any(.fail_closed_reasons[]; .code == "ack_required_message_unacknowledged")' "${unacked}/out/swarm_agent_causal_trace_events.json" >/dev/null
+
+  write_common_fixtures "$ack_failed" "closed"
+  write_identity_receipt "$ack_failed"
+  jq '.ack_attempts = [{
+    message_id:1,
+    thread_id:"bd-trace",
+    bead_id:"bd-trace",
+    agent_name:"AgentAlpha",
+    attempted_at:"2026-05-06T00:02:30Z",
+    success:false,
+    error:"MessageRecipient not found: 739:1"
+  }]' "${ack_failed}/messages.json" >"${ack_failed}/messages.tmp"
+  mv "${ack_failed}/messages.tmp" "${ack_failed}/messages.json"
+  expect_fail_closed "$ack_failed" "${ack_failed}/out"
+  jq -e 'any(.fail_closed_reasons[]; .code == "ack_attempt_failed")' "${ack_failed}/out/swarm_agent_causal_trace_events.json" >/dev/null
+  jq -e 'any(.events[]; .event_type == "identity_reconciliation_receipt" and .payload.thread_id == "bd-trace")' "${ack_failed}/out/swarm_agent_causal_trace_events.json" >/dev/null
+  jq -e 'any(.events[]; .event_type == "ack_attempt" and (.payload.error // "" | contains("MessageRecipient not found")))' "${ack_failed}/out/swarm_agent_causal_trace_events.json" >/dev/null
+
+  write_common_fixtures "$ack_missing_receipt" "closed"
+  jq '.ack_attempts = [{
+    message_id:1,
+    thread_id:"bd-trace",
+    bead_id:"bd-trace",
+    agent_name:"AgentAlpha",
+    attempted_at:"2026-05-06T00:02:30Z",
+    success:false,
+    error:"MessageRecipient not found: 739:1"
+  }]' "${ack_missing_receipt}/messages.json" >"${ack_missing_receipt}/messages.tmp"
+  mv "${ack_missing_receipt}/messages.tmp" "${ack_missing_receipt}/messages.json"
+  expect_fail_closed "$ack_missing_receipt" "${ack_missing_receipt}/out"
+  jq -e 'any(.degraded_reasons[]; .code == "identity_reconciliation_receipt_missing")' "${ack_missing_receipt}/out/swarm_agent_causal_trace_events.json" >/dev/null
+
+  write_common_fixtures "$ack_bad_receipt" "closed"
+  write_identity_receipt "$ack_bad_receipt" "pass" "bd-other" "bd-other" 999 0
+  jq '.ack_attempts = [{
+    message_id:1,
+    thread_id:"bd-trace",
+    bead_id:"bd-trace",
+    agent_name:"AgentAlpha",
+    attempted_at:"2026-05-06T00:02:30Z",
+    success:false,
+    error:"MessageRecipient not found: 739:1"
+  }]' "${ack_bad_receipt}/messages.json" >"${ack_bad_receipt}/messages.tmp"
+  mv "${ack_bad_receipt}/messages.tmp" "${ack_bad_receipt}/messages.json"
+  expect_fail_closed "$ack_bad_receipt" "${ack_bad_receipt}/out"
+  jq -e 'any(.fail_closed_reasons[]; .code == "identity_reconciliation_receipt_contradicts_ack_attempt")' "${ack_bad_receipt}/out/swarm_agent_causal_trace_events.json" >/dev/null
 
   record_pass "selftest fixtures"
   printf 'swarm_agent_causal_trace_normalizer_smoke_artifacts=%s\n' "$tmp_root"

@@ -149,7 +149,10 @@ fn binary_emits_topology_assessment_bundle() {
 
     let commands = fs::read_to_string(out_dir.join("commands.txt")).expect("read commands");
     assert!(commands.contains("franken_extension_host_topology_assessment"));
-    assert!(commands.contains("rch exec"));
+    assert!(commands.contains(
+        "EXTENSION_HOST_TOPOLOGY_ASSESSMENT_ARTIFACT_ROOT='<ARTIFACT_ROOT>' EXTENSION_HOST_TOPOLOGY_ASSESSMENT_SEED=4242 ./scripts/run_extension_host_topology_assessment.sh bundle"
+    ));
+    assert!(!commands.contains("rch exec -- cargo"));
     assert!(!commands.contains(
         "cargo run -p frankenengine-engine --bin franken_extension_host_topology_assessment\n"
     ));

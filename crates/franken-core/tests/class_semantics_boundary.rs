@@ -5,9 +5,8 @@
 //! and class inheritance patterns using franken-core's boundary interface.
 
 use frankenengine_core::object_model::{
-    JsValue, ManagedObject, ObjectError, ObjectHandle, ObjectHeap, OrdinaryObject,
-    PropertyDescriptor, PropertyKey, ProxyInvariantChecker, ProxyObject, Reflect,
-    ReflectApplyRequest, ReflectConstructRequest, SymbolId, SymbolRegistry, WellKnownSymbol,
+    JsValue, ObjectError, ObjectHandle, ObjectHeap, OrdinaryObject, PropertyDescriptor,
+    PropertyKey, ProxyInvariantChecker, Reflect, WellKnownSymbol,
 };
 
 // Helper functions for test clarity
@@ -20,7 +19,7 @@ fn int_val(n: i64) -> JsValue {
 }
 
 fn str_val(s: &str) -> JsValue {
-    JsValue::Str(s.to_string())
+    JsValue::str(s)
 }
 
 // ---------------------------------------------------------------------------
@@ -663,8 +662,10 @@ fn proxy_constructor_revocation() {
 
 #[test]
 fn proxy_invariant_constructor_property() {
-    let mut target = OrdinaryObject::default();
-    target.constructable = true;
+    let mut target = OrdinaryObject {
+        constructable: true,
+        ..Default::default()
+    };
     target
         .define_own_property(
             str_key("length"),
@@ -897,13 +898,17 @@ fn property_key_ordering_in_class() {
     .unwrap();
 
     let names = heap.get_own_property_names(obj).unwrap();
-    // Integer indices come first (sorted), then strings (insertion/BTreeMap order)
+    // Integer indices come first (sorted), then strings in insertion order.
     assert!(
         names.iter().position(|x| x == "1").unwrap()
             < names.iter().position(|x| x == "10").unwrap()
     );
     assert!(
         names.iter().position(|x| x == "10").unwrap()
+            < names.iter().position(|x| x == "zebra").unwrap()
+    );
+    assert!(
+        names.iter().position(|x| x == "zebra").unwrap()
             < names.iter().position(|x| x == "alpha").unwrap()
     );
 }

@@ -643,12 +643,13 @@ fn ordinary_object_own_property_keys_es2020_order() {
         .unwrap();
 
     let keys = obj.own_property_keys();
-    // Expected: numeric indices sorted (0, 2, 10), then strings (a, b via BTree), then symbols
+    // Expected: numeric indices sorted (0, 2, 10), then strings in insertion
+    // order (b, a), then symbols in insertion order.
     assert_eq!(keys[0], str_key("0"));
     assert_eq!(keys[1], str_key("2"));
     assert_eq!(keys[2], str_key("10"));
-    assert_eq!(keys[3], str_key("a"));
-    assert_eq!(keys[4], str_key("b"));
+    assert_eq!(keys[3], str_key("b"));
+    assert_eq!(keys[4], str_key("a"));
     assert_eq!(keys[5], PropertyKey::Symbol(SymbolId(100)));
 }
 

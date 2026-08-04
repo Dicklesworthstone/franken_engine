@@ -16,6 +16,7 @@
 use frankenengine_engine::ast::{
     Expression, ExpressionStatement, ParseGoal, SourceSpan, Statement, SyntaxTree,
 };
+use frankenengine_engine::deterministic_serde::CanonicalValue;
 use frankenengine_engine::hash_tiers::ContentHash;
 use frankenengine_engine::ifc_artifacts::Label;
 use frankenengine_engine::ir_contract::{
@@ -75,6 +76,7 @@ fn make_ir2(ir1_hash: ContentHash) -> Ir2Module {
         effect: EffectBoundary::Pure,
         required_capability: None,
         flow: None,
+        span: None,
     });
     ir2.ops.push(Ir2Op {
         inner: Ir1Op::Call { arg_count: 1 },
@@ -85,6 +87,7 @@ fn make_ir2(ir1_hash: ContentHash) -> Ir2Module {
             sink_clearance: Label::Internal,
             declassification_required: false,
         }),
+        span: None,
     });
     ir2.required_capabilities
         .push(CapabilityTag("fs:read".to_string()));
@@ -110,7 +113,7 @@ fn make_ir3(ir2_hash: ContentHash) -> Ir3Module {
         dst: 3,
     });
     ir3.instructions.push(Ir3Instruction::Return { value: 3 });
-    ir3.constant_pool.push("hello".to_string());
+    ir3.constant_pool.push("hello".into());
     ir3.function_table.push(Ir3FunctionDesc {
         entry: 0,
         arity: 0,
@@ -520,6 +523,7 @@ fn ir2_ifc_annotations_preserved_through_roundtrip() {
             sink_clearance: Label::Public,
             declassification_required: true,
         }),
+        span: None,
     });
 
     let json = serde_json::to_string(&ir2).unwrap();
@@ -572,6 +576,75 @@ fn ir_level_ordering_is_pipeline_order() {
     ];
     for i in 0..levels.len() - 1 {
         assert!(levels[i] < levels[i + 1]);
+    }
+}
+
+#[test]
+fn function_local_lexical_metadata_is_backward_compatible_and_canonical_bd_pimva() {
+    fn function_op(declared: bool, local_lexical_bindings: Vec<ResolvedBinding>) -> Ir1Op {
+        if declared {
+            Ir1Op::DeclareFunction {
+                name: "run".to_string(),
+                binding_id: 0,
+                param_names: Vec::new(),
+                body_ops: Vec::new(),
+                free_vars: Vec::new(),
+                free_var_ids: Vec::new(),
+                runtime_global_loads: Vec::new(),
+                child_captured_locals: Vec::new(),
+                local_lexical_bindings,
+                is_generator: false,
+                is_async: false,
+                rest_param_index: None,
+            }
+        } else {
+            Ir1Op::CreateFunction {
+                name: Some("run".to_string()),
+                param_names: Vec::new(),
+                body_ops: Vec::new(),
+                free_vars: Vec::new(),
+                free_var_ids: Vec::new(),
+                runtime_global_loads: Vec::new(),
+                child_captured_locals: Vec::new(),
+                local_lexical_bindings,
+                is_generator: false,
+                is_async: false,
+                rest_param_index: None,
+            }
+        }
+    }
+
+    for declared in [false, true] {
+        let empty = function_op(declared, Vec::new());
+        let json = serde_json::to_string(&empty).expect("serialize function op");
+        assert!(!json.contains("local_lexical_bindings"));
+        let restored: Ir1Op = serde_json::from_str(&json).expect("deserialize legacy function op");
+        assert_eq!(restored, empty);
+        let CanonicalValue::Map(empty_fields) = empty.canonical_value() else {
+            panic!("function op canonical value must be a map");
+        };
+        assert!(!empty_fields.contains_key("local_lexical_bindings"));
+
+        let lexical = ResolvedBinding {
+            name: "value".to_string(),
+            binding_id: 7,
+            scope: ScopeId { depth: 1, index: 0 },
+            kind: BindingKind::Let,
+        };
+        let with_let = function_op(declared, vec![lexical.clone()]);
+        let with_const = function_op(
+            declared,
+            vec![ResolvedBinding {
+                kind: BindingKind::Const,
+                ..lexical
+            }],
+        );
+        let CanonicalValue::Map(let_fields) = with_let.canonical_value() else {
+            panic!("function op canonical value must be a map");
+        };
+        assert!(let_fields.contains_key("local_lexical_bindings"));
+        assert_ne!(empty.canonical_value(), with_let.canonical_value());
+        assert_ne!(with_let.canonical_value(), with_const.canonical_value());
     }
 }
 
@@ -746,7 +819,7 @@ fn scope_kind_serde_round_trip() {
 fn ir_schema_version_current_is_stable() {
     let v = IrSchemaVersion::CURRENT;
     assert_eq!(v.major, 0);
-    assert_eq!(v.minor, 1);
+    assert_eq!(v.minor, 7);
 }
 
 #[test]
@@ -1250,6 +1323,7 @@ fn enrichment_ir3_for_of_next_serde_roundtrip() {
 fn enrichment_ir3_iterator_close_all_reasons_serde_roundtrip() {
     for reason in [
         IteratorCloseReason::Break,
+        IteratorCloseReason::Continue,
         IteratorCloseReason::Return,
         IteratorCloseReason::Throw,
     ] {
@@ -1263,6 +1337,23 @@ fn enrichment_ir3_iterator_close_all_reasons_serde_roundtrip() {
     }
 }
 
+#[test]
+fn enrichment_ir2_iterator_close_continue_serde_roundtrip_bd_g73mg() {
+    let op = Ir2Op {
+        inner: Ir1Op::IteratorClose {
+            reason: IteratorCloseReason::Continue,
+        },
+        effect: EffectBoundary::ReadEffect,
+        required_capability: None,
+        flow: None,
+        span: None,
+    };
+    let json = serde_json::to_string(&op).unwrap();
+    assert!(json.contains("Continue"));
+    let recovered: Ir2Op = serde_json::from_str(&json).unwrap();
+    assert_eq!(op, recovered);
+}
+
 // --- IR1 op serde round-trips ---
 
 #[test]
@@ -1272,7 +1363,7 @@ fn enrichment_ir1_all_ops_serde_roundtrip() {
             value: Ir1Literal::Integer(99),
         },
         Ir1Op::LoadLiteral {
-            value: Ir1Literal::String("hello".to_string()),
+            value: Ir1Literal::String("hello".into()),
         },
         Ir1Op::LoadLiteral {
             value: Ir1Literal::Boolean(true),
@@ -1288,7 +1379,7 @@ fn enrichment_ir1_all_ops_serde_roundtrip() {
         Ir1Op::Call { arg_count: 3 },
         Ir1Op::Return,
         Ir1Op::ImportModule {
-            specifier: "mod".to_string(),
+            specifier: "mod".into(),
         },
         Ir1Op::ExportBinding {
             name: "x".to_string(),
@@ -1303,13 +1394,13 @@ fn enrichment_ir1_all_ops_serde_roundtrip() {
         Ir1Op::JumpIfTruthy { label_id: 4 },
         Ir1Op::JumpIfNullish { label_id: 5 },
         Ir1Op::GetProperty {
-            key: Ir1PropertyKey::Static("prop".to_string()),
+            key: Ir1PropertyKey::Static("prop".into()),
         },
         Ir1Op::GetProperty {
             key: Ir1PropertyKey::Dynamic,
         },
         Ir1Op::SetProperty {
-            key: Ir1PropertyKey::Static("val".to_string()),
+            key: Ir1PropertyKey::Static("val".into()),
         },
         Ir1Op::DeleteProperty {
             key: Ir1PropertyKey::Dynamic,
@@ -1325,6 +1416,9 @@ fn enrichment_ir1_all_ops_serde_roundtrip() {
             body_ops: Vec::new(),
             free_vars: Vec::new(),
             free_var_ids: Vec::new(),
+            runtime_global_loads: Vec::new(),
+            child_captured_locals: Vec::new(),
+            local_lexical_bindings: Vec::new(),
             is_generator: false,
             is_async: false,
             rest_param_index: None,
@@ -1475,10 +1569,10 @@ fn enrichment_ir3_hash_changes_with_instruction_order() {
 fn enrichment_ir3_hash_changes_with_constant_pool() {
     let h = ContentHash::compute(b"ir2");
     let mut m1 = Ir3Module::new(h, "test.js");
-    m1.constant_pool.push("alpha".to_string());
+    m1.constant_pool.push("alpha".into());
 
     let mut m2 = Ir3Module::new(h, "test.js");
-    m2.constant_pool.push("beta".to_string());
+    m2.constant_pool.push("beta".into());
 
     assert_ne!(m1.content_hash(), m2.content_hash());
 }
@@ -1762,7 +1856,7 @@ fn enrichment_ir_contract_event_serde_roundtrip_error() {
 #[test]
 fn enrichment_ir1_literal_all_variants_serde() {
     let literals = [
-        Ir1Literal::String("test".to_string()),
+        Ir1Literal::String("test".into()),
         Ir1Literal::Integer(42),
         Ir1Literal::Integer(-1),
         Ir1Literal::Integer(0),
@@ -1782,7 +1876,7 @@ fn enrichment_ir1_literal_all_variants_serde() {
 
 #[test]
 fn enrichment_ir1_property_key_static_serde() {
-    let key = Ir1PropertyKey::Static("myProp".to_string());
+    let key = Ir1PropertyKey::Static("myProp".into());
     let json = serde_json::to_string(&key).unwrap();
     let recovered: Ir1PropertyKey = serde_json::from_str(&json).unwrap();
     assert_eq!(key, recovered);
@@ -1801,6 +1895,7 @@ fn enrichment_ir1_property_key_dynamic_serde() {
 #[test]
 fn enrichment_iterator_close_reason_as_str_stable() {
     assert_eq!(IteratorCloseReason::Break.as_str(), "break");
+    assert_eq!(IteratorCloseReason::Continue.as_str(), "continue");
     assert_eq!(IteratorCloseReason::Return.as_str(), "return");
     assert_eq!(IteratorCloseReason::Throw.as_str(), "throw");
 }
@@ -1809,13 +1904,14 @@ fn enrichment_iterator_close_reason_as_str_stable() {
 fn enrichment_iterator_close_reason_all_unique() {
     let strs: std::collections::BTreeSet<&str> = [
         IteratorCloseReason::Break,
+        IteratorCloseReason::Continue,
         IteratorCloseReason::Return,
         IteratorCloseReason::Throw,
     ]
     .iter()
     .map(|r| r.as_str())
     .collect();
-    assert_eq!(strs.len(), 3);
+    assert_eq!(strs.len(), 4);
 }
 
 // --- ScopeKind additional coverage ---
@@ -2146,6 +2242,7 @@ fn enrichment_ir2_op_pure_no_capability_serde() {
         effect: EffectBoundary::Pure,
         required_capability: None,
         flow: None,
+        span: None,
     };
     let json = serde_json::to_string(&op).unwrap();
     let recovered: Ir2Op = serde_json::from_str(&json).unwrap();
@@ -2163,6 +2260,7 @@ fn enrichment_ir2_op_with_all_fields_serde() {
             sink_clearance: Label::Public,
             declassification_required: false,
         }),
+        span: None,
     };
     let json = serde_json::to_string(&op).unwrap();
     let recovered: Ir2Op = serde_json::from_str(&json).unwrap();

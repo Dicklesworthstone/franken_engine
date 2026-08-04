@@ -426,11 +426,11 @@ impl CausationGraph {
             // Add direct causes
             if let Some(edge_ids) = self.reverse_adjacency.get(&current_id) {
                 for edge_id in edge_ids {
-                    if let Some(edge) = self.edges.get(edge_id) {
-                        if !visited.contains(&edge.source) {
-                            visited.insert(edge.source);
-                            queue.push_back((edge.source, depth + 1));
-                        }
+                    if let Some(edge) = self.edges.get(edge_id)
+                        && !visited.contains(&edge.source)
+                    {
+                        visited.insert(edge.source);
+                        queue.push_back((edge.source, depth + 1));
                     }
                 }
             }
@@ -480,12 +480,12 @@ impl CausationGraph {
             // Reduce in-degree of adjacent nodes
             if let Some(edge_ids) = self.adjacency.get(&node_id) {
                 for edge_id in edge_ids {
-                    if let Some(edge) = self.edges.get(edge_id) {
-                        if let Some(degree) = in_degree.get_mut(&edge.target) {
-                            *degree -= 1;
-                            if *degree == 0 {
-                                queue.push_back(edge.target);
-                            }
+                    if let Some(edge) = self.edges.get(edge_id)
+                        && let Some(degree) = in_degree.get_mut(&edge.target)
+                    {
+                        *degree -= 1;
+                        if *degree == 0 {
+                            queue.push_back(edge.target);
                         }
                     }
                 }

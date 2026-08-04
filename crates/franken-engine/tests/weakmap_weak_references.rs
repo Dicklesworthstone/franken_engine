@@ -29,7 +29,7 @@ fn weakmap_test_config() -> InterpreterConfig {
 fn module(label: &str, instructions: Vec<Ir3Instruction>, pool: Vec<&str>) -> Ir3Module {
     let mut module = Ir3Module::new(ContentHash::compute(label.as_bytes()), label);
     module.instructions = instructions;
-    module.constant_pool = pool.into_iter().map(str::to_string).collect();
+    module.constant_pool = pool.into_iter().map(Into::into).collect();
     module.required_capabilities = vec![
         CapabilityTag("builtin:WeakMap".to_string()),
         CapabilityTag("builtin:WeakMapPrototypeHas".to_string()),

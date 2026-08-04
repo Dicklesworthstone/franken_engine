@@ -17,6 +17,25 @@ use crate::security_epoch::SecurityEpoch;
 pub const GA_EXIT_EVIDENCE_PACKAGE_SCHEMA_VERSION: &str =
     "franken-engine.ga-exit-evidence-package.v1";
 
+// --- Track Y third-party proof-bundle pins (bd-cixqu.25.3) ------------------
+//
+// These constants are the single source of truth in Rust for the Track Y
+// proof-bundle surface. They MUST match the Y.1 exporter
+// (`scripts/export_proof_bundle.sh`, bd-cixqu.25.1) and the Y.2 verifier
+// (`docker/y2_proof_bundle_verifier/`, `scripts/run_y2_proof_bundle_verifier.sh`,
+// bd-cixqu.25.2) so the three tracks cannot drift apart (Y.3 future-self note).
+
+/// Canonical proof-bundle schema, shared with the Y.1 exporter and the Y.2
+/// verifier (`franken-engine.proof-bundle.v1`).
+pub const PROOF_BUNDLE_SCHEMA_VERSION: &str = "franken-engine.proof-bundle.v1";
+/// Y.1 exporter entrypoint that produces the proof bundle.
+pub const PROOF_BUNDLE_EXPORTER: &str = "scripts/export_proof_bundle.sh";
+/// Y.2 clean-room third-party verifier image reference (no engine source).
+pub const PROOF_BUNDLE_VERIFIER_IMAGE: &str =
+    "frankenengine/y2-proof-bundle-verifier:bd-cixqu.25.2";
+/// Y.2 verifier gate entrypoint (build image + verify a bundle).
+pub const PROOF_BUNDLE_VERIFIER_GATE: &str = "scripts/run_y2_proof_bundle_verifier.sh";
+
 /// Release evidence surface represented in the GA package.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -231,6 +250,73 @@ impl ReproducibilityWitness {
     }
 }
 
+/// Third-party-verifiable proof-bundle reference embedded in the GA exit
+/// package (Track Y). The bundle IS the trust artifact: an external auditor
+/// re-checks it with the Y.2 verifier image (`PROOF_BUNDLE_VERIFIER_IMAGE`)
+/// without the FrankenEngine source tree. The `recheck_digest_sha256` is the
+/// Y.1 trust anchor (`recheck_expected.sha256`); a verifier that recomputes a
+/// different digest fails closed.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct ProofBundleReference {
+    /// Proof-bundle schema (`PROOF_BUNDLE_SCHEMA_VERSION`).
+    pub schema_version: String,
+    /// Bundle tar path relative to the handoff root (e.g. `proof_bundle.tar.gz`).
+    pub bundle_path: String,
+    /// Y.1 recheck digest trust anchor: bare lowercase hex sha256 (64 chars).
+    pub recheck_digest_sha256: String,
+    /// Number of proofs covered by the bundle.
+    pub claim_count: u32,
+    /// Y.1 exporter entrypoint (`PROOF_BUNDLE_EXPORTER`).
+    pub exporter: String,
+    /// Y.2 verifier image (`PROOF_BUNDLE_VERIFIER_IMAGE`).
+    pub verifier_image: String,
+    /// Y.2 verifier gate entrypoint (`PROOF_BUNDLE_VERIFIER_GATE`).
+    pub verifier_gate: String,
+    /// Concrete command a third party runs to re-verify the bundle.
+    pub verify_command: String,
+}
+
+impl ProofBundleReference {
+    /// Build a reference from a bundle path, its Y.1 recheck digest, and the
+    /// proof count, filling the canonical Y.1/Y.2 pins so the three tracks
+    /// cannot drift.
+    #[must_use]
+    pub fn new(
+        bundle_path: impl Into<String>,
+        recheck_digest_sha256: impl Into<String>,
+        claim_count: u32,
+    ) -> Self {
+        let bundle_path = bundle_path.into();
+        Self {
+            schema_version: PROOF_BUNDLE_SCHEMA_VERSION.to_string(),
+            verify_command: format!("{PROOF_BUNDLE_VERIFIER_GATE} verify {bundle_path}"),
+            bundle_path,
+            recheck_digest_sha256: recheck_digest_sha256.into(),
+            claim_count,
+            exporter: PROOF_BUNDLE_EXPORTER.to_string(),
+            verifier_image: PROOF_BUNDLE_VERIFIER_IMAGE.to_string(),
+            verifier_gate: PROOF_BUNDLE_VERIFIER_GATE.to_string(),
+        }
+    }
+
+    /// Validate the reference fields (non-empty + well-formed digest).
+    pub fn validate(&self) -> Result<(), GaExitEvidencePackageError> {
+        validate_non_empty("proof_bundle schema_version", &self.schema_version)?;
+        validate_non_empty("proof_bundle bundle_path", &self.bundle_path)?;
+        validate_non_empty("proof_bundle exporter", &self.exporter)?;
+        validate_non_empty("proof_bundle verifier_image", &self.verifier_image)?;
+        validate_non_empty("proof_bundle verifier_gate", &self.verifier_gate)?;
+        validate_non_empty("proof_bundle verify_command", &self.verify_command)?;
+        let digest = &self.recheck_digest_sha256;
+        if digest.len() != 64 || !digest.bytes().all(|b| b.is_ascii_hexdigit()) {
+            return Err(GaExitEvidencePackageError::InvalidProofBundleDigest {
+                digest: digest.clone(),
+            });
+        }
+        Ok(())
+    }
+}
+
 /// Deterministic GA exit evidence package.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct GaExitEvidencePackage {
@@ -252,6 +338,11 @@ pub struct GaExitEvidencePackage {
     pub risk_disposition_register: BTreeMap<String, String>,
     /// Commands that an external verifier can run.
     pub third_party_replay_commands: Vec<String>,
+    /// Third-party-verifiable proof bundle reference (Track Y). Backward
+    /// compatible: omitted from serialization (and the content hash) when absent
+    /// so packages assembled before Y.3 keep their existing bytes.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub proof_bundle: Option<ProofBundleReference>,
     /// Extra deterministic package metadata.
     pub metadata: BTreeMap<String, String>,
 }
@@ -274,6 +365,7 @@ impl GaExitEvidencePackage {
             schema_versions: BTreeMap::new(),
             risk_disposition_register: BTreeMap::new(),
             third_party_replay_commands: Vec::new(),
+            proof_bundle: None,
             metadata: BTreeMap::new(),
         }
     }
@@ -352,6 +444,17 @@ impl GaExitEvidencePackage {
         Ok(())
     }
 
+    /// Attach the Track Y third-party proof-bundle reference. The reference is
+    /// validated eagerly so a malformed digest cannot enter the package.
+    pub fn set_proof_bundle(
+        &mut self,
+        reference: ProofBundleReference,
+    ) -> Result<(), GaExitEvidencePackageError> {
+        reference.validate()?;
+        self.proof_bundle = Some(reference);
+        Ok(())
+    }
+
     /// Return a canonicalized copy suitable for deterministic serialization.
     #[must_use]
     pub fn canonicalized(&self) -> Self {
@@ -416,6 +519,10 @@ impl GaExitEvidencePackage {
                     witness_id: witness.witness_id.clone(),
                 });
             }
+        }
+
+        if let Some(reference) = &self.proof_bundle {
+            reference.validate()?;
         }
 
         Ok(())
@@ -484,6 +591,32 @@ impl GaExitEvidencePackage {
                 artifact.claim_mode.to_string(),
             );
         }
+        if let Some(reference) = &self.proof_bundle {
+            manifest.insert(
+                "proof_bundle.schema_version".to_string(),
+                reference.schema_version.clone(),
+            );
+            manifest.insert(
+                "proof_bundle.bundle_path".to_string(),
+                reference.bundle_path.clone(),
+            );
+            manifest.insert(
+                "proof_bundle.recheck_digest_sha256".to_string(),
+                reference.recheck_digest_sha256.clone(),
+            );
+            manifest.insert(
+                "proof_bundle.claim_count".to_string(),
+                reference.claim_count.to_string(),
+            );
+            manifest.insert(
+                "proof_bundle.verifier_image".to_string(),
+                reference.verifier_image.clone(),
+            );
+            manifest.insert(
+                "proof_bundle.verify_command".to_string(),
+                reference.verify_command.clone(),
+            );
+        }
         Ok(manifest)
     }
 }
@@ -516,6 +649,8 @@ pub enum GaExitEvidencePackageError {
         artifact_id: String,
         verdict: EvidenceVerdict,
     },
+    /// Proof-bundle recheck digest was not a 64-char lowercase hex sha256.
+    InvalidProofBundleDigest { digest: String },
     /// JSON serialization failed.
     Serialization { reason: String },
 }
@@ -561,6 +696,10 @@ impl fmt::Display for GaExitEvidencePackageError {
             } => write!(
                 f,
                 "GA evidence artifact blocks release: {artifact_id} ({verdict:?})"
+            ),
+            Self::InvalidProofBundleDigest { digest } => write!(
+                f,
+                "GA proof-bundle recheck digest must be 64-char hex sha256: {digest}"
             ),
             Self::Serialization { reason } => {
                 write!(f, "GA evidence package serialization failed: {reason}")
@@ -1132,5 +1271,129 @@ mod tests {
             domain: EvidenceDomain::Security,
         };
         assert!(err.to_string().contains("security"));
+    }
+
+    // --- Track Y proof-bundle reference (bd-cixqu.25.3) ---------------------
+
+    const SAMPLE_DIGEST: &str = "9aeef424e3379e93fb0c36b0181a765d6aef96e0b507bd02ef89e759e04721a6";
+
+    #[test]
+    fn proof_bundle_reference_pins_canonical_constants() {
+        let reference = ProofBundleReference::new("proof_bundle.tar.gz", SAMPLE_DIGEST, 6);
+        assert_eq!(reference.schema_version, PROOF_BUNDLE_SCHEMA_VERSION);
+        assert_eq!(reference.exporter, PROOF_BUNDLE_EXPORTER);
+        assert_eq!(reference.verifier_image, PROOF_BUNDLE_VERIFIER_IMAGE);
+        assert_eq!(reference.verifier_gate, PROOF_BUNDLE_VERIFIER_GATE);
+        assert!(reference.verify_command.contains("proof_bundle.tar.gz"));
+        assert!(
+            reference
+                .verify_command
+                .contains(PROOF_BUNDLE_VERIFIER_GATE)
+        );
+        // The schema string must match what Y.1 / Y.2 actually emit/consume.
+        assert_eq!(
+            PROOF_BUNDLE_SCHEMA_VERSION,
+            "franken-engine.proof-bundle.v1"
+        );
+    }
+
+    #[test]
+    fn proof_bundle_reference_validates_digest() {
+        ProofBundleReference::new("b.tar.gz", SAMPLE_DIGEST, 3)
+            .validate()
+            .expect("64-char hex digest is valid");
+        let bad = ProofBundleReference::new("b.tar.gz", "deadbeef", 3);
+        assert!(matches!(
+            bad.validate(),
+            Err(GaExitEvidencePackageError::InvalidProofBundleDigest { .. })
+        ));
+        let nonhex = ProofBundleReference::new("b.tar.gz", "z".repeat(64), 3);
+        assert!(matches!(
+            nonhex.validate(),
+            Err(GaExitEvidencePackageError::InvalidProofBundleDigest { .. })
+        ));
+    }
+
+    #[test]
+    fn package_includes_proof_bundle_in_manifest() -> Result<(), Box<dyn Error>> {
+        let mut package = complete_package()?;
+        package.set_proof_bundle(ProofBundleReference::new(
+            "proof_bundle.tar.gz",
+            SAMPLE_DIGEST,
+            6,
+        ))?;
+        package.validate()?;
+        let manifest = package.handoff_manifest()?;
+        assert_eq!(
+            manifest
+                .get("proof_bundle.schema_version")
+                .map(String::as_str),
+            Some(PROOF_BUNDLE_SCHEMA_VERSION)
+        );
+        assert_eq!(
+            manifest
+                .get("proof_bundle.recheck_digest_sha256")
+                .map(String::as_str),
+            Some(SAMPLE_DIGEST)
+        );
+        assert_eq!(
+            manifest
+                .get("proof_bundle.verifier_image")
+                .map(String::as_str),
+            Some(PROOF_BUNDLE_VERIFIER_IMAGE)
+        );
+        assert_eq!(
+            manifest.get("proof_bundle.claim_count").map(String::as_str),
+            Some("6")
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn proof_bundle_absent_keeps_serialization_backward_compatible() -> Result<(), Box<dyn Error>> {
+        // A package with no proof bundle must serialize WITHOUT the field and
+        // hash identically to its pre-Y.3 shape (skip_serializing_if).
+        let package = complete_package()?;
+        assert!(package.proof_bundle.is_none());
+        let json = String::from_utf8(package.deterministic_json_bytes()?)?;
+        assert!(
+            !json.contains("proof_bundle"),
+            "absent proof bundle must be omitted from JSON: {json}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn proof_bundle_changes_hash_and_round_trips() -> Result<(), Box<dyn Error>> {
+        let baseline = complete_package()?;
+        let baseline_hash = baseline.content_hash()?;
+        let mut package = complete_package()?;
+        package.set_proof_bundle(ProofBundleReference::new(
+            "proof_bundle.tar.gz",
+            SAMPLE_DIGEST,
+            6,
+        ))?;
+        // Adding the bundle is observable in the content hash.
+        assert_ne!(baseline_hash, package.content_hash()?);
+        // And it survives a serde round trip.
+        let json = serde_json::to_string(&package)?;
+        let restored: GaExitEvidencePackage = serde_json::from_str(&json)?;
+        assert_eq!(package, restored);
+        assert_eq!(restored.proof_bundle, package.proof_bundle);
+        Ok(())
+    }
+
+    #[test]
+    fn invalid_proof_bundle_digest_rejected_at_set() -> Result<(), Box<dyn Error>> {
+        let mut package = complete_package()?;
+        let err = package
+            .set_proof_bundle(ProofBundleReference::new("b.tar.gz", "nothex", 1))
+            .expect_err("malformed digest must be rejected at set time");
+        assert!(matches!(
+            err,
+            GaExitEvidencePackageError::InvalidProofBundleDigest { .. }
+        ));
+        assert!(package.proof_bundle.is_none());
+        Ok(())
     }
 }

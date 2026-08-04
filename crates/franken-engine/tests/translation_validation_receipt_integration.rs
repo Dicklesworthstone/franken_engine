@@ -528,6 +528,46 @@ fn test_proof_evidence_hash_sensitivity() {
     assert_ne!(ev1.content_hash(), ev2.content_hash());
 }
 
+#[test]
+fn test_receipt_proof_json_witness_public_api_for_counterexample() {
+    let receipt = TranslationValidationReceipt::new(
+        1,
+        "integration/receipt witness",
+        None,
+        epoch(1),
+        1234,
+        hash(b"baseline"),
+        hash(b"optimized"),
+        vec![rule("r-counterexample", -200_000)],
+        disproven(),
+        "integration-cost",
+    );
+
+    let witness = receipt.to_proof_json_witness();
+    assert_eq!(witness.verdict, "counterexample");
+    assert_eq!(
+        witness.reason.as_deref(),
+        Some("output differs on test case #3")
+    );
+    assert!(witness.counterexample_hash.is_some());
+    assert!(witness.verify_content_hash());
+
+    let output_dir = std::env::temp_dir().join(format!(
+        "tv_receipt_integration_witness_{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system clock")
+            .as_nanos()
+    ));
+    let emitted = emit_receipt_proof_json_witness(&receipt, &output_dir)
+        .expect("receipt witness should emit");
+    assert_eq!(
+        emitted.path.file_name().and_then(|name| name.to_str()),
+        Some("integration_receipt_witness.proof.json")
+    );
+    assert_eq!(emitted.verdict, "counterexample");
+}
+
 // ---------------------------------------------------------------------------
 // Applied rule records
 // ---------------------------------------------------------------------------

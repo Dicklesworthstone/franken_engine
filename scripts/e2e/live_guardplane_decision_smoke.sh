@@ -22,11 +22,20 @@ echo "   Output: $output_dir"
 
 mkdir -p "$output_dir"
 
-# Build the example
+# Build the example. Prefer rch when it is available, but fall back to a local
+# cargo build so the smoke still runs without remote workers and can reuse a warm
+# CARGO_TARGET_DIR. RCH_CARGO_WRAPPER_BYPASS=1 forces the local path. The example
+# target is registered under `frankenengine-engine` (Cargo.toml `[[example]]`).
 echo "📦 Building live guardplane decision example..."
-RCH_ENV_ALLOWLIST="${RCH_ENV_ALLOWLIST:-CARGO_TARGET_DIR}" \
-    rch exec -- env CARGO_TARGET_DIR="$target_dir" \
-    cargo build --example live_guardplane_decision_example --release
+if command -v rch >/dev/null 2>&1 && [[ "${RCH_CARGO_WRAPPER_BYPASS:-0}" != "1" ]]; then
+    RCH_ENV_ALLOWLIST="${RCH_ENV_ALLOWLIST:-CARGO_TARGET_DIR}" \
+        rch exec -- env CARGO_TARGET_DIR="$target_dir" \
+        cargo build --example live_guardplane_decision_example --release
+else
+    CARGO_TARGET_DIR="$target_dir" CARGO_INCREMENTAL="${CARGO_INCREMENTAL:-0}" \
+        cargo build -p frankenengine-engine \
+        --example live_guardplane_decision_example --release
+fi
 
 # Run the example and capture output
 echo "🔍 Running guardplane decision analysis..."
@@ -61,9 +70,12 @@ for expected in "${expected_outputs[@]}"; do
     fi
 done
 
-# Check if proof artifacts were generated in expected locations
-suspicious_artifacts="/tmp/guardplane_example_suspicious"
-benign_artifacts="/tmp/guardplane_example_benign"
+# Check if proof artifacts were generated in expected locations.
+# The example writes bundle-relative dirs under `tmp/` (gitignored) from the
+# repo root it is run in (`cd "$root_dir"` above), so resolve them there rather
+# than the system `/tmp`.
+suspicious_artifacts="${root_dir}/tmp/guardplane_example_suspicious"
+benign_artifacts="${root_dir}/tmp/guardplane_example_benign"
 
 for artifacts_dir in "$suspicious_artifacts" "$benign_artifacts"; do
     if [[ -d "$artifacts_dir" ]]; then

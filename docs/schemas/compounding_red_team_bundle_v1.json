@@ -1,0 +1,86 @@
+{
+  "schema_version": "franken-engine.compounding-red-team-bundle.v1",
+  "bead_id": "bd-cixqu.21.4",
+  "component": "compounding_red_team_campaign",
+  "purpose": "Deterministic, reproducible artifact bundle for a compounding red-team campaign that orchestrates U.1 attack generation, U.3 novelty detection, and U.2 corpus promotion, with a complete audit trail for operator review.",
+  "implementation_module": "crates/franken-engine/src/compounding_red_team_campaign.rs",
+  "implementation_cli": "frankenctl gates compounding-red-team --out-dir <dir> [--config <file>]",
+  "gate_script": "scripts/gates/run_rgc_compounding_red_team.sh",
+  "replay_script": "scripts/e2e/rgc_compounding_red_team_replay.sh",
+  "required_artifacts": [
+    "compounding_red_team_bundle.json",
+    "run_manifest.json",
+    "summary.md"
+  ],
+  "determinism": "Identical config inputs produce byte-identical bundles. bundle_digest is a SHA-256 content hash over the canonical bundle sequence (schema_version, campaign_id, config_fingerprint, per-candidate id/source-hash/novelty/disposition/promoted-name, and aggregate counts). generated_at_ns is a deterministic seed carried from the config, never wall-clock.",
+  "config": {
+    "format": "TOML (partial; missing fields take defaults)",
+    "fields": {
+      "campaign_label": "string; human-readable label (part of campaign_id)",
+      "timestamp_ns": "u64; deterministic generation seed",
+      "max_candidates_per_strategy": "u32; generation breadth per attack strategy",
+      "max_mutations_per_base": "u32; mutation depth per base exploit",
+      "include_obfuscation": "bool; include obfuscation mutations",
+      "duplicate_threshold_millionths": "u64; novelty duplicate similarity cut (default 900000)",
+      "near_duplicate_threshold_millionths": "u64; novelty near-duplicate cut (default 700000)",
+      "promotion_trials": "u32; reproduction trials for the promotion gate (default 5)",
+      "target_corpus_size": "u32; advisory promotion cap"
+    }
+  },
+  "bundle_fields": {
+    "schema_version": "string; must equal franken-engine.compounding-red-team-bundle.v1",
+    "campaign_id": "string; <campaign_label>:<config_fingerprint>",
+    "campaign_label": "string",
+    "config_fingerprint": "string; cfg-<hex16> content hash over the campaign config",
+    "generated_at_ns": "u64; deterministic generation seed carried from the config",
+    "explored": "array of explored_record; every generated candidate, in deterministic order",
+    "promoted_scenarios": "array of red-team-scenario.v1 manifest pairs promoted this campaign",
+    "statistics": "campaign_statistics object",
+    "bundle_digest": "string; bundle-<hex> content hash over the canonical bundle sequence"
+  },
+  "explored_record": {
+    "candidate_id": "string; deterministic scenario id",
+    "attack_vector": "string; attack-vector slug",
+    "strategy": "string; attack-strategy slug",
+    "severity": "string; severity slug",
+    "source_hash": "string; hex content hash of the generated attack source",
+    "novelty": {
+      "verdict": "novel | near_duplicate | duplicate",
+      "nearest_similarity_millionths": "u64; similarity to the nearest accepted candidate (0 if none)",
+      "nearest_candidate_id": "string | null",
+      "duplicate_threshold_millionths": "u64",
+      "near_duplicate_threshold_millionths": "u64"
+    },
+    "disposition": "promoted | rejected_duplicate | rejected_near_duplicate | rejected_not_reproduced",
+    "reason": "string; human-readable justification",
+    "minimization": "franken-engine.corpus-promotion-trace.v1 object | null",
+    "verdict": "corpus-promotion oracle verdict object | null",
+    "promoted_scenario_name": "string | null"
+  },
+  "campaign_statistics": {
+    "candidates_explored": "u32",
+    "promoted": "u32",
+    "rejected": "u32",
+    "novelty_distribution": {
+      "novel": "u32",
+      "near_duplicate": "u32",
+      "duplicate": "u32"
+    },
+    "corpus_size_before": "u32",
+    "corpus_size_after": "u32",
+    "corpus_growth": "u32",
+    "success_rate_by_attack_vector_millionths": "object; attack_vector -> promotion rate (millionths)"
+  },
+  "invariants": [
+    "promoted + rejected == candidates_explored",
+    "novel + near_duplicate + duplicate == candidates_explored",
+    "promoted <= novel (only genuinely novel attacks are promoted)",
+    "corpus_growth == promoted and corpus_size_after == corpus_size_before + corpus_growth",
+    "each promoted scenario asserts expected_outcome.frankenengine.outcome == fail_closed"
+  ],
+  "validation_commands": [
+    "cargo test -p frankenengine-engine --test compounding_red_team_campaign_integration",
+    "bash scripts/gates/run_rgc_compounding_red_team.sh ci",
+    "bash scripts/e2e/rgc_compounding_red_team_replay.sh"
+  ]
+}

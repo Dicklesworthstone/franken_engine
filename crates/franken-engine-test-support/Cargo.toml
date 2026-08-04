@@ -9,4 +9,9 @@ license.workspace = true
 path = "src/lib.rs"
 
 [dependencies]
-frankenengine-engine = { path = "../franken-engine" }
+# See bd-ndpm2: `default-features = false` stops this edge from re-enabling
+# the engine's /dp sibling features in a standalone workspace build. The
+# mock control-plane adapters use no sibling-gated API but do need asupersync.
+frankenengine-engine = { path = "../franken-engine", default-features = false, features = [
+    "asupersync-integration",
+] }

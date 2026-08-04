@@ -1,0 +1,1791 @@
+{
+  "schema_version": "franken-engine.execution-truth-ledger.v1",
+  "ledger_id": "franken-engine-performance-conformance-bridge-truth-v1",
+  "owning_bead": "bd-performance-conformance-bridge-tu32j.1.1",
+  "source_cutoff_utc": "2026-07-24T08:04:40Z",
+  "max_age_days": 90,
+  "rendered_markdown_path": "docs/EXECUTION_TRUTH_LEDGER_V1.md",
+  "purpose": "Bind the historical JIT, AOT, tiering, Test262, performance, and claim records to the code paths and artifacts that actually exist. The ledger preserves useful scaffolding while preventing planning records, input-only hashes, synthetic timings, test-only paths, or observed failures from being promoted into production-success claims.",
+  "assumptions": [
+    "The repository root contains the canonical .beads/issues.jsonl and docs/claim_to_proof_matrix_v1.json snapshots used by the validator.",
+    "Git tracking state is part of reproducibility truth: an ignored working-tree artifact can support local diagnosis but cannot by itself support a fresh-clone observed claim.",
+    "A local_optional proof retains its historical path and hash, is fully revalidated when present, and emits an explicit absence event when missing; it never substitutes for required or Git-tracked closure evidence.",
+    "Observed performance and conformance failures remain valuable evidence; observed describes the measurement, not success against the target.",
+    "Opportunity and relevance scores are ordinal 1-100 planning signals, not probabilities or measured effect sizes; S, M, L, and XL budgets describe relative engineering scope and exclude external-dependency latency.",
+    "QuickJS- and V8-named native lanes are compatibility-era profile names, not bindings to those engines."
+  ],
+  "exclusions": [
+    "This ledger does not implement native code generation, AOT images, Test262 harness parity, or performance optimizations.",
+    "This ledger does not promote or rewrite claim-matrix rows; BRIDGE-00.2 owns claim-language correction after this crosswalk is accepted.",
+    "This ledger does not delete, rewrite, or retroactively relabel historical artifacts.",
+    "ECMA-402, Annex B, post-ES2020 proposals, and host-specific Test262 cases remain outside the declared es2020-normative denominator."
+  ],
+  "classification_definitions": {
+    "executable": "A real parser, validator, runner, planner, benchmark, or runtime path executes rather than existing only as prose or a type declaration.",
+    "observed": "A real run produced measurements or decisions. Observed does not imply that a target passed.",
+    "planning_provenance": "The surface records plans, identities, guards, lineage, or future backend intent but is not itself the claimed executable output.",
+    "production_wired": "The surface reaches the same native parse-lower-execute path used by shipped runtime orchestration, not merely a fixture or isolated model.",
+    "simulated": "The implementation deliberately models the claimed operation without executing the real backend or effect.",
+    "synthetic_estimate": "A duration, size, hash, or outcome is derived from a formula or label rather than measured from the claimed output.",
+    "test_only": "The evidence is exercised by tests, CI, benchmarks, or audit tooling and is not itself a shipped runtime execution lane."
+  },
+  "subjects": [
+    {
+      "subject_id": "bead:bd-11p",
+      "kind": "bead",
+      "title": "[10.7] Integrate `test262` ES2020 normative profile as a release blocker with explicit waiver file and zero silent failures policy.",
+      "current_state": "closed",
+      "claim_posture": "not_applicable",
+      "classifications": [
+        "executable",
+        "observed",
+        "test_only"
+      ],
+      "runtime_reality": "A real CI-invoked release-gate script builds, tests, and runs the checked-in Test262 lane with structured artifacts; the gate infrastructure is real, while the full objective of zero unwaived ES2020 semantic failures is not met",
+      "user_impact": "Users get regression visibility and fail-closed gate mechanics, but must not read a green checked-in-vector gate as full ES2020 conformance",
+      "limitations": [
+        "The CI path runs the checked-in vector set, not the complete 47,157-case es2020-normative denominator.",
+        "Harness hooks, includes, flags, negative phases, realms, modules, and async completion are not yet parity-complete.",
+        "Closing the infrastructure bead did not close the Phase A conformance exit criterion."
+      ],
+      "downstream_decisions": [
+        "Keep full ES2020 conformance as a target until the live-corpus gate has zero unwaived semantic failures.",
+        "Retain the existing CI gate as a regression sentinel while BRIDGE-12 and BRIDGE-13 replace its incomplete harness model."
+      ],
+      "proofs": [
+        {
+          "proof_id": "bd-11p.ci-workflow",
+          "kind": "ci_wiring",
+          "path": ".github/workflows/version_matrix_conformance.yml",
+          "file_sha256": "c39b8e55e4dd28e67d61605d2a3d6575246cf7febf066c94dd3e659863651159",
+          "must_contain": [
+            "Run test262 ES2020 release-blocker suite",
+            "./scripts/run_test262_es2020_gate.sh ci"
+          ],
+          "expected_git_tracked": true,
+          "caller": "GitHub Actions version-matrix-conformance job",
+          "interpretation": "The Test262 gate is genuinely CI-invoked."
+        },
+        {
+          "proof_id": "bd-11p.gate-execution",
+          "kind": "source",
+          "path": "scripts/run_test262_es2020_gate.sh",
+          "start_line": 34,
+          "end_line": 99,
+          "range_sha256": "8eb03008f1501b6cfbdf609bd7f5780971a8b2acf77ffd4d1c08890965f33718",
+          "must_contain": [
+            "rch exec -- env",
+            "cargo test -p frankenengine-engine --test test262_release_gate",
+            "cargo run -p frankenengine-engine --bin franken_test262_runner"
+          ],
+          "caller": ".github/workflows/version_matrix_conformance.yml",
+          "interpretation": "The gate runs real Rust tests and the real runner through rch."
+        }
+      ],
+      "revalidation": {
+        "owner_id": "bd-performance-conformance-bridge-tu32j.13.1",
+        "role": "Test262 harness and denominator owner",
+        "trigger": "any runner, profile, waiver, high-water-mark, or CI workflow changes",
+        "command": "./scripts/run_execution_truth_ledger_gate.sh ci",
+        "fallback": "retain the checked-in-vector regression gate and label it provisional",
+        "kill_rule": "block any full-conformance wording while live unwaived failures or harness gaps remain",
+        "rollback": "restore the prior tracked ledger and gate script; preserve the failed run bundle for review"
+      }
+    },
+    {
+      "subject_id": "bead:bd-1lsy.7.10",
+      "kind": "bead",
+      "title": "[RGC-610] Build persistent code-cache and AOT compilation lane for cold-start supremacy",
+      "current_state": "closed",
+      "claim_posture": "not_applicable",
+      "classifications": [
+        "executable",
+        "planning_provenance",
+        "simulated",
+        "synthetic_estimate",
+        "test_only"
+      ],
+      "runtime_reality": "The AOT planner and cold-start artifact writer execute and preserve deterministic provenance, but compile time is a source-size formula, artifact_hash binds inputs, and no bytecode, IR, machine code, signed runtime image, or cached executable is emitted",
+      "user_impact": "Users can audit deterministic cache and provenance contracts now, but receive no AOT startup acceleration from this lane",
+      "limitations": [
+        "Compiled status describes a planning record, not an executable image.",
+        "The sole cold-start consumer explicitly excludes its manifest from proof and release claims.",
+        "No runtime dispatch loads or executes an output produced by this module."
+      ],
+      "downstream_decisions": [
+        "Treat existing records as reusable provenance inputs for BRIDGE-05 and BRIDGE-06.",
+        "Require produced bytes, signature, loader validation, deopt/fallback, and observed cold-start measurements before calling the lane AOT."
+      ],
+      "proofs": [
+        {
+          "proof_id": "bd-1lsy-7-10.aot-header",
+          "kind": "source",
+          "path": "crates/franken-engine/src/aot_entrygraph_compiler.rs",
+          "start_line": 1,
+          "end_line": 22,
+          "range_sha256": "b97bd2be268d03f9965c05b743d2580fb8f20dcd06044df9a24edad76d5ddf03",
+          "must_contain": [
+            "It does NOT yet run a codegen backend",
+            "compiled-output codegen is deferred"
+          ],
+          "caller": "cold_start_compilation_lane",
+          "interpretation": "The module now states the correct non-codegen boundary."
+        },
+        {
+          "proof_id": "bd-1lsy-7-10.cold-start-limit",
+          "kind": "source",
+          "path": "crates/franken-engine/src/cold_start_compilation_lane.rs",
+          "start_line": 1041,
+          "end_line": 1059,
+          "range_sha256": "72c91176d4f375235b1274b013b650e82172d52b6fd9563b42810936294aea93",
+          "must_contain": [
+            "demo label hash, not persisted runtime image bytes",
+            "excluded from proof and release claims"
+          ],
+          "caller": "cold_start_compilation_lane bundle writer",
+          "interpretation": "The consumer fail-closes release claims around synthetic images."
+        },
+        {
+          "proof_id": "bd-1lsy-7-10.simulated-compile",
+          "kind": "source",
+          "path": "crates/franken-engine/src/aot_entrygraph_compiler.rs",
+          "start_line": 694,
+          "end_line": 756,
+          "range_sha256": "b6333da7e575bc99cade0ed78a30aa6729a732244026b88cf699cfc59ac36b5a",
+          "must_contain": [
+            "Simulate compiling",
+            "source_size_bytes / 100 + 1",
+            "artifact hash is derived from source + config"
+          ],
+          "caller": "compile_entrygraph",
+          "interpretation": "The claimed compile duration and artifact identity are synthetic/input-derived."
+        }
+      ],
+      "revalidation": {
+        "owner_id": "bd-performance-conformance-bridge-tu32j.6.1",
+        "role": "native capsule and executable-image architecture owner",
+        "trigger": "a codegen backend, executable image format, cache loader, or cold-start claim changes",
+        "command": "./scripts/run_execution_truth_ledger_gate.sh ci",
+        "fallback": "execute the baseline interpreter and retain provenance-only records",
+        "kill_rule": "disable AOT selection on any signature, epoch, semantic-parity, or loader validation failure",
+        "rollback": "invalidate the new cache generation and route all entries to the baseline interpreter"
+      }
+    },
+    {
+      "subject_id": "bead:bd-1lsy.7.3",
+      "kind": "bead",
+      "title": "[RGC-603] Implement optimized compilation tier (Cranelift-backed) with deopt guards",
+      "current_state": "closed",
+      "claim_posture": "not_applicable",
+      "classifications": [
+        "executable",
+        "planning_provenance",
+        "test_only"
+      ],
+      "runtime_reality": "Executable hot-path, superblock, guard, side-exit, and compilation-unit planners exist and name Cranelift as the intended backend, but repository manifests contain no Cranelift codegen/JIT/module dependency and runtime dispatch never executes native output",
+      "user_impact": "Users benefit from reusable deterministic tier-up policy records, but receive no optimized native tier speedup or real deoptimization transition",
+      "limitations": [
+        "OptimizedTierBackend::Cranelift is a serialized enum value, not a linked backend.",
+        "The focused test proves plan construction and deopt metadata, not machine-code execution.",
+        "No measured optimized-tier speedup satisfies the bead's historical acceptance criteria."
+      ],
+      "downstream_decisions": [
+        "Reuse guard and side-exit contracts as inputs to BRIDGE-06 rather than rebuilding them.",
+        "Do not count this closed bead as implementation evidence for raw-performance parity."
+      ],
+      "proofs": [
+        {
+          "proof_id": "bd-1lsy-7-3.lock-no-cranelift",
+          "kind": "manifest",
+          "path": "Cargo.lock",
+          "forbidden_text": [
+            "name = \"cranelift-codegen\"",
+            "name = \"cranelift-jit\"",
+            "name = \"cranelift-module\"",
+            "name = \"cranelift-native\""
+          ],
+          "caller": "Cargo dependency resolver",
+          "interpretation": "No Cranelift backend crate is locked."
+        },
+        {
+          "proof_id": "bd-1lsy-7-3.manifest-no-cranelift",
+          "kind": "manifest",
+          "path": "crates/franken-engine/Cargo.toml",
+          "forbidden_text": [
+            "cranelift-codegen",
+            "cranelift-jit",
+            "cranelift-module",
+            "cranelift-native"
+          ],
+          "caller": "frankenengine-engine crate manifest",
+          "interpretation": "The engine crate does not link a Cranelift backend."
+        },
+        {
+          "proof_id": "bd-1lsy-7-3.plan-record",
+          "kind": "source",
+          "path": "crates/franken-engine/src/superblock_formation.rs",
+          "start_line": 246,
+          "end_line": 420,
+          "range_sha256": "518b304f6727238d477f4698912f16e748478eb14f272e8c0bb0d6b7bbc4bccf",
+          "must_contain": [
+            "Optimized-tier planning artifacts",
+            "One optimized compilation unit ready for backend lowering",
+            "requires_differential_equivalence"
+          ],
+          "caller": "OptimizedTierCompilationPlan::build",
+          "interpretation": "The executable surface stops at a plan ready for future backend lowering."
+        },
+        {
+          "proof_id": "bd-1lsy-7-3.test-only-cranelift",
+          "kind": "source",
+          "path": "crates/franken-engine/src/superblock_formation.rs",
+          "start_line": 2016,
+          "end_line": 2067,
+          "range_sha256": "493499aff4f415053b0b2287d667f2d253e34d823b0f95ba0abcbaf169bd4a9e",
+          "must_contain": [
+            "optimized_tier_plan_builds_cranelift_unit",
+            "OptimizedTierBackend::Cranelift"
+          ],
+          "caller": "Rust unit test",
+          "interpretation": "The existing Cranelift proof is plan-shape coverage, not backend execution."
+        }
+      ],
+      "revalidation": {
+        "owner_id": "bd-performance-conformance-bridge-tu32j.6.1",
+        "role": "native optimized-tier owner",
+        "trigger": "manifests, backend lowering, executable memory policy, deopt, or tier dispatch change",
+        "command": "./scripts/run_execution_truth_ledger_gate.sh ci",
+        "fallback": "route every compilation candidate to the baseline interpreter",
+        "kill_rule": "disable the native tier on any semantic mismatch, missing deopt map, W^X violation, or unsupported platform",
+        "rollback": "invalidate native capsules by backend/toolchain fingerprint and restore interpreter-only dispatch"
+      }
+    },
+    {
+      "subject_id": "bead:bd-6a61n.1.8",
+      "kind": "bead",
+      "title": "[RC-1.8] Test262 Conformance Harness — Baseline Pass Rate Measurement",
+      "current_state": "closed",
+      "claim_posture": "not_applicable",
+      "classifications": [
+        "executable",
+        "observed",
+        "production_wired",
+        "test_only"
+      ],
+      "runtime_reality": "The real pinned corpus is discovered and evaluated through HybridRouter, producing a measured 120/47,157 pass result, but metadata for includes, flags, and negative phases is lost when cases become execution vectors",
+      "user_impact": "Users have an honest conservative lower bound and real failure corpus, not a fabricated percentage, but the number cannot yet be interpreted as standards conformance",
+      "limitations": [
+        "assert.js, sta.js, propertyHelper.js, and case-specific includes are not preloaded.",
+        "Positive cases are compared to a default value rather than executing Test262 assertions with full harness semantics.",
+        "Negative phase and error-type fidelity, modules, realms, strictness variants, and async $DONE remain incomplete."
+      ],
+      "downstream_decisions": [
+        "Use the 0.25 percent result as a baseline failure observation, never as a conformance score.",
+        "BRIDGE-12 must preserve metadata losslessly before builtin and language frontier work is scored."
+      ],
+      "proofs": [
+        {
+          "proof_id": "bd-6a61n-1-8.case-model",
+          "kind": "source",
+          "path": "crates/franken-engine/src/test262_harness.rs",
+          "start_line": 25,
+          "end_line": 87,
+          "range_sha256": "f3bace24f319550954576eb5b941d3ec9da1551bd98226d665ebfe3bae40da70",
+          "must_contain": [
+            "pub includes: Vec<String>",
+            "pub flags: Vec<String>",
+            "pub struct Test262CaseVector"
+          ],
+          "caller": "Test262Harness::generate_case_vectors",
+          "interpretation": "Rich source metadata exists before conversion to a smaller vector schema."
+        },
+        {
+          "proof_id": "bd-6a61n-1-8.live-execution",
+          "kind": "source",
+          "path": "crates/franken-engine/src/bin/franken_test262_runner.rs",
+          "start_line": 542,
+          "end_line": 609,
+          "range_sha256": "bffeaf056f7ffc34f17b387ee3a53ffcb0d499a9df8b6c6d8753f24cc7bf393b",
+          "must_contain": [
+            "HybridRouter::default",
+            "router",
+            ".eval(case.source.as_str())"
+          ],
+          "caller": "execute_case_vector",
+          "interpretation": "Cases execute the native engine rather than replaying precomputed pass labels."
+        },
+        {
+          "proof_id": "bd-6a61n-1-8.measured-result",
+          "kind": "artifact",
+          "path": "docs/test262_real_corpus_pass_rate_v1.json",
+          "file_sha256": "0232d23444032b8e4de82e91f0822ab299ad586ce29924bab8d46ea7bd19123e",
+          "json_assertions": [
+            {
+              "pointer": "/denominator",
+              "expected": 47157
+            },
+            {
+              "pointer": "/passed",
+              "expected": 120
+            },
+            {
+              "pointer": "/pass_rate_millionths",
+              "expected": 2544
+            },
+            {
+              "pointer": "/full_suite_claim_allowed",
+              "expected": false
+            }
+          ],
+          "expected_git_tracked": true,
+          "caller": "scripts/run_test262_real_corpus_pass_rate.sh",
+          "interpretation": "The repository publishes the failed real-corpus measurement and forbids a full-suite claim."
+        },
+        {
+          "proof_id": "bd-6a61n-1-8.vector-metadata-loss",
+          "kind": "source",
+          "path": "crates/franken-engine/src/test262_harness.rs",
+          "start_line": 427,
+          "end_line": 444,
+          "range_sha256": "885e9964e55e4c32386d986b341be83b3f37f7eaefecd6251066c5317419cead",
+          "must_contain": [
+            "Test262CaseVector",
+            "source: test.source.clone()",
+            "expected_value"
+          ],
+          "caller": "vectors_from_suite",
+          "interpretation": "The vector conversion omits includes, flags, features, and structured negative metadata."
+        }
+      ],
+      "revalidation": {
+        "owner_id": "bd-performance-conformance-bridge-tu32j.13.1",
+        "role": "lossless Test262 metadata owner",
+        "trigger": "the corpus pin, profile, metadata schema, harness preload, or verdict semantics change",
+        "command": "./scripts/run_execution_truth_ledger_gate.sh ci",
+        "fallback": "publish separate execution-coverage and conservative harness-baseline figures",
+        "kill_rule": "reject any conformance promotion if includes or required metadata are discarded",
+        "rollback": "restore the prior runner schema and baseline artifact while retaining the failed new run"
+      }
+    },
+    {
+      "subject_id": "bead:bd-cixqu.7.17",
+      "kind": "bead",
+      "title": "Replace simulated Track-G verifiers with real proofs + emit proof.json bundle (unblocks FE-CLAIM-016..021 promotion)",
+      "current_state": "closed",
+      "claim_posture": "not_applicable",
+      "classifications": [
+        "executable",
+        "observed",
+        "test_only"
+      ],
+      "runtime_reality": "The replacement work delivered a real Lean producer, fail-closed Z3 and bounded-sample verifier paths, and proof-bundle emitters; it removed the earlier unconditional verifier stubs but did not itself supply durable, tracked, complete promotion evidence for all six Track-G claims",
+      "user_impact": "Users no longer depend on unconditional or string-only verifier success in the upgraded paths, while conservative claim postures prevent incomplete proof production from being advertised as theorem-backed runtime behavior",
+      "limitations": [
+        "The available successful FE-CLAIM-016 Lean artifact is local and Git-untracked.",
+        "No current artifacts/rgc_theorem_backed_compiler_inputs directory supplies fresh claim proofs in this checkout.",
+        "Generated optimizer obligations still use unsupported prose shapes in important paths, so FE-CLAIM-019 and FE-CLAIM-020 correctly fail to emit semantic-equivalence evidence.",
+        "The checked-in claim rationale still describes the superseded verifier implementations."
+      ],
+      "downstream_decisions": [
+        "Preserve the real verifier and emitter work as executable infrastructure rather than relabel it as a completed promotion.",
+        "Correct all FE-CLAIM-016 through FE-CLAIM-021 rationales together and require tracked, independently rechecked producer bundles before promotion."
+      ],
+      "proofs": [
+        {
+          "proof_id": "bd-cixqu-7-17.lean-observation",
+          "kind": "artifact",
+          "path": "artifacts/dw_proof_spine/20260710T090949Z/proof_spine_e2e/FE-CLAIM-016.proof.json",
+          "required": false,
+          "file_sha256": "8eb26841322e910742391f76db54e5d9b41237267f78d60a9fc48685a45a3d23",
+          "json_assertions": [
+            {
+              "pointer": "/claim_ids/0",
+              "expected": "FE-CLAIM-016"
+            },
+            {
+              "pointer": "/checker_result",
+              "expected": "Passed"
+            },
+            {
+              "pointer": "/theorem_or_validator_id",
+              "expected": "lean4::proofs/lean4"
+            }
+          ],
+          "expected_git_tracked": false,
+          "caller": "scripts/run_dw_proof_spine.sh live E2E",
+          "interpretation": "A real successful Lean-producer observation exists locally, but its ignored location cannot support fresh-clone promotion."
+        },
+        {
+          "proof_id": "bd-cixqu-7-17.optimization-emitter",
+          "kind": "source",
+          "path": "crates/franken-engine/src/optimization_proof_carriers.rs",
+          "start_line": 783,
+          "end_line": 838,
+          "range_sha256": "d338091517c9acbca52e221edb419b97069245b718fd6503423d998b8a2f83a9",
+          "must_contain": [
+            "fully verified optimization proof set",
+            "theorem_ids.is_empty()",
+            "FE-CLAIM-019",
+            "FE-CLAIM-020"
+          ],
+          "caller": "OptimizationProofCarrier::emit_fe_claim_019_020_proof_bundles",
+          "interpretation": "Optimization proof emission is executable and fail-closed, but only after a fully verified non-empty proof set."
+        },
+        {
+          "proof_id": "bd-cixqu-7-17.policy-emitter",
+          "kind": "source",
+          "path": "crates/franken-engine/src/bin/emit_track_g_proof_bundles.rs",
+          "start_line": 41,
+          "end_line": 125,
+          "range_sha256": "a6906660cf671b0e31e9a2d665a01c94cd2e4a2f64d46377d3c27ea3106e4550",
+          "must_contain": [
+            "SmtSolver::Z3",
+            "verify_all_theorems",
+            "no theorems proven",
+            "emit_proof_bundles"
+          ],
+          "caller": "emit_track_g_proof_bundles",
+          "interpretation": "The operator binary drives real Z3 and refuses to emit when no theorem proves."
+        },
+        {
+          "proof_id": "bd-cixqu-7-17.policy-z3",
+          "kind": "source",
+          "path": "crates/franken-engine/src/policy_theorem_engine.rs",
+          "start_line": 474,
+          "end_line": 548,
+          "range_sha256": "43edbefac3bf6f58c88dc319b71bd4b1b481cbb365db8384e58e1a7d3e329a3e",
+          "must_contain": [
+            "SmtSolver::Z3",
+            "self.verify_with_z3",
+            "structural-prefilter"
+          ],
+          "caller": "PolicyTheoremEngine::verify_single_theorem",
+          "interpretation": "The default Z3 branch invokes the solver path while non-Z3 backends remain explicitly structural."
+        }
+      ],
+      "revalidation": {
+        "owner_id": "bd-performance-conformance-bridge-tu32j.1.2",
+        "role": "Track-G claim-truth owner",
+        "trigger": "Lean, Z3, bounded-sample verification, proof emitters, Track-G artifacts, or FE-CLAIM-016 through FE-CLAIM-021 rationale change",
+        "command": "./scripts/run_execution_truth_ledger_gate.sh ci",
+        "fallback": "keep all affected claims at hypothesis and run the fail-closed verifier paths without promotion",
+        "kill_rule": "reject promotion on fixture-only, untracked, missing, stale, unsupported-domain, skipped-toolchain, or non-independently-rechecked evidence",
+        "rollback": "restore hypothesis wording and the last fail-closed verifier configuration while preserving failed proof bundles"
+      }
+    },
+    {
+      "subject_id": "bead:bd-o4cbn",
+      "kind": "bead",
+      "title": "Profile-Driven Performance Pass v1 — Address Phase-1 Profiling Hotspots",
+      "current_state": "open",
+      "claim_posture": "not_applicable",
+      "classifications": [
+        "executable",
+        "observed",
+        "planning_provenance",
+        "test_only"
+      ],
+      "runtime_reality": "A real eight-benchmark Criterion/perf/samply pass produced actionable hotspot measurements and some child optimizations have landed, but the root wave remains open and its 69-file pass1 artifact tree is ignored rather than Git-tracked",
+      "user_impact": "Users receive incremental low-risk speedups and an evidence-ranked backlog, but the wave cannot supply durable third-party reproduction or order-of-magnitude performance evidence",
+      "limitations": [
+        "The pass1 artifact directory is absent from a fresh clone because /tests/artifacts is ignored.",
+        "The handoff explicitly did not run Node/Bun comparative benches and did not gate a claim.",
+        "Percent-scale hotspot work does not close the roughly three-order-of-magnitude raw-performance gap."
+      ],
+      "downstream_decisions": [
+        "Crosswalk remaining low-level optimizations into the bridge rather than duplicate them.",
+        "Require a tracked, content-addressed rebaseline bundle before any result backs a public performance claim."
+      ],
+      "proofs": [
+        {
+          "proof_id": "bd-o4cbn.pass1-baseline",
+          "kind": "artifact",
+          "path": "tests/artifacts/perf/20260520T214829Z-prof-pass1/baseline_summary.json",
+          "required": false,
+          "file_sha256": "026ab4e0d29bae48826b99ca1b7b3573f75f83ed6b1ea00a25586cb88aff6853",
+          "json_assertions": [
+            {
+              "pointer": "/criterion_version",
+              "expected": "0.5"
+            },
+            {
+              "pointer": "/samples_per_bench",
+              "expected": 100
+            }
+          ],
+          "expected_git_tracked": false,
+          "caller": "hot_paths Criterion profiling pass",
+          "interpretation": "The local measurement is real, hash-bound, and explicitly non-portable because it is untracked."
+        },
+        {
+          "proof_id": "bd-o4cbn.pass1-handoff",
+          "kind": "artifact",
+          "path": "tests/artifacts/perf/20260520T214829Z-prof-pass1/07_HANDOFF.md",
+          "required": false,
+          "start_line": 90,
+          "end_line": 110,
+          "range_sha256": "a568d8c3a3747a3c72da465b3c241674f55cbd2976de468afe27dcd7dc158fac",
+          "must_contain": [
+            "Did not optimize",
+            "Did not run the `comparative_node` / `comparative_bun` benches",
+            "Nothing in this artifact bundle is intended as a substitute"
+          ],
+          "expected_git_tracked": false,
+          "caller": "profiling-software-performance handoff",
+          "interpretation": "The historical handoff correctly bounds what the profile did not prove."
+        }
+      ],
+      "revalidation": {
+        "owner_id": "bd-performance-conformance-bridge-tu32j.3.1",
+        "role": "benchmark and measurement contract owner",
+        "trigger": "pass1 is reused, bd-o4cbn is closed, or a hotspot win is published",
+        "command": "./scripts/run_execution_truth_ledger_gate.sh ci",
+        "fallback": "retain pass1 as local diagnostic history and collect a new tracked baseline",
+        "kill_rule": "reject a win on comparator drift, missing raw samples, overlapping confidence interval, or untracked proof bundle",
+        "rollback": "revert the single optimization lever and restore the last valid tracked baseline"
+      }
+    },
+    {
+      "subject_id": "bead:bd-w2dov",
+      "kind": "bead",
+      "title": "[reality-check] aot_entrygraph_compiler doc claims AOT compilation but fabricates artifact hash with no codegen",
+      "current_state": "closed",
+      "claim_posture": "not_applicable",
+      "classifications": [
+        "observed",
+        "planning_provenance"
+      ],
+      "runtime_reality": "The audit finding was correct and its documentation correction remains present: the AOT module now identifies its outputs as provenance/planning records and its artifact hash as an identity of inputs",
+      "user_impact": "Users and maintainers are less likely to mistake a deterministic input identity for an executable AOT artifact",
+      "limitations": [
+        "The audit corrected wording, not implementation.",
+        "The underlying closed AOT/tiering beads still require crosswalk and successor work.",
+        "Historical bead closure state remains unchanged for audit continuity."
+      ],
+      "downstream_decisions": [
+        "Preserve bd-w2dov as the historical correction anchor.",
+        "Use executable-output checks in BRIDGE-00.2 so the same overclaim cannot recur."
+      ],
+      "proofs": [
+        {
+          "proof_id": "bd-w2dov.corrected-header",
+          "kind": "source",
+          "path": "crates/franken-engine/src/aot_entrygraph_compiler.rs",
+          "start_line": 1,
+          "end_line": 22,
+          "range_sha256": "b97bd2be268d03f9965c05b743d2580fb8f20dcd06044df9a24edad76d5ddf03",
+          "must_contain": [
+            "real codegen is future work (bd-w2dov)",
+            "not executable startup images"
+          ],
+          "caller": "module documentation consumed by rustdoc and reviewers",
+          "interpretation": "The accepted fix direction is still encoded in the source."
+        }
+      ],
+      "revalidation": {
+        "owner_id": "bd-performance-conformance-bridge-tu32j.1.2",
+        "role": "claim-language and executable-output gate owner",
+        "trigger": "any AOT, tiering, image, cache, or artifact-hash wording changes",
+        "command": "./scripts/run_execution_truth_ledger_gate.sh ci",
+        "fallback": "downgrade wording to planning/provenance",
+        "kill_rule": "reject executable or observed wording without produced output bytes and a production consumer",
+        "rollback": "restore the last truth-ledger-approved wording without deleting historical records"
+      }
+    },
+    {
+      "subject_id": "claim:FE-CLAIM-001",
+      "kind": "claim",
+      "title": "FrankenEngine is a native Rust runtime for adversarial extension workloads with deterministic replay, cryptographic decision receipts, and fleet-scale containment.",
+      "current_state": "observed",
+      "claim_posture": "observed",
+      "classifications": [
+        "executable",
+        "observed",
+        "production_wired"
+      ],
+      "runtime_reality": "The shipped orchestrator parses and lowers extension source, configures two native execution profiles, and runs either through the same InterpreterCore implementation with capability and host-effect plumbing",
+      "user_impact": "Users execute through a genuine Rust-native runtime rather than V8 or QuickJS bindings, while retaining fail-closed security plumbing",
+      "limitations": [
+        "The observed native runtime is an interpreter, not an observed JIT or AOT tier.",
+        "QuickJsLane and V8Lane are historical names for deterministic and throughput profiles.",
+        "This row does not establish full JavaScript conformance, raw-performance parity, or distributed fleet operation."
+      ],
+      "downstream_decisions": [
+        "Keep FE-CLAIM-001 observed for the bounded native-runtime scope.",
+        "Do not use FE-CLAIM-001 as evidence for FE-CLAIM-010, FE-CLAIM-017, or FE-CLAIM-019."
+      ],
+      "proofs": [
+        {
+          "proof_id": "fe-claim-001.interpreter-lanes",
+          "kind": "source",
+          "path": "crates/franken-engine/src/baseline_interpreter.rs",
+          "start_line": 63724,
+          "end_line": 63947,
+          "range_sha256": "7496a44ead82b23dfd717eaae74363343bd2ac3f5f9e43ed1f28ee740083dc13",
+          "must_contain": [
+            "let mut core = InterpreterCore::new",
+            "pub struct QuickJsLane",
+            "pub struct V8Lane"
+          ],
+          "caller": "LaneRouter::execute_with_hook",
+          "interpretation": "Both named lanes construct the same native InterpreterCore with different configurations."
+        },
+        {
+          "proof_id": "fe-claim-001.orchestrator-runtime",
+          "kind": "source",
+          "path": "crates/franken-engine/src/execution_orchestrator.rs",
+          "start_line": 1326,
+          "end_line": 1375,
+          "range_sha256": "a6f4f8d42c67f39297fae53e06379e73075afaa7d148673d4f7a6ceaa6367360",
+          "must_contain": [
+            "LaneRouter::with_configs",
+            "lane_router.set_host_io",
+            ".execute_with_hook"
+          ],
+          "caller": "ExecutionOrchestrator::phase_execute",
+          "interpretation": "Production orchestration reaches the native lane router and preserves host authority."
+        },
+        {
+          "proof_id": "fe-claim-001.profile-aliases",
+          "kind": "source",
+          "path": "crates/franken-engine/src/runtime_decision_core.rs",
+          "start_line": 86,
+          "end_line": 125,
+          "range_sha256": "3ee09704c87b388f63fa011e57f9380c7ac8ba85bf8edad300e0f165c3b449c0",
+          "must_contain": [
+            "Legacy constructor retained",
+            "Self::deterministic_profile()",
+            "Self::throughput_profile()"
+          ],
+          "caller": "runtime decision and compatibility call sites",
+          "interpretation": "QuickJS/V8 labels canonicalize to native execution-profile labels."
+        }
+      ],
+      "revalidation": {
+        "owner_id": "bd-performance-conformance-bridge-tu32j.2.1",
+        "role": "canonical runtime ownership owner",
+        "trigger": "parser, lowering, interpreter, lane routing, or external-engine dependencies change",
+        "command": "./scripts/run_execution_truth_ledger_gate.sh ci",
+        "fallback": "route to the deterministic native interpreter profile",
+        "kill_rule": "block the native-only claim if core execution depends on an external engine binding",
+        "rollback": "restore the last verified native execution path and invalidate incompatible artifacts"
+      }
+    },
+    {
+      "subject_id": "claim:FE-CLAIM-009",
+      "kind": "claim",
+      "title": "Every published performance and security claim ships with reproducible artifact bundles.",
+      "current_state": "observed",
+      "claim_posture": "observed",
+      "classifications": [
+        "executable",
+        "observed",
+        "test_only"
+      ],
+      "runtime_reality": "The claim-matrix gate checks tracked repro.lock partners for observed rows and FE-CLAIM-009 has a tracked reproducibility lock, but the matrix gate is not invoked by any of the five current GitHub workflow files",
+      "user_impact": "Users can inspect committed evidence contracts, but repository CI does not yet make the flagship claim matrix self-enforcing on every change",
+      "limitations": [
+        "The gate verifies recorded artifacts and wording; it does not re-execute every producer.",
+        "Ignored working-tree bundles such as the May pass1 profile cannot support fresh-clone reproducibility.",
+        "Manual or downstream gate invocation can be omitted unless BRIDGE-00.2 adds CI wiring."
+      ],
+      "downstream_decisions": [
+        "Keep the bounded observed row only for published claims with tracked repro.lock partners.",
+        "Wire the matrix and execution-truth gates into CI under BRIDGE-00.2."
+      ],
+      "proofs": [
+        {
+          "proof_id": "fe-claim-009.claim-gate-not-in-adversarial-fuzz-ci",
+          "kind": "ci_wiring",
+          "path": ".github/workflows/adversarial_fuzz.yml",
+          "forbidden_text": [
+            "run_claim_to_proof_matrix_gate.sh"
+          ],
+          "caller": "GitHub Actions",
+          "interpretation": "This workflow does not invoke the claim-matrix gate."
+        },
+        {
+          "proof_id": "fe-claim-009.claim-gate-not-in-dist-ci",
+          "kind": "ci_wiring",
+          "path": ".github/workflows/dist.yml",
+          "forbidden_text": [
+            "run_claim_to_proof_matrix_gate.sh"
+          ],
+          "caller": "GitHub Actions",
+          "interpretation": "This workflow does not invoke the claim-matrix gate."
+        },
+        {
+          "proof_id": "fe-claim-009.claim-gate-not-in-perf-ci",
+          "kind": "ci_wiring",
+          "path": ".github/workflows/perf_regression_gate.yml",
+          "forbidden_text": [
+            "run_claim_to_proof_matrix_gate.sh"
+          ],
+          "caller": "GitHub Actions",
+          "interpretation": "This workflow does not invoke the claim-matrix gate."
+        },
+        {
+          "proof_id": "fe-claim-009.claim-gate-not-in-quality-ci",
+          "kind": "ci_wiring",
+          "path": ".github/workflows/quality-gates.yml",
+          "forbidden_text": [
+            "run_claim_to_proof_matrix_gate.sh"
+          ],
+          "caller": "GitHub Actions",
+          "interpretation": "This workflow does not invoke the claim-matrix gate."
+        },
+        {
+          "proof_id": "fe-claim-009.claim-gate-not-in-version-ci",
+          "kind": "ci_wiring",
+          "path": ".github/workflows/version_matrix_conformance.yml",
+          "forbidden_text": [
+            "run_claim_to_proof_matrix_gate.sh"
+          ],
+          "caller": "GitHub Actions",
+          "interpretation": "This workflow does not invoke the claim-matrix gate."
+        },
+        {
+          "proof_id": "fe-claim-009.repro-lock",
+          "kind": "artifact",
+          "path": "docs/evidence/FE-CLAIM-009/repro.lock",
+          "file_sha256": "12ebfadec66c03038448d203bee34e840d0ba95cf3fb512006a8fcb04b0a86a9",
+          "expected_git_tracked": true,
+          "caller": "scripts/run_claim_to_proof_matrix_gate.sh",
+          "interpretation": "The claim's own reproducibility lock is committed."
+        },
+        {
+          "proof_id": "fe-claim-009.tracking-check",
+          "kind": "source",
+          "path": "scripts/run_claim_to_proof_matrix_gate.sh",
+          "start_line": 205,
+          "end_line": 230,
+          "range_sha256": "8496e461f325db4f38c6865dbd2bf80051258783ef35bd8295ac8b0fec074fc1",
+          "must_contain": [
+            "repro_lock_committed",
+            "git ls-files --error-unmatch"
+          ],
+          "caller": "claim-to-proof matrix validation",
+          "interpretation": "Observed-row reproducibility requires a Git-tracked lock."
+        }
+      ],
+      "revalidation": {
+        "owner_id": "bd-performance-conformance-bridge-tu32j.1.2",
+        "role": "claim-integrity CI owner",
+        "trigger": "a workflow, the claim matrix, artifact publication, or repro.lock changes",
+        "command": "./scripts/run_execution_truth_ledger_gate.sh ci",
+        "fallback": "downgrade affected claims and retain artifacts as non-authoritative history",
+        "kill_rule": "block observed publication when a required artifact or tracked lock is missing, stale, or tampered",
+        "rollback": "restore the last green matrix and evidence locks; never delete the failed bundle"
+      }
+    },
+    {
+      "subject_id": "claim:FE-CLAIM-010",
+      "kind": "claim",
+      "title": ">= 3x weighted-geometric-mean throughput versus Node and Bun under the benchmark denominator contract.",
+      "current_state": "target",
+      "claim_posture": "target",
+      "classifications": [
+        "executable",
+        "observed",
+        "test_only"
+      ],
+      "runtime_reality": "A real 28-case denominator run reports 0.000920x Node and 0.000791x Bun geomean throughput for the admitted cases, so the three-times target fails by roughly three orders of magnitude",
+      "user_impact": "Users get an honest baseline and fairness record, but no current raw-throughput advantage",
+      "limitations": [
+        "Only 16 Node and 13 Bun cases were admitted after behavior-equivalence filtering.",
+        "The engine instruction budget was raised to two billion because containment defaults could not run the corpus.",
+        "The bundle measures the baseline interpreter, not a future native tier or extension-transaction suite."
+      ],
+      "downstream_decisions": [
+        "Keep FE-CLAIM-010 at target.",
+        "Use separate raw-compute and equivalent-isolation transaction scoreboards in the bridge.",
+        "Require both performance and semantic-equivalence evidence for every admitted case."
+      ],
+      "proofs": [
+        {
+          "proof_id": "fe-claim-010.denominator",
+          "kind": "artifact",
+          "path": "docs/perf/e2_denominator_bundle_v1/denominator.json",
+          "file_sha256": "3ea83069c0cbf2a29c85dcfcd7f6bafdee68a8fe659a97e4b0cbf8fb5791a340",
+          "json_assertions": [
+            {
+              "pointer": "/corpus/case_count",
+              "expected": 28
+            },
+            {
+              "pointer": "/node_denominator/geomean_speedup_millionths",
+              "expected": 920
+            },
+            {
+              "pointer": "/node_denominator/meets_3x_floor",
+              "expected": false
+            },
+            {
+              "pointer": "/bun_denominator/geomean_speedup_millionths",
+              "expected": 791
+            },
+            {
+              "pointer": "/bun_denominator/meets_3x_floor",
+              "expected": false
+            }
+          ],
+          "expected_git_tracked": true,
+          "caller": "scripts/run_e2_denominator_bundle_gate.sh",
+          "interpretation": "The tracked denominator proves the target currently fails."
+        }
+      ],
+      "revalidation": {
+        "owner_id": "bd-performance-conformance-bridge-tu32j.3.1",
+        "role": "benchmark denominator owner",
+        "trigger": "the corpus, baseline version, fairness policy, execution tier, hardware, or scoring changes",
+        "command": "./scripts/run_execution_truth_ledger_gate.sh ci",
+        "fallback": "retain the last valid denominator and label new results non-comparable",
+        "kill_rule": "reject the 3x claim if either Node or Bun score is below 3000000 millionths or fairness fails",
+        "rollback": "restore the prior corpus and scoring lock; preserve both result bundles"
+      }
+    },
+    {
+      "subject_id": "claim:FE-CLAIM-016",
+      "kind": "claim",
+      "title": "Mathematically explicit security decisions.",
+      "current_state": "hypothesis",
+      "claim_posture": "hypothesis",
+      "classifications": [
+        "executable",
+        "observed",
+        "planning_provenance",
+        "test_only"
+      ],
+      "runtime_reality": "Genuine Lean sources, a fail-closed proof producer, and a local successful FE-CLAIM-016 proof observation now exist, advancing beyond the promotion note; the successful artifact remains ignored and the live lane can explicitly skip when the pinned toolchain or package cache is absent",
+      "user_impact": "Users have a real machine-checking path and honest Unavailable semantics, but no durable fresh-clone proof package yet supports observed public wording",
+      "limitations": [
+        "The successful July proof artifact is Git-untracked and therefore not independently reproducible from a clean checkout by artifact inspection alone.",
+        "The live E2E records a skip rather than a pass when lake, lean, or the mathlib cache is absent.",
+        "The claim is broad while the current Lean corpus proves specific IFC and capability-algebra properties."
+      ],
+      "downstream_decisions": [
+        "Keep FE-CLAIM-016 at hypothesis until a tracked proof bundle, pinned toolchain result, scope statement, and independent recheck are available.",
+        "Update the stale promotion rationale to acknowledge the real producer and local successful run without overstating portability."
+      ],
+      "proofs": [
+        {
+          "proof_id": "fe-claim-016.dw-live-contract",
+          "kind": "source",
+          "path": "scripts/run_dw_proof_spine.sh",
+          "start_line": 1,
+          "end_line": 31,
+          "range_sha256": "aec4a2c55f4acdaf610f709975fe8bf2d4edbc7bef76ec280077f1cba153e2d1",
+          "must_contain": [
+            "FE-CLAIM-016",
+            "fixture-only artifacts are REJECTED",
+            "lake/lean toolchain"
+          ],
+          "caller": "scripts/run_dw_proof_spine.sh",
+          "interpretation": "The capstone distinguishes real-tool success, explicit unavailability, fixtures, and deferred claims."
+        },
+        {
+          "proof_id": "fe-claim-016.local-proof",
+          "kind": "artifact",
+          "path": "artifacts/dw_proof_spine/20260710T090949Z/proof_spine_e2e/FE-CLAIM-016.proof.json",
+          "required": false,
+          "file_sha256": "8eb26841322e910742391f76db54e5d9b41237267f78d60a9fc48685a45a3d23",
+          "json_assertions": [
+            {
+              "pointer": "/claim_ids/0",
+              "expected": "FE-CLAIM-016"
+            },
+            {
+              "pointer": "/checker_result",
+              "expected": "Passed"
+            }
+          ],
+          "expected_git_tracked": false,
+          "caller": "franken_lean_proof_producer over proofs/lean4",
+          "interpretation": "The local artifact records a real Passed checker result but is explicitly non-portable evidence."
+        },
+        {
+          "proof_id": "fe-claim-016.stale-promotion-note",
+          "kind": "artifact",
+          "path": "docs/operator-gates/FE_CLAIM_016_021_PROMOTION_DECISION.md",
+          "start_line": 59,
+          "end_line": 66,
+          "range_sha256": "780356c15b7ba63c210903a6f6d27c6ef3f842d64989c67d99890bf1742fd11a",
+          "must_contain": [
+            "no `lake`/`lean` toolchain",
+            "nothing emits a `.proof.json`",
+            "emitter and a CI lane"
+          ],
+          "caller": "FE-CLAIM-016..021 promotion decision",
+          "interpretation": "The governance note predates the producer and local successful proof run."
+        }
+      ],
+      "revalidation": {
+        "owner_id": "bd-performance-conformance-bridge-tu32j.1.2",
+        "role": "Lean proof-claim owner",
+        "trigger": "Lean sources, the producer schema, toolchain pin, proof artifact, CI lane, or claim scope change",
+        "command": "./scripts/run_execution_truth_ledger_gate.sh ci",
+        "fallback": "report the producer result as Unavailable and keep the claim at hypothesis",
+        "kill_rule": "reject promotion on skipped toolchains, fixture-only artifacts, untracked results, scope mismatch, stale hashes, or failed independent replay",
+        "rollback": "restore hypothesis rationale and retain both the last valid and failed proof bundles"
+      }
+    },
+    {
+      "subject_id": "claim:FE-CLAIM-017",
+      "kind": "claim",
+      "title": "Proof-carrying compilation contract with machine-checkable witness and isomorphism ledger.",
+      "current_state": "hypothesis",
+      "claim_posture": "hypothesis",
+      "classifications": [
+        "executable",
+        "planning_provenance",
+        "test_only"
+      ],
+      "runtime_reality": "Real differential translation validators reject semantic drift, but they do not emit the claim-scoped proof.json witness consumed by the theorem-backed compiler promotion gate",
+      "user_impact": "Users benefit from executable translation checks, but cannot independently recheck a proof-carrying compilation artifact",
+      "limitations": [
+        "No FE-CLAIM-017 proof bundle is emitted.",
+        "The six theorem-backed claims promote as an umbrella, so unrelated missing proofs also hold this row at hypothesis.",
+        "Executable differential validation is not equivalent to a portable machine-checkable witness."
+      ],
+      "downstream_decisions": [
+        "Keep FE-CLAIM-017 at hypothesis.",
+        "Reuse translation validators as the producer for a future proof bundle rather than replace them."
+      ],
+      "proofs": [
+        {
+          "proof_id": "fe-claim-017.promotion-record",
+          "kind": "artifact",
+          "path": "docs/operator-gates/FE_CLAIM_016_021_PROMOTION_DECISION.md",
+          "start_line": 68,
+          "end_line": 90,
+          "range_sha256": "b6d7a89c411e51f7c7fc38ee748af823f7f3d293eee3b1bf30744b9754fdd35e",
+          "must_contain": [
+            "real differential validation, no proof emission",
+            "emit no `.proof.json`"
+          ],
+          "caller": "FE-CLAIM-016..021 promotion gate",
+          "interpretation": "The checked-in promotion decision preserves the missing-witness boundary."
+        }
+      ],
+      "revalidation": {
+        "owner_id": "bd-performance-conformance-bridge-tu32j.1.2",
+        "role": "compiler proof-claim owner",
+        "trigger": "translation validators or theorem-backed proof emitters change",
+        "command": "./scripts/run_execution_truth_ledger_gate.sh ci",
+        "fallback": "run differential validators and keep the claim at hypothesis",
+        "kill_rule": "reject promotion without a fresh non-fixture machine-checkable witness",
+        "rollback": "discard the new promotion decision and restore hypothesis wording"
+      }
+    },
+    {
+      "subject_id": "claim:FE-CLAIM-018",
+      "kind": "claim",
+      "title": "Policy evaluation with formal semantics and mathematically explicit merge operators with proofs.",
+      "current_state": "hypothesis",
+      "claim_posture": "hypothesis",
+      "classifications": [
+        "executable",
+        "planning_provenance",
+        "test_only"
+      ],
+      "runtime_reality": "PolicyTheoremEngine now defaults to a real Z3 subprocess path, maps unsat, sat, unknown, timeout, and subprocess errors fail-closed, and can emit FE-CLAIM-018 proof bundles only from Z3-proven cache entries; the claim matrix and promotion decision still describe the removed string-only implementation",
+      "user_impact": "Users receive materially stronger theorem checking and counterexample behavior than governance prose reports, while the broad formal-semantics claim remains conservatively unpromoted",
+      "limitations": [
+        "No fresh FE-CLAIM-018 proof artifact exists in the promotion gate input directory in this checkout.",
+        "The engine-grounded default axioms establish a specific modeled domain, not every policy language or merge operator implied by the broad claim.",
+        "Explicit Internal, CVC5, and Yices selections use structural fallback and cannot contribute a proof bundle."
+      ],
+      "downstream_decisions": [
+        "Correct the implementation rationale but keep FE-CLAIM-018 at hypothesis.",
+        "Require an explicit theorem domain, tracked Z3 proof bundle, producer version, and independent replay before promotion."
+      ],
+      "proofs": [
+        {
+          "proof_id": "fe-claim-018.current-z3",
+          "kind": "source",
+          "path": "crates/franken-engine/src/policy_theorem_engine.rs",
+          "start_line": 474,
+          "end_line": 548,
+          "range_sha256": "43edbefac3bf6f58c88dc319b71bd4b1b481cbb365db8384e58e1a7d3e329a3e",
+          "must_contain": [
+            "SmtSolver::Z3",
+            "self.verify_with_z3",
+            "structural-prefilter"
+          ],
+          "caller": "PolicyTheoremEngine::verify_single_theorem",
+          "interpretation": "The current default path invokes Z3 and separates structural fallback from real proof evidence."
+        },
+        {
+          "proof_id": "fe-claim-018.stale-promotion-note",
+          "kind": "artifact",
+          "path": "docs/operator-gates/FE_CLAIM_016_021_PROMOTION_DECISION.md",
+          "start_line": 77,
+          "end_line": 83,
+          "range_sha256": "da6a53d8c3b96dcf809a3434f449bc91007c71bf1541fc7cd406a6d1ac996f70",
+          "must_contain": [
+            "For now, simulate SMT verification",
+            "No Z3/CVC5/Yices",
+            "SmtSolver::Internal"
+          ],
+          "caller": "FE-CLAIM-016..021 promotion decision",
+          "interpretation": "The checked-in rationale describes the superseded pre-Z3 implementation."
+        }
+      ],
+      "revalidation": {
+        "owner_id": "bd-performance-conformance-bridge-tu32j.1.2",
+        "role": "formal policy-semantics claim owner",
+        "trigger": "policy theorem formulas, default axioms, solver routing, proof emission, or the claim domain changes",
+        "command": "./scripts/run_execution_truth_ledger_gate.sh ci",
+        "fallback": "use structural checks only as diagnostics and keep the claim at hypothesis",
+        "kill_rule": "reject promotion on absent Z3 provenance, unsupported backend, unknown or sat result, axiom-scope mismatch, or missing independent replay",
+        "rollback": "restore the last fail-closed solver configuration and hypothesis wording; retain counterexamples"
+      }
+    },
+    {
+      "subject_id": "claim:FE-CLAIM-019",
+      "kind": "claim",
+      "title": "Mathematically equivalent fast paths behind isomorphism proof notes.",
+      "current_state": "hypothesis",
+      "claim_posture": "hypothesis",
+      "classifications": [
+        "executable",
+        "planning_provenance",
+        "test_only"
+      ],
+      "runtime_reality": "The current optimizer proof router is no longer the unconditional-Verified stub described by the claim matrix and promotion note: it invokes Z3-backed checks or bounded sample runners and fails closed on empty inputs, but no fresh FE-CLAIM-019 proof bundle justifies promotion",
+      "user_impact": "Users receive stronger fail-closed optimizer validation than the matrix reason reports, while public wording remains conservatively at hypothesis",
+      "limitations": [
+        "The claim matrix and promotion decision contain stale implementation rationale.",
+        "Bounded samples do not establish general mathematical equivalence.",
+        "No fresh non-fixture claim proof and independent recheck bundle exists."
+      ],
+      "downstream_decisions": [
+        "Correct stale rationale under BRIDGE-00.2 without promoting the claim.",
+        "Require explicit proof scope, samples or theorem domain, proof emission, and independent recheck before observed wording."
+      ],
+      "proofs": [
+        {
+          "proof_id": "fe-claim-019.current-verifier",
+          "kind": "source",
+          "path": "crates/franken-engine/src/optimization_proof_carriers.rs",
+          "start_line": 619,
+          "end_line": 669,
+          "range_sha256": "afc4a2e6073c55658c23c268844d2104c49902afbfec287d082ad07739161b7d",
+          "must_contain": [
+            "fail-closed router",
+            "verify_via_z3",
+            "verify_with_sample_differential_runner"
+          ],
+          "caller": "OptimizationProofCarrier::verify_single_proof",
+          "interpretation": "The current implementation has advanced beyond the rationale recorded in the matrix."
+        },
+        {
+          "proof_id": "fe-claim-019.stale-promotion-note",
+          "kind": "artifact",
+          "path": "docs/operator-gates/FE_CLAIM_016_021_PROMOTION_DECISION.md",
+          "start_line": 68,
+          "end_line": 90,
+          "range_sha256": "b6d7a89c411e51f7c7fc38ee748af823f7f3d293eee3b1bf30744b9754fdd35e",
+          "must_contain": [
+            "returns",
+            "ProofResult::Verified",
+            "unconditionally"
+          ],
+          "caller": "FE-CLAIM-016..021 promotion decision",
+          "interpretation": "The governance note still describes the superseded unconditional verifier."
+        }
+      ],
+      "revalidation": {
+        "owner_id": "bd-performance-conformance-bridge-tu32j.1.2",
+        "role": "optimization proof-claim owner",
+        "trigger": "the optimizer verifier, Z3 integration, proof bundle, or matrix rationale changes",
+        "command": "./scripts/run_execution_truth_ledger_gate.sh ci",
+        "fallback": "disable the fast path or use the spec-exact baseline path",
+        "kill_rule": "reject promotion or fast-path activation on missing domain proof, unsupported syntax, sample absence, or verifier failure",
+        "rollback": "restore hypothesis wording and baseline execution while preserving failed proof artifacts"
+      }
+    },
+    {
+      "subject_id": "claim:FE-CLAIM-020",
+      "kind": "claim",
+      "title": "Theorem-backed compiler for high-assurance policy governance.",
+      "current_state": "hypothesis",
+      "claim_posture": "hypothesis",
+      "classifications": [
+        "executable",
+        "planning_provenance",
+        "test_only"
+      ],
+      "runtime_reality": "A fail-closed FE-CLAIM-019 and FE-CLAIM-020 proof-bundle emitter now exists, but it emits only after a fully verified non-empty optimization proof set; the current generated prose-shaped obligations do not verify and intentionally produce no semantic-equivalence certificate",
+      "user_impact": "Users are protected from fabricated theorem-backed compiler success, but there is not yet an end-to-end compiler path whose generated obligations routinely produce portable proofs",
+      "limitations": [
+        "The emitter is executable infrastructure, not evidence that the normal compiler produces a fully verified proof set.",
+        "Current generated optimization obligations remain outside the bounded executable or SMT-LIB domain in important paths.",
+        "No fresh FE-CLAIM-020 proof artifact is present for independent promotion recheck."
+      ],
+      "downstream_decisions": [
+        "Keep FE-CLAIM-020 at hypothesis and correct the obsolete simulated-by-composition rationale.",
+        "Treat obligation-generator support and complete optimization coverage as promotion prerequisites, not just verifier availability."
+      ],
+      "proofs": [
+        {
+          "proof_id": "fe-claim-020.current-emitter",
+          "kind": "source",
+          "path": "crates/franken-engine/src/optimization_proof_carriers.rs",
+          "start_line": 783,
+          "end_line": 838,
+          "range_sha256": "d338091517c9acbca52e221edb419b97069245b718fd6503423d998b8a2f83a9",
+          "must_contain": [
+            "fully verified optimization proof set",
+            "theorem_ids.is_empty()",
+            "FE-CLAIM-020"
+          ],
+          "caller": "OptimizationProofCarrier::emit_fe_claim_019_020_proof_bundles",
+          "interpretation": "The proof emitter refuses empty or not-fully-verified optimization evidence."
+        },
+        {
+          "proof_id": "fe-claim-020.generated-gap",
+          "kind": "source",
+          "path": "crates/franken-engine/src/optimization_proof_carriers.rs",
+          "start_line": 1862,
+          "end_line": 1939,
+          "range_sha256": "d28aecd666f10004a3858e5218b154249d805b89caa87b84f96c3a0976fff131",
+          "must_contain": [
+            "produces NO `SemanticEquivalence` certificate",
+            "FE-CLAIM-019 /",
+            "FE-CLAIM-020 stay HYPOTHESIS"
+          ],
+          "caller": "optimization_proof_carriers::tests::proof_certificate_generation",
+          "interpretation": "The regression test explicitly proves unsupported generated obligations fail closed instead of yielding claim evidence."
+        },
+        {
+          "proof_id": "fe-claim-020.stale-promotion-note",
+          "kind": "artifact",
+          "path": "docs/operator-gates/FE_CLAIM_016_021_PROMOTION_DECISION.md",
+          "start_line": 91,
+          "end_line": 98,
+          "range_sha256": "4777a901e51a9bdb83e8a888a86af0691e81eea001d4d8ca9b9ac5ebcdff568f",
+          "must_contain": [
+            "simulated by composition",
+            "inherits their simulated",
+            "claims correctly remain at `hypothesis`"
+          ],
+          "caller": "FE-CLAIM-016..021 promotion decision",
+          "interpretation": "The posture remains conservative, but its implementation rationale predates the fail-closed verifier and emitter."
+        }
+      ],
+      "revalidation": {
+        "owner_id": "bd-performance-conformance-bridge-tu32j.1.2",
+        "role": "theorem-backed compiler claim owner",
+        "trigger": "obligation generation, verifier coverage, proof emission, compiler integration, or the promotion bundle changes",
+        "command": "./scripts/run_execution_truth_ledger_gate.sh ci",
+        "fallback": "run the unoptimized or unproved compiler path and retain hypothesis wording",
+        "kill_rule": "reject proof emission or optimization activation on unsupported obligations, incomplete pass coverage, empty theorem sets, solver failure, or replay mismatch",
+        "rollback": "disable the proof-specialized path, restore baseline compilation, and preserve failed obligations and counterexamples"
+      }
+    },
+    {
+      "subject_id": "claim:FE-CLAIM-021",
+      "kind": "claim",
+      "title": "Policy Theorem Engine with theorem checks for monotonic safety constraints.",
+      "current_state": "hypothesis",
+      "claim_posture": "hypothesis",
+      "classifications": [
+        "executable",
+        "planning_provenance",
+        "test_only"
+      ],
+      "runtime_reality": "The theorem engine now drives each obligation through real Z3, records unsat, sat, unknown, timeout, and error outcomes, and emits claim proofs only when the verification cache proves Z3 provenance; the checked-in rationale still says no solver is invoked",
+      "user_impact": "Users gain a real fail-closed monotonicity, non-interference, and attenuation verification substrate, but cannot yet rely on a tracked, broadly scoped theorem package as a released runtime guarantee",
+      "limitations": [
+        "No fresh FE-CLAIM-021 promotion artifact is present in the expected input directory.",
+        "The modeled theorems and default axioms cover a bounded engine-specific domain.",
+        "Solver availability and exact version remain environmental unless captured in a durable proof bundle."
+      ],
+      "downstream_decisions": [
+        "Keep FE-CLAIM-021 at hypothesis while correcting the stale no-solver rationale.",
+        "Require tracked solver provenance, theorem inventory, axiom scope, counterexample behavior, and independent replay before promotion."
+      ],
+      "proofs": [
+        {
+          "proof_id": "fe-claim-021.current-z3-emission",
+          "kind": "source",
+          "path": "crates/franken-engine/src/policy_theorem_engine.rs",
+          "start_line": 611,
+          "end_line": 731,
+          "range_sha256": "4858825c69e289fe4514f01ce7d020aa4705fb5dec985c3f24f43b5a6d1a386e",
+          "must_contain": [
+            "invoke_z3",
+            "Z3Outcome::Unsat",
+            "emit_proof_bundles",
+            "has_z3_proven_cache"
+          ],
+          "caller": "PolicyTheoremEngine::verify_with_z3 and emit_proof_bundles",
+          "interpretation": "Only real Z3-proven cache entries can reach claim proof emission."
+        },
+        {
+          "proof_id": "fe-claim-021.stale-promotion-note",
+          "kind": "artifact",
+          "path": "docs/operator-gates/FE_CLAIM_016_021_PROMOTION_DECISION.md",
+          "start_line": 77,
+          "end_line": 83,
+          "range_sha256": "da6a53d8c3b96dcf809a3434f449bc91007c71bf1541fc7cd406a6d1ac996f70",
+          "must_contain": [
+            "For now, simulate SMT verification",
+            "No Z3/CVC5/Yices",
+            "SmtSolver::Internal"
+          ],
+          "caller": "FE-CLAIM-016..021 promotion decision",
+          "interpretation": "The governance note still describes the removed string-only default."
+        }
+      ],
+      "revalidation": {
+        "owner_id": "bd-performance-conformance-bridge-tu32j.1.2",
+        "role": "policy theorem-engine claim owner",
+        "trigger": "the theorem inventory, axioms, solver routing, cache provenance, proof emission, or public scope changes",
+        "command": "./scripts/run_execution_truth_ledger_gate.sh ci",
+        "fallback": "return Unknown or retain structural diagnostics without emitting a proof bundle",
+        "kill_rule": "reject promotion on missing solver provenance, sat or unknown results, theorem or axiom scope drift, stale artifacts, or failed replay",
+        "rollback": "restore hypothesis wording and the last fail-closed theorem configuration while retaining counterexamples"
+      }
+    },
+    {
+      "subject_id": "claim:FE-CLAIM-025",
+      "kind": "claim",
+      "title": "Reflexive claim-evidence integrity: the integrity gate is itself a gated claim, its verdict is committed in a Merkle ledger, and a no-mock drill demonstrates it cannot be satisfied by fixtures.",
+      "current_state": "observed",
+      "claim_posture": "observed",
+      "classifications": [
+        "executable",
+        "observed",
+        "test_only"
+      ],
+      "runtime_reality": "A real capstone composes matrix wording, bidirectional evidence ceilings, a committed Merkle ledger, and Test262 posture checks, with tracked FE-CLAIM-025 evidence; however neither the capstone nor matrix gate runs in current GitHub workflows, and its own backfilled reproducibility metadata contains hard-coded schema-hash constants rather than derived schema digests",
+      "user_impact": "Users can manually run a substantive fail-closed integrity and drift system, but automatic enforcement and the integrity claim's own reproduction metadata are weaker than the observed wording suggests",
+      "limitations": [
+        "No current GitHub workflow invokes the claim-evidence integrity capstone or claim-to-proof matrix gate.",
+        "The tracked env, manifest, and repro.lock schema_hash fields are static patterned constants from the backfill generator rather than hashes computed from a named schema.",
+        "The repro.lock prescribes cargo clean, a direct non-rch Cargo command, an absolute historical workspace, and an old source commit, so it is not a safe exact replay recipe for the current tree.",
+        "The tracked manifest records a historical 4/4 run; the gate still needs live rerun evidence for current-state closure."
+      ],
+      "downstream_decisions": [
+        "Keep the executable capstone and Merkle ledger, but wire them into CI under BRIDGE-00.2.",
+        "Replace patterned schema identifiers and stale replay metadata with computed schema hashes, current toolchain fingerprints, rch-safe commands, and a fresh proof bundle."
+      ],
+      "proofs": [
+        {
+          "proof_id": "fe-claim-025.backfill-schema-constants",
+          "kind": "source",
+          "path": "scripts/backfill_reproducibility_bundles.py",
+          "start_line": 145,
+          "end_line": 205,
+          "range_sha256": "54c82d739445196cc4baf0145bff4fcd5457b545967533abc2aa9249b0911cab",
+          "must_contain": [
+            "sha256:7f8a9b2c3d4e5f6789abcdef",
+            "sha256:8f9a0b1c2d3e4f5678abc9def",
+            "backfill_reproducibility_bundles.py"
+          ],
+          "caller": "reproducibility bundle backfill",
+          "interpretation": "The schema_hash values are hard-coded generator constants, not computed digests."
+        },
+        {
+          "proof_id": "fe-claim-025.capstone",
+          "kind": "source",
+          "path": "scripts/run_claim_evidence_integrity_capstone.sh",
+          "start_line": 1,
+          "end_line": 35,
+          "range_sha256": "41dff78528824f2fffcc96435169373de7f160be4dfffc7b9556ae8350d1caea",
+          "must_contain": [
+            "run_claim_to_proof_matrix_gate.sh ci",
+            "run_claim_evidence_ledger_gate.sh ci",
+            "run_test262_posture_consistency.sh ci"
+          ],
+          "caller": "claim-evidence integrity operator and CI entry point",
+          "interpretation": "The capstone composes real sub-gates and declares fail-closed behavior."
+        },
+        {
+          "proof_id": "fe-claim-025.ledger-root",
+          "kind": "artifact",
+          "path": "docs/claim_evidence_ledger_root.txt",
+          "start_line": 1,
+          "end_line": 42,
+          "range_sha256": "ae441c5e12ae192011144a0c3109f455ba88c00264e4e3c8c4d115fda112c746",
+          "must_contain": [
+            "root e7d9a6b46c1d1db943d083ec54af6c1bb563157fe73a71832102e8e9a8e9a15a",
+            "leaf_count 28",
+            "leaf FE-CLAIM-025 observed reproduced"
+          ],
+          "expected_git_tracked": true,
+          "caller": "scripts/run_claim_evidence_ledger_gate.sh ci",
+          "interpretation": "The committed Merkle ledger contains FE-CLAIM-025's own observed leaf."
+        },
+        {
+          "proof_id": "fe-claim-025.manifest",
+          "kind": "artifact",
+          "path": "docs/evidence/FE-CLAIM-025/manifest.json",
+          "file_sha256": "b101e38a203681635c989c4bb3bdc7e04665408cda7d898fa60727b6c46a3af7",
+          "json_assertions": [
+            {
+              "pointer": "/claim/id",
+              "expected": "FE-CLAIM-025"
+            },
+            {
+              "pointer": "/claim/state",
+              "expected": "observed"
+            },
+            {
+              "pointer": "/outputs/verification_result",
+              "expected": "passed"
+            },
+            {
+              "pointer": "/schema_hash",
+              "expected": "sha256:8f9a0b1c2d3e4f5678abc9def0123456789abcdef0123456789abcdef01234567"
+            }
+          ],
+          "expected_git_tracked": true,
+          "caller": "FE-CLAIM-025 evidence bundle",
+          "interpretation": "The historical run is tracked, while its patterned schema identifier is exposed rather than trusted as a real digest."
+        },
+        {
+          "proof_id": "fe-claim-025.repro-lock",
+          "kind": "artifact",
+          "path": "docs/evidence/FE-CLAIM-025/repro.lock",
+          "file_sha256": "2fdee1ca3fe0ad438f48289ca368175b5991717f8117a3164fc4a4ae19cbffa5",
+          "json_assertions": [
+            {
+              "pointer": "/commands/cleanup",
+              "expected": "cargo clean"
+            },
+            {
+              "pointer": "/expected_outputs/verification_success",
+              "expected": true
+            },
+            {
+              "pointer": "/schema_hash",
+              "expected": "sha256:9f0a1b2c3d4e5f6789abcdef0123456789abcdef0123456789abcdef01234567"
+            }
+          ],
+          "expected_git_tracked": true,
+          "caller": "FE-CLAIM-025 reproduction contract",
+          "interpretation": "The lock is durable but its destructive cleanup and patterned schema identifier require correction."
+        }
+      ],
+      "revalidation": {
+        "owner_id": "bd-performance-conformance-bridge-tu32j.1.2",
+        "role": "reflexive claim-integrity owner",
+        "trigger": "claim rows, evidence tiers, the ledger root, capstone sub-gates, workflows, schemas, or reproduction metadata change",
+        "command": "./scripts/run_execution_truth_ledger_gate.sh ci",
+        "fallback": "run the capstone manually, downgrade affected claims, and retain the prior ledger root with an explicit stale marker",
+        "kill_rule": "reject observed integrity wording on capstone failure, uncomputed schema identities, stale or unsafe replay metadata, missing CI enforcement, fixture acceptance, or ledger drift",
+        "rollback": "restore the last green matrix and Merkle root, disable affected observed wording, and preserve failed drift bundles"
+      }
+    },
+    {
+      "subject_id": "claim:FE-CLAIM-026",
+      "kind": "claim",
+      "title": "The measured fraction of the ES2020 observable surface the engine executes is published as a single content-addressed, gated coverage figure, broken into six weighted category views (parser, builtin, control-flow, async, module, intentional-divergence) with a floor that exposes the weakest view.",
+      "current_state": "target",
+      "claim_posture": "target",
+      "classifications": [
+        "executable",
+        "observed",
+        "test_only"
+      ],
+      "runtime_reality": "A tracked coverage bundle reports 6,201/47,514 executed cases, 13.0508 percent overall, with builtin as the 1.6664 percent floor; this measures error-free execution or correct rejection, not assertion conformance",
+      "user_impact": "Users can see where the runtime reaches code rather than failing immediately, while a separate stricter metric prevents coverage from masquerading as correctness",
+      "limitations": [
+        "Assertion outcomes are not verified by this metric.",
+        "The coverage summary contains a contradictory sentence saying the stricter harness preloads includes even though both runner evidence and the next limitation say it does not.",
+        "Zero-total intentional-divergence view requires careful interpretation."
+      ],
+      "downstream_decisions": [
+        "Keep FE-CLAIM-026 at target.",
+        "Correct the contradictory include wording and maintain separate coverage and conformance scoreboards."
+      ],
+      "proofs": [
+        {
+          "proof_id": "fe-claim-026.coverage-summary",
+          "kind": "artifact",
+          "path": "docs/coverage/es2020_coverage_summary_bundle_v1/coverage_summary.json",
+          "file_sha256": "f3df45a6b2ee258feff486ef00518c4b19c852aba11b77ed2dc8d3d2d88e5cfa",
+          "json_assertions": [
+            {
+              "pointer": "/in_scope_passed",
+              "expected": 6201
+            },
+            {
+              "pointer": "/in_scope_total",
+              "expected": 47514
+            },
+            {
+              "pointer": "/observable_surface_executed_millionths",
+              "expected": 130508
+            },
+            {
+              "pointer": "/floor_view",
+              "expected": "builtin"
+            },
+            {
+              "pointer": "/floor_view_executed_millionths",
+              "expected": 16664
+            }
+          ],
+          "expected_git_tracked": true,
+          "caller": "scripts/run_coverage_summary_bundle_gate.sh",
+          "interpretation": "The content-addressed artifact records bounded execution coverage, not conformance."
+        }
+      ],
+      "revalidation": {
+        "owner_id": "bd-performance-conformance-bridge-tu32j.13.1",
+        "role": "conformance and coverage denominator owner",
+        "trigger": "the corpus profile, coverage definition, view weighting, harness, or engine changes",
+        "command": "./scripts/run_execution_truth_ledger_gate.sh ci",
+        "fallback": "publish the last valid coverage bundle with its cutoff and limitations",
+        "kill_rule": "block any use of execution coverage as a conformance pass rate",
+        "rollback": "restore the prior summary and report the new run as rejected evidence"
+      }
+    },
+    {
+      "subject_id": "claim:FE-CLAIM-TEST262",
+      "kind": "claim",
+      "title": "Test262 conformance via a provisional checked-in es2020-normative vector subset; full-suite conformance is TARGETED.",
+      "current_state": "target",
+      "claim_posture": "target",
+      "classifications": [
+        "executable",
+        "observed",
+        "production_wired",
+        "test_only"
+      ],
+      "runtime_reality": "Both a three-vector checked-in gate and a real 47,157-case native execution run exist; the latter passes 120 cases and explicitly disallows a full-suite claim because Test262 harness includes are not preloaded",
+      "user_impact": "Users get transparent, reproducible evidence of the current gap instead of silent expected-failure lists",
+      "limitations": [
+        "The live runner discards includes, flags, features, and structured negative metadata during vector conversion.",
+        "The declared scope excludes ECMA-402, Annex B, and post-ES2020 proposals.",
+        "Production-wired means the runner reaches the native engine path; it does not mean the harness is production functionality."
+      ],
+      "downstream_decisions": [
+        "Keep full-suite conformance targeted.",
+        "Promote only when the declared es2020-normative denominator has zero unwaived semantic failures and the waiver ledger contains only valid host/harness exclusions."
+      ],
+      "proofs": [
+        {
+          "proof_id": "fe-claim-test262.live-corpus",
+          "kind": "artifact",
+          "path": "docs/test262_real_corpus_pass_rate_v1.json",
+          "file_sha256": "0232d23444032b8e4de82e91f0822ab299ad586ce29924bab8d46ea7bd19123e",
+          "json_assertions": [
+            {
+              "pointer": "/proof_state",
+              "expected": "real_corpus_measured"
+            },
+            {
+              "pointer": "/denominator",
+              "expected": 47157
+            },
+            {
+              "pointer": "/full_suite_claim_allowed",
+              "expected": false
+            }
+          ],
+          "expected_git_tracked": true,
+          "caller": "franken_test262_runner --suite-path",
+          "interpretation": "The real-corpus artifact is observed and explicitly bounded."
+        },
+        {
+          "proof_id": "fe-claim-test262.suite-conversion",
+          "kind": "source",
+          "path": "crates/franken-engine/src/bin/franken_test262_runner.rs",
+          "start_line": 646,
+          "end_line": 692,
+          "range_sha256": "f2c6865f26acd4b089bc83b02e48d76a7a8dc7a8913a7ca92a3ad92990272f6b",
+          "must_contain": [
+            "Test262Harness",
+            "generate_case_vectors",
+            "source: v.source"
+          ],
+          "caller": "execute_live_case_vectors",
+          "interpretation": "The live corpus is real, but conversion retains only the reduced vector fields."
+        }
+      ],
+      "revalidation": {
+        "owner_id": "bd-performance-conformance-bridge-tu32j.13.1",
+        "role": "Test262 claim owner",
+        "trigger": "the Test262 pin, profile, harness, vector schema, waiver, or pass rate changes",
+        "command": "./scripts/run_execution_truth_ledger_gate.sh ci",
+        "fallback": "publish the bounded provisional and real-corpus lower-bound artifacts separately",
+        "kill_rule": "block full-conformance wording while full_suite_claim_allowed is false or unwaived semantic failures remain",
+        "rollback": "restore prior target wording and preserve the failed measurement for frontier triage"
+      }
+    }
+  ],
+  "findings": [
+    {
+      "finding_id": "TRUTH-001",
+      "severity": "critical",
+      "status": "open",
+      "summary": "The closed Cranelift-tier bead produced planning and guard records but no linked backend or native execution path.",
+      "opportunity_score": 100,
+      "relevance_score": 100,
+      "score_rationale": "This directly controls the raw-performance ceiling and corrects a closed implementation claim that lacks executable output.",
+      "implementation_budget": "XL: native lowering, deoptimization, executable-memory policy, cache integration, and platform hardening",
+      "subject_ids": [
+        "bead:bd-1lsy.7.3",
+        "claim:FE-CLAIM-010"
+      ],
+      "correction_owner": "native-tier-architecture",
+      "successor_bead": "bd-performance-conformance-bridge-tu32j.6.1"
+    },
+    {
+      "finding_id": "TRUTH-002",
+      "severity": "critical",
+      "status": "open",
+      "summary": "The closed AOT lane emits input identities and synthetic timing, not executable image bytes.",
+      "opportunity_score": 95,
+      "relevance_score": 100,
+      "score_rationale": "A real executable image and loader are required for cold-start specialization and for any AOT wording to be defensible.",
+      "implementation_budget": "XL: image format, lowering, loader, content-addressed cache, invalidation, and safe fallback",
+      "subject_ids": [
+        "bead:bd-1lsy.7.10",
+        "bead:bd-w2dov"
+      ],
+      "correction_owner": "native-capsule-architecture",
+      "successor_bead": "bd-performance-conformance-bridge-tu32j.6.1"
+    },
+    {
+      "finding_id": "TRUTH-003",
+      "severity": "critical",
+      "status": "open",
+      "summary": "Test262 includes and other normative metadata are parsed then discarded before native evaluation.",
+      "opportunity_score": 95,
+      "relevance_score": 100,
+      "score_rationale": "Lossless metadata and harness preloads are the cheapest credible multiplier on the measured conformance pass rate.",
+      "implementation_budget": "M: lossless metadata model, include preload, flag semantics, negative expectations, and async completion",
+      "subject_ids": [
+        "bead:bd-6a61n.1.8",
+        "claim:FE-CLAIM-TEST262"
+      ],
+      "correction_owner": "test262-metadata-model",
+      "successor_bead": "bd-performance-conformance-bridge-tu32j.13.1"
+    },
+    {
+      "finding_id": "TRUTH-004",
+      "severity": "major",
+      "status": "open",
+      "summary": "The coverage summary contradicts itself about whether the stricter harness preloads Test262 includes.",
+      "opportunity_score": 70,
+      "relevance_score": 95,
+      "score_rationale": "The correction is small but prevents execution coverage from being mistaken for conformance and protects the campaign denominator.",
+      "implementation_budget": "S: reconcile profile wording, regenerate the coverage bundle, and ratchet the contradiction check",
+      "subject_ids": [
+        "claim:FE-CLAIM-026",
+        "claim:FE-CLAIM-TEST262"
+      ],
+      "correction_owner": "claim-language",
+      "successor_bead": "bd-performance-conformance-bridge-tu32j.1.2"
+    },
+    {
+      "finding_id": "TRUTH-005",
+      "severity": "major",
+      "status": "open",
+      "summary": "The closed Track-G replacement bead delivered real Lean, Z3, bounded-sample, and proof-emitter paths, so the FE-CLAIM-016 through FE-CLAIM-021 matrix and promotion rationales are stale; the claims should remain hypotheses because tracked complete proof bundles, supported generator coverage, and independent rechecks are still missing.",
+      "opportunity_score": 65,
+      "relevance_score": 75,
+      "score_rationale": "This has high claim-integrity value but is less immediate than the execution-tier and conformance blockers.",
+      "implementation_budget": "L: tracked complete proof bundles, supported generator coverage, promotion rules, and independent replay",
+      "subject_ids": [
+        "bead:bd-cixqu.7.17",
+        "claim:FE-CLAIM-016",
+        "claim:FE-CLAIM-017",
+        "claim:FE-CLAIM-018",
+        "claim:FE-CLAIM-019",
+        "claim:FE-CLAIM-020",
+        "claim:FE-CLAIM-021"
+      ],
+      "correction_owner": "claim-language",
+      "successor_bead": "bd-performance-conformance-bridge-tu32j.1.2"
+    },
+    {
+      "finding_id": "TRUTH-006",
+      "severity": "major",
+      "status": "open",
+      "summary": "The May performance pass is a real local observation, but its artifact tree is ignored and unavailable to fresh-clone verifiers.",
+      "opportunity_score": 85,
+      "relevance_score": 100,
+      "score_rationale": "Every optimization decision needs a durable, clean-clone baseline or apparent wins can be comparator and artifact drift.",
+      "implementation_budget": "M: tracked raw samples, pinned comparators, reproducible runner, and clean-clone verification",
+      "subject_ids": [
+        "bead:bd-o4cbn",
+        "claim:FE-CLAIM-009"
+      ],
+      "correction_owner": "performance-evidence",
+      "successor_bead": "bd-performance-conformance-bridge-tu32j.3.1"
+    },
+    {
+      "finding_id": "TRUTH-007",
+      "severity": "major",
+      "status": "open",
+      "summary": "QuickJS and V8 lane names identify two configurations of one native interpreter, not distinct execution engines or optimized tiers.",
+      "opportunity_score": 80,
+      "relevance_score": 95,
+      "score_rationale": "Canonical lane ownership removes misleading architecture signals and reduces the dual-lane tax on every semantic and performance fix.",
+      "implementation_budget": "L: canonical-lane decision, compatibility alias retirement, parity gates, and module graduation",
+      "subject_ids": [
+        "bead:bd-1lsy.7.3",
+        "claim:FE-CLAIM-001"
+      ],
+      "correction_owner": "runtime-ownership",
+      "successor_bead": "bd-performance-conformance-bridge-tu32j.2.1"
+    },
+    {
+      "finding_id": "TRUTH-008",
+      "severity": "major",
+      "status": "open",
+      "summary": "The claim-to-proof matrix gate and claim-evidence integrity capstone exist and check real tracked state but are absent from all current GitHub workflows.",
+      "opportunity_score": 90,
+      "relevance_score": 100,
+      "score_rationale": "This is a small integration change with disproportionate leverage against silent claim and evidence regression.",
+      "implementation_budget": "S: workflow wiring, branch-protection requirement, failure artifacts, and retention policy",
+      "subject_ids": [
+        "claim:FE-CLAIM-009",
+        "claim:FE-CLAIM-025"
+      ],
+      "correction_owner": "claim-integrity-ci",
+      "successor_bead": "bd-performance-conformance-bridge-tu32j.1.2"
+    },
+    {
+      "finding_id": "TRUTH-009",
+      "severity": "major",
+      "status": "open",
+      "summary": "FE-CLAIM-025's tracked env, manifest, and repro metadata use hard-coded patterned schema_hash constants instead of computed schema digests, while repro.lock prescribes cargo clean, direct Cargo, an absolute historical workspace, and a stale source revision.",
+      "opportunity_score": 85,
+      "relevance_score": 95,
+      "score_rationale": "An integrity claim cannot rely on patterned pseudo-hashes or an unsafe, stale reproduction recipe.",
+      "implementation_budget": "M: computed schema identities, safe rch reproduction, source rebinding, and evidence regeneration",
+      "subject_ids": [
+        "claim:FE-CLAIM-025"
+      ],
+      "correction_owner": "claim-integrity-evidence",
+      "successor_bead": "bd-performance-conformance-bridge-tu32j.1.2"
+    }
+  ],
+  "provenance_edges": [
+    {
+      "from": "bead:bd-w2dov",
+      "relation": "corrects_wording_for",
+      "to": "bead:bd-1lsy.7.10"
+    },
+    {
+      "from": "bead:bd-1lsy.7.3",
+      "relation": "historically_blocks",
+      "to": "bead:bd-1lsy.7.10"
+    },
+    {
+      "from": "bead:bd-6a61n.1.8",
+      "relation": "produces_baseline_for",
+      "to": "claim:FE-CLAIM-TEST262"
+    },
+    {
+      "from": "bead:bd-cixqu.7.17",
+      "relation": "delivers_fail_closed_verifier_for",
+      "to": "claim:FE-CLAIM-016"
+    },
+    {
+      "from": "bead:bd-cixqu.7.17",
+      "relation": "delivers_fail_closed_verifier_for",
+      "to": "claim:FE-CLAIM-018"
+    },
+    {
+      "from": "bead:bd-cixqu.7.17",
+      "relation": "delivers_fail_closed_verifier_for",
+      "to": "claim:FE-CLAIM-019"
+    },
+    {
+      "from": "bead:bd-cixqu.7.17",
+      "relation": "delivers_fail_closed_verifier_for",
+      "to": "claim:FE-CLAIM-020"
+    },
+    {
+      "from": "bead:bd-cixqu.7.17",
+      "relation": "delivers_fail_closed_verifier_for",
+      "to": "claim:FE-CLAIM-021"
+    },
+    {
+      "from": "bead:bd-11p",
+      "relation": "gates_provisional_surface_for",
+      "to": "claim:FE-CLAIM-TEST262"
+    },
+    {
+      "from": "bead:bd-o4cbn",
+      "relation": "provides_hotspot_inputs_for",
+      "to": "claim:FE-CLAIM-010"
+    },
+    {
+      "from": "claim:FE-CLAIM-001",
+      "relation": "production_execution_anchor_for",
+      "to": "claim:FE-CLAIM-TEST262"
+    },
+    {
+      "from": "claim:FE-CLAIM-009",
+      "relation": "governs_artifact_posture_for",
+      "to": "claim:FE-CLAIM-010"
+    },
+    {
+      "from": "claim:FE-CLAIM-017",
+      "relation": "proof_prerequisite_for",
+      "to": "claim:FE-CLAIM-019"
+    },
+    {
+      "from": "claim:FE-CLAIM-018",
+      "relation": "proof_prerequisite_for",
+      "to": "claim:FE-CLAIM-020"
+    },
+    {
+      "from": "claim:FE-CLAIM-019",
+      "relation": "proof_prerequisite_for",
+      "to": "claim:FE-CLAIM-020"
+    },
+    {
+      "from": "claim:FE-CLAIM-021",
+      "relation": "proof_prerequisite_for",
+      "to": "claim:FE-CLAIM-020"
+    },
+    {
+      "from": "claim:FE-CLAIM-025",
+      "relation": "governs_integrity_posture_for",
+      "to": "claim:FE-CLAIM-009"
+    },
+    {
+      "from": "claim:FE-CLAIM-026",
+      "relation": "must_remain_distinct_from",
+      "to": "claim:FE-CLAIM-TEST262"
+    }
+  ],
+  "legal": {
+    "repository_license": "MIT",
+    "external_corpora": [
+      {
+        "name": "tc39/test262",
+        "source": "https://github.com/tc39/test262",
+        "revision": "d0c1b4555b03dd404873fd6422a4b5da00136500",
+        "license": "BSD-3-Clause",
+        "redistribution": "Corpus is referenced by revision; this ledger stores no corpus source."
+      },
+      {
+        "name": "Node.js",
+        "source": "system runtime used by e2 denominator",
+        "revision": "v20.19.4",
+        "license": "upstream distribution terms",
+        "redistribution": "No Node binary is redistributed in this ledger."
+      },
+      {
+        "name": "Bun",
+        "source": "system runtime used by e2 denominator",
+        "revision": "1.3.14",
+        "license": "upstream distribution terms",
+        "redistribution": "No Bun binary is redistributed in this ledger."
+      }
+    ],
+    "review_owner": "bd-performance-conformance-bridge-tu32j.1.1"
+  }
+}

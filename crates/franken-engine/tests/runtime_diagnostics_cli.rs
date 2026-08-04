@@ -20,7 +20,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use frankenengine_engine::compatibility_advisory::AdvisoryBuilder;
 use frankenengine_engine::containment_executor::{ContainmentReceipt, ContainmentState};
 use frankenengine_engine::evidence_ledger::{
-    CandidateAction, ChosenAction, DecisionType, EvidenceEntry, EvidenceEntryBuilder, Witness,
+    CandidateAction, ChosenAction, DecisionType, EvidenceEntry, EvidenceEntryBuilder,
+    LabFixtureEvidenceEntryBuilderExt as _, Witness,
 };
 use frankenengine_engine::expected_loss_selector::ContainmentAction;
 use frankenengine_engine::hash_tiers::ContentHash;
@@ -103,6 +104,7 @@ fn build_sample_input() -> RuntimeDiagnosticsCliInput {
         },
         evidence_entries: sample_evidence_entries(),
         hostcall_records: vec![sample_hostcall_envelope()],
+        telemetry_drop_counts: Default::default(),
         containment_receipts: vec![sample_containment_envelope()],
         replay_artifacts: vec![ReplayArtifactRecord {
             trace_id: "trace-incident".to_string(),
@@ -460,11 +462,16 @@ fn support_bundle_command_redacts_sensitive_values_and_writes_files() {
 
     let written_index = out_dir.join("support_bundle/index.json");
     let written_summary = out_dir.join("support_bundle/summary.md");
+    let written_evidence_summary = out_dir.join("support_bundle/evidence_summary.json");
     let written_redaction_audit = out_dir.join("support_bundle/redaction_audit_report.json");
     let written_leak_matrix = out_dir.join("support_bundle/leak_fixture_matrix.json");
     let written_privacy_summary = out_dir.join("support_bundle/privacy_verdict_summary.md");
     assert!(written_index.exists(), "index file should be written");
     assert!(written_summary.exists(), "summary file should be written");
+    assert!(
+        written_evidence_summary.exists(),
+        "evidence completeness summary should be written"
+    );
     assert!(
         written_redaction_audit.exists(),
         "redaction audit report should be written"
@@ -1011,6 +1018,7 @@ fn lib_export_support_bundle_produces_required_files() {
         "support_bundle/commands.txt",
         "support_bundle/runtime_diagnostics.json",
         "support_bundle/evidence_records.jsonl",
+        "support_bundle/evidence_summary.json",
         "support_bundle/summary.md",
         "support_bundle/redaction_audit_report.json",
         "support_bundle/leak_fixture_matrix.json",

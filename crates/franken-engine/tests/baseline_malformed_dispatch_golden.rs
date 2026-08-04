@@ -11,10 +11,6 @@ use frankenengine_engine::ir_contract::{
 };
 use serde::Serialize;
 
-// bd-ub6x8.6.3: migrated from tests/golden_vectors/ to tests/golden/wire_vectors/.
-const EXPECTED: &str =
-    include_str!("golden/wire_vectors/baseline_malformed_dispatch_fail_closed.json");
-
 #[derive(Debug, Serialize)]
 struct ErrorSnapshot {
     kind: &'static str,
@@ -29,10 +25,16 @@ struct ValueSnapshot {
 }
 
 #[derive(Debug, Serialize)]
+struct IntSnapshot {
+    kind: &'static str,
+    value: i64,
+}
+
+#[derive(Debug, Serialize)]
 struct BaselineMalformedDispatchSnapshot {
     coverage_gap: &'static str,
     binding_kind_error: ErrorSnapshot,
-    invalid_utf16_index_of: ErrorSnapshot,
+    split_pair_index_of: IntSnapshot,
     valid_utf16_includes: ValueSnapshot,
     valid_utf16_starts_with: ValueSnapshot,
 }
@@ -56,7 +58,7 @@ fn test_module(instructions: Vec<Ir3Instruction>, constant_pool: Vec<String>) ->
             source_label: "baseline-malformed-dispatch-golden".to_string(),
         },
         instructions,
-        constant_pool,
+        constant_pool: constant_pool.into_iter().map(Into::into).collect(),
         function_table: Vec::new(),
         specialization: None,
         required_capabilities: Vec::new(),
@@ -91,6 +93,13 @@ fn bool_snapshot(value: Value) -> ValueSnapshot {
             value,
         },
         other => panic!("expected bool, got {other:?}"),
+    }
+}
+
+fn int_snapshot(value: Value) -> IntSnapshot {
+    match value {
+        Value::Int(value) => IntSnapshot { kind: "int", value },
+        other => panic!("expected int, got {other:?}"),
     }
 }
 
@@ -145,9 +154,12 @@ fn baseline_malformed_dispatch_fail_closed_matches_golden() {
     let snapshot = BaselineMalformedDispatchSnapshot {
         coverage_gap: "baseline_interpreter malformed dispatch inputs",
         binding_kind_error: binding_kind_error(),
-        invalid_utf16_index_of: type_error_snapshot(
+        // A fromIndex that splits the surrogate pair is a legal code-unit
+        // offset (bd-rdnhc): "😀z" is [D83D, DE00, 7A], so indexOf("z", 1)
+        // finds the match at unit index 2 instead of failing closed.
+        split_pair_index_of: int_snapshot(
             string_builtin("builtin:StringPrototypeIndexOf", "😀z", "z", 1)
-                .expect_err("unpaired UTF-16 suffix must fail closed"),
+                .expect("split-pair fromIndex is a legal code-unit offset"),
         ),
         valid_utf16_includes: bool_snapshot(
             string_builtin("builtin:StringPrototypeIncludes", "😀z", "z", 2)
@@ -160,5 +172,5 @@ fn baseline_malformed_dispatch_fail_closed_matches_golden() {
     };
 
     let actual = format!("{}\n", serde_json::to_string_pretty(&snapshot).unwrap());
-    assert_eq!(actual, EXPECTED);
+    insta::assert_snapshot!("baseline_malformed_dispatch_fail_closed", actual);
 }

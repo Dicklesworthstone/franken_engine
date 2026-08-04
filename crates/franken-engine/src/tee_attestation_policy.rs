@@ -12,11 +12,9 @@
 //!
 //! Plan references: Section 10.15 (9I.1), bead bd-2xu5.
 
+use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
-use std::time::Duration;
-
-use serde::{Deserialize, Serialize};
 
 use crate::engine_object_id::{self, EngineObjectId, ObjectDomain, SchemaId};
 use crate::hash_tiers::ContentHash;
@@ -792,8 +790,8 @@ impl TeeAttestationPolicy {
             schema_version: 1,
             policy_epoch: SecurityEpoch::from_raw(0),
             freshness_window: AttestationFreshnessWindow {
-                standard_max_age_secs: Duration::from_secs(300).as_secs(),
-                high_impact_max_age_secs: Duration::from_secs(60).as_secs(),
+                standard_max_age_secs: std::time::Duration::from_secs(300).as_secs(),
+                high_impact_max_age_secs: std::time::Duration::from_secs(60).as_secs(),
             },
             approved_measurements,
             // At least one fail-closed revocation source is mandatory: without a
@@ -1313,7 +1311,11 @@ impl TeeAttestationPolicyStore {
             return Err(err);
         };
         let policy_id = policy.derive_policy_id()?;
-        match policy.evaluate_quote(quote, impact, runtime_epoch) {
+        // Structural-only policy evaluation is intentional in this receipt
+        // verifier path; attested evaluate-then-verify is enforced upstream.
+        #[allow(deprecated)]
+        let quote_evaluation = policy.evaluate_quote(quote, impact, runtime_epoch);
+        match quote_evaluation {
             Ok(()) => {
                 let mut metadata = BTreeMap::new();
                 metadata.insert("platform".to_string(), quote.platform.to_string());

@@ -17,7 +17,7 @@ use std::path::{Path, PathBuf};
 use frankenengine_engine::control_plane::{
     self, ContractDecisionAdapter, DecisionAdapter, DecisionContract, DecisionRequest,
     DecisionVerdict, EvidenceEmitter, FallbackPolicy, InMemoryEvidenceEmitter, LossMatrix,
-    Posterior,
+    Posterior, UpdatePosteriorError,
 };
 use frankenengine_test_support::control_plane as control_plane_mocks;
 
@@ -141,9 +141,14 @@ impl DecisionContract for MiniContract {
         &self.loss_matrix
     }
 
-    fn update_posterior(&self, posterior: &mut Posterior, state_index: usize) {
+    fn update_posterior(
+        &self,
+        posterior: &mut Posterior,
+        state_index: usize,
+    ) -> Result<(), UpdatePosteriorError> {
         let _ = state_index;
         posterior.bayesian_update(&[0.8, 0.2]);
+        Ok(())
     }
 
     fn choose_action(&self, posterior: &Posterior) -> usize {

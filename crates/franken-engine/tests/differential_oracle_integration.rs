@@ -50,11 +50,6 @@ fn frankenctl_differential_oracle_run_emits_four_backend_receipts() {
         .output()
         .expect("frankenctl differential-oracle should execute");
 
-    assert!(
-        output.status.success(),
-        "frankenctl should succeed: stderr={}",
-        String::from_utf8_lossy(&output.stderr)
-    );
     let stdout_report: serde_json::Value =
         serde_json::from_slice(&output.stdout).expect("stdout should contain JSON report");
     let file_report: serde_json::Value = serde_json::from_slice(
@@ -75,7 +70,7 @@ fn frankenctl_differential_oracle_run_emits_four_backend_receipts() {
     assert_eq!(stdout_report["backends"].as_array().unwrap().len(), 4);
     assert_eq!(
         stdout_report["canonicalization"]["schema_version"].as_str(),
-        Some("franken-engine.differential-oracle.canonicalization.v1")
+        Some("franken-engine.differential-oracle.canonicalization.v2")
     );
     assert_eq!(
         stdout_report["canonicalization"]["observations"]
@@ -93,7 +88,7 @@ fn frankenctl_differential_oracle_run_emits_four_backend_receipts() {
     );
     assert_eq!(
         stdout_report["divergence_taxonomy"]["schema_version"].as_str(),
-        Some("franken-engine.differential-oracle.divergence-taxonomy.v1")
+        Some("franken-engine.differential-oracle.divergence-taxonomy.v2")
     );
     assert!(
         stdout_report["divergence_taxonomy"]["findings"]
@@ -104,18 +99,30 @@ fn frankenctl_differential_oracle_run_emits_four_backend_receipts() {
         file_report["schema_version"],
         stdout_report["schema_version"]
     );
+    let expected_exit = match stdout_report["canonicalization"]["semantic_verdict"].as_str() {
+        Some("consensus") => 0,
+        Some("divergence") => 3,
+        Some("insufficient_data") => 4,
+        other => panic!("unexpected semantic verdict: {other:?}"),
+    };
+    assert_eq!(
+        output.status.code(),
+        Some(expected_exit),
+        "legacy differential-oracle surface must propagate the report verdict: stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
 
     let node = backend(&stdout_report, "node_lts");
     assert!(matches!(
         node["status"].as_str(),
-        Some("completed" | "failed" | "unavailable" | "timeout")
+        Some("completed" | "failed" | "unavailable" | "timeout" | "degraded")
     ));
     assert!(node["command"].as_array().is_some());
 
     let bun = backend(&stdout_report, "bun_stable");
     assert!(matches!(
         bun["status"].as_str(),
-        Some("completed" | "failed" | "unavailable" | "timeout")
+        Some("completed" | "failed" | "unavailable" | "timeout" | "degraded")
     ));
     assert!(bun["command"].as_array().is_some());
 
@@ -129,6 +136,16 @@ fn frankenctl_differential_oracle_run_emits_four_backend_receipts() {
     assert_eq!(franken_core["value"].as_str(), Some("2"));
     assert_eq!(franken_core["exit_code"].as_i64(), Some(0));
     assert!(
+        franken_core["command"]
+            .as_array()
+            .expect("franken-core command should be an array")
+            .iter()
+            .any(|entry| entry
+                .as_str()
+                .unwrap_or_default()
+                .contains("frankenengine_core::baseline_interpreter::QuickJsLane::execute"))
+    );
+    assert!(
         franken_core["diagnostics"]
             .as_array()
             .expect("franken-core diagnostics should be an array")
@@ -136,6 +153,6 @@ fn frankenctl_differential_oracle_run_emits_four_backend_receipts() {
             .any(|entry| entry
                 .as_str()
                 .unwrap_or_default()
-                .contains("frankenengine-core crate is not linked"))
+                .contains("frankenengine-core path dependency executed"))
     );
 }

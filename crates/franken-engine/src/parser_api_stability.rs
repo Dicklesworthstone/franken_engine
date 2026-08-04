@@ -360,6 +360,43 @@ impl GoldenVersionVector {
         }
     }
 
+    /// The live vector after the engine AST exact-string carrier schema bump.
+    pub fn v2() -> Self {
+        let mut vector = Self::v1();
+        vector.ast_schema = "franken-engine.parser-ast.schema.v2".into();
+        vector
+    }
+
+    /// The live vector after the root EOF byte-column schema correction.
+    pub fn v3() -> Self {
+        let mut vector = Self::v2();
+        vector.ast_schema = "franken-engine.parser-ast.schema.v3".into();
+        vector
+    }
+
+    /// The live vector after exact UTF-16 module metadata became lossless.
+    pub fn v4() -> Self {
+        let mut vector = Self::v3();
+        vector.ast_schema = "franken-engine.parser-ast.schema.v4".into();
+        vector
+    }
+
+    /// The live vector after effective assignment strictness became explicit.
+    ///
+    /// Schema v5 is intentionally not an engine compatibility-parser vector:
+    /// that identifier belongs to the native `franken-core` exact-module-source
+    /// shape. The engine therefore advances directly from v4 to v6.
+    pub fn v6() -> Self {
+        let mut vector = Self::v4();
+        vector.ast_schema = "franken-engine.parser-ast.schema.v6".into();
+        vector
+    }
+
+    /// The golden vector corresponding to the currently exported constants.
+    pub fn current() -> Self {
+        Self::v6()
+    }
+
     /// Compare against live constants and return mismatches.
     pub fn check_against_live(&self) -> Vec<(String, String, String)> {
         let mut mismatches = Vec::new();
@@ -513,7 +550,7 @@ pub fn run_compatibility_checks() -> CompatibilityReport {
     let mut results = Vec::new();
 
     // 1. Version string stability
-    let golden = GoldenVersionVector::v1();
+    let golden = GoldenVersionVector::current();
     let mismatches = golden.check_against_live();
     results.push(CompatibilityCheckResult {
         check_id: "version_strings".into(),
@@ -972,8 +1009,48 @@ mod tests {
     // -- Golden version vector tests --
 
     #[test]
-    fn golden_v1_matches_live_constants() {
+    fn golden_v1_remains_a_historical_schema_vector() {
         let golden = GoldenVersionVector::v1();
+        let mismatches = golden.check_against_live();
+        assert_eq!(mismatches.len(), 1);
+        assert_eq!(mismatches[0].0, "ast_schema");
+        assert_eq!(mismatches[0].1, "franken-engine.parser-ast.schema.v1");
+        assert_eq!(mismatches[0].2, "franken-engine.parser-ast.schema.v6");
+    }
+
+    #[test]
+    fn golden_v2_remains_a_historical_schema_vector() {
+        let golden = GoldenVersionVector::v2();
+        let mismatches = golden.check_against_live();
+        assert_eq!(mismatches.len(), 1);
+        assert_eq!(mismatches[0].0, "ast_schema");
+        assert_eq!(mismatches[0].1, "franken-engine.parser-ast.schema.v2");
+        assert_eq!(mismatches[0].2, "franken-engine.parser-ast.schema.v6");
+    }
+
+    #[test]
+    fn golden_v3_remains_a_historical_schema_vector() {
+        let golden = GoldenVersionVector::v3();
+        let mismatches = golden.check_against_live();
+        assert_eq!(mismatches.len(), 1);
+        assert_eq!(mismatches[0].0, "ast_schema");
+        assert_eq!(mismatches[0].1, "franken-engine.parser-ast.schema.v3");
+        assert_eq!(mismatches[0].2, "franken-engine.parser-ast.schema.v6");
+    }
+
+    #[test]
+    fn golden_v4_remains_a_historical_schema_vector() {
+        let golden = GoldenVersionVector::v4();
+        let mismatches = golden.check_against_live();
+        assert_eq!(mismatches.len(), 1);
+        assert_eq!(mismatches[0].0, "ast_schema");
+        assert_eq!(mismatches[0].1, "franken-engine.parser-ast.schema.v4");
+        assert_eq!(mismatches[0].2, "franken-engine.parser-ast.schema.v6");
+    }
+
+    #[test]
+    fn golden_v6_matches_live_constants() {
+        let golden = GoldenVersionVector::v6();
         let mismatches = golden.check_against_live();
         assert!(
             mismatches.is_empty(),
@@ -994,8 +1071,8 @@ mod tests {
     }
 
     #[test]
-    fn golden_v1_detects_hypothetical_drift() {
-        let mut g = GoldenVersionVector::v1();
+    fn golden_current_detects_hypothetical_drift() {
+        let mut g = GoldenVersionVector::current();
         g.ast_contract = "franken-engine.parser-ast.contract.v99".into();
         let mismatches = g.check_against_live();
         assert_eq!(mismatches.len(), 1);

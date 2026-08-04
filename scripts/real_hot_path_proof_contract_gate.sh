@@ -283,6 +283,114 @@ manifest_json() {
   jq -c "$filter // ${fallback}" "$manifest_path"
 }
 
+rustflags_has_effective_codegen_option() {
+  local flags="$1"
+  local option_name="$2"
+  local expected_value="$3"
+  local -a tokens=()
+  local index
+  local effective_value=""
+
+  read -r -a tokens <<<"$flags"
+  for ((index = 0; index < ${#tokens[@]}; index += 1)); do
+    case "${tokens[index]}" in
+      -C"${option_name}"=*)
+        effective_value="${tokens[index]#-C${option_name}=}"
+        ;;
+      -C)
+        if [[ "${tokens[index + 1]:-}" == "${option_name}="* ]]; then
+          effective_value="${tokens[index + 1]#${option_name}=}"
+        fi
+        ;;
+    esac
+  done
+  [[ "$effective_value" == "$expected_value" ]]
+}
+
+# Parse the shell-safe command rendering without evaluating it. The producer
+# only emits whitespace-delimited words, quotes, and backslash escapes; command,
+# parameter, glob, and arithmetic expansion are deliberately unsupported.
+declare -a simple_shell_words=()
+split_simple_shell_words() {
+  local input="$1"
+  local character=""
+  local word=""
+  local state="unquoted"
+  local escaped="false"
+  local word_started="false"
+  local index
+
+  simple_shell_words=()
+  for ((index = 0; index < ${#input}; index += 1)); do
+    character="${input:index:1}"
+    case "$state" in
+      unquoted)
+        if [[ "$escaped" == "true" ]]; then
+          word+="$character"
+          escaped="false"
+          word_started="true"
+        elif [[ "$character" == "\\" ]]; then
+          escaped="true"
+          word_started="true"
+        elif [[ "$character" == "'" ]]; then
+          state="single"
+          word_started="true"
+        elif [[ "$character" == '"' ]]; then
+          state="double"
+          word_started="true"
+        elif [[ "$character" =~ [[:space:]] ]]; then
+          if [[ "$word_started" == "true" ]]; then
+            simple_shell_words+=("$word")
+            word=""
+            word_started="false"
+          fi
+        else
+          word+="$character"
+          word_started="true"
+        fi
+        ;;
+      single)
+        if [[ "$character" == "'" ]]; then
+          state="unquoted"
+        else
+          word+="$character"
+        fi
+        ;;
+      double)
+        if [[ "$escaped" == "true" ]]; then
+          word+="$character"
+          escaped="false"
+        elif [[ "$character" == "\\" ]]; then
+          escaped="true"
+        elif [[ "$character" == '"' ]]; then
+          state="unquoted"
+        else
+          word+="$character"
+        fi
+        ;;
+    esac
+  done
+
+  if [[ "$escaped" == "true" || "$state" != "unquoted" ]]; then
+    return 1
+  fi
+  if [[ "$word_started" == "true" ]]; then
+    simple_shell_words+=("$word")
+  fi
+}
+
+rustflags_are_replay_safe() {
+  local flags="$1"
+  local token
+  local -a tokens=()
+
+  read -r -a tokens <<<"$flags"
+  [[ "${#tokens[@]}" -gt 0 ]] || return 1
+  for token in "${tokens[@]}"; do
+    [[ "$token" =~ ^[-+A-Za-z0-9_=.,/:]+$ ]] || return 1
+  done
+}
+
 manifest_schema="$(manifest_string '.schema_version')"
 manifest_bead_id="$(manifest_string '.bead_id')"
 manifest_component="$(manifest_string '.component')"
@@ -293,14 +401,111 @@ manifest_decision_id="$(manifest_string '.decision_id')"
 manifest_policy_id="$(manifest_string '.policy_id')"
 manifest_target_dir="$(manifest_string '.cargo_target_dir')"
 manifest_incremental="$(manifest_string '.cargo_incremental')"
+manifest_build_jobs="$(manifest_string '.cargo_build_jobs')"
 manifest_rustflags="$(manifest_string '.rustflags')"
+manifest_toolchain="$(manifest_string '.toolchain')"
 manifest_outcome="$(manifest_string '.outcome')"
 manifest_command="$(manifest_string '.commands[0]')"
 manifest_remote_exit="$(manifest_string '.rch.remote_exit_code')"
 manifest_worker_id="$(manifest_string '.rch.selected_worker.id')"
 manifest_local_fallback="$(manifest_string '.rch.local_fallback_detected')"
 manifest_queue_when_busy="$(manifest_string '.rch.queue_when_busy')"
+manifest_exec_timeout="$(manifest_string '.rch.exec_timeout_seconds')"
+manifest_wait_timeout="$(manifest_string '.rch.wait_response_timeout_seconds')"
+manifest_test_timeout="$(manifest_string '.rch.test_timeout_seconds')"
+manifest_priority="$(manifest_string '.rch.priority')"
+manifest_visibility="$(manifest_string '.rch.visibility')"
 metric_fields_json="$(manifest_json '{remote_exit_code: .rch.remote_exit_code, local_fallback_detected: .rch.local_fallback_detected, queue_when_busy: .rch.queue_when_busy}' '{}')"
+
+manifest_command_matches_fields() {
+  local index=0
+  local token name value
+  local -A client_env=()
+  local -A remote_env=()
+  local -a expected_cargo=()
+  local expected
+
+  case "$manifest_mode" in
+    check)
+      expected_cargo=(cargo check -p frankenengine-engine --no-default-features --bench hot_paths)
+      ;;
+    smoke|ci)
+      expected_cargo=(cargo bench -p frankenengine-engine --no-default-features --bench hot_paths -- --test)
+      ;;
+    *) return 1 ;;
+  esac
+
+  split_simple_shell_words "$manifest_command" || return 1
+  [[ "${simple_shell_words[index]:-}" == "env" ]] || return 1
+  index=$((index + 1))
+  [[ "${simple_shell_words[index]:-}" == "-u" ]] || return 1
+  index=$((index + 1))
+  [[ "${simple_shell_words[index]:-}" == "CARGO_ENCODED_RUSTFLAGS" ]] || return 1
+  index=$((index + 1))
+
+  while [[ "${simple_shell_words[index]:-}" != "timeout" ]]; do
+    token="${simple_shell_words[index]:-}"
+    [[ "$token" == *=* ]] || return 1
+    name="${token%%=*}"
+    value="${token#*=}"
+    [[ "$name" =~ ^[A-Z][A-Z0-9_]*$ ]] || return 1
+    case "$name" in
+      RCH_DAEMON_WAIT_RESPONSE_TIMEOUT_SECS|RCH_QUEUE_WHEN_BUSY|RCH_PRIORITY|RCH_VISIBILITY|RCH_TEST_TIMEOUT_SEC)
+        [[ -z "${client_env[$name]+present}" ]] || return 1
+        client_env[$name]="$value"
+        ;;
+      *) return 1 ;;
+    esac
+    index=$((index + 1))
+  done
+  [[ "${client_env[RCH_DAEMON_WAIT_RESPONSE_TIMEOUT_SECS]:-}" == "$manifest_wait_timeout" ]] || return 1
+  [[ "${client_env[RCH_QUEUE_WHEN_BUSY]:-}" == "1" && "$manifest_queue_when_busy" == "true" ]] || return 1
+  [[ "${client_env[RCH_PRIORITY]:-}" == "$manifest_priority" ]] || return 1
+  [[ "${client_env[RCH_VISIBILITY]:-}" == "$manifest_visibility" && -n "$manifest_visibility" ]] || return 1
+  [[ "${client_env[RCH_TEST_TIMEOUT_SEC]:-}" == "$manifest_test_timeout" ]] || return 1
+  [[ "$manifest_exec_timeout" =~ ^[0-9]+$ ]] || return 1
+  [[ "$manifest_wait_timeout" =~ ^[0-9]+$ ]] || return 1
+  [[ "$manifest_test_timeout" =~ ^[0-9]+$ ]] || return 1
+  [[ "$manifest_priority" =~ ^[A-Za-z0-9._-]+$ ]] || return 1
+  [[ "$manifest_visibility" =~ ^[A-Za-z0-9._-]+$ ]] || return 1
+
+  for expected in timeout --kill-after=30 "$manifest_exec_timeout" rch exec -- env -u CARGO_ENCODED_RUSTFLAGS; do
+    [[ "${simple_shell_words[index]:-}" == "$expected" ]] || return 1
+    index=$((index + 1))
+  done
+
+  while [[ "${simple_shell_words[index]:-}" != "cargo" ]]; do
+    token="${simple_shell_words[index]:-}"
+    [[ "$token" == *=* ]] || return 1
+    name="${token%%=*}"
+    value="${token#*=}"
+    [[ "$name" =~ ^[A-Z][A-Z0-9_]*$ ]] || return 1
+    case "$name" in
+      RUSTUP_TOOLCHAIN|CARGO_TARGET_DIR|CARGO_INCREMENTAL|CARGO_BUILD_JOBS|RUSTFLAGS)
+        [[ -z "${remote_env[$name]+present}" ]] || return 1
+        remote_env[$name]="$value"
+        ;;
+      *) return 1 ;;
+    esac
+    index=$((index + 1))
+  done
+  [[ "${remote_env[RUSTUP_TOOLCHAIN]:-}" == "$manifest_toolchain" ]] || return 1
+  [[ "${remote_env[CARGO_TARGET_DIR]:-}" == "$manifest_target_dir" ]] || return 1
+  [[ "${remote_env[CARGO_INCREMENTAL]:-}" == "$manifest_incremental" ]] || return 1
+  [[ "${remote_env[CARGO_BUILD_JOBS]:-}" == "$manifest_build_jobs" ]] || return 1
+  [[ "${remote_env[RUSTFLAGS]:-}" == "$manifest_rustflags" ]] || return 1
+  [[ "$manifest_toolchain" =~ ^[A-Za-z0-9._+-]+$ ]] || return 1
+  [[ "$manifest_target_dir" =~ ^/tmp/[A-Za-z0-9._/-]+$ ]] || return 1
+  [[ "$manifest_incremental" =~ ^[0-9]+$ ]] || return 1
+  [[ "$manifest_build_jobs" =~ ^[0-9]+$ ]] || return 1
+  rustflags_are_replay_safe "$manifest_rustflags" || return 1
+
+  for expected in "${expected_cargo[@]}"; do
+    [[ "${simple_shell_words[index]:-}" == "$expected" ]] || return 1
+    index=$((index + 1))
+  done
+  [[ "$index" -eq "${#simple_shell_words[@]}" ]]
+}
 
 require_manifest_string() {
   local value="$1"
@@ -331,6 +536,9 @@ if [[ "$manifest_valid" == true ]]; then
   require_manifest_string "$manifest_decision_id" ".decision_id"
   require_manifest_string "$manifest_policy_id" ".policy_id"
   require_manifest_string "$manifest_target_dir" ".cargo_target_dir"
+  require_manifest_string "$manifest_build_jobs" ".cargo_build_jobs"
+  require_manifest_string "$manifest_rustflags" ".rustflags"
+  require_manifest_string "$manifest_toolchain" ".toolchain"
   require_manifest_string "$manifest_command" ".commands[0]"
 
   if [[ "$manifest_component" != "real_hot_path_proof" ]]; then
@@ -381,7 +589,7 @@ if [[ "$manifest_valid" == true ]]; then
       "Disable incremental compilation in the wrapper environment."
   fi
 
-  if [[ "$manifest_rustflags" != *"-Cdebuginfo=0"* ]]; then
+  if ! rustflags_has_effective_codegen_option "$manifest_rustflags" "debuginfo" "0"; then
     emit_failure \
       "FE-REAL-HOT-PATH-CONTRACT-RCH-POLICY" \
       "run_manifest.json:.rustflags" \
@@ -389,15 +597,20 @@ if [[ "$manifest_valid" == true ]]; then
       "Use the wrapper default RUSTFLAGS or record an explicit reviewed policy change."
   fi
 
-  if [[ "$manifest_command" != *"rch exec --"* ||
-        "$manifest_command" != *"RCH_QUEUE_WHEN_BUSY=1"* ||
-        "$manifest_command" != *"CARGO_TARGET_DIR="* ||
-        "$manifest_command" != *"--no-default-features"* ||
-        "$manifest_command" != *"--bench hot_paths"* ]]; then
+  if ! rustflags_has_effective_codegen_option "$manifest_rustflags" "linker-features" "-lld"; then
+    emit_failure \
+      "FE-REAL-HOT-PATH-CONTRACT-RCH-POLICY" \
+      "run_manifest.json:.rustflags" \
+      "RUSTFLAGS must include an exact -Clinker-features=-lld option so custom flags preserve the system-cc implicit-LLD opt-out" \
+      "Use the wrapper default RUSTFLAGS or compose the checked-in linker opt-out explicitly."
+  fi
+
+  if [[ "$(jq '.commands | length' "$manifest_path")" != "1" ]] ||
+    ! manifest_command_matches_fields; then
     emit_failure \
       "FE-REAL-HOT-PATH-CONTRACT-COMMAND-POLICY" \
       "run_manifest.json:.commands[0]" \
-      "command must route the hot_paths proof through rch with target isolation" \
+      "command must use both encoded-flag clears and exactly bind the manifest toolchain, RCH policy, Cargo environment, and hot_paths argv" \
       "Use scripts/run_real_hot_path_proof.sh instead of hand-written cargo commands."
   fi
 

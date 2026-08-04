@@ -18,7 +18,10 @@
     clippy::manual_abs_diff
 )]
 
+use frankenengine_engine::HybridRouter;
 use frankenengine_engine::ast::{ParseGoal, SyntaxTree};
+use frankenengine_engine::ir_contract::{Ir0Module, Ir3Instruction};
+use frankenengine_engine::lowering_pipeline::{LoweringContext, lower_ir0_to_ir3};
 use frankenengine_engine::module_async_evaluation::{
     AsyncEvalEventType, AsyncModuleEvaluator, AsyncModulePhase,
 };
@@ -30,6 +33,19 @@ use frankenengine_engine::static_semantics::{StaticErrorKind, analyze};
 
 fn parse(source: &str, goal: ParseGoal) -> ParseResult<SyntaxTree> {
     CanonicalEs2020Parser.parse(source, goal)
+}
+
+fn eval_console(source: &str) -> String {
+    let mut engine = HybridRouter::default();
+    let outcome = engine
+        .eval(source)
+        .unwrap_or_else(|error| panic!("top-level await eval failed for {source:?}: {error}"));
+    outcome
+        .console_output
+        .iter()
+        .map(|entry| entry.message.clone())
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 // ---------------------------------------------------------------------------
@@ -85,6 +101,146 @@ fn tla_multiple_awaits_in_module() {
     assert!(
         result.passed(),
         "Static semantics should pass for multiple TLA in module"
+    );
+}
+
+#[test]
+fn tla_lowering_emits_await_value_for_module_code() {
+    let tree = frankenengine_engine::parser_api_stability::parse_module(
+        "const value = await Promise.resolve(42); console.log(value);",
+    )
+    .expect("parse executable top-level await module");
+    let ir0 = Ir0Module::from_syntax_tree(tree, "top_level_await_lowering.mjs");
+    let output = lower_ir0_to_ir3(
+        &ir0,
+        &LoweringContext::new("tla-lowering", "bd-r9qoy", "module-continuation"),
+    )
+    .expect("lower executable top-level await module");
+
+    assert!(
+        output
+            .ir3
+            .instructions
+            .iter()
+            .any(|instruction| matches!(instruction, Ir3Instruction::ModuleAwaitValue { .. }))
+    );
+}
+
+#[test]
+fn settled_tla_returns_the_resumed_module_completion_value() {
+    let mut engine = HybridRouter::default();
+    let outcome = engine
+        .eval("await Promise.resolve('ready'); 73;")
+        .expect("settled top-level await should resume module evaluation");
+
+    assert_eq!(outcome.value, "73");
+}
+
+#[test]
+fn pending_tla_resumes_after_event_loop_turn() {
+    let source = r#"
+        const { once, EventEmitter } = require('node:events');
+        const emitter = new EventEmitter();
+        const order = ['before'];
+        setImmediate(() => {
+          order.push('emit');
+          emitter.emit('ready', 'settled');
+        });
+        const values = await once(emitter, 'ready');
+        order.push(values[0]);
+        console.log(order.join(','));
+    "#;
+
+    assert_eq!(eval_console(source), "before,emit,settled");
+}
+
+#[test]
+fn sequential_pending_tla_resumes_preserve_module_state() {
+    let source = r#"
+        const { once, EventEmitter } = require('node:events');
+        const first = new EventEmitter();
+        const second = new EventEmitter();
+        const order = [];
+        setImmediate(() => first.emit('ready', 'one'));
+        setImmediate(() => second.emit('ready', 'two'));
+        order.push((await once(first, 'ready'))[0]);
+        order.push((await once(second, 'ready'))[0]);
+        console.log(order.join(','));
+    "#;
+
+    assert_eq!(eval_console(source), "one,two");
+}
+
+#[test]
+fn pending_tla_rejection_enters_module_catch() {
+    let source = r#"
+        const { once, EventEmitter } = require('node:events');
+        const emitter = new EventEmitter();
+        const original = new Error('tla-fail');
+        setImmediate(() => emitter.emit('error', original));
+        try {
+          await once(emitter, 'ready');
+          console.log('wrong');
+        } catch (error) {
+          console.log((error === original) + ':' + error.message);
+        }
+    "#;
+
+    assert_eq!(eval_console(source), "true:tla-fail");
+}
+
+#[test]
+fn pending_tla_reaction_preserves_fifo_microtask_order() {
+    let source = r#"
+        const { once, EventEmitter } = require('node:events');
+        const emitter = new EventEmitter();
+        const order = [];
+        const ready = once(emitter, 'ready');
+        ready.then(() => order.push('earlier-reaction'));
+        setImmediate(() => emitter.emit('ready'));
+        await ready;
+        order.push('module-continuation');
+        console.log(order.join(','));
+    "#;
+
+    assert_eq!(eval_console(source), "earlier-reaction,module-continuation");
+}
+
+#[test]
+fn uncaught_pending_tla_rejection_fails_module_evaluation() {
+    let source = r#"
+        const { once, EventEmitter } = require('node:events');
+        const emitter = new EventEmitter();
+        setImmediate(() => emitter.emit('error', new Error('uncaught-tla')));
+        await once(emitter, 'ready');
+        console.log('must-not-run');
+    "#;
+    let mut engine = HybridRouter::default();
+    let error = engine
+        .eval(source)
+        .expect_err("an uncaught top-level await rejection must fail evaluation");
+    assert!(
+        error.to_string().contains("uncaught exception"),
+        "unexpected top-level await rejection: {error}"
+    );
+}
+
+#[test]
+fn pending_tla_without_event_loop_work_fails_closed() {
+    let source = r#"
+        const { once, EventEmitter } = require('node:events');
+        const emitter = new EventEmitter();
+        await once(emitter, 'never');
+    "#;
+    let mut engine = HybridRouter::default();
+    let error = engine
+        .eval(source)
+        .expect_err("an unresolvable top-level await must not report successful evaluation");
+    assert!(
+        error
+            .to_string()
+            .contains("pending module Promise with no remaining event-loop work"),
+        "unexpected top-level await error: {error}"
     );
 }
 

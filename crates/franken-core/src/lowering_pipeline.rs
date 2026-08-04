@@ -7,8 +7,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::ast::{
     ArrowBody, AssignmentOperator, BinaryOperator, BindingPattern, ExportKind, Expression,
-    ImportClause, MethodDefinition, MethodKind, ParseGoal, SourceSpan, Statement, UnaryOperator,
-    VariableDeclarationKind,
+    FunctionParam, ImportClause, MethodDefinition, MethodKind, ObjectPatternProperty, ParseGoal,
+    SourceSpan, Statement, UnaryOperator, UpdateOperator, VariableDeclarationKind,
 };
 use crate::flow_lattice::{
     Clearance, DeclassificationObligation, FlowCheckResult as LatticeFlowCheckResult,
@@ -21,8 +21,11 @@ use crate::ir_contract::{
     IR_ACCESSOR_SET_PREFIX, IR_SUPER_CONSTRUCTOR_PROPERTY, IR_SUPER_PROTOTYPE_PROPERTY, Ir0Module,
     Ir1Literal, Ir1Module, Ir1Op, Ir1PropertyKey, Ir2Module, Ir2Op, Ir3FunctionDesc,
     Ir3Instruction, Ir3Module, IrError, IrLevel, IteratorCloseReason, Reg, RegRange,
-    ResolvedBinding, ScopeId, ScopeKind, ScopeNode, verify_ir1_source, verify_ir3_specialization,
+    ResolvedBinding, ScopeId, ScopeKind, ScopeNode, verify_ir1_generator_boundaries,
+    verify_ir1_source, verify_ir2_generator_boundaries, verify_ir3_specialization,
+    verify_schema_version,
 };
+use crate::js_string::JsString;
 use crate::parser::{
     PARSER_DIAGNOSTIC_HASH_ALGORITHM, PARSER_DIAGNOSTIC_HASH_PREFIX,
     PARSER_DIAGNOSTIC_TAXONOMY_VERSION, ParseDiagnosticCategory, ParseDiagnosticSeverity,
@@ -37,6 +40,30 @@ const COMPONENT: &str = "lowering_pipeline";
 const IFC_RUNTIME_GUARD_CAPABILITY: &str = "ifc.check_flow";
 const IFC_FLOW_PROOF_ERROR_CODE: &str = "FE-LOWER-IFC-0001";
 const IFC_FLOW_PROOF_SCHEMA_VERSION: &str = "frankenengine.ir2_flow_proof_witness.v1";
+const LEXICAL_CAPTURE_CELL_PREFIX: &str = "\0lexical-capture\0";
+pub(crate) const CLASS_EXPRESSION_CONSTRUCTOR_SELF_CAPTURE_PREFIX: &str =
+    "\0class-expression-constructor-self\0";
+const CLASS_EXPRESSION_METHOD_SELF_CAPTURE_PREFIX: &str = "\0class-expression-method-self\0";
+pub(crate) const FUNCTION_EXPRESSION_SELF_CAPTURE_PREFIX: &str = "\0function-expression-self\0";
+const ARROW_LEXICAL_THIS_CAPTURE: &str = "\0arrow-lexical-this\0";
+const ARROW_LEXICAL_NEW_TARGET_CAPTURE: &str = "\0arrow-lexical-new-target\0";
+const ARROW_LEXICAL_SUPER_CAPTURE: &str = "\0arrow-lexical-super\0";
+
+fn lexical_capture_cell_name(name: &str, binding_id: BindingId) -> String {
+    format!("{LEXICAL_CAPTURE_CELL_PREFIX}{binding_id}\0{name}")
+}
+
+fn class_expression_constructor_self_capture_name(name: &str, origin_id: BindingId) -> String {
+    format!("{CLASS_EXPRESSION_CONSTRUCTOR_SELF_CAPTURE_PREFIX}{origin_id}\0{name}")
+}
+
+fn class_expression_method_self_capture_name(name: &str, origin_id: BindingId) -> String {
+    format!("{CLASS_EXPRESSION_METHOD_SELF_CAPTURE_PREFIX}{origin_id}\0{name}")
+}
+
+fn function_expression_self_capture_name(name: &str, origin_id: BindingId) -> String {
+    format!("{FUNCTION_EXPRESSION_SELF_CAPTURE_PREFIX}{origin_id}\0{name}")
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LoweringContext {
@@ -113,7 +140,7 @@ pub struct LoweringPipelineOutput {
     pub events: Vec<LoweringEvent>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 struct FlowInferenceMetrics {
     total_flow_ops: u64,
     static_proven_ops: u64,
@@ -121,12 +148,34 @@ struct FlowInferenceMetrics {
 }
 
 impl FlowInferenceMetrics {
+    fn include(&mut self, other: Self) {
+        self.total_flow_ops = self.total_flow_ops.saturating_add(other.total_flow_ops);
+        self.static_proven_ops = self
+            .static_proven_ops
+            .saturating_add(other.static_proven_ops);
+        self.runtime_check_ops = self
+            .runtime_check_ops
+            .saturating_add(other.runtime_check_ops);
+    }
+
     fn static_coverage_millionths(self) -> u64 {
         if self.total_flow_ops == 0 {
             return 0;
         }
         (self.static_proven_ops.saturating_mul(1_000_000)) / self.total_flow_ops
     }
+}
+
+/// One effect-classified operation nested inside a function body. `op_index`
+/// remains the enclosing top-level IR2 operation index so existing authority
+/// consumers can resolve it to the function declaration/expression site;
+/// `body_path` supplies a deterministic internal identity for repeated nested
+/// flows without changing the v1 artifact schema.
+#[derive(Debug, Clone)]
+struct NestedIr2AnalysisSite {
+    op_index: usize,
+    body_path: Vec<usize>,
+    op: Ir2Op,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -157,6 +206,10 @@ impl Ir2FlowProofArtifact {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct FlowProofArtifactEntry {
     pub op_index: u64,
+    /// Deterministic path within the enclosing function operation. Empty for
+    /// top-level operations and legacy v1 artifacts.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub body_path: Vec<u64>,
     pub source_label: Label,
     pub sink_clearance: Label,
     pub capability: Option<String>,
@@ -166,6 +219,8 @@ pub struct FlowProofArtifactEntry {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct DeniedFlowArtifactEntry {
     pub op_index: u64,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub body_path: Vec<u64>,
     pub source_label: Label,
     pub sink_clearance: Label,
     pub capability: Option<String>,
@@ -176,6 +231,8 @@ pub struct DeniedFlowArtifactEntry {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct RequiredDeclassificationArtifactEntry {
     pub op_index: u64,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub body_path: Vec<u64>,
     pub source_label: Label,
     pub sink_clearance: Label,
     pub capability: Option<String>,
@@ -201,6 +258,8 @@ const REQUIRED_DECLASSIFICATION_REPLAY_COMMAND_HINT: &str =
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct RuntimeCheckpointArtifactEntry {
     pub op_index: u64,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub body_path: Vec<u64>,
     pub source_label: Label,
     pub sink_clearance: Label,
     pub capability: Option<String>,
@@ -445,6 +504,7 @@ pub fn validate_ir0_static_semantics(ir0: &Ir0Module) -> SemanticValidationResul
             | Statement::For(_)
             | Statement::ForIn(_)
             | Statement::ForOf(_)
+            | Statement::Labeled(_)
             | Statement::While(_)
             | Statement::DoWhile(_)
             | Statement::Return(_)
@@ -464,9 +524,1031 @@ pub fn validate_ir0_static_semantics(ir0: &Ir0Module) -> SemanticValidationResul
     result
 }
 
+// ---------------------------------------------------------------------------
+// Node `path` builtin recognition (bd-tu0c3) — core mirror of the
+// franken-engine lowering interception. `require('path')` bindings that are
+// actually USED as a recognized pure-compute `path` builtin (a member call
+// like `path.join(...)` / `path.posix.join(...)` / `path.win32.join(...)` or a
+// property read like `path.sep`) are recorded as NUL-sentinel aliases; the
+// recognized declaration is elided, member calls lower to `builtin:Path*`
+// hostcalls and constant property reads lower to string literals. A
+// bare/unused `const path = require('path')` keeps core's existing behavior
+// (a `module:require` hostcall). Keep in lockstep with
+// `franken-engine/src/lowering_pipeline.rs`.
+// ---------------------------------------------------------------------------
+
+/// bd-tu0c3: true when `specifier` names the Node path module — `path` or
+/// `node:path`.
+fn is_path_module_specifier(specifier: &str) -> bool {
+    specifier == "path" || specifier == "node:path"
+}
+
+/// bd-tu0c3: sentinel key recording that `name` is bound to the path module
+/// via `const <name> = require('path')` AND used as a recognized `path`
+/// builtin. Stored in the lowering `binding_lookup`; the leading NUL cannot
+/// occur in a JS identifier so the sentinel never collides with or shadows a
+/// real binding.
+fn path_module_alias_sentinel(name: &str) -> String {
+    format!("\0pathmod\0{name}")
+}
+
+/// bd-tu0c3: true when `expr` is exactly `require('path')` /
+/// `require('node:path')` with an unshadowed `require` — the initializer shape
+/// that aliases the path module in `const path = require('path')`.
+fn is_require_path_module_initializer(
+    expr: &Expression,
+    binding_lookup: &BTreeMap<String, BindingId>,
+) -> bool {
+    let Expression::Call { callee, arguments } = expr else {
+        return false;
+    };
+    if !matches!(callee.as_ref(), Expression::Identifier(name)
+        if name == "require" && !binding_lookup.contains_key(name.as_str()))
+    {
+        return false;
+    }
+    matches!(
+        arguments.as_slice(),
+        [spec] if well_formed_string_literal(spec).is_some_and(is_path_module_specifier)
+    )
+}
+
+/// Which Node `path` namespace a recognized receiver selects (bd-tu0c3). The
+/// default `path` object on linux IS the posix implementation, so both the
+/// bare module receiver and `.posix` map to [`PathModuleNamespace::Posix`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PathModuleNamespace {
+    Posix,
+    Win32,
+}
+
+/// bd-tu0c3: capability tag for a recognized `path` method in `namespace`.
+/// Single source of truth shared by the usage-lookahead scan and the call-site
+/// recognizer. The win32 surface is deliberately the small separator-sensitive
+/// subset (join/basename/isAbsolute).
+fn path_method_capability(namespace: PathModuleNamespace, method: &str) -> Option<&'static str> {
+    match namespace {
+        PathModuleNamespace::Posix => match method {
+            "join" => Some("builtin:PathJoin"),
+            "basename" => Some("builtin:PathBasename"),
+            "dirname" => Some("builtin:PathDirname"),
+            "extname" => Some("builtin:PathExtname"),
+            "normalize" => Some("builtin:PathNormalize"),
+            "resolve" => Some("builtin:PathResolve"),
+            "relative" => Some("builtin:PathRelative"),
+            "isAbsolute" => Some("builtin:PathIsAbsolute"),
+            "parse" => Some("builtin:PathParse"),
+            "format" => Some("builtin:PathFormat"),
+            _ => None,
+        },
+        PathModuleNamespace::Win32 => match method {
+            "join" => Some("builtin:PathWin32Join"),
+            "basename" => Some("builtin:PathWin32Basename"),
+            "isAbsolute" => Some("builtin:PathWin32IsAbsolute"),
+            _ => None,
+        },
+    }
+}
+
+/// bd-tu0c3: the constant value of a recognized `path` namespace property read
+/// (`sep` / `delimiter`), per Node.
+fn path_namespace_property_constant(
+    namespace: PathModuleNamespace,
+    property: &str,
+) -> Option<&'static str> {
+    match (namespace, property) {
+        (PathModuleNamespace::Posix, "sep") => Some("/"),
+        (PathModuleNamespace::Posix, "delimiter") => Some(":"),
+        (PathModuleNamespace::Win32, "sep") => Some("\\"),
+        (PathModuleNamespace::Win32, "delimiter") => Some(";"),
+        _ => None,
+    }
+}
+
+/// bd-tu0c3: resolve a member-expression receiver to a path-module namespace,
+/// parameterized over the module-object predicate so the pre-scan (candidate
+/// alias names) and the lowering (recorded sentinels) share one shape:
+///   * `<module>`         -> Posix (linux default `path` IS posix)
+///   * `<module>.posix`   -> Posix
+///   * `<module>.win32`   -> Win32
+fn path_receiver_namespace_with<F: Fn(&Expression) -> bool>(
+    object: &Expression,
+    is_module_object: &F,
+) -> Option<PathModuleNamespace> {
+    if is_module_object(object) {
+        return Some(PathModuleNamespace::Posix);
+    }
+    if let Expression::Member {
+        object: inner,
+        property,
+        computed: false,
+    } = object
+        && is_module_object(inner)
+        && let Some(ns) = well_formed_static_name(property)
+    {
+        return match ns {
+            "posix" => Some(PathModuleNamespace::Posix),
+            "win32" => Some(PathModuleNamespace::Win32),
+            _ => None,
+        };
+    }
+    None
+}
+
+/// bd-tu0c3: true when `expr` IS the path module object at lowering time — a
+/// sentinel-recorded require-binding alias or the inline `require('path')`
+/// call.
+fn is_path_module_object(expr: &Expression, binding_lookup: &BTreeMap<String, BindingId>) -> bool {
+    match expr {
+        Expression::Identifier(alias) => {
+            binding_lookup.contains_key(&path_module_alias_sentinel(alias))
+        }
+        Expression::Call { callee, arguments } => {
+            matches!(callee.as_ref(), Expression::Identifier(name)
+                if name == "require" && !binding_lookup.contains_key(name.as_str()))
+                && matches!(
+                    arguments.as_slice(),
+                    [spec] if well_formed_string_literal(spec).is_some_and(is_path_module_specifier)
+                )
+        }
+        _ => false,
+    }
+}
+
+/// bd-tu0c3: recognize a `path` builtin member call and return its
+/// `builtin:Path*` capability. Purely syntactic — there is no real path module
+/// heap object.
+fn path_builtin_call_capability(
+    callee: &Expression,
+    binding_lookup: &BTreeMap<String, BindingId>,
+) -> Option<&'static str> {
+    let Expression::Member {
+        object,
+        property,
+        computed: false,
+    } = callee
+    else {
+        return None;
+    };
+    let namespace =
+        path_receiver_namespace_with(object, &|expr| is_path_module_object(expr, binding_lookup))?;
+    let method = well_formed_static_name(property)?;
+    path_method_capability(namespace, method)
+}
+
+/// bd-tu0c3: recognize a `path` constant property READ (`path.sep`,
+/// `path.posix.delimiter`, `path.win32.sep`, …) and return the string constant
+/// it lowers to.
+fn path_member_constant(
+    object: &Expression,
+    property: &Expression,
+    computed: bool,
+    binding_lookup: &BTreeMap<String, BindingId>,
+) -> Option<&'static str> {
+    let namespace =
+        path_receiver_namespace_with(object, &|expr| is_path_module_object(expr, binding_lookup))?;
+    let prop = match computed {
+        false => well_formed_static_name(property)?,
+        true => well_formed_string_literal(property)?,
+    };
+    path_namespace_property_constant(namespace, prop)
+}
+
+/// bd-tu0c3: scan-time twin of [`path_builtin_call_capability`]'s receiver
+/// check — during the pre-scan the sentinels are not recorded yet, so the
+/// module-object predicate is membership in the candidate alias-name set.
+fn is_path_alias_method_callee(callee: &Expression, alias_names: &BTreeSet<String>) -> bool {
+    let Expression::Member {
+        object,
+        property,
+        computed: false,
+    } = callee
+    else {
+        return false;
+    };
+    let Some(namespace) = path_receiver_namespace_with(
+        object,
+        &|expr| matches!(expr, Expression::Identifier(name) if alias_names.contains(name)),
+    ) else {
+        return false;
+    };
+    well_formed_static_name(property)
+        .is_some_and(|method| path_method_capability(namespace, method).is_some())
+}
+
+/// bd-tu0c3: scan-time twin of [`path_member_constant`]: true when `expr` is a
+/// recognized constant property read on one of the candidate alias names.
+fn is_path_alias_property_read(expr: &Expression, alias_names: &BTreeSet<String>) -> bool {
+    let Expression::Member {
+        object,
+        property,
+        computed: false,
+    } = expr
+    else {
+        return false;
+    };
+    let Some(namespace) = path_receiver_namespace_with(
+        object,
+        &|inner| matches!(inner, Expression::Identifier(name) if alias_names.contains(name)),
+    ) else {
+        return false;
+    };
+    well_formed_static_name(property)
+        .is_some_and(|property| path_namespace_property_constant(namespace, property).is_some())
+}
+
+/// bd-tu0c3: recursively scan `expr` for a call whose callee satisfies
+/// `is_target`. Function/arrow/class bodies and object literals are opaque
+/// (fail-closed): a usage buried inside one is conservatively NOT detected, so
+/// the corresponding alias keeps its existing behavior.
+fn expr_contains_matching_call<F: Fn(&Expression) -> bool>(
+    expr: &Expression,
+    is_target: &F,
+) -> bool {
+    match expr {
+        Expression::Call { callee, arguments } | Expression::OptionalCall { callee, arguments } => {
+            is_target(callee)
+                || expr_contains_matching_call(callee, is_target)
+                || arguments
+                    .iter()
+                    .any(|a| expr_contains_matching_call(a, is_target))
+        }
+        Expression::New { callee, arguments } => {
+            expr_contains_matching_call(callee, is_target)
+                || arguments
+                    .iter()
+                    .any(|a| expr_contains_matching_call(a, is_target))
+        }
+        Expression::Member {
+            object, property, ..
+        }
+        | Expression::OptionalMember {
+            object, property, ..
+        } => {
+            expr_contains_matching_call(object, is_target)
+                || expr_contains_matching_call(property, is_target)
+        }
+        Expression::Binary { left, right, .. } | Expression::Assignment { left, right, .. } => {
+            expr_contains_matching_call(left, is_target)
+                || expr_contains_matching_call(right, is_target)
+        }
+        Expression::Unary { argument, .. }
+        | Expression::Update { argument, .. }
+        | Expression::Await(argument)
+        | Expression::SpreadElement(argument) => expr_contains_matching_call(argument, is_target),
+        Expression::Conditional {
+            test,
+            consequent,
+            alternate,
+        } => {
+            expr_contains_matching_call(test, is_target)
+                || expr_contains_matching_call(consequent, is_target)
+                || expr_contains_matching_call(alternate, is_target)
+        }
+        Expression::Yield {
+            argument: Some(argument),
+            ..
+        } => expr_contains_matching_call(argument, is_target),
+        Expression::ArrayLiteral(elements) => elements
+            .iter()
+            .flatten()
+            .any(|e| expr_contains_matching_call(e, is_target)),
+        Expression::TemplateLiteral { expressions, .. } => expressions
+            .iter()
+            .any(|e| expr_contains_matching_call(e, is_target)),
+        _ => false,
+    }
+}
+
+/// bd-tu0c3: recursively scan `expr` for a member READ satisfying `is_target`
+/// — the property-read sibling of [`expr_contains_matching_call`], same
+/// traversal, same fail-closed opacity.
+fn expr_contains_matching_member<F: Fn(&Expression) -> bool>(
+    expr: &Expression,
+    is_target: &F,
+) -> bool {
+    match expr {
+        Expression::Member {
+            object, property, ..
+        }
+        | Expression::OptionalMember {
+            object, property, ..
+        } => {
+            is_target(expr)
+                || expr_contains_matching_member(object, is_target)
+                || expr_contains_matching_member(property, is_target)
+        }
+        Expression::Call { callee, arguments } | Expression::OptionalCall { callee, arguments } => {
+            expr_contains_matching_member(callee, is_target)
+                || arguments
+                    .iter()
+                    .any(|a| expr_contains_matching_member(a, is_target))
+        }
+        Expression::New { callee, arguments } => {
+            expr_contains_matching_member(callee, is_target)
+                || arguments
+                    .iter()
+                    .any(|a| expr_contains_matching_member(a, is_target))
+        }
+        Expression::Binary { left, right, .. } | Expression::Assignment { left, right, .. } => {
+            expr_contains_matching_member(left, is_target)
+                || expr_contains_matching_member(right, is_target)
+        }
+        Expression::Unary { argument, .. }
+        | Expression::Update { argument, .. }
+        | Expression::Await(argument)
+        | Expression::SpreadElement(argument) => expr_contains_matching_member(argument, is_target),
+        Expression::Conditional {
+            test,
+            consequent,
+            alternate,
+        } => {
+            expr_contains_matching_member(test, is_target)
+                || expr_contains_matching_member(consequent, is_target)
+                || expr_contains_matching_member(alternate, is_target)
+        }
+        Expression::Yield {
+            argument: Some(argument),
+            ..
+        } => expr_contains_matching_member(argument, is_target),
+        Expression::ArrayLiteral(elements) => elements
+            .iter()
+            .flatten()
+            .any(|e| expr_contains_matching_member(e, is_target)),
+        Expression::TemplateLiteral { expressions, .. } => expressions
+            .iter()
+            .any(|e| expr_contains_matching_member(e, is_target)),
+        _ => false,
+    }
+}
+
+/// bd-tu0c3: true when `expr` contains a recognized path usage on one of
+/// `alias_names` — either a recognized method CALL (`<alias>.join(...)`) or a
+/// recognized constant property READ (`<alias>.sep`).
+fn expr_contains_path_alias_usage(expr: &Expression, alias_names: &BTreeSet<String>) -> bool {
+    expr_contains_matching_call(expr, &|callee| {
+        is_path_alias_method_callee(callee, alias_names)
+    }) || expr_contains_matching_member(expr, &|member| {
+        is_path_alias_property_read(member, alias_names)
+    })
+}
+
+/// bd-tu0c3: statement-level usage scan for the path alias gate. Recurses
+/// through control-flow statements (blocks, if/else, loops, switch,
+/// try/catch/finally, return/throw); function and class bodies remain opaque —
+/// a usage only inside one is conservatively not detected (fail-closed).
+fn path_statement_contains_usage<F: Fn(&Expression) -> bool>(stmt: &Statement, uses: &F) -> bool {
+    match stmt {
+        Statement::Expression(es) => uses(&es.expression),
+        Statement::VariableDeclaration(vd) => vd
+            .declarations
+            .iter()
+            .any(|d| d.initializer.as_ref().is_some_and(uses)),
+        Statement::Block(block) => block
+            .body
+            .iter()
+            .any(|inner| path_statement_contains_usage(inner, uses)),
+        Statement::If(if_stmt) => {
+            uses(&if_stmt.condition)
+                || path_statement_contains_usage(&if_stmt.consequent, uses)
+                || if_stmt
+                    .alternate
+                    .as_deref()
+                    .is_some_and(|alt| path_statement_contains_usage(alt, uses))
+        }
+        Statement::For(for_stmt) => {
+            for_stmt
+                .init
+                .as_deref()
+                .is_some_and(|init| path_statement_contains_usage(init, uses))
+                || for_stmt.condition.as_ref().is_some_and(uses)
+                || for_stmt.update.as_ref().is_some_and(uses)
+                || path_statement_contains_usage(&for_stmt.body, uses)
+        }
+        Statement::ForIn(for_in) => {
+            for_in.pre_loop_initializer.as_ref().is_some_and(uses)
+                || uses(&for_in.object)
+                || path_statement_contains_usage(&for_in.body, uses)
+        }
+        Statement::ForOf(for_of) => {
+            uses(&for_of.iterable) || path_statement_contains_usage(&for_of.body, uses)
+        }
+        Statement::Labeled(labeled) => path_statement_contains_usage(&labeled.body, uses),
+        Statement::While(while_stmt) => {
+            uses(&while_stmt.condition) || path_statement_contains_usage(&while_stmt.body, uses)
+        }
+        Statement::DoWhile(do_while) => {
+            uses(&do_while.condition) || path_statement_contains_usage(&do_while.body, uses)
+        }
+        Statement::Return(ret) => ret.argument.as_ref().is_some_and(uses),
+        Statement::Throw(throw_stmt) => uses(&throw_stmt.argument),
+        Statement::TryCatch(try_stmt) => {
+            try_stmt
+                .block
+                .body
+                .iter()
+                .any(|inner| path_statement_contains_usage(inner, uses))
+                || try_stmt.handler.as_ref().is_some_and(|handler| {
+                    handler
+                        .body
+                        .body
+                        .iter()
+                        .any(|inner| path_statement_contains_usage(inner, uses))
+                })
+                || try_stmt.finalizer.as_ref().is_some_and(|finalizer| {
+                    finalizer
+                        .body
+                        .iter()
+                        .any(|inner| path_statement_contains_usage(inner, uses))
+                })
+        }
+        Statement::Switch(switch_stmt) => {
+            uses(&switch_stmt.discriminant)
+                || switch_stmt.cases.iter().any(|case| {
+                    case.test.as_ref().is_some_and(uses)
+                        || case
+                            .consequent
+                            .iter()
+                            .any(|inner| path_statement_contains_usage(inner, uses))
+                })
+        }
+        // Function/class declarations stay opaque (fail-closed); imports,
+        // exports, break and continue carry no scannable expression.
+        _ => false,
+    }
+}
+
+/// bd-tu0c3: compute the set of identifier names that are BOTH bound via
+/// `const/let/var <name> = require('path')` / `require('node:path')` at the
+/// unit root AND used as a recognized `path` builtin (method call or constant
+/// property read) somewhere reachable by the fail-closed statement scan.
+fn confirmed_path_module_aliases(
+    body: &[Statement],
+    binding_lookup: &BTreeMap<String, BindingId>,
+) -> BTreeSet<String> {
+    let mut candidates = BTreeSet::new();
+    for stmt in body {
+        if let Statement::VariableDeclaration(vd) = stmt {
+            for d in &vd.declarations {
+                if let (BindingPattern::Identifier(name), Some(init)) = (&d.pattern, &d.initializer)
+                    && is_require_path_module_initializer(init, binding_lookup)
+                {
+                    candidates.insert(name.clone());
+                }
+            }
+        }
+    }
+    if candidates.is_empty() {
+        return candidates;
+    }
+
+    let mut used = BTreeSet::new();
+    for name in &candidates {
+        let single: BTreeSet<String> = std::iter::once(name.clone()).collect();
+        if body.iter().any(|stmt| {
+            path_statement_contains_usage(stmt, &|e| expr_contains_path_alias_usage(e, &single))
+        }) {
+            used.insert(name.clone());
+        }
+    }
+    used
+}
+
+// ---------------------------------------------------------------------------
+// Node `querystring` + `os` builtin recognition (bd-qmy52) — core mirror of
+// the franken-engine lowering interception. Two further pure-compute module
+// families following the `path` template (bd-tu0c3): usage-confirmed
+// `require('querystring')` / `require('os')` aliases are recorded as
+// NUL-sentinels and elided; member calls lower to `builtin:Querystring*` /
+// `builtin:Os*` hostcalls, `os.EOL`/`os.devNull` property reads lower to
+// string literals, and `os.constants` lowers to a 0-arg `builtin:OsConstants`
+// HostCall. Bare/unused aliases keep core's existing `module:require`
+// behavior. Keep in lockstep with `franken-engine/src/lowering_pipeline.rs`.
+// ---------------------------------------------------------------------------
+
+/// bd-qmy52: true when `specifier` names the Node querystring module —
+/// `querystring` or `node:querystring`.
+fn is_querystring_module_specifier(specifier: &str) -> bool {
+    specifier == "querystring" || specifier == "node:querystring"
+}
+
+/// bd-qmy52: sentinel key recording that `name` is bound to the querystring
+/// module via `const <name> = require('querystring')` AND used as a
+/// recognized querystring builtin. Mirror of [`path_module_alias_sentinel`].
+fn querystring_module_alias_sentinel(name: &str) -> String {
+    format!("\0qsmod\0{name}")
+}
+
+/// bd-qmy52: true when `expr` is exactly `require('querystring')` /
+/// `require('node:querystring')` with an unshadowed `require`.
+fn is_require_querystring_module_initializer(
+    expr: &Expression,
+    binding_lookup: &BTreeMap<String, BindingId>,
+) -> bool {
+    let Expression::Call { callee, arguments } = expr else {
+        return false;
+    };
+    if !matches!(callee.as_ref(), Expression::Identifier(name)
+        if name == "require" && !binding_lookup.contains_key(name.as_str()))
+    {
+        return false;
+    }
+    matches!(
+        arguments.as_slice(),
+        [spec] if well_formed_string_literal(spec).is_some_and(is_querystring_module_specifier)
+    )
+}
+
+/// bd-qmy52: capability tag for a recognized `querystring` method. Single
+/// source of truth shared by the usage-lookahead scan and the call-site
+/// recognizer. `decode`/`encode` are Node's documented aliases of
+/// `parse`/`stringify`.
+fn querystring_method_capability(method: &str) -> Option<&'static str> {
+    match method {
+        "parse" | "decode" => Some("builtin:QuerystringParse"),
+        "stringify" | "encode" => Some("builtin:QuerystringStringify"),
+        "escape" => Some("builtin:QuerystringEscape"),
+        "unescape" => Some("builtin:QuerystringUnescape"),
+        _ => None,
+    }
+}
+
+/// bd-qmy52: true when `expr` IS the querystring module object at lowering
+/// time — a sentinel-recorded require-binding alias or the inline
+/// `require('querystring')` call.
+fn is_querystring_module_object(
+    expr: &Expression,
+    binding_lookup: &BTreeMap<String, BindingId>,
+) -> bool {
+    match expr {
+        Expression::Identifier(alias) => {
+            binding_lookup.contains_key(&querystring_module_alias_sentinel(alias))
+        }
+        Expression::Call { callee, arguments } => {
+            matches!(callee.as_ref(), Expression::Identifier(name)
+                if name == "require" && !binding_lookup.contains_key(name.as_str()))
+                && matches!(
+                    arguments.as_slice(),
+                    [spec] if well_formed_string_literal(spec)
+                        .is_some_and(is_querystring_module_specifier)
+                )
+        }
+        _ => false,
+    }
+}
+
+/// bd-qmy52: recognize a `querystring` builtin member call and return its
+/// `builtin:Querystring*` capability. Purely syntactic; no sub-namespaces.
+fn querystring_builtin_call_capability(
+    callee: &Expression,
+    binding_lookup: &BTreeMap<String, BindingId>,
+) -> Option<&'static str> {
+    let Expression::Member {
+        object,
+        property,
+        computed: false,
+    } = callee
+    else {
+        return None;
+    };
+    if !is_querystring_module_object(object, binding_lookup) {
+        return None;
+    }
+    let method = well_formed_static_name(property)?;
+    querystring_method_capability(method)
+}
+
+/// bd-qmy52: scan-time twin of [`querystring_builtin_call_capability`]'s
+/// receiver check — during the pre-scan the sentinels are not recorded yet, so
+/// the module-object predicate is membership in the candidate alias-name set.
+fn is_querystring_alias_method_callee(callee: &Expression, alias_names: &BTreeSet<String>) -> bool {
+    let Expression::Member {
+        object,
+        property,
+        computed: false,
+    } = callee
+    else {
+        return false;
+    };
+    if !matches!(object.as_ref(), Expression::Identifier(name) if alias_names.contains(name)) {
+        return false;
+    }
+    well_formed_static_name(property)
+        .is_some_and(|method| querystring_method_capability(method).is_some())
+}
+
+/// bd-qmy52: compute the set of identifier names that are BOTH bound via
+/// `const/let/var <name> = require('querystring')` at the unit root AND used
+/// as a recognized querystring builtin somewhere reachable by the fail-closed
+/// statement scan. Mirror of [`confirmed_path_module_aliases`].
+fn confirmed_querystring_module_aliases(
+    body: &[Statement],
+    binding_lookup: &BTreeMap<String, BindingId>,
+) -> BTreeSet<String> {
+    let mut candidates = BTreeSet::new();
+    for stmt in body {
+        if let Statement::VariableDeclaration(vd) = stmt {
+            for d in &vd.declarations {
+                if let (BindingPattern::Identifier(name), Some(init)) = (&d.pattern, &d.initializer)
+                    && is_require_querystring_module_initializer(init, binding_lookup)
+                {
+                    candidates.insert(name.clone());
+                }
+            }
+        }
+    }
+    if candidates.is_empty() {
+        return candidates;
+    }
+
+    let mut used = BTreeSet::new();
+    for name in &candidates {
+        let single: BTreeSet<String> = std::iter::once(name.clone()).collect();
+        if body.iter().any(|stmt| {
+            path_statement_contains_usage(stmt, &|e| {
+                expr_contains_matching_call(e, &|callee| {
+                    is_querystring_alias_method_callee(callee, &single)
+                })
+            })
+        }) {
+            used.insert(name.clone());
+        }
+    }
+    used
+}
+
+/// bd-qmy52: true when `specifier` names the Node os module — `os` or
+/// `node:os`.
+fn is_os_module_specifier(specifier: &str) -> bool {
+    specifier == "os" || specifier == "node:os"
+}
+
+/// bd-qmy52: sentinel key recording that `name` is bound to the os module via
+/// `const <name> = require('os')` AND used as a recognized os builtin. Mirror
+/// of [`path_module_alias_sentinel`].
+fn os_module_alias_sentinel(name: &str) -> String {
+    format!("\0osmod\0{name}")
+}
+
+/// bd-qmy52: true when `expr` is exactly `require('os')` /
+/// `require('node:os')` with an unshadowed `require`.
+fn is_require_os_module_initializer(
+    expr: &Expression,
+    binding_lookup: &BTreeMap<String, BindingId>,
+) -> bool {
+    let Expression::Call { callee, arguments } = expr else {
+        return false;
+    };
+    if !matches!(callee.as_ref(), Expression::Identifier(name)
+        if name == "require" && !binding_lookup.contains_key(name.as_str()))
+    {
+        return false;
+    }
+    matches!(
+        arguments.as_slice(),
+        [spec] if well_formed_string_literal(spec).is_some_and(is_os_module_specifier)
+    )
+}
+
+/// bd-qmy52: capability tag for a recognized `os` method. Single source of
+/// truth shared by the usage-lookahead scan and the call-site recognizer. All
+/// pure-compute: the interpreter dispatch returns FIXED engine-contained
+/// values (documented at the dispatch arms).
+fn os_method_capability(method: &str) -> Option<&'static str> {
+    match method {
+        "platform" => Some("builtin:OsPlatform"),
+        "arch" => Some("builtin:OsArch"),
+        "type" => Some("builtin:OsType"),
+        "release" => Some("builtin:OsRelease"),
+        "version" => Some("builtin:OsVersion"),
+        "homedir" => Some("builtin:OsHomedir"),
+        "tmpdir" => Some("builtin:OsTmpdir"),
+        "hostname" => Some("builtin:OsHostname"),
+        "uptime" => Some("builtin:OsUptime"),
+        "totalmem" => Some("builtin:OsTotalmem"),
+        "freemem" => Some("builtin:OsFreemem"),
+        "loadavg" => Some("builtin:OsLoadavg"),
+        "cpus" => Some("builtin:OsCpus"),
+        "networkInterfaces" => Some("builtin:OsNetworkInterfaces"),
+        "userInfo" => Some("builtin:OsUserInfo"),
+        "endianness" => Some("builtin:OsEndianness"),
+        "availableParallelism" => Some("builtin:OsAvailableParallelism"),
+        "machine" => Some("builtin:OsMachine"),
+        "getPriority" => Some("builtin:OsGetPriority"),
+        "setPriority" => Some("builtin:OsSetPriority"),
+        _ => None,
+    }
+}
+
+/// bd-qmy52: what a recognized `os` property READ lowers to.
+enum OsMemberReadLowering {
+    /// Deterministic constant (`os.EOL`, `os.devNull`) — a string literal.
+    StringConstant(&'static str),
+    /// `os.constants` — a 0-arg `builtin:OsConstants` HostCall allocating the
+    /// nested `{ signals, errno, priority }` object.
+    ConstantsHostcall,
+}
+
+/// bd-qmy52: the lowering of a recognized `os` property name, per Node
+/// (linux). Shared by the scan and the member arm so the confirmed-alias gate
+/// can never diverge from what the lowering rewrites.
+fn os_property_read_lowering(property: &str) -> Option<OsMemberReadLowering> {
+    match property {
+        "EOL" => Some(OsMemberReadLowering::StringConstant("\n")),
+        "devNull" => Some(OsMemberReadLowering::StringConstant("/dev/null")),
+        "constants" => Some(OsMemberReadLowering::ConstantsHostcall),
+        _ => None,
+    }
+}
+
+/// bd-qmy52: true when `expr` IS the os module object at lowering time — a
+/// sentinel-recorded require-binding alias or the inline `require('os')` call.
+fn is_os_module_object(expr: &Expression, binding_lookup: &BTreeMap<String, BindingId>) -> bool {
+    match expr {
+        Expression::Identifier(alias) => {
+            binding_lookup.contains_key(&os_module_alias_sentinel(alias))
+        }
+        Expression::Call { callee, arguments } => {
+            matches!(callee.as_ref(), Expression::Identifier(name)
+                if name == "require" && !binding_lookup.contains_key(name.as_str()))
+                && matches!(
+                    arguments.as_slice(),
+                    [spec] if well_formed_string_literal(spec).is_some_and(is_os_module_specifier)
+                )
+        }
+        _ => false,
+    }
+}
+
+/// bd-qmy52: recognize an `os` builtin member call and return its
+/// `builtin:Os*` capability. Purely syntactic; no sub-namespaces.
+fn os_builtin_call_capability(
+    callee: &Expression,
+    binding_lookup: &BTreeMap<String, BindingId>,
+) -> Option<&'static str> {
+    let Expression::Member {
+        object,
+        property,
+        computed: false,
+    } = callee
+    else {
+        return None;
+    };
+    if !is_os_module_object(object, binding_lookup) {
+        return None;
+    }
+    let method = well_formed_static_name(property)?;
+    os_method_capability(method)
+}
+
+/// Recognize the standard static methods that have real core interpreter
+/// dispatch arms. Core deliberately has no heap-backed global-object registry,
+/// so an unshadowed `Object.keys(...)`-style call must become its canonical
+/// `builtin:*` hostcall during lowering. Keep this list limited to executable
+/// arms in `baseline_interpreter.rs`; the numeric stdlib bridge advertises a
+/// wider aspirational surface that is not callable yet (bd-zql4d).
+const STATIC_BUILTIN_GLOBALS: [&str; 7] = [
+    "Object", "Array", "String", "Math", "JSON", "Symbol", "Reflect",
+];
+
+/// Intrinsics that exist only through a direct-call lowering seam. Bare
+/// unshadowed reads are undefined, but a real outer lexical binding with the
+/// same name must still propagate into a nested function and shadow the seam.
+const DIRECT_CALL_INTRINSIC_GLOBALS: [&str; 1] = ["require"];
+
+/// Return a UTF-8-exact static name without ever projecting a lone UTF-16
+/// surrogate through U+FFFD. Identifiers are always well formed; quoted
+/// names participate only while their exact JS string has a lossless `str`
+/// view. Runtime string literal lowering does not use this helper.
+fn well_formed_static_name(expression: &Expression) -> Option<&str> {
+    match expression {
+        Expression::Identifier(name) => Some(name.as_str()),
+        Expression::StringLiteral(name) => name.as_str(),
+        _ => None,
+    }
+}
+
+fn well_formed_string_literal(expression: &Expression) -> Option<&str> {
+    match expression {
+        Expression::StringLiteral(value) => value.as_str(),
+        _ => None,
+    }
+}
+
+fn is_static_builtin_global(name: &str) -> bool {
+    STATIC_BUILTIN_GLOBALS.contains(&name)
+}
+
+fn is_non_materialized_intrinsic_global(name: &str) -> bool {
+    is_static_builtin_global(name) || DIRECT_CALL_INTRINSIC_GLOBALS.contains(&name)
+}
+
+/// Materialize the supported first-class builtin global values. Most static
+/// builtin globals exist only as call-lowering receivers, but `Symbol` is also
+/// callable and therefore needs a real value when it is read unbound.
+fn static_builtin_global_factory_capability(
+    name: &str,
+    binding_lookup: &BTreeMap<String, BindingId>,
+) -> Option<&'static str> {
+    if binding_lookup.contains_key(name) {
+        return None;
+    }
+    match name {
+        "Symbol" => Some("builtin:SymbolFunction"),
+        _ => None,
+    }
+}
+
+fn static_builtin_call_capability(
+    callee: &Expression,
+    binding_lookup: &BTreeMap<String, BindingId>,
+) -> Option<&'static str> {
+    let Expression::Member {
+        object,
+        property,
+        computed,
+    } = callee
+    else {
+        return None;
+    };
+    let Expression::Identifier(global) = object.as_ref() else {
+        return None;
+    };
+    if binding_lookup.contains_key(global.as_str()) {
+        return None;
+    }
+    let property_name = match *computed {
+        false => well_formed_static_name(property)?,
+        true => well_formed_string_literal(property)?,
+    };
+    match (global.as_str(), property_name) {
+        ("Object", "keys") => Some("builtin:ObjectKeys"),
+        ("Object", "values") => Some("builtin:ObjectValues"),
+        ("Object", "entries") => Some("builtin:ObjectEntries"),
+        ("Object", "assign") => Some("builtin:ObjectAssign"),
+        ("Object", "getOwnPropertyNames") => Some("builtin:ObjectGetOwnPropertyNames"),
+        ("Object", "getOwnPropertySymbols") => Some("builtin:ObjectGetOwnPropertySymbols"),
+        ("Array", "isArray") => Some("builtin:ArrayIsArray"),
+        ("String", "fromCharCode") => Some("builtin:StringFromCharCode"),
+        ("String", "fromCodePoint") => Some("builtin:StringFromCodePoint"),
+        ("Math", "abs") => Some("builtin:MathAbs"),
+        ("JSON", "parse") => Some("builtin:JsonParse"),
+        ("JSON", "stringify") => Some("builtin:JsonStringify"),
+        ("Symbol", "for") => Some("builtin:SymbolFor"),
+        ("Symbol", "keyFor") => Some("builtin:SymbolKeyFor"),
+        ("Reflect", "ownKeys") => Some("builtin:ReflectOwnKeys"),
+        _ => None,
+    }
+}
+
+/// Recognize supported first-class static builtin member reads.
+///
+/// Core has no materialized `Array` global object, so an unshadowed
+/// `Array.isArray` value read needs a dedicated factory hostcall. Well-known
+/// `Symbol.*` values likewise materialize through explicit zero-argument
+/// builtin capabilities. Keep this allowlist separate from direct-call
+/// interception because these entries produce first-class values.
+fn static_builtin_member_factory_capability(
+    object: &Expression,
+    property: &Expression,
+    computed: bool,
+    binding_lookup: &BTreeMap<String, BindingId>,
+) -> Option<&'static str> {
+    let Expression::Identifier(global) = object else {
+        return None;
+    };
+    if binding_lookup.contains_key(global.as_str()) {
+        return None;
+    }
+    let property_name = match computed {
+        false => well_formed_static_name(property)?,
+        true => well_formed_string_literal(property)?,
+    };
+    match (global.as_str(), property_name) {
+        ("Array", "isArray") => Some("builtin:ArrayIsArrayFunction"),
+        ("Symbol", "iterator") => Some("builtin:SymbolIterator"),
+        ("Symbol", "toPrimitive") => Some("builtin:SymbolToPrimitive"),
+        ("Symbol", "hasInstance") => Some("builtin:SymbolHasInstance"),
+        ("Symbol", "toStringTag") => Some("builtin:SymbolToStringTag"),
+        ("Symbol", "species") => Some("builtin:SymbolSpecies"),
+        ("Symbol", "isConcatSpreadable") => Some("builtin:SymbolIsConcatSpreadable"),
+        ("Symbol", "unscopables") => Some("builtin:SymbolUnscopables"),
+        ("Symbol", "asyncIterator") => Some("builtin:SymbolAsyncIterator"),
+        ("Symbol", "match") => Some("builtin:SymbolMatch"),
+        ("Symbol", "matchAll") => Some("builtin:SymbolMatchAll"),
+        ("Symbol", "replace") => Some("builtin:SymbolReplace"),
+        ("Symbol", "search") => Some("builtin:SymbolSearch"),
+        ("Symbol", "split") => Some("builtin:SymbolSplit"),
+        _ => None,
+    }
+}
+
+/// bd-qmy52: recognize an `os` property READ (`os.EOL`, `os.devNull`,
+/// `os.constants`) on a recognized os-module object and return its lowering.
+/// Accepts the same static/quoted property shapes as [`path_member_constant`].
+fn os_member_read_lowering(
+    object: &Expression,
+    property: &Expression,
+    computed: bool,
+    binding_lookup: &BTreeMap<String, BindingId>,
+) -> Option<OsMemberReadLowering> {
+    if !is_os_module_object(object, binding_lookup) {
+        return None;
+    }
+    let prop = match computed {
+        false => well_formed_static_name(property)?,
+        true => well_formed_string_literal(property)?,
+    };
+    os_property_read_lowering(prop)
+}
+
+/// bd-qmy52: scan-time twin of [`os_builtin_call_capability`]'s receiver check.
+fn is_os_alias_method_callee(callee: &Expression, alias_names: &BTreeSet<String>) -> bool {
+    let Expression::Member {
+        object,
+        property,
+        computed: false,
+    } = callee
+    else {
+        return false;
+    };
+    if !matches!(object.as_ref(), Expression::Identifier(name) if alias_names.contains(name)) {
+        return false;
+    }
+    well_formed_static_name(property).is_some_and(|method| os_method_capability(method).is_some())
+}
+
+/// bd-qmy52: scan-time twin of [`os_member_read_lowering`]: true when `expr`
+/// is a recognized os property read (`<alias>.EOL`, `<alias>.constants`, …) on
+/// one of the candidate alias names.
+fn is_os_alias_property_read(expr: &Expression, alias_names: &BTreeSet<String>) -> bool {
+    let Expression::Member {
+        object,
+        property,
+        computed: false,
+    } = expr
+    else {
+        return false;
+    };
+    if !matches!(object.as_ref(), Expression::Identifier(name) if alias_names.contains(name)) {
+        return false;
+    }
+    well_formed_static_name(property)
+        .is_some_and(|property| os_property_read_lowering(property).is_some())
+}
+
+/// bd-qmy52: true when `expr` contains a recognized os usage on one of
+/// `alias_names` — either a recognized method CALL (`<alias>.platform()`) or a
+/// recognized property READ (`<alias>.EOL`, `<alias>.constants`).
+fn expr_contains_os_alias_usage(expr: &Expression, alias_names: &BTreeSet<String>) -> bool {
+    expr_contains_matching_call(expr, &|callee| {
+        is_os_alias_method_callee(callee, alias_names)
+    }) || expr_contains_matching_member(expr, &|member| {
+        is_os_alias_property_read(member, alias_names)
+    })
+}
+
+/// bd-qmy52: compute the set of identifier names that are BOTH bound via
+/// `const/let/var <name> = require('os')` at the unit root AND used as a
+/// recognized os builtin (method call or property read) somewhere reachable by
+/// the fail-closed statement scan. Mirror of
+/// [`confirmed_path_module_aliases`].
+fn confirmed_os_module_aliases(
+    body: &[Statement],
+    binding_lookup: &BTreeMap<String, BindingId>,
+) -> BTreeSet<String> {
+    let mut candidates = BTreeSet::new();
+    for stmt in body {
+        if let Statement::VariableDeclaration(vd) = stmt {
+            for d in &vd.declarations {
+                if let (BindingPattern::Identifier(name), Some(init)) = (&d.pattern, &d.initializer)
+                    && is_require_os_module_initializer(init, binding_lookup)
+                {
+                    candidates.insert(name.clone());
+                }
+            }
+        }
+    }
+    if candidates.is_empty() {
+        return candidates;
+    }
+
+    let mut used = BTreeSet::new();
+    for name in &candidates {
+        let single: BTreeSet<String> = std::iter::once(name.clone()).collect();
+        if body.iter().any(|stmt| {
+            path_statement_contains_usage(stmt, &|e| expr_contains_os_alias_usage(e, &single))
+        }) {
+            used.insert(name.clone());
+        }
+    }
+    used
+}
+
 pub fn lower_ir0_to_ir1(
     ir0: &Ir0Module,
 ) -> Result<LoweringPassResult<Ir1Module>, LoweringPipelineError> {
+    verify_schema_version(&ir0.header).map_err(lowering_error_from_ir_error)?;
     if ir0.tree.body.is_empty() {
         return Err(LoweringPipelineError::EmptyIr0Body);
     }
@@ -481,8 +1563,37 @@ pub fn lower_ir0_to_ir1(
     };
     let mut bindings = Vec::<ResolvedBinding>::new();
     let mut binding_lookup = BTreeMap::<String, BindingId>::new();
-    let declared_root_bindings =
+    let mut declared_root_bindings =
         reserve_root_scope_bindings(&ir0.tree.body, &mut binding_lookup, &mut binding_index);
+    declared_root_bindings.extend(reserve_hoisted_var_bindings(
+        &ir0.tree.body,
+        &mut binding_lookup,
+        &mut binding_index,
+    ));
+    // bd-tu0c3: record path-module binding aliases (`const path =
+    // require('path')` that are actually used as a recognized pure-compute
+    // `path` builtin) as NUL-sentinels in binding_lookup, so the binding form
+    // lowers to `builtin:Path*` HostCalls and lowering-time string constants.
+    // Usage-gated: a bare/unused `const path = require('path')` keeps core's
+    // existing `module:require` behavior. The sentinel value is unused — its
+    // presence is the signal; the NUL-prefixed key can never collide with a
+    // real binding name and is never pushed into `bindings`.
+    for alias in confirmed_path_module_aliases(&ir0.tree.body, &binding_lookup) {
+        binding_lookup.insert(path_module_alias_sentinel(&alias), 0);
+    }
+    // bd-qmy52: same usage-gated sentinel recording for the two other
+    // pure-compute module families — `require('querystring')` (member calls
+    // lower to `builtin:Querystring*` HostCalls) and `require('os')` (member
+    // calls lower to `builtin:Os*` HostCalls; `os.EOL`/`os.devNull` property
+    // reads lower to string constants and `os.constants` to a 0-arg
+    // `builtin:OsConstants` HostCall). A bare/unused alias keeps core's
+    // existing `module:require` behavior.
+    for alias in confirmed_querystring_module_aliases(&ir0.tree.body, &binding_lookup) {
+        binding_lookup.insert(querystring_module_alias_sentinel(&alias), 0);
+    }
+    for alias in confirmed_os_module_aliases(&ir0.tree.body, &binding_lookup) {
+        binding_lookup.insert(os_module_alias_sentinel(&alias), 0);
+    }
     let mut synthetic_export_index = 0u32;
     let mut synthetic_import_index = 0u32;
     let mut label_counter = 0u32;
@@ -547,7 +1658,7 @@ pub fn lower_ir0_to_ir1(
                     ImportClause::Default { local } => {
                         ir1.ops.push(Ir1Op::ImportModule { specifier });
                         ir1.ops.push(Ir1Op::GetProperty {
-                            key: Ir1PropertyKey::Static("default".to_string()),
+                            key: Ir1PropertyKey::Static("default".into()),
                         });
                         let binding_id = alloc_import_binding(
                             local,
@@ -575,7 +1686,7 @@ pub fn lower_ir0_to_ir1(
                                 binding_id: temp_binding_id,
                             });
                             ir1.ops.push(Ir1Op::GetProperty {
-                                key: Ir1PropertyKey::Static(spec.import_name.clone()),
+                                key: Ir1PropertyKey::Static(spec.import_name.clone().into()),
                             });
                             let binding_id = alloc_import_binding(
                                 &spec.local_name,
@@ -607,7 +1718,7 @@ pub fn lower_ir0_to_ir1(
                             binding_id: temp_binding_id,
                         });
                         ir1.ops.push(Ir1Op::GetProperty {
-                            key: Ir1PropertyKey::Static("default".to_string()),
+                            key: Ir1PropertyKey::Static("default".into()),
                         });
                         let default_binding_id = alloc_import_binding(
                             default,
@@ -625,7 +1736,7 @@ pub fn lower_ir0_to_ir1(
                                 binding_id: temp_binding_id,
                             });
                             ir1.ops.push(Ir1Op::GetProperty {
-                                key: Ir1PropertyKey::Static(spec.import_name.clone()),
+                                key: Ir1PropertyKey::Static(spec.import_name.clone().into()),
                             });
                             let binding_id = alloc_import_binding(
                                 &spec.local_name,
@@ -654,7 +1765,7 @@ pub fn lower_ir0_to_ir1(
                             binding_id: temp_binding_id,
                         });
                         ir1.ops.push(Ir1Op::GetProperty {
-                            key: Ir1PropertyKey::Static("default".to_string()),
+                            key: Ir1PropertyKey::Static("default".into()),
                         });
                         let default_binding_id = alloc_import_binding(
                             default,
@@ -714,8 +1825,8 @@ pub fn lower_ir0_to_ir1(
                     ir1.ops.push(Ir1Op::Pop);
                 }
                 ExportKind::NamedClause(clause) => {
-                    let specifiers = parse_named_export_clause_bindings(clause);
-                    if let Some(source_specifier) = parse_named_export_clause_source(clause) {
+                    let specifiers = parse_named_export_clause_bindings(clause.canonical_head());
+                    if let Some(source_specifier) = clause.source().cloned() {
                         if specifiers.is_empty() {
                             ir1.ops.push(Ir1Op::ImportModule {
                                 specifier: source_specifier,
@@ -751,7 +1862,7 @@ pub fn lower_ir0_to_ir1(
                                     binding_id: temp_binding_id,
                                 });
                                 ir1.ops.push(Ir1Op::GetProperty {
-                                    key: Ir1PropertyKey::Static(import_name),
+                                    key: Ir1PropertyKey::Static(import_name.into()),
                                 });
                                 let export_binding_name = make_internal_binding_name(
                                     "reexport_binding",
@@ -869,10 +1980,95 @@ fn alloc_label(counter: &mut u32) -> u32 {
     id
 }
 
+fn alloc_finally_forwarder(
+    forwarders: &mut Vec<(u32, u32)>,
+    target: Option<u32>,
+    label_counter: &mut u32,
+) -> Option<u32> {
+    let target = target?;
+    if let Some((via_label, _)) = forwarders
+        .iter()
+        .find(|(_, actual_target)| *actual_target == target)
+    {
+        return Some(*via_label);
+    }
+
+    let via_label = alloc_label(label_counter);
+    forwarders.push((via_label, target));
+    Some(via_label)
+}
+
 #[derive(Debug, Clone, Copy, Default)]
 struct ControlFlowTargets {
     break_label: Option<u32>,
     continue_label: Option<u32>,
+}
+
+#[derive(Debug, Clone)]
+struct LabelFrame {
+    name: String,
+    break_target: u32,
+    continue_target: Option<u32>,
+}
+
+#[derive(Debug, Clone, Default)]
+struct LabelContext {
+    frames: Vec<LabelFrame>,
+    pending: Vec<String>,
+}
+
+impl LabelContext {
+    fn resolve(&self, name: &str) -> Option<&LabelFrame> {
+        self.frames.iter().rev().find(|frame| frame.name == name)
+    }
+
+    fn contains(&self, name: &str) -> bool {
+        self.frames.iter().any(|frame| frame.name == name)
+            || self.pending.iter().any(|pending| pending == name)
+    }
+
+    fn with_pending(&self, label: String) -> Self {
+        let mut child = self.clone();
+        child.pending.push(label);
+        child
+    }
+
+    fn enter_loop(&self, break_target: u32, continue_target: u32) -> Self {
+        let mut child = self.clone();
+        for name in &self.pending {
+            child.frames.push(LabelFrame {
+                name: name.clone(),
+                break_target,
+                continue_target: Some(continue_target),
+            });
+        }
+        child.pending.clear();
+        child
+    }
+
+    fn remap_abrupt_targets(
+        &self,
+        break_forwarders: &[(u32, u32)],
+        continue_forwarders: &[(u32, u32)],
+    ) -> Self {
+        let mut child = self.clone();
+        for frame in &mut child.frames {
+            if let Some(via_label) = break_forwarders.iter().find_map(|(via_label, actual)| {
+                (*actual == frame.break_target).then_some(*via_label)
+            }) {
+                frame.break_target = via_label;
+            }
+            if let Some(continue_target) = frame.continue_target
+                && let Some(via_label) =
+                    continue_forwarders.iter().find_map(|(via_label, actual)| {
+                        (*actual == continue_target).then_some(*via_label)
+                    })
+            {
+                frame.continue_target = Some(via_label);
+            }
+        }
+        child
+    }
 }
 
 fn make_internal_binding_name(purpose: &str, index: u32) -> String {
@@ -936,13 +2132,733 @@ fn reserve_root_scope_bindings(
     declared
 }
 
+/// Reserve `var` bindings from nested control-flow statements in their
+/// enclosing function/module scope. Unlike `let`/`const`, a nested `var Math`
+/// shadows the entire function, including calls textually before the block;
+/// missing this pre-scan could incorrectly redirect such a call to a builtin.
+/// Function and class bodies are separate scopes and are intentionally not
+/// traversed here.
+fn reserve_hoisted_var_bindings(
+    statements: &[Statement],
+    binding_lookup: &mut BTreeMap<String, BindingId>,
+    binding_index: &mut BindingId,
+) -> BTreeSet<String> {
+    fn visit(
+        statement: &Statement,
+        binding_lookup: &mut BTreeMap<String, BindingId>,
+        binding_index: &mut BindingId,
+        declared: &mut BTreeSet<String>,
+    ) {
+        match statement {
+            Statement::VariableDeclaration(declaration)
+                if declaration.kind == VariableDeclarationKind::Var =>
+            {
+                for declarator in &declaration.declarations {
+                    for name in declarator.pattern.binding_names() {
+                        reserve_binding_id(binding_lookup, binding_index, name);
+                        declared.insert(name.to_string());
+                    }
+                }
+            }
+            Statement::Block(block) => {
+                for nested in &block.body {
+                    visit(nested, binding_lookup, binding_index, declared);
+                }
+            }
+            Statement::If(if_statement) => {
+                visit(
+                    &if_statement.consequent,
+                    binding_lookup,
+                    binding_index,
+                    declared,
+                );
+                if let Some(alternate) = &if_statement.alternate {
+                    visit(alternate, binding_lookup, binding_index, declared);
+                }
+            }
+            Statement::For(for_statement) => {
+                if let Some(initializer) = &for_statement.init {
+                    visit(initializer, binding_lookup, binding_index, declared);
+                }
+                visit(&for_statement.body, binding_lookup, binding_index, declared);
+            }
+            Statement::ForIn(for_in) => {
+                if for_in.binding_kind == Some(VariableDeclarationKind::Var) {
+                    for name in for_in.binding.binding_names() {
+                        reserve_binding_id(binding_lookup, binding_index, name);
+                        declared.insert(name.to_string());
+                    }
+                }
+                visit(&for_in.body, binding_lookup, binding_index, declared);
+            }
+            Statement::ForOf(for_of) => {
+                if for_of.binding_kind == Some(VariableDeclarationKind::Var) {
+                    for name in for_of.binding.binding_names() {
+                        reserve_binding_id(binding_lookup, binding_index, name);
+                        declared.insert(name.to_string());
+                    }
+                }
+                visit(&for_of.body, binding_lookup, binding_index, declared);
+            }
+            Statement::While(while_statement) => visit(
+                &while_statement.body,
+                binding_lookup,
+                binding_index,
+                declared,
+            ),
+            Statement::DoWhile(do_while) => {
+                visit(&do_while.body, binding_lookup, binding_index, declared)
+            }
+            Statement::TryCatch(try_catch) => {
+                for nested in &try_catch.block.body {
+                    visit(nested, binding_lookup, binding_index, declared);
+                }
+                if let Some(handler) = &try_catch.handler {
+                    for nested in &handler.body.body {
+                        visit(nested, binding_lookup, binding_index, declared);
+                    }
+                }
+                if let Some(finalizer) = &try_catch.finalizer {
+                    for nested in &finalizer.body {
+                        visit(nested, binding_lookup, binding_index, declared);
+                    }
+                }
+            }
+            Statement::Switch(switch_statement) => {
+                for case in &switch_statement.cases {
+                    for nested in &case.consequent {
+                        visit(nested, binding_lookup, binding_index, declared);
+                    }
+                }
+            }
+            Statement::Labeled(labeled) => {
+                visit(&labeled.body, binding_lookup, binding_index, declared);
+            }
+            Statement::FunctionDeclaration(_) | Statement::ClassDeclaration(_) => {}
+            _ => {}
+        }
+    }
+
+    let mut declared = BTreeSet::new();
+    for statement in statements {
+        visit(statement, binding_lookup, binding_index, &mut declared);
+    }
+    declared
+}
+
+/// Install the lexical declarations owned by a block before lowering any of
+/// its statements.  A fresh binding ID is required even when an outer scope
+/// already has the same name: otherwise a call before `let`/`const`/`class`
+/// initialization can be mistaken for an unshadowed static builtin.
+///
+/// The returned map records the enclosing lookup entries so the caller can
+/// restore them after the block while retaining any unrelated free-variable
+/// discoveries made while lowering the block.
+fn reserve_fresh_lexical_bindings(
+    lexical_names: BTreeSet<String>,
+    binding_lookup: &mut BTreeMap<String, BindingId>,
+    binding_index: &mut BindingId,
+) -> BTreeMap<String, Option<BindingId>> {
+    let mut enclosing_bindings = BTreeMap::new();
+    for name in lexical_names {
+        enclosing_bindings.insert(name.clone(), binding_lookup.get(&name).copied());
+        let binding_id = *binding_index;
+        *binding_index = binding_index.saturating_add(1);
+        binding_lookup.insert(name, binding_id);
+    }
+    enclosing_bindings
+}
+
+fn reserve_block_lexical_bindings(
+    statements: &[Statement],
+    additional_lexical_name: Option<&str>,
+    binding_lookup: &mut BTreeMap<String, BindingId>,
+    binding_index: &mut BindingId,
+) -> BTreeMap<String, Option<BindingId>> {
+    let mut lexical_names = BTreeSet::new();
+    if let Some(name) = additional_lexical_name {
+        lexical_names.insert(name.to_string());
+    }
+    for statement in statements {
+        match statement {
+            Statement::VariableDeclaration(declaration)
+                if declaration.kind != VariableDeclarationKind::Var =>
+            {
+                for declarator in &declaration.declarations {
+                    lexical_names.extend(
+                        declarator
+                            .pattern
+                            .binding_names()
+                            .into_iter()
+                            .map(str::to_string),
+                    );
+                }
+            }
+            Statement::FunctionDeclaration(function) => {
+                if let Some(name) = &function.name {
+                    lexical_names.insert(name.clone());
+                }
+            }
+            Statement::ClassDeclaration(cls) => {
+                if let Some(name) = &cls.name {
+                    lexical_names.insert(name.clone());
+                }
+            }
+            _ => {}
+        }
+    }
+
+    reserve_fresh_lexical_bindings(lexical_names, binding_lookup, binding_index)
+}
+
+fn restore_block_lexical_bindings(
+    binding_lookup: &mut BTreeMap<String, BindingId>,
+    enclosing_bindings: BTreeMap<String, Option<BindingId>>,
+) {
+    for (name, enclosing_binding) in enclosing_bindings {
+        if let Some(binding_id) = enclosing_binding {
+            binding_lookup.insert(name, binding_id);
+        } else {
+            binding_lookup.remove(&name);
+        }
+    }
+}
+
+fn restore_class_expression_self_binding(
+    binding_lookup: &mut BTreeMap<String, BindingId>,
+    self_name: Option<&str>,
+    enclosing_binding: Option<BindingId>,
+) {
+    let Some(self_name) = self_name else {
+        return;
+    };
+    if let Some(binding_id) = enclosing_binding {
+        binding_lookup.insert(self_name.to_string(), binding_id);
+    } else {
+        binding_lookup.remove(self_name);
+    }
+}
+
+fn emit_error_throw_message(ops: &mut Vec<Ir1Op>, capability: &str, message: String) {
+    ops.push(Ir1Op::LoadLiteral {
+        value: Ir1Literal::String(message.into()),
+    });
+    ops.push(Ir1Op::HostCall {
+        capability: capability.to_string(),
+        arg_count: 1,
+    });
+    ops.push(Ir1Op::Throw);
+    ops.push(Ir1Op::LoadLiteral {
+        value: Ir1Literal::Undefined,
+    });
+}
+
+fn emit_reference_error_throw_message(ops: &mut Vec<Ir1Op>, message: String) {
+    emit_error_throw_message(ops, "builtin:ReferenceError", message);
+}
+
+fn emit_type_error_throw_message(ops: &mut Vec<Ir1Op>, message: String) {
+    emit_error_throw_message(ops, "builtin:TypeError", message);
+}
+
+fn emit_reference_error_throw(ops: &mut Vec<Ir1Op>, name: &str) {
+    emit_reference_error_throw_message(ops, format!("{name} is not defined"));
+}
+
+fn emit_parameter_tdz_throw(ops: &mut Vec<Ir1Op>, name: &str) {
+    emit_reference_error_throw_message(
+        ops,
+        format!("Cannot access '{name}' before initialization"),
+    );
+}
+
+/// Rewrite only the operations emitted for a parameter default expression.
+/// The surrounding default branch remains intact, so an access in a dead
+/// branch does not throw. Function bodies are opaque here: their reads resolve
+/// through the live, source-ordered parameter cells captured at runtime.
+fn rewrite_parameter_tdz_accesses(ops: &mut Vec<Ir1Op>, start: usize, state: &ParameterTdzState) {
+    let default_ops = ops.drain(start..).collect::<Vec<_>>();
+    for op in default_ops {
+        let referenced_binding = match &op {
+            Ir1Op::LoadBinding { binding_id }
+            | Ir1Op::StoreBinding { binding_id }
+            | Ir1Op::AssignOp { binding_id, .. } => state.uninitialized.get(binding_id),
+            _ => None,
+        };
+        let Some(name) = referenced_binding else {
+            ops.push(op);
+            continue;
+        };
+
+        if matches!(op, Ir1Op::StoreBinding { .. } | Ir1Op::AssignOp { .. }) {
+            // StoreBinding and AssignOp consume an RHS and leave the assigned
+            // value on the IR1 stack. Match that net stack effect before the
+            // synthetic unreachable Undefined emitted by the throw helper.
+            ops.push(Ir1Op::Pop);
+        }
+        emit_parameter_tdz_throw(ops, name);
+    }
+}
+
+/// Class bodies use ordinary function lowering, but an unresolved bare name
+/// must still throw instead of becoming a captured `undefined` placeholder.
+/// Preserve the special `typeof missingName` behavior and any real enclosing
+/// binding; named class expressions install their private self alias in the
+/// outer lookup before this pass runs.
+fn rewrite_unresolved_class_body_loads(
+    body_ops: &mut Vec<Ir1Op>,
+    body_lookup: &BTreeMap<String, BindingId>,
+    pre_lower_names: &BTreeSet<String>,
+    outer_lookup: &BTreeMap<String, BindingId>,
+) -> BTreeSet<String> {
+    let locally_defined_ids: BTreeSet<BindingId> = body_ops
+        .iter()
+        .filter_map(|op| match op {
+            Ir1Op::StoreBinding { binding_id } | Ir1Op::DeclareFunction { binding_id, .. } => {
+                Some(*binding_id)
+            }
+            _ => None,
+        })
+        .collect();
+    let unresolved_by_id: BTreeMap<BindingId, String> = body_lookup
+        .iter()
+        .filter(|(name, binding_id)| {
+            !is_internal_lowering_binding(name)
+                && !pre_lower_names.contains(name.as_str())
+                && !outer_lookup.contains_key(name.as_str())
+                && !locally_defined_ids.contains(binding_id)
+        })
+        .map(|(name, binding_id)| (*binding_id, name.clone()))
+        .collect();
+    if unresolved_by_id.is_empty() {
+        return BTreeSet::new();
+    }
+    let unresolved_names = unresolved_by_id.values().cloned().collect();
+
+    let mut rewritten = Vec::with_capacity(body_ops.len());
+    for (index, op) in body_ops.iter().enumerate() {
+        if let Ir1Op::LoadBinding { binding_id } = op
+            && let Some(name) = unresolved_by_id.get(binding_id)
+            && !matches!(
+                body_ops.get(index.saturating_add(1)),
+                Some(Ir1Op::UnaryOp {
+                    operator: UnaryOperator::Typeof
+                })
+            )
+        {
+            emit_reference_error_throw(&mut rewritten, name);
+            continue;
+        }
+        rewritten.push(op.clone());
+    }
+    *body_ops = rewritten;
+    unresolved_names
+}
+
+/// Give a named function/class-expression self capture a runtime-private name
+/// while retaining its exact body and outer binding IDs. Constructor and
+/// method markers are deliberately distinct: only cyclic constructor/function
+/// markers are initialized to the new closure at runtime, while methods capture
+/// the already-created class value.
+fn rewrite_private_self_capture(
+    private_outer_binding: BindingId,
+    runtime_name: String,
+    free_vars: &mut [String],
+    free_var_outer_ids: &[BindingId],
+) {
+    for (free_var, outer_id) in free_vars.iter_mut().zip(free_var_outer_ids) {
+        if *outer_id == private_outer_binding {
+            free_var.clone_from(&runtime_name);
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn lower_lexical_statement_sequence(
+    statements: &[Statement],
+    ops: &mut Vec<Ir1Op>,
+    bindings: &mut Vec<ResolvedBinding>,
+    binding_lookup: &mut BTreeMap<String, BindingId>,
+    binding_index: &mut BindingId,
+    scope_id: ScopeId,
+    label_counter: &mut u32,
+    control_flow: ControlFlowTargets,
+    label_ctx: &LabelContext,
+) -> Result<(), LoweringPipelineError> {
+    let enclosing_bindings =
+        reserve_block_lexical_bindings(statements, None, binding_lookup, binding_index);
+    let result = statements.iter().try_for_each(|statement| {
+        lower_statement_to_ir1_with_flow(
+            statement,
+            ops,
+            bindings,
+            binding_lookup,
+            binding_index,
+            scope_id,
+            label_counter,
+            control_flow,
+            label_ctx,
+        )
+    });
+    restore_block_lexical_bindings(binding_lookup, enclosing_bindings);
+    result
+}
+
+fn seed_function_outer_static_bindings(
+    outer_lookup: &BTreeMap<String, BindingId>,
+    body_lookup: &mut BTreeMap<String, BindingId>,
+    body_binding_index: &mut BindingId,
+) {
+    for global in STATIC_BUILTIN_GLOBALS
+        .iter()
+        .chain(DIRECT_CALL_INTRINSIC_GLOBALS.iter())
+        .copied()
+    {
+        if !body_lookup.contains_key(global) && outer_lookup.contains_key(global) {
+            reserve_binding_id(body_lookup, body_binding_index, global);
+        }
+    }
+}
+
+/// Pre-reserve declarations in a function-like body. `declared_names` is
+/// captured immediately after formal bindings are allocated, so a declaration
+/// in the body can shadow a same-named capture used by a default expression
+/// without changing the parameter environment's binding identity.
+fn prepare_function_body_bindings(
+    statements: Option<&[Statement]>,
+    mut declared_names: BTreeSet<String>,
+    body_lookup: &mut BTreeMap<String, BindingId>,
+    body_binding_index: &mut BindingId,
+) -> BTreeSet<String> {
+    if let Some(statements) = statements {
+        declared_names.extend(reserve_root_scope_bindings(
+            statements,
+            body_lookup,
+            body_binding_index,
+        ));
+        declared_names.extend(reserve_hoisted_var_bindings(
+            statements,
+            body_lookup,
+            body_binding_index,
+        ));
+    }
+    declared_names
+}
+
+fn merge_unshadowed_parameter_prologue_captures(
+    captures: &[(String, BindingId)],
+    body_lookup: &mut BTreeMap<String, BindingId>,
+) {
+    for (name, binding_id) in captures {
+        body_lookup.entry(name.clone()).or_insert(*binding_id);
+    }
+}
+
+/// Validate the rest-parameter syntax represented by the positional ABI.
+/// Every preceding formal occupies one slot, including default and
+/// destructuring patterns, so `rest_param_index` remains the source position.
+fn validate_rest_parameter_abi(
+    params: &[FunctionParam],
+) -> Result<Option<u32>, LoweringPipelineError> {
+    let rest_params = params
+        .iter()
+        .enumerate()
+        .filter(|(_, param)| matches!(&param.pattern, BindingPattern::Rest(_)))
+        .collect::<Vec<_>>();
+    let Some((rest_index, rest_param)) = rest_params.first().copied() else {
+        return Ok(None);
+    };
+
+    let rest_binds_identifier = matches!(
+        &rest_param.pattern,
+        BindingPattern::Rest(inner) if inner.as_identifier().is_some()
+    );
+    if rest_params.len() != 1 || rest_index + 1 != params.len() || !rest_binds_identifier {
+        return Err(unsupported_frontier_expression_error(
+            "function_parameter_patterns_with_rest",
+            "FE-LOWER-UNSUPPORTED-REST-PARAM-ABI-0001",
+            "core.function_rest_parameter_abi",
+            "rest parameters require one final identifier rest binding",
+            Some(rest_param.span.clone()),
+        ));
+    }
+
+    Ok(Some(rest_index as u32))
+}
+
+/// Allocate one runtime slot per formal and every identifier introduced by a
+/// pattern. Non-identifier formals use an unforgeable synthetic source slot;
+/// their entry prologue copies/defaults/destructures that slot into user
+/// bindings before the body executes (bd-ur3tk.10).
+#[derive(Default)]
+struct FunctionParameterPlan<'a> {
+    param_names: Vec<String>,
+    parameter_steps: Vec<(usize, String, &'a BindingPattern)>,
+    parameter_bindings: Vec<(usize, BindingId, String)>,
+    rest_param_index: Option<u32>,
+}
+
+/// Parameter bindings that are not yet initialized at a particular point in
+/// the source-ordered parameter prologue. Argument carrier registers are
+/// populated before the prologue runs, so this explicit lowering state keeps
+/// those raw values from making self/later parameter references observable.
+#[derive(Clone, Default)]
+struct ParameterTdzState {
+    uninitialized: BTreeMap<BindingId, String>,
+}
+
+impl ParameterTdzState {
+    fn at_formal(parameter_bindings: &[(usize, BindingId, String)], formal_index: usize) -> Self {
+        Self {
+            uninitialized: parameter_bindings
+                .iter()
+                .filter(|(index, _, _)| *index >= formal_index)
+                .map(|(_, binding_id, name)| (*binding_id, name.clone()))
+                .collect(),
+        }
+    }
+
+    fn mark_binding_initialized(
+        &mut self,
+        name: &str,
+        binding_lookup: &BTreeMap<String, BindingId>,
+    ) {
+        if let Some(binding_id) = binding_lookup.get(name) {
+            self.uninitialized.remove(binding_id);
+        }
+    }
+
+    fn mark_pattern_initialized(
+        &mut self,
+        pattern: &BindingPattern,
+        binding_lookup: &BTreeMap<String, BindingId>,
+    ) {
+        for name in pattern.binding_names() {
+            self.mark_binding_initialized(name, binding_lookup);
+        }
+    }
+}
+
+fn parameter_prologue_referenced_binding_ids(ops: &[Ir1Op]) -> BTreeSet<BindingId> {
+    let mut referenced = BTreeSet::new();
+    for op in ops {
+        match op {
+            Ir1Op::LoadBinding { binding_id }
+            | Ir1Op::StoreBinding { binding_id }
+            | Ir1Op::AssignOp { binding_id, .. }
+            | Ir1Op::ExportBinding { binding_id, .. } => {
+                referenced.insert(*binding_id);
+            }
+            Ir1Op::DeclareFunction {
+                body_ops,
+                free_var_ids,
+                free_var_outer_ids,
+                ..
+            }
+            | Ir1Op::CreateFunction {
+                body_ops,
+                free_var_ids,
+                free_var_outer_ids,
+                ..
+            } => {
+                let child_references = parameter_prologue_referenced_binding_ids(body_ops);
+                referenced.extend(free_var_ids.iter().zip(free_var_outer_ids).filter_map(
+                    |(body_id, outer_id)| child_references.contains(body_id).then_some(*outer_id),
+                ));
+            }
+            _ => {}
+        }
+    }
+    referenced
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct ArrowLexicalContextUsage {
+    this_value: bool,
+    new_target: bool,
+    super_value: bool,
+}
+
+impl ArrowLexicalContextUsage {
+    fn include(&mut self, other: Self) {
+        self.this_value |= other.this_value;
+        self.new_target |= other.new_target;
+        self.super_value |= other.super_value;
+    }
+
+    fn is_empty(self) -> bool {
+        !self.this_value && !self.new_target && !self.super_value
+    }
+}
+
+fn arrow_lexical_context_usage(ops: &[Ir1Op]) -> ArrowLexicalContextUsage {
+    let mut usage = ArrowLexicalContextUsage::default();
+    for op in ops {
+        match op {
+            Ir1Op::LoadThis => usage.this_value = true,
+            Ir1Op::LoadNewTarget => usage.new_target = true,
+            Ir1Op::LoadSuper => usage.super_value = true,
+            Ir1Op::CreateFunction {
+                body_ops,
+                is_arrow: true,
+                ..
+            } => usage.include(arrow_lexical_context_usage(body_ops)),
+            _ => {}
+        }
+    }
+    usage
+}
+
+fn allocate_function_parameter_bindings<'a>(
+    params: &'a [FunctionParam],
+    body_bindings: &mut Vec<ResolvedBinding>,
+    body_lookup: &mut BTreeMap<String, BindingId>,
+    body_binding_index: &mut BindingId,
+    body_scope: ScopeId,
+) -> Result<FunctionParameterPlan<'a>, LoweringPipelineError> {
+    let rest_param_index = validate_rest_parameter_abi(params)?;
+    let mut param_names = Vec::with_capacity(params.len());
+    let mut parameter_steps = Vec::with_capacity(params.len());
+
+    // Keep raw argument registers behind private carrier bindings. Source
+    // parameter bindings are allocated separately below and initialized in
+    // formal order by the prologue. This prevents a later raw argument in rN
+    // from becoming visible before its BindingInitialization step.
+    for (index, param) in params.iter().enumerate() {
+        let abi_name = if let BindingPattern::Rest(inner) = &param.pattern
+            && let Some(name) = inner.as_identifier()
+        {
+            name.to_string()
+        } else if let Some(name) = param.name() {
+            name.to_string()
+        } else {
+            format!("@@franken_internal_param_{index}")
+        };
+        param_names.push(abi_name);
+
+        let carrier_name = format!("@@franken_internal_param_{index}");
+        let _ = alloc_binding(
+            body_bindings,
+            body_lookup,
+            body_binding_index,
+            body_scope,
+            &carrier_name,
+            BindingKind::Parameter,
+        )
+        .map_err(LoweringPipelineError::SemanticViolation)?;
+        parameter_steps.push((index, carrier_name, &param.pattern));
+    }
+
+    for param in params {
+        for bound_name in param.pattern.binding_names() {
+            let _ = alloc_binding(
+                body_bindings,
+                body_lookup,
+                body_binding_index,
+                body_scope,
+                bound_name,
+                BindingKind::Parameter,
+            )
+            .map_err(LoweringPipelineError::SemanticViolation)?;
+        }
+    }
+    let mut parameter_bindings = Vec::new();
+    for (formal_index, param) in params.iter().enumerate() {
+        for name in param.pattern.binding_names() {
+            let binding_id =
+                *body_lookup
+                    .get(name)
+                    .ok_or(LoweringPipelineError::InvariantViolation {
+                        detail: "user parameter binding must be allocated before its TDZ plan",
+                    })?;
+            parameter_bindings.push((formal_index, binding_id, name.to_string()));
+        }
+    }
+    Ok(FunctionParameterPlan {
+        param_names,
+        parameter_steps,
+        parameter_bindings,
+        rest_param_index,
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn lower_function_parameter_prologue(
+    parameter_steps: &[(usize, String, &BindingPattern)],
+    parameter_bindings: &[(usize, BindingId, String)],
+    outer_lookup: &BTreeMap<String, BindingId>,
+    body_ops: &mut Vec<Ir1Op>,
+    body_bindings: &mut Vec<ResolvedBinding>,
+    parameter_lookup: &BTreeMap<String, BindingId>,
+    body_binding_index: &mut BindingId,
+    body_scope: ScopeId,
+    body_label_counter: &mut u32,
+) -> Result<Vec<(String, BindingId)>, LoweringPipelineError> {
+    if parameter_steps.is_empty() {
+        return Ok(Vec::new());
+    }
+    let parameter_binding_names = parameter_lookup.keys().cloned().collect::<BTreeSet<_>>();
+    let mut prologue_lookup = parameter_lookup.clone();
+    seed_function_outer_static_bindings(outer_lookup, &mut prologue_lookup, body_binding_index);
+    let prologue_start = body_ops.len();
+    for (formal_index, carrier_name, pattern) in parameter_steps {
+        let source_binding_id = *prologue_lookup.get(carrier_name).ok_or(
+            LoweringPipelineError::InvariantViolation {
+                detail: "parameter carrier binding must be allocated before its prologue",
+            },
+        )?;
+        let mut parameter_tdz = ParameterTdzState::at_formal(parameter_bindings, *formal_index);
+        let direct_name = match pattern {
+            BindingPattern::Identifier(name) => Some(name.as_str()),
+            BindingPattern::Rest(inner) => inner.as_identifier(),
+            _ => None,
+        };
+        if let Some(name) = direct_name {
+            let target_binding_id =
+                *prologue_lookup
+                    .get(name)
+                    .ok_or(LoweringPipelineError::InvariantViolation {
+                        detail: "direct parameter binding must be allocated before its prologue",
+                    })?;
+            body_ops.push(Ir1Op::LoadBinding {
+                binding_id: source_binding_id,
+            });
+            emit_destructuring_target_write(
+                body_ops,
+                target_binding_id,
+                DestructuringWriteMode::Initialize,
+            );
+            body_ops.push(Ir1Op::Pop);
+            parameter_tdz.mark_binding_initialized(name, &prologue_lookup);
+        } else {
+            lower_destructuring_to_ir1_with_parameter_tdz(
+                pattern,
+                source_binding_id,
+                body_ops,
+                body_bindings,
+                &mut prologue_lookup,
+                body_binding_index,
+                body_scope,
+                body_label_counter,
+                DestructuringWriteMode::Initialize,
+                Some(&mut parameter_tdz),
+            )?;
+        }
+    }
+    let referenced_binding_ids =
+        parameter_prologue_referenced_binding_ids(&body_ops[prologue_start..]);
+    Ok(prologue_lookup
+        .into_iter()
+        .filter(|(name, _)| {
+            !parameter_binding_names.contains(name) && !is_internal_lowering_binding(name)
+        })
+        .filter(|(_, binding_id)| referenced_binding_ids.contains(binding_id))
+        .collect())
+}
+
 fn parse_named_export_clause_bindings(clause: &str) -> Vec<(String, String)> {
     let trimmed = clause.trim();
-    let local_clause = split_named_export_clause(trimmed)
-        .map(|(head, _)| head.trim())
-        .unwrap_or(trimmed);
-
-    if let Some(inner) = local_clause
+    if let Some(inner) = trimmed
         .strip_prefix('{')
         .and_then(|body| body.strip_suffix('}'))
     {
@@ -974,33 +2890,6 @@ fn parse_named_export_clause_bindings(clause: &str) -> Vec<(String, String)> {
     } else {
         vec![(trimmed.to_string(), trimmed.to_string())]
     }
-}
-
-fn parse_named_export_clause_source(clause: &str) -> Option<String> {
-    let trimmed = clause.trim();
-    let (_head, source_raw) = split_named_export_clause(trimmed)?;
-    parse_quoted_export_source(source_raw.trim())
-}
-
-fn split_named_export_clause(clause: &str) -> Option<(&str, &str)> {
-    clause.split_once(" from ")
-}
-
-fn parse_quoted_export_source(input: &str) -> Option<String> {
-    if input.len() < 2 {
-        return None;
-    }
-    let bytes = input.as_bytes();
-    let first = bytes[0];
-    let last = bytes[bytes.len() - 1];
-    if (first == b'\'' && last == b'\'') || (first == b'"' && last == b'"') {
-        let inner = &input[1..input.len() - 1];
-        if inner.contains('\n') || inner.contains('\r') {
-            return None;
-        }
-        return Some(inner.to_string());
-    }
-    None
 }
 
 fn alloc_pattern_primary_binding(
@@ -1043,10 +2932,119 @@ fn alloc_pattern_primary_binding(
     )
 }
 
+/// Resolve the identifiers in a `for-in`/`for-of` assignment target.
+///
+/// A loop head without `let`/`const`/`var` is an assignment, not a lexical
+/// declaration.  Existing bindings must therefore be reused instead of
+/// passing through declaration-conflict checks or installing a temporary
+/// loop scope.  For consistency with ordinary assignment lowering, an
+/// unresolved target gets a root-scope placeholder binding.
+fn resolve_assignment_pattern_primary_binding(
+    bindings: &mut Vec<ResolvedBinding>,
+    binding_lookup: &mut BTreeMap<String, BindingId>,
+    binding_index: &mut BindingId,
+    scope_id: ScopeId,
+    pattern: &BindingPattern,
+) -> Result<BindingId, SemanticError> {
+    let mut first_target = None;
+
+    for name in pattern.binding_names() {
+        let binding_id = if let Some(existing) = binding_lookup.get(name) {
+            *existing
+        } else {
+            alloc_binding(
+                bindings,
+                binding_lookup,
+                binding_index,
+                scope_id,
+                name,
+                BindingKind::Let,
+            )?
+        };
+        first_target.get_or_insert(binding_id);
+    }
+
+    Ok(first_target.unwrap_or(0))
+}
+
+fn object_pattern_static_key(
+    prop: &ObjectPatternProperty,
+    fallback_name: Option<&str>,
+) -> Result<JsString, LoweringPipelineError> {
+    Ok(canonical_static_object_property_key(&prop.key)
+        .unwrap_or_else(|_| JsString::from(fallback_name.unwrap_or_default())))
+}
+
+#[derive(Clone)]
+enum DestructuringPropertyKey {
+    Static(JsString),
+    Dynamic(BindingId),
+}
+
+fn emit_destructuring_property_key(key: &DestructuringPropertyKey, ops: &mut Vec<Ir1Op>) {
+    match key {
+        DestructuringPropertyKey::Static(key) => ops.push(Ir1Op::LoadLiteral {
+            value: Ir1Literal::String(key.clone()),
+        }),
+        DestructuringPropertyKey::Dynamic(binding_id) => ops.push(Ir1Op::LoadBinding {
+            binding_id: *binding_id,
+        }),
+    }
+}
+
+fn emit_object_binding_coercibility_check(
+    source_bid: BindingId,
+    ops: &mut Vec<Ir1Op>,
+    label_counter: &mut u32,
+) {
+    let error_label = alloc_label(label_counter);
+    let continue_label = alloc_label(label_counter);
+
+    ops.push(Ir1Op::LoadBinding {
+        binding_id: source_bid,
+    });
+    ops.push(Ir1Op::JumpIfNullish {
+        label_id: error_label,
+    });
+    ops.push(Ir1Op::Jump {
+        label_id: continue_label,
+    });
+    ops.push(Ir1Op::Label { id: error_label });
+    emit_type_error_throw_message(ops, "Cannot destructure null or undefined".to_string());
+    // The synthetic undefined after Throw keeps generic expression lowering
+    // structurally total. Discard it here so both control-flow arms have the
+    // same compile-time value-stack shape; it is unreachable at runtime.
+    ops.push(Ir1Op::Pop);
+    ops.push(Ir1Op::Label { id: continue_label });
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DestructuringWriteMode {
+    Initialize,
+    Assign,
+}
+
+fn emit_destructuring_target_write(
+    ops: &mut Vec<Ir1Op>,
+    binding_id: BindingId,
+    mode: DestructuringWriteMode,
+) {
+    match mode {
+        DestructuringWriteMode::Initialize => {
+            ops.push(Ir1Op::StoreBinding { binding_id });
+        }
+        DestructuringWriteMode::Assign => {
+            ops.push(Ir1Op::AssignOp {
+                binding_id,
+                operator: AssignmentOperator::Assign,
+            });
+        }
+    }
+}
+
 /// Emit IR1 ops to destructure a value (already stored in `source_bid`) into
-/// the individual bindings declared by `pattern`. For object patterns this
-/// emits `LoadBinding(source) + GetProperty(key) + StoreBinding(target) + Pop`
-/// for each property. Array patterns use numeric index strings.
+/// the individual bindings declared by `pattern`. Array patterns use numeric
+/// index strings.
 #[allow(clippy::only_used_in_recursion)]
 #[allow(clippy::too_many_arguments)]
 fn lower_destructuring_to_ir1(
@@ -1059,48 +3057,198 @@ fn lower_destructuring_to_ir1(
     scope_id: ScopeId,
     label_counter: &mut u32,
 ) -> Result<(), LoweringPipelineError> {
+    lower_destructuring_to_ir1_with_parameter_tdz(
+        pattern,
+        source_bid,
+        ops,
+        bindings,
+        binding_lookup,
+        binding_index,
+        scope_id,
+        label_counter,
+        DestructuringWriteMode::Initialize,
+        None,
+    )
+}
+
+#[allow(clippy::only_used_in_recursion)]
+#[allow(clippy::too_many_arguments)]
+fn lower_destructuring_assignment_to_ir1(
+    pattern: &BindingPattern,
+    source_bid: BindingId,
+    ops: &mut Vec<Ir1Op>,
+    bindings: &mut Vec<ResolvedBinding>,
+    binding_lookup: &mut BTreeMap<String, BindingId>,
+    binding_index: &mut BindingId,
+    scope_id: ScopeId,
+    label_counter: &mut u32,
+) -> Result<(), LoweringPipelineError> {
+    lower_destructuring_to_ir1_with_parameter_tdz(
+        pattern,
+        source_bid,
+        ops,
+        bindings,
+        binding_lookup,
+        binding_index,
+        scope_id,
+        label_counter,
+        DestructuringWriteMode::Assign,
+        None,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn lower_destructuring_to_ir1_with_parameter_tdz(
+    pattern: &BindingPattern,
+    source_bid: BindingId,
+    ops: &mut Vec<Ir1Op>,
+    bindings: &mut Vec<ResolvedBinding>,
+    binding_lookup: &mut BTreeMap<String, BindingId>,
+    binding_index: &mut BindingId,
+    scope_id: ScopeId,
+    label_counter: &mut u32,
+    write_mode: DestructuringWriteMode,
+    mut parameter_tdz: Option<&mut ParameterTdzState>,
+) -> Result<(), LoweringPipelineError> {
     match pattern {
         BindingPattern::Identifier(_) => {
             // Simple binding — already handled by StoreBinding above.
         }
         BindingPattern::ObjectPattern(props) => {
+            emit_object_binding_coercibility_check(source_bid, ops, label_counter);
+            let mut rest_excluded_keys = Vec::<DestructuringPropertyKey>::new();
             for prop in props {
-                let target_names = prop.value.binding_names();
-                let target_name = match target_names.first() {
-                    Some(n) => *n,
-                    None => continue,
-                };
-                let target_bid = match binding_lookup.get(target_name) {
-                    Some(bid) => *bid,
-                    None => continue,
-                };
+                if let BindingPattern::Rest(inner) = &prop.value {
+                    let (rest_bid, target_name) = match inner.as_ref() {
+                        BindingPattern::Identifier(name) => {
+                            let Some(binding_id) = binding_lookup.get(name) else {
+                                continue;
+                            };
+                            (*binding_id, Some(name.as_str()))
+                        }
+                        _ => (
+                            alloc_internal_binding(
+                                bindings,
+                                binding_lookup,
+                                binding_index,
+                                scope_id,
+                                "destructure_rest",
+                            )?,
+                            None,
+                        ),
+                    };
 
-                // Determine the property key string.
-                let key_str = if prop.shorthand {
-                    target_name.to_string()
-                } else {
-                    match &prop.key {
-                        Expression::Identifier(name) => name.clone(),
-                        Expression::StringLiteral(s) => s.clone(),
-                        Expression::NumericLiteral(n) => n.to_string(),
-                        _ => target_name.to_string(),
+                    // Object rest filters every consumed key before reading
+                    // the remaining own properties. Keeping the
+                    // exclusions on the operand stack lets the dedicated copy
+                    // operation avoid observing excluded accessors.
+                    ops.push(Ir1Op::NewObject { count: 0 });
+                    ops.push(Ir1Op::LoadBinding {
+                        binding_id: source_bid,
+                    });
+                    for key in &rest_excluded_keys {
+                        emit_destructuring_property_key(key, ops);
                     }
+                    let excluded_count = u32::try_from(rest_excluded_keys.len()).map_err(|_| {
+                        LoweringPipelineError::InvariantViolation {
+                            detail: "Object-rest exclusion count exceeds u32 capacity",
+                        }
+                    })?;
+                    ops.push(Ir1Op::CopyDataProperties { excluded_count });
+                    if target_name.is_some() {
+                        emit_destructuring_target_write(ops, rest_bid, write_mode);
+                    } else {
+                        ops.push(Ir1Op::StoreBinding {
+                            binding_id: rest_bid,
+                        });
+                    }
+                    ops.push(Ir1Op::Pop);
+
+                    if let Some(target_name) = target_name {
+                        if let Some(state) = parameter_tdz.as_deref_mut() {
+                            state.mark_binding_initialized(target_name, binding_lookup);
+                        }
+                    } else {
+                        lower_destructuring_to_ir1_with_parameter_tdz(
+                            inner,
+                            rest_bid,
+                            ops,
+                            bindings,
+                            binding_lookup,
+                            binding_index,
+                            scope_id,
+                            label_counter,
+                            write_mode,
+                            parameter_tdz.as_deref_mut(),
+                        )?;
+                    }
+
+                    continue;
+                }
+
+                let target_names = prop.value.binding_names();
+                let property_key = if prop.computed {
+                    let key_expression_start = ops.len();
+                    lower_expression_to_ir1(
+                        &prop.key,
+                        ops,
+                        bindings,
+                        binding_lookup,
+                        binding_index,
+                        scope_id,
+                        label_counter,
+                    )?;
+                    if let Some(state) = parameter_tdz.as_deref() {
+                        rewrite_parameter_tdz_accesses(ops, key_expression_start, state);
+                    }
+                    let key_binding = alloc_internal_binding(
+                        bindings,
+                        binding_lookup,
+                        binding_index,
+                        scope_id,
+                        "destructure_key",
+                    )?;
+                    ops.push(Ir1Op::StoreBinding {
+                        binding_id: key_binding,
+                    });
+                    ops.push(Ir1Op::Pop);
+                    DestructuringPropertyKey::Dynamic(key_binding)
+                } else {
+                    DestructuringPropertyKey::Static(object_pattern_static_key(
+                        prop,
+                        target_names.first().copied(),
+                    )?)
                 };
+                rest_excluded_keys.push(property_key.clone());
 
                 // Load the source object, get the property, store to target binding.
                 ops.push(Ir1Op::LoadBinding {
                     binding_id: source_bid,
                 });
+                if matches!(&property_key, DestructuringPropertyKey::Dynamic(_)) {
+                    emit_destructuring_property_key(&property_key, ops);
+                }
                 ops.push(Ir1Op::GetProperty {
-                    key: Ir1PropertyKey::Static(key_str),
+                    key: match &property_key {
+                        DestructuringPropertyKey::Static(key) => {
+                            Ir1PropertyKey::Static(key.clone())
+                        }
+                        DestructuringPropertyKey::Dynamic(_) => Ir1PropertyKey::Dynamic,
+                    },
                 });
 
                 match &prop.value {
-                    BindingPattern::Identifier(_) => {
-                        ops.push(Ir1Op::StoreBinding {
-                            binding_id: target_bid,
-                        });
+                    BindingPattern::Identifier(target_name) => {
+                        let target_bid = *binding_lookup.get(target_name).ok_or(
+                            LoweringPipelineError::InvariantViolation {
+                                detail: "Object-pattern target binding must be allocated before lowering",
+                            },
+                        )?;
+                        emit_destructuring_target_write(ops, target_bid, write_mode);
                         ops.push(Ir1Op::Pop);
+                        if let Some(state) = parameter_tdz.as_deref_mut() {
+                            state.mark_binding_initialized(target_name, binding_lookup);
+                        }
                     }
                     _ => {
                         let temp_binding = alloc_internal_binding(
@@ -1114,7 +3262,7 @@ fn lower_destructuring_to_ir1(
                             binding_id: temp_binding,
                         });
                         ops.push(Ir1Op::Pop);
-                        lower_destructuring_to_ir1(
+                        lower_destructuring_to_ir1_with_parameter_tdz(
                             &prop.value,
                             temp_binding,
                             ops,
@@ -1123,6 +3271,8 @@ fn lower_destructuring_to_ir1(
                             binding_index,
                             scope_id,
                             label_counter,
+                            write_mode,
+                            parameter_tdz.as_deref_mut(),
                         )?;
                     }
                 }
@@ -1140,25 +3290,60 @@ fn lower_destructuring_to_ir1(
 
                 // Handle rest element: `[a, ...rest]`
                 if let BindingPattern::Rest(inner) = element {
-                    let target_names = inner.binding_names();
-                    let target_name = match target_names.first() {
-                        Some(n) => *n,
-                        None => continue,
+                    let (rest_bid, target_name) = match inner.as_ref() {
+                        BindingPattern::Identifier(name) => {
+                            let Some(binding_id) = binding_lookup.get(name) else {
+                                continue;
+                            };
+                            (*binding_id, Some(name.as_str()))
+                        }
+                        _ => (
+                            alloc_internal_binding(
+                                bindings,
+                                binding_lookup,
+                                binding_index,
+                                scope_id,
+                                "destructure_rest",
+                            )?,
+                            None,
+                        ),
                     };
-                    if let Some(&target_bid) = binding_lookup.get(target_name) {
-                        // Rest collects remaining elements by slicing the source array
-                        // from the current index to the end.
-                        ops.push(Ir1Op::LoadBinding {
-                            binding_id: source_bid,
-                        });
-                        ops.push(Ir1Op::LoadLiteral {
-                            value: Ir1Literal::Integer(index as i64),
-                        });
-                        ops.push(Ir1Op::ArraySlice);
+
+                    // Rest collects remaining elements by slicing the source array
+                    // from the current index to the end.
+                    ops.push(Ir1Op::LoadBinding {
+                        binding_id: source_bid,
+                    });
+                    ops.push(Ir1Op::LoadLiteral {
+                        value: Ir1Literal::Integer(index as i64),
+                    });
+                    ops.push(Ir1Op::ArraySlice);
+                    if target_name.is_some() {
+                        emit_destructuring_target_write(ops, rest_bid, write_mode);
+                    } else {
                         ops.push(Ir1Op::StoreBinding {
-                            binding_id: target_bid,
+                            binding_id: rest_bid,
                         });
-                        ops.push(Ir1Op::Pop);
+                    }
+                    ops.push(Ir1Op::Pop);
+
+                    if let Some(target_name) = target_name {
+                        if let Some(state) = parameter_tdz.as_deref_mut() {
+                            state.mark_binding_initialized(target_name, binding_lookup);
+                        }
+                    } else {
+                        lower_destructuring_to_ir1_with_parameter_tdz(
+                            inner,
+                            rest_bid,
+                            ops,
+                            bindings,
+                            binding_lookup,
+                            binding_index,
+                            scope_id,
+                            label_counter,
+                            write_mode,
+                            parameter_tdz.as_deref_mut(),
+                        )?;
                     }
                     continue;
                 }
@@ -1178,14 +3363,15 @@ fn lower_destructuring_to_ir1(
                     binding_id: source_bid,
                 });
                 ops.push(Ir1Op::GetProperty {
-                    key: Ir1PropertyKey::Static(index.to_string()),
+                    key: Ir1PropertyKey::Static(index.to_string().into()),
                 });
                 match element {
                     BindingPattern::Identifier(_) => {
-                        ops.push(Ir1Op::StoreBinding {
-                            binding_id: target_bid,
-                        });
+                        emit_destructuring_target_write(ops, target_bid, write_mode);
                         ops.push(Ir1Op::Pop);
+                        if let Some(state) = parameter_tdz.as_deref_mut() {
+                            state.mark_binding_initialized(target_name, binding_lookup);
+                        }
                     }
                     _ => {
                         let temp_binding = alloc_internal_binding(
@@ -1199,7 +3385,7 @@ fn lower_destructuring_to_ir1(
                             binding_id: temp_binding,
                         });
                         ops.push(Ir1Op::Pop);
-                        lower_destructuring_to_ir1(
+                        lower_destructuring_to_ir1_with_parameter_tdz(
                             element,
                             temp_binding,
                             ops,
@@ -1208,6 +3394,8 @@ fn lower_destructuring_to_ir1(
                             binding_index,
                             scope_id,
                             label_counter,
+                            write_mode,
+                            parameter_tdz.as_deref_mut(),
                         )?;
                     }
                 }
@@ -1236,20 +3424,23 @@ fn lower_destructuring_to_ir1(
                 label_id: default_label,
             });
 
+            // The supplied and default arms are alternatives. Lower each
+            // BindingInitialization with the same pre-branch TDZ state, then
+            // merge by marking the whole left-hand pattern initialized.
+            let parameter_tdz_before_branch = parameter_tdz.as_deref().cloned();
             match left.as_ref() {
                 BindingPattern::Identifier(name) => {
                     if let Some(&target_bid) = binding_lookup.get(name.as_str()) {
                         ops.push(Ir1Op::LoadBinding {
                             binding_id: source_bid,
                         });
-                        ops.push(Ir1Op::StoreBinding {
-                            binding_id: target_bid,
-                        });
+                        emit_destructuring_target_write(ops, target_bid, write_mode);
                         ops.push(Ir1Op::Pop);
                     }
                 }
                 _ => {
-                    lower_destructuring_to_ir1(
+                    let mut branch_tdz = parameter_tdz_before_branch.clone();
+                    lower_destructuring_to_ir1_with_parameter_tdz(
                         left,
                         source_bid,
                         ops,
@@ -1258,6 +3449,8 @@ fn lower_destructuring_to_ir1(
                         binding_index,
                         scope_id,
                         label_counter,
+                        write_mode,
+                        branch_tdz.as_mut(),
                     )?;
                 }
             }
@@ -1266,6 +3459,7 @@ fn lower_destructuring_to_ir1(
             });
 
             ops.push(Ir1Op::Label { id: default_label });
+            let default_expression_start = ops.len();
             lower_expression_to_ir1(
                 right,
                 ops,
@@ -1275,6 +3469,9 @@ fn lower_destructuring_to_ir1(
                 scope_id,
                 label_counter,
             )?;
+            if let Some(state) = parameter_tdz_before_branch.as_ref() {
+                rewrite_parameter_tdz_accesses(ops, default_expression_start, state);
+            }
             ops.push(Ir1Op::StoreBinding {
                 binding_id: source_bid,
             });
@@ -1285,14 +3482,13 @@ fn lower_destructuring_to_ir1(
                         ops.push(Ir1Op::LoadBinding {
                             binding_id: source_bid,
                         });
-                        ops.push(Ir1Op::StoreBinding {
-                            binding_id: target_bid,
-                        });
+                        emit_destructuring_target_write(ops, target_bid, write_mode);
                         ops.push(Ir1Op::Pop);
                     }
                 }
                 _ => {
-                    lower_destructuring_to_ir1(
+                    let mut branch_tdz = parameter_tdz_before_branch;
+                    lower_destructuring_to_ir1_with_parameter_tdz(
                         left,
                         source_bid,
                         ops,
@@ -1301,15 +3497,20 @@ fn lower_destructuring_to_ir1(
                         binding_index,
                         scope_id,
                         label_counter,
+                        write_mode,
+                        branch_tdz.as_mut(),
                     )?;
                 }
             }
 
             ops.push(Ir1Op::Label { id: end_label });
+            if let Some(state) = parameter_tdz.as_deref_mut() {
+                state.mark_pattern_initialized(left, binding_lookup);
+            }
         }
         BindingPattern::Rest(inner) => {
             // Rest at top level (unusual but valid). Recurse into inner.
-            lower_destructuring_to_ir1(
+            lower_destructuring_to_ir1_with_parameter_tdz(
                 inner,
                 source_bid,
                 ops,
@@ -1318,6 +3519,8 @@ fn lower_destructuring_to_ir1(
                 binding_index,
                 scope_id,
                 label_counter,
+                write_mode,
+                parameter_tdz,
             )?;
         }
     }
@@ -1343,6 +3546,7 @@ fn lower_statement_to_ir1(
         scope_id,
         label_counter,
         ControlFlowTargets::default(),
+        &LabelContext::default(),
     )
 }
 
@@ -1356,6 +3560,7 @@ fn lower_statement_to_ir1_with_flow(
     scope_id: ScopeId,
     label_counter: &mut u32,
     control_flow: ControlFlowTargets,
+    label_ctx: &LabelContext,
 ) -> Result<(), LoweringPipelineError> {
     match statement {
         Statement::Expression(stmt) => {
@@ -1401,15 +3606,42 @@ fn lower_statement_to_ir1_with_flow(
 
                 // Lower the initializer expression (pushes value onto stack).
                 if let Some(init) = &d.initializer {
-                    lower_expression_to_ir1(
-                        init,
-                        ops,
-                        bindings,
-                        binding_lookup,
-                        binding_index,
-                        scope_id,
-                        label_counter,
-                    )?;
+                    // bd-tu0c3: when `<id> = require('path')` aliases the path
+                    // module AND the alias was confirmed at pre-scan (used as a
+                    // recognized `path.*` builtin; the NUL-sentinel is
+                    // present), bind `id` to `undefined` and SKIP lowering the
+                    // inner `require('path')` — which would otherwise emit a
+                    // `module:require` hostcall that faults at runtime. The
+                    // pure-compute operations are recognized at the member
+                    // call/read sites. A bare/unused `const path =
+                    // require('path')` is not recorded, so it keeps the
+                    // existing behavior. Mirror of the franken-engine elision.
+                    // bd-qmy52 joins the querystring and os require-bindings
+                    // to the same elision (confirmed aliases only; unused
+                    // aliases keep the `module:require` behavior).
+                    if let BindingPattern::Identifier(alias) = &d.pattern
+                        && ((is_require_path_module_initializer(init, binding_lookup)
+                            && binding_lookup.contains_key(&path_module_alias_sentinel(alias)))
+                            || (is_require_querystring_module_initializer(init, binding_lookup)
+                                && binding_lookup
+                                    .contains_key(&querystring_module_alias_sentinel(alias)))
+                            || (is_require_os_module_initializer(init, binding_lookup)
+                                && binding_lookup.contains_key(&os_module_alias_sentinel(alias))))
+                    {
+                        ops.push(Ir1Op::LoadLiteral {
+                            value: Ir1Literal::Undefined,
+                        });
+                    } else {
+                        lower_expression_to_ir1(
+                            init,
+                            ops,
+                            bindings,
+                            binding_lookup,
+                            binding_index,
+                            scope_id,
+                            label_counter,
+                        )?;
+                    }
                 } else {
                     ops.push(Ir1Op::LoadLiteral {
                         value: Ir1Literal::Undefined,
@@ -1443,7 +3675,9 @@ fn lower_statement_to_ir1_with_flow(
             }
         }
         Statement::Block(block) => {
-            for inner in &block.body {
+            let enclosing_bindings =
+                reserve_block_lexical_bindings(&block.body, None, binding_lookup, binding_index);
+            let result = block.body.iter().try_for_each(|inner| {
                 lower_statement_to_ir1_with_flow(
                     inner,
                     ops,
@@ -1453,8 +3687,11 @@ fn lower_statement_to_ir1_with_flow(
                     scope_id,
                     label_counter,
                     control_flow,
-                )?;
-            }
+                    label_ctx,
+                )
+            });
+            restore_block_lexical_bindings(binding_lookup, enclosing_bindings);
+            result?;
         }
         Statement::If(if_stmt) => {
             lower_expression_to_ir1(
@@ -1481,6 +3718,7 @@ fn lower_statement_to_ir1_with_flow(
                 scope_id,
                 label_counter,
                 control_flow,
+                label_ctx,
             )?;
             ops.push(Ir1Op::Jump {
                 label_id: end_label,
@@ -1496,11 +3734,21 @@ fn lower_statement_to_ir1_with_flow(
                     scope_id,
                     label_counter,
                     control_flow,
+                    label_ctx,
                 )?;
             }
             ops.push(Ir1Op::Label { id: end_label });
         }
         Statement::For(for_stmt) => {
+            let for_enclosing_bindings =
+                for_stmt.init.as_deref().map_or_else(BTreeMap::new, |init| {
+                    reserve_block_lexical_bindings(
+                        std::slice::from_ref(init),
+                        None,
+                        binding_lookup,
+                        binding_index,
+                    )
+                });
             if let Some(init) = &for_stmt.init {
                 lower_statement_to_ir1_with_flow(
                     init,
@@ -1511,6 +3759,7 @@ fn lower_statement_to_ir1_with_flow(
                     scope_id,
                     label_counter,
                     control_flow,
+                    label_ctx,
                 )?;
             }
             let loop_label = alloc_label(label_counter);
@@ -1544,6 +3793,7 @@ fn lower_statement_to_ir1_with_flow(
                     break_label: Some(end_label),
                     continue_label: Some(continue_label),
                 },
+                &label_ctx.enter_loop(end_label, continue_label),
             )?;
             ops.push(Ir1Op::Label { id: continue_label });
             if let Some(update) = &for_stmt.update {
@@ -1562,19 +3812,79 @@ fn lower_statement_to_ir1_with_flow(
                 label_id: loop_label,
             });
             ops.push(Ir1Op::Label { id: end_label });
+            restore_block_lexical_bindings(binding_lookup, for_enclosing_bindings);
         }
         Statement::ForIn(for_in_stmt) => {
-            // Lowering: for (let k in obj) { body }
-            //   1. Evaluate object expression → push on stack
-            //   2. ForInInit → pop object, push enumerator
-            //   3. loop_label:
-            //   4. ForInNext { done_label: end } → push next key (or jump)
-            //   5. StoreBinding(k) → bind key to loop variable
-            //   6. Pop
-            //   7. body
-            //   8. Jump → loop_label
-            //   9. end_label:
-            //  10. IteratorClose (break path wired through control_flow)
+            // Lowering: for (var k = init in obj) { body }
+            //   1. For the Annex-B form only, evaluate init and store k once
+            //   2. Evaluate object expression → push on stack
+            //   3. ForInInit → pop object, push enumerator
+            //   4. loop_label:
+            //   5. ForInNext { done_label: end } → push next key (or jump)
+            //   6. StoreBinding(k) → bind key to loop variable
+            //   7. Pop
+            //   8. body
+            //   9. Jump → loop_label
+            //  10. end_label:
+            let for_in_enclosing_bindings = if matches!(
+                for_in_stmt.binding_kind,
+                Some(VariableDeclarationKind::Let | VariableDeclarationKind::Const)
+            ) {
+                reserve_fresh_lexical_bindings(
+                    for_in_stmt
+                        .binding
+                        .binding_names()
+                        .into_iter()
+                        .map(str::to_string)
+                        .collect(),
+                    binding_lookup,
+                    binding_index,
+                )
+            } else {
+                BTreeMap::new()
+            };
+
+            let pre_loop_binding_id = if let Some(initializer) = &for_in_stmt.pre_loop_initializer {
+                if for_in_stmt.binding_kind != Some(VariableDeclarationKind::Var)
+                    || !matches!(&for_in_stmt.binding, BindingPattern::Identifier(_))
+                {
+                    return Err(LoweringPipelineError::InvariantViolation {
+                        detail: "for-in pre-loop initializer requires a var identifier binding",
+                    });
+                }
+                // Annex B resolves the hoisted `var` binding before evaluating
+                // the initializer, then performs PutValue before touching the
+                // RHS. The later key assignment reuses this exact binding ID.
+                let binding_id = alloc_pattern_primary_binding(
+                    bindings,
+                    binding_lookup,
+                    binding_index,
+                    scope_id,
+                    &for_in_stmt.binding,
+                    BindingKind::Var,
+                )
+                .map_err(LoweringPipelineError::SemanticViolation)?;
+                lower_expression_to_ir1(
+                    initializer,
+                    ops,
+                    bindings,
+                    binding_lookup,
+                    binding_index,
+                    scope_id,
+                    label_counter,
+                )?;
+                ops.push(Ir1Op::StoreBinding { binding_id });
+                ops.push(Ir1Op::Pop);
+                Some(binding_id)
+            } else {
+                None
+            };
+
+            // A lexical loop-head binding is already in its TDZ while the
+            // right-hand side is evaluated. Reserving it first also prevents
+            // a same-name static builtin (for example `Math`) from being
+            // intercepted through an outer/global spelling. `var` and bare
+            // assignment targets intentionally keep their enclosing binding.
             lower_expression_to_ir1(
                 &for_in_stmt.object,
                 ops,
@@ -1596,20 +3906,28 @@ fn lower_statement_to_ir1_with_flow(
             });
 
             // Bind the yielded key to the loop variable.
-            let binding_kind = match for_in_stmt.binding_kind {
-                Some(VariableDeclarationKind::Let) | None => BindingKind::Let,
-                Some(VariableDeclarationKind::Const) => BindingKind::Const,
-                Some(VariableDeclarationKind::Var) => BindingKind::Var,
+            let bid = if let Some(binding_id) = pre_loop_binding_id {
+                binding_id
+            } else {
+                match for_in_stmt.binding_kind {
+                    None => resolve_assignment_pattern_primary_binding(
+                        bindings,
+                        binding_lookup,
+                        binding_index,
+                        scope_id,
+                        &for_in_stmt.binding,
+                    ),
+                    Some(kind) => alloc_pattern_primary_binding(
+                        bindings,
+                        binding_lookup,
+                        binding_index,
+                        scope_id,
+                        &for_in_stmt.binding,
+                        binding_kind_for_variable_declaration(kind),
+                    ),
+                }
+                .map_err(LoweringPipelineError::SemanticViolation)?
             };
-            let bid = alloc_pattern_primary_binding(
-                bindings,
-                binding_lookup,
-                binding_index,
-                scope_id,
-                &for_in_stmt.binding,
-                binding_kind,
-            )
-            .map_err(LoweringPipelineError::SemanticViolation)?;
             // For simple identifier patterns, store to the primary binding.
             // For destructuring patterns, use a dedicated internal source binding.
             let source_binding_id = if matches!(for_in_stmt.binding, BindingPattern::Identifier(_))
@@ -1629,21 +3947,43 @@ fn lower_statement_to_ir1_with_flow(
                 .map_err(LoweringPipelineError::SemanticViolation)?
             };
 
-            ops.push(Ir1Op::StoreBinding {
-                binding_id: source_binding_id,
-            });
+            if for_in_stmt.binding_kind.is_none()
+                && matches!(for_in_stmt.binding, BindingPattern::Identifier(_))
+            {
+                ops.push(Ir1Op::AssignOp {
+                    binding_id: source_binding_id,
+                    operator: AssignmentOperator::Assign,
+                });
+            } else {
+                ops.push(Ir1Op::StoreBinding {
+                    binding_id: source_binding_id,
+                });
+            }
             ops.push(Ir1Op::Pop);
             if !matches!(for_in_stmt.binding, BindingPattern::Identifier(_)) {
-                lower_destructuring_to_ir1(
-                    &for_in_stmt.binding,
-                    source_binding_id,
-                    ops,
-                    bindings,
-                    binding_lookup,
-                    binding_index,
-                    scope_id,
-                    label_counter,
-                )?;
+                if for_in_stmt.binding_kind.is_none() {
+                    lower_destructuring_assignment_to_ir1(
+                        &for_in_stmt.binding,
+                        source_binding_id,
+                        ops,
+                        bindings,
+                        binding_lookup,
+                        binding_index,
+                        scope_id,
+                        label_counter,
+                    )?;
+                } else {
+                    lower_destructuring_to_ir1(
+                        &for_in_stmt.binding,
+                        source_binding_id,
+                        ops,
+                        bindings,
+                        binding_lookup,
+                        binding_index,
+                        scope_id,
+                        label_counter,
+                    )?;
+                }
             }
 
             lower_statement_to_ir1_with_flow(
@@ -1658,12 +3998,14 @@ fn lower_statement_to_ir1_with_flow(
                     break_label: Some(end_label),
                     continue_label: Some(continue_label),
                 },
+                &label_ctx.enter_loop(end_label, continue_label),
             )?;
             ops.push(Ir1Op::Label { id: continue_label });
             ops.push(Ir1Op::Jump {
                 label_id: loop_label,
             });
             ops.push(Ir1Op::Label { id: end_label });
+            restore_block_lexical_bindings(binding_lookup, for_in_enclosing_bindings);
         }
         Statement::ForOf(for_of_stmt) => {
             // Lowering: for (let v of iterable) { body }
@@ -1676,6 +4018,26 @@ fn lower_statement_to_ir1_with_flow(
             //   7. body (break path calls IteratorClose)
             //   8. Jump → loop_label
             //   9. end_label:
+            let for_of_enclosing_bindings = if matches!(
+                for_of_stmt.binding_kind,
+                Some(VariableDeclarationKind::Let | VariableDeclarationKind::Const)
+            ) {
+                reserve_fresh_lexical_bindings(
+                    for_of_stmt
+                        .binding
+                        .binding_names()
+                        .into_iter()
+                        .map(str::to_string)
+                        .collect(),
+                    binding_lookup,
+                    binding_index,
+                )
+            } else {
+                BTreeMap::new()
+            };
+
+            // See the for-in twin above: lexical loop heads shadow during
+            // RHS evaluation, while `var` and assignment targets do not.
             lower_expression_to_ir1(
                 &for_of_stmt.iterable,
                 ops,
@@ -1686,32 +4048,54 @@ fn lower_statement_to_ir1_with_flow(
                 label_counter,
             )?;
             ops.push(Ir1Op::ForOfInit);
+            let iterator_binding_id = alloc_internal_binding(
+                bindings,
+                binding_lookup,
+                binding_index,
+                scope_id,
+                "for_of_iterator",
+            )?;
+            ops.push(Ir1Op::StoreBinding {
+                binding_id: iterator_binding_id,
+            });
 
             let loop_label = alloc_label(label_counter);
             let continue_label = alloc_label(label_counter);
             let close_label = alloc_label(label_counter);
+            let throw_close_label = alloc_label(label_counter);
+            let return_close_label = alloc_label(label_counter);
             let end_label = alloc_label(label_counter);
 
             ops.push(Ir1Op::Label { id: loop_label });
             ops.push(Ir1Op::ForOfNext {
                 done_label: end_label,
             });
+            // IteratorStep/IteratorValue failures do not close the iterator.
+            // Protect only the loop-head assignment once a value exists.
+            ops.push(Ir1Op::BeginTry {
+                catch_label: throw_close_label,
+                finally_label: Some(throw_close_label),
+            });
 
             // Bind the yielded value to the loop variable.
-            let binding_kind = match for_of_stmt.binding_kind {
-                Some(VariableDeclarationKind::Let) | None => BindingKind::Let,
-                Some(VariableDeclarationKind::Const) => BindingKind::Const,
-                Some(VariableDeclarationKind::Var) => BindingKind::Var,
+            let bid = match for_of_stmt.binding_kind {
+                None => resolve_assignment_pattern_primary_binding(
+                    bindings,
+                    binding_lookup,
+                    binding_index,
+                    scope_id,
+                    &for_of_stmt.binding,
+                ),
+                Some(kind) => alloc_pattern_primary_binding(
+                    bindings,
+                    binding_lookup,
+                    binding_index,
+                    scope_id,
+                    &for_of_stmt.binding,
+                    binding_kind_for_variable_declaration(kind),
+                ),
             };
-            let bid = alloc_pattern_primary_binding(
-                bindings,
-                binding_lookup,
-                binding_index,
-                scope_id,
-                &for_of_stmt.binding,
-                binding_kind,
-            )
-            .map_err(LoweringPipelineError::SemanticViolation)?;
+            let bid = bid.map_err(LoweringPipelineError::SemanticViolation)?;
             // For simple identifier patterns, store to the primary binding.
             // For destructuring patterns, use a dedicated internal source binding.
             let source_binding_id = if matches!(for_of_stmt.binding, BindingPattern::Identifier(_))
@@ -1731,22 +4115,71 @@ fn lower_statement_to_ir1_with_flow(
                 .map_err(LoweringPipelineError::SemanticViolation)?
             };
 
-            ops.push(Ir1Op::StoreBinding {
-                binding_id: source_binding_id,
-            });
+            if for_of_stmt.binding_kind.is_none()
+                && matches!(for_of_stmt.binding, BindingPattern::Identifier(_))
+            {
+                ops.push(Ir1Op::AssignOp {
+                    binding_id: source_binding_id,
+                    operator: AssignmentOperator::Assign,
+                });
+            } else {
+                ops.push(Ir1Op::StoreBinding {
+                    binding_id: source_binding_id,
+                });
+            }
             ops.push(Ir1Op::Pop);
             if !matches!(for_of_stmt.binding, BindingPattern::Identifier(_)) {
-                lower_destructuring_to_ir1(
-                    &for_of_stmt.binding,
-                    source_binding_id,
-                    ops,
-                    bindings,
-                    binding_lookup,
-                    binding_index,
-                    scope_id,
-                    label_counter,
-                )?;
+                if for_of_stmt.binding_kind.is_none() {
+                    lower_destructuring_assignment_to_ir1(
+                        &for_of_stmt.binding,
+                        source_binding_id,
+                        ops,
+                        bindings,
+                        binding_lookup,
+                        binding_index,
+                        scope_id,
+                        label_counter,
+                    )?;
+                } else {
+                    lower_destructuring_to_ir1(
+                        &for_of_stmt.binding,
+                        source_binding_id,
+                        ops,
+                        bindings,
+                        binding_lookup,
+                        binding_index,
+                        scope_id,
+                        label_counter,
+                    )?;
+                }
             }
+
+            ops.push(Ir1Op::EndTry);
+
+            let mut outer_break_close_forwarders = Vec::new();
+            let mut outer_continue_close_forwarders = Vec::new();
+            for frame in &label_ctx.frames {
+                alloc_finally_forwarder(
+                    &mut outer_break_close_forwarders,
+                    Some(frame.break_target),
+                    label_counter,
+                );
+                alloc_finally_forwarder(
+                    &mut outer_continue_close_forwarders,
+                    frame.continue_target,
+                    label_counter,
+                );
+            }
+            let body_label_ctx = label_ctx
+                .remap_abrupt_targets(
+                    &outer_break_close_forwarders,
+                    &outer_continue_close_forwarders,
+                )
+                .enter_loop(close_label, continue_label);
+            ops.push(Ir1Op::BeginTry {
+                catch_label: throw_close_label,
+                finally_label: Some(return_close_label),
+            });
 
             lower_statement_to_ir1_with_flow(
                 &for_of_stmt.body,
@@ -1760,17 +4193,85 @@ fn lower_statement_to_ir1_with_flow(
                     break_label: Some(close_label),
                     continue_label: Some(continue_label),
                 },
+                &body_label_ctx,
             )?;
-            ops.push(Ir1Op::Label { id: continue_label });
+            ops.push(Ir1Op::EndTry);
             ops.push(Ir1Op::Jump {
                 label_id: loop_label,
             });
-            // Break path: close the iterator before exiting.
+
+            // Continuing this loop leaves the synthetic body frame but does
+            // not cross an iterator boundary.
+            ops.push(Ir1Op::Label { id: continue_label });
+            ops.push(Ir1Op::EndTry);
+            ops.push(Ir1Op::Jump {
+                label_id: loop_label,
+            });
+
             ops.push(Ir1Op::Label { id: close_label });
+            ops.push(Ir1Op::EndTry);
+            ops.push(Ir1Op::LoadBinding {
+                binding_id: iterator_binding_id,
+            });
             ops.push(Ir1Op::IteratorClose {
                 reason: IteratorCloseReason::Break,
             });
+            ops.push(Ir1Op::Jump {
+                label_id: end_label,
+            });
+
+            for (via_label, actual_target) in outer_break_close_forwarders {
+                ops.push(Ir1Op::Label { id: via_label });
+                ops.push(Ir1Op::EndTry);
+                ops.push(Ir1Op::LoadBinding {
+                    binding_id: iterator_binding_id,
+                });
+                ops.push(Ir1Op::IteratorClose {
+                    reason: IteratorCloseReason::Break,
+                });
+                ops.push(Ir1Op::Jump {
+                    label_id: actual_target,
+                });
+            }
+            for (via_label, actual_target) in outer_continue_close_forwarders {
+                ops.push(Ir1Op::Label { id: via_label });
+                ops.push(Ir1Op::EndTry);
+                ops.push(Ir1Op::LoadBinding {
+                    binding_id: iterator_binding_id,
+                });
+                ops.push(Ir1Op::IteratorClose {
+                    reason: IteratorCloseReason::Continue,
+                });
+                ops.push(Ir1Op::Jump {
+                    label_id: actual_target,
+                });
+            }
+
+            ops.push(Ir1Op::Label {
+                id: return_close_label,
+            });
+            ops.push(Ir1Op::EnterFinally);
+            ops.push(Ir1Op::LoadBinding {
+                binding_id: iterator_binding_id,
+            });
+            ops.push(Ir1Op::IteratorClose {
+                reason: IteratorCloseReason::Return,
+            });
+            ops.push(Ir1Op::EndFinally);
+
+            ops.push(Ir1Op::Label {
+                id: throw_close_label,
+            });
+            ops.push(Ir1Op::EnterFinally);
+            ops.push(Ir1Op::LoadBinding {
+                binding_id: iterator_binding_id,
+            });
+            ops.push(Ir1Op::IteratorClose {
+                reason: IteratorCloseReason::Throw,
+            });
+            ops.push(Ir1Op::EndFinally);
             ops.push(Ir1Op::Label { id: end_label });
+            restore_block_lexical_bindings(binding_lookup, for_of_enclosing_bindings);
         }
         Statement::While(while_stmt) => {
             let loop_label = alloc_label(label_counter);
@@ -1801,6 +4302,7 @@ fn lower_statement_to_ir1_with_flow(
                     break_label: Some(end_label),
                     continue_label: Some(loop_label),
                 },
+                &label_ctx.enter_loop(end_label, loop_label),
             )?;
             ops.push(Ir1Op::Jump {
                 label_id: loop_label,
@@ -1824,6 +4326,7 @@ fn lower_statement_to_ir1_with_flow(
                     break_label: Some(end_label),
                     continue_label: Some(continue_label),
                 },
+                &label_ctx.enter_loop(end_label, continue_label),
             )?;
             ops.push(Ir1Op::Label { id: continue_label });
             lower_expression_to_ir1(
@@ -1878,27 +4381,107 @@ fn lower_statement_to_ir1_with_flow(
             ops.push(Ir1Op::Throw);
         }
         Statement::TryCatch(tc) => {
+            let has_handler = tc.handler.is_some();
+            let has_finalizer = tc.finalizer.is_some();
             let end_label = alloc_label(label_counter);
-            let finally_label = if tc.finalizer.is_some() {
+            let finally_label = if has_finalizer {
                 Some(alloc_label(label_counter))
             } else {
                 None
             };
-            let break_via_finally_label = if tc.finalizer.is_some() {
-                control_flow.break_label.map(|_| alloc_label(label_counter))
+            // Abrupt exits from a try body must pop its handler frame even
+            // when there is no finalizer. Otherwise a later throw/return can
+            // re-enter the stale handler after control has left the try.
+            let try_needs_abrupt_forwarders = has_handler || has_finalizer;
+            let mut try_break_forwarders = Vec::new();
+            let mut try_continue_forwarders = Vec::new();
+            let mut catch_break_forwarders = Vec::new();
+            let mut catch_continue_forwarders = Vec::new();
+            let try_break_forwarder = if try_needs_abrupt_forwarders {
+                alloc_finally_forwarder(
+                    &mut try_break_forwarders,
+                    control_flow.break_label,
+                    label_counter,
+                )
             } else {
                 None
             };
-            let continue_via_finally_label = if tc.finalizer.is_some() {
-                control_flow
-                    .continue_label
-                    .map(|_| alloc_label(label_counter))
+            let try_continue_forwarder = if try_needs_abrupt_forwarders {
+                alloc_finally_forwarder(
+                    &mut try_continue_forwarders,
+                    control_flow.continue_label,
+                    label_counter,
+                )
             } else {
                 None
             };
-            let inner_control_flow = ControlFlowTargets {
-                break_label: break_via_finally_label.or(control_flow.break_label),
-                continue_label: continue_via_finally_label.or(control_flow.continue_label),
+            if try_needs_abrupt_forwarders {
+                for frame in &label_ctx.frames {
+                    alloc_finally_forwarder(
+                        &mut try_break_forwarders,
+                        Some(frame.break_target),
+                        label_counter,
+                    );
+                    alloc_finally_forwarder(
+                        &mut try_continue_forwarders,
+                        frame.continue_target,
+                        label_counter,
+                    );
+                }
+            }
+            let try_control_flow = ControlFlowTargets {
+                break_label: try_break_forwarder.or(control_flow.break_label),
+                continue_label: try_continue_forwarder.or(control_flow.continue_label),
+            };
+            let try_label_ctx = if try_needs_abrupt_forwarders {
+                label_ctx.remap_abrupt_targets(&try_break_forwarders, &try_continue_forwarders)
+            } else {
+                label_ctx.clone()
+            };
+            // A catch body has no live frame unless it is guarded by the
+            // nested try/finally used to route rethrows through `finally`.
+            // Give that guard its own forwarders so each exit pops exactly
+            // the frame that is active on its path.
+            let catch_break_forwarder = if has_handler && has_finalizer {
+                alloc_finally_forwarder(
+                    &mut catch_break_forwarders,
+                    control_flow.break_label,
+                    label_counter,
+                )
+            } else {
+                None
+            };
+            let catch_continue_forwarder = if has_handler && has_finalizer {
+                alloc_finally_forwarder(
+                    &mut catch_continue_forwarders,
+                    control_flow.continue_label,
+                    label_counter,
+                )
+            } else {
+                None
+            };
+            if has_handler && has_finalizer {
+                for frame in &label_ctx.frames {
+                    alloc_finally_forwarder(
+                        &mut catch_break_forwarders,
+                        Some(frame.break_target),
+                        label_counter,
+                    );
+                    alloc_finally_forwarder(
+                        &mut catch_continue_forwarders,
+                        frame.continue_target,
+                        label_counter,
+                    );
+                }
+            }
+            let catch_control_flow = ControlFlowTargets {
+                break_label: catch_break_forwarder.or(control_flow.break_label),
+                continue_label: catch_continue_forwarder.or(control_flow.continue_label),
+            };
+            let catch_label_ctx = if has_handler && has_finalizer {
+                label_ctx.remap_abrupt_targets(&catch_break_forwarders, &catch_continue_forwarders)
+            } else {
+                label_ctx.clone()
             };
             // When there is a catch handler, allocate a distinct catch label.
             // When there is only a finally (no catch), route exceptions
@@ -1913,7 +4496,9 @@ fn lower_statement_to_ir1_with_flow(
                 catch_label,
                 finally_label,
             });
-            for inner in &tc.block.body {
+            let try_enclosing_bindings =
+                reserve_block_lexical_bindings(&tc.block.body, None, binding_lookup, binding_index);
+            let try_result = tc.block.body.iter().try_for_each(|inner| {
                 lower_statement_to_ir1_with_flow(
                     inner,
                     ops,
@@ -1922,8 +4507,67 @@ fn lower_statement_to_ir1_with_flow(
                     binding_index,
                     scope_id,
                     label_counter,
-                    inner_control_flow,
-                )?;
+                    try_control_flow,
+                    &try_label_ctx,
+                )
+            });
+            restore_block_lexical_bindings(binding_lookup, try_enclosing_bindings);
+            try_result?;
+            let has_try_abrupt_forwarders =
+                !try_break_forwarders.is_empty() || !try_continue_forwarders.is_empty();
+            let normal_try_complete_label =
+                has_try_abrupt_forwarders.then(|| alloc_label(label_counter));
+            if let Some(normal_try_complete_label) = normal_try_complete_label {
+                ops.push(Ir1Op::Jump {
+                    label_id: normal_try_complete_label,
+                });
+                for (via_break_label, actual_break_label) in try_break_forwarders {
+                    ops.push(Ir1Op::Label {
+                        id: via_break_label,
+                    });
+                    ops.push(Ir1Op::EndTry);
+                    if let Some(finalizer) = &tc.finalizer {
+                        lower_lexical_statement_sequence(
+                            &finalizer.body,
+                            ops,
+                            bindings,
+                            binding_lookup,
+                            binding_index,
+                            scope_id,
+                            label_counter,
+                            control_flow,
+                            label_ctx,
+                        )?;
+                    }
+                    ops.push(Ir1Op::Jump {
+                        label_id: actual_break_label,
+                    });
+                }
+                for (via_continue_label, actual_continue_label) in try_continue_forwarders {
+                    ops.push(Ir1Op::Label {
+                        id: via_continue_label,
+                    });
+                    ops.push(Ir1Op::EndTry);
+                    if let Some(finalizer) = &tc.finalizer {
+                        lower_lexical_statement_sequence(
+                            &finalizer.body,
+                            ops,
+                            bindings,
+                            binding_lookup,
+                            binding_index,
+                            scope_id,
+                            label_counter,
+                            control_flow,
+                            label_ctx,
+                        )?;
+                    }
+                    ops.push(Ir1Op::Jump {
+                        label_id: actual_continue_label,
+                    });
+                }
+                ops.push(Ir1Op::Label {
+                    id: normal_try_complete_label,
+                });
             }
             ops.push(Ir1Op::EndTry);
             // Normal completion: jump past catch to finally (or end).
@@ -1949,37 +4593,106 @@ fn lower_statement_to_ir1_with_flow(
                     });
                 }
                 if let Some(handler) = &tc.handler {
-                    if let Some(param) = &handler.parameter {
-                        let bid = alloc_binding(
-                            bindings,
-                            binding_lookup,
-                            binding_index,
-                            scope_id,
-                            param,
-                            BindingKind::Let,
-                        )
-                        .map_err(LoweringPipelineError::SemanticViolation)?;
-                        ops.push(Ir1Op::StoreBinding { binding_id: bid });
-                        ops.push(Ir1Op::Pop);
-                    } else {
-                        // The exception is pushed onto the stack by EnterCatch.
-                        // We must pop it so the stack remains balanced.
-                        ops.push(Ir1Op::Pop);
-                    }
-                    for inner in &handler.body.body {
-                        lower_statement_to_ir1_with_flow(
-                            inner,
-                            ops,
-                            bindings,
-                            binding_lookup,
-                            binding_index,
-                            scope_id,
-                            label_counter,
-                            inner_control_flow,
-                        )?;
-                    }
+                    let catch_enclosing_bindings = reserve_block_lexical_bindings(
+                        &handler.body.body,
+                        handler.parameter.as_deref(),
+                        binding_lookup,
+                        binding_index,
+                    );
+                    let catch_result = (|| -> Result<(), LoweringPipelineError> {
+                        if let Some(param) = &handler.parameter {
+                            let bid = alloc_binding(
+                                bindings,
+                                binding_lookup,
+                                binding_index,
+                                scope_id,
+                                param,
+                                BindingKind::Let,
+                            )
+                            .map_err(LoweringPipelineError::SemanticViolation)?;
+                            ops.push(Ir1Op::StoreBinding { binding_id: bid });
+                            ops.push(Ir1Op::Pop);
+                        } else {
+                            // The exception is pushed onto the stack by EnterCatch.
+                            // We must pop it so the stack remains balanced.
+                            ops.push(Ir1Op::Pop);
+                        }
+                        for inner in &handler.body.body {
+                            lower_statement_to_ir1_with_flow(
+                                inner,
+                                ops,
+                                bindings,
+                                binding_lookup,
+                                binding_index,
+                                scope_id,
+                                label_counter,
+                                catch_control_flow,
+                                &catch_label_ctx,
+                            )?;
+                        }
+                        Ok(())
+                    })();
+                    restore_block_lexical_bindings(binding_lookup, catch_enclosing_bindings);
+                    catch_result?;
                 }
                 if catch_requires_finally_guard {
+                    let has_catch_abrupt_forwarders =
+                        !catch_break_forwarders.is_empty() || !catch_continue_forwarders.is_empty();
+                    let normal_catch_complete_label =
+                        has_catch_abrupt_forwarders.then(|| alloc_label(label_counter));
+                    if let Some(normal_catch_complete_label) = normal_catch_complete_label {
+                        ops.push(Ir1Op::Jump {
+                            label_id: normal_catch_complete_label,
+                        });
+                        for (via_break_label, actual_break_label) in catch_break_forwarders {
+                            ops.push(Ir1Op::Label {
+                                id: via_break_label,
+                            });
+                            ops.push(Ir1Op::EndTry);
+                            if let Some(finalizer) = &tc.finalizer {
+                                lower_lexical_statement_sequence(
+                                    &finalizer.body,
+                                    ops,
+                                    bindings,
+                                    binding_lookup,
+                                    binding_index,
+                                    scope_id,
+                                    label_counter,
+                                    control_flow,
+                                    label_ctx,
+                                )?;
+                            }
+                            ops.push(Ir1Op::Jump {
+                                label_id: actual_break_label,
+                            });
+                        }
+                        for (via_continue_label, actual_continue_label) in catch_continue_forwarders
+                        {
+                            ops.push(Ir1Op::Label {
+                                id: via_continue_label,
+                            });
+                            ops.push(Ir1Op::EndTry);
+                            if let Some(finalizer) = &tc.finalizer {
+                                lower_lexical_statement_sequence(
+                                    &finalizer.body,
+                                    ops,
+                                    bindings,
+                                    binding_lookup,
+                                    binding_index,
+                                    scope_id,
+                                    label_counter,
+                                    control_flow,
+                                    label_ctx,
+                                )?;
+                            }
+                            ops.push(Ir1Op::Jump {
+                                label_id: actual_continue_label,
+                            });
+                        }
+                        ops.push(Ir1Op::Label {
+                            id: normal_catch_complete_label,
+                        });
+                    }
                     ops.push(Ir1Op::EndTry);
                     // After catch: enter the same finally block used by the
                     // surrounding try. The nested guard ensures abrupt exits
@@ -1989,74 +4702,94 @@ fn lower_statement_to_ir1_with_flow(
                     });
                 }
             }
-            // Emit finally block if present.
-            if let Some(fl) = finally_label {
+            // The forwarder copies above run after EndTry and therefore have
+            // no in-flight completion. The canonical finalizer below is
+            // different: break/continue issued after EnterFinally must discard
+            // the completion that caused entry before leaving the block.
+            if let Some(finalizer) = &tc.finalizer {
+                let fl = finally_label.ok_or(LoweringPipelineError::InvariantViolation {
+                    detail: "Finalizer missing lowering label",
+                })?;
+                let mut finalizer_break_forwarders = Vec::new();
+                let mut finalizer_continue_forwarders = Vec::new();
+                let finalizer_break_forwarder = alloc_finally_forwarder(
+                    &mut finalizer_break_forwarders,
+                    control_flow.break_label,
+                    label_counter,
+                );
+                let finalizer_continue_forwarder = alloc_finally_forwarder(
+                    &mut finalizer_continue_forwarders,
+                    control_flow.continue_label,
+                    label_counter,
+                );
+                for frame in &label_ctx.frames {
+                    alloc_finally_forwarder(
+                        &mut finalizer_break_forwarders,
+                        Some(frame.break_target),
+                        label_counter,
+                    );
+                    alloc_finally_forwarder(
+                        &mut finalizer_continue_forwarders,
+                        frame.continue_target,
+                        label_counter,
+                    );
+                }
+                let finalizer_control_flow = ControlFlowTargets {
+                    break_label: finalizer_break_forwarder.or(control_flow.break_label),
+                    continue_label: finalizer_continue_forwarder.or(control_flow.continue_label),
+                };
+                let finalizer_label_ctx = label_ctx.remap_abrupt_targets(
+                    &finalizer_break_forwarders,
+                    &finalizer_continue_forwarders,
+                );
                 ops.push(Ir1Op::Label { id: fl });
                 ops.push(Ir1Op::EnterFinally);
-                if let Some(finalizer) = &tc.finalizer {
-                    for inner in &finalizer.body {
-                        lower_statement_to_ir1_with_flow(
-                            inner,
-                            ops,
-                            bindings,
-                            binding_lookup,
-                            binding_index,
-                            scope_id,
-                            label_counter,
-                            control_flow,
-                        )?;
+                lower_lexical_statement_sequence(
+                    &finalizer.body,
+                    ops,
+                    bindings,
+                    binding_lookup,
+                    binding_index,
+                    scope_id,
+                    label_counter,
+                    finalizer_control_flow,
+                    &finalizer_label_ctx,
+                )?;
+                let has_finalizer_abrupt_forwarders = !finalizer_break_forwarders.is_empty()
+                    || !finalizer_continue_forwarders.is_empty();
+                let normal_finally_complete_label =
+                    has_finalizer_abrupt_forwarders.then(|| alloc_label(label_counter));
+                if let Some(normal_finally_complete_label) = normal_finally_complete_label {
+                    ops.push(Ir1Op::Jump {
+                        label_id: normal_finally_complete_label,
+                    });
+                    for (via_break_label, actual_break_label) in finalizer_break_forwarders {
+                        ops.push(Ir1Op::Label {
+                            id: via_break_label,
+                        });
+                        ops.push(Ir1Op::DiscardAbruptCompletion);
+                        ops.push(Ir1Op::Jump {
+                            label_id: actual_break_label,
+                        });
                     }
+                    for (via_continue_label, actual_continue_label) in finalizer_continue_forwarders
+                    {
+                        ops.push(Ir1Op::Label {
+                            id: via_continue_label,
+                        });
+                        ops.push(Ir1Op::DiscardAbruptCompletion);
+                        ops.push(Ir1Op::Jump {
+                            label_id: actual_continue_label,
+                        });
+                    }
+                    ops.push(Ir1Op::Label {
+                        id: normal_finally_complete_label,
+                    });
                 }
                 ops.push(Ir1Op::EndFinally);
                 ops.push(Ir1Op::Jump {
                     label_id: end_label,
                 });
-            }
-            if let Some(finalizer) = &tc.finalizer {
-                if let (Some(via_break_label), Some(actual_break_label)) =
-                    (break_via_finally_label, control_flow.break_label)
-                {
-                    ops.push(Ir1Op::Label {
-                        id: via_break_label,
-                    });
-                    for inner in &finalizer.body {
-                        lower_statement_to_ir1_with_flow(
-                            inner,
-                            ops,
-                            bindings,
-                            binding_lookup,
-                            binding_index,
-                            scope_id,
-                            label_counter,
-                            control_flow,
-                        )?;
-                    }
-                    ops.push(Ir1Op::Jump {
-                        label_id: actual_break_label,
-                    });
-                }
-                if let (Some(via_continue_label), Some(actual_continue_label)) =
-                    (continue_via_finally_label, control_flow.continue_label)
-                {
-                    ops.push(Ir1Op::Label {
-                        id: via_continue_label,
-                    });
-                    for inner in &finalizer.body {
-                        lower_statement_to_ir1_with_flow(
-                            inner,
-                            ops,
-                            bindings,
-                            binding_lookup,
-                            binding_index,
-                            scope_id,
-                            label_counter,
-                            control_flow,
-                        )?;
-                    }
-                    ops.push(Ir1Op::Jump {
-                        label_id: actual_continue_label,
-                    });
-                }
             }
             ops.push(Ir1Op::Label { id: end_label });
         }
@@ -2070,45 +4803,123 @@ fn lower_statement_to_ir1_with_flow(
                 scope_id,
                 label_counter,
                 control_flow,
+                label_ctx,
             )?;
         }
         Statement::Break(brk) => {
-            if let Some(label) = &brk.label {
-                return Err(LoweringPipelineError::SemanticViolation(
-                    SemanticError::new(
-                        SemanticErrorCode::UndefinedLabel,
-                        Some(label.clone()),
+            let label_id = if let Some(label) = &brk.label {
+                match label_ctx.resolve(label) {
+                    Some(frame) => frame.break_target,
+                    None => {
+                        return Err(LoweringPipelineError::SemanticViolation(
+                            SemanticError::new(
+                                SemanticErrorCode::UndefinedLabel,
+                                Some(label.clone()),
+                                Some(brk.span.clone()),
+                            ),
+                        ));
+                    }
+                }
+            } else {
+                control_flow.break_label.ok_or_else(|| {
+                    LoweringPipelineError::SemanticViolation(SemanticError::new(
+                        SemanticErrorCode::IllegalBreak,
+                        None,
                         Some(brk.span.clone()),
-                    ),
-                ));
-            }
-            let label_id = control_flow.break_label.ok_or_else(|| {
-                LoweringPipelineError::SemanticViolation(SemanticError::new(
-                    SemanticErrorCode::IllegalBreak,
-                    None,
-                    Some(brk.span.clone()),
-                ))
-            })?;
+                    ))
+                })?
+            };
             ops.push(Ir1Op::Jump { label_id });
         }
         Statement::Continue(cont) => {
-            if let Some(label) = &cont.label {
+            let label_id = if let Some(label) = &cont.label {
+                match label_ctx.resolve(label) {
+                    Some(frame) => frame.continue_target.ok_or_else(|| {
+                        LoweringPipelineError::SemanticViolation(SemanticError::new(
+                            SemanticErrorCode::IllegalContinue,
+                            Some(label.clone()),
+                            Some(cont.span.clone()),
+                        ))
+                    })?,
+                    None => {
+                        return Err(LoweringPipelineError::SemanticViolation(
+                            SemanticError::new(
+                                SemanticErrorCode::UndefinedLabel,
+                                Some(label.clone()),
+                                Some(cont.span.clone()),
+                            ),
+                        ));
+                    }
+                }
+            } else {
+                control_flow.continue_label.ok_or_else(|| {
+                    LoweringPipelineError::SemanticViolation(SemanticError::new(
+                        SemanticErrorCode::IllegalContinue,
+                        None,
+                        Some(cont.span.clone()),
+                    ))
+                })?
+            };
+            ops.push(Ir1Op::Jump { label_id });
+        }
+        Statement::Labeled(labeled) => {
+            if label_ctx.contains(&labeled.label) {
                 return Err(LoweringPipelineError::SemanticViolation(
                     SemanticError::new(
-                        SemanticErrorCode::UndefinedLabel,
-                        Some(label.clone()),
-                        Some(cont.span.clone()),
+                        SemanticErrorCode::DuplicateLabel,
+                        Some(labeled.label.clone()),
+                        Some(labeled.span.clone()),
                     ),
                 ));
             }
-            let label_id = control_flow.continue_label.ok_or_else(|| {
-                LoweringPipelineError::SemanticViolation(SemanticError::new(
-                    SemanticErrorCode::IllegalContinue,
-                    None,
-                    Some(cont.span.clone()),
-                ))
-            })?;
-            ops.push(Ir1Op::Jump { label_id });
+            let body = labeled.body.as_ref();
+            let defers_to_loop = matches!(
+                body,
+                Statement::For(_)
+                    | Statement::While(_)
+                    | Statement::DoWhile(_)
+                    | Statement::ForIn(_)
+                    | Statement::ForOf(_)
+                    | Statement::Labeled(_)
+            );
+            if defers_to_loop {
+                let child = label_ctx.with_pending(labeled.label.clone());
+                lower_statement_to_ir1_with_flow(
+                    body,
+                    ops,
+                    bindings,
+                    binding_lookup,
+                    binding_index,
+                    scope_id,
+                    label_counter,
+                    control_flow,
+                    &child,
+                )?;
+            } else {
+                let after_label = alloc_label(label_counter);
+                let mut child = label_ctx.clone();
+                let mut names = std::mem::take(&mut child.pending);
+                names.push(labeled.label.clone());
+                for name in names {
+                    child.frames.push(LabelFrame {
+                        name,
+                        break_target: after_label,
+                        continue_target: None,
+                    });
+                }
+                lower_statement_to_ir1_with_flow(
+                    body,
+                    ops,
+                    bindings,
+                    binding_lookup,
+                    binding_index,
+                    scope_id,
+                    label_counter,
+                    control_flow,
+                    &child,
+                )?;
+                ops.push(Ir1Op::Label { id: after_label });
+            }
         }
         Statement::FunctionDeclaration(func) => {
             let name = func.name.clone().unwrap_or_else(|| "anonymous".to_string());
@@ -2123,32 +4934,54 @@ fn lower_statement_to_ir1_with_flow(
             .map_err(LoweringPipelineError::SemanticViolation)?;
 
             // Lower function body with its own fresh scope.
-            let param_names: Vec<String> = func
-                .params
-                .iter()
-                .filter_map(|p| p.name().map(String::from))
-                .collect();
             let mut body_ops = Vec::new();
             let mut body_bindings = Vec::new();
             let mut body_lookup = BTreeMap::new();
             let mut body_binding_index: BindingId = 0;
             let body_scope = ScopeId { depth: 0, index: 0 };
             let mut body_label_counter: u32 = 0;
-            // Allocate parameter bindings in the body scope.
-            for pname in &param_names {
-                let _ = alloc_binding(
-                    &mut body_bindings,
-                    &mut body_lookup,
-                    &mut body_binding_index,
-                    body_scope,
-                    pname,
-                    BindingKind::Parameter,
-                )
-                .map_err(LoweringPipelineError::SemanticViolation)?;
+            let FunctionParameterPlan {
+                param_names,
+                parameter_steps,
+                parameter_bindings,
+                rest_param_index,
+            } = allocate_function_parameter_bindings(
+                &func.params,
+                &mut body_bindings,
+                &mut body_lookup,
+                &mut body_binding_index,
+                body_scope,
+            )?;
+            let parameter_binding_names = body_lookup.keys().cloned().collect();
+            let parameter_prologue_captures = lower_function_parameter_prologue(
+                &parameter_steps,
+                &parameter_bindings,
+                binding_lookup,
+                &mut body_ops,
+                &mut body_bindings,
+                &body_lookup,
+                &mut body_binding_index,
+                body_scope,
+                &mut body_label_counter,
+            )?;
+            if func.is_generator {
+                body_ops.push(Ir1Op::GeneratorBodyStart);
             }
-            // Snapshot which binding names already exist before body lowering
-            // (just the parameters at this point).
-            let pre_lower_names: BTreeSet<String> = body_lookup.keys().cloned().collect();
+            let pre_lower_names = prepare_function_body_bindings(
+                Some(&func.body.body),
+                parameter_binding_names,
+                &mut body_lookup,
+                &mut body_binding_index,
+            );
+            merge_unshadowed_parameter_prologue_captures(
+                &parameter_prologue_captures,
+                &mut body_lookup,
+            );
+            seed_function_outer_static_bindings(
+                binding_lookup,
+                &mut body_lookup,
+                &mut body_binding_index,
+            );
             for stmt in &func.body.body {
                 lower_statement_to_ir1(
                     stmt,
@@ -2169,15 +5002,29 @@ fn lower_statement_to_ir1_with_flow(
             }
 
             // Identify free variables: bindings created as forward
-            // references that exist in the OUTER scope's lookup.
-            let free_vars: Vec<String> = body_lookup
-                .keys()
-                .filter(|name| {
-                    !pre_lower_names.contains(name.as_str())
-                        && binding_lookup.contains_key(name.as_str())
-                })
-                .cloned()
-                .collect();
+            // references that exist in the OUTER scope's lookup. Capture the
+            // body binding-id alongside the name so the deferred IR3 pass can
+            // resolve them exactly (bd-snlhk; mirrors the engine fix).
+            let (mut free_vars, mut free_var_ids, mut free_var_outer_ids) = collect_free_vars(
+                &body_lookup,
+                &pre_lower_names,
+                bindings,
+                binding_lookup,
+                binding_index,
+                scope_id,
+            );
+            append_shadowed_parameter_prologue_captures(
+                &parameter_prologue_captures,
+                &mut free_vars,
+                &mut free_var_ids,
+                &mut free_var_outer_ids,
+                bindings,
+                binding_lookup,
+                binding_index,
+                scope_id,
+            );
+            let local_lexical_bindings =
+                collect_function_local_lexical_bindings(&body_bindings, &free_var_ids, &body_ops);
 
             ops.push(Ir1Op::DeclareFunction {
                 name,
@@ -2185,41 +5032,81 @@ fn lower_statement_to_ir1_with_flow(
                 param_names,
                 body_ops,
                 free_vars,
+                free_var_ids,
+                free_var_outer_ids,
+                local_lexical_bindings,
                 is_generator: func.is_generator,
+                rest_param_index,
             });
             ops.push(Ir1Op::Pop);
         }
         Statement::ClassDeclaration(cls) => {
             let class_name = cls.name.clone().unwrap_or_else(|| "anonymous".to_string());
+            // The class binding is the live self cell for constructor and
+            // method parameter defaults. Allocate it before lowering those
+            // prologues so self references resolve to this exact outer cell.
+            let bid = alloc_binding(
+                bindings,
+                binding_lookup,
+                binding_index,
+                scope_id,
+                &class_name,
+                BindingKind::Let,
+            )
+            .map_err(LoweringPipelineError::SemanticViolation)?;
             // Find the constructor method, if any.
             let constructor = cls.body.iter().find(|m| m.kind == MethodKind::Constructor);
             // Lower constructor as a function declaration.
-            let param_names: Vec<String> = constructor
-                .map(|c| {
-                    c.params
-                        .iter()
-                        .filter_map(|p| p.name().map(String::from))
-                        .collect()
-                })
-                .unwrap_or_default();
             let mut body_ops = Vec::new();
             let mut body_bindings = Vec::new();
             let mut body_lookup = BTreeMap::new();
             let mut body_binding_index: BindingId = 0;
             let body_scope = ScopeId { depth: 0, index: 0 };
             let mut body_label_counter: u32 = 0;
-            for pname in &param_names {
-                let _ = alloc_binding(
+            let FunctionParameterPlan {
+                param_names,
+                parameter_steps,
+                parameter_bindings,
+                rest_param_index,
+            } = if let Some(ctor) = constructor {
+                allocate_function_parameter_bindings(
+                    &ctor.params,
                     &mut body_bindings,
                     &mut body_lookup,
                     &mut body_binding_index,
                     body_scope,
-                    pname,
-                    BindingKind::Parameter,
-                )
-                .map_err(LoweringPipelineError::SemanticViolation)?;
-            }
-            if let Some(ctor) = constructor {
+                )?
+            } else {
+                FunctionParameterPlan::default()
+            };
+            let parameter_binding_names = body_lookup.keys().cloned().collect();
+            let parameter_prologue_captures = lower_function_parameter_prologue(
+                &parameter_steps,
+                &parameter_bindings,
+                binding_lookup,
+                &mut body_ops,
+                &mut body_bindings,
+                &body_lookup,
+                &mut body_binding_index,
+                body_scope,
+                &mut body_label_counter,
+            )?;
+            let ctor_pre_lower_names = if let Some(ctor) = constructor {
+                let pre_lower_names = prepare_function_body_bindings(
+                    Some(&ctor.body.body),
+                    parameter_binding_names,
+                    &mut body_lookup,
+                    &mut body_binding_index,
+                );
+                merge_unshadowed_parameter_prologue_captures(
+                    &parameter_prologue_captures,
+                    &mut body_lookup,
+                );
+                seed_function_outer_static_bindings(
+                    binding_lookup,
+                    &mut body_lookup,
+                    &mut body_binding_index,
+                );
                 for stmt in &ctor.body.body {
                     lower_statement_to_ir1(
                         stmt,
@@ -2231,29 +5118,51 @@ fn lower_statement_to_ir1_with_flow(
                         &mut body_label_counter,
                     )?;
                 }
-            }
+                pre_lower_names
+            } else {
+                body_lookup.keys().cloned().collect()
+            };
             if !matches!(body_ops.last(), Some(Ir1Op::Return)) {
                 body_ops.push(Ir1Op::LoadLiteral {
                     value: Ir1Literal::Undefined,
                 });
                 body_ops.push(Ir1Op::Return);
             }
-            let bid = alloc_binding(
+            let (mut ctor_free_vars, mut ctor_free_var_ids, mut ctor_free_var_outer_ids) =
+                collect_free_vars(
+                    &body_lookup,
+                    &ctor_pre_lower_names,
+                    bindings,
+                    binding_lookup,
+                    binding_index,
+                    scope_id,
+                );
+            append_shadowed_parameter_prologue_captures(
+                &parameter_prologue_captures,
+                &mut ctor_free_vars,
+                &mut ctor_free_var_ids,
+                &mut ctor_free_var_outer_ids,
                 bindings,
                 binding_lookup,
                 binding_index,
                 scope_id,
-                &class_name,
-                BindingKind::Let,
-            )
-            .map_err(LoweringPipelineError::SemanticViolation)?;
+            );
+            let ctor_local_lexical_bindings = collect_function_local_lexical_bindings(
+                &body_bindings,
+                &ctor_free_var_ids,
+                &body_ops,
+            );
             ops.push(Ir1Op::DeclareFunction {
                 name: class_name,
                 binding_id: bid,
                 param_names,
                 body_ops,
-                free_vars: Vec::new(),
+                free_vars: ctor_free_vars,
+                free_var_ids: ctor_free_var_ids,
+                free_var_outer_ids: ctor_free_var_outer_ids,
+                local_lexical_bindings: ctor_local_lexical_bindings,
                 is_generator: false,
+                rest_param_index,
             });
 
             // Set up inheritance if this class extends another
@@ -2270,13 +5179,13 @@ fn lower_statement_to_ir1_with_flow(
                     label_counter,
                 )?;
                 ops.push(Ir1Op::SetProperty {
-                    key: Ir1PropertyKey::Static(IR_SUPER_CONSTRUCTOR_PROPERTY.to_string()),
+                    key: Ir1PropertyKey::Static(IR_SUPER_CONSTRUCTOR_PROPERTY.into()),
                 });
 
                 // Load child constructor (our class)
                 ops.push(Ir1Op::LoadBinding { binding_id: bid });
                 ops.push(Ir1Op::GetProperty {
-                    key: Ir1PropertyKey::Static("prototype".to_string()),
+                    key: Ir1PropertyKey::Static("prototype".into()),
                 });
 
                 // Load parent constructor
@@ -2290,12 +5199,12 @@ fn lower_statement_to_ir1_with_flow(
                     label_counter,
                 )?;
                 ops.push(Ir1Op::GetProperty {
-                    key: Ir1PropertyKey::Static("prototype".to_string()),
+                    key: Ir1PropertyKey::Static("prototype".into()),
                 });
 
                 // Set Child.prototype.__proto__ = Parent.prototype
                 ops.push(Ir1Op::SetProperty {
-                    key: Ir1PropertyKey::Static("__proto__".to_string()),
+                    key: Ir1PropertyKey::Static("__proto__".into()),
                 });
                 ops.push(Ir1Op::Pop);
             }
@@ -2307,35 +5216,69 @@ fn lower_statement_to_ir1_with_flow(
                 .iter()
                 .filter(|m| m.kind != MethodKind::Constructor)
             {
-                let method_name = match &method.key {
-                    Expression::Identifier(name) => name.clone(),
-                    Expression::StringLiteral(s) => s.clone(),
-                    _ => "anonymous_method".to_string(),
-                };
+                let method_property_key = canonical_static_object_property_key(&method.key)
+                    .unwrap_or_else(|_| JsString::from("anonymous_method"));
+                // Function names remain a display/debug carrier. Property
+                // identity is kept separately in exact UTF-16 below.
+                let method_name = property_key_function_display_name(&method_property_key);
 
                 // Lower method body with its own scope.
-                let m_param_names: Vec<String> = method
-                    .params
-                    .iter()
-                    .filter_map(|p| p.name().map(String::from))
-                    .collect();
                 let mut m_body_ops = Vec::new();
                 let mut m_bindings = Vec::new();
                 let mut m_lookup = BTreeMap::new();
                 let mut m_binding_index: BindingId = 0;
                 let m_scope = ScopeId { depth: 0, index: 0 };
                 let mut m_label_counter: u32 = 0;
-                for pname in &m_param_names {
-                    let _ = alloc_binding(
-                        &mut m_bindings,
-                        &mut m_lookup,
-                        &mut m_binding_index,
-                        m_scope,
-                        pname,
-                        BindingKind::Parameter,
-                    )
-                    .map_err(LoweringPipelineError::SemanticViolation)?;
+                let FunctionParameterPlan {
+                    param_names: m_param_names,
+                    parameter_steps: m_parameter_steps,
+                    parameter_bindings: m_parameter_bindings,
+                    rest_param_index: m_rest_param_index,
+                } = allocate_function_parameter_bindings(
+                    &method.params,
+                    &mut m_bindings,
+                    &mut m_lookup,
+                    &mut m_binding_index,
+                    m_scope,
+                )?;
+                if m_rest_param_index.is_some()
+                    && matches!(method.kind, MethodKind::Get | MethodKind::Set)
+                {
+                    return Err(unsupported_frontier_expression_error(
+                        "accessor_rest_parameters",
+                        "FE-LOWER-UNSUPPORTED-ACCESSOR-REST-0001",
+                        "core.accessor_rest_parameter_runtime",
+                        "getter and setter functions cannot declare rest parameters",
+                        Some(method.span.clone()),
+                    ));
                 }
+                let parameter_binding_names = m_lookup.keys().cloned().collect();
+                let parameter_prologue_captures = lower_function_parameter_prologue(
+                    &m_parameter_steps,
+                    &m_parameter_bindings,
+                    binding_lookup,
+                    &mut m_body_ops,
+                    &mut m_bindings,
+                    &m_lookup,
+                    &mut m_binding_index,
+                    m_scope,
+                    &mut m_label_counter,
+                )?;
+                let method_pre_lower_names = prepare_function_body_bindings(
+                    Some(&method.body.body),
+                    parameter_binding_names,
+                    &mut m_lookup,
+                    &mut m_binding_index,
+                );
+                merge_unshadowed_parameter_prologue_captures(
+                    &parameter_prologue_captures,
+                    &mut m_lookup,
+                );
+                seed_function_outer_static_bindings(
+                    binding_lookup,
+                    &mut m_lookup,
+                    &mut m_binding_index,
+                );
                 for stmt in &method.body.body {
                     lower_statement_to_ir1(
                         stmt,
@@ -2353,6 +5296,30 @@ fn lower_statement_to_ir1_with_flow(
                     });
                     m_body_ops.push(Ir1Op::Return);
                 }
+                let (mut method_free_vars, mut method_free_var_ids, mut method_free_var_outer_ids) =
+                    collect_free_vars(
+                        &m_lookup,
+                        &method_pre_lower_names,
+                        bindings,
+                        binding_lookup,
+                        binding_index,
+                        scope_id,
+                    );
+                append_shadowed_parameter_prologue_captures(
+                    &parameter_prologue_captures,
+                    &mut method_free_vars,
+                    &mut method_free_var_ids,
+                    &mut method_free_var_outer_ids,
+                    bindings,
+                    binding_lookup,
+                    binding_index,
+                    scope_id,
+                );
+                let method_local_lexical_bindings = collect_function_local_lexical_bindings(
+                    &m_bindings,
+                    &method_free_var_ids,
+                    &m_body_ops,
+                );
                 let method_super_binding = if cls.super_class.is_some() {
                     Some(alloc_internal_binding(
                         bindings,
@@ -2370,7 +5337,7 @@ fn lower_statement_to_ir1_with_flow(
                 ops.push(Ir1Op::LoadBinding { binding_id: bid });
                 if !method.is_static {
                     ops.push(Ir1Op::GetProperty {
-                        key: Ir1PropertyKey::Static("prototype".to_string()),
+                        key: Ir1PropertyKey::Static("prototype".into()),
                     });
                 }
 
@@ -2379,8 +5346,13 @@ fn lower_statement_to_ir1_with_flow(
                     name: Some(method_name.clone()),
                     param_names: m_param_names,
                     body_ops: m_body_ops,
-                    free_vars: Vec::new(),
+                    free_vars: method_free_vars,
+                    free_var_ids: method_free_var_ids,
+                    free_var_outer_ids: method_free_var_outer_ids,
+                    local_lexical_bindings: method_local_lexical_bindings,
                     is_generator: false,
+                    is_arrow: false,
+                    rest_param_index: m_rest_param_index,
                 });
                 if let Some(method_binding) = method_super_binding {
                     ops.push(Ir1Op::StoreBinding {
@@ -2389,9 +5361,13 @@ fn lower_statement_to_ir1_with_flow(
                 }
 
                 let property_key = match method.kind {
-                    MethodKind::Get => format!("{IR_ACCESSOR_GET_PREFIX}{method_name}"),
-                    MethodKind::Set => format!("{IR_ACCESSOR_SET_PREFIX}{method_name}"),
-                    MethodKind::Method | MethodKind::Constructor => method_name,
+                    MethodKind::Get => {
+                        exact_prefixed_property_key(IR_ACCESSOR_GET_PREFIX, &method_property_key)
+                    }
+                    MethodKind::Set => {
+                        exact_prefixed_property_key(IR_ACCESSOR_SET_PREFIX, &method_property_key)
+                    }
+                    MethodKind::Method | MethodKind::Constructor => method_property_key,
                 };
 
                 // SetProperty pops value (top), then object (next).
@@ -2416,11 +5392,11 @@ fn lower_statement_to_ir1_with_flow(
                     )?;
                     if !method.is_static {
                         ops.push(Ir1Op::GetProperty {
-                            key: Ir1PropertyKey::Static("prototype".to_string()),
+                            key: Ir1PropertyKey::Static("prototype".into()),
                         });
                     }
                     ops.push(Ir1Op::SetProperty {
-                        key: Ir1PropertyKey::Static(IR_SUPER_PROTOTYPE_PROPERTY.to_string()),
+                        key: Ir1PropertyKey::Static(IR_SUPER_PROTOTYPE_PROPERTY.into()),
                     });
                 }
                 // Do not emit Pop here: module-level Pop updates the script
@@ -2446,6 +5422,7 @@ fn lower_switch_to_ir1(
     scope_id: ScopeId,
     label_counter: &mut u32,
     control_flow: ControlFlowTargets,
+    label_ctx: &LabelContext,
 ) -> Result<(), LoweringPipelineError> {
     lower_expression_to_ir1(
         &switch_stmt.discriminant,
@@ -2471,71 +5448,222 @@ fn lower_switch_to_ir1(
         binding_id: discriminant_binding,
     });
 
-    let end_label = alloc_label(label_counter);
-    let case_labels: Vec<u32> = (0..switch_stmt.cases.len())
-        .map(|_| alloc_label(label_counter))
-        .collect();
-    let mut default_label = None;
+    let switch_body = switch_stmt
+        .cases
+        .iter()
+        .flat_map(|case| case.consequent.iter().cloned())
+        .collect::<Vec<_>>();
+    let switch_enclosing_bindings =
+        reserve_block_lexical_bindings(&switch_body, None, binding_lookup, binding_index);
+    let switch_result = (|| -> Result<(), LoweringPipelineError> {
+        let end_label = alloc_label(label_counter);
+        let case_labels: Vec<u32> = (0..switch_stmt.cases.len())
+            .map(|_| alloc_label(label_counter))
+            .collect();
+        let mut default_label = None;
 
-    for (case, case_label) in switch_stmt.cases.iter().zip(case_labels.iter().copied()) {
-        if let Some(test) = &case.test {
-            ops.push(Ir1Op::LoadBinding {
-                binding_id: discriminant_binding,
-            });
-            lower_expression_to_ir1(
-                test,
-                ops,
-                bindings,
-                binding_lookup,
-                binding_index,
-                scope_id,
-                label_counter,
-            )?;
-            ops.push(Ir1Op::BinaryOp {
-                operator: BinaryOperator::StrictEqual,
-            });
-            let next_case_label = alloc_label(label_counter);
-            ops.push(Ir1Op::JumpIfFalsy {
-                label_id: next_case_label,
-            });
-            ops.push(Ir1Op::Pop);
-            ops.push(Ir1Op::Jump {
-                label_id: case_label,
-            });
-            ops.push(Ir1Op::Label {
-                id: next_case_label,
-            });
+        for (case, case_label) in switch_stmt.cases.iter().zip(case_labels.iter().copied()) {
+            if let Some(test) = &case.test {
+                ops.push(Ir1Op::LoadBinding {
+                    binding_id: discriminant_binding,
+                });
+                lower_expression_to_ir1(
+                    test,
+                    ops,
+                    bindings,
+                    binding_lookup,
+                    binding_index,
+                    scope_id,
+                    label_counter,
+                )?;
+                ops.push(Ir1Op::BinaryOp {
+                    operator: BinaryOperator::StrictEqual,
+                });
+                let next_case_label = alloc_label(label_counter);
+                ops.push(Ir1Op::JumpIfFalsy {
+                    label_id: next_case_label,
+                });
+                ops.push(Ir1Op::Pop);
+                ops.push(Ir1Op::Jump {
+                    label_id: case_label,
+                });
+                ops.push(Ir1Op::Label {
+                    id: next_case_label,
+                });
+            } else {
+                default_label = Some(case_label);
+            }
+        }
+
+        ops.push(Ir1Op::Jump {
+            label_id: default_label.unwrap_or(end_label),
+        });
+
+        let switch_flow = ControlFlowTargets {
+            break_label: Some(end_label),
+            continue_label: control_flow.continue_label,
+        };
+        for (case, case_label) in switch_stmt.cases.iter().zip(case_labels.iter().copied()) {
+            ops.push(Ir1Op::Label { id: case_label });
+            for body_stmt in &case.consequent {
+                lower_statement_to_ir1_with_flow(
+                    body_stmt,
+                    ops,
+                    bindings,
+                    binding_lookup,
+                    binding_index,
+                    scope_id,
+                    label_counter,
+                    switch_flow,
+                    label_ctx,
+                )?;
+            }
+        }
+
+        ops.push(Ir1Op::Label { id: end_label });
+        Ok(())
+    })();
+    restore_block_lexical_bindings(binding_lookup, switch_enclosing_bindings);
+    switch_result
+}
+
+/// Synthetic names never denote source-level bindings and therefore must not
+/// be promoted through enclosing closure scopes.
+fn is_internal_lowering_binding(name: &str) -> bool {
+    name.starts_with("<internal:")
+        || name.starts_with("@@franken_internal_")
+        || name.starts_with('\0')
+}
+
+/// Collect free variables of a function body: names present in the body's
+/// binding lookup that were NOT declared by the body itself (params /
+/// pre-lowered names). If a name is not yet present in the immediate outer
+/// lookup, reserve an exact forward binding there before recording the child
+/// capture. As recursive lowering unwinds, the intermediate function's own
+/// collection promotes that same binding one scope farther outward. This is
+/// what lets `outer -> middle -> inner -> x` capture `x` even when `middle`
+/// never references it directly (bd-x0ld5).
+///
+/// Returns names paired index-wise with both their body-scope and immediate
+/// outer-scope binding ids, so downstream passes never reconstruct capture
+/// identity heuristically (bd-snlhk; mirrors the engine's bd-g0aok fix).
+fn collect_free_vars(
+    body_lookup: &BTreeMap<String, BindingId>,
+    pre_lower_names: &BTreeSet<String>,
+    outer_bindings: &mut Vec<ResolvedBinding>,
+    outer_lookup: &mut BTreeMap<String, BindingId>,
+    outer_binding_index: &mut BindingId,
+    outer_scope: ScopeId,
+) -> (Vec<String>, Vec<BindingId>, Vec<BindingId>) {
+    let mut names = Vec::new();
+    let mut body_ids = Vec::new();
+    let mut outer_ids = Vec::new();
+    for (name, id) in body_lookup.iter() {
+        if pre_lower_names.contains(name.as_str()) || is_internal_lowering_binding(name) {
+            continue;
+        }
+        let outer_id = if let Some(outer_id) = outer_lookup.get(name.as_str()) {
+            *outer_id
         } else {
-            default_label = Some(case_label);
-        }
+            let outer_id = *outer_binding_index;
+            *outer_binding_index = outer_binding_index.saturating_add(1);
+            outer_bindings.push(ResolvedBinding {
+                name: name.clone(),
+                binding_id: outer_id,
+                scope: outer_scope,
+                kind: BindingKind::Let,
+            });
+            outer_lookup.insert(name.clone(), outer_id);
+            outer_id
+        };
+        names.push(name.clone());
+        body_ids.push(*id);
+        outer_ids.push(outer_id);
     }
+    (names, body_ids, outer_ids)
+}
 
-    ops.push(Ir1Op::Jump {
-        label_id: default_label.unwrap_or(end_label),
-    });
+/// Preserve exact source-local lexical identity and kind only where an
+/// immediate child captures that binding and deferred IR3 lowering will need
+/// to materialize a runtime cell after detaching this function's scope tree.
+///
+/// Free variables retain their own exact-ID metadata and must not be
+/// redeclared as locals. Synthetic lowering temporaries remain register-backed
+/// and deliberately keep the historical mutable posture.
+#[allow(clippy::box_collection)] // Thin optional carrier bounds recursive Ir1Op stack size.
+fn collect_function_local_lexical_bindings(
+    bindings: &[ResolvedBinding],
+    free_var_ids: &[BindingId],
+    body_ops: &[Ir1Op],
+) -> Option<Box<Vec<ResolvedBinding>>> {
+    let free_var_ids = free_var_ids.iter().copied().collect::<BTreeSet<_>>();
+    let child_captured_ids = body_ops
+        .iter()
+        .filter_map(|op| match op {
+            Ir1Op::DeclareFunction {
+                free_var_outer_ids, ..
+            }
+            | Ir1Op::CreateFunction {
+                free_var_outer_ids, ..
+            } => Some(free_var_outer_ids.as_slice()),
+            _ => None,
+        })
+        .flatten()
+        .copied()
+        .collect::<BTreeSet<_>>();
+    let local_lexical_bindings = bindings
+        .iter()
+        .filter(|binding| {
+            matches!(
+                binding.kind,
+                BindingKind::Let | BindingKind::Const | BindingKind::Parameter
+            ) && !is_internal_lowering_binding(&binding.name)
+                && !free_var_ids.contains(&binding.binding_id)
+                && child_captured_ids.contains(&binding.binding_id)
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    (!local_lexical_bindings.is_empty()).then(|| Box::new(local_lexical_bindings))
+}
 
-    let switch_flow = ControlFlowTargets {
-        break_label: Some(end_label),
-        continue_label: control_flow.continue_label,
-    };
-    for (case, case_label) in switch_stmt.cases.iter().zip(case_labels.iter().copied()) {
-        ops.push(Ir1Op::Label { id: case_label });
-        for body_stmt in &case.consequent {
-            lower_statement_to_ir1_with_flow(
-                body_stmt,
-                ops,
-                bindings,
-                binding_lookup,
-                binding_index,
-                scope_id,
-                label_counter,
-                switch_flow,
-            )?;
+/// Parameter defaults execute in a distinct environment. Most of their
+/// captures are also visible to the body and are collected normally; a body
+/// declaration with the same name deliberately hides one from `body_lookup`.
+/// Preserve those shadowed capture binding IDs explicitly so the prologue's
+/// `LoadBinding` still resolves to the outer environment.
+#[allow(clippy::too_many_arguments)]
+fn append_shadowed_parameter_prologue_captures(
+    captures: &[(String, BindingId)],
+    names: &mut Vec<String>,
+    body_ids: &mut Vec<BindingId>,
+    outer_ids: &mut Vec<BindingId>,
+    outer_bindings: &mut Vec<ResolvedBinding>,
+    outer_lookup: &mut BTreeMap<String, BindingId>,
+    outer_binding_index: &mut BindingId,
+    outer_scope: ScopeId,
+) {
+    for (name, body_id) in captures {
+        if body_ids.contains(body_id) {
+            continue;
         }
+        let outer_id = if let Some(outer_id) = outer_lookup.get(name) {
+            *outer_id
+        } else {
+            let outer_id = *outer_binding_index;
+            *outer_binding_index = outer_binding_index.saturating_add(1);
+            outer_bindings.push(ResolvedBinding {
+                name: name.clone(),
+                binding_id: outer_id,
+                scope: outer_scope,
+                kind: BindingKind::Let,
+            });
+            outer_lookup.insert(name.clone(), outer_id);
+            outer_id
+        };
+        names.push(name.clone());
+        body_ids.push(*body_id);
+        outer_ids.push(outer_id);
     }
-
-    ops.push(Ir1Op::Label { id: end_label });
-    Ok(())
 }
 
 fn binding_kind_for_variable_declaration(kind: VariableDeclarationKind) -> BindingKind {
@@ -2546,11 +5674,154 @@ fn binding_kind_for_variable_declaration(kind: VariableDeclarationKind) -> Bindi
     }
 }
 
+/// Encode the IR1 binding classification for the runtime `DeclareBinding`
+/// instruction. Keep this in lockstep with the interpreter's binding-kind ABI.
+fn runtime_binding_kind_code(kind: BindingKind) -> u8 {
+    match kind {
+        BindingKind::Var => 0,
+        BindingKind::Let => 1,
+        BindingKind::Const | BindingKind::Import => 2,
+        BindingKind::Parameter => 3,
+        BindingKind::FunctionDecl => 4,
+    }
+}
+
+fn is_cyclic_private_self_capture(name: &str) -> bool {
+    name.starts_with(CLASS_EXPRESSION_CONSTRUCTOR_SELF_CAPTURE_PREFIX)
+        || name.starts_with(FUNCTION_EXPRESSION_SELF_CAPTURE_PREFIX)
+}
+
+fn is_private_self_capture(name: &str) -> bool {
+    is_cyclic_private_self_capture(name)
+        || name.starts_with(CLASS_EXPRESSION_METHOD_SELF_CAPTURE_PREFIX)
+}
+
+/// Materialize an exact capture alias without weakening private function/class
+/// names into mutable `var` cells. Constructor and named-function-expression
+/// aliases are left uninitialized for cyclic publication by the interpreter;
+/// method aliases receive the already-created class value exactly once.
+fn emit_temporary_capture_alias(
+    ir3: &mut Ir3Module,
+    name: &str,
+    source: Option<Reg>,
+) -> Result<(), LoweringPipelineError> {
+    let name_pool_index = push_constant(&mut ir3.constant_pool, name);
+    let private_self = is_private_self_capture(name);
+    ir3.instructions.push(Ir3Instruction::DeclareBinding {
+        name_pool_index,
+        kind: if private_self {
+            runtime_binding_kind_code(BindingKind::Const)
+        } else {
+            runtime_binding_kind_code(BindingKind::Var)
+        },
+    });
+
+    if is_cyclic_private_self_capture(name) {
+        return Ok(());
+    }
+    let Some(source) = source else {
+        if private_self {
+            return Err(LoweringPipelineError::InvariantViolation {
+                detail: "class-expression method self capture requires its initialized class value",
+            });
+        }
+        return Ok(());
+    };
+    if private_self {
+        ir3.instructions.push(Ir3Instruction::InitBinding {
+            src: source,
+            name_pool_index,
+        });
+    } else {
+        ir3.instructions.push(Ir3Instruction::StoreScoped {
+            src: source,
+            name_pool_index,
+        });
+    }
+    Ok(())
+}
+
+fn binding_requires_runtime_initialization(kind: BindingKind) -> bool {
+    matches!(
+        kind,
+        BindingKind::Let | BindingKind::Const | BindingKind::Import
+    )
+}
+
+fn nested_function_body(op: &Ir1Op) -> Option<&[Ir1Op]> {
+    match op {
+        Ir1Op::DeclareFunction { body_ops, .. } | Ir1Op::CreateFunction { body_ops, .. } => {
+            Some(body_ops)
+        }
+        _ => None,
+    }
+}
+
+/// Classify every operation nested in a function body while keeping its
+/// enclosing top-level IR2 index. Flow inference is reset for each function
+/// frame so labels cannot leak between unrelated bodies.
+fn collect_nested_ir2_analysis(
+    top_level_ops: &[Ir1Op],
+) -> (Vec<NestedIr2AnalysisSite>, FlowInferenceMetrics) {
+    fn visit_body(
+        body_ops: &[Ir1Op],
+        top_level_index: usize,
+        path_prefix: &mut Vec<usize>,
+        sites: &mut Vec<NestedIr2AnalysisSite>,
+        metrics: &mut FlowInferenceMetrics,
+    ) {
+        let mut classified = body_ops
+            .iter()
+            .map(|op| {
+                let (effect, required_capability, flow) = classify_ir1_op(op);
+                Ir2Op {
+                    inner: op.clone(),
+                    effect,
+                    required_capability,
+                    flow,
+                }
+            })
+            .collect::<Vec<_>>();
+        metrics.include(infer_ir2_flow_annotations_for_ops(&mut classified));
+
+        for (body_index, op) in classified.into_iter().enumerate() {
+            path_prefix.push(body_index);
+            sites.push(NestedIr2AnalysisSite {
+                op_index: top_level_index,
+                body_path: path_prefix.clone(),
+                op: op.clone(),
+            });
+            if let Some(nested_body) = nested_function_body(&op.inner) {
+                visit_body(nested_body, top_level_index, path_prefix, sites, metrics);
+            }
+            path_prefix.pop();
+        }
+    }
+
+    let mut sites = Vec::new();
+    let mut metrics = FlowInferenceMetrics::default();
+    for (top_level_index, op) in top_level_ops.iter().enumerate() {
+        if let Some(body_ops) = nested_function_body(op) {
+            visit_body(
+                body_ops,
+                top_level_index,
+                &mut Vec::new(),
+                &mut sites,
+                &mut metrics,
+            );
+        }
+    }
+    (sites, metrics)
+}
+
 pub fn lower_ir1_to_ir2(
     ir1: &Ir1Module,
 ) -> Result<LoweringPassResult<Ir2Module>, LoweringPipelineError> {
+    verify_schema_version(&ir1.header).map_err(lowering_error_from_ir_error)?;
+    verify_ir1_generator_boundaries(ir1).map_err(lowering_error_from_ir_error)?;
     let ir1_hash = ir1.content_hash();
     let mut ir2 = Ir2Module::new(ir1_hash, ir1.header.source_label.clone());
+    ir2.header.schema_version = ir1.header.schema_version;
     ir2.scopes = ir1.scopes.clone();
 
     let mut required_capabilities = BTreeSet::<String>::new();
@@ -2566,18 +5837,29 @@ pub fn lower_ir1_to_ir2(
             flow,
         });
     }
+    let (nested_sites, nested_flow_metrics) = collect_nested_ir2_analysis(&ir1.ops);
+    for site in &nested_sites {
+        if let Some(capability) = &site.op.required_capability {
+            required_capabilities.insert(capability.0.clone());
+        }
+    }
     ir2.required_capabilities = required_capabilities
         .into_iter()
         .map(CapabilityTag)
         .collect();
-    let flow_metrics = infer_ir2_flow_annotations(&mut ir2);
+    let mut flow_metrics = infer_ir2_flow_annotations(&mut ir2);
+    flow_metrics.include(nested_flow_metrics);
 
     let source_hash_matches = ir2.header.source_hash.as_ref() == Some(&ir1_hash);
     let hostcall_effects_have_capability = ir2
         .ops
         .iter()
         .filter(|op| matches!(op.effect, EffectBoundary::HostcallEffect))
-        .all(|op| op.required_capability.is_some());
+        .all(|op| op.required_capability.is_some())
+        && nested_sites
+            .iter()
+            .filter(|site| matches!(site.op.effect, EffectBoundary::HostcallEffect))
+            .all(|site| site.op.required_capability.is_some());
     let flow_metrics_consistent = flow_metrics.static_proven_ops + flow_metrics.runtime_check_ops
         == flow_metrics.total_flow_ops;
     let static_coverage_millionths = flow_metrics.static_coverage_millionths();
@@ -2713,9 +5995,168 @@ fn lower_assign_op_to_ir3(
     }
 }
 
+/// The binary operation a *non-logical* compound assignment applies to the
+/// current value and the right-hand side (`a += b` -> `a = a + b`). Returns
+/// `None` for a plain `Assign` (no combine) and for the short-circuiting logical
+/// compound operators (`&&=`, `||=`, `??=`), which must be lowered through their
+/// dedicated jump form before reaching a load-op-store site. This is the member-
+/// target analogue of `lower_assign_op_to_ir3`'s per-operator dispatch, used to
+/// combine a property's loaded current value with the RHS (bd-rmxao).
+fn compound_assignment_binary_operator(operator: AssignmentOperator) -> Option<BinaryOperator> {
+    match operator {
+        AssignmentOperator::AddAssign => Some(BinaryOperator::Add),
+        AssignmentOperator::SubtractAssign => Some(BinaryOperator::Subtract),
+        AssignmentOperator::MultiplyAssign => Some(BinaryOperator::Multiply),
+        AssignmentOperator::DivideAssign => Some(BinaryOperator::Divide),
+        AssignmentOperator::RemainderAssign => Some(BinaryOperator::Remainder),
+        AssignmentOperator::ExponentiateAssign => Some(BinaryOperator::Exponentiate),
+        AssignmentOperator::LeftShiftAssign => Some(BinaryOperator::LeftShift),
+        AssignmentOperator::RightShiftAssign => Some(BinaryOperator::RightShift),
+        AssignmentOperator::UnsignedRightShiftAssign => Some(BinaryOperator::UnsignedRightShift),
+        AssignmentOperator::BitwiseAndAssign => Some(BinaryOperator::BitwiseAnd),
+        AssignmentOperator::BitwiseOrAssign => Some(BinaryOperator::BitwiseOr),
+        AssignmentOperator::BitwiseXorAssign => Some(BinaryOperator::BitwiseXor),
+        AssignmentOperator::Assign
+        | AssignmentOperator::LogicalAndAssign
+        | AssignmentOperator::LogicalOrAssign
+        | AssignmentOperator::NullishCoalescingAssign => None,
+    }
+}
+
+fn emit_exact_nested_capture_scope(
+    ir3: &mut Ir3Module,
+    function_binding_registers: &mut BTreeMap<BindingId, Reg>,
+    function_capture_names: &BTreeMap<BindingId, String>,
+    register_cursor: &mut Reg,
+    names: &[String],
+    body_ids: &[BindingId],
+    outer_ids: &[BindingId],
+) -> Result<bool, LoweringPipelineError> {
+    if names.len() != body_ids.len() || names.len() != outer_ids.len() {
+        return Err(LoweringPipelineError::InvariantViolation {
+            detail: "Nested function capture metadata lengths differ",
+        });
+    }
+    if names.is_empty() {
+        return Ok(false);
+    }
+
+    // Existing free-variable and child-capture names already identify live
+    // scope cells. Reuse those cells directly when the nested spelling agrees;
+    // materialize a temporary alias only when no matching runtime name exists.
+    let mut sources = Vec::with_capacity(names.len());
+    for (name, outer_id) in names.iter().zip(outer_ids.iter()) {
+        let existing_runtime_name = function_capture_names.get(outer_id);
+        if existing_runtime_name == Some(name) {
+            continue;
+        }
+        let source = if is_cyclic_private_self_capture(name) {
+            None
+        } else if let Some(parent_runtime_name) = existing_runtime_name {
+            let dst = alloc_register(register_cursor);
+            let name_pool_index = push_constant(&mut ir3.constant_pool, parent_runtime_name);
+            ir3.instructions.push(Ir3Instruction::LoadScoped {
+                dst,
+                name_pool_index,
+            });
+            Some(dst)
+        } else {
+            Some(
+                *function_binding_registers
+                    .entry(*outer_id)
+                    .or_insert_with(|| alloc_register(register_cursor)),
+            )
+        };
+        sources.push((name, source));
+    }
+
+    if sources.is_empty() {
+        return Ok(false);
+    }
+
+    ir3.instructions.push(Ir3Instruction::PushScope);
+    for (name, source) in sources {
+        emit_temporary_capture_alias(ir3, name, source)?;
+    }
+    Ok(true)
+}
+
+/// Capture an arrow's defining call context in private scope cells. Nested
+/// arrows copy the enclosing arrow's cells; arrows created by ordinary
+/// functions read the live call frame exactly once at definition time.
+fn emit_arrow_lexical_capture_scope(
+    ir3: &mut Ir3Module,
+    register_cursor: &mut Reg,
+    usage: ArrowLexicalContextUsage,
+    inherit_from_enclosing_arrow: bool,
+) -> bool {
+    if usage.is_empty() {
+        return false;
+    }
+
+    ir3.instructions.push(Ir3Instruction::PushScope);
+    for (used, name, direct_instruction) in [
+        (usage.this_value, ARROW_LEXICAL_THIS_CAPTURE, 0_u8),
+        (usage.new_target, ARROW_LEXICAL_NEW_TARGET_CAPTURE, 1_u8),
+        (usage.super_value, ARROW_LEXICAL_SUPER_CAPTURE, 2_u8),
+    ] {
+        if !used {
+            continue;
+        }
+        let src = alloc_register(register_cursor);
+        let name_pool_index = push_constant(&mut ir3.constant_pool, name);
+        if inherit_from_enclosing_arrow {
+            ir3.instructions.push(Ir3Instruction::LoadScoped {
+                dst: src,
+                name_pool_index,
+            });
+        } else {
+            match direct_instruction {
+                0 => ir3.instructions.push(Ir3Instruction::LoadThis { dst: src }),
+                1 => ir3
+                    .instructions
+                    .push(Ir3Instruction::LoadNewTarget { dst: src }),
+                _ => ir3
+                    .instructions
+                    .push(Ir3Instruction::LoadSuper { dst: src }),
+            }
+        }
+        ir3.instructions.push(Ir3Instruction::DeclareBinding {
+            name_pool_index,
+            kind: 0,
+        });
+        ir3.instructions.push(Ir3Instruction::StoreScoped {
+            src,
+            name_pool_index,
+        });
+    }
+    true
+}
+
+fn validate_deferred_rest_parameter_abi(
+    param_count: usize,
+    rest_param_index: Option<u32>,
+) -> Result<(), LoweringPipelineError> {
+    let Some(rest_index) = rest_param_index else {
+        return Ok(());
+    };
+    let arity =
+        u32::try_from(param_count).map_err(|_| LoweringPipelineError::InvariantViolation {
+            detail: "Function parameter count exceeds the IR3 positional ABI",
+        })?;
+    if rest_index.checked_add(1) != Some(arity) {
+        return Err(LoweringPipelineError::InvariantViolation {
+            detail: "Function rest metadata must identify the final positional parameter",
+        });
+    }
+    Ok(())
+}
+
 pub fn lower_ir2_to_ir3(
     ir2: &Ir2Module,
 ) -> Result<LoweringPassResult<Ir3Module>, LoweringPipelineError> {
+    verify_schema_version(&ir2.header).map_err(lowering_error_from_ir_error)?;
+    verify_ir2_generator_boundaries(ir2).map_err(lowering_error_from_ir_error)?;
     enum PendingJump {
         Unconditional {
             instruction_index: usize,
@@ -2743,7 +6184,18 @@ pub fn lower_ir2_to_ir3(
 
     let ir2_hash = ir2.content_hash();
     let mut ir3 = Ir3Module::new(ir2_hash, ir2.header.source_label.clone());
-    let mut register_cursor: Reg = 0;
+    ir3.header.schema_version = ir2.header.schema_version;
+    // Register 0 is the module's reserved completion-value slot: the baseline
+    // interpreter returns `read_reg(0)` when execution falls off the end of the
+    // instruction stream (Halt), and module-level `Return` lowers to
+    // `Return { value: 0 }`. The expression-statement `Pop` handler keeps r0
+    // fresh by emitting `Move { dst: 0, src: <value> }`. Binding/temporary
+    // allocation must therefore start at register 1 — if it started at 0 the
+    // first-declared binding (e.g. a top-level `function` closure) would be
+    // pinned to r0 and then silently clobbered by every later expression-
+    // statement Pop, breaking any call that reads that binding inside a loop
+    // (bd-fqlfw.2.11.1: "expected function, got boolean").
+    let mut register_cursor: Reg = 1;
     let mut binding_registers = BTreeMap::<BindingId, Reg>::new();
     let mut required_capabilities = BTreeSet::<String>::new();
     let mut value_stack: Vec<Reg> = Vec::new();
@@ -2751,22 +6203,39 @@ pub fn lower_ir2_to_ir3(
     let mut iterator_cleanup_labels = BTreeMap::<u32, Reg>::new();
     let mut pending_jumps = Vec::<PendingJump>::new();
     let mut catch_entry_labels = BTreeSet::<u32>::new();
-    // Deferred function bodies: (body_ir1_ops, param_names, name, free_vars, is_generator).
+    let explicit_finally_entry_labels = ir2
+        .ops
+        .windows(2)
+        .filter_map(|pair| match (&pair[0].inner, &pair[1].inner) {
+            (Ir1Op::Label { id }, Ir1Op::EnterFinally) => Some(*id),
+            _ => None,
+        })
+        .collect::<BTreeSet<_>>();
+    // Deferred function bodies retain their own binding-id namespace and exact
+    // local lexical metadata. A named carrier keeps nested enqueue sites from
+    // silently swapping fields as this contract evolves.
     // After the main code + Halt, each body is lowered into the instruction
     // stream and registered in function_table.  Index 0 is reserved for main.
-    #[allow(clippy::type_complexity)]
-    let mut deferred_functions: Vec<(
-        Vec<Ir1Op>,
-        Vec<String>,
-        Option<String>,
-        Vec<String>,
-        bool,
-    )> = Vec::new();
+    #[derive(Clone)]
+    struct DeferredFunction {
+        body_ops: Vec<Ir1Op>,
+        param_names: Vec<String>,
+        name: Option<String>,
+        free_vars: Vec<String>,
+        free_var_ids: Vec<BindingId>,
+        local_lexical_bindings: Vec<ResolvedBinding>,
+        is_generator: bool,
+        is_arrow: bool,
+        arrow_lexical_context: ArrowLexicalContextUsage,
+        rest_param_index: Option<u32>,
+    }
+    let mut deferred_functions = Vec::<DeferredFunction>::new();
 
     // Build name→BindingId lookup from the module's scope tree so the
     // IR3 lowering can resolve free-variable names to register indices.
     let mut name_to_binding_id = BTreeMap::<String, BindingId>::new();
     let mut binding_id_to_name = BTreeMap::<BindingId, String>::new();
+    let mut binding_id_to_kind = BTreeMap::<BindingId, BindingKind>::new();
     for scope in &ir2.scopes {
         for binding in &scope.bindings {
             name_to_binding_id
@@ -2775,26 +6244,93 @@ pub fn lower_ir2_to_ir3(
             binding_id_to_name
                 .entry(binding.binding_id)
                 .or_insert(binding.name.clone());
+            binding_id_to_kind
+                .entry(binding.binding_id)
+                .or_insert(binding.kind);
         }
     }
+    let top_level_declared_binding_ids = ir2
+        .ops
+        .iter()
+        .filter_map(|op| match &op.inner {
+            Ir1Op::StoreBinding { binding_id } | Ir1Op::DeclareFunction { binding_id, .. } => {
+                Some(*binding_id)
+            }
+            _ => None,
+        })
+        .collect::<BTreeSet<_>>();
     let is_commonjs = Path::new(&ir2.header.source_label)
         .extension()
         .and_then(|ext| ext.to_str())
         .map(|ext| ext.eq_ignore_ascii_case("cjs"))
         .unwrap_or(false);
-    let mut cjs_binding_ids = BTreeSet::<BindingId>::new();
+    let mut scoped_binding_ids = BTreeSet::<BindingId>::new();
     if is_commonjs {
+        if let Some(binding_id) = name_to_binding_id.get("require") {
+            scoped_binding_ids.insert(*binding_id);
+        }
         if let Some(binding_id) = name_to_binding_id.get("module") {
-            cjs_binding_ids.insert(*binding_id);
+            scoped_binding_ids.insert(*binding_id);
         }
         if let Some(binding_id) = name_to_binding_id.get("exports") {
-            cjs_binding_ids.insert(*binding_id);
+            scoped_binding_ids.insert(*binding_id);
         }
         if let Some(binding_id) = name_to_binding_id.get("__filename") {
-            cjs_binding_ids.insert(*binding_id);
+            scoped_binding_ids.insert(*binding_id);
         }
         if let Some(binding_id) = name_to_binding_id.get("__dirname") {
-            cjs_binding_ids.insert(*binding_id);
+            scoped_binding_ids.insert(*binding_id);
+        }
+    }
+    let injected_scope_binding_ids = scoped_binding_ids.clone();
+
+    // Bindings captured from module code must live in one persistent scope
+    // cell. Capture metadata carries the exact outer id, so same-spelled
+    // bindings from different lexical scopes remain distinct.
+    let shared_top_level_capture_names_by_id: BTreeMap<BindingId, String> = ir2
+        .ops
+        .iter()
+        .flat_map(|op| match &op.inner {
+            Ir1Op::CreateFunction {
+                free_vars,
+                free_var_outer_ids,
+                ..
+            }
+            | Ir1Op::DeclareFunction {
+                free_vars,
+                free_var_outer_ids,
+                ..
+            } => free_vars
+                .iter()
+                .cloned()
+                .zip(free_var_outer_ids.iter().copied())
+                .collect::<Vec<_>>(),
+            _ => Vec::new(),
+        })
+        .filter_map(|(name, binding_id)| {
+            (!injected_scope_binding_ids.contains(&binding_id)
+                && binding_id_to_name.get(&binding_id) == Some(&name))
+            .then(|| (binding_id, lexical_capture_cell_name(&name, binding_id)))
+        })
+        .collect();
+    scoped_binding_ids.extend(shared_top_level_capture_names_by_id.keys().copied());
+    let main_capture_scope_pushed = !shared_top_level_capture_names_by_id.is_empty();
+    if main_capture_scope_pushed {
+        ir3.instructions.push(Ir3Instruction::PushScope);
+        for (binding_id, name) in &shared_top_level_capture_names_by_id {
+            let pool_idx = push_constant(&mut ir3.constant_pool, name);
+            ir3.instructions.push(Ir3Instruction::DeclareBinding {
+                name_pool_index: pool_idx,
+                kind: if top_level_declared_binding_ids.contains(binding_id) {
+                    binding_id_to_kind
+                        .get(binding_id)
+                        .copied()
+                        .map(runtime_binding_kind_code)
+                        .unwrap_or(0)
+                } else {
+                    0
+                },
+            });
         }
     }
 
@@ -2883,10 +6419,11 @@ pub fn lower_ir2_to_ir3(
                 value_stack.push(dst);
             }
             Ir1Op::LoadBinding { binding_id } => {
-                if cjs_binding_ids.contains(binding_id) {
-                    let name = binding_id_to_name
+                if scoped_binding_ids.contains(binding_id) {
+                    let name = shared_top_level_capture_names_by_id
                         .get(binding_id)
                         .cloned()
+                        .or_else(|| binding_id_to_name.get(binding_id).cloned())
                         .unwrap_or_else(|| format!("__binding_{binding_id}"));
                     let dst = alloc_register(&mut register_cursor);
                     let pool_index = push_constant(&mut ir3.constant_pool, &name);
@@ -2909,16 +6446,31 @@ pub fn lower_ir2_to_ir3(
             }
             Ir1Op::StoreBinding { binding_id } => {
                 let src = value_stack.pop().unwrap_or(0);
-                if cjs_binding_ids.contains(binding_id) {
-                    let name = binding_id_to_name
+                if scoped_binding_ids.contains(binding_id) {
+                    let name = shared_top_level_capture_names_by_id
                         .get(binding_id)
                         .cloned()
+                        .or_else(|| binding_id_to_name.get(binding_id).cloned())
                         .unwrap_or_else(|| format!("__binding_{binding_id}"));
                     let pool_index = push_constant(&mut ir3.constant_pool, &name);
-                    ir3.instructions.push(Ir3Instruction::StoreScoped {
-                        src,
-                        name_pool_index: pool_index,
-                    });
+                    let initializes_shared_lexical = shared_top_level_capture_names_by_id
+                        .contains_key(binding_id)
+                        && top_level_declared_binding_ids.contains(binding_id)
+                        && binding_id_to_kind
+                            .get(binding_id)
+                            .copied()
+                            .is_some_and(binding_requires_runtime_initialization);
+                    if initializes_shared_lexical {
+                        ir3.instructions.push(Ir3Instruction::InitBinding {
+                            name_pool_index: pool_index,
+                            src,
+                        });
+                    } else {
+                        ir3.instructions.push(Ir3Instruction::StoreScoped {
+                            src,
+                            name_pool_index: pool_index,
+                        });
+                    }
                     value_stack.push(src);
                 } else {
                     let dst = *binding_registers
@@ -2930,7 +6482,9 @@ pub fn lower_ir2_to_ir3(
             }
             Ir1Op::Call { arg_count } => {
                 let count = *arg_count as usize;
-                if count > value_stack.len() {
+                // Stack layout: [..., callee, arg0, arg1, ...]; we pop `count`
+                // args plus the callee, so `count + 1` slots must be present.
+                if count.saturating_add(1) > value_stack.len() {
                     return Err(LoweringPipelineError::InvariantViolation {
                         detail: "Value stack underflow in Call",
                     });
@@ -2963,7 +6517,13 @@ pub fn lower_ir2_to_ir3(
             Ir1Op::CallMethod { arg_count } => {
                 let count = *arg_count as usize;
                 // Stack layout: [..., callee, receiver, arg0, arg1, ...]
-                // Pop args first, then receiver, then callee.
+                // Pop args first, then receiver, then callee, so `count + 2`
+                // slots must be present.
+                if count.saturating_add(2) > value_stack.len() {
+                    return Err(LoweringPipelineError::InvariantViolation {
+                        detail: "Value stack underflow in CallMethod",
+                    });
+                }
                 let mut args = Vec::with_capacity(count);
                 for _ in 0..count {
                     args.push(value_stack.pop().unwrap_or(0));
@@ -2993,7 +6553,7 @@ pub fn lower_ir2_to_ir3(
             }
             Ir1Op::ImportModule { specifier } => {
                 let string_reg = alloc_register(&mut register_cursor);
-                let pool_index = push_constant(&mut ir3.constant_pool, specifier);
+                let pool_index = push_constant(&mut ir3.constant_pool, specifier.clone());
                 ir3.instructions.push(Ir3Instruction::LoadStr {
                     dst: string_reg,
                     pool_index,
@@ -3020,6 +6580,9 @@ pub fn lower_ir2_to_ir3(
                 ir3.instructions
                     .push(Ir3Instruction::Move { dst, src: current });
                 value_stack.push(dst);
+            }
+            Ir1Op::GeneratorBodyStart => {
+                ir3.instructions.push(Ir3Instruction::GeneratorBodyStart);
             }
             Ir1Op::Yield { delegate } => {
                 let value_reg = value_stack.pop().unwrap_or(0);
@@ -3069,7 +6632,9 @@ pub fn lower_ir2_to_ir3(
                 // catch, exceptions go directly to the finally block and
                 // EnterCatch must NOT be emitted — it would consume the pending
                 // exception before EndFinally can re-throw it.
-                if finally_label.as_ref() != Some(catch_label) {
+                if finally_label.as_ref() != Some(catch_label)
+                    && !explicit_finally_entry_labels.contains(catch_label)
+                {
                     catch_entry_labels.insert(*catch_label);
                 }
                 let instr_idx = ir3.instructions.len();
@@ -3091,6 +6656,10 @@ pub fn lower_ir2_to_ir3(
             }
             Ir1Op::EndFinally => {
                 ir3.instructions.push(Ir3Instruction::EndFinally);
+            }
+            Ir1Op::DiscardAbruptCompletion => {
+                ir3.instructions
+                    .push(Ir3Instruction::DiscardAbruptCompletion);
             }
             Ir1Op::BinaryOp { operator } => {
                 let rhs = value_stack.pop().unwrap_or(0);
@@ -3153,6 +6722,47 @@ pub fn lower_ir2_to_ir3(
                 binding_id,
                 operator,
             } => {
+                if scoped_binding_ids.contains(binding_id) {
+                    let src = value_stack.pop().unwrap_or(0);
+                    let name = shared_top_level_capture_names_by_id
+                        .get(binding_id)
+                        .cloned()
+                        .or_else(|| binding_id_to_name.get(binding_id).cloned())
+                        .unwrap_or_else(|| format!("__binding_{binding_id}"));
+                    let pool_index = push_constant(&mut ir3.constant_pool, &name);
+                    let result = if *operator == AssignmentOperator::Assign {
+                        ir3.instructions.push(Ir3Instruction::StoreScoped {
+                            src,
+                            name_pool_index: pool_index,
+                        });
+                        src
+                    } else if matches!(
+                        operator,
+                        AssignmentOperator::LogicalAndAssign
+                            | AssignmentOperator::LogicalOrAssign
+                            | AssignmentOperator::NullishCoalescingAssign
+                    ) {
+                        return Err(LoweringPipelineError::InvariantViolation {
+                            detail: "logical compound assignments must be short-circuit lowered before IR3",
+                        });
+                    } else {
+                        let lhs = alloc_register(&mut register_cursor);
+                        ir3.instructions.push(Ir3Instruction::LoadScoped {
+                            dst: lhs,
+                            name_pool_index: pool_index,
+                        });
+                        let result = alloc_register(&mut register_cursor);
+                        ir3.instructions
+                            .push(lower_assign_op_to_ir3(*operator, result, lhs, src));
+                        ir3.instructions.push(Ir3Instruction::StoreScoped {
+                            src: result,
+                            name_pool_index: pool_index,
+                        });
+                        result
+                    };
+                    value_stack.push(result);
+                    continue;
+                }
                 let dst = *binding_registers
                     .entry(*binding_id)
                     .or_insert_with(|| alloc_register(&mut register_cursor));
@@ -3342,7 +6952,7 @@ pub fn lower_ir2_to_ir3(
                     Ir1PropertyKey::Static(key) => {
                         let obj = value_stack.pop().unwrap_or(0);
                         let key_reg = alloc_register(&mut register_cursor);
-                        let pool_index = push_constant(&mut ir3.constant_pool, key);
+                        let pool_index = push_constant(&mut ir3.constant_pool, key.clone());
                         ir3.instructions.push(Ir3Instruction::LoadStr {
                             dst: key_reg,
                             pool_index,
@@ -3369,7 +6979,7 @@ pub fn lower_ir2_to_ir3(
                     Ir1PropertyKey::Static(key) => {
                         let obj = value_stack.pop().unwrap_or(0);
                         let key_reg = alloc_register(&mut register_cursor);
-                        let pool_index = push_constant(&mut ir3.constant_pool, key);
+                        let pool_index = push_constant(&mut ir3.constant_pool, key.clone());
                         ir3.instructions.push(Ir3Instruction::LoadStr {
                             dst: key_reg,
                             pool_index,
@@ -3394,7 +7004,7 @@ pub fn lower_ir2_to_ir3(
                     Ir1PropertyKey::Static(key) => {
                         let obj = value_stack.pop().unwrap_or(0);
                         let key_reg = alloc_register(&mut register_cursor);
-                        let pool_index = push_constant(&mut ir3.constant_pool, key);
+                        let pool_index = push_constant(&mut ir3.constant_pool, key.clone());
                         ir3.instructions.push(Ir3Instruction::LoadStr {
                             dst: key_reg,
                             pool_index,
@@ -3510,6 +7120,43 @@ pub fn lower_ir2_to_ir3(
                     .push(Ir3Instruction::SpreadIntoObject { target, source });
                 value_stack.push(target);
             }
+            Ir1Op::CopyDataProperties { excluded_count } => {
+                // Stack: [..., target, source, excluded...] -> [..., target].
+                // Materialize exclusions into a contiguous range so arbitrary
+                // valid IR1 producers do not have to pre-allocate one.
+                let excluded_len = *excluded_count as usize;
+                if excluded_len
+                    .checked_add(2)
+                    .is_none_or(|needed| needed > value_stack.len())
+                {
+                    return Err(LoweringPipelineError::InvariantViolation {
+                        detail: "Value stack underflow in CopyDataProperties",
+                    });
+                }
+                let mut excluded_regs = Vec::with_capacity(excluded_len);
+                for _ in 0..excluded_len {
+                    excluded_regs.push(value_stack.pop().unwrap_or(0));
+                }
+                excluded_regs.reverse();
+                let source = value_stack.pop().unwrap_or(0);
+                let target = value_stack.pop().unwrap_or(0);
+                let excluded_start = register_cursor;
+                for src in excluded_regs {
+                    let dst = alloc_register(&mut register_cursor);
+                    ir3.instructions.push(Ir3Instruction::Move { dst, src });
+                }
+                let value_dst = alloc_register(&mut register_cursor);
+                ir3.instructions.push(Ir3Instruction::CopyDataProperties {
+                    target,
+                    source,
+                    excluded: RegRange {
+                        start: excluded_start,
+                        count: *excluded_count,
+                    },
+                    value_dst,
+                });
+                value_stack.push(target);
+            }
             Ir1Op::Throw => {
                 let value = value_stack.pop().unwrap_or(0);
                 ir3.instructions.push(Ir3Instruction::Throw { value });
@@ -3535,42 +7182,72 @@ pub fn lower_ir2_to_ir3(
                 param_names,
                 body_ops,
                 free_vars,
+                free_var_ids,
+                free_var_outer_ids,
+                local_lexical_bindings,
                 is_generator,
+                rest_param_index,
+                ..
             } => {
+                if free_vars.len() != free_var_ids.len()
+                    || free_vars.len() != free_var_outer_ids.len()
+                {
+                    return Err(LoweringPipelineError::InvariantViolation {
+                        detail: "Function capture metadata lengths differ",
+                    });
+                }
                 let dst = *binding_registers
                     .entry(*binding_id)
                     .or_insert_with(|| alloc_register(&mut register_cursor));
+                let runtime_free_vars: Vec<String> = free_vars
+                    .iter()
+                    .zip(free_var_outer_ids.iter())
+                    .map(|(name, outer_id)| {
+                        shared_top_level_capture_names_by_id
+                            .get(outer_id)
+                            .cloned()
+                            .unwrap_or_else(|| name.clone())
+                    })
+                    .collect();
+                let temp_free_vars: Vec<(&String, &BindingId)> = runtime_free_vars
+                    .iter()
+                    .zip(free_var_outer_ids.iter())
+                    .filter(|(runtime_name, outer_id)| {
+                        shared_top_level_capture_names_by_id.get(outer_id) != Some(*runtime_name)
+                            && !(injected_scope_binding_ids.contains(outer_id)
+                                && binding_id_to_name.get(outer_id) == Some(*runtime_name))
+                    })
+                    .collect();
                 {
                     // If the function has free variables, put the current
                     // scope's bindings onto the scope chain so
                     // CreateClosure can capture them.
-                    if !free_vars.is_empty() {
+                    if !temp_free_vars.is_empty() {
                         ir3.instructions.push(Ir3Instruction::PushScope);
-                        for fv in free_vars {
-                            let pool_idx = push_constant(&mut ir3.constant_pool, fv);
-                            ir3.instructions.push(Ir3Instruction::DeclareBinding {
-                                name_pool_index: pool_idx,
-                                kind: 0, // var
-                            });
-                            // Copy register value to scope chain.
-                            if let Some(&reg) = binding_registers
-                                .get(&name_to_binding_id.get(fv).copied().unwrap_or(0))
-                            {
-                                ir3.instructions.push(Ir3Instruction::StoreScoped {
-                                    src: reg,
-                                    name_pool_index: pool_idx,
-                                });
-                            }
+                        for (fv, outer_binding_id) in &temp_free_vars {
+                            emit_temporary_capture_alias(
+                                &mut ir3,
+                                fv,
+                                binding_registers.get(outer_binding_id).copied(),
+                            )?;
                         }
                     }
                     let function_index = deferred_functions.len() as u32 + 1;
-                    deferred_functions.push((
-                        body_ops.clone(),
-                        param_names.clone(),
-                        Some(name.clone()),
-                        free_vars.clone(),
-                        *is_generator,
-                    ));
+                    deferred_functions.push(DeferredFunction {
+                        body_ops: body_ops.clone(),
+                        param_names: param_names.clone(),
+                        name: Some(name.clone()),
+                        free_vars: runtime_free_vars.clone(),
+                        free_var_ids: free_var_ids.clone(),
+                        local_lexical_bindings: local_lexical_bindings
+                            .as_deref()
+                            .cloned()
+                            .unwrap_or_default(),
+                        is_generator: *is_generator,
+                        is_arrow: false,
+                        arrow_lexical_context: ArrowLexicalContextUsage::default(),
+                        rest_param_index: *rest_param_index,
+                    });
                     if *is_generator {
                         ir3.instructions.push(Ir3Instruction::CreateGenerator {
                             dst,
@@ -3584,7 +7261,24 @@ pub fn lower_ir2_to_ir3(
                             capture_count: free_vars.len() as u32,
                         });
                     }
-                    if !free_vars.is_empty() {
+                    if let Some(runtime_name) = shared_top_level_capture_names_by_id.get(binding_id)
+                    {
+                        let pool_idx = push_constant(&mut ir3.constant_pool, runtime_name);
+                        if binding_id_to_kind.get(binding_id).is_some_and(|kind| {
+                            matches!(kind, BindingKind::Let | BindingKind::Const)
+                        }) {
+                            ir3.instructions.push(Ir3Instruction::InitBinding {
+                                src: dst,
+                                name_pool_index: pool_idx,
+                            });
+                        } else {
+                            ir3.instructions.push(Ir3Instruction::StoreScoped {
+                                src: dst,
+                                name_pool_index: pool_idx,
+                            });
+                        }
+                    }
+                    if !temp_free_vars.is_empty() {
                         ir3.instructions.push(Ir3Instruction::PopScope);
                     }
                 }
@@ -3595,37 +7289,79 @@ pub fn lower_ir2_to_ir3(
                 param_names,
                 body_ops,
                 free_vars,
+                free_var_ids,
+                free_var_outer_ids,
+                local_lexical_bindings,
                 is_generator,
+                is_arrow,
+                rest_param_index,
             } => {
+                if free_vars.len() != free_var_ids.len()
+                    || free_vars.len() != free_var_outer_ids.len()
+                {
+                    return Err(LoweringPipelineError::InvariantViolation {
+                        detail: "Function capture metadata lengths differ",
+                    });
+                }
                 let dst = alloc_register(&mut register_cursor);
+                let runtime_free_vars: Vec<String> = free_vars
+                    .iter()
+                    .zip(free_var_outer_ids.iter())
+                    .map(|(name, outer_id)| {
+                        shared_top_level_capture_names_by_id
+                            .get(outer_id)
+                            .cloned()
+                            .unwrap_or_else(|| name.clone())
+                    })
+                    .collect();
+                let temp_free_vars: Vec<(&String, &BindingId)> = runtime_free_vars
+                    .iter()
+                    .zip(free_var_outer_ids.iter())
+                    .filter(|(runtime_name, outer_id)| {
+                        shared_top_level_capture_names_by_id.get(outer_id) != Some(*runtime_name)
+                            && !(injected_scope_binding_ids.contains(outer_id)
+                                && binding_id_to_name.get(outer_id) == Some(*runtime_name))
+                    })
+                    .collect();
                 // If the function has free variables, put them on the
                 // scope chain before capturing.
-                if !free_vars.is_empty() {
+                if !temp_free_vars.is_empty() {
                     ir3.instructions.push(Ir3Instruction::PushScope);
-                    for fv in free_vars {
-                        let pool_idx = push_constant(&mut ir3.constant_pool, fv);
-                        ir3.instructions.push(Ir3Instruction::DeclareBinding {
-                            name_pool_index: pool_idx,
-                            kind: 0,
-                        });
-                        if let Some(&reg) =
-                            binding_registers.get(&name_to_binding_id.get(fv).copied().unwrap_or(0))
-                        {
-                            ir3.instructions.push(Ir3Instruction::StoreScoped {
-                                src: reg,
-                                name_pool_index: pool_idx,
-                            });
-                        }
+                    for (fv, outer_binding_id) in &temp_free_vars {
+                        emit_temporary_capture_alias(
+                            &mut ir3,
+                            fv,
+                            binding_registers.get(outer_binding_id).copied(),
+                        )?;
                     }
                 }
                 let function_index = deferred_functions.len() as u32 + 1;
-                deferred_functions.push((
-                    body_ops.clone(),
-                    param_names.clone(),
-                    name.clone(),
-                    free_vars.clone(),
-                    *is_generator,
-                ));
+                let arrow_lexical_context = if *is_arrow {
+                    arrow_lexical_context_usage(body_ops)
+                } else {
+                    ArrowLexicalContextUsage::default()
+                };
+                deferred_functions.push(DeferredFunction {
+                    body_ops: body_ops.clone(),
+                    param_names: param_names.clone(),
+                    name: name.clone(),
+                    free_vars: runtime_free_vars.clone(),
+                    free_var_ids: free_var_ids.clone(),
+                    local_lexical_bindings: local_lexical_bindings
+                        .as_deref()
+                        .cloned()
+                        .unwrap_or_default(),
+                    is_generator: *is_generator,
+                    is_arrow: *is_arrow,
+                    arrow_lexical_context,
+                    rest_param_index: *rest_param_index,
+                });
+                let pushed_arrow_lexical_scope = emit_arrow_lexical_capture_scope(
+                    &mut ir3,
+                    &mut register_cursor,
+                    arrow_lexical_context,
+                    false,
+                );
                 if *is_generator {
                     ir3.instructions.push(Ir3Instruction::CreateGenerator {
                         dst,
@@ -3639,7 +7375,10 @@ pub fn lower_ir2_to_ir3(
                         capture_count: free_vars.len() as u32,
                     });
                 }
-                if !free_vars.is_empty() {
+                if pushed_arrow_lexical_scope {
+                    ir3.instructions.push(Ir3Instruction::PopScope);
+                }
+                if !temp_free_vars.is_empty() {
                     ir3.instructions.push(Ir3Instruction::PopScope);
                 }
                 value_stack.push(dst);
@@ -3958,6 +7697,10 @@ pub fn lower_ir2_to_ir3(
         }
     }
 
+    if main_capture_scope_pushed {
+        ir3.instructions.push(Ir3Instruction::PopScope);
+    }
+
     if !matches!(ir3.instructions.last(), Some(Ir3Instruction::Halt)) {
         ir3.instructions.push(Ir3Instruction::Halt);
     }
@@ -3967,6 +7710,7 @@ pub fn lower_ir2_to_ir3(
         frame_size: register_cursor.max(1),
         name: Some("main".to_string()),
         is_generator: false,
+        rest_param_index: None,
     });
 
     // ── Deferred function bodies ──────────────────────────────────────
@@ -3976,18 +7720,52 @@ pub fn lower_ir2_to_ir3(
     // body can push new entries without conflicting with the borrow.
     let mut deferred_idx = 0;
     while deferred_idx < deferred_functions.len() {
-        let (body_ops, param_names, fn_name, free_vars, fn_is_generator) =
-            deferred_functions[deferred_idx].clone();
+        let DeferredFunction {
+            body_ops,
+            param_names,
+            name: fn_name,
+            free_vars,
+            free_var_ids,
+            local_lexical_bindings: fn_local_lexical_bindings,
+            is_generator: fn_is_generator,
+            is_arrow: fn_is_arrow,
+            arrow_lexical_context: fn_arrow_lexical_context,
+            rest_param_index: fn_rest_param_index,
+        } = deferred_functions[deferred_idx].clone();
         deferred_idx += 1;
-        let (body_ops, param_names, fn_name, free_vars) =
-            (&body_ops, &param_names, &fn_name, &free_vars);
-        let entry = ir3.instructions.len() as u32;
-        let arity = param_names.len() as u32;
+        validate_deferred_rest_parameter_abi(param_names.len(), fn_rest_param_index)?;
+        let (body_ops, param_names, fn_name, free_vars, free_var_ids) =
+            (&body_ops, &param_names, &fn_name, &free_vars, &free_var_ids);
+        let entry = u32::try_from(ir3.instructions.len()).map_err(|_| {
+            LoweringPipelineError::InvariantViolation {
+                detail: "IR3 instruction stream exceeds addressable size",
+            }
+        })?;
+        let arity = u32::try_from(param_names.len()).map_err(|_| {
+            LoweringPipelineError::InvariantViolation {
+                detail: "Function parameter count exceeds the IR3 positional ABI",
+            }
+        })?;
         let mut fn_reg: Reg = 0;
         let mut fn_binding_regs = BTreeMap::<BindingId, Reg>::new();
         let mut fn_value_stack: Vec<Reg> = Vec::new();
+        // bd-fqlfw.2.11.4: register discarded by the most recent function-body
+        // `Pop`, so an immediately-following explicit `Return` (whose IR1 is
+        // `[eval X, Pop, Return]`) can deliver that value instead of reading r0.
+        let mut fn_last_popped: Option<Reg> = None;
         let mut fn_label_targets = BTreeMap::<u32, u32>::new();
         let mut fn_pending_jumps = Vec::<PendingJump>::new();
+        let mut fn_catch_entry_labels = BTreeSet::<u32>::new();
+        let fn_explicit_finally_entry_labels = body_ops
+            .windows(2)
+            .filter_map(|pair| match (&pair[0], &pair[1]) {
+                (Ir1Op::Label { id }, Ir1Op::EnterFinally) => Some(*id),
+                _ => None,
+            })
+            .collect::<BTreeSet<_>>();
+        // Iterator registers to drop from the value stack when their loop's
+        // done-label lands (bd-ddloz; mirrors the top-level pass).
+        let mut fn_iterator_cleanup_labels = BTreeMap::<u32, Reg>::new();
 
         // Allocate parameter registers r0..rN-1.
         for (i, _pname) in param_names.iter().enumerate() {
@@ -4013,111 +7791,217 @@ pub fn lower_ir2_to_ir3(
             }
         }
 
-        // Build a set of binding_ids that correspond to free variables.
-        // These will use scope-chain lookup instead of register access.
-        let free_var_binding_ids: BTreeSet<BindingId> = {
-            let param_count = param_names.len() as BindingId;
-            let mut fv_ids = BTreeSet::new();
-            // The body lowering assigned binding_ids starting from 0
-            // for params, then incrementing for each new identifier.
-            // Free variables are identifiers that got forward-reference
-            // bindings (binding_id >= param_count) with names in free_vars.
-            // We scan body_ops to find LoadBinding/StoreBinding with
-            // binding_id >= param_count and trust those are free vars.
-            if !free_vars.is_empty() {
-                for bop in body_ops.iter() {
-                    match bop {
-                        Ir1Op::LoadBinding { binding_id } | Ir1Op::StoreBinding { binding_id }
-                            if *binding_id >= param_count =>
-                        {
-                            fv_ids.insert(*binding_id);
-                        }
-                        _ => {}
-                    }
-                }
-            }
-            fv_ids
-        };
-
-        // Build binding_id → name map for free variables by scanning
-        // the body ops for the first LoadBinding of each free-var id.
-        // The name comes from the order of appearance matched against
-        // the free_vars list.
-        let fv_id_to_name: BTreeMap<BindingId, String> = {
-            let mut map = BTreeMap::new();
-            if !free_vars.is_empty() {
-                // The body lowering creates forward-reference bindings
-                // in order of first appearance.  Match them up.
-                let mut seen_ids = Vec::new();
-                for bop in body_ops.iter() {
-                    if let Ir1Op::LoadBinding { binding_id } = bop
-                        && free_var_binding_ids.contains(binding_id)
-                        && !seen_ids.contains(binding_id)
-                    {
-                        seen_ids.push(*binding_id);
-                    }
-                }
-                for (idx, bid) in seen_ids.iter().enumerate() {
-                    if let Some(name) = free_vars.get(idx) {
-                        map.insert(*bid, name.clone());
-                    }
-                }
-            }
-            map
-        };
-
-        // Pre-scan: detect if any child function captures free variables.
-        // If so, this function must mirror its local bindings to the scope
-        // chain so those captures resolve at runtime.
-        let has_capturing_children = body_ops.iter().any(|bop| match bop {
-            Ir1Op::CreateFunction { free_vars: fv, .. }
-            | Ir1Op::DeclareFunction { free_vars: fv, .. } => !fv.is_empty(),
-            _ => false,
-        });
-
-        // Collect names of variables that child closures capture from
-        // THIS function, so we can emit DeclareBinding + StoreScoped
-        // for exactly those bindings.
-        let child_captured_names: BTreeSet<String> = body_ops
+        // Exact free-variable binding_id -> name mapping, carried from IR1
+        // via `free_var_ids` (paired index-wise with `free_vars` by
+        // `collect_free_vars`). Replaces the old first-appearance zip
+        // heuristic, which silently mis-bound names whenever the body's
+        // first-use order diverged from the alphabetical `free_vars` order
+        // (recursion, captured `let`s, multi-free-var closures) and swept
+        // body locals into the free-var set (bd-snlhk; the engine shipped
+        // the same fix as bd-g0aok).
+        let fv_id_to_name: BTreeMap<BindingId, String> = free_var_ids
             .iter()
-            .flat_map(|bop| match bop {
-                Ir1Op::CreateFunction { free_vars: fv, .. }
-                | Ir1Op::DeclareFunction { free_vars: fv, .. } => fv.clone(),
-                _ => Vec::new(),
-            })
+            .zip(free_vars.iter())
+            .map(|(id, name)| (*id, name.clone()))
             .collect();
 
-        // If children capture our locals, push a scope frame at the
-        // beginning of this function body.
+        let local_lexical_binding_by_id: BTreeMap<BindingId, ResolvedBinding> =
+            fn_local_lexical_bindings
+                .iter()
+                .cloned()
+                .map(|binding| (binding.binding_id, binding))
+                .collect();
+
+        // Collect the exact local binding IDs that child closures capture.
+        // Name-only or ordinal reconstruction cannot distinguish nested
+        // lexical shadows and can mirror an unrelated earlier local.
+        let mut child_captured_bindings = BTreeMap::<BindingId, String>::new();
+        for body_op in body_ops {
+            let capture_metadata = match body_op {
+                Ir1Op::CreateFunction {
+                    free_vars,
+                    free_var_ids,
+                    free_var_outer_ids,
+                    ..
+                }
+                | Ir1Op::DeclareFunction {
+                    free_vars,
+                    free_var_ids,
+                    free_var_outer_ids,
+                    ..
+                } => Some((free_vars, free_var_ids, free_var_outer_ids)),
+                _ => None,
+            };
+            let Some((names, body_ids, outer_ids)) = capture_metadata else {
+                continue;
+            };
+            if names.len() != body_ids.len() || names.len() != outer_ids.len() {
+                return Err(LoweringPipelineError::InvariantViolation {
+                    detail: "Nested function capture metadata lengths differ",
+                });
+            }
+            for (name, outer_id) in names.iter().zip(outer_ids.iter()) {
+                if name.starts_with(CLASS_EXPRESSION_CONSTRUCTOR_SELF_CAPTURE_PREFIX)
+                    || name.starts_with(CLASS_EXPRESSION_METHOD_SELF_CAPTURE_PREFIX)
+                    || name.starts_with(FUNCTION_EXPRESSION_SELF_CAPTURE_PREFIX)
+                {
+                    // Constructor-self and method-self are deliberately
+                    // distinct aliases of one class binding. Preserve them
+                    // per nested closure instead of collapsing them by id.
+                    continue;
+                }
+                let runtime_name = fv_id_to_name
+                    .get(outer_id)
+                    .cloned()
+                    .unwrap_or_else(|| lexical_capture_cell_name(name, *outer_id));
+                child_captured_bindings.insert(*outer_id, runtime_name);
+            }
+        }
+        let has_capturing_children = !child_captured_bindings.is_empty();
+        let mut function_capture_names = child_captured_bindings.clone();
+        function_capture_names.extend(
+            fv_id_to_name
+                .iter()
+                .map(|(binding_id, name)| (*binding_id, name.clone())),
+        );
+
+        // Child closures snapshot scope-frame structure when they are created.
+        // Materialize every local capture cell at function entry so a child
+        // created before the source declaration still observes later writes.
         if has_capturing_children {
             ir3.instructions.push(Ir3Instruction::PushScope);
-            // Put parameters on the scope chain too (children may capture them).
-            for (i, pname) in param_names.iter().enumerate() {
-                if child_captured_names.contains(pname) {
-                    let pool_idx = push_constant(&mut ir3.constant_pool, pname);
-                    ir3.instructions.push(Ir3Instruction::DeclareBinding {
-                        name_pool_index: pool_idx,
-                        kind: 0,
+            for (binding_id, name) in &child_captured_bindings {
+                if fv_id_to_name.get(binding_id) == Some(name) {
+                    // The inherited free-variable cell already has the exact
+                    // name the child will resolve; do not shadow it.
+                    continue;
+                }
+                let inherited = if let Some(outer_name) = fv_id_to_name.get(binding_id) {
+                    let src = alloc_register(&mut fn_reg);
+                    let outer_pool_idx = push_constant(&mut ir3.constant_pool, outer_name);
+                    ir3.instructions.push(Ir3Instruction::LoadScoped {
+                        dst: src,
+                        name_pool_index: outer_pool_idx,
                     });
+                    Some(src)
+                } else {
+                    fn_binding_regs.get(binding_id).copied()
+                };
+                let pool_idx = push_constant(&mut ir3.constant_pool, name);
+                ir3.instructions.push(Ir3Instruction::DeclareBinding {
+                    name_pool_index: pool_idx,
+                    kind: local_lexical_binding_by_id
+                        .get(binding_id)
+                        .map_or(0, |binding| {
+                            if binding.kind == BindingKind::Parameter {
+                                // Captured parameter cells participate in the
+                                // source-ordered parameter TDZ. A runtime Param
+                                // cell is hoisted/initialized, so use a mutable
+                                // lexical cell and initialize it at its formal
+                                // prologue step instead.
+                                runtime_binding_kind_code(BindingKind::Let)
+                            } else {
+                                runtime_binding_kind_code(binding.kind)
+                            }
+                        }),
+                });
+                if let Some(src) = inherited {
                     ir3.instructions.push(Ir3Instruction::InitBinding {
                         name_pool_index: pool_idx,
-                        src: i as Reg,
+                        src,
                     });
                 }
             }
         }
 
-        // Classify body ops into Ir2 and lower to IR3.
-        for body_ir1 in body_ops {
-            let (effect, cap, flow) = classify_ir1_op(body_ir1);
-            let ir2_op = Ir2Op {
-                inner: body_ir1.clone(),
-                effect,
-                required_capability: cap,
-                flow,
-            };
+        // Classify and infer the whole function body as one flow frame before
+        // lowering it.  Per-op classification alone loses the accumulated
+        // source label needed to guard a later declassification hostcall.
+        let mut body_ir2_ops = body_ops
+            .iter()
+            .map(|body_ir1| {
+                let (effect, required_capability, flow) = classify_ir1_op(body_ir1);
+                Ir2Op {
+                    inner: body_ir1.clone(),
+                    effect,
+                    required_capability,
+                    flow,
+                }
+            })
+            .collect::<Vec<_>>();
+        infer_ir2_flow_annotations_for_ops(&mut body_ir2_ops);
+        for ir2_op in &body_ir2_ops {
+            let body_ir1 = &ir2_op.inner;
+            // An explicit source return is encoded as `[value, Pop, Return]`.
+            // Treat the remembered Pop register as an adjacency marker so a
+            // control-flow carrier left below it on the linear value stack
+            // cannot replace the return value, and an older expression Pop
+            // cannot leak into a later synthetic fall-off return.
+            let return_value_from_preceding_pop = fn_last_popped.take();
+            if matches!(ir2_op.effect, EffectBoundary::HostcallEffect) {
+                let capability = ir2_op
+                    .required_capability
+                    .clone()
+                    .unwrap_or_else(|| CapabilityTag("hostcall.invoke".to_string()));
+                let (start_reg, arg_count) = match body_ir1 {
+                    Ir1Op::HostCall { arg_count, .. } => {
+                        let count = *arg_count;
+                        if count as usize > fn_value_stack.len() {
+                            return Err(LoweringPipelineError::InvariantViolation {
+                                detail: "Value stack underflow in function-body HostCall",
+                            });
+                        }
+                        let mut args = Vec::with_capacity(count as usize);
+                        for _ in 0..count {
+                            args.push(fn_value_stack.pop().unwrap_or(0));
+                        }
+                        args.reverse();
+                        let start = fn_reg;
+                        for arg_reg in args {
+                            let dst = alloc_register(&mut fn_reg);
+                            ir3.instructions
+                                .push(Ir3Instruction::Move { dst, src: arg_reg });
+                        }
+                        (start, count)
+                    }
+                    _ => {
+                        let hostcall_arg = fn_value_stack.pop().unwrap_or(0);
+                        let start = alloc_register(&mut fn_reg);
+                        ir3.instructions.push(Ir3Instruction::Move {
+                            dst: start,
+                            src: hostcall_arg,
+                        });
+                        (start, 1)
+                    }
+                };
+
+                if flow_requires_runtime_check(ir2_op.flow.as_ref(), &capability) {
+                    required_capabilities.insert(IFC_RUNTIME_GUARD_CAPABILITY.to_string());
+                    let guard_dst = alloc_register(&mut fn_reg);
+                    ir3.instructions.push(Ir3Instruction::HostCall {
+                        capability: CapabilityTag(IFC_RUNTIME_GUARD_CAPABILITY.to_string()),
+                        args: RegRange {
+                            start: start_reg,
+                            count: arg_count,
+                        },
+                        dst: guard_dst,
+                    });
+                }
+                required_capabilities.insert(capability.0.clone());
+                let dst = alloc_register(&mut fn_reg);
+                ir3.instructions.push(Ir3Instruction::HostCall {
+                    capability,
+                    args: RegRange {
+                        start: start_reg,
+                        count: arg_count,
+                    },
+                    dst,
+                });
+                fn_value_stack.push(dst);
+                continue;
+            }
             // We handle a core subset of ops that appear in function bodies.
-            match &ir2_op.inner {
+            match body_ir1 {
                 Ir1Op::LoadLiteral { value } => {
                     let dst = alloc_register(&mut fn_reg);
                     match value {
@@ -4130,7 +8014,7 @@ pub fn lower_ir2_to_ir3(
                                 .push(Ir3Instruction::LoadFloat { dst, bits: *bits });
                         }
                         Ir1Literal::String(s) => {
-                            let pool_index = push_constant(&mut ir3.constant_pool, s);
+                            let pool_index = push_constant(&mut ir3.constant_pool, s.clone());
                             ir3.instructions
                                 .push(Ir3Instruction::LoadStr { dst, pool_index });
                         }
@@ -4148,8 +8032,12 @@ pub fn lower_ir2_to_ir3(
                     fn_value_stack.push(dst);
                 }
                 Ir1Op::LoadBinding { binding_id } => {
-                    if let Some(name) = fv_id_to_name.get(binding_id) {
-                        // Free variable: load from scope chain by name.
+                    if let Some(name) = fv_id_to_name
+                        .get(binding_id)
+                        .or_else(|| child_captured_bindings.get(binding_id))
+                    {
+                        // Free variables and locals shared with a child both
+                        // live in the scope chain rather than a private register.
                         let dst = alloc_register(&mut fn_reg);
                         let pool_idx = push_constant(&mut ir3.constant_pool, name);
                         ir3.instructions.push(Ir3Instruction::LoadScoped {
@@ -4167,36 +8055,47 @@ pub fn lower_ir2_to_ir3(
                     }
                 }
                 Ir1Op::StoreBinding { binding_id } => {
-                    let is_first_store = !fn_binding_regs.contains_key(binding_id);
+                    if let Some(name) = fv_id_to_name.get(binding_id) {
+                        let src = fn_value_stack.pop().unwrap_or(0);
+                        let pool_idx = push_constant(&mut ir3.constant_pool, name);
+                        ir3.instructions.push(Ir3Instruction::StoreScoped {
+                            src,
+                            name_pool_index: pool_idx,
+                        });
+                        if let Some(child_name) = child_captured_bindings.get(binding_id)
+                            && child_name != name
+                        {
+                            let child_pool_idx = push_constant(&mut ir3.constant_pool, child_name);
+                            ir3.instructions.push(Ir3Instruction::StoreScoped {
+                                src,
+                                name_pool_index: child_pool_idx,
+                            });
+                        }
+                        fn_value_stack.push(src);
+                        continue;
+                    }
+                    if let Some(name) = child_captured_bindings.get(binding_id) {
+                        let src = fn_value_stack.pop().unwrap_or(0);
+                        let pool_idx = push_constant(&mut ir3.constant_pool, name);
+                        if local_lexical_binding_by_id.contains_key(binding_id) {
+                            ir3.instructions.push(Ir3Instruction::InitBinding {
+                                src,
+                                name_pool_index: pool_idx,
+                            });
+                        } else {
+                            ir3.instructions.push(Ir3Instruction::StoreScoped {
+                                src,
+                                name_pool_index: pool_idx,
+                            });
+                        }
+                        fn_value_stack.push(src);
+                        continue;
+                    }
                     let dst = *fn_binding_regs
                         .entry(*binding_id)
                         .or_insert_with(|| alloc_register(&mut fn_reg));
                     let src = fn_value_stack.pop().unwrap_or(0);
                     ir3.instructions.push(Ir3Instruction::Move { dst, src });
-                    // If this function has capturing children and this
-                    // binding is being stored for the first time (i.e.,
-                    // it's a local variable init, not a parameter
-                    // already handled above), also put it on the scope
-                    // chain so child closures can find it via LoadScoped.
-                    if has_capturing_children && *binding_id >= param_names.len() as BindingId {
-                        // Use a synthetic name: try to find the real name from
-                        // child_captured_names.  For simplicity we use the binding_id
-                        // as a counter into the captured names.
-                        let var_idx = (*binding_id as usize).saturating_sub(param_names.len());
-                        if let Some(name) = child_captured_names.iter().nth(var_idx) {
-                            let pool_idx = push_constant(&mut ir3.constant_pool, name);
-                            if is_first_store {
-                                ir3.instructions.push(Ir3Instruction::DeclareBinding {
-                                    name_pool_index: pool_idx,
-                                    kind: 0,
-                                });
-                            }
-                            ir3.instructions.push(Ir3Instruction::StoreScoped {
-                                src: dst,
-                                name_pool_index: pool_idx,
-                            });
-                        }
-                    }
                     fn_value_stack.push(dst);
                 }
                 Ir1Op::BinaryOp { operator } => {
@@ -4215,7 +8114,15 @@ pub fn lower_ir2_to_ir3(
                     fn_value_stack.push(dst);
                 }
                 Ir1Op::Return => {
-                    let value = fn_value_stack.pop().unwrap_or(0);
+                    // bd-fqlfw.2.11.4: deliver the actual return value. The
+                    // synthetic fall-off-end return (`[LoadLiteral Undefined,
+                    // Return]`, no Pop — appended ~line 2164) leaves its value on
+                    // the stack. An explicit `return X` (`[eval X, Pop, Return]`)
+                    // must prefer the immediately preceding Pop register over
+                    // any iterator/control carrier remaining below it.
+                    let value = return_value_from_preceding_pop
+                        .or_else(|| fn_value_stack.pop())
+                        .unwrap_or(0);
                     ir3.instructions.push(Ir3Instruction::Return { value });
                 }
                 Ir1Op::Call { arg_count } => {
@@ -4271,8 +8178,31 @@ pub fn lower_ir2_to_ir3(
                     fn_value_stack.push(dst);
                 }
                 Ir1Op::Label { id } => {
-                    let target = ir3.instructions.len() as u32;
-                    fn_label_targets.insert(*id, target);
+                    let target = u32::try_from(ir3.instructions.len()).map_err(|_| {
+                        LoweringPipelineError::InvariantViolation {
+                            detail: "IR3 instruction stream exceeds addressable size",
+                        }
+                    })?;
+                    if fn_label_targets.insert(*id, target).is_some() {
+                        return Err(LoweringPipelineError::InvariantViolation {
+                            detail: "Deferred function body contains duplicate label ids",
+                        });
+                    }
+                    if fn_catch_entry_labels.contains(id) {
+                        let dst = alloc_register(&mut fn_reg);
+                        ir3.instructions.push(Ir3Instruction::EnterCatch { dst });
+                        fn_value_stack.push(dst);
+                    }
+                    // A for..in/of done-label lands with the iterator
+                    // register still on the value stack; drop it so the
+                    // stack stays balanced (bd-ddloz; mirrors the
+                    // top-level pass).
+                    if fn_iterator_cleanup_labels
+                        .get(id)
+                        .is_some_and(|expected| fn_value_stack.last() == Some(expected))
+                    {
+                        fn_value_stack.pop();
+                    }
                 }
                 Ir1Op::Jump { label_id } => {
                     let idx = ir3.instructions.len();
@@ -4282,13 +8212,44 @@ pub fn lower_ir2_to_ir3(
                         label_id: *label_id,
                     });
                 }
-                Ir1Op::JumpIfFalsy { label_id } | Ir1Op::JumpIfFalsyConsume { label_id } => {
+                Ir1Op::JumpIfFalsy { label_id } => {
+                    // Jump to `label_id` when the condition is FALSY. The
+                    // interpreter's `JumpIf` jumps on TRUTHY, so a bare
+                    // `JumpIf { cond, target: label }` here INVERTED every
+                    // function-body conditional and loop test — `if (c) {..}`
+                    // skipped its body when `c` was true and a `for`/`while`
+                    // test fell straight through to the loop end, so a
+                    // loop-accumulate IIFE returned its pre-loop value
+                    // (bd-my5ar). Emit the same two-instruction
+                    // "skip-on-truthy, then unconditional jump-to-label"
+                    // pattern the module-level loop uses (`PendingJump::JumpIfFalsy`).
+                    // Non-consuming: the condition register stays on the value
+                    // stack for the trailing `Pop` the lowering emits after the test.
                     let cond = fn_value_stack.pop().unwrap_or(0);
-                    let idx = ir3.instructions.len();
+                    let truthy_skip_index = ir3.instructions.len();
                     ir3.instructions
                         .push(Ir3Instruction::JumpIf { cond, target: 0 });
-                    fn_pending_jumps.push(PendingJump::Conditional {
-                        instruction_index: idx,
+                    let falsy_jump_index = ir3.instructions.len();
+                    ir3.instructions.push(Ir3Instruction::Jump { target: 0 });
+                    fn_pending_jumps.push(PendingJump::JumpIfFalsy {
+                        truthy_skip_index,
+                        falsy_jump_index,
+                        label_id: *label_id,
+                    });
+                    fn_value_stack.push(cond);
+                }
+                Ir1Op::JumpIfFalsyConsume { label_id } => {
+                    // Same falsy-jump shape as `JumpIfFalsy`, but consumes the
+                    // condition register (does not leave it on the value stack).
+                    let cond = fn_value_stack.pop().unwrap_or(0);
+                    let truthy_skip_index = ir3.instructions.len();
+                    ir3.instructions
+                        .push(Ir3Instruction::JumpIf { cond, target: 0 });
+                    let falsy_jump_index = ir3.instructions.len();
+                    ir3.instructions.push(Ir3Instruction::Jump { target: 0 });
+                    fn_pending_jumps.push(PendingJump::JumpIfFalsy {
+                        truthy_skip_index,
+                        falsy_jump_index,
                         label_id: *label_id,
                     });
                 }
@@ -4302,11 +8263,39 @@ pub fn lower_ir2_to_ir3(
                         label_id: *label_id,
                     });
                 }
+                Ir1Op::JumpIfNullish { label_id } => {
+                    let cond = fn_value_stack.pop().ok_or(
+                        LoweringPipelineError::InvariantViolation {
+                            detail:
+                                "JumpIfNullish requires a condition register in a function body",
+                        },
+                    )?;
+                    let instruction_index = ir3.instructions.len();
+                    ir3.instructions
+                        .push(Ir3Instruction::JumpIfNullish { cond, target: 0 });
+                    fn_pending_jumps.push(PendingJump::Conditional {
+                        instruction_index,
+                        label_id: *label_id,
+                    });
+                }
                 Ir1Op::Pop | Ir1Op::Nop => {
                     let reg = fn_value_stack.pop().unwrap_or(0);
                     if matches!(body_ir1, Ir1Op::Pop) {
-                        ir3.instructions
-                            .push(Ir3Instruction::Move { dst: 0, src: reg });
+                        // bd-fqlfw.2.11.4: a function-body `Pop` must DISCARD the
+                        // expression value, NOT route it through register 0. r0 is
+                        // the function's first parameter (the calling convention
+                        // writes args to the callee window at r0,r1,...), so the
+                        // old `Move { dst: 0, src: reg }` clobbered param0 —
+                        // corrupting any `return <param0>` (or re-read of param0)
+                        // that followed an expression statement. Remember the
+                        // discarded register so an immediately-following `Return`
+                        // (the IR1 for `return X` is `[eval X, Pop, Return]`, whose
+                        // `Pop` empties the value stack) delivers the actual value
+                        // rather than underflowing to r0. The module-level Pop
+                        // handler keeps its r0-completion convention (it reserves
+                        // r0); only this deferred function-body loop changes. The
+                        // engine lane already discards here (bd-62un6).
+                        fn_last_popped = Some(reg);
                     }
                 }
                 Ir1Op::AssignOp {
@@ -4314,6 +8303,53 @@ pub fn lower_ir2_to_ir3(
                     operator,
                 } => {
                     let src = fn_value_stack.pop().unwrap_or(0);
+                    if let Some(name) = fv_id_to_name
+                        .get(binding_id)
+                        .or_else(|| child_captured_bindings.get(binding_id))
+                    {
+                        let pool_idx = push_constant(&mut ir3.constant_pool, name);
+                        let result = if *operator == AssignmentOperator::Assign {
+                            ir3.instructions.push(Ir3Instruction::StoreScoped {
+                                src,
+                                name_pool_index: pool_idx,
+                            });
+                            src
+                        } else if matches!(
+                            operator,
+                            AssignmentOperator::LogicalAndAssign
+                                | AssignmentOperator::LogicalOrAssign
+                                | AssignmentOperator::NullishCoalescingAssign
+                        ) {
+                            return Err(LoweringPipelineError::InvariantViolation {
+                                detail: "logical compound assignments must be short-circuit lowered before IR3",
+                            });
+                        } else {
+                            let lhs = alloc_register(&mut fn_reg);
+                            ir3.instructions.push(Ir3Instruction::LoadScoped {
+                                dst: lhs,
+                                name_pool_index: pool_idx,
+                            });
+                            let result = alloc_register(&mut fn_reg);
+                            let instr = lower_assign_op_to_ir3(*operator, result, lhs, src);
+                            ir3.instructions.push(instr);
+                            ir3.instructions.push(Ir3Instruction::StoreScoped {
+                                src: result,
+                                name_pool_index: pool_idx,
+                            });
+                            result
+                        };
+                        if let Some(child_name) = child_captured_bindings.get(binding_id)
+                            && child_name != name
+                        {
+                            let child_pool_idx = push_constant(&mut ir3.constant_pool, child_name);
+                            ir3.instructions.push(Ir3Instruction::StoreScoped {
+                                src: result,
+                                name_pool_index: child_pool_idx,
+                            });
+                        }
+                        fn_value_stack.push(result);
+                        continue;
+                    }
                     let dst = *fn_binding_regs
                         .entry(*binding_id)
                         .or_insert_with(|| alloc_register(&mut fn_reg));
@@ -4333,7 +8369,7 @@ pub fn lower_ir2_to_ir3(
                         Ir1PropertyKey::Static(k) => {
                             let obj = fn_value_stack.pop().unwrap_or(0);
                             let kr = alloc_register(&mut fn_reg);
-                            let pool_index = push_constant(&mut ir3.constant_pool, k);
+                            let pool_index = push_constant(&mut ir3.constant_pool, k.clone());
                             ir3.instructions.push(Ir3Instruction::LoadStr {
                                 dst: kr,
                                 pool_index,
@@ -4360,7 +8396,7 @@ pub fn lower_ir2_to_ir3(
                         Ir1PropertyKey::Static(k) => {
                             let obj = fn_value_stack.pop().unwrap_or(0);
                             let kr = alloc_register(&mut fn_reg);
-                            let pool_index = push_constant(&mut ir3.constant_pool, k);
+                            let pool_index = push_constant(&mut ir3.constant_pool, k.clone());
                             ir3.instructions.push(Ir3Instruction::LoadStr {
                                 dst: kr,
                                 pool_index,
@@ -4380,19 +8416,102 @@ pub fn lower_ir2_to_ir3(
                     });
                     fn_value_stack.push(value);
                 }
+                Ir1Op::DeleteProperty { key } => {
+                    let (obj, key_reg) = match key {
+                        Ir1PropertyKey::Static(key) => {
+                            let obj = fn_value_stack.pop().ok_or(
+                                LoweringPipelineError::InvariantViolation {
+                                    detail:
+                                        "DeleteProperty requires an object register in a function body",
+                                },
+                            )?;
+                            let key_reg = alloc_register(&mut fn_reg);
+                            let pool_index = push_constant(&mut ir3.constant_pool, key.clone());
+                            ir3.instructions.push(Ir3Instruction::LoadStr {
+                                dst: key_reg,
+                                pool_index,
+                            });
+                            (obj, key_reg)
+                        }
+                        Ir1PropertyKey::Dynamic => {
+                            let key_reg = fn_value_stack.pop().ok_or(
+                                LoweringPipelineError::InvariantViolation {
+                                    detail:
+                                        "DeleteProperty requires a key register in a function body",
+                                },
+                            )?;
+                            let obj = fn_value_stack.pop().ok_or(
+                                LoweringPipelineError::InvariantViolation {
+                                    detail:
+                                        "DeleteProperty requires an object register in a function body",
+                                },
+                            )?;
+                            (obj, key_reg)
+                        }
+                    };
+                    let dst = alloc_register(&mut fn_reg);
+                    ir3.instructions.push(Ir3Instruction::DeleteProperty {
+                        obj,
+                        key: key_reg,
+                        dst,
+                    });
+                    fn_value_stack.push(dst);
+                }
                 Ir1Op::LoadThis => {
                     let dst = alloc_register(&mut fn_reg);
-                    ir3.instructions.push(Ir3Instruction::LoadThis { dst });
+                    if fn_is_arrow {
+                        if !fn_arrow_lexical_context.this_value {
+                            return Err(LoweringPipelineError::InvariantViolation {
+                                detail: "arrow this load missing lexical capture metadata",
+                            });
+                        }
+                        let name_pool_index =
+                            push_constant(&mut ir3.constant_pool, ARROW_LEXICAL_THIS_CAPTURE);
+                        ir3.instructions.push(Ir3Instruction::LoadScoped {
+                            dst,
+                            name_pool_index,
+                        });
+                    } else {
+                        ir3.instructions.push(Ir3Instruction::LoadThis { dst });
+                    }
                     fn_value_stack.push(dst);
                 }
                 Ir1Op::LoadNewTarget => {
                     let dst = alloc_register(&mut fn_reg);
-                    ir3.instructions.push(Ir3Instruction::LoadNewTarget { dst });
+                    if fn_is_arrow {
+                        if !fn_arrow_lexical_context.new_target {
+                            return Err(LoweringPipelineError::InvariantViolation {
+                                detail: "arrow new.target load missing lexical capture metadata",
+                            });
+                        }
+                        let name_pool_index =
+                            push_constant(&mut ir3.constant_pool, ARROW_LEXICAL_NEW_TARGET_CAPTURE);
+                        ir3.instructions.push(Ir3Instruction::LoadScoped {
+                            dst,
+                            name_pool_index,
+                        });
+                    } else {
+                        ir3.instructions.push(Ir3Instruction::LoadNewTarget { dst });
+                    }
                     fn_value_stack.push(dst);
                 }
                 Ir1Op::LoadSuper => {
                     let dst = alloc_register(&mut fn_reg);
-                    ir3.instructions.push(Ir3Instruction::LoadSuper { dst });
+                    if fn_is_arrow {
+                        if !fn_arrow_lexical_context.super_value {
+                            return Err(LoweringPipelineError::InvariantViolation {
+                                detail: "arrow super load missing lexical capture metadata",
+                            });
+                        }
+                        let name_pool_index =
+                            push_constant(&mut ir3.constant_pool, ARROW_LEXICAL_SUPER_CAPTURE);
+                        ir3.instructions.push(Ir3Instruction::LoadScoped {
+                            dst,
+                            name_pool_index,
+                        });
+                    } else {
+                        ir3.instructions.push(Ir3Instruction::LoadSuper { dst });
+                    }
                     fn_value_stack.push(dst);
                 }
                 Ir1Op::NewArray { count } => {
@@ -4406,7 +8525,7 @@ pub fn lower_ir2_to_ir3(
                     ir3.instructions.push(Ir3Instruction::NewArray { dst });
                     for (i, val_reg) in elems.into_iter().enumerate() {
                         let key_reg = alloc_register(&mut fn_reg);
-                        let pool_index = push_constant(&mut ir3.constant_pool, &i.to_string());
+                        let pool_index = push_constant(&mut ir3.constant_pool, i.to_string());
                         ir3.instructions.push(Ir3Instruction::LoadStr {
                             dst: key_reg,
                             pool_index,
@@ -4472,9 +8591,77 @@ pub fn lower_ir2_to_ir3(
                         .push(Ir3Instruction::SpreadIntoObject { target, source });
                     fn_value_stack.push(target);
                 }
+                Ir1Op::CopyDataProperties { excluded_count } => {
+                    // Stack: [..., target, source, excluded...] -> [..., target].
+                    let excluded_len = *excluded_count as usize;
+                    if excluded_len
+                        .checked_add(2)
+                        .is_none_or(|needed| needed > fn_value_stack.len())
+                    {
+                        return Err(LoweringPipelineError::InvariantViolation {
+                            detail: "Value stack underflow in deferred CopyDataProperties",
+                        });
+                    }
+                    let mut excluded_regs = Vec::with_capacity(excluded_len);
+                    for _ in 0..excluded_len {
+                        excluded_regs.push(fn_value_stack.pop().unwrap_or(0));
+                    }
+                    excluded_regs.reverse();
+                    let source = fn_value_stack.pop().unwrap_or(0);
+                    let target = fn_value_stack.pop().unwrap_or(0);
+                    let excluded_start = fn_reg;
+                    for src in excluded_regs {
+                        let dst = alloc_register(&mut fn_reg);
+                        ir3.instructions.push(Ir3Instruction::Move { dst, src });
+                    }
+                    let value_dst = alloc_register(&mut fn_reg);
+                    ir3.instructions.push(Ir3Instruction::CopyDataProperties {
+                        target,
+                        source,
+                        excluded: RegRange {
+                            start: excluded_start,
+                            count: *excluded_count,
+                        },
+                        value_dst,
+                    });
+                    fn_value_stack.push(target);
+                }
                 Ir1Op::Throw => {
                     let value = fn_value_stack.pop().unwrap_or(0);
                     ir3.instructions.push(Ir3Instruction::Throw { value });
+                }
+                Ir1Op::BeginTry {
+                    catch_label,
+                    finally_label,
+                } => {
+                    if finally_label.as_ref() != Some(catch_label)
+                        && !fn_explicit_finally_entry_labels.contains(catch_label)
+                    {
+                        fn_catch_entry_labels.insert(*catch_label);
+                    }
+                    let instruction_index = ir3.instructions.len();
+                    ir3.instructions.push(Ir3Instruction::BeginTry {
+                        catch_target: 0,
+                        finally_target: None,
+                    });
+                    fn_pending_jumps.push(PendingJump::TryCatch {
+                        instruction_index,
+                        catch_label_id: *catch_label,
+                        finally_label_id: *finally_label,
+                    });
+                }
+                Ir1Op::EndTry => {
+                    ir3.instructions.push(Ir3Instruction::EndTry);
+                }
+                Ir1Op::EnterFinally => {
+                    ir3.instructions.push(Ir3Instruction::EnterFinally);
+                }
+                Ir1Op::EndFinally => {
+                    ir3.instructions.push(Ir3Instruction::EndFinally);
+                }
+                Ir1Op::DiscardAbruptCompletion => {
+                    ir3.instructions
+                        .push(Ir3Instruction::DiscardAbruptCompletion);
                 }
                 // Nested function definitions inside function bodies.
                 Ir1Op::DeclareFunction {
@@ -4483,19 +8670,57 @@ pub fn lower_ir2_to_ir3(
                     param_names: inner_params,
                     name: inner_name,
                     free_vars: inner_fv,
+                    free_var_ids: inner_fv_ids,
+                    free_var_outer_ids: inner_fv_outer_ids,
+                    local_lexical_bindings: inner_local_lexical_bindings,
                     is_generator: inner_gen,
+                    rest_param_index: inner_rest,
                 } if !inner_body.is_empty() => {
                     let dst = *fn_binding_regs
                         .entry(*inner_bid)
                         .or_insert_with(|| alloc_register(&mut fn_reg));
+                    let inner_runtime_fv: Vec<String> = inner_fv
+                        .iter()
+                        .zip(inner_fv_outer_ids.iter())
+                        .map(|(name, outer_id)| {
+                            if name.starts_with(CLASS_EXPRESSION_CONSTRUCTOR_SELF_CAPTURE_PREFIX)
+                                || name.starts_with(CLASS_EXPRESSION_METHOD_SELF_CAPTURE_PREFIX)
+                                || name.starts_with(FUNCTION_EXPRESSION_SELF_CAPTURE_PREFIX)
+                            {
+                                return name.clone();
+                            }
+                            child_captured_bindings
+                                .get(outer_id)
+                                .or_else(|| fv_id_to_name.get(outer_id))
+                                .cloned()
+                                .unwrap_or_else(|| name.clone())
+                        })
+                        .collect();
                     let function_index = deferred_functions.len() as u32 + 1;
-                    deferred_functions.push((
-                        inner_body.clone(),
-                        inner_params.clone(),
-                        Some(inner_name.clone()),
-                        inner_fv.clone(),
-                        *inner_gen,
-                    ));
+                    deferred_functions.push(DeferredFunction {
+                        body_ops: inner_body.clone(),
+                        param_names: inner_params.clone(),
+                        name: Some(inner_name.clone()),
+                        free_vars: inner_runtime_fv.clone(),
+                        free_var_ids: inner_fv_ids.clone(),
+                        local_lexical_bindings: inner_local_lexical_bindings
+                            .as_deref()
+                            .cloned()
+                            .unwrap_or_default(),
+                        is_generator: *inner_gen,
+                        is_arrow: false,
+                        arrow_lexical_context: ArrowLexicalContextUsage::default(),
+                        rest_param_index: *inner_rest,
+                    });
+                    let pushed_capture_scope = emit_exact_nested_capture_scope(
+                        &mut ir3,
+                        &mut fn_binding_regs,
+                        &function_capture_names,
+                        &mut fn_reg,
+                        &inner_runtime_fv,
+                        inner_fv_ids,
+                        inner_fv_outer_ids,
+                    )?;
                     if *inner_gen {
                         ir3.instructions.push(Ir3Instruction::CreateGenerator {
                             dst,
@@ -4509,6 +8734,23 @@ pub fn lower_ir2_to_ir3(
                             capture_count: inner_fv.len() as u32,
                         });
                     }
+                    if let Some(name) = child_captured_bindings.get(inner_bid) {
+                        let pool_idx = push_constant(&mut ir3.constant_pool, name);
+                        if local_lexical_binding_by_id.contains_key(inner_bid) {
+                            ir3.instructions.push(Ir3Instruction::InitBinding {
+                                src: dst,
+                                name_pool_index: pool_idx,
+                            });
+                        } else {
+                            ir3.instructions.push(Ir3Instruction::StoreScoped {
+                                src: dst,
+                                name_pool_index: pool_idx,
+                            });
+                        }
+                    }
+                    if pushed_capture_scope {
+                        ir3.instructions.push(Ir3Instruction::PopScope);
+                    }
                     fn_value_stack.push(dst);
                 }
                 Ir1Op::CreateFunction {
@@ -4516,17 +8758,67 @@ pub fn lower_ir2_to_ir3(
                     param_names: inner_params,
                     name: inner_name,
                     free_vars: inner_fv,
+                    free_var_ids: inner_fv_ids,
+                    free_var_outer_ids: inner_fv_outer_ids,
+                    local_lexical_bindings: inner_local_lexical_bindings,
                     is_generator: inner_gen,
+                    is_arrow: inner_is_arrow,
+                    rest_param_index: inner_rest,
                 } => {
                     let dst = alloc_register(&mut fn_reg);
+                    let inner_runtime_fv: Vec<String> = inner_fv
+                        .iter()
+                        .zip(inner_fv_outer_ids.iter())
+                        .map(|(name, outer_id)| {
+                            if name.starts_with(CLASS_EXPRESSION_CONSTRUCTOR_SELF_CAPTURE_PREFIX)
+                                || name.starts_with(CLASS_EXPRESSION_METHOD_SELF_CAPTURE_PREFIX)
+                                || name.starts_with(FUNCTION_EXPRESSION_SELF_CAPTURE_PREFIX)
+                            {
+                                return name.clone();
+                            }
+                            child_captured_bindings
+                                .get(outer_id)
+                                .or_else(|| fv_id_to_name.get(outer_id))
+                                .cloned()
+                                .unwrap_or_else(|| name.clone())
+                        })
+                        .collect();
                     let function_index = deferred_functions.len() as u32 + 1;
-                    deferred_functions.push((
-                        inner_body.clone(),
-                        inner_params.clone(),
-                        inner_name.clone(),
-                        inner_fv.clone(),
-                        *inner_gen,
-                    ));
+                    let inner_arrow_lexical_context = if *inner_is_arrow {
+                        arrow_lexical_context_usage(inner_body)
+                    } else {
+                        ArrowLexicalContextUsage::default()
+                    };
+                    deferred_functions.push(DeferredFunction {
+                        body_ops: inner_body.clone(),
+                        param_names: inner_params.clone(),
+                        name: inner_name.clone(),
+                        free_vars: inner_runtime_fv.clone(),
+                        free_var_ids: inner_fv_ids.clone(),
+                        local_lexical_bindings: inner_local_lexical_bindings
+                            .as_deref()
+                            .cloned()
+                            .unwrap_or_default(),
+                        is_generator: *inner_gen,
+                        is_arrow: *inner_is_arrow,
+                        arrow_lexical_context: inner_arrow_lexical_context,
+                        rest_param_index: *inner_rest,
+                    });
+                    let pushed_capture_scope = emit_exact_nested_capture_scope(
+                        &mut ir3,
+                        &mut fn_binding_regs,
+                        &function_capture_names,
+                        &mut fn_reg,
+                        &inner_runtime_fv,
+                        inner_fv_ids,
+                        inner_fv_outer_ids,
+                    )?;
+                    let pushed_arrow_lexical_scope = emit_arrow_lexical_capture_scope(
+                        &mut ir3,
+                        &mut fn_reg,
+                        inner_arrow_lexical_context,
+                        fn_is_arrow,
+                    );
                     if *inner_gen {
                         ir3.instructions.push(Ir3Instruction::CreateGenerator {
                             dst,
@@ -4539,6 +8831,12 @@ pub fn lower_ir2_to_ir3(
                             function_index,
                             capture_count: inner_fv.len() as u32,
                         });
+                    }
+                    if pushed_arrow_lexical_scope {
+                        ir3.instructions.push(Ir3Instruction::PopScope);
+                    }
+                    if pushed_capture_scope {
+                        ir3.instructions.push(Ir3Instruction::PopScope);
                     }
                     fn_value_stack.push(dst);
                 }
@@ -4552,6 +8850,9 @@ pub fn lower_ir2_to_ir3(
                     });
                     fn_value_stack.push(dst);
                 }
+                Ir1Op::GeneratorBodyStart => {
+                    ir3.instructions.push(Ir3Instruction::GeneratorBodyStart);
+                }
                 Ir1Op::Await => {
                     let current = fn_value_stack.pop().unwrap_or(0);
                     let dst = alloc_register(&mut fn_reg);
@@ -4559,14 +8860,211 @@ pub fn lower_ir2_to_ir3(
                         .push(Ir3Instruction::Move { dst, src: current });
                     fn_value_stack.push(dst);
                 }
-                // Fallthrough: unhandled ops in function bodies become nops.
-                _ => {}
+                // Iterator-protocol ops (bd-ddloz): mirror the top-level
+                // pass. Previously these fell through to the nop arm below,
+                // so a for..of/for..in inside a function body kept its loop
+                // jumps but lost its iterator init/advance and spun to
+                // instruction-budget exhaustion.
+                Ir1Op::ForInInit => {
+                    let src = fn_value_stack.pop().ok_or(
+                        LoweringPipelineError::InvariantViolation {
+                            detail: "ForInInit requires an iterable register on the value stack",
+                        },
+                    )?;
+                    let dst = alloc_register(&mut fn_reg);
+                    ir3.instructions
+                        .push(Ir3Instruction::ForInInit { src, dst });
+                    fn_value_stack.push(dst);
+                }
+                Ir1Op::ForOfInit => {
+                    let src = fn_value_stack.pop().ok_or(
+                        LoweringPipelineError::InvariantViolation {
+                            detail: "ForOfInit requires an iterable register on the value stack",
+                        },
+                    )?;
+                    let dst = alloc_register(&mut fn_reg);
+                    ir3.instructions
+                        .push(Ir3Instruction::ForOfInit { src, dst });
+                    fn_value_stack.push(dst);
+                }
+                Ir1Op::ForInNext { done_label } => {
+                    let iterator = fn_value_stack.last().copied().ok_or(
+                        LoweringPipelineError::InvariantViolation {
+                            detail:
+                                "ForInNext requires an active iterator register on the value stack",
+                        },
+                    )?;
+                    let value_dst = alloc_register(&mut fn_reg);
+                    let instruction_index = ir3.instructions.len();
+                    ir3.instructions.push(Ir3Instruction::ForInNext {
+                        iterator,
+                        value_dst,
+                        done_target: 0,
+                    });
+                    fn_pending_jumps.push(PendingJump::IteratorDoneTarget {
+                        instruction_index,
+                        label_id: *done_label,
+                    });
+                    fn_iterator_cleanup_labels
+                        .entry(*done_label)
+                        .or_insert(iterator);
+                    fn_value_stack.push(value_dst);
+                }
+                Ir1Op::ForOfNext { done_label } => {
+                    let iterator = fn_value_stack.last().copied().ok_or(
+                        LoweringPipelineError::InvariantViolation {
+                            detail:
+                                "ForOfNext requires an active iterator register on the value stack",
+                        },
+                    )?;
+                    let value_dst = alloc_register(&mut fn_reg);
+                    let instruction_index = ir3.instructions.len();
+                    ir3.instructions.push(Ir3Instruction::ForOfNext {
+                        iterator,
+                        value_dst,
+                        done_target: 0,
+                    });
+                    fn_pending_jumps.push(PendingJump::IteratorDoneTarget {
+                        instruction_index,
+                        label_id: *done_label,
+                    });
+                    fn_iterator_cleanup_labels
+                        .entry(*done_label)
+                        .or_insert(iterator);
+                    fn_value_stack.push(value_dst);
+                }
+                Ir1Op::IteratorClose { reason } => {
+                    let iterator = fn_value_stack.pop().ok_or(
+                        LoweringPipelineError::InvariantViolation {
+                            detail:
+                                "IteratorClose requires an active iterator register on the value stack",
+                        },
+                    )?;
+                    ir3.instructions.push(Ir3Instruction::IteratorClose {
+                        iterator,
+                        reason: *reason,
+                    });
+                }
+                Ir1Op::Construct { arg_count } => {
+                    let count = *arg_count as usize;
+                    if count
+                        .checked_add(1)
+                        .is_none_or(|needed| needed > fn_value_stack.len())
+                    {
+                        return Err(LoweringPipelineError::InvariantViolation {
+                            detail: "Value stack underflow in function-body Construct",
+                        });
+                    }
+                    let mut args = Vec::with_capacity(count.min(1024));
+                    for _ in 0..count {
+                        args.push(fn_value_stack.pop().unwrap_or(0));
+                    }
+                    args.reverse();
+                    let callee = fn_value_stack.pop().unwrap_or(0);
+                    let dst = alloc_register(&mut fn_reg);
+                    let args = if args.is_empty() {
+                        RegRange { start: 0, count: 0 }
+                    } else {
+                        let start = fn_reg;
+                        for src in args {
+                            let contiguous_dst = alloc_register(&mut fn_reg);
+                            ir3.instructions.push(Ir3Instruction::Move {
+                                dst: contiguous_dst,
+                                src,
+                            });
+                        }
+                        RegRange {
+                            start,
+                            count: *arg_count,
+                        }
+                    };
+                    ir3.instructions
+                        .push(Ir3Instruction::Construct { callee, args, dst });
+                    fn_value_stack.push(dst);
+                }
+                Ir1Op::TemplateLiteral { quasi_count } => {
+                    let quasi_count = *quasi_count as usize;
+                    let part_count = if quasi_count == 0 {
+                        0
+                    } else {
+                        quasi_count
+                            .checked_mul(2)
+                            .and_then(|n| n.checked_sub(1))
+                            .ok_or(LoweringPipelineError::InvariantViolation {
+                                detail: "Function-body template literal part count overflow",
+                            })?
+                    };
+                    if part_count > fn_value_stack.len() {
+                        return Err(LoweringPipelineError::InvariantViolation {
+                            detail: "Value stack underflow in function-body TemplateLiteral",
+                        });
+                    }
+                    let mut parts = Vec::with_capacity(part_count.min(1024));
+                    for _ in 0..part_count {
+                        parts.push(fn_value_stack.pop().unwrap_or(0));
+                    }
+                    parts.reverse();
+
+                    let dst = alloc_register(&mut fn_reg);
+                    if parts.is_empty() {
+                        let pool_index = push_constant(&mut ir3.constant_pool, "");
+                        ir3.instructions
+                            .push(Ir3Instruction::LoadStr { dst, pool_index });
+                    } else {
+                        let start = fn_reg;
+                        for src in parts {
+                            let contiguous_dst = alloc_register(&mut fn_reg);
+                            ir3.instructions.push(Ir3Instruction::Move {
+                                dst: contiguous_dst,
+                                src,
+                            });
+                        }
+                        ir3.instructions.push(Ir3Instruction::TemplateLiteral {
+                            parts: RegRange {
+                                start,
+                                count: part_count as u32,
+                            },
+                            dst,
+                        });
+                    }
+                    fn_value_stack.push(dst);
+                }
+                Ir1Op::ImportModule { .. } => {
+                    return Err(LoweringPipelineError::InvariantViolation {
+                        detail: "ImportModule is not valid in a deferred function body",
+                    });
+                }
+                Ir1Op::ExportBinding { .. } => {
+                    return Err(LoweringPipelineError::InvariantViolation {
+                        detail: "ExportBinding is not valid in a deferred function body",
+                    });
+                }
+                Ir1Op::DeclareFunction { .. } => {
+                    return Err(LoweringPipelineError::InvariantViolation {
+                        detail: "Deferred function declaration has an empty body",
+                    });
+                }
+                Ir1Op::HostCall { .. } => {
+                    return Err(LoweringPipelineError::InvariantViolation {
+                        detail: "HostCall bypassed function-body capability lowering",
+                    });
+                }
             }
         }
 
         // Ensure function body ends with Return.
         if !matches!(ir3.instructions.last(), Some(Ir3Instruction::Return { .. })) {
-            ir3.instructions.push(Ir3Instruction::Return { value: 0 });
+            // bd-fqlfw.2.11.4: fall-off-end returns `undefined` per spec, NOT r0
+            // (which now holds param0, since the function-body Pop no longer
+            // routes the completion value through r0). This tail is normally
+            // unreachable — the IR1 builder already appends a synthetic
+            // `[LoadLiteral Undefined, Return]` (~line 2164) — but keep it
+            // spec-correct should a future body-lowering path skip that.
+            let undef = alloc_register(&mut fn_reg);
+            ir3.instructions
+                .push(Ir3Instruction::LoadUndefined { dst: undef });
+            ir3.instructions
+                .push(Ir3Instruction::Return { value: undef });
         }
 
         // Resolve pending jumps within this function body.
@@ -4576,31 +9074,123 @@ pub fn lower_ir2_to_ir3(
                     instruction_index,
                     label_id,
                 } => {
-                    if let Some(&target) = fn_label_targets.get(&label_id) {
-                        ir3.instructions[instruction_index] = Ir3Instruction::Jump { target };
-                    }
+                    let target = *fn_label_targets.get(&label_id).ok_or(
+                        LoweringPipelineError::InvariantViolation {
+                            detail: "function-body control-flow references missing label",
+                        },
+                    )?;
+                    ir3.instructions[instruction_index] = Ir3Instruction::Jump { target };
                 }
                 PendingJump::Conditional {
                     instruction_index,
                     label_id,
                 } => {
-                    if let Some(&target) = fn_label_targets.get(&label_id) {
-                        match &mut ir3.instructions[instruction_index] {
-                            Ir3Instruction::JumpIf {
-                                target: jump_target,
-                                ..
-                            }
-                            | Ir3Instruction::JumpIfNullish {
-                                target: jump_target,
-                                ..
-                            } => {
-                                *jump_target = target;
-                            }
-                            _ => {}
+                    let target = *fn_label_targets.get(&label_id).ok_or(
+                        LoweringPipelineError::InvariantViolation {
+                            detail: "function-body control-flow references missing label",
+                        },
+                    )?;
+                    match &mut ir3.instructions[instruction_index] {
+                        Ir3Instruction::JumpIf {
+                            target: jump_target,
+                            ..
+                        }
+                        | Ir3Instruction::JumpIfNullish {
+                            target: jump_target,
+                            ..
+                        } => {
+                            *jump_target = target;
+                        }
+                        _ => {
+                            return Err(LoweringPipelineError::InvariantViolation {
+                                detail: "function-body conditional lowering emitted unexpected instruction shape",
+                            });
                         }
                     }
                 }
-                _ => {}
+                PendingJump::JumpIfFalsy {
+                    truthy_skip_index,
+                    falsy_jump_index,
+                    label_id,
+                } => {
+                    // Wire the two-instruction falsy-jump pattern emitted above:
+                    // `JumpIf` skips the unconditional `Jump` when the condition
+                    // is truthy (so control falls through past the loop/if
+                    // target); the `Jump` carries the falsy branch to `label_id`.
+                    let falsy_target = *fn_label_targets.get(&label_id).ok_or(
+                        LoweringPipelineError::InvariantViolation {
+                            detail: "function-body control-flow references missing label",
+                        },
+                    )?;
+                    let truthy_target = u32::try_from(falsy_jump_index + 1).map_err(|_| {
+                        LoweringPipelineError::InvariantViolation {
+                            detail: "IR3 instruction stream exceeds addressable size",
+                        }
+                    })?;
+                    let cond = match ir3.instructions[truthy_skip_index] {
+                        Ir3Instruction::JumpIf { cond, .. } => cond,
+                        _ => {
+                            return Err(LoweringPipelineError::InvariantViolation {
+                                detail: "function-body conditional lowering emitted unexpected instruction shape",
+                            });
+                        }
+                    };
+                    ir3.instructions[truthy_skip_index] = Ir3Instruction::JumpIf {
+                        cond,
+                        target: truthy_target,
+                    };
+                    ir3.instructions[falsy_jump_index] = Ir3Instruction::Jump {
+                        target: falsy_target,
+                    };
+                }
+                PendingJump::IteratorDoneTarget {
+                    instruction_index,
+                    label_id,
+                } => {
+                    // Fail closed on a missing done-label: a ForIn/ForOfNext
+                    // whose done_target stays 0 would jump into unrelated
+                    // code instead of exiting the loop (bd-ddloz).
+                    let target = *fn_label_targets.get(&label_id).ok_or(
+                        LoweringPipelineError::InvariantViolation {
+                            detail: "iterator lowering references missing label",
+                        },
+                    )?;
+                    match &mut ir3.instructions[instruction_index] {
+                        Ir3Instruction::ForInNext { done_target, .. }
+                        | Ir3Instruction::ForOfNext { done_target, .. } => {
+                            *done_target = target;
+                        }
+                        _ => {
+                            return Err(LoweringPipelineError::InvariantViolation {
+                                detail: "iterator lowering emitted unexpected instruction shape",
+                            });
+                        }
+                    }
+                }
+                PendingJump::TryCatch {
+                    instruction_index,
+                    catch_label_id,
+                    finally_label_id,
+                } => {
+                    let catch_target = *fn_label_targets.get(&catch_label_id).ok_or(
+                        LoweringPipelineError::InvariantViolation {
+                            detail: "function try/catch lowering references missing catch label",
+                        },
+                    )?;
+                    let finally_target = if let Some(finally_label_id) = finally_label_id {
+                        Some(*fn_label_targets.get(&finally_label_id).ok_or(
+                            LoweringPipelineError::InvariantViolation {
+                                detail: "function try/finally lowering references missing finally label",
+                            },
+                        )?)
+                    } else {
+                        None
+                    };
+                    ir3.instructions[instruction_index] = Ir3Instruction::BeginTry {
+                        catch_target,
+                        finally_target,
+                    };
+                }
             }
         }
 
@@ -4610,6 +9200,7 @@ pub fn lower_ir2_to_ir3(
             frame_size: fn_reg.max(1),
             name: fn_name.clone(),
             is_generator: fn_is_generator,
+            rest_param_index: fn_rest_param_index,
         });
     }
 
@@ -4711,11 +9302,37 @@ fn build_ir2_flow_proof_artifact(
         runtime_checkpoints: Vec::new(),
     };
 
-    for (op_index, op) in ir2.ops.iter().enumerate() {
+    let mut analysis_sites = ir2
+        .ops
+        .iter()
+        .enumerate()
+        .map(|(op_index, op)| NestedIr2AnalysisSite {
+            op_index,
+            body_path: Vec::new(),
+            op: op.clone(),
+        })
+        .collect::<Vec<_>>();
+    let top_level_ir1_ops = ir2
+        .ops
+        .iter()
+        .map(|op| op.inner.clone())
+        .collect::<Vec<_>>();
+    let (nested_sites, _) = collect_nested_ir2_analysis(&top_level_ir1_ops);
+    analysis_sites.extend(nested_sites);
+
+    for site in &analysis_sites {
+        let op = &site.op;
         let Some(flow) = op.flow.as_ref() else {
             continue;
         };
-        let op_index_u64 = op_index as u64;
+        // Keep the v1 `op_index` namespace compatible with authority consumers:
+        // nested operations point at their enclosing top-level function op.
+        let op_index_u64 = site.op_index as u64;
+        let body_path = site
+            .body_path
+            .iter()
+            .map(|index| *index as u64)
+            .collect::<Vec<_>>();
         let source_label = flow.data_label.clone();
         let sink_clearance_label = flow.sink_clearance.clone();
         let source_class = LabelClass::from_label(&source_label);
@@ -4727,7 +9344,17 @@ fn build_ir2_flow_proof_artifact(
             && let Some(required_capability) = op.required_capability.as_ref()
             && flow_capability_supports_declassification(required_capability)
         {
-            let obligation_id = format!("declass-op-{op_index}");
+            let obligation_id = if site.body_path.is_empty() {
+                format!("declass-op-{}", site.op_index)
+            } else {
+                let body_path = site
+                    .body_path
+                    .iter()
+                    .map(usize::to_string)
+                    .collect::<Vec<_>>()
+                    .join("-");
+                format!("declass-op-{}-body-{body_path}", site.op_index)
+            };
             if !lattice.obligations().contains_key(&obligation_id) {
                 lattice
                     .register_obligation(DeclassificationObligation {
@@ -4754,6 +9381,7 @@ fn build_ir2_flow_proof_artifact(
                 .runtime_checkpoints
                 .push(RuntimeCheckpointArtifactEntry {
                     op_index: op_index_u64,
+                    body_path: body_path.clone(),
                     source_label,
                     sink_clearance: sink_clearance_label,
                     capability,
@@ -4771,6 +9399,7 @@ fn build_ir2_flow_proof_artifact(
             LatticeFlowCheckResult::LegalByLattice => {
                 artifact.proved_flows.push(FlowProofArtifactEntry {
                     op_index: op_index_u64,
+                    body_path: body_path.clone(),
                     source_label,
                     sink_clearance: sink_clearance_label,
                     capability,
@@ -4789,6 +9418,7 @@ fn build_ir2_flow_proof_artifact(
                     .required_declassifications
                     .push(RequiredDeclassificationArtifactEntry {
                         op_index: op_index_u64,
+                        body_path: body_path.clone(),
                         source_label,
                         sink_clearance: sink_clearance_label,
                         capability,
@@ -4804,6 +9434,7 @@ fn build_ir2_flow_proof_artifact(
             LatticeFlowCheckResult::Blocked { .. } => {
                 artifact.denied_flows.push(DeniedFlowArtifactEntry {
                     op_index: op_index_u64,
+                    body_path,
                     source_label,
                     sink_clearance: sink_clearance_label,
                     capability,
@@ -5040,32 +9671,65 @@ fn lower_class_expression_to_ir1(
     let constructor = body
         .iter()
         .find(|method| method.kind == MethodKind::Constructor);
-    let param_names: Vec<String> = constructor
-        .map(|ctor| {
-            ctor.params
-                .iter()
-                .filter_map(|param| param.name().map(String::from))
-                .collect()
-        })
-        .unwrap_or_default();
+    let class_binding = alloc_internal_binding(
+        bindings,
+        binding_lookup,
+        binding_index,
+        scope_id,
+        "class_expression",
+    )?;
+    let ctor_enclosing_self_binding =
+        name.and_then(|self_name| binding_lookup.insert(self_name.to_string(), class_binding));
     let mut body_ops = Vec::new();
     let mut body_bindings = Vec::new();
     let mut body_lookup = BTreeMap::new();
     let mut body_binding_index: BindingId = 0;
     let body_scope = ScopeId { depth: 0, index: 0 };
     let mut body_label_counter: u32 = 0;
-    for param_name in &param_names {
-        let _ = alloc_binding(
+    let FunctionParameterPlan {
+        param_names,
+        parameter_steps,
+        parameter_bindings,
+        rest_param_index,
+    } = if let Some(ctor) = constructor {
+        allocate_function_parameter_bindings(
+            &ctor.params,
             &mut body_bindings,
             &mut body_lookup,
             &mut body_binding_index,
             body_scope,
-            param_name,
-            BindingKind::Parameter,
-        )
-        .map_err(LoweringPipelineError::SemanticViolation)?;
-    }
-    if let Some(ctor) = constructor {
+        )?
+    } else {
+        FunctionParameterPlan::default()
+    };
+    let parameter_binding_names = body_lookup.keys().cloned().collect();
+    let parameter_prologue_captures = lower_function_parameter_prologue(
+        &parameter_steps,
+        &parameter_bindings,
+        binding_lookup,
+        &mut body_ops,
+        &mut body_bindings,
+        &body_lookup,
+        &mut body_binding_index,
+        body_scope,
+        &mut body_label_counter,
+    )?;
+    let mut ctor_pre_lower_names = if let Some(ctor) = constructor {
+        let pre_lower_names = prepare_function_body_bindings(
+            Some(&ctor.body.body),
+            parameter_binding_names,
+            &mut body_lookup,
+            &mut body_binding_index,
+        );
+        merge_unshadowed_parameter_prologue_captures(
+            &parameter_prologue_captures,
+            &mut body_lookup,
+        );
+        seed_function_outer_static_bindings(
+            binding_lookup,
+            &mut body_lookup,
+            &mut body_binding_index,
+        );
         for stmt in &ctor.body.body {
             lower_statement_to_ir1(
                 stmt,
@@ -5077,27 +9741,64 @@ fn lower_class_expression_to_ir1(
                 &mut body_label_counter,
             )?;
         }
-    }
+        pre_lower_names
+    } else {
+        body_lookup.keys().cloned().collect()
+    };
     if !matches!(body_ops.last(), Some(Ir1Op::Return)) {
         body_ops.push(Ir1Op::LoadLiteral {
             value: Ir1Literal::Undefined,
         });
         body_ops.push(Ir1Op::Return);
     }
-
-    let class_binding = alloc_internal_binding(
+    let unresolved_ctor_names = rewrite_unresolved_class_body_loads(
+        &mut body_ops,
+        &body_lookup,
+        &ctor_pre_lower_names,
+        binding_lookup,
+    );
+    ctor_pre_lower_names.extend(unresolved_ctor_names);
+    let (mut ctor_free_vars, mut ctor_free_var_ids, mut ctor_free_var_outer_ids) =
+        collect_free_vars(
+            &body_lookup,
+            &ctor_pre_lower_names,
+            bindings,
+            binding_lookup,
+            binding_index,
+            scope_id,
+        );
+    append_shadowed_parameter_prologue_captures(
+        &parameter_prologue_captures,
+        &mut ctor_free_vars,
+        &mut ctor_free_var_ids,
+        &mut ctor_free_var_outer_ids,
         bindings,
         binding_lookup,
         binding_index,
         scope_id,
-        "class_expression",
-    )?;
+    );
+    if let Some(self_name) = name {
+        rewrite_private_self_capture(
+            class_binding,
+            class_expression_constructor_self_capture_name(self_name, class_binding),
+            &mut ctor_free_vars,
+            &ctor_free_var_outer_ids,
+        );
+    }
+    let ctor_local_lexical_bindings =
+        collect_function_local_lexical_bindings(&body_bindings, &ctor_free_var_ids, &body_ops);
+    restore_class_expression_self_binding(binding_lookup, name, ctor_enclosing_self_binding);
     ops.push(Ir1Op::CreateFunction {
         name: name.map(str::to_string),
         param_names,
         body_ops,
-        free_vars: Vec::new(),
+        free_vars: ctor_free_vars,
+        free_var_ids: ctor_free_var_ids,
+        free_var_outer_ids: ctor_free_var_outer_ids,
+        local_lexical_bindings: ctor_local_lexical_bindings,
         is_generator: false,
+        is_arrow: false,
+        rest_param_index,
     });
     ops.push(Ir1Op::StoreBinding {
         binding_id: class_binding,
@@ -5118,7 +9819,7 @@ fn lower_class_expression_to_ir1(
             label_counter,
         )?;
         ops.push(Ir1Op::SetProperty {
-            key: Ir1PropertyKey::Static(IR_SUPER_CONSTRUCTOR_PROPERTY.to_string()),
+            key: Ir1PropertyKey::Static(IR_SUPER_CONSTRUCTOR_PROPERTY.into()),
         });
         ops.push(Ir1Op::Nop);
 
@@ -5126,7 +9827,7 @@ fn lower_class_expression_to_ir1(
             binding_id: class_binding,
         });
         ops.push(Ir1Op::GetProperty {
-            key: Ir1PropertyKey::Static("prototype".to_string()),
+            key: Ir1PropertyKey::Static("prototype".into()),
         });
         lower_expression_to_ir1(
             super_expr,
@@ -5138,10 +9839,10 @@ fn lower_class_expression_to_ir1(
             label_counter,
         )?;
         ops.push(Ir1Op::GetProperty {
-            key: Ir1PropertyKey::Static("prototype".to_string()),
+            key: Ir1PropertyKey::Static("prototype".into()),
         });
         ops.push(Ir1Op::SetProperty {
-            key: Ir1PropertyKey::Static("__proto__".to_string()),
+            key: Ir1PropertyKey::Static("__proto__".into()),
         });
         ops.push(Ir1Op::Nop);
     }
@@ -5150,33 +9851,69 @@ fn lower_class_expression_to_ir1(
         .iter()
         .filter(|method| method.kind != MethodKind::Constructor)
     {
-        let method_name = match &method.key {
-            Expression::Identifier(name) => name.clone(),
-            Expression::StringLiteral(name) => name.clone(),
-            _ => "anonymous_method".to_string(),
-        };
-        let method_param_names: Vec<String> = method
-            .params
-            .iter()
-            .filter_map(|param| param.name().map(String::from))
-            .collect();
+        let method_property_key = canonical_static_object_property_key(&method.key)
+            .unwrap_or_else(|_| JsString::from("anonymous_method"));
+        // Function names remain a display/debug carrier. Property identity
+        // is kept separately in exact UTF-16 below.
+        let method_name = property_key_function_display_name(&method_property_key);
         let mut method_body_ops = Vec::new();
         let mut method_bindings = Vec::new();
         let mut method_lookup = BTreeMap::new();
         let mut method_binding_index: BindingId = 0;
         let method_scope = ScopeId { depth: 0, index: 0 };
         let mut method_label_counter: u32 = 0;
-        for param_name in &method_param_names {
-            let _ = alloc_binding(
-                &mut method_bindings,
-                &mut method_lookup,
-                &mut method_binding_index,
-                method_scope,
-                param_name,
-                BindingKind::Parameter,
-            )
-            .map_err(LoweringPipelineError::SemanticViolation)?;
+        let FunctionParameterPlan {
+            param_names: method_param_names,
+            parameter_steps: method_parameter_steps,
+            parameter_bindings: method_parameter_bindings,
+            rest_param_index: method_rest_param_index,
+        } = allocate_function_parameter_bindings(
+            &method.params,
+            &mut method_bindings,
+            &mut method_lookup,
+            &mut method_binding_index,
+            method_scope,
+        )?;
+        if method_rest_param_index.is_some()
+            && matches!(method.kind, MethodKind::Get | MethodKind::Set)
+        {
+            return Err(unsupported_frontier_expression_error(
+                "accessor_rest_parameters",
+                "FE-LOWER-UNSUPPORTED-ACCESSOR-REST-0001",
+                "core.accessor_rest_parameter_runtime",
+                "getter and setter functions cannot declare rest parameters",
+                Some(method.span.clone()),
+            ));
         }
+        let method_enclosing_self_binding =
+            name.and_then(|self_name| binding_lookup.insert(self_name.to_string(), class_binding));
+        let parameter_binding_names = method_lookup.keys().cloned().collect();
+        let parameter_prologue_captures = lower_function_parameter_prologue(
+            &method_parameter_steps,
+            &method_parameter_bindings,
+            binding_lookup,
+            &mut method_body_ops,
+            &mut method_bindings,
+            &method_lookup,
+            &mut method_binding_index,
+            method_scope,
+            &mut method_label_counter,
+        )?;
+        let mut method_pre_lower_names = prepare_function_body_bindings(
+            Some(&method.body.body),
+            parameter_binding_names,
+            &mut method_lookup,
+            &mut method_binding_index,
+        );
+        merge_unshadowed_parameter_prologue_captures(
+            &parameter_prologue_captures,
+            &mut method_lookup,
+        );
+        seed_function_outer_static_bindings(
+            binding_lookup,
+            &mut method_lookup,
+            &mut method_binding_index,
+        );
         for stmt in &method.body.body {
             lower_statement_to_ir1(
                 stmt,
@@ -5194,6 +9931,46 @@ fn lower_class_expression_to_ir1(
             });
             method_body_ops.push(Ir1Op::Return);
         }
+        let unresolved_method_names = rewrite_unresolved_class_body_loads(
+            &mut method_body_ops,
+            &method_lookup,
+            &method_pre_lower_names,
+            binding_lookup,
+        );
+        method_pre_lower_names.extend(unresolved_method_names);
+        let (mut method_free_vars, mut method_free_var_ids, mut method_free_var_outer_ids) =
+            collect_free_vars(
+                &method_lookup,
+                &method_pre_lower_names,
+                bindings,
+                binding_lookup,
+                binding_index,
+                scope_id,
+            );
+        append_shadowed_parameter_prologue_captures(
+            &parameter_prologue_captures,
+            &mut method_free_vars,
+            &mut method_free_var_ids,
+            &mut method_free_var_outer_ids,
+            bindings,
+            binding_lookup,
+            binding_index,
+            scope_id,
+        );
+        if let Some(self_name) = name {
+            rewrite_private_self_capture(
+                class_binding,
+                class_expression_method_self_capture_name(self_name, class_binding),
+                &mut method_free_vars,
+                &method_free_var_outer_ids,
+            );
+        }
+        let method_local_lexical_bindings = collect_function_local_lexical_bindings(
+            &method_bindings,
+            &method_free_var_ids,
+            &method_body_ops,
+        );
+        restore_class_expression_self_binding(binding_lookup, name, method_enclosing_self_binding);
 
         let method_super_binding = if super_class.is_some() {
             Some(alloc_internal_binding(
@@ -5212,15 +9989,20 @@ fn lower_class_expression_to_ir1(
         });
         if !method.is_static {
             ops.push(Ir1Op::GetProperty {
-                key: Ir1PropertyKey::Static("prototype".to_string()),
+                key: Ir1PropertyKey::Static("prototype".into()),
             });
         }
         ops.push(Ir1Op::CreateFunction {
             name: Some(method_name.clone()),
             param_names: method_param_names,
             body_ops: method_body_ops,
-            free_vars: Vec::new(),
+            free_vars: method_free_vars,
+            free_var_ids: method_free_var_ids,
+            free_var_outer_ids: method_free_var_outer_ids,
+            local_lexical_bindings: method_local_lexical_bindings,
             is_generator: false,
+            is_arrow: false,
+            rest_param_index: method_rest_param_index,
         });
         if let Some(method_binding) = method_super_binding {
             ops.push(Ir1Op::StoreBinding {
@@ -5229,9 +10011,13 @@ fn lower_class_expression_to_ir1(
         }
 
         let property_key = match method.kind {
-            MethodKind::Get => format!("{IR_ACCESSOR_GET_PREFIX}{method_name}"),
-            MethodKind::Set => format!("{IR_ACCESSOR_SET_PREFIX}{method_name}"),
-            MethodKind::Method | MethodKind::Constructor => method_name,
+            MethodKind::Get => {
+                exact_prefixed_property_key(IR_ACCESSOR_GET_PREFIX, &method_property_key)
+            }
+            MethodKind::Set => {
+                exact_prefixed_property_key(IR_ACCESSOR_SET_PREFIX, &method_property_key)
+            }
+            MethodKind::Method | MethodKind::Constructor => method_property_key,
         };
         ops.push(Ir1Op::SetProperty {
             key: Ir1PropertyKey::Static(property_key),
@@ -5253,11 +10039,11 @@ fn lower_class_expression_to_ir1(
             )?;
             if !method.is_static {
                 ops.push(Ir1Op::GetProperty {
-                    key: Ir1PropertyKey::Static("prototype".to_string()),
+                    key: Ir1PropertyKey::Static("prototype".into()),
                 });
             }
             ops.push(Ir1Op::SetProperty {
-                key: Ir1PropertyKey::Static(IR_SUPER_PROTOTYPE_PROPERTY.to_string()),
+                key: Ir1PropertyKey::Static(IR_SUPER_PROTOTYPE_PROPERTY.into()),
             });
             ops.push(Ir1Op::Nop);
         }
@@ -5267,6 +10053,51 @@ fn lower_class_expression_to_ir1(
         binding_id: class_binding,
     });
     Ok(())
+}
+
+fn canonical_static_object_property_key(
+    key: &Expression,
+) -> Result<JsString, LoweringPipelineError> {
+    match key {
+        Expression::Identifier(name) => Ok(JsString::from(name)),
+        Expression::StringLiteral(value) => Ok(value.clone()),
+        Expression::NumericLiteral(value) => Ok(JsString::from(value.to_string())),
+        Expression::FloatLiteral(bits) => {
+            let mut buffer = ryu_js::Buffer::new();
+            Ok(JsString::from(buffer.format(f64::from_bits(*bits))))
+        }
+        _ => Err(unsupported_frontier_expression_error(
+            "object_literal_static_property_key",
+            "FE-LOWER-UNSUPPORTED-STATIC-OBJECT-KEY-0001",
+            "core.object_literal_static_property_key",
+            "static object property keys require a canonical property-name AST form",
+            None,
+        )),
+    }
+}
+
+/// Produce the legacy UTF-8 function-name carrier without reusing it as the
+/// property identity. Exact property keys use an unambiguous code-unit label
+/// for display metadata while the IR key retains its original `JsString`.
+fn property_key_function_display_name(key: &JsString) -> String {
+    if let Some(name) = key.as_str() {
+        return name.to_string();
+    }
+
+    let mut display = String::from("[property:");
+    for (index, unit) in key.encode_utf16().enumerate() {
+        if index != 0 {
+            display.push('_');
+        }
+        std::fmt::Write::write_fmt(&mut display, format_args!("{unit:04X}"))
+            .expect("writing property-key code units to a String cannot fail");
+    }
+    display.push(']');
+    display
+}
+
+fn exact_prefixed_property_key(prefix: &str, key: &JsString) -> JsString {
+    JsString::from(prefix).concat(key)
 }
 
 fn lower_expression_to_ir1(
@@ -5280,6 +10111,33 @@ fn lower_expression_to_ir1(
 ) -> Result<(), LoweringPipelineError> {
     match expression {
         Expression::Identifier(name) => {
+            // `Symbol` is the one supported static builtin global that also
+            // has a first-class callable value. Materialize it before the
+            // non-materialized-global fallback while preserving lexical
+            // shadowing.
+            if let Some(capability) = static_builtin_global_factory_capability(name, binding_lookup)
+            {
+                ops.push(Ir1Op::HostCall {
+                    capability: capability.to_string(),
+                    arg_count: 0,
+                });
+                return Ok(());
+            }
+            // Core has no heap-backed global objects for the remaining static
+            // builtin receivers, and `require` is supported only as a
+            // direct-call lowering seam. An unbound bare read is therefore
+            // undefined and must not create a forward-reference entry that
+            // poisons a later supported static call such as
+            // `Math.nope; Math.abs(1)` (bd-zql4d) or a later unshadowed
+            // `require('x')` after lowering a nested closure (bd-x0ld5).
+            if is_non_materialized_intrinsic_global(name)
+                && !binding_lookup.contains_key(name.as_str())
+            {
+                ops.push(Ir1Op::LoadLiteral {
+                    value: Ir1Literal::Undefined,
+                });
+                return Ok(());
+            }
             // Identifier references look up an existing binding or create
             // a forward-reference placeholder.  This must NOT trigger the
             // duplicate-declaration conflict check that applies only to
@@ -5364,7 +10222,7 @@ fn lower_expression_to_ir1(
         }
         Expression::Raw(raw) => {
             ops.push(Ir1Op::LoadLiteral {
-                value: Ir1Literal::String(raw.clone()),
+                value: Ir1Literal::String(raw.clone().into()),
             });
             if raw.contains('(') {
                 ops.push(Ir1Op::Call { arg_count: 0 });
@@ -5389,10 +10247,10 @@ fn lower_expression_to_ir1(
             // Load pattern and flags as string literals, then create RegExp.
             // For now, emit a hostcall to regexp:create.
             ops.push(Ir1Op::LoadLiteral {
-                value: Ir1Literal::String(pattern.clone()),
+                value: Ir1Literal::String(pattern.clone().into()),
             });
             ops.push(Ir1Op::LoadLiteral {
-                value: Ir1Literal::String(flags.clone()),
+                value: Ir1Literal::String(flags.clone().into()),
             });
             ops.push(Ir1Op::HostCall {
                 capability: "regexp:create".to_string(),
@@ -5563,6 +10421,231 @@ fn lower_expression_to_ir1(
                 operator: *operator,
             });
         }
+        Expression::Update {
+            operator,
+            argument,
+            prefix,
+        } => {
+            // ES `++`/`--` operate numerically (ToNumber), writing the operand
+            // back as operand ± 1 and yielding the PRIOR value for a postfix
+            // update or the NEW value for a prefix update. The parser emits
+            // `Update` for identifier and member targets (bd-xi3bk, bd-rmxao);
+            // any other operand is not a valid reference.
+            let step_operator = match operator {
+                UpdateOperator::Increment => BinaryOperator::Add,
+                UpdateOperator::Decrement => BinaryOperator::Subtract,
+            };
+
+            match argument.as_ref() {
+                Expression::Identifier(name) => {
+                    let binding_id = if let Some(existing) = binding_lookup.get(name.as_str()) {
+                        *existing
+                    } else {
+                        let id = *binding_index;
+                        *binding_index = binding_index.saturating_add(1);
+                        bindings.push(ResolvedBinding {
+                            name: name.clone(),
+                            binding_id: id,
+                            scope: root_scope_id,
+                            kind: BindingKind::Let,
+                        });
+                        binding_lookup.insert(name.clone(), id);
+                        id
+                    };
+
+                    // Read the operand and ToNumber-coerce it (unary `+`): ES
+                    // `++`/`--` always operate numerically, unlike `x += 1` which
+                    // would string-concatenate a string operand.
+                    ops.push(Ir1Op::LoadBinding { binding_id });
+                    ops.push(Ir1Op::UnaryOp {
+                        operator: UnaryOperator::UnaryPlus,
+                    });
+
+                    // A postfix update yields the PRIOR numeric value, so stash it
+                    // before the write (there is no stack-dup op; use a binding).
+                    let prior_binding = if *prefix {
+                        None
+                    } else {
+                        let tmp = alloc_internal_binding(
+                            bindings,
+                            binding_lookup,
+                            binding_index,
+                            root_scope_id,
+                            "update_prior_value",
+                        )?;
+                        ops.push(Ir1Op::StoreBinding { binding_id: tmp });
+                        Some(tmp)
+                    };
+
+                    // new = prior ± 1, written back through `AssignOp` (scope/
+                    // capture aware). The store leaves the new value on the stack.
+                    ops.push(Ir1Op::LoadLiteral {
+                        value: Ir1Literal::Integer(1),
+                    });
+                    ops.push(Ir1Op::BinaryOp {
+                        operator: step_operator,
+                    });
+                    ops.push(Ir1Op::AssignOp {
+                        binding_id,
+                        operator: AssignmentOperator::Assign,
+                    });
+
+                    // Prefix: keep the new value. Postfix: drop it and reload the
+                    // stashed prior value as the expression result.
+                    if let Some(tmp) = prior_binding {
+                        ops.push(Ir1Op::Pop);
+                        ops.push(Ir1Op::LoadBinding { binding_id: tmp });
+                    }
+                }
+                Expression::Member {
+                    object,
+                    property,
+                    computed,
+                } => {
+                    // A consumed member-target update (`obj.x++`, `a[i]--`) needs
+                    // the same ToNumber + prior/new result semantics as an
+                    // identifier target, but the object and computed key must be
+                    // evaluated ONCE and reused for both the load and the store
+                    // (single-eval — bd-rmxao). Stash them in internal bindings.
+                    let object_binding = alloc_internal_binding(
+                        bindings,
+                        binding_lookup,
+                        binding_index,
+                        root_scope_id,
+                        "update_object",
+                    )?;
+                    lower_expression_to_ir1(
+                        object,
+                        ops,
+                        bindings,
+                        binding_lookup,
+                        binding_index,
+                        root_scope_id,
+                        label_counter,
+                    )?;
+                    ops.push(Ir1Op::StoreBinding {
+                        binding_id: object_binding,
+                    });
+                    ops.push(Ir1Op::Pop);
+
+                    let (key, dynamic_key_binding) = if *computed {
+                        let key_binding = alloc_internal_binding(
+                            bindings,
+                            binding_lookup,
+                            binding_index,
+                            root_scope_id,
+                            "update_key",
+                        )?;
+                        lower_expression_to_ir1(
+                            property,
+                            ops,
+                            bindings,
+                            binding_lookup,
+                            binding_index,
+                            root_scope_id,
+                            label_counter,
+                        )?;
+                        ops.push(Ir1Op::StoreBinding {
+                            binding_id: key_binding,
+                        });
+                        ops.push(Ir1Op::Pop);
+                        (Ir1PropertyKey::Dynamic, Some(key_binding))
+                    } else {
+                        (
+                            lower_member_property_key_to_ir1(
+                                property,
+                                false,
+                                ops,
+                                bindings,
+                                binding_lookup,
+                                binding_index,
+                                root_scope_id,
+                                label_counter,
+                            )?,
+                            None,
+                        )
+                    };
+
+                    // prior = ToNumber(obj[key])
+                    ops.push(Ir1Op::LoadBinding {
+                        binding_id: object_binding,
+                    });
+                    if let Some(key_binding) = dynamic_key_binding {
+                        ops.push(Ir1Op::LoadBinding {
+                            binding_id: key_binding,
+                        });
+                    }
+                    ops.push(Ir1Op::GetProperty { key: key.clone() });
+                    ops.push(Ir1Op::UnaryOp {
+                        operator: UnaryOperator::UnaryPlus,
+                    });
+
+                    let prior_binding = if *prefix {
+                        None
+                    } else {
+                        let tmp = alloc_internal_binding(
+                            bindings,
+                            binding_lookup,
+                            binding_index,
+                            root_scope_id,
+                            "update_prior_value",
+                        )?;
+                        ops.push(Ir1Op::StoreBinding { binding_id: tmp });
+                        Some(tmp)
+                    };
+
+                    // new = prior ± 1
+                    ops.push(Ir1Op::LoadLiteral {
+                        value: Ir1Literal::Integer(1),
+                    });
+                    ops.push(Ir1Op::BinaryOp {
+                        operator: step_operator,
+                    });
+
+                    // Write `new` back through the stashed reference. SetProperty
+                    // needs the object (and key) beneath the value, so stash the
+                    // new value and reload the reference before it.
+                    let result_binding = alloc_internal_binding(
+                        bindings,
+                        binding_lookup,
+                        binding_index,
+                        root_scope_id,
+                        "update_result",
+                    )?;
+                    ops.push(Ir1Op::StoreBinding {
+                        binding_id: result_binding,
+                    });
+                    ops.push(Ir1Op::Pop);
+                    ops.push(Ir1Op::LoadBinding {
+                        binding_id: object_binding,
+                    });
+                    if let Some(key_binding) = dynamic_key_binding {
+                        ops.push(Ir1Op::LoadBinding {
+                            binding_id: key_binding,
+                        });
+                    }
+                    ops.push(Ir1Op::LoadBinding {
+                        binding_id: result_binding,
+                    });
+                    // SetProperty leaves the new value on the stack (the prefix
+                    // result). For a postfix update, drop it and reload the prior.
+                    ops.push(Ir1Op::SetProperty { key });
+                    if let Some(tmp) = prior_binding {
+                        ops.push(Ir1Op::Pop);
+                        ops.push(Ir1Op::LoadBinding { binding_id: tmp });
+                    }
+                }
+                _ => {
+                    return Err(unsupported_frontier_expression_error(
+                        "update_target",
+                        "FE-LOWER-UPDATE-0001",
+                        "lower_ir0_to_ir1.update_target",
+                        "update expression operand must be an identifier or member expression",
+                        None,
+                    ));
+                }
+            }
+        }
         Expression::Assignment {
             operator,
             left,
@@ -5639,19 +10722,43 @@ fn lower_expression_to_ir1(
                     _ => {}
                 }
 
-                lower_expression_to_ir1(
-                    right,
-                    ops,
-                    bindings,
-                    binding_lookup,
-                    binding_index,
-                    root_scope_id,
-                    label_counter,
-                )?;
-                ops.push(Ir1Op::AssignOp {
-                    binding_id,
-                    operator: *operator,
-                });
+                if let Some(binary_operator) = compound_assignment_binary_operator(*operator) {
+                    // GetValue(left) precedes RHS evaluation for a compound
+                    // assignment. Besides preserving the pre-RHS value when
+                    // the RHS mutates this binding, the early load is where a
+                    // parameter TDZ check must fire.
+                    ops.push(Ir1Op::LoadBinding { binding_id });
+                    lower_expression_to_ir1(
+                        right,
+                        ops,
+                        bindings,
+                        binding_lookup,
+                        binding_index,
+                        root_scope_id,
+                        label_counter,
+                    )?;
+                    ops.push(Ir1Op::BinaryOp {
+                        operator: binary_operator,
+                    });
+                    ops.push(Ir1Op::AssignOp {
+                        binding_id,
+                        operator: AssignmentOperator::Assign,
+                    });
+                } else {
+                    lower_expression_to_ir1(
+                        right,
+                        ops,
+                        bindings,
+                        binding_lookup,
+                        binding_index,
+                        root_scope_id,
+                        label_counter,
+                    )?;
+                    ops.push(Ir1Op::AssignOp {
+                        binding_id,
+                        operator: *operator,
+                    });
+                }
             } else if let Expression::Member {
                 object,
                 property,
@@ -5814,6 +10921,131 @@ fn lower_expression_to_ir1(
                     });
                     ops.push(Ir1Op::SetProperty { key });
                     ops.push(Ir1Op::Label { id: end_label });
+                    return Ok(());
+                }
+
+                if let Some(binary_operator) = compound_assignment_binary_operator(*operator) {
+                    // Non-logical compound member assignment (`obj.x += rhs`,
+                    // `a[i] *= rhs`, …): the operand and key must be evaluated
+                    // ONCE, the current property value loaded and combined with the
+                    // RHS, then written back. The prior bare `SetProperty` path
+                    // ignored `operator` and stored the RHS alone, so `obj.x += 1`
+                    // set `obj.x = 1` rather than `obj.x + 1` (bd-rmxao). Stash the
+                    // object (and computed key) in internal bindings so the same
+                    // reference feeds both the load and the store without re-
+                    // evaluating a side-effecting object/key expression.
+                    let object_binding = alloc_internal_binding(
+                        bindings,
+                        binding_lookup,
+                        binding_index,
+                        root_scope_id,
+                        "member_compound_object",
+                    )?;
+                    lower_expression_to_ir1(
+                        object,
+                        ops,
+                        bindings,
+                        binding_lookup,
+                        binding_index,
+                        root_scope_id,
+                        label_counter,
+                    )?;
+                    ops.push(Ir1Op::StoreBinding {
+                        binding_id: object_binding,
+                    });
+                    ops.push(Ir1Op::Pop);
+
+                    let (key, dynamic_key_binding) = if *computed {
+                        let key_binding = alloc_internal_binding(
+                            bindings,
+                            binding_lookup,
+                            binding_index,
+                            root_scope_id,
+                            "member_compound_key",
+                        )?;
+                        lower_expression_to_ir1(
+                            property,
+                            ops,
+                            bindings,
+                            binding_lookup,
+                            binding_index,
+                            root_scope_id,
+                            label_counter,
+                        )?;
+                        ops.push(Ir1Op::StoreBinding {
+                            binding_id: key_binding,
+                        });
+                        ops.push(Ir1Op::Pop);
+                        (Ir1PropertyKey::Dynamic, Some(key_binding))
+                    } else {
+                        (
+                            lower_member_property_key_to_ir1(
+                                property,
+                                false,
+                                ops,
+                                bindings,
+                                binding_lookup,
+                                binding_index,
+                                root_scope_id,
+                                label_counter,
+                            )?,
+                            None,
+                        )
+                    };
+
+                    // current = obj[key]
+                    ops.push(Ir1Op::LoadBinding {
+                        binding_id: object_binding,
+                    });
+                    if let Some(key_binding) = dynamic_key_binding {
+                        ops.push(Ir1Op::LoadBinding {
+                            binding_id: key_binding,
+                        });
+                    }
+                    ops.push(Ir1Op::GetProperty { key: key.clone() });
+
+                    // combined = current <op> rhs (current is the deeper stack
+                    // slot / lhs; BinaryOp pops rhs then lhs).
+                    lower_expression_to_ir1(
+                        right,
+                        ops,
+                        bindings,
+                        binding_lookup,
+                        binding_index,
+                        root_scope_id,
+                        label_counter,
+                    )?;
+                    ops.push(Ir1Op::BinaryOp {
+                        operator: binary_operator,
+                    });
+
+                    // SetProperty needs the object (and key) beneath the value, so
+                    // stash the combined value and reload the reference before it.
+                    let result_binding = alloc_internal_binding(
+                        bindings,
+                        binding_lookup,
+                        binding_index,
+                        root_scope_id,
+                        "member_compound_result",
+                    )?;
+                    ops.push(Ir1Op::StoreBinding {
+                        binding_id: result_binding,
+                    });
+                    ops.push(Ir1Op::Pop);
+                    ops.push(Ir1Op::LoadBinding {
+                        binding_id: object_binding,
+                    });
+                    if let Some(key_binding) = dynamic_key_binding {
+                        ops.push(Ir1Op::LoadBinding {
+                            binding_id: key_binding,
+                        });
+                    }
+                    ops.push(Ir1Op::LoadBinding {
+                        binding_id: result_binding,
+                    });
+                    // SetProperty leaves the assigned value on the stack, so the
+                    // compound assignment yields the combined value (as ES requires).
+                    ops.push(Ir1Op::SetProperty { key });
                     return Ok(());
                 }
 
@@ -6000,6 +11232,80 @@ fn lower_expression_to_ir1(
                 });
                 return Ok(());
             }
+            // bd-tu0c3: pure-compute Node `path` builtins. Recognized member
+            // calls on a confirmed path-module alias (`const path =
+            // require('path')`), on its `.posix`/`.win32` namespaces, or on an
+            // inline `require('path')` receiver lower to `builtin:Path*`
+            // hostcalls. The receiver is deliberately NOT lowered — the
+            // recognized require declaration is elided and recognition is
+            // purely syntactic. Arity is validated at dispatch (variadic
+            // join/resolve, optional basename ext). Mirror of the
+            // franken-engine call-arm interception.
+            if let Some(capability) = path_builtin_call_capability(callee, binding_lookup) {
+                for arg in arguments {
+                    lower_expression_to_ir1(
+                        arg,
+                        ops,
+                        bindings,
+                        binding_lookup,
+                        binding_index,
+                        root_scope_id,
+                        label_counter,
+                    )?;
+                }
+                ops.push(Ir1Op::HostCall {
+                    capability: capability.to_string(),
+                    arg_count: arguments.len() as u32,
+                });
+                return Ok(());
+            }
+            // bd-qmy52: pure-compute Node `querystring` and `os` builtins.
+            // Recognized member calls on a confirmed module alias or an
+            // inline `require('querystring')` / `require('os')` receiver
+            // lower to `builtin:Querystring*` / `builtin:Os*` hostcalls,
+            // exactly like the path interception above (receiver NOT lowered;
+            // arity validated at dispatch). Mirror of the franken-engine
+            // call-arm interception.
+            if let Some(capability) = querystring_builtin_call_capability(callee, binding_lookup)
+                .or_else(|| os_builtin_call_capability(callee, binding_lookup))
+            {
+                for arg in arguments {
+                    lower_expression_to_ir1(
+                        arg,
+                        ops,
+                        bindings,
+                        binding_lookup,
+                        binding_index,
+                        root_scope_id,
+                        label_counter,
+                    )?;
+                }
+                ops.push(Ir1Op::HostCall {
+                    capability: capability.to_string(),
+                    arg_count: arguments.len() as u32,
+                });
+                return Ok(());
+            }
+            // Core has no global-object registry, so supported static methods
+            // on bare unshadowed globals resolve directly to hostcalls.
+            if let Some(capability) = static_builtin_call_capability(callee, binding_lookup) {
+                for arg in arguments {
+                    lower_expression_to_ir1(
+                        arg,
+                        ops,
+                        bindings,
+                        binding_lookup,
+                        binding_index,
+                        root_scope_id,
+                        label_counter,
+                    )?;
+                }
+                ops.push(Ir1Op::HostCall {
+                    capability: capability.to_string(),
+                    arg_count: arguments.len() as u32,
+                });
+                return Ok(());
+            }
             // Detect method calls: obj.method(args) → CallMethod with receiver
             let is_method = matches!(
                 callee.as_ref(),
@@ -6101,6 +11407,62 @@ fn lower_expression_to_ir1(
             property,
             computed,
         } => {
+            // bd-cue2u / bd-n8eta.4.3: unshadowed `Array.isArray` and
+            // well-known `Symbol.*` member reads materialize deterministic
+            // first-class builtin values. Direct static calls are intercepted
+            // earlier, while lexical bindings fall through to ordinary
+            // property access.
+            if let Some(capability) = static_builtin_member_factory_capability(
+                object,
+                property,
+                *computed,
+                binding_lookup,
+            ) {
+                ops.push(Ir1Op::HostCall {
+                    capability: capability.to_string(),
+                    arg_count: 0,
+                });
+                return Ok(());
+            }
+            // bd-tu0c3: `path.sep` / `path.delimiter` (and the
+            // `.posix`/`.win32` namespace forms) on a confirmed path-module
+            // alias are deterministic platform constants; lower them directly
+            // to string literals. The receiver is deliberately NOT lowered (no
+            // real path module object). Mirror of the franken-engine
+            // member-arm interception.
+            if let Some(constant) =
+                path_member_constant(object, property, *computed, binding_lookup)
+            {
+                ops.push(Ir1Op::LoadLiteral {
+                    value: Ir1Literal::String(constant.into()),
+                });
+                return Ok(());
+            }
+            // bd-qmy52: recognized `os` property READS on a confirmed
+            // os-module alias. `os.EOL` / `os.devNull` lower to string
+            // literals; `os.constants` lowers to a 0-arg `builtin:OsConstants`
+            // HostCall allocating the nested `{ signals, errno, priority }`
+            // object so chained reads (`os.constants.signals.SIGINT`) and
+            // bare reads (`typeof os.constants`) both work on a real heap
+            // object. Mirror of the franken-engine member-arm interception.
+            if let Some(lowering) =
+                os_member_read_lowering(object, property, *computed, binding_lookup)
+            {
+                match lowering {
+                    OsMemberReadLowering::StringConstant(constant) => {
+                        ops.push(Ir1Op::LoadLiteral {
+                            value: Ir1Literal::String(constant.into()),
+                        });
+                    }
+                    OsMemberReadLowering::ConstantsHostcall => {
+                        ops.push(Ir1Op::HostCall {
+                            capability: "builtin:OsConstants".to_string(),
+                            arg_count: 0,
+                        });
+                    }
+                }
+                return Ok(());
+            }
             lower_expression_to_ir1(
                 object,
                 ops,
@@ -6421,12 +11783,7 @@ fn lower_expression_to_ir1(
                                 label_counter,
                             )?;
                         } else {
-                            let key_str = match &prop.key {
-                                Expression::Identifier(name) => name.clone(),
-                                Expression::StringLiteral(s) => s.clone(),
-                                Expression::NumericLiteral(n) => n.to_string(),
-                                other => format!("{other:?}"),
-                            };
+                            let key_str = canonical_static_object_property_key(&prop.key)?;
                             ops.push(Ir1Op::LoadLiteral {
                                 value: Ir1Literal::String(key_str),
                             });
@@ -6440,9 +11797,14 @@ fn lower_expression_to_ir1(
                             root_scope_id,
                             label_counter,
                         )?;
-                        ops.push(Ir1Op::SetProperty {
-                            key: Ir1PropertyKey::Dynamic,
-                        });
+                        // Build a single-property object and merge it into the
+                        // target. A bare SetProperty would consume the target
+                        // and leave the assigned value on the stack, which is
+                        // correct for assignment expressions but breaks mixed
+                        // object literals such as {...source, key: value}
+                        // (bd-oca1s, bd-ibsn4).
+                        ops.push(Ir1Op::NewObject { count: 1 });
+                        ops.push(Ir1Op::SpreadIntoObject);
                     }
                 }
             } else {
@@ -6459,12 +11821,7 @@ fn lower_expression_to_ir1(
                             label_counter,
                         )?;
                     } else {
-                        let key_str = match &prop.key {
-                            Expression::Identifier(name) => name.clone(),
-                            Expression::StringLiteral(s) => s.clone(),
-                            Expression::NumericLiteral(n) => n.to_string(),
-                            other => format!("{other:?}"),
-                        };
+                        let key_str = canonical_static_object_property_key(&prop.key)?;
                         ops.push(Ir1Op::LoadLiteral {
                             value: Ir1Literal::String(key_str),
                         });
@@ -6486,28 +11843,54 @@ fn lower_expression_to_ir1(
         }
         Expression::ArrowFunction { params, body, .. } => {
             // Lower arrow function body with its own fresh scope.
-            let param_names: Vec<String> = params
-                .iter()
-                .filter_map(|p| p.name().map(String::from))
-                .collect();
             let mut body_ops = Vec::new();
             let mut body_bindings = Vec::new();
             let mut body_lookup = BTreeMap::new();
             let mut body_binding_index: BindingId = 0;
             let body_scope = ScopeId { depth: 0, index: 0 };
             let mut body_label_counter: u32 = 0;
-            // Allocate parameter bindings in the body scope.
-            for pname in &param_names {
-                let _ = alloc_binding(
-                    &mut body_bindings,
-                    &mut body_lookup,
-                    &mut body_binding_index,
-                    body_scope,
-                    pname,
-                    BindingKind::Parameter,
-                )
-                .map_err(LoweringPipelineError::SemanticViolation)?;
-            }
+            let FunctionParameterPlan {
+                param_names,
+                parameter_steps,
+                parameter_bindings,
+                rest_param_index,
+            } = allocate_function_parameter_bindings(
+                params,
+                &mut body_bindings,
+                &mut body_lookup,
+                &mut body_binding_index,
+                body_scope,
+            )?;
+            let parameter_binding_names = body_lookup.keys().cloned().collect();
+            let parameter_prologue_captures = lower_function_parameter_prologue(
+                &parameter_steps,
+                &parameter_bindings,
+                binding_lookup,
+                &mut body_ops,
+                &mut body_bindings,
+                &body_lookup,
+                &mut body_binding_index,
+                body_scope,
+                &mut body_label_counter,
+            )?;
+            let pre_lower_names = prepare_function_body_bindings(
+                match body {
+                    ArrowBody::Block(block) => Some(block.body.as_slice()),
+                    ArrowBody::Expression(_) => None,
+                },
+                parameter_binding_names,
+                &mut body_lookup,
+                &mut body_binding_index,
+            );
+            merge_unshadowed_parameter_prologue_captures(
+                &parameter_prologue_captures,
+                &mut body_lookup,
+            );
+            seed_function_outer_static_bindings(
+                binding_lookup,
+                &mut body_lookup,
+                &mut body_binding_index,
+            );
             match body {
                 ArrowBody::Expression(expr) => {
                     lower_expression_to_ir1(
@@ -6538,20 +11921,41 @@ fn lower_expression_to_ir1(
             if !matches!(body_ops.last(), Some(Ir1Op::Return)) {
                 body_ops.push(Ir1Op::Return);
             }
-            let pre_lower_names: BTreeSet<String> = param_names.iter().cloned().collect();
-            let arrow_free_vars: Vec<String> = body_lookup
-                .keys()
-                .filter(|n| {
-                    !pre_lower_names.contains(n.as_str()) && binding_lookup.contains_key(n.as_str())
-                })
-                .cloned()
-                .collect();
+            let (mut arrow_free_vars, mut arrow_free_var_ids, mut arrow_free_var_outer_ids) =
+                collect_free_vars(
+                    &body_lookup,
+                    &pre_lower_names,
+                    bindings,
+                    binding_lookup,
+                    binding_index,
+                    root_scope_id,
+                );
+            append_shadowed_parameter_prologue_captures(
+                &parameter_prologue_captures,
+                &mut arrow_free_vars,
+                &mut arrow_free_var_ids,
+                &mut arrow_free_var_outer_ids,
+                bindings,
+                binding_lookup,
+                binding_index,
+                root_scope_id,
+            );
+            let arrow_local_lexical_bindings = collect_function_local_lexical_bindings(
+                &body_bindings,
+                &arrow_free_var_ids,
+                &body_ops,
+            );
             ops.push(Ir1Op::CreateFunction {
                 name: None,
                 param_names,
                 body_ops,
                 free_vars: arrow_free_vars,
+                free_var_ids: arrow_free_var_ids,
+                free_var_outer_ids: arrow_free_var_outer_ids,
+                local_lexical_bindings: arrow_local_lexical_bindings,
                 is_generator: false,
+                is_arrow: true,
+                rest_param_index,
             });
         }
         Expression::Function {
@@ -6562,28 +11966,71 @@ fn lower_expression_to_ir1(
             ..
         } => {
             // Same as ArrowFunction but with a BlockStatement body and optional name.
-            let param_names: Vec<String> = params
-                .iter()
-                .filter_map(|p| p.name().map(String::from))
-                .collect();
+            // A named function expression owns a private outer cell. Install
+            // the source spelling only while lowering its parameter/body
+            // environments; the runtime marker is initialized cyclically by
+            // CreateClosure before the closure becomes observable.
+            let function_self_binding = if let Some(function_name) = name {
+                let binding_id = alloc_internal_binding(
+                    bindings,
+                    binding_lookup,
+                    binding_index,
+                    root_scope_id,
+                    "function_expression_self",
+                )?;
+                let previous = binding_lookup.insert(function_name.clone(), binding_id);
+                Some((function_name.as_str(), binding_id, previous))
+            } else {
+                None
+            };
             let mut body_ops = Vec::new();
             let mut body_bindings = Vec::new();
             let mut body_lookup = BTreeMap::new();
             let mut body_binding_index: BindingId = 0;
             let body_scope = ScopeId { depth: 0, index: 0 };
             let mut body_label_counter: u32 = 0;
-            let pre_lower_names: BTreeSet<String> = param_names.iter().cloned().collect();
-            for pname in &param_names {
-                let _ = alloc_binding(
-                    &mut body_bindings,
-                    &mut body_lookup,
-                    &mut body_binding_index,
-                    body_scope,
-                    pname,
-                    BindingKind::Parameter,
-                )
-                .map_err(LoweringPipelineError::SemanticViolation)?;
+            let FunctionParameterPlan {
+                param_names,
+                parameter_steps,
+                parameter_bindings,
+                rest_param_index,
+            } = allocate_function_parameter_bindings(
+                params,
+                &mut body_bindings,
+                &mut body_lookup,
+                &mut body_binding_index,
+                body_scope,
+            )?;
+            let parameter_binding_names = body_lookup.keys().cloned().collect();
+            let parameter_prologue_captures = lower_function_parameter_prologue(
+                &parameter_steps,
+                &parameter_bindings,
+                binding_lookup,
+                &mut body_ops,
+                &mut body_bindings,
+                &body_lookup,
+                &mut body_binding_index,
+                body_scope,
+                &mut body_label_counter,
+            )?;
+            if *is_generator {
+                body_ops.push(Ir1Op::GeneratorBodyStart);
             }
+            let pre_lower_names = prepare_function_body_bindings(
+                Some(&body.body),
+                parameter_binding_names,
+                &mut body_lookup,
+                &mut body_binding_index,
+            );
+            merge_unshadowed_parameter_prologue_captures(
+                &parameter_prologue_captures,
+                &mut body_lookup,
+            );
+            seed_function_outer_static_bindings(
+                binding_lookup,
+                &mut body_lookup,
+                &mut body_binding_index,
+            );
             for stmt in &body.body {
                 lower_statement_to_ir1(
                     stmt,
@@ -6601,19 +12048,56 @@ fn lower_expression_to_ir1(
                 });
                 body_ops.push(Ir1Op::Return);
             }
-            let fn_free_vars: Vec<String> = body_lookup
-                .keys()
-                .filter(|n| {
-                    !pre_lower_names.contains(n.as_str()) && binding_lookup.contains_key(n.as_str())
-                })
-                .cloned()
-                .collect();
+            let (mut fn_free_vars, mut fn_free_var_ids, mut fn_free_var_outer_ids) =
+                collect_free_vars(
+                    &body_lookup,
+                    &pre_lower_names,
+                    bindings,
+                    binding_lookup,
+                    binding_index,
+                    root_scope_id,
+                );
+            append_shadowed_parameter_prologue_captures(
+                &parameter_prologue_captures,
+                &mut fn_free_vars,
+                &mut fn_free_var_ids,
+                &mut fn_free_var_outer_ids,
+                bindings,
+                binding_lookup,
+                binding_index,
+                root_scope_id,
+            );
+            if let Some((function_name, binding_id, _)) = &function_self_binding {
+                rewrite_private_self_capture(
+                    *binding_id,
+                    function_expression_self_capture_name(function_name, *binding_id),
+                    &mut fn_free_vars,
+                    &fn_free_var_outer_ids,
+                );
+            }
+            let fn_local_lexical_bindings = collect_function_local_lexical_bindings(
+                &body_bindings,
+                &fn_free_var_ids,
+                &body_ops,
+            );
+            if let Some((function_name, _, previous)) = function_self_binding {
+                if let Some(previous) = previous {
+                    binding_lookup.insert(function_name.to_string(), previous);
+                } else {
+                    binding_lookup.remove(function_name);
+                }
+            }
             ops.push(Ir1Op::CreateFunction {
                 name: name.clone(),
                 param_names,
                 body_ops,
                 free_vars: fn_free_vars,
+                free_var_ids: fn_free_var_ids,
+                free_var_outer_ids: fn_free_var_outer_ids,
+                local_lexical_bindings: fn_local_lexical_bindings,
                 is_generator: *is_generator,
+                is_arrow: false,
+                rest_param_index,
             });
         }
         Expression::New { callee, arguments } => {
@@ -6648,7 +12132,7 @@ fn lower_expression_to_ir1(
             // Interleave quasis and expressions: quasi[0], expr[0], quasi[1], ..., quasi[N-1]
             for (i, quasi) in quasis.iter().enumerate() {
                 ops.push(Ir1Op::LoadLiteral {
-                    value: Ir1Literal::String(quasi.clone()),
+                    value: Ir1Literal::String(quasi.clone().into()),
                 });
                 if i < expressions.len() {
                     lower_expression_to_ir1(
@@ -6712,10 +12196,10 @@ fn lower_member_property_key_to_ir1(
     }
 
     let key = match property {
-        Expression::Identifier(name) => name.clone(),
+        Expression::Identifier(name) => JsString::from(name),
         Expression::StringLiteral(value) => value.clone(),
-        Expression::NumericLiteral(value) => value.to_string(),
-        _ => "unknown".to_string(),
+        Expression::NumericLiteral(value) => JsString::from(value.to_string()),
+        _ => JsString::from("unknown"),
     };
     Ok(Ir1PropertyKey::Static(key))
 }
@@ -6786,7 +12270,8 @@ fn classify_ir1_op(
         | Ir1Op::BeginTry { .. }
         | Ir1Op::EndTry
         | Ir1Op::EnterFinally
-        | Ir1Op::EndFinally => (
+        | Ir1Op::EndFinally
+        | Ir1Op::DiscardAbruptCompletion => (
             EffectBoundary::ReadEffect,
             None,
             Some(FlowAnnotation {
@@ -6795,9 +12280,10 @@ fn classify_ir1_op(
                 declassification_required: false,
             }),
         ),
-        Ir1Op::GetProperty { .. } | Ir1Op::SetProperty { .. } | Ir1Op::DeleteProperty { .. } => {
-            (EffectBoundary::ReadEffect, None, None)
-        }
+        Ir1Op::GetProperty { .. }
+        | Ir1Op::SetProperty { .. }
+        | Ir1Op::DeleteProperty { .. }
+        | Ir1Op::CopyDataProperties { .. } => (EffectBoundary::ReadEffect, None, None),
         Ir1Op::ForInInit
         | Ir1Op::ForInNext { .. }
         | Ir1Op::ForOfInit
@@ -6810,6 +12296,10 @@ fn classify_ir1_op(
 }
 
 fn infer_ir2_flow_annotations(ir2: &mut Ir2Module) -> FlowInferenceMetrics {
+    infer_ir2_flow_annotations_for_ops(&mut ir2.ops)
+}
+
+fn infer_ir2_flow_annotations_for_ops(ops: &mut [Ir2Op]) -> FlowInferenceMetrics {
     let mut binding_labels = BTreeMap::<BindingId, Label>::new();
     let mut last_label = Label::Public;
     let mut metrics = FlowInferenceMetrics {
@@ -6818,7 +12308,7 @@ fn infer_ir2_flow_annotations(ir2: &mut Ir2Module) -> FlowInferenceMetrics {
         runtime_check_ops: 0,
     };
 
-    for op in &mut ir2.ops {
+    for op in ops {
         let inferred_data_label =
             infer_data_label_for_op(&op.inner, &binding_labels, last_label.clone());
         let inferred_sink_clearance = infer_sink_clearance(
@@ -6991,11 +12481,11 @@ fn lower_literal_to_ir3(
     value: &Ir1Literal,
     dst: Reg,
     instructions: &mut Vec<Ir3Instruction>,
-    constant_pool: &mut Vec<String>,
+    constant_pool: &mut Vec<JsString>,
 ) {
     match value {
         Ir1Literal::String(text) => {
-            let pool_index = push_constant(constant_pool, text);
+            let pool_index = push_constant(constant_pool, text.clone());
             instructions.push(Ir3Instruction::LoadStr { dst, pool_index });
         }
         Ir1Literal::Integer(value) => {
@@ -7012,12 +12502,13 @@ fn lower_literal_to_ir3(
     }
 }
 
-fn push_constant(pool: &mut Vec<String>, value: &str) -> u32 {
-    if let Some(index) = pool.iter().position(|entry| entry == value) {
+fn push_constant(pool: &mut Vec<JsString>, value: impl Into<JsString>) -> u32 {
+    let value = value.into();
+    if let Some(index) = pool.iter().position(|entry| entry == &value) {
         return u32::try_from(index).unwrap_or(u32::MAX);
     }
 
-    pool.push(value.to_string());
+    pool.push(value);
     u32::try_from(pool.len() - 1).unwrap_or(u32::MAX)
 }
 
@@ -7094,12 +12585,15 @@ mod tests {
         ArrowBody, AssignmentOperator, BinaryOperator, BindingPattern, BlockStatement,
         BreakStatement, CatchClause, ContinueStatement, DoWhileStatement, ExportDeclaration,
         ExportKind, Expression, ExpressionStatement, ForInStatement, ForOfStatement, ForStatement,
-        FunctionDeclaration, FunctionParam, IfStatement, ImportDeclaration, MethodDefinition,
-        MethodKind, ObjectPatternProperty, ObjectProperty, ParseGoal, ReturnStatement, SourceSpan,
-        Statement, SwitchCase, SwitchStatement, SyntaxTree, ThrowStatement, TryCatchStatement,
-        UnaryOperator, VariableDeclaration, VariableDeclarationKind, VariableDeclarator,
-        WhileStatement,
+        FunctionDeclaration, FunctionParam, IfStatement, ImportDeclaration, LabeledStatement,
+        MethodDefinition, MethodKind, ObjectPatternProperty, ObjectProperty, ParseGoal,
+        ReturnStatement, SourceSpan, Statement, SwitchCase, SwitchStatement, SyntaxTree,
+        ThrowStatement, TryCatchStatement, UnaryOperator, VariableDeclaration,
+        VariableDeclarationKind, VariableDeclarator, WhileStatement,
     };
+    use crate::baseline_interpreter::{InterpreterConfig, QuickJsLane, Value};
+    use crate::capability::RuntimeCapability;
+    use crate::parser::{CanonicalEs2020Parser, Es2020Parser};
     use crate::parser_gap_inventory::{ParserGapSiteId, UnsupportedSyntaxDiagnostic};
 
     fn span() -> SourceSpan {
@@ -7118,6 +12612,152 @@ mod tests {
         Ir0Module::from_syntax_tree(tree, "fixture.js")
     }
 
+    fn lower_source_to_ir1_bd_n8eta_4_3(source: &str) -> Ir1Module {
+        let tree = CanonicalEs2020Parser
+            .parse(source, ParseGoal::Script)
+            .expect("bd-n8eta.4.3 lowering source should parse");
+        lower_ir0_to_ir1(&Ir0Module::from_syntax_tree(tree, "bd_n8eta_4_3.js"))
+            .expect("bd-n8eta.4.3 source should lower to IR1")
+            .module
+    }
+
+    fn host_calls_bd_n8eta_4_3(ops: &[Ir1Op]) -> Vec<(&str, u32)> {
+        fn visit<'a>(ops: &'a [Ir1Op], calls: &mut Vec<(&'a str, u32)>) {
+            for op in ops {
+                if let Ir1Op::HostCall {
+                    capability,
+                    arg_count,
+                } = op
+                {
+                    calls.push((capability.as_str(), *arg_count));
+                }
+                if let Some(body_ops) = nested_function_body(op) {
+                    visit(body_ops, calls);
+                }
+            }
+        }
+
+        let mut calls = Vec::new();
+        visit(ops, &mut calls);
+        calls
+    }
+
+    fn lower_rest_source_to_ir3(source: &str) -> Result<Ir3Module, LoweringPipelineError> {
+        let tree = CanonicalEs2020Parser
+            .parse(source, ParseGoal::Script)
+            .expect("rest-parameter regression source should parse");
+        let ir0 = Ir0Module::from_syntax_tree(tree, "rest_params.js");
+        lower_ir0_to_ir3(
+            &ir0,
+            &LoweringContext::new("trace-rest", "decision-rest", "policy-rest"),
+        )
+        .map(|output| output.ir3)
+    }
+
+    fn lower_exception_source_to_ir3_bd_47p8z(source: &str) -> Ir3Module {
+        let tree = CanonicalEs2020Parser
+            .parse(source, ParseGoal::Script)
+            .expect("exception-lowering regression source should parse");
+        let ir0 = Ir0Module::from_syntax_tree(tree, "bd_47p8z.js");
+        lower_ir0_to_ir3(
+            &ir0,
+            &LoweringContext::new("trace-bd-47p8z", "decision-bd-47p8z", "policy-bd-47p8z"),
+        )
+        .expect("exception-lowering regression source should lower")
+        .ir3
+    }
+
+    fn execute_exception_module_bd_47p8z(module: &Ir3Module) -> Value {
+        let mut config = InterpreterConfig::quickjs_defaults();
+        config.granted_capabilities = BTreeSet::from([
+            RuntimeCapability::VmDispatch,
+            RuntimeCapability::HeapAllocate,
+        ]);
+        QuickJsLane::with_config(config)
+            .execute(module, "trace-bd-47p8z")
+            .expect("exception-lowering regression should execute")
+            .value
+    }
+
+    fn lower_and_execute_deferred_source_bd_6pvhn(source: &str) -> (Ir1Module, Ir3Module, Value) {
+        let tree = CanonicalEs2020Parser
+            .parse(source, ParseGoal::Script)
+            .expect("deferred-operation regression source should parse");
+        let ir0 = Ir0Module::from_syntax_tree(tree, "bd_6pvhn.js");
+        let ir1 = lower_ir0_to_ir1(&ir0)
+            .expect("deferred-operation regression should lower to IR1")
+            .module;
+        let ir2 = lower_ir1_to_ir2(&ir1)
+            .expect("deferred-operation regression should lower to IR2")
+            .module;
+        let module = lower_ir2_to_ir3(&ir2)
+            .expect("deferred-operation regression should lower to IR3")
+            .module;
+        let mut config = InterpreterConfig::quickjs_defaults();
+        config.granted_capabilities = BTreeSet::from([
+            RuntimeCapability::VmDispatch,
+            RuntimeCapability::HeapAllocate,
+        ]);
+        let value = QuickJsLane::with_config(config)
+            .execute(&module, "trace-bd-6pvhn")
+            .expect("deferred-operation regression should execute")
+            .value;
+        (ir1, module, value)
+    }
+
+    fn deferred_ir1_body_bd_6pvhn<'a>(ir1: &'a Ir1Module, name: &str) -> &'a [Ir1Op] {
+        ir1.ops
+            .iter()
+            .find_map(|op| match op {
+                Ir1Op::DeclareFunction {
+                    name: function_name,
+                    body_ops,
+                    ..
+                } if function_name == name => Some(body_ops.as_slice()),
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("missing IR1 deferred body for {name}"))
+    }
+
+    fn deferred_ir3_body_bd_6pvhn<'a>(module: &'a Ir3Module, name: &str) -> &'a [Ir3Instruction] {
+        let start = module
+            .function_table
+            .iter()
+            .find(|desc| desc.name.as_deref() == Some(name))
+            .unwrap_or_else(|| panic!("missing IR3 deferred body for {name}"))
+            .entry as usize;
+        let end = module
+            .function_table
+            .iter()
+            .map(|desc| desc.entry as usize)
+            .filter(|entry| *entry > start)
+            .min()
+            .unwrap_or(module.instructions.len());
+        &module.instructions[start..end]
+    }
+
+    fn malformed_deferred_ir2_bd_6pvhn(body_ops: Vec<Ir1Op>) -> Ir2Module {
+        let mut ir1 = Ir1Module::new(
+            ContentHash::compute(b"malformed-deferred-ir0"),
+            "bd_6pvhn_malformed.js",
+        );
+        ir1.ops.push(Ir1Op::DeclareFunction {
+            name: "outer".to_string(),
+            binding_id: 0,
+            param_names: Vec::new(),
+            body_ops,
+            free_vars: Vec::new(),
+            free_var_ids: Vec::new(),
+            free_var_outer_ids: Vec::new(),
+            local_lexical_bindings: None,
+            is_generator: false,
+            rest_param_index: None,
+        });
+        lower_ir1_to_ir2(&ir1)
+            .expect("hand-built deferred IR1 should reach IR2 validation")
+            .module
+    }
+
     #[test]
     fn lower_ir0_to_ir1_emits_witness_and_scope() {
         let ir0 = script_ir0();
@@ -7134,6 +12774,102 @@ mod tests {
                 .iter()
                 .all(|check| check.passed)
         );
+    }
+
+    #[test]
+    fn unbound_symbol_global_materializes_first_class_factory_bd_n8eta_4_3() {
+        let ir1 = lower_source_to_ir1_bd_n8eta_4_3(
+            "const factory = Symbol; const value = factory('description'); value;",
+        );
+
+        assert_eq!(
+            host_calls_bd_n8eta_4_3(&ir1.ops),
+            vec![("builtin:SymbolFunction", 0)]
+        );
+    }
+
+    #[test]
+    fn static_symbol_object_and_reflect_calls_lower_explicitly_bd_n8eta_4_3() {
+        let ir1 = lower_source_to_ir1_bd_n8eta_4_3(
+            "Symbol.for('first');\
+             Symbol.keyFor(Symbol.for('second'));\
+             Object.entries({});\
+             Object.assign({}, {});\
+             Object.getOwnPropertyNames({});\
+             Object.getOwnPropertySymbols({});\
+             Reflect.ownKeys({});",
+        );
+
+        assert_eq!(
+            host_calls_bd_n8eta_4_3(&ir1.ops),
+            vec![
+                ("builtin:SymbolFor", 1),
+                ("builtin:SymbolFor", 1),
+                ("builtin:SymbolKeyFor", 1),
+                ("builtin:ObjectEntries", 1),
+                ("builtin:ObjectAssign", 2),
+                ("builtin:ObjectGetOwnPropertyNames", 1),
+                ("builtin:ObjectGetOwnPropertySymbols", 1),
+                ("builtin:ReflectOwnKeys", 1),
+            ]
+        );
+    }
+
+    #[test]
+    fn well_known_symbol_member_reads_lower_explicitly_bd_n8eta_4_3() {
+        let ir1 = lower_source_to_ir1_bd_n8eta_4_3(
+            "Symbol.iterator;\
+             Symbol['toPrimitive'];\
+             Symbol.hasInstance;\
+             Symbol['toStringTag'];\
+             Symbol.species;\
+             Symbol['isConcatSpreadable'];\
+             Symbol.unscopables;\
+             Symbol['asyncIterator'];\
+             Symbol.match;\
+             Symbol['matchAll'];\
+             Symbol.replace;\
+             Symbol['search'];\
+             Symbol.split;",
+        );
+
+        assert_eq!(
+            host_calls_bd_n8eta_4_3(&ir1.ops),
+            vec![
+                ("builtin:SymbolIterator", 0),
+                ("builtin:SymbolToPrimitive", 0),
+                ("builtin:SymbolHasInstance", 0),
+                ("builtin:SymbolToStringTag", 0),
+                ("builtin:SymbolSpecies", 0),
+                ("builtin:SymbolIsConcatSpreadable", 0),
+                ("builtin:SymbolUnscopables", 0),
+                ("builtin:SymbolAsyncIterator", 0),
+                ("builtin:SymbolMatch", 0),
+                ("builtin:SymbolMatchAll", 0),
+                ("builtin:SymbolReplace", 0),
+                ("builtin:SymbolSearch", 0),
+                ("builtin:SymbolSplit", 0),
+            ]
+        );
+    }
+
+    #[test]
+    fn captured_lexical_globals_shadow_symbol_object_and_reflect_lowering_bd_n8eta_4_3() {
+        let ir1 = lower_source_to_ir1_bd_n8eta_4_3(
+            "const Symbol = { for: 1, iterator: 2 };\
+             const Object = { entries: 3, getOwnPropertySymbols: 4 };\
+             const Reflect = { ownKeys: 5 };\
+             function read() {\
+                 Symbol.for('value');\
+                 Object.entries({});\
+                 Object.getOwnPropertySymbols({});\
+                 Reflect.ownKeys({});\
+                 return Symbol.iterator;\
+             }\
+             read();",
+        );
+
+        assert!(host_calls_bd_n8eta_4_3(&ir1.ops).is_empty());
     }
 
     #[test]
@@ -7261,9 +12997,15 @@ mod tests {
             .expect("IR2->IR3 should resolve conditional control-flow")
             .module;
 
+        // The condition value (`LoadBool false`) lands in register 1, not 0:
+        // module-level binding/temporary allocation starts at register 1 because
+        // r0 is reserved for the script completion value (bd-fqlfw.2.11.1). The
+        // jump TARGETS (instruction indices 3 and 5) are unaffected by register
+        // numbering. (bd-7duxc: this assertion's `cond: 0` was stale after the
+        // register-0 reservation landed.)
         assert!(matches!(
             ir3.instructions.get(1),
-            Some(Ir3Instruction::JumpIf { cond: 0, target: 3 })
+            Some(Ir3Instruction::JumpIf { cond: 1, target: 3 })
         ));
         assert!(matches!(
             ir3.instructions.get(2),
@@ -7298,6 +13040,53 @@ mod tests {
             err,
             LoweringPipelineError::InvariantViolation {
                 detail: "lowered control-flow references missing label",
+            }
+        );
+    }
+
+    #[test]
+    fn lower_ir2_to_ir3_call_fails_closed_when_callee_missing() {
+        // A `Call` needs `arg_count + 1` stack slots (the args plus the callee).
+        // With an empty value stack, even `arg_count == 0` must fail closed on
+        // the absent callee rather than silently defaulting it to register 0.
+        let mut ir2 = Ir2Module::new(ContentHash::compute(b"call-underflow"), "call_underflow.js");
+        ir2.ops.push(Ir2Op {
+            inner: Ir1Op::Call { arg_count: 0 },
+            effect: EffectBoundary::Pure,
+            required_capability: None,
+            flow: None,
+        });
+
+        let err = lower_ir2_to_ir3(&ir2).expect_err("missing callee should fail closed");
+        assert_eq!(
+            err,
+            LoweringPipelineError::InvariantViolation {
+                detail: "Value stack underflow in Call",
+            }
+        );
+    }
+
+    #[test]
+    fn lower_ir2_to_ir3_call_method_fails_closed_on_underflow() {
+        // A `CallMethod` needs `arg_count + 2` stack slots (the args plus the
+        // receiver and the callee). An empty stack must fail closed instead of
+        // popping defaulted register-0 values for the receiver and callee.
+        let mut ir2 = Ir2Module::new(
+            ContentHash::compute(b"call-method-underflow"),
+            "call_method_underflow.js",
+        );
+        ir2.ops.push(Ir2Op {
+            inner: Ir1Op::CallMethod { arg_count: 0 },
+            effect: EffectBoundary::Pure,
+            required_capability: None,
+            flow: None,
+        });
+
+        let err = lower_ir2_to_ir3(&ir2).expect_err("missing receiver/callee should fail closed");
+        assert_eq!(
+            err,
+            LoweringPipelineError::InvariantViolation {
+                detail: "Value stack underflow in CallMethod",
             }
         );
     }
@@ -7366,7 +13155,7 @@ mod tests {
     fn dynamic_hostcall_paths_insert_runtime_ifc_guard() {
         let mut ir1 = Ir1Module::new(ContentHash::compute(b"flow-ir0"), "dynamic_flow.js");
         ir1.ops.push(Ir1Op::LoadLiteral {
-            value: Ir1Literal::String("secret_token".to_string()),
+            value: Ir1Literal::String("secret_token".into()),
         });
         ir1.ops.push(Ir1Op::HostCall {
             capability: "hostcall.invoke".to_string(),
@@ -7430,10 +13219,190 @@ mod tests {
     }
 
     #[test]
+    fn nested_dynamic_hostcall_is_guarded_and_accounted_for_in_ir2() {
+        let mut ir1 = Ir1Module::new(ContentHash::compute(b"nested-flow-ir0"), "nested_flow.js");
+        ir1.ops.push(Ir1Op::DeclareFunction {
+            name: "nestedFlow".to_string(),
+            binding_id: 0,
+            param_names: Vec::new(),
+            body_ops: vec![
+                Ir1Op::LoadLiteral {
+                    value: Ir1Literal::String("secret_token".into()),
+                },
+                Ir1Op::HostCall {
+                    capability: "hostcall.invoke".to_string(),
+                    arg_count: 1,
+                },
+                Ir1Op::Pop,
+                Ir1Op::Return,
+            ],
+            free_vars: Vec::new(),
+            free_var_ids: Vec::new(),
+            free_var_outer_ids: Vec::new(),
+            local_lexical_bindings: None,
+            is_generator: false,
+            rest_param_index: None,
+        });
+        ir1.ops.push(Ir1Op::Pop);
+        ir1.ops.push(Ir1Op::Return);
+
+        let ir2 = lower_ir1_to_ir2(&ir1)
+            .expect("nested dynamic hostcall should lower to IR2")
+            .module;
+        assert!(
+            ir2.required_capabilities
+                .iter()
+                .any(|capability| capability.0 == "hostcall.invoke")
+        );
+        let context = LoweringContext::new("nested-trace", "nested-decision", "nested-policy");
+        let proof = build_ir2_flow_proof_artifact(&ir2, &context)
+            .expect("nested dynamic flow should produce a proof artifact");
+        assert!(proof.runtime_checkpoints.iter().any(|entry| {
+            entry.op_index == 0
+                && entry.capability.as_deref() == Some("hostcall.invoke")
+                && entry.reason == "dynamic_capability"
+        }));
+
+        let ir3 = lower_ir2_to_ir3(&ir2)
+            .expect("nested dynamic hostcall should lower to IR3")
+            .module;
+        let guard_index = ir3
+            .instructions
+            .iter()
+            .position(|instruction| {
+                matches!(
+                    instruction,
+                    Ir3Instruction::HostCall { capability, .. }
+                        if capability.0 == IFC_RUNTIME_GUARD_CAPABILITY
+                )
+            })
+            .expect("nested dynamic hostcall must have an IFC guard");
+        let invoke_index = ir3
+            .instructions
+            .iter()
+            .position(|instruction| {
+                matches!(
+                    instruction,
+                    Ir3Instruction::HostCall { capability, .. }
+                        if capability.0 == "hostcall.invoke"
+                )
+            })
+            .expect("nested dynamic hostcall must be emitted");
+        assert!(guard_index < invoke_index);
+    }
+
+    #[test]
+    fn nested_declassification_hostcall_uses_inferred_function_flow_for_guard() {
+        let mut ir1 = Ir1Module::new(
+            ContentHash::compute(b"nested-declass-flow-ir0"),
+            "nested_declass_flow.js",
+        );
+        ir1.ops.push(Ir1Op::DeclareFunction {
+            name: "nestedDeclassFlow".to_string(),
+            binding_id: 0,
+            param_names: Vec::new(),
+            body_ops: vec![
+                Ir1Op::LoadLiteral {
+                    value: Ir1Literal::String("secret_token".into()),
+                },
+                Ir1Op::HostCall {
+                    capability: "declassify.audit".to_string(),
+                    arg_count: 1,
+                },
+                Ir1Op::Pop,
+                Ir1Op::Return,
+            ],
+            free_vars: Vec::new(),
+            free_var_ids: Vec::new(),
+            free_var_outer_ids: Vec::new(),
+            local_lexical_bindings: None,
+            is_generator: false,
+            rest_param_index: None,
+        });
+        ir1.ops.push(Ir1Op::Pop);
+        ir1.ops.push(Ir1Op::Return);
+
+        let ir2 = lower_ir1_to_ir2(&ir1)
+            .expect("nested declassification hostcall should lower to IR2")
+            .module;
+        let context = LoweringContext::new(
+            "nested-declass-trace",
+            "nested-declass-decision",
+            "nested-declass-policy",
+        );
+        let proof = build_ir2_flow_proof_artifact(&ir2, &context)
+            .expect("nested declassification should produce an obligation");
+        assert!(proof.required_declassifications.iter().any(|entry| {
+            entry.op_index == 0 && entry.capability.as_deref() == Some("declassify.audit")
+        }));
+
+        let ir3 = lower_ir2_to_ir3(&ir2)
+            .expect("nested declassification hostcall should lower to IR3")
+            .module;
+        let guard_index = ir3
+            .instructions
+            .iter()
+            .position(|instruction| {
+                matches!(
+                    instruction,
+                    Ir3Instruction::HostCall { capability, .. }
+                        if capability.0 == IFC_RUNTIME_GUARD_CAPABILITY
+                )
+            })
+            .expect("nested declassification hostcall must have an IFC guard");
+        let declassify_index = ir3
+            .instructions
+            .iter()
+            .position(|instruction| {
+                matches!(
+                    instruction,
+                    Ir3Instruction::HostCall { capability, .. }
+                        if capability.0 == "declassify.audit"
+                )
+            })
+            .expect("nested declassification hostcall must be emitted");
+        assert!(guard_index < declassify_index);
+    }
+
+    #[test]
+    fn mismatched_function_capture_metadata_fails_closed() {
+        let mut ir2 = Ir2Module::new(
+            ContentHash::compute(b"mismatched-capture-metadata"),
+            "mismatched_capture.js",
+        );
+        ir2.ops.push(Ir2Op {
+            inner: Ir1Op::CreateFunction {
+                name: Some("badCapture".to_string()),
+                param_names: Vec::new(),
+                body_ops: vec![Ir1Op::Return],
+                free_vars: vec!["captured".to_string()],
+                free_var_ids: Vec::new(),
+                free_var_outer_ids: vec![0],
+                local_lexical_bindings: None,
+                is_generator: false,
+                is_arrow: false,
+                rest_param_index: None,
+            },
+            effect: EffectBoundary::Pure,
+            required_capability: None,
+            flow: None,
+        });
+
+        let error = lower_ir2_to_ir3(&ir2)
+            .expect_err("parallel capture vectors with different lengths must fail closed");
+        assert_eq!(
+            error,
+            LoweringPipelineError::InvariantViolation {
+                detail: "Function capture metadata lengths differ",
+            }
+        );
+    }
+
+    #[test]
     fn statically_proven_hostcall_skips_runtime_ifc_guard() {
         let mut ir1 = Ir1Module::new(ContentHash::compute(b"flow-ir0"), "static_flow.js");
         ir1.ops.push(Ir1Op::LoadLiteral {
-            value: Ir1Literal::String("hostcall<\"fs.read\">".to_string()),
+            value: Ir1Literal::String("hostcall<\"fs.read\">".into()),
         });
         ir1.ops.push(Ir1Op::Return);
 
@@ -7468,7 +13437,7 @@ mod tests {
     fn ir2_flow_proof_artifact_records_static_proof() {
         let mut ir1 = Ir1Module::new(ContentHash::compute(b"flow-ir0"), "static_flow.js");
         ir1.ops.push(Ir1Op::LoadLiteral {
-            value: Ir1Literal::String("hostcall<\"fs.read\">".to_string()),
+            value: Ir1Literal::String("hostcall<\"fs.read\">".into()),
         });
         ir1.ops.push(Ir1Op::Return);
 
@@ -7496,7 +13465,7 @@ mod tests {
     fn ir2_flow_proof_artifact_records_dynamic_runtime_checkpoint() {
         let mut ir1 = Ir1Module::new(ContentHash::compute(b"flow-ir0"), "dynamic_flow.js");
         ir1.ops.push(Ir1Op::LoadLiteral {
-            value: Ir1Literal::String("secret_token".to_string()),
+            value: Ir1Literal::String("secret_token".into()),
         });
         ir1.ops.push(Ir1Op::HostCall {
             capability: "hostcall.invoke".to_string(),
@@ -8026,7 +13995,7 @@ mod tests {
     #[test]
     fn classify_import_module() {
         let (effect, cap, flow) = classify_ir1_op(&Ir1Op::ImportModule {
-            specifier: "mod".to_string(),
+            specifier: "mod".into(),
         });
         assert_eq!(effect, EffectBoundary::ReadEffect);
         assert!(cap.is_some());
@@ -8053,7 +14022,7 @@ mod tests {
     #[test]
     fn classify_load_literal_string_hostcall() {
         let (effect, cap, _flow) = classify_ir1_op(&Ir1Op::LoadLiteral {
-            value: Ir1Literal::String("hostcall<\"fs.read\">".to_string()),
+            value: Ir1Literal::String("hostcall<\"fs.read\">".into()),
         });
         assert_eq!(effect, EffectBoundary::HostcallEffect);
         assert!(cap.is_some());
@@ -8063,7 +14032,7 @@ mod tests {
     #[test]
     fn classify_load_literal_string_plain() {
         let (effect, cap, flow) = classify_ir1_op(&Ir1Op::LoadLiteral {
-            value: Ir1Literal::String("hello".to_string()),
+            value: Ir1Literal::String("hello".into()),
         });
         assert_eq!(effect, EffectBoundary::Pure);
         assert!(cap.is_none());
@@ -8174,7 +14143,7 @@ mod tests {
         let mut instructions = Vec::new();
         let mut pool = Vec::new();
         lower_literal_to_ir3(
-            &Ir1Literal::String("hello".to_string()),
+            &Ir1Literal::String("hello".into()),
             0,
             &mut instructions,
             &mut pool,
@@ -8344,7 +14313,7 @@ mod tests {
                 clause: ImportClause::Default {
                     local: "_".to_string(),
                 },
-                source: "lodash".to_string(),
+                source: "lodash".into(),
                 binding: Some("_".to_string()),
                 span: span(),
             })],
@@ -8360,6 +14329,50 @@ mod tests {
             .any(|op| matches!(op, Ir1Op::ImportModule { specifier } if specifier == "lodash"));
         assert!(has_import);
         assert_eq!(result.module.scopes[0].kind, ScopeKind::Module);
+    }
+
+    #[test]
+    fn lowering_keeps_import_and_reexport_exact_sources_distinct_bd_lfq44() {
+        let tree = CanonicalEs2020Parser
+            .parse(
+                r#"import "\uD800"; export {} from "\uDC00""#,
+                ParseGoal::Module,
+            )
+            .expect("exact module sources should parse");
+        let ir0 = Ir0Module::from_syntax_tree(tree, "exact_module_sources.mjs");
+        let ir1 = lower_ir0_to_ir1(&ir0)
+            .expect("exact module sources should lower to IR1")
+            .module;
+        let specifiers: Vec<&JsString> = ir1
+            .ops
+            .iter()
+            .filter_map(|op| match op {
+                Ir1Op::ImportModule { specifier } => Some(specifier),
+                _ => None,
+            })
+            .collect();
+
+        assert_eq!(specifiers.len(), 2);
+        assert_eq!(specifiers[0].code_units_vec(), vec![0xD800]);
+        assert_eq!(specifiers[1].code_units_vec(), vec![0xDC00]);
+        assert_ne!(specifiers[0], specifiers[1]);
+
+        let ir2 = lower_ir1_to_ir2(&ir1)
+            .expect("exact module sources should lower to IR2")
+            .module;
+        let ir3 = lower_ir2_to_ir3(&ir2)
+            .expect("exact module sources should lower to IR3")
+            .module;
+        assert!(
+            ir3.constant_pool
+                .iter()
+                .any(|value| value.code_units_vec() == vec![0xD800])
+        );
+        assert!(
+            ir3.constant_pool
+                .iter()
+                .any(|value| value.code_units_vec() == vec![0xDC00])
+        );
     }
 
     #[test]
@@ -8409,7 +14422,7 @@ mod tests {
                     span: span(),
                 }),
                 Statement::Export(ExportDeclaration {
-                    kind: ExportKind::NamedClause("{ foo as published }".to_string()),
+                    kind: ExportKind::NamedClause("{ foo as published }".into()),
                     span: span(),
                 }),
             ],
@@ -8431,7 +14444,7 @@ mod tests {
         let tree = SyntaxTree {
             goal: ParseGoal::Module,
             body: vec![Statement::Export(ExportDeclaration {
-                kind: ExportKind::NamedClause("{ foo as bar } from \"./dep.js\"".to_string()),
+                kind: ExportKind::NamedClause("{ foo as bar } from \"./dep.js\"".into()),
                 span: span(),
             })],
             span: span(),
@@ -8453,11 +14466,29 @@ mod tests {
     }
 
     #[test]
+    fn lower_reexport_uses_cooked_module_source_bd_vltnh() {
+        let tree = CanonicalEs2020Parser
+            .parse(
+                r#"export { foo as bar } from ".\u002Fdep.js""#,
+                ParseGoal::Module,
+            )
+            .expect("escaped re-export source should parse");
+        let ir0 = Ir0Module::from_syntax_tree(tree, "named_reexport_escape.mjs");
+        let result = lower_ir0_to_ir1(&ir0).expect("escaped re-export should lower");
+
+        assert!(
+            result.module.ops.iter().any(
+                |op| matches!(op, Ir1Op::ImportModule { specifier } if specifier == "./dep.js")
+            )
+        );
+    }
+
+    #[test]
     fn lower_module_with_named_export_unknown_binding() {
         let tree = SyntaxTree {
             goal: ParseGoal::Module,
             body: vec![Statement::Export(ExportDeclaration {
-                kind: ExportKind::NamedClause("{ bar }".to_string()),
+                kind: ExportKind::NamedClause("{ bar }".into()),
                 span: span(),
             })],
             span: span(),
@@ -8479,7 +14510,7 @@ mod tests {
             goal: ParseGoal::Module,
             body: vec![
                 Statement::Export(ExportDeclaration {
-                    kind: ExportKind::NamedClause("{ foo }".to_string()),
+                    kind: ExportKind::NamedClause("{ foo }".into()),
                     span: span(),
                 }),
                 Statement::VariableDeclaration(VariableDeclaration {
@@ -8777,7 +14808,7 @@ mod tests {
                     clause: ImportClause::Default {
                         local: "_".to_string(),
                     },
-                    source: "lodash".to_string(),
+                    source: "lodash".into(),
                     binding: Some("_".to_string()),
                     span: span(),
                 }),
@@ -8814,7 +14845,7 @@ mod tests {
         let tree = SyntaxTree {
             goal: ParseGoal::Script,
             body: vec![Statement::Expression(ExpressionStatement {
-                expression: Expression::StringLiteral("hello world".to_string()),
+                expression: Expression::StringLiteral("hello world".into()),
                 span: span(),
             })],
             span: span(),
@@ -8827,8 +14858,30 @@ mod tests {
             output
                 .ir3
                 .constant_pool
-                .contains(&"hello world".to_string())
+                .contains(&JsString::from("hello world"))
         );
+    }
+
+    #[test]
+    fn quoted_surrogate_literals_reach_runtime_as_exact_units_bd_vltnh() {
+        for (source, expected_units) in [
+            (r#""\uD800";"#, vec![0xD800]),
+            (r#""\uDC00";"#, vec![0xDC00]),
+            (r#""a\uD800b";"#, vec![0x0061, 0xD800, 0x0062]),
+            (r#""\uD83D\uDE00";"#, vec![0xD83D, 0xDE00]),
+        ] {
+            let expected = JsString::from_code_units(&expected_units);
+            let (ir1, ir3, value) = lower_and_execute_deferred_source_bd_6pvhn(source);
+
+            assert!(ir1.ops.iter().any(|op| matches!(
+                op,
+                Ir1Op::LoadLiteral {
+                    value: Ir1Literal::String(literal)
+                } if literal == &expected
+            )));
+            assert!(ir3.constant_pool.contains(&expected));
+            assert_eq!(value, Value::Str(expected), "source {source:?}");
+        }
     }
 
     // -- scope_binding_ids_are_unique --
@@ -8893,7 +14946,7 @@ mod tests {
         let labels = BTreeMap::new();
         let secret = infer_data_label_for_op(
             &Ir1Op::LoadLiteral {
-                value: Ir1Literal::String("my_secret_key".to_string()),
+                value: Ir1Literal::String("my_secret_key".into()),
             },
             &labels,
             Label::Public,
@@ -8902,7 +14955,7 @@ mod tests {
 
         let token = infer_data_label_for_op(
             &Ir1Op::LoadLiteral {
-                value: Ir1Literal::String("AUTH_TOKEN".to_string()),
+                value: Ir1Literal::String("AUTH_TOKEN".into()),
             },
             &labels,
             Label::Public,
@@ -8911,7 +14964,7 @@ mod tests {
 
         let api_key = infer_data_label_for_op(
             &Ir1Op::LoadLiteral {
-                value: Ir1Literal::String("my_api_key_here".to_string()),
+                value: Ir1Literal::String("my_api_key_here".into()),
             },
             &labels,
             Label::Public,
@@ -8920,7 +14973,7 @@ mod tests {
 
         let password = infer_data_label_for_op(
             &Ir1Op::LoadLiteral {
-                value: Ir1Literal::String("user_password".to_string()),
+                value: Ir1Literal::String("user_password".into()),
             },
             &labels,
             Label::Public,
@@ -8929,7 +14982,7 @@ mod tests {
 
         let credential = infer_data_label_for_op(
             &Ir1Op::LoadLiteral {
-                value: Ir1Literal::String("credential_store".to_string()),
+                value: Ir1Literal::String("credential_store".into()),
             },
             &labels,
             Label::Public,
@@ -8942,7 +14995,7 @@ mod tests {
         let labels = BTreeMap::new();
         let public = infer_data_label_for_op(
             &Ir1Op::LoadLiteral {
-                value: Ir1Literal::String("hello world".to_string()),
+                value: Ir1Literal::String("hello world".into()),
             },
             &labels,
             Label::Public,
@@ -8991,7 +15044,7 @@ mod tests {
         let labels = BTreeMap::new();
         let label = infer_data_label_for_op(
             &Ir1Op::ImportModule {
-                specifier: "lodash".to_string(),
+                specifier: "lodash".into(),
             },
             &labels,
             Label::Public,
@@ -9352,6 +15405,99 @@ mod tests {
     #[test]
     fn named_class_expression_lowers() {
         assert_class_expression_lowers(basic_class_expression(Some("NamedClass")));
+    }
+
+    #[test]
+    fn named_class_expression_uses_private_constructor_and_method_captures_bd_va13y() {
+        let tree = CanonicalEs2020Parser
+            .parse(
+                "let C = class Inner { \
+                     constructor(){ this.ctor = Inner; } \
+                     method(){ return Inner; } \
+                 };",
+                ParseGoal::Script,
+            )
+            .expect("bd-va13y named class source should parse");
+        let module = lower_ir0_to_ir1(&Ir0Module::from_syntax_tree(tree, "bd_va13y_named.js"))
+            .expect("bd-va13y named class source should lower")
+            .module;
+        let capture_names: Vec<&str> = module
+            .ops
+            .iter()
+            .filter_map(|op| match op {
+                Ir1Op::CreateFunction { free_vars, .. } => Some(free_vars.as_slice()),
+                _ => None,
+            })
+            .flatten()
+            .map(String::as_str)
+            .collect();
+
+        assert!(
+            capture_names
+                .iter()
+                .any(|name| { name.starts_with(CLASS_EXPRESSION_CONSTRUCTOR_SELF_CAPTURE_PREFIX) })
+        );
+        assert!(
+            capture_names
+                .iter()
+                .any(|name| name.starts_with(CLASS_EXPRESSION_METHOD_SELF_CAPTURE_PREFIX))
+        );
+        assert!(!capture_names.contains(&"Inner"));
+        assert!(
+            module
+                .scopes
+                .iter()
+                .flat_map(|scope| &scope.bindings)
+                .all(|binding| binding.name != "Inner"),
+            "class self name must not become an enclosing lexical binding"
+        );
+    }
+
+    #[test]
+    fn anonymous_class_unresolved_name_is_not_promoted_to_outer_capture_bd_va13y() {
+        let tree = CanonicalEs2020Parser
+            .parse(
+                "let C = class { method(){ try { anonymous; } catch (error) {} } };",
+                ParseGoal::Script,
+            )
+            .expect("bd-va13y anonymous class source should parse");
+        let module = lower_ir0_to_ir1(&Ir0Module::from_syntax_tree(tree, "bd_va13y_anonymous.js"))
+            .expect("bd-va13y anonymous class source should lower")
+            .module;
+
+        assert!(
+            module
+                .scopes
+                .iter()
+                .flat_map(|scope| &scope.bindings)
+                .all(|binding| binding.name != "anonymous")
+        );
+        let functions: Vec<(&[String], &[Ir1Op])> = module
+            .ops
+            .iter()
+            .filter_map(|op| match op {
+                Ir1Op::CreateFunction {
+                    free_vars,
+                    body_ops,
+                    ..
+                } => Some((free_vars.as_slice(), body_ops.as_slice())),
+                _ => None,
+            })
+            .collect();
+        assert!(
+            functions
+                .iter()
+                .all(|(free_vars, _)| { !free_vars.iter().any(|name| name == "anonymous") })
+        );
+        assert!(functions.iter().any(|(_, body_ops)| {
+            body_ops.iter().any(|op| {
+                matches!(
+                    op,
+                    Ir1Op::HostCall { capability, .. }
+                        if capability == "builtin:ReferenceError"
+                )
+            })
+        }));
     }
 
     #[test]
@@ -9767,6 +15913,232 @@ mod tests {
     }
 
     #[test]
+    fn lower_object_method_shorthand_preserves_computed_key_order_bd_vjmy7() {
+        let tree = CanonicalEs2020Parser
+            .parse(
+                "({ next() { return 1; }, [Symbol.iterator]() { return this; } })",
+                ParseGoal::Script,
+            )
+            .expect("object method shorthand should parse");
+        let result = lower_ir0_to_ir1(&Ir0Module::from_syntax_tree(
+            tree,
+            "bd_vjmy7_object_methods.js",
+        ))
+        .expect("object method shorthand should lower");
+        let ops = &result.module.ops;
+        let create_indices = ops
+            .iter()
+            .enumerate()
+            .filter_map(|(index, op)| matches!(op, Ir1Op::CreateFunction { .. }).then_some(index))
+            .collect::<Vec<_>>();
+        assert_eq!(create_indices.len(), 2);
+        let symbol_index = ops
+            .iter()
+            .position(|op| {
+                matches!(
+                    op,
+                    Ir1Op::HostCall {
+                        capability,
+                        arg_count: 0,
+                    } if capability == "builtin:SymbolIterator"
+                )
+            })
+            .expect("computed Symbol.iterator key must materialize exactly");
+        let object_index = ops
+            .iter()
+            .position(|op| matches!(op, Ir1Op::NewObject { count: 2 }))
+            .expect("both method properties must build one two-entry object");
+        assert!(create_indices[0] < symbol_index);
+        assert!(symbol_index < create_indices[1]);
+        assert!(create_indices[1] < object_index);
+    }
+
+    #[test]
+    fn static_object_literal_keys_fail_closed_without_canonical_ast_bd_y74cd() {
+        for with_spread in [false, true] {
+            let mut properties = vec![ObjectProperty {
+                key: Expression::BooleanLiteral(true),
+                value: Expression::NumericLiteral(1),
+                computed: false,
+                shorthand: false,
+            }];
+            if with_spread {
+                let spread =
+                    Expression::SpreadElement(Box::new(Expression::Identifier("source".into())));
+                properties.push(ObjectProperty {
+                    key: spread.clone(),
+                    value: spread,
+                    computed: false,
+                    shorthand: true,
+                });
+            }
+
+            let error = lower_ir0_to_ir1(&expr_ir0(Expression::ObjectLiteral(properties)))
+                .expect_err("noncanonical static keys must not use debug formatting");
+            let LoweringPipelineError::UnsupportedSyntax(diagnostic) = error else {
+                panic!("expected unsupported static object-key diagnostic");
+            };
+            assert_eq!(
+                diagnostic.diagnostic_code,
+                "FE-LOWER-UNSUPPORTED-STATIC-OBJECT-KEY-0001"
+            );
+            assert_eq!(
+                diagnostic.site_id,
+                "core.object_literal_static_property_key"
+            );
+        }
+    }
+
+    #[test]
+    fn exact_property_keys_preserve_static_and_computed_lowering_bd_b12xs_6() {
+        let expected = JsString::from_code_units(&[0xD800]);
+        let exact_key = || Expression::StringLiteral(JsString::from_code_units(&[0xD800]));
+
+        let static_member = lower_ir0_to_ir1(&expr_ir0(Expression::Member {
+            object: Box::new(Expression::Identifier("object".into())),
+            property: Box::new(exact_key()),
+            computed: false,
+        }))
+        .expect("exact non-computed member key should lower");
+        assert!(static_member.module.ops.iter().any(|op| matches!(
+            op,
+            Ir1Op::GetProperty {
+                key: Ir1PropertyKey::Static(key)
+            } if key == &expected
+        )));
+        let static_member_ir3 = lower_ir0_to_ir3(
+            &expr_ir0(Expression::Member {
+                object: Box::new(Expression::Identifier("object".into())),
+                property: Box::new(exact_key()),
+                computed: false,
+            }),
+            &LoweringContext::new(
+                "trace-bd-b12xs-6-static-key",
+                "decision-bd-b12xs-6-static-key",
+                "policy-bd-b12xs-6-static-key",
+            ),
+        )
+        .expect("exact static member key should lower through IR3")
+        .ir3;
+        assert!(static_member_ir3.constant_pool.contains(&expected));
+
+        let computed_member = lower_ir0_to_ir1(&expr_ir0(Expression::Member {
+            object: Box::new(Expression::Identifier("object".into())),
+            property: Box::new(exact_key()),
+            computed: true,
+        }))
+        .expect("exact computed member key should lower dynamically");
+        assert!(computed_member.module.ops.iter().any(|op| matches!(
+            op,
+            Ir1Op::LoadLiteral {
+                value: Ir1Literal::String(key)
+            } if key == &expected
+        )));
+        assert!(computed_member.module.ops.iter().any(|op| matches!(
+            op,
+            Ir1Op::GetProperty {
+                key: Ir1PropertyKey::Dynamic
+            }
+        )));
+
+        let computed_object =
+            lower_ir0_to_ir1(&expr_ir0(Expression::ObjectLiteral(vec![ObjectProperty {
+                key: exact_key(),
+                value: Expression::NumericLiteral(1),
+                computed: true,
+                shorthand: false,
+            }])))
+            .expect("exact computed object key should lower");
+        assert!(computed_object.module.ops.iter().any(|op| matches!(
+            op,
+            Ir1Op::LoadLiteral {
+                value: Ir1Literal::String(key)
+            } if key == &expected
+        )));
+
+        let static_object =
+            lower_ir0_to_ir1(&expr_ir0(Expression::ObjectLiteral(vec![ObjectProperty {
+                key: exact_key(),
+                value: Expression::NumericLiteral(1),
+                computed: false,
+                shorthand: false,
+            }])))
+            .expect("exact static object key should lower");
+        assert!(static_object.module.ops.iter().any(|op| matches!(
+            op,
+            Ir1Op::LoadLiteral {
+                value: Ir1Literal::String(key)
+            } if key == &expected
+        )));
+    }
+
+    #[test]
+    fn class_property_keys_preserve_exact_units_and_accessor_prefixes_bd_b12xs_6() {
+        let tree = CanonicalEs2020Parser
+            .parse(
+                r#"class Exact { "\uD800"() {} get "\uD801"() {} }"#,
+                ParseGoal::Script,
+            )
+            .expect("exact class keys should parse");
+        let module = lower_ir0_to_ir1(&Ir0Module::from_syntax_tree(
+            tree,
+            "bd_b12xs_6_exact_class.js",
+        ))
+        .expect("exact class keys should lower")
+        .module;
+
+        let method_key = JsString::from_code_units(&[0xD800]);
+        let getter_key = exact_prefixed_property_key(
+            IR_ACCESSOR_GET_PREFIX,
+            &JsString::from_code_units(&[0xD801]),
+        );
+        assert!(module.ops.iter().any(|op| matches!(
+            op,
+            Ir1Op::CreateFunction {
+                name: Some(name), ..
+            } if name == "[property:D800]"
+        )));
+        assert!(module.ops.iter().any(|op| matches!(
+            op,
+            Ir1Op::SetProperty {
+                key: Ir1PropertyKey::Static(key)
+            } if key == &method_key
+        )));
+        assert!(module.ops.iter().any(|op| matches!(
+            op,
+            Ir1Op::SetProperty {
+                key: Ir1PropertyKey::Static(key)
+            } if key == &getter_key
+        )));
+        assert_ne!(
+            property_key_function_display_name(&method_key),
+            property_key_function_display_name(&JsString::from_code_units(&[0xD801]))
+        );
+    }
+
+    #[test]
+    fn float_object_literal_ast_key_uses_javascript_number_spelling_bd_y74cd() {
+        for (value, expected) in [
+            (1e20f64, "100000000000000000000"),
+            (667_082_108_456_853.2, "667082108456853.2"),
+        ] {
+            let ir0 = expr_ir0(Expression::ObjectLiteral(vec![ObjectProperty {
+                key: Expression::FloatLiteral(value.to_bits()),
+                value: Expression::NumericLiteral(1),
+                computed: false,
+                shorthand: false,
+            }]));
+            let result = lower_ir0_to_ir1(&ir0).expect("canonical float property key should lower");
+            assert!(result.module.ops.iter().any(|op| matches!(
+                op,
+                Ir1Op::LoadLiteral {
+                    value: Ir1Literal::String(key)
+                } if key == expected
+            )));
+        }
+    }
+
+    #[test]
     fn lower_arrow_function_expression_body() {
         let ir0 = expr_ir0(Expression::ArrowFunction {
             params: vec![FunctionParam {
@@ -10041,6 +16413,7 @@ mod tests {
         let ir0 = stmt_ir0(vec![Statement::ForIn(ForInStatement {
             binding: BindingPattern::Identifier("k".into()),
             binding_kind: Some(VariableDeclarationKind::Let),
+            pre_loop_initializer: None,
             object: Expression::Identifier("obj".into()),
             body: Box::new(Statement::Expression(ExpressionStatement {
                 expression: Expression::Identifier("k".into()),
@@ -10059,6 +16432,95 @@ mod tests {
             ops.iter().any(|op| matches!(op, Ir1Op::ForInNext { .. })),
             "missing ForInNext"
         );
+    }
+
+    #[test]
+    fn legacy_var_for_in_initializer_precedes_rhs_and_reuses_binding_bd_1tafi() {
+        let call = |name: &str| Expression::Call {
+            callee: Box::new(Expression::Identifier(name.into())),
+            arguments: Vec::new(),
+        };
+        let statement = Statement::ForIn(ForInStatement {
+            binding: BindingPattern::Identifier("key".into()),
+            binding_kind: Some(VariableDeclarationKind::Var),
+            pre_loop_initializer: Some(call("init")),
+            object: call("rhs"),
+            body: Box::new(Statement::Expression(ExpressionStatement {
+                expression: Expression::Identifier("key".into()),
+                span: span(),
+            })),
+            span: span(),
+        });
+        assert!(path_statement_contains_usage(&statement, &|expression| {
+            matches!(expression, Expression::Call { callee, .. }
+                if callee.as_ref() == &Expression::Identifier("init".into()))
+        }));
+
+        let result = lower_ir0_to_ir1(&stmt_ir0(vec![statement]))
+            .expect("legacy var for-in initializer should lower");
+        let ops = &result.module.ops;
+        let binding_id = |name: &str| {
+            result.module.scopes[0]
+                .bindings
+                .iter()
+                .find(|binding| binding.name == name)
+                .unwrap_or_else(|| panic!("missing binding for {name}"))
+                .binding_id
+        };
+        let key_id = binding_id("key");
+        let init_id = binding_id("init");
+        let rhs_id = binding_id("rhs");
+        let position = |predicate: &dyn Fn(&Ir1Op) -> bool| {
+            ops.iter()
+                .position(predicate)
+                .expect("expected ordered IR1 operation")
+        };
+        let init_load = position(
+            &|op| matches!(op, Ir1Op::LoadBinding { binding_id } if *binding_id == init_id),
+        );
+        let rhs_load = position(
+            &|op| matches!(op, Ir1Op::LoadBinding { binding_id } if *binding_id == rhs_id),
+        );
+        let for_in_init = position(&|op| matches!(op, Ir1Op::ForInInit));
+        let for_in_next = position(&|op| matches!(op, Ir1Op::ForInNext { .. }));
+        let key_stores = ops
+            .iter()
+            .enumerate()
+            .filter_map(|(index, op)| {
+                matches!(op, Ir1Op::StoreBinding { binding_id } if *binding_id == key_id)
+                    .then_some(index)
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(key_stores.len(), 2);
+        assert!(
+            init_load < key_stores[0]
+                && key_stores[0] < rhs_load
+                && rhs_load < for_in_init
+                && for_in_init < for_in_next
+                && for_in_next < key_stores[1],
+            "expected initializer/store before RHS/enumeration and the same key binding afterward: {ops:?}"
+        );
+    }
+
+    #[test]
+    fn forged_for_in_pre_loop_initializer_fails_closed_bd_1tafi() {
+        let ir0 = stmt_ir0(vec![Statement::ForIn(ForInStatement {
+            binding: BindingPattern::Identifier("key".into()),
+            binding_kind: Some(VariableDeclarationKind::Let),
+            pre_loop_initializer: Some(Expression::NumericLiteral(1)),
+            object: Expression::ObjectLiteral(Vec::new()),
+            body: Box::new(Statement::Block(BlockStatement {
+                body: Vec::new(),
+                span: span(),
+            })),
+            span: span(),
+        })]);
+        assert!(matches!(
+            lower_ir0_to_ir1(&ir0),
+            Err(LoweringPipelineError::InvariantViolation {
+                detail: "for-in pre-loop initializer requires a var identifier binding"
+            })
+        ));
     }
 
     #[test]
@@ -10089,6 +16551,548 @@ mod tests {
                 .any(|op| matches!(op, Ir1Op::IteratorClose { .. })),
             "missing IteratorClose"
         );
+    }
+
+    #[test]
+    fn lower_for_of_head_and_body_have_distinct_close_handlers_bd_t9n3s() {
+        let ir0 = stmt_ir0(vec![Statement::ForOf(ForOfStatement {
+            binding: BindingPattern::Identifier("v".into()),
+            binding_kind: None,
+            iterable: Expression::Identifier("arr".into()),
+            body: Box::new(Statement::Block(BlockStatement {
+                body: Vec::new(),
+                span: span(),
+            })),
+            span: span(),
+        })]);
+        let ir1 = lower_ir0_to_ir1(&ir0)
+            .expect("for-of lowering should succeed")
+            .module;
+        let ops = &ir1.ops;
+        let init_pos = ops
+            .iter()
+            .position(|op| matches!(op, Ir1Op::ForOfInit))
+            .expect("missing ForOfInit");
+        let iterator_binding = match ops.get(init_pos + 1) {
+            Some(Ir1Op::StoreBinding { binding_id }) => *binding_id,
+            other => panic!("ForOfInit must retain its iterator, got {other:?}"),
+        };
+        let begin_tries = ops
+            .iter()
+            .filter_map(|op| match op {
+                Ir1Op::BeginTry {
+                    catch_label,
+                    finally_label,
+                } => Some((*catch_label, *finally_label)),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(begin_tries.len(), 2, "head and body guards");
+        assert_eq!(begin_tries[0].1, Some(begin_tries[0].0));
+        assert_eq!(begin_tries[1].0, begin_tries[0].0);
+        assert_ne!(begin_tries[1].1, Some(begin_tries[1].0));
+        assert!(ops.windows(2).any(|pair| matches!(
+            pair,
+            [
+                Ir1Op::BeginTry { .. },
+                Ir1Op::AssignOp {
+                    operator: AssignmentOperator::Assign,
+                    ..
+                }
+            ]
+        )));
+
+        let closes = ops
+            .iter()
+            .filter_map(|op| match op {
+                Ir1Op::IteratorClose { reason } => Some(*reason),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            closes,
+            vec![
+                IteratorCloseReason::Break,
+                IteratorCloseReason::Return,
+                IteratorCloseReason::Throw,
+            ]
+        );
+        assert!(ops.windows(2).any(|pair| matches!(
+            pair,
+            [
+                Ir1Op::LoadBinding { binding_id },
+                Ir1Op::IteratorClose {
+                    reason: IteratorCloseReason::Throw
+                }
+            ] if *binding_id == iterator_binding
+        )));
+        assert!(
+            ops.windows(3).any(|triple| matches!(
+                triple,
+                [
+                    Ir1Op::EnterFinally,
+                    Ir1Op::LoadBinding { binding_id },
+                    Ir1Op::IteratorClose {
+                        reason: IteratorCloseReason::Return
+                    }
+                ] if *binding_id == iterator_binding
+            )),
+            "return completion must be owned before iterator close"
+        );
+    }
+
+    #[test]
+    fn lower_for_of_return_handler_survives_ir3_without_enter_catch_bd_t9n3s() {
+        let ir0 = stmt_ir0(vec![Statement::ForOf(ForOfStatement {
+            binding: BindingPattern::Identifier("value".into()),
+            binding_kind: Some(VariableDeclarationKind::Const),
+            iterable: Expression::Identifier("values".into()),
+            body: Box::new(Statement::Return(ReturnStatement {
+                argument: Some(Expression::Identifier("value".into())),
+                span: span(),
+            })),
+            span: span(),
+        })]);
+        let ir1 = lower_ir0_to_ir1(&ir0)
+            .expect("for-of return lowering")
+            .module;
+        let ir2 = lower_ir1_to_ir2(&ir1).expect("IR1 to IR2").module;
+        let ir3 = lower_ir2_to_ir3(&ir2).expect("IR2 to IR3").module;
+        assert_eq!(
+            ir3.instructions
+                .iter()
+                .filter(|instruction| matches!(instruction, Ir3Instruction::EnterCatch { .. }))
+                .count(),
+            0,
+            "synthetic throw-close entries must retain their pending exception"
+        );
+        assert!(ir3.instructions.iter().any(|instruction| matches!(
+            instruction,
+            Ir3Instruction::IteratorClose {
+                reason: IteratorCloseReason::Return,
+                ..
+            }
+        )));
+    }
+
+    #[test]
+    fn lower_captured_const_for_of_head_as_guarded_scoped_assignment_bd_dp12f() {
+        let tree = CanonicalEs2020Parser
+            .parse(
+                "const fixed = 0; function run() { for (fixed of [1]) {} } run();",
+                ParseGoal::Script,
+            )
+            .expect("captured const for-of source should parse");
+        let ir0 = Ir0Module::from_syntax_tree(tree, "bd_dp12f.js");
+        let output = lower_ir0_to_ir3(
+            &ir0,
+            &LoweringContext::new("trace-bd-dp12f", "decision-bd-dp12f", "policy"),
+        )
+        .expect("captured const for-of source should lower");
+        let fixed = output
+            .ir1
+            .scopes
+            .iter()
+            .flat_map(|scope| &scope.bindings)
+            .find(|binding| binding.name == "fixed")
+            .expect("fixed binding metadata");
+        assert_eq!(fixed.kind, BindingKind::Const);
+        let cell_name = lexical_capture_cell_name("fixed", fixed.binding_id);
+        let cell_pool_indices = output
+            .ir3
+            .constant_pool
+            .iter()
+            .enumerate()
+            .filter_map(|(index, value)| (value == cell_name.as_str()).then_some(index as u32))
+            .collect::<BTreeSet<_>>();
+        assert!(
+            !cell_pool_indices.is_empty(),
+            "captured cell must be pooled"
+        );
+        assert!(output.ir3.instructions.iter().any(|instruction| matches!(
+            instruction,
+            Ir3Instruction::DeclareBinding {
+                name_pool_index,
+                kind: 2
+            } if cell_pool_indices.contains(name_pool_index)
+        )));
+        assert!(output.ir3.instructions.iter().any(|instruction| matches!(
+            instruction,
+            Ir3Instruction::InitBinding {
+                name_pool_index,
+                ..
+            } if cell_pool_indices.contains(name_pool_index)
+        )));
+
+        let (head_guard, throw_close_target) = output
+            .ir3
+            .instructions
+            .iter()
+            .enumerate()
+            .find_map(|(index, instruction)| match instruction {
+                Ir3Instruction::BeginTry {
+                    catch_target,
+                    finally_target: Some(finally_target),
+                } if catch_target == finally_target
+                    && matches!(
+                        output.ir3.instructions.get(index + 1),
+                        Some(Ir3Instruction::StoreScoped {
+                            name_pool_index,
+                            ..
+                        }) if cell_pool_indices.contains(name_pool_index)
+                    ) =>
+                {
+                    Some((index, *catch_target as usize))
+                }
+                _ => None,
+            })
+            .expect("loop-head StoreScoped must be inside its throw-close guard");
+        assert!(matches!(
+            output.ir3.instructions.get(head_guard + 2),
+            Some(Ir3Instruction::EndTry)
+        ));
+        assert!(matches!(
+            output.ir3.instructions.get(throw_close_target),
+            Some(Ir3Instruction::EnterFinally)
+        ));
+        assert!(matches!(
+            output.ir3.instructions.get(throw_close_target + 2),
+            Some(Ir3Instruction::IteratorClose {
+                reason: IteratorCloseReason::Throw,
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn lower_function_local_captured_const_keeps_kind_init_and_checked_store_bd_uhf1m() {
+        let tree = CanonicalEs2020Parser
+            .parse(
+                concat!(
+                    "function make() {",
+                    "  const fixed = 1;",
+                    "  function read() { return fixed; }",
+                    "  fixed = 2;",
+                    "  return read();",
+                    "}",
+                    "make();",
+                ),
+                ParseGoal::Script,
+            )
+            .expect("captured local const source should parse");
+        let ir0 = Ir0Module::from_syntax_tree(tree, "bd_uhf1m_const.js");
+        let output = lower_ir0_to_ir3(
+            &ir0,
+            &LoweringContext::new("trace-bd-uhf1m", "decision-bd-uhf1m", "policy"),
+        )
+        .expect("captured local const source should lower");
+        let (body_ops, fixed) = output
+            .ir1
+            .ops
+            .iter()
+            .find_map(|op| match op {
+                Ir1Op::DeclareFunction {
+                    name,
+                    body_ops,
+                    local_lexical_bindings,
+                    ..
+                } if name == "make" => local_lexical_bindings.as_deref().and_then(|bindings| {
+                    bindings
+                        .iter()
+                        .find(|binding| binding.name == "fixed")
+                        .map(|binding| (body_ops, binding))
+                }),
+                _ => None,
+            })
+            .expect("make must retain exact metadata for captured local fixed");
+        assert_eq!(fixed.kind, BindingKind::Const);
+        assert_eq!(
+            body_ops
+                .iter()
+                .filter(|op| matches!(
+                    op,
+                    Ir1Op::StoreBinding { binding_id } if *binding_id == fixed.binding_id
+                ))
+                .count(),
+            1,
+            "the declaration must have one initialization store"
+        );
+        assert_eq!(
+            body_ops
+                .iter()
+                .filter(|op| matches!(
+                    op,
+                    Ir1Op::AssignOp { binding_id, .. } if *binding_id == fixed.binding_id
+                ))
+                .count(),
+            1,
+            "the later assignment must remain distinguishable from initialization"
+        );
+
+        let cell_name = lexical_capture_cell_name("fixed", fixed.binding_id);
+        let cell_pool_index = u32::try_from(
+            output
+                .ir3
+                .constant_pool
+                .iter()
+                .position(|value| value == cell_name.as_str())
+                .expect("exact captured-local cell name must be pooled"),
+        )
+        .expect("constant-pool index must fit u32");
+        let make_body = deferred_ir3_body_bd_6pvhn(&output.ir3, "make");
+        let declarations = make_body
+            .iter()
+            .enumerate()
+            .filter_map(|(index, instruction)| match instruction {
+                Ir3Instruction::DeclareBinding {
+                    name_pool_index,
+                    kind,
+                } if *name_pool_index == cell_pool_index => Some((index, *kind)),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(declarations.len(), 1);
+        assert_eq!(
+            declarations[0].1, 2,
+            "captured const must retain const kind"
+        );
+        let init_indices = make_body
+            .iter()
+            .enumerate()
+            .filter_map(|(index, instruction)| {
+                matches!(
+                    instruction,
+                    Ir3Instruction::InitBinding { name_pool_index, .. }
+                        if *name_pool_index == cell_pool_index
+                )
+                .then_some(index)
+            })
+            .collect::<Vec<_>>();
+        let store_indices = make_body
+            .iter()
+            .enumerate()
+            .filter_map(|(index, instruction)| {
+                matches!(
+                    instruction,
+                    Ir3Instruction::StoreScoped { name_pool_index, .. }
+                        if *name_pool_index == cell_pool_index
+                )
+                .then_some(index)
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(init_indices.len(), 1, "declaration must initialize once");
+        assert_eq!(store_indices.len(), 1, "assignment must stay checked");
+        assert!(declarations[0].0 < init_indices[0]);
+        assert!(init_indices[0] < store_indices[0]);
+    }
+
+    #[test]
+    fn lower_captured_local_class_initializes_its_lexical_cell_bd_uhf1m() {
+        let tree = CanonicalEs2020Parser
+            .parse(
+                concat!(
+                    "function make() {",
+                    "  class Local {}",
+                    "  function read() { return Local; }",
+                    "  return read;",
+                    "}",
+                    "make();",
+                ),
+                ParseGoal::Script,
+            )
+            .expect("captured local class source should parse");
+        let ir0 = Ir0Module::from_syntax_tree(tree, "bd_uhf1m_class.js");
+        let output = lower_ir0_to_ir3(
+            &ir0,
+            &LoweringContext::new("trace-bd-uhf1m", "decision-bd-uhf1m", "policy"),
+        )
+        .expect("captured local class source should lower");
+        let local = output
+            .ir1
+            .ops
+            .iter()
+            .find_map(|op| match op {
+                Ir1Op::DeclareFunction {
+                    name,
+                    local_lexical_bindings,
+                    ..
+                } if name == "make" => local_lexical_bindings
+                    .as_deref()
+                    .and_then(|bindings| bindings.iter().find(|binding| binding.name == "Local")),
+                _ => None,
+            })
+            .expect("make must retain exact metadata for captured class Local");
+        assert_eq!(local.kind, BindingKind::Let);
+        let cell_name = lexical_capture_cell_name("Local", local.binding_id);
+        let cell_pool_index = u32::try_from(
+            output
+                .ir3
+                .constant_pool
+                .iter()
+                .position(|value| value == cell_name.as_str())
+                .expect("exact captured-class cell name must be pooled"),
+        )
+        .expect("constant-pool index must fit u32");
+        let make_body = deferred_ir3_body_bd_6pvhn(&output.ir3, "make");
+        let local_function_index = u32::try_from(
+            output
+                .ir3
+                .function_table
+                .iter()
+                .position(|descriptor| descriptor.name.as_deref() == Some("Local"))
+                .expect("captured class constructor must have a deferred descriptor"),
+        )
+        .expect("function-table index must fit u32");
+        let create_index = make_body
+            .iter()
+            .position(|instruction| {
+                matches!(
+                    instruction,
+                    Ir3Instruction::CreateClosure { function_index, .. }
+                        if *function_index == local_function_index
+                )
+            })
+            .expect("make must create the Local constructor closure");
+        assert_eq!(
+            make_body
+                .iter()
+                .filter(|instruction| matches!(
+                    instruction,
+                    Ir3Instruction::DeclareBinding {
+                        name_pool_index,
+                        kind: 1,
+                    } if *name_pool_index == cell_pool_index
+                ))
+                .count(),
+            1,
+            "captured class must retain lexical let posture"
+        );
+        let init_indices = make_body
+            .iter()
+            .enumerate()
+            .filter_map(|(index, instruction)| {
+                matches!(
+                    instruction,
+                    Ir3Instruction::InitBinding {
+                        name_pool_index,
+                        ..
+                    } if *name_pool_index == cell_pool_index
+                )
+                .then_some(index)
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            init_indices.len(),
+            1,
+            "class declaration must initialize its captured lexical cell"
+        );
+        assert!(
+            create_index < init_indices[0],
+            "class closure must be created before it initializes the lexical cell"
+        );
+        assert!(!make_body.iter().any(|instruction| matches!(
+            instruction,
+            Ir3Instruction::StoreScoped { name_pool_index, .. }
+                if *name_pool_index == cell_pool_index
+        )));
+    }
+
+    #[test]
+    fn lower_outer_labelled_continue_closes_only_crossed_iterator_bd_t9n3s() {
+        let inner = Statement::ForOf(ForOfStatement {
+            binding: BindingPattern::Identifier("value".into()),
+            binding_kind: Some(VariableDeclarationKind::Const),
+            iterable: Expression::Identifier("values".into()),
+            body: Box::new(Statement::Continue(ContinueStatement {
+                label: Some("outer".into()),
+                span: span(),
+            })),
+            span: span(),
+        });
+        let ir0 = stmt_ir0(vec![Statement::Labeled(LabeledStatement {
+            label: "outer".into(),
+            body: Box::new(Statement::While(WhileStatement {
+                condition: Expression::BooleanLiteral(true),
+                body: Box::new(Statement::Block(BlockStatement {
+                    body: vec![inner],
+                    span: span(),
+                })),
+                span: span(),
+            })),
+            span: span(),
+        })]);
+        let ir1 = lower_ir0_to_ir1(&ir0)
+            .expect("outer labelled continue lowering")
+            .module;
+        assert_eq!(
+            ir1.ops
+                .iter()
+                .filter(|op| matches!(
+                    op,
+                    Ir1Op::IteratorClose {
+                        reason: IteratorCloseReason::Continue
+                    }
+                ))
+                .count(),
+            1
+        );
+        let ir2 = lower_ir1_to_ir2(&ir1).expect("IR1 to IR2").module;
+        let ir3 = lower_ir2_to_ir3(&ir2).expect("IR2 to IR3").module;
+        assert!(ir3.instructions.iter().any(|instruction| matches!(
+            instruction,
+            Ir3Instruction::IteratorClose {
+                reason: IteratorCloseReason::Continue,
+                ..
+            }
+        )));
+    }
+
+    #[test]
+    fn lower_nested_duplicate_label_is_semantic_error_bd_t9n3s() {
+        let inner = Statement::Labeled(LabeledStatement {
+            label: "duplicate".into(),
+            body: Box::new(Statement::While(WhileStatement {
+                condition: Expression::BooleanLiteral(false),
+                body: Box::new(Statement::Block(BlockStatement {
+                    body: Vec::new(),
+                    span: span(),
+                })),
+                span: span(),
+            })),
+            span: span(),
+        });
+        let ir0 = stmt_ir0(vec![Statement::Labeled(LabeledStatement {
+            label: "duplicate".into(),
+            body: Box::new(inner),
+            span: span(),
+        })]);
+
+        let err = lower_ir0_to_ir1(&ir0).expect_err("nested duplicate label must fail");
+        assert!(matches!(
+            err,
+            LoweringPipelineError::SemanticViolation(SemanticError {
+                code: SemanticErrorCode::DuplicateLabel,
+                binding_name: Some(name),
+                ..
+            }) if name == "duplicate"
+        ));
+    }
+
+    #[test]
+    fn lower_sequential_label_name_reuse_is_allowed_bd_t9n3s() {
+        let labeled_expression = |value| {
+            Statement::Labeled(LabeledStatement {
+                label: "reusable".into(),
+                body: Box::new(Statement::Expression(ExpressionStatement {
+                    expression: Expression::NumericLiteral(value),
+                    span: span(),
+                })),
+                span: span(),
+            })
+        };
+        let ir0 = stmt_ir0(vec![labeled_expression(1), labeled_expression(2)]);
+
+        lower_ir0_to_ir1(&ir0).expect("sequential label scopes must not overlap");
     }
 
     #[test]
@@ -10765,6 +17769,1808 @@ mod tests {
     }
 
     #[test]
+    fn rest_parameter_metadata_reaches_ir3_for_function_shapes_bd_ur3tk_9() {
+        let ir3 = lower_rest_source_to_ir3(
+            "let arrow = (head, ...arrowTail) => arrowTail.length;\
+             function outer(head, ...outerTail) {\
+               function inner(head, ...innerTail) { return innerTail.length; }\
+               return inner(head);\
+             }\
+             class Bucket {\
+               constructor(head, ...ctorTail) {}\
+               collect(head, ...methodTail) { return methodTail.length; }\
+             }",
+        )
+        .expect("supported identifier rest parameters should lower");
+
+        for name in ["outer", "inner", "Bucket", "collect"] {
+            let desc = ir3
+                .function_table
+                .iter()
+                .find(|desc| desc.name.as_deref() == Some(name))
+                .unwrap_or_else(|| panic!("missing IR3 descriptor for {name}"));
+            assert_eq!(desc.arity, 2, "{name} positional arity");
+            assert_eq!(desc.rest_param_index, Some(1), "{name} rest slot");
+        }
+
+        let arrow = ir3
+            .function_table
+            .iter()
+            .find(|desc| desc.name.is_none())
+            .expect("anonymous arrow descriptor");
+        assert_eq!(arrow.arity, 2);
+        assert_eq!(arrow.rest_param_index, Some(1));
+        let main = ir3
+            .function_table
+            .iter()
+            .find(|desc| desc.name.as_deref() == Some("main"))
+            .expect("main descriptor");
+        assert_eq!(main.rest_param_index, None);
+    }
+
+    #[test]
+    fn patterned_formals_keep_positional_slots_for_every_function_shape_bd_ur3tk_10() {
+        let ir3 = lower_rest_source_to_ir3(
+            "function mixed({ value }, ...tail) { return value; }\
+             function outer([head], ...outerTail) {\
+               function inner({ nested }, ...innerTail) { return nested; }\
+               return inner({ nested: head });\
+             }\
+             let arrow = ({ left }, ...arrowTail) => left;\
+             let expressed = function expressed({ right }, ...expressionTail) { return right; };\
+             class Bucket {\
+               constructor({ item }, ...ctorTail) {}\
+               collect([entry], ...methodTail) { return entry; }\
+             }\
+             let Crate = class Crate {\
+               constructor([item], ...exprCtorTail) {}\
+               collectExpr({ entry }, ...exprMethodTail) { return entry; }\
+             };",
+        )
+        .expect("patterned prefixes must retain their positional slots before rest");
+
+        for name in [
+            "mixed",
+            "outer",
+            "inner",
+            "expressed",
+            "Bucket",
+            "collect",
+            "Crate",
+            "collectExpr",
+        ] {
+            let desc = ir3
+                .function_table
+                .iter()
+                .find(|desc| desc.name.as_deref() == Some(name))
+                .unwrap_or_else(|| panic!("missing IR3 descriptor for {name}"));
+            assert_eq!(desc.arity, 2, "{name} must retain both formal slots");
+            assert_eq!(desc.rest_param_index, Some(1), "{name} rest slot");
+        }
+
+        let arrow = ir3
+            .function_table
+            .iter()
+            .find(|desc| desc.name.is_none())
+            .expect("anonymous patterned arrow descriptor");
+        assert_eq!(arrow.arity, 2);
+        assert_eq!(arrow.rest_param_index, Some(1));
+    }
+
+    #[test]
+    fn patterned_default_and_rest_formals_execute_bd_ur3tk_10() {
+        let (ir1, module, value) = lower_and_execute_deferred_source_bd_6pvhn(
+            "function mixed({ value }, scale = 4, ...tail) {\
+                 return value * 10 + scale + tail.length;\
+             }\
+             mixed({ value: 3 }, undefined, 1, 2);",
+        );
+        let Ir1Op::DeclareFunction {
+            param_names,
+            rest_param_index,
+            ..
+        } = ir1
+            .ops
+            .iter()
+            .find(|op| matches!(op, Ir1Op::DeclareFunction { name, .. } if name == "mixed"))
+            .expect("mixed declaration")
+        else {
+            unreachable!("filtered declaration shape")
+        };
+        assert_eq!(param_names.len(), 3);
+        assert!(param_names[0].starts_with("@@franken_internal_param_"));
+        assert!(param_names[1].starts_with("@@franken_internal_param_"));
+        assert_eq!(param_names[2], "tail");
+        assert_eq!(*rest_param_index, Some(2));
+        assert!(
+            deferred_ir1_body_bd_6pvhn(&ir1, "mixed")
+                .iter()
+                .any(|op| matches!(op, Ir1Op::GetProperty { .. })),
+            "the object and default parameters must run their entry prologue"
+        );
+        assert!(
+            deferred_ir3_body_bd_6pvhn(&module, "mixed")
+                .iter()
+                .any(|instruction| matches!(instruction, Ir3Instruction::GetProperty { .. }))
+        );
+        assert_eq!(value, Value::Int(36));
+    }
+
+    #[test]
+    fn whole_pattern_defaults_execute_bd_laab3() {
+        let source_prefix = "function objectDefault({ a = 5 } = {}) { return a; }\
+             let arrayDefault = ([a = 7] = []) => a;";
+
+        let (_, _, supplied) = lower_and_execute_deferred_source_bd_6pvhn(&format!(
+            "{source_prefix} objectDefault({{ a: 2 }}) + arrayDefault([3]);"
+        ));
+        assert_eq!(supplied, Value::Int(5));
+
+        let (_, _, explicit_undefined) = lower_and_execute_deferred_source_bd_6pvhn(&format!(
+            "{source_prefix} objectDefault(undefined) + arrayDefault(undefined);"
+        ));
+        assert_eq!(explicit_undefined, Value::Int(12));
+
+        let (_, _, omitted) = lower_and_execute_deferred_source_bd_6pvhn(&format!(
+            "{source_prefix} objectDefault() + arrayDefault();"
+        ));
+        assert_eq!(omitted, Value::Int(12));
+
+        let (_, _, empty_containers) = lower_and_execute_deferred_source_bd_6pvhn(&format!(
+            "{source_prefix} objectDefault({{}}) + arrayDefault([]);"
+        ));
+        assert_eq!(empty_containers, Value::Int(12));
+    }
+
+    #[test]
+    fn patterned_prologues_execute_for_expression_and_class_shapes_bd_ur3tk_10() {
+        let (_, _, value) = lower_and_execute_deferred_source_bd_6pvhn(
+            "let expressed = function expressed({ value }, add = 1, ...tail) {\
+                 return value + add + tail.length;\
+             };\
+             class Declared {\
+                 constructor({ value }, add = 1, ...tail) {\
+                     this.total = value + add + tail.length;\
+                 }\
+                 collect([value], add = 1, ...tail) {\
+                     return value + add + tail.length;\
+                 }\
+             }\
+             let Expressed = class Expressed {\
+                 constructor([value], add = 1, ...tail) {\
+                     this.total = value + add + tail.length;\
+                 }\
+                 collect({ value }, add = 1, ...tail) {\
+                     return value + add + tail.length;\
+                 }\
+             };\
+             let declared = new Declared({ value: 2 }, undefined, 0);\
+             let classExpression = new Expressed([4], undefined, 0);\
+             expressed({ value: 1 }, undefined, 0)\
+                 + declared.total\
+                 + declared.collect([3], undefined, 0)\
+                 + classExpression.total\
+                 + classExpression.collect({ value: 5 }, undefined, 0);",
+        );
+        assert_eq!(value, Value::Int(25));
+    }
+
+    #[test]
+    fn earlier_parameter_defaults_execute_across_function_shapes_bd_1e0tp() {
+        let (_, _, value) = lower_and_execute_deferred_source_bd_6pvhn(
+            "function declared(a = 1, b = a) { return b; }\
+             let arrow = (a = 1, b = a) => b;\
+             let expressed = function(a = 1, b = a) { return b; };\
+             class Declared {\
+                 constructor(a = 1, b = a) { this.value = b; }\
+                 method(a = 1, b = a) { return b; }\
+             }\
+             let Expressed = class {\
+                 constructor(a = 1, b = a) { this.value = b; }\
+                 method(a = 1, b = a) { return b; }\
+             };\
+             function outer() {\
+                 return function nested(a = 1, b = a) { return b; };\
+             }\
+             function captured(a = 1, b = a) { return () => b; }\
+             let declaredInstance = new Declared();\
+             let expressedInstance = new Expressed();\
+             declared() + arrow() + expressed()\
+                 + declaredInstance.value + declaredInstance.method()\
+                 + expressedInstance.value + expressedInstance.method()\
+                 + outer()() + captured()();",
+        );
+        assert_eq!(value, Value::Int(9));
+    }
+
+    #[test]
+    fn self_and_later_parameter_reads_throw_reference_error_bd_1e0tp() {
+        let cases = [
+            (
+                "declaration self",
+                "function target(a = a) {} try { target(); 'missed'; } catch (error) { error.name + ':' + error.message; }",
+                "ReferenceError:Cannot access 'a' before initialization",
+            ),
+            (
+                "declaration later even when supplied",
+                "function target(a = b, b = 2) {} try { target(undefined, 9); 'missed'; } catch (error) { error.name + ':' + error.message; }",
+                "ReferenceError:Cannot access 'b' before initialization",
+            ),
+            (
+                "arrow",
+                "let target = (a = b, b = 2) => a; try { target(); 'missed'; } catch (error) { error.name + ':' + error.message; }",
+                "ReferenceError:Cannot access 'b' before initialization",
+            ),
+            (
+                "function expression",
+                "let target = function(a = b, b = 2) { return a; }; try { target(); 'missed'; } catch (error) { error.name + ':' + error.message; }",
+                "ReferenceError:Cannot access 'b' before initialization",
+            ),
+            (
+                "constructor",
+                "class Target { constructor(a = b, b = 2) {} } try { new Target(); 'missed'; } catch (error) { error.name + ':' + error.message; }",
+                "ReferenceError:Cannot access 'b' before initialization",
+            ),
+            (
+                "method",
+                "let target = class { method(a = b, b = 2) {} }; try { new target().method(); 'missed'; } catch (error) { error.name + ':' + error.message; }",
+                "ReferenceError:Cannot access 'b' before initialization",
+            ),
+            (
+                "nested function",
+                "function outer() { return function inner(a = b, b = 2) {}; } try { outer()(); 'missed'; } catch (error) { error.name + ':' + error.message; }",
+                "ReferenceError:Cannot access 'b' before initialization",
+            ),
+        ];
+
+        for (shape, source, expected) in cases {
+            let (_, _, value) = lower_and_execute_deferred_source_bd_6pvhn(source);
+            assert_eq!(value, Value::str(expected), "{shape}");
+        }
+    }
+
+    #[test]
+    fn parameter_tdz_tracks_pattern_order_and_rest_bd_1e0tp() {
+        let (_, _, earlier) = lower_and_execute_deferred_source_bd_6pvhn(
+            "function target({ a = 1, b = a } = {}, [c = 2, d = c] = []) {\
+                 return a * 1000 + b * 100 + c * 10 + d;\
+             }\
+             target();",
+        );
+        assert_eq!(earlier, Value::Int(1_122));
+
+        for (shape, source, expected_name) in [
+            (
+                "object self",
+                "function target({ a = a } = {}) {} try { target(); 'missed'; } catch (error) { error.name + ':' + error.message; }",
+                "a",
+            ),
+            (
+                "object later",
+                "function target({ a = b, b = 2 } = {}) {} try { target(); 'missed'; } catch (error) { error.name + ':' + error.message; }",
+                "b",
+            ),
+            (
+                "array later",
+                "function target([a = b, b = 2] = []) {} try { target(); 'missed'; } catch (error) { error.name + ':' + error.message; }",
+                "b",
+            ),
+            (
+                "later rest",
+                "function target(a = rest, ...rest) {} try { target(); 'missed'; } catch (error) { error.name + ':' + error.message; }",
+                "rest",
+            ),
+        ] {
+            let (_, _, value) = lower_and_execute_deferred_source_bd_6pvhn(source);
+            assert_eq!(
+                value,
+                Value::str(format!(
+                    "ReferenceError:Cannot access '{expected_name}' before initialization"
+                )),
+                "{shape}"
+            );
+        }
+
+        let (_, _, compound_effects) = lower_and_execute_deferred_source_bd_6pvhn(
+            "let effects = { count: 0 };\
+             function sideEffect() { effects.count = effects.count + 1; return 1; }\
+             function target(a = (b += sideEffect()), b = 0) {}\
+             try { target(); } catch (error) {}\
+             effects.count;",
+        );
+        assert_eq!(
+            compound_effects,
+            Value::Int(0),
+            "compound assignment must read the TDZ binding before its RHS"
+        );
+
+        let (_, _, compound_snapshot) = lower_and_execute_deferred_source_bd_6pvhn(
+            "let value = 1;\
+             let result = (value += (value = 10));\
+             result * 100 + value;",
+        );
+        assert_eq!(
+            compound_snapshot,
+            Value::Int(1_111),
+            "compound assignment must combine the pre-RHS binding value"
+        );
+    }
+
+    #[test]
+    fn parameter_tdz_checks_are_branch_sensitive_and_cover_writes_bd_1e0tp() {
+        let (_, _, value) = lower_and_execute_deferred_source_bd_6pvhn(
+            "function deadLater(a = true ? 1 : b, b = 2) { return a; }\
+             function deadSelf(a = false ? a : 1) { return a; }\
+             function supplied(a = b, b = 2) { return a; }\
+             function earlierWrite(a = 1, b = (a = 3)) { return a + b; }\
+             deadLater() + deadSelf() + supplied(7, 9) + earlierWrite();",
+        );
+        assert_eq!(value, Value::Int(15));
+
+        for (shape, source, expected_name) in [
+            (
+                "write later",
+                "function target(a = (b = 3), b) {} try { target(); 'missed'; } catch (error) { error.name + ':' + error.message; }",
+                "b",
+            ),
+            (
+                "write self",
+                "function target(a = (a = 3)) {} try { target(); 'missed'; } catch (error) { error.name + ':' + error.message; }",
+                "a",
+            ),
+            (
+                "typeof later",
+                "function target(a = typeof b, b = 2) {} try { target(); 'missed'; } catch (error) { error.name + ':' + error.message; }",
+                "b",
+            ),
+        ] {
+            let (_, _, value) = lower_and_execute_deferred_source_bd_6pvhn(source);
+            assert_eq!(
+                value,
+                Value::str(format!(
+                    "ReferenceError:Cannot access '{expected_name}' before initialization"
+                )),
+                "{shape}"
+            );
+        }
+    }
+
+    #[test]
+    fn nested_and_empty_pattern_formals_execute_bd_ur3tk_10() {
+        let (_, _, nested) = lower_and_execute_deferred_source_bd_6pvhn(
+            "let combine = ([head, [nested]], scale = 2, ...tail) =>\
+                 head + nested * scale + tail.length;\
+             combine([1, [3]], undefined, 8, 9);",
+        );
+        assert_eq!(nested, Value::Int(9));
+
+        let (_, _, empty_rest) = lower_and_execute_deferred_source_bd_6pvhn(
+            "function count({}, ...tail) { return tail.length; } count({});",
+        );
+        assert_eq!(empty_rest, Value::Int(0));
+
+        let (_, _, canonical_numeric_key) = lower_and_execute_deferred_source_bd_6pvhn(
+            "function read({ 1: value }, ...tail) { return value + tail.length; }\
+             read({ 1: 3 });",
+        );
+        assert_eq!(canonical_numeric_key, Value::Int(3));
+
+        let (_, _, canonical_decimal_keys) = lower_and_execute_deferred_source_bd_6pvhn(
+            "function decimal({ 1.5: value }, ...tail) { return value; }\
+             function wide({ 9007199254740992: value }, ...tail) { return value; }\
+             decimal({ '1.5': 3 }) + wide({ '9007199254740992': 4 });",
+        );
+        assert_eq!(canonical_decimal_keys, Value::Int(7));
+    }
+
+    #[test]
+    fn captureless_default_closure_executes_bd_ur3tk_10() {
+        let (_, _, value) = lower_and_execute_deferred_source_bd_6pvhn(
+            "let Math = 11;\
+             function invoke(callback = () => 4, ...tail) {\
+                 return callback() + tail.length;\
+             }\
+             invoke(undefined, 9);",
+        );
+        assert_eq!(value, Value::Int(5));
+
+        let (_, _, ordinary_function_this) = lower_and_execute_deferred_source_bd_6pvhn(
+            "function invoke(callback = function () { return this; }, ...tail) {\
+                 return tail.length;\
+             }\
+             invoke(undefined, 9);",
+        );
+        assert_eq!(ordinary_function_this, Value::Int(1));
+
+        let (_, _, arrow_with_ordinary_child) = lower_and_execute_deferred_source_bd_6pvhn(
+            "function invoke(callback = () => function () { return this; }, ...tail) {\
+                 return tail.length;\
+             }\
+             invoke(undefined, 9);",
+        );
+        assert_eq!(arrow_with_ordinary_child, Value::Int(1));
+    }
+
+    #[test]
+    fn unused_static_spelled_self_name_is_not_a_capture_bd_ur3tk_10() {
+        let (_, _, value) = lower_and_execute_deferred_source_bd_6pvhn(
+            "function Math(callback = () => 4, { value }, ...tail) {\
+                 return callback() + value + tail.length;\
+             }\
+             Math(undefined, { value: 3 });",
+        );
+        assert_eq!(value, Value::Int(7));
+    }
+
+    #[test]
+    fn synthetic_parameter_slots_cannot_collide_with_source_names_bd_ur3tk_10() {
+        let (_, _, value) = lower_and_execute_deferred_source_bd_6pvhn(
+            "function add(__param_1, { value }) { return __param_1 + value; }\
+             add(2, { value: 3 });",
+        );
+        assert_eq!(value, Value::Int(5));
+    }
+
+    #[test]
+    fn default_parameter_environment_survives_body_shadowing_bd_ur3tk_10() {
+        let (_, _, ordinary) = lower_and_execute_deferred_source_bd_6pvhn(
+            "let fallback = 7;\
+             function read(value = fallback) {\
+                 let fallback = 99;\
+                 return value;\
+             }\
+             read();",
+        );
+        assert_eq!(ordinary, Value::Int(7));
+
+        let (_, _, static_name) = lower_and_execute_deferred_source_bd_6pvhn(
+            "let Math = 11;\
+             function readStatic(value = Math) {\
+                 let Math = 88;\
+                 return value;\
+             }\
+             readStatic();",
+        );
+        assert_eq!(static_name, Value::Int(11));
+
+        let (_, _, nested_var) = lower_and_execute_deferred_source_bd_6pvhn(
+            "let fallback = 5;\
+             function readNested(value = fallback) {\
+                 if (true) { var fallback = 77; }\
+                 return value;\
+             }\
+             readNested();",
+        );
+        assert_eq!(nested_var, Value::Int(5));
+    }
+
+    #[test]
+    fn object_rest_parameter_patterns_execute_bd_vkf78() {
+        let (ir1, module, value) = lower_and_execute_deferred_source_bd_6pvhn(
+            "function project({ kept, 1.5: decimal, ...rest }) {\
+                 rest.extra = rest.extra + 1;\
+                 return kept * 1000 + decimal * 100 + rest.extra * 10\
+                     + (rest.kept === undefined ? 1 : 0)\
+                     + (rest['1.5'] === undefined ? 2 : 0);\
+             }\
+             let source = { kept: 2, '1.5': 3, extra: 4 };\
+             let result = project(source);\
+             result * 100 + source.extra;",
+        );
+
+        let body_ir1 = deferred_ir1_body_bd_6pvhn(&ir1, "project");
+        assert!(
+            body_ir1
+                .iter()
+                .any(|op| matches!(op, Ir1Op::CopyDataProperties { excluded_count: 2 })),
+            "object-rest parameter prologue must carry both exclusions into the copy"
+        );
+        assert_eq!(
+            body_ir1
+                .iter()
+                .filter(|op| matches!(op, Ir1Op::DeleteProperty { .. }))
+                .count(),
+            0,
+            "object rest must filter exclusions before copying, not delete afterward"
+        );
+        let body_ir3 = deferred_ir3_body_bd_6pvhn(&module, "project");
+        assert!(body_ir3.iter().any(|instruction| matches!(
+            instruction,
+            Ir3Instruction::CopyDataProperties {
+                excluded: RegRange { count: 2, .. },
+                ..
+            }
+        )));
+        assert_eq!(
+            body_ir3
+                .iter()
+                .filter(|instruction| matches!(instruction, Ir3Instruction::DeleteProperty { .. }))
+                .count(),
+            0
+        );
+        assert_eq!(value, Value::Int(235_304));
+    }
+
+    #[test]
+    fn nested_and_empty_exclusion_object_rest_parameters_execute_bd_vkf78() {
+        let (ir1, module, value) = lower_and_execute_deferred_source_bd_6pvhn(
+            "function nested({ box: { kept, ...inside }, ...outside }) {\
+                 return kept * 100 + inside.left * 10 + outside.tail;\
+             }\
+             function copy({ ...rest }) { return rest.a + rest.b; }\
+             nested({ box: { kept: 5, left: 6 }, tail: 7 }) * 100\
+                 + copy({ a: 8, b: 9 });",
+        );
+        let nested_counts = deferred_ir1_body_bd_6pvhn(&ir1, "nested")
+            .iter()
+            .filter_map(|op| match op {
+                Ir1Op::CopyDataProperties { excluded_count } => Some(*excluded_count),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(nested_counts, vec![1, 1]);
+        assert!(
+            deferred_ir3_body_bd_6pvhn(&module, "copy")
+                .iter()
+                .any(|instruction| matches!(
+                    instruction,
+                    Ir3Instruction::CopyDataProperties {
+                        excluded: RegRange { count: 0, .. },
+                        ..
+                    }
+                ))
+        );
+        assert_eq!(value, Value::Int(56_717));
+    }
+
+    #[test]
+    fn nested_rest_parameter_targets_recursively_destructure_slices_bd_cjtvr() {
+        let (ir1, module, value) = lower_and_execute_deferred_source_bd_6pvhn(
+            "function unpack([...[head, ...tail]]) {\
+                 return head * 100 + tail[0] * 10 + tail[1];\
+             }\
+             unpack([2, 3, 4]);",
+        );
+
+        assert_eq!(
+            deferred_ir1_body_bd_6pvhn(&ir1, "unpack")
+                .iter()
+                .filter(|op| matches!(op, Ir1Op::ArraySlice))
+                .count(),
+            2,
+            "the outer and nested rest targets each require their own slice"
+        );
+        assert_eq!(
+            deferred_ir3_body_bd_6pvhn(&module, "unpack")
+                .iter()
+                .filter(|instruction| matches!(instruction, Ir3Instruction::ArraySlice { .. }))
+                .count(),
+            2
+        );
+        assert_eq!(value, Value::Int(234));
+    }
+
+    #[test]
+    fn computed_parameter_keys_evaluate_once_and_preserve_tdz_bd_cjtvr() {
+        let (ir1, module, value) = lower_and_execute_deferred_source_bd_6pvhn(
+            "let state = { calls: 0 };\
+             function key() { state.calls = state.calls + 1; return 'picked'; }\
+             function project({ [key()]: picked, ...rest }) {\
+                 return picked * 100 + rest.left * 10\
+                     + (rest.picked === undefined ? 1 : 0);\
+             }\
+             function earlier(name, { [name]: picked }) { return picked; }\
+             function samePattern({ name = 'x', [name]: picked }) { return picked; }\
+             project({ picked: 2, left: 3 }) * 100\
+                 + earlier('x', { x: 4 }) * 10 + state.calls\
+                 + samePattern({ x: 5 });",
+        );
+
+        let project_ir1 = deferred_ir1_body_bd_6pvhn(&ir1, "project");
+        assert!(project_ir1.iter().any(|op| matches!(
+            op,
+            Ir1Op::GetProperty {
+                key: Ir1PropertyKey::Dynamic
+            }
+        )));
+        assert!(
+            project_ir1
+                .iter()
+                .any(|op| matches!(op, Ir1Op::CopyDataProperties { excluded_count: 1 }))
+        );
+        assert!(
+            deferred_ir3_body_bd_6pvhn(&module, "project")
+                .iter()
+                .any(|instruction| matches!(
+                    instruction,
+                    Ir3Instruction::CopyDataProperties {
+                        excluded: RegRange { count: 1, .. },
+                        ..
+                    }
+                ))
+        );
+        assert_eq!(value, Value::Int(23_146));
+
+        let (_, _, tdz) = lower_and_execute_deferred_source_bd_6pvhn(
+            "function target({ [later]: picked }, later) { return picked; }\
+             try { target({ x: 1 }, 'x'); 'missed'; }\
+             catch (error) { error.name + ':' + error.message; }",
+        );
+        assert_eq!(
+            tdz,
+            Value::str("ReferenceError:Cannot access 'later' before initialization")
+        );
+
+        let (_, _, same_pattern_forward_tdz) = lower_and_execute_deferred_source_bd_6pvhn(
+            "function target({ [later]: picked, later }) { return picked; }\
+             try { target({ x: 1, later: 'x' }); 'missed'; }\
+             catch (error) { error.name + ':' + error.message; }",
+        );
+        assert_eq!(
+            same_pattern_forward_tdz,
+            Value::str("ReferenceError:Cannot access 'later' before initialization")
+        );
+    }
+
+    #[test]
+    fn computed_object_rest_declarations_reuse_exact_saved_keys_bd_cjtvr() {
+        let (ir1, _, value) = lower_and_execute_deferred_source_bd_6pvhn(
+            "let state = { calls: 0 };\
+             function key(name) { state.calls = state.calls + 1; return name; }\
+             let source = { box: { left: 4 }, tail: 5 };\
+             let { [key('box')]: { [key('picked')]: picked = 3, ...inside },\
+                   ...outside } = source;\
+             state.calls * 10000 + picked * 1000 + inside.left * 100\
+                 + outside.tail * 10\
+                 + (inside.picked === undefined ? 1 : 0)\
+                 + (outside.box === undefined ? 1 : 0);",
+        );
+
+        assert_eq!(
+            ir1.ops
+                .iter()
+                .filter(|op| matches!(
+                    op,
+                    Ir1Op::GetProperty {
+                        key: Ir1PropertyKey::Dynamic
+                    }
+                ))
+                .count(),
+            2
+        );
+        assert_eq!(
+            ir1.ops
+                .iter()
+                .filter_map(|op| match op {
+                    Ir1Op::CopyDataProperties { excluded_count } => Some(*excluded_count),
+                    _ => None,
+                })
+                .collect::<Vec<_>>(),
+            vec![1, 1]
+        );
+        assert_eq!(value, Value::Int(23_452));
+    }
+
+    #[test]
+    fn same_level_computed_exclusions_evaluate_once_in_order_bd_cjtvr() {
+        let (ir1, module, value) = lower_and_execute_deferred_source_bd_6pvhn(
+            "let state = { calls: 0, trace: 0 };\
+             function key(name, digit) {\
+                 state.calls = state.calls + 1;\
+                 state.trace = state.trace * 10 + digit;\
+                 return name;\
+             }\
+             let { [key('first', 1)]: first, [key('second', 2)]: second,\
+                   ...rest } = { first: 1, second: 2, left: 3 };\
+             state.trace * 100000 + state.calls * 10000\
+                 + first * 1000 + second * 100 + rest.left * 10\
+                 + (rest.first === undefined ? 1 : 0)\
+                 + (rest.second === undefined ? 1 : 0);",
+        );
+
+        assert_eq!(
+            ir1.ops
+                .iter()
+                .filter(|op| matches!(op, Ir1Op::CopyDataProperties { excluded_count: 2 }))
+                .count(),
+            1
+        );
+        assert_eq!(
+            module
+                .instructions
+                .iter()
+                .filter(|instruction| matches!(
+                    instruction,
+                    Ir3Instruction::CopyDataProperties {
+                        excluded: RegRange { count: 2, .. },
+                        ..
+                    }
+                ))
+                .count(),
+            1
+        );
+        assert_eq!(value, Value::Int(1_221_232));
+    }
+
+    #[test]
+    fn nested_rest_variable_declaration_recursively_destructures_slice_bd_cjtvr() {
+        let (_, _, value) = lower_and_execute_deferred_source_bd_6pvhn(
+            "let [prefix, ...[head, ...tail]] = [1, 2, 3, 4];\
+             prefix * 1000 + head * 100 + tail[0] * 10 + tail[1];",
+        );
+        assert_eq!(value, Value::Int(1_234));
+    }
+
+    #[test]
+    fn bare_for_of_head_recomputes_dynamic_exclusion_each_iteration_bd_cjtvr() {
+        let (ir1, module, value) = lower_and_execute_deferred_source_bd_6pvhn(
+            "let state = { calls: 0 };\
+             function key() { state.calls = state.calls + 1; return 'picked'; }\
+             let picked = 0;\
+             let rest = {};\
+             let total = 0;\
+             let rows = [{ picked: 1, left: 2 }, { picked: 3, left: 4 }];\
+             for ({ [key()]: picked, ...rest } of rows) {\
+                 total = total + picked * 10 + rest.left\
+                     + (rest.picked === undefined ? 100 : 0);\
+             }\
+             state.calls * 1000 + total;",
+        );
+
+        assert!(ir1.ops.iter().any(|op| matches!(
+            op,
+            Ir1Op::GetProperty {
+                key: Ir1PropertyKey::Dynamic
+            }
+        )));
+        assert!(module.instructions.iter().any(|instruction| matches!(
+            instruction,
+            Ir3Instruction::CopyDataProperties {
+                excluded: RegRange { count: 1, .. },
+                ..
+            }
+        )));
+        assert_eq!(value, Value::Int(2_246));
+    }
+
+    #[test]
+    fn bare_for_in_head_recomputes_dynamic_exclusion_each_iteration_bd_cjtvr() {
+        let (_, _, value) = lower_and_execute_deferred_source_bd_6pvhn(
+            "let state = { calls: 0 };\
+             function key() { state.calls = state.calls + 1; return '0'; }\
+             let picked = '';\
+             let rest = {};\
+             let seen = '';\
+             for ({ [key()]: picked, ...rest } in { ab: 1, cd: 2 }) {\
+                 seen = seen + picked + rest[1];\
+             }\
+             state.calls + ':' + seen;",
+        );
+
+        assert_eq!(value, Value::str("2:abcd"));
+    }
+
+    #[test]
+    fn nullish_object_bindings_throw_before_computed_keys_bd_sbv6g() {
+        let (ir1, module, value) = lower_and_execute_deferred_source_bd_6pvhn(
+            "let state = { calls: 0, caught: 0 };\
+             function key() { state.calls = state.calls + 1; return 'picked'; }\
+             try { let { [key()]: picked } = null; }\
+             catch (error) {\
+                 state.caught = state.caught + (error.name === 'TypeError' ? 1 : 100);\
+             }\
+             try { let { [key()]: picked } = undefined; }\
+             catch (error) {\
+                 state.caught = state.caught + (error.name === 'TypeError' ? 1 : 100);\
+             }\
+             function project({ [key()]: picked }) { return picked; }\
+             try { project(); }\
+             catch (error) {\
+                 state.caught = state.caught + (error.name === 'TypeError' ? 1 : 100);\
+             }\
+             try { project(null); }\
+             catch (error) {\
+                 state.caught = state.caught + (error.name === 'TypeError' ? 1 : 100);\
+             }\
+             state.calls * 1000 + state.caught;",
+        );
+
+        let first_guard = ir1
+            .ops
+            .iter()
+            .position(|op| matches!(op, Ir1Op::JumpIfNullish { .. }))
+            .expect("object binding must emit a nullish guard");
+        let first_dynamic_key_call = ir1
+            .ops
+            .iter()
+            .position(|op| matches!(op, Ir1Op::Call { .. }))
+            .expect("computed binding key must call key()");
+        let first_dynamic_get = ir1
+            .ops
+            .iter()
+            .position(|op| {
+                matches!(
+                    op,
+                    Ir1Op::GetProperty {
+                        key: Ir1PropertyKey::Dynamic
+                    }
+                )
+            })
+            .expect("computed binding key must drive dynamic GetProperty");
+        assert!(first_guard < first_dynamic_key_call);
+        assert!(first_dynamic_key_call < first_dynamic_get);
+        assert!(ir1.ops.iter().any(|op| matches!(
+            op,
+            Ir1Op::HostCall { capability, .. } if capability == "builtin:TypeError"
+        )));
+        assert!(
+            module
+                .instructions
+                .iter()
+                .any(|instruction| matches!(instruction, Ir3Instruction::JumpIfNullish { .. }))
+        );
+        assert_eq!(value, Value::Int(4));
+    }
+
+    #[test]
+    fn object_coercibility_precedes_empty_rest_nested_and_loop_patterns_bd_sbv6g() {
+        let (_, _, value) = lower_and_execute_deferred_source_bd_6pvhn(
+            "let state = { calls: 0, caught: 0 };\
+             function key() { state.calls = state.calls + 1; return 'picked'; }\
+             try { let {} = null; }\
+             catch (error) { state.caught = state.caught + (error.name === 'TypeError'); }\
+             try { let { ...rest } = undefined; }\
+             catch (error) { state.caught = state.caught + (error.name === 'TypeError'); }\
+             try { let { box: { [key()]: picked } } = { box: null }; }\
+             catch (error) { state.caught = state.caught + (error.name === 'TypeError'); }\
+             let picked = 0;\
+             try { for ({ [key()]: picked } of [null]) {} }\
+             catch (error) { state.caught = state.caught + (error.name === 'TypeError'); }\
+             let {} = 1;\
+             let {} = false;\
+             let {} = '';\
+             let {} = 'ordinary';\
+             state.calls * 1000 + state.caught;",
+        );
+
+        assert_eq!(value, Value::Int(4));
+    }
+
+    fn static_property_key_cases_bd_h4esx() -> Vec<(&'static str, &'static str)> {
+        vec![
+            (r#""value""#, "value"),
+            (r"'v\x61lue'", "value"),
+            (r"'v\u0061lue'", "value"),
+            (r"'\uD83D\uDE00'", "😀"),
+            (r"'\u{1F600}'", "😀"),
+            ("'a\\\nb'", "ab"),
+            ("'a\\\r\nb'", "ab"),
+            ("'a\\\rb'", "ab"),
+            ("'a\\\u{2028}b'", "ab"),
+            ("'a\\\u{2029}b'", "ab"),
+            (r"\u0076alue", "value"),
+            ("π", "π"),
+            (r"\u03C0", "π"),
+            (r"\u037A", "ͺ"),
+            (r"a\u037A", "aͺ"),
+            ("0x10", "16"),
+            ("0b10", "2"),
+            ("0o10", "8"),
+            ("1_000", "1000"),
+            ("1e3", "1000"),
+            ("1.5", "1.5"),
+            (".5", "0.5"),
+            ("1e-6", "0.000001"),
+            ("1e-7", "1e-7"),
+            ("1e20", "100000000000000000000"),
+            ("1e21", "1e+21"),
+            ("667082108456853.2", "667082108456853.2"),
+            ("9007199254740993", "9007199254740992"),
+            ("18446744073709551615", "18446744073709552000"),
+            ("0x10n", "16"),
+            ("1_000n", "1000"),
+            (
+                "123456789012345678901234567890n",
+                "123456789012345678901234567890",
+            ),
+        ]
+    }
+
+    #[test]
+    fn static_object_binding_keys_execute_with_canonical_property_names_bd_h4esx() {
+        for (binding_key, canonical_key) in static_property_key_cases_bd_h4esx() {
+            let source = format!(
+                "function pick({{{binding_key}: parameter}}) {{ return parameter; }}\
+                 let {{{binding_key}: variable}} = {{'{canonical_key}': 7}};\
+                 pick({{'{canonical_key}': 5}}) * 10 + variable;"
+            );
+            let (_, _, value) = lower_and_execute_deferred_source_bd_6pvhn(&source);
+            assert_eq!(
+                value,
+                Value::Int(57),
+                "binding key `{binding_key}` must resolve canonical property `{canonical_key}`"
+            );
+        }
+    }
+
+    #[test]
+    fn binding_pattern_comment_and_bom_trivia_execute_bd_rcnxf() {
+        let (_, _, static_keys) = lower_and_execute_deferred_source_bd_6pvhn(
+            "let/* declaration */\u{FEFF}{/* lead */ value /* : , = } ] */: x, \
+             'quoted' /* : , = */: y, 1 /* : , = */: z, \
+             shorthand /* = , */ = 5} = {value: 7, quoted: 3, 1: 2}; \
+             x * 1000 + y * 100 + z * 10 + shorthand;",
+        );
+        assert_eq!(static_keys, Value::Int(7_325));
+
+        let (_, _, parameters) = lower_and_execute_deferred_source_bd_6pvhn(
+            "function pick({value // : , = ] }\n: x}, [/* hole */, y = 2]) { \
+                 return x * 10 + y; \
+             } \
+             pick({value: 7}, [, 3]);",
+        );
+        assert_eq!(parameters, Value::Int(73));
+
+        let (_, _, tight_defaults) = lower_and_execute_deferred_source_bd_6pvhn(
+            "let [x/* tight */=4] = []; \
+             let {y/* tight */=3} = {}; \
+             x * 10 + y;",
+        );
+        assert_eq!(tight_defaults, Value::Int(43));
+
+        let (_, _, declaration_lines) = lower_and_execute_deferred_source_bd_6pvhn(
+            "let/* closed block trivia */\nlineValue = 4; \
+             const\u{FEFF}\nbomValue = 3; \
+             lineValue * 10 + bomValue;",
+        );
+        assert_eq!(declaration_lines, Value::Int(43));
+
+        let (_, _, comment_segments) = lower_and_execute_deferred_source_bd_6pvhn(
+            "let/* ; } ] ) */x = 4; \
+             let y/* ; ' \" ` { [ */=3; \
+             x * 10 + y;",
+        );
+        assert_eq!(comment_segments, Value::Int(43));
+
+        let (_, _, sloppy_let_asi) = lower_and_execute_deferred_source_bd_6pvhn(
+            "var let = 5; var counter = 1; let\n++counter; counter;",
+        );
+        assert_eq!(sloppy_let_asi, Value::Int(2));
+
+        let (_, _, continued_declarations) = lower_and_execute_deferred_source_bd_6pvhn(
+            "const first // before initializer\n= 2; \
+             let second // before initializer\n= 3; \
+             const [third] // before initializer\n= [4]; \
+             let fourth // before comma\n, fifth = 5; \
+             first * 1000 + second * 100 + third * 10 + fifth;",
+        );
+        assert_eq!(continued_declarations, Value::Int(2_345));
+
+        let (_, _, trailing_declarations) = lower_and_execute_deferred_source_bd_6pvhn(
+            "let a = 1; const // before binding\n b = 2; \
+             let d = 1; const e // before equals\n = 2; \
+             let f = 1; let g // before comma\n , h = 2; \
+             a + b + d + e + f + h;",
+        );
+        assert_eq!(trailing_declarations, Value::Int(9));
+
+        let (_, _, sloppy_let_trivia) = lower_and_execute_deferred_source_bd_6pvhn(
+            "var let = value => value + 1; \
+             var first = let/**/(4); \
+             var second = let\u{FEFF}(4); \
+             let/**/x = 9; \
+             first * 100 + second * 10 + x;",
+        );
+        assert_eq!(sloppy_let_trivia, Value::Int(559));
+
+        let (_, _, sloppy_let_assignment) =
+            lower_and_execute_deferred_source_bd_6pvhn("var let = 0; let\n= 1; let;");
+        assert_eq!(sloppy_let_assignment, Value::Int(1));
+
+        let (_, _, sloppy_let_in) = lower_and_execute_deferred_source_bd_6pvhn(
+            "var let = 'x'; var object = {x: 1}; let\nin object;",
+        );
+        assert_eq!(sloppy_let_in, Value::Bool(true));
+
+        for source in [
+            "var let = value => value + 1; let\n(4);",
+            "var let = value => value + 1; let// call trivia\n(4);",
+            "var let = value => value + 1; let\u{FEFF}\n(4);",
+        ] {
+            let (_, _, sloppy_let_call) = lower_and_execute_deferred_source_bd_6pvhn(source);
+            assert_eq!(sloppy_let_call, Value::Int(5), "source: {source:?}");
+        }
+
+        let (_, _, sloppy_let_reserved_words) =
+            lower_and_execute_deferred_source_bd_6pvhn("var let = 1; let\ntrue; let\nnull; let;");
+        assert_eq!(sloppy_let_reserved_words, Value::Int(1));
+
+        let (_, _, leading_statement_trivia) = lower_and_execute_deferred_source_bd_6pvhn(
+            "/* leading */ let a = 1; \
+             /* before declaration */ const b = 2; \
+             a + b;",
+        );
+        assert_eq!(leading_statement_trivia, Value::Int(3));
+
+        let (_, _, comment_only_segments) = lower_and_execute_deferred_source_bd_6pvhn(
+            "let x = 1; /* block only */ ; // line only\n x;",
+        );
+        assert_eq!(comment_only_segments, Value::Int(1));
+
+        let (_, _, clause_trivia) = lower_and_execute_deferred_source_bd_6pvhn(
+            "let x = 0; if (false) { x = 1; }/* clause */else { x = 2; } x;",
+        );
+        assert_eq!(clause_trivia, Value::Int(2));
+
+        let (_, _, standalone_else) =
+            lower_and_execute_deferred_source_bd_6pvhn("let x = 0; if (false) {} else\nx = 2; x;");
+        assert_eq!(standalone_else, Value::Int(2));
+
+        let (_, _, clause_identifier_prefix) = lower_and_execute_deferred_source_bd_6pvhn(
+            "var else$foo = 7; var x = 0; \
+             if (false) { x = 1; } else$foo; x + else$foo;",
+        );
+        assert_eq!(clause_identifier_prefix, Value::Int(7));
+
+        let (_, _, contextual_for_of) = lower_and_execute_deferred_source_bd_6pvhn(
+            "let seen = 0; for (let of of [7]) { seen = of; } seen;",
+        );
+        assert_eq!(contextual_for_of, Value::Int(7));
+    }
+
+    #[test]
+    fn postfix_operand_comment_trivia_lowers_and_executes_bd_56geo() {
+        let (ir1, _, value) = lower_and_execute_deferred_source_bd_6pvhn(
+            "let obj = { \
+                 value: 40, \
+                 add: function (amount) { return this.value + amount; } \
+             }; \
+             let read = obj. /* read . */ value; \
+             obj. /* call . */ add /* callee */ \
+                 (/* argument ) , */ read - 38 /* trailing argument */);",
+        );
+        assert!(ir1.ops.iter().any(|op| matches!(
+            op,
+            Ir1Op::GetProperty {
+                key: Ir1PropertyKey::Static(key)
+            } if key == "value"
+        )));
+        assert!(ir1.ops.iter().any(|op| matches!(
+            op,
+            Ir1Op::GetProperty {
+                key: Ir1PropertyKey::Static(key)
+            } if key == "add"
+        )));
+        assert!(
+            ir1.ops
+                .iter()
+                .any(|op| matches!(op, Ir1Op::CallMethod { arg_count: 1 }))
+        );
+        assert_eq!(value, Value::Int(42));
+    }
+
+    #[test]
+    fn legacy_var_for_in_initializer_executes_once_before_rhs_bd_1tafi() {
+        let (_, _, empty_object) = lower_and_execute_deferred_source_bd_6pvhn(
+            "var order = 0; \
+             function init() { order = order * 10 + 1; return 7; } \
+             function rhs() { order = order * 10 + 2; return {}; } \
+             for (var key = init() in rhs()) { order = 999; } \
+             order * 10 + key;",
+        );
+        assert_eq!(
+            empty_object,
+            Value::Int(127),
+            "initializer and RHS must run in source order even with no keys"
+        );
+
+        let (_, _, multiple_keys) = lower_and_execute_deferred_source_bd_6pvhn(
+            "var count = 0; \
+             function init() { count = count + 1; return 'seed'; } \
+             for (var key = init() in {alpha: 1, beta: 2}) {} \
+             count * 10 + (key === 'beta' ? 2 : 0);",
+        );
+        assert_eq!(
+            multiple_keys,
+            Value::Int(12),
+            "initializer must run once before yielded keys overwrite the var binding"
+        );
+
+        let (_, _, deferred_function) = lower_and_execute_deferred_source_bd_6pvhn(
+            "function retained() { \
+                 for (var key = 7 in {}) {} \
+                 return key; \
+             } \
+             retained();",
+        );
+        assert_eq!(deferred_function, Value::Int(7));
+    }
+
+    #[test]
+    fn unicode_and_escaped_binding_names_execute_canonically_bd_t4947() {
+        let (_, _, direct) = lower_and_execute_deferred_source_bd_6pvhn(
+            r"let π = 7;
+              let \u0076alue = 3;
+              π * 10 + \u0076alue;",
+        );
+        assert_eq!(direct, Value::Int(73));
+
+        let (_, _, destructured) = lower_and_execute_deferred_source_bd_6pvhn(
+            r"let {π, \u0076alue, a\u037A} = {'π': 7, value: 3, 'aͺ': 2};
+              π * 100 + \u0076alue * 10 + a\u037A;",
+        );
+        assert_eq!(destructured, Value::Int(732));
+
+        let (_, _, arrows) = lower_and_execute_deferred_source_bd_6pvhn(
+            r"let make = \u03C0 => π + 1;
+              let take = ([\u0076alue]) => value;
+              make(9) * 10 + take([4]);",
+        );
+        assert_eq!(arrows, Value::Int(104));
+
+        let (_, _, escaped_call) = lower_and_execute_deferred_source_bd_6pvhn(
+            r"let \u0066n = value => value + 1; \u0066n(4);",
+        );
+        assert_eq!(escaped_call, Value::Int(5));
+
+        let (_, _, rest_bindings) = lower_and_execute_deferred_source_bd_6pvhn(
+            r"let [head, ...\u0074ail] = [1, 2, 3];
+              function pair(...\u0076alues) { return values[0] * 10 + values[1]; }
+              head * 1000 + tail[0] * 100 + tail[1] * 10 + pair(4, 5);",
+        );
+        assert_eq!(rest_bindings, Value::Int(1_275));
+    }
+
+    #[test]
+    fn declaration_and_catch_names_execute_canonically_bd_7vm4l() {
+        let (_, _, value) = lower_and_execute_deferred_source_bd_6pvhn(
+            r"function v\u0061lue() { return 7; }
+              let result = 0;
+              try { throw value(); } catch (e\u0072r) { result = err + 1; }
+              result;",
+        );
+        assert_eq!(value, Value::Int(8));
+    }
+
+    #[test]
+    fn escaped_import_bindings_collide_after_canonicalization_bd_7vm4l() {
+        let tree = CanonicalEs2020Parser
+            .parse(
+                r"import {first as v\u0061lue} from 'one';
+                   import {second as value} from 'two';",
+                ParseGoal::Module,
+            )
+            .expect("each import declaration is locally well-formed");
+        let ir0 = Ir0Module::from_syntax_tree(tree, "bd_7vm4l.mjs");
+        let result = validate_ir0_static_semantics(&ir0);
+        assert_eq!(result.error_count(), 1);
+        assert!(matches!(
+            result.errors.as_slice(),
+            [SemanticError {
+                code: SemanticErrorCode::DuplicateImportBinding,
+                binding_name: Some(name),
+                ..
+            }] if name == "value"
+        ));
+    }
+
+    #[test]
+    fn sloppy_script_await_and_yield_bindings_execute_as_identifiers_bd_4d60a() {
+        let (_, _, value) = lower_and_execute_deferred_source_bd_6pvhn(
+            "var await = value => value + 1; var yield = 3; await(yield);",
+        );
+        assert_eq!(value, Value::Int(4));
+    }
+
+    #[test]
+    fn static_object_literal_keys_execute_with_canonical_property_names_bd_y74cd() {
+        for (object_key, canonical_key) in static_property_key_cases_bd_h4esx() {
+            let source = format!("let {{'{canonical_key}': value}} = {{{object_key}: 7}}; value;");
+            let (_, _, value) = lower_and_execute_deferred_source_bd_6pvhn(&source);
+            assert_eq!(
+                value,
+                Value::Int(7),
+                "object key `{object_key}` must produce canonical property `{canonical_key}`"
+            );
+        }
+    }
+
+    #[test]
+    fn object_literal_shorthand_uses_canonical_identifier_bd_y74cd() {
+        let (_, _, value) = lower_and_execute_deferred_source_bd_6pvhn(
+            r"let value = 7;
+              let {'value': escaped} = {\u0076alue};
+              var await = 3;
+              let {'await': contextual} = {await};
+              escaped * 10 + contextual;",
+        );
+        assert_eq!(value, Value::Int(73));
+    }
+
+    #[test]
+    fn computed_object_literal_keys_evaluate_inner_expression_once_bd_y74cd() {
+        let (_, _, primitive_keys) = lower_and_execute_deferred_source_bd_6pvhn(
+            "let {'null': null_value} = {[null]: 3};\
+             let {'undefined': undefined_value} = {[undefined]: 4};\
+             null_value * 10 + undefined_value;",
+        );
+        assert_eq!(primitive_keys, Value::Int(34));
+
+        let (_, _, order) = lower_and_execute_deferred_source_bd_6pvhn(
+            "let order = 0;\
+             function key() { order = order * 10 + 1; return 'value'; }\
+             function value() { order = order * 10 + 2; return 7; }\
+             let {'value': picked} = {[key()]: value()};\
+             picked * 100 + order;",
+        );
+        assert_eq!(order, Value::Int(712));
+    }
+
+    #[test]
+    fn regexp_computed_object_keys_lower_bd_egjks() {
+        let tree = CanonicalEs2020Parser
+            .parse(
+                "let object = { [/]/]: 7, [/[/]/]: 8 }; \
+                 object[/]/] * 10 + object[/[/]/];",
+                ParseGoal::Script,
+            )
+            .expect("RegExp computed-key source should parse");
+        let ir0 = Ir0Module::from_syntax_tree(tree, "bd_egjks.js");
+        let ir1 = lower_ir0_to_ir1(&ir0)
+            .expect("RegExp computed keys should lower to IR1")
+            .module;
+        assert_eq!(
+            ir1.ops
+                .iter()
+                .filter(|op| matches!(
+                    op,
+                    Ir1Op::HostCall { capability, arg_count: 2 }
+                        if capability == "regexp:create"
+                ))
+                .count(),
+            4
+        );
+        assert_eq!(
+            ir1.ops
+                .iter()
+                .filter(|op| matches!(op, Ir1Op::NewObject { count: 2 }))
+                .count(),
+            1
+        );
+        assert_eq!(
+            ir1.ops
+                .iter()
+                .filter(|op| matches!(
+                    op,
+                    Ir1Op::GetProperty {
+                        key: Ir1PropertyKey::Dynamic
+                    }
+                ))
+                .count(),
+            2
+        );
+    }
+
+    #[test]
+    fn mixed_object_spread_preserves_target_and_override_order_bd_ibsn4() {
+        let (_, _, value) = lower_and_execute_deferred_source_bd_6pvhn(
+            "let {a, b, c} = {...{a: 1, b: 2}, b: 9, c: 3};\
+             let {'a': after} = {...{a: 1}, a: 9};\
+             let {'a': before} = {a: 9, ...{a: 1}};\
+             a * 10000 + b * 1000 + c * 100 + after * 10 + before;",
+        );
+        assert_eq!(value, Value::Int(19_391));
+    }
+
+    #[test]
+    fn mixed_object_spread_preserves_computed_keys_and_evaluation_order_bd_ibsn4() {
+        let (_, _, value) = lower_and_execute_deferred_source_bd_6pvhn(
+            "let order = 0;\
+             function key() { order = order * 10 + 1; return 'a'; }\
+             function value() { order = order * 10 + 2; return 9; }\
+             let {'a': after} = {...{a: 1}, [key()]: value()};\
+             let name = 'a';\
+             let {'a': before} = {[name]: 9, ...{a: 1}};\
+             after * 1000 + before * 100 + order;",
+        );
+        assert_eq!(value, Value::Int(9_112));
+    }
+
+    #[test]
+    fn mixed_object_spread_uses_canonical_static_property_names_bd_ibsn4() {
+        let (_, _, value) = lower_and_execute_deferred_source_bd_6pvhn(
+            "let {'16': radix, '1.5': decimal} = {...{}, 0x10: 7, 1.5: 8};\
+             radix * 10 + decimal;",
+        );
+        assert_eq!(value, Value::Int(78));
+    }
+
+    #[test]
+    fn mixed_object_spread_executes_in_deferred_function_body_bd_ibsn4() {
+        let (_, _, value) = lower_and_execute_deferred_source_bd_6pvhn(
+            "let order = 0;\
+             function source() { order = order * 10 + 1; return {a: 1}; }\
+             function key() { order = order * 10 + 2; return 'b'; }\
+             function propertyValue() { order = order * 10 + 3; return 9; }\
+             function build() { return {...source(), [key()]: propertyValue()}; }\
+             let {a, b} = build();\
+             a * 10000 + b * 1000 + order;",
+        );
+        assert_eq!(value, Value::Int(19_123));
+    }
+
+    #[test]
+    fn parameter_default_closures_share_source_ordered_live_cells_bd_wqbac() {
+        let (_, _, value) = lower_and_execute_deferred_source_bd_6pvhn(
+            "function build(callback = () => later, { later } = { later: 3 }) {\
+                 later = later + 1;\
+                 return callback;\
+             }\
+             let first = build(undefined, { later: 10 });\
+             let second = build(undefined, { later: 20 });\
+             first() * 100 + second();",
+        );
+        assert_eq!(value, Value::Int(1_121));
+    }
+
+    #[test]
+    fn immediate_default_closure_read_preserves_later_parameter_tdz_bd_wqbac() {
+        let (_, _, value) = lower_and_execute_deferred_source_bd_6pvhn(
+            "function target(value = (() => later)(), later = 3) { return value; }\
+             try { target(undefined, 9); 'missed'; }\
+             catch (error) { error.name + ':' + error.message; }",
+        );
+        assert_eq!(
+            value,
+            Value::str("ReferenceError:Cannot access 'later' before initialization")
+        );
+    }
+
+    #[test]
+    fn default_arrows_capture_defining_this_across_escape_and_nesting_bd_wqbac() {
+        let (_, _, value) = lower_and_execute_deferred_source_bd_6pvhn(
+            "function make(callback = () => () => this.value) { return callback(); }\
+             let holder = { value: 7, make };\
+             let arrow = holder.make();\
+             let other = { value: 99, arrow };\
+             other.arrow();",
+        );
+        assert_eq!(value, Value::Int(7));
+    }
+
+    #[test]
+    fn default_arrows_capture_new_target_bd_wqbac() {
+        let (_, _, value) = lower_and_execute_deferred_source_bd_6pvhn(
+            "function Box(read = () => new.target) { this.read = read; }\
+             let box = new Box();\
+             box.read() === Box;",
+        );
+        assert_eq!(value, Value::Bool(true));
+    }
+
+    #[test]
+    fn default_arrows_capture_super_and_defining_this_bd_wqbac() {
+        let (_, _, value) = lower_and_execute_deferred_source_bd_6pvhn(
+            "class Parent { value() { return this.number; } }\
+             class Child extends Parent {\
+                 make(callback = () => super.value()) { return callback; }\
+             }\
+             let child = new Child();\
+             child.number = 7;\
+             let callback = child.make();\
+             let other = { number: 99, callback };\
+             other.callback();",
+        );
+        assert_eq!(value, Value::Int(7));
+    }
+
+    #[test]
+    fn declaration_and_expression_self_defaults_use_live_cells_bd_wqbac() {
+        let (_, _, value) = lower_and_execute_deferred_source_bd_6pvhn(
+            "function declared(value = declared) { return value; }\
+             let original = declared;\
+             declared = 7;\
+             let self = 9;\
+             let wrapped = function self(value = self) { return value === self; };\
+             original() * 10 + (wrapped() ? 1 : 0) + self;",
+        );
+        assert_eq!(value, Value::Int(80));
+    }
+
+    #[test]
+    fn named_class_constructor_and_method_defaults_use_private_self_bd_wqbac() {
+        let (_, _, value) = lower_and_execute_deferred_source_bd_6pvhn(
+            "let Self = 9;\
+             let Wrapped = class Self {\
+                 constructor(value = Self) { this.ctor = value === Self; }\
+                 method(value = Self) { return value === Self; }\
+             };\
+             let wrapped = new Wrapped();\
+             (wrapped.ctor ? 100 : 0) + (wrapped.method() ? 10 : 0) + Self;",
+        );
+        assert_eq!(value, Value::Int(119));
+    }
+
+    #[test]
+    fn named_generator_expression_self_default_gets_private_const_marker_bd_wqbac() {
+        let module = lower_rest_source_to_ir3(
+            "let outer = 9;\
+             let generator = function* outer(value = outer) { yield value; };",
+        )
+        .expect("named generator expression self default should lower");
+        let marker_index = module
+            .constant_pool
+            .iter()
+            .position(|name| name.starts_with(FUNCTION_EXPRESSION_SELF_CAPTURE_PREFIX))
+            .expect("named generator expression must use a private self marker");
+        assert!(module.instructions.iter().any(|instruction| matches!(
+            instruction,
+            Ir3Instruction::DeclareBinding {
+                name_pool_index,
+                kind,
+            } if *name_pool_index as usize == marker_index
+                && *kind == runtime_binding_kind_code(BindingKind::Const)
+        )));
+        assert!(
+            module
+                .instructions
+                .iter()
+                .any(|instruction| matches!(instruction, Ir3Instruction::CreateGenerator { .. }))
+        );
+    }
+
+    #[test]
+    fn generator_defaults_run_at_invocation_before_body_bd_093id() {
+        let (ir1, ir3, value) = lower_and_execute_deferred_source_bd_6pvhn(
+            "let n = 0;\
+             function mark() { n = n * 10 + 1; return 7; }\
+             function* g(x = mark()) { n = n * 10 + 2; yield x; }\
+             let iterator = g();\
+             let atCall = n;\
+             let first = iterator.next();\
+             atCall + ':' + n + ':' + first.value + ':' + first.done;",
+        );
+        assert_eq!(value, Value::str("1:12:7:false"));
+
+        let ir1_body = deferred_ir1_body_bd_6pvhn(&ir1, "g");
+        assert_eq!(
+            ir1_body
+                .iter()
+                .filter(|op| matches!(op, Ir1Op::GeneratorBodyStart))
+                .count(),
+            1
+        );
+        let ir3_body = deferred_ir3_body_bd_6pvhn(&ir3, "g");
+        assert_eq!(
+            ir3_body
+                .iter()
+                .filter(|instruction| matches!(instruction, Ir3Instruction::GeneratorBodyStart))
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn named_generator_self_default_is_private_bd_093id() {
+        let (_, _, value) = lower_and_execute_deferred_source_bd_6pvhn(
+            "let inner = 9;\
+             let g = function* inner(x = inner) {\
+                 yield (x === g ? 100 : 0) + (inner === g ? 10 : 0);\
+             };\
+             let first = g().next();\
+             first.value + inner;",
+        );
+        assert_eq!(value, Value::Int(119));
+    }
+
+    #[test]
+    fn generator_next_injects_resume_value_and_completes_bd_093id() {
+        let (_, _, value) = lower_and_execute_deferred_source_bd_6pvhn(
+            "function* g(seed) {\
+                 const received = yield seed;\
+                 return received + 1;\
+             }\
+             let iterator = g(10);\
+             let first = iterator.next(99);\
+             let second = iterator.next(20);\
+             let third = iterator.next(30);\
+             first.value === 10 && first.done === false\
+                 && second.value === 21 && second.done === true\
+                 && third.value === undefined && third.done === true;",
+        );
+        assert_eq!(value, Value::Bool(true));
+    }
+
+    #[test]
+    fn generator_next_property_requires_receiver_bd_093id() {
+        let (_, _, value) = lower_and_execute_deferred_source_bd_6pvhn(
+            "function* g() { yield 4; }\
+             let iterator = g();\
+             let nextType = typeof iterator.next;\
+             let next = iterator.next;\
+             let detachedError = '';\
+             try { next(); } catch (error) { detachedError = error.name; }\
+             let direct = iterator.next();\
+             nextType + ':' + detachedError + ':' + direct.value + ':' + direct.done;",
+        );
+        assert_eq!(value, Value::str("function:TypeError:4:false"));
+    }
+
+    #[test]
+    fn generator_method_invocation_preserves_receiver_for_defaults_and_body_bd_093id() {
+        let (_, _, value) = lower_and_execute_deferred_source_bd_6pvhn(
+            "function* g(x = this.n) { yield this.n + x; }\
+             let holder = { n: 4, g };\
+             holder.g().next().value;",
+        );
+        assert_eq!(value, Value::Int(8));
+    }
+
+    #[test]
+    fn nested_plain_generator_call_does_not_inherit_callers_receiver_bd_093id() {
+        let (_, _, value) = lower_and_execute_deferred_source_bd_6pvhn(
+            "function* g() { yield this === holder; }\
+             function make() { return g(); }\
+             let holder = { make };\
+             holder.make().next().value;",
+        );
+        assert_eq!(value, Value::Bool(false));
+    }
+
+    #[test]
+    fn generator_default_throw_is_synchronous_bd_093id() {
+        let (_, _, value) = lower_and_execute_deferred_source_bd_6pvhn(
+            "let effects = 0;\
+             function fail() { effects += 1; throw 7; }\
+             function* defaultThrow(x = fail()) { effects += 100; yield x; }\
+             let callCaught = 0;\
+             try { defaultThrow(); } catch (error) { callCaught = error; }\
+             function* bodyThrow() { effects += 10; throw 8; }\
+             let iterator = bodyThrow();\
+             let beforeNext = effects;\
+             let nextCaught = 0;\
+             try { iterator.next(); } catch (error) { nextCaught = error; }\
+             callCaught + ':' + beforeNext + ':' + nextCaught + ':' + effects;",
+        );
+        assert_eq!(value, Value::str("7:1:8:11"));
+    }
+
+    #[test]
+    fn failed_generator_invocation_does_not_poison_next_activation_bd_093id() {
+        let (_, _, value) = lower_and_execute_deferred_source_bd_6pvhn(
+            "let calls = 0;\
+             function init() { calls += 1; if (calls === 1) throw 5; return calls; }\
+             function* g(x = init()) { yield x; }\
+             let firstCaught = 0;\
+             try { g(); } catch (error) { firstCaught = error; }\
+             let second = g().next();\
+             firstCaught + ':' + calls + ':' + second.value + ':' + second.done;",
+        );
+        assert_eq!(value, Value::str("5:2:2:false"));
+    }
+
+    #[test]
+    fn generator_activations_isolate_live_parameter_closures_bd_093id() {
+        let (_, _, value) = lower_and_execute_deferred_source_bd_6pvhn(
+            "let serial = 0;\
+             function* g(x = ++serial, read = () => x) {\
+                 x += 10;\
+                 yield read();\
+                 x += 10;\
+                 return read();\
+             }\
+             let a = g();\
+             let b = g();\
+             let afterCalls = serial;\
+             let a1 = a.next();\
+             let b1 = b.next();\
+             let a2 = a.next();\
+             let b2 = b.next();\
+             afterCalls + ':' + a1.value + ':' + b1.value + ':'\
+                 + a2.value + ':' + b2.value + ':' + serial;",
+        );
+        assert_eq!(value, Value::str("2:11:12:21:22:2"));
+    }
+
+    #[test]
+    fn generator_rest_arguments_survive_invocation_and_resume_bd_ur3tk_5() {
+        let (_, _, value) = lower_and_execute_deferred_source_bd_6pvhn(
+            "function* empty(...tail) {\
+                 yield tail.length;\
+                 return tail.length;\
+             }\
+             function* fixed(head, ...tail) {\
+                 yield head + ':' + tail.length + ':' + tail[0] + ':' + tail[1];\
+                 return tail[0] + tail[1];\
+             }\
+             let emptyIterator = empty();\
+             let fixedIterator = fixed('h', 20, 22);\
+             let emptyFirst = emptyIterator.next();\
+             let fixedFirst = fixedIterator.next();\
+             let fixedDone = fixedIterator.next();\
+             emptyFirst.value + ':' + emptyFirst.done + ':'\
+                 + fixedFirst.value + ':' + fixedFirst.done + ':'\
+                 + fixedDone.value + ':' + fixedDone.done;",
+        );
+        assert_eq!(value, Value::str("0:false:h:2:20:22:false:42:true"));
+    }
+
+    #[test]
+    fn legacy_markerless_generator_keeps_schema_through_ir1_ir2_ir3_bd_093id() {
+        let tree = CanonicalEs2020Parser
+            .parse(
+                "function* g(x) { yield x; } g(7).next().value;",
+                ParseGoal::Script,
+            )
+            .expect("legacy generator compatibility source should parse");
+        let ir0 = Ir0Module::from_syntax_tree(tree, "legacy_generator_bd_093id.js");
+        let mut ir1 = lower_ir0_to_ir1(&ir0)
+            .expect("current source should lower to IR1")
+            .module;
+        let body = ir1
+            .ops
+            .iter_mut()
+            .find_map(|op| match op {
+                Ir1Op::DeclareFunction {
+                    name,
+                    body_ops,
+                    is_generator: true,
+                    ..
+                } if name == "g" => Some(body_ops),
+                _ => None,
+            })
+            .expect("lowered generator body should exist");
+        body.retain(|op| !matches!(op, Ir1Op::GeneratorBodyStart));
+
+        let current_error = lower_ir1_to_ir2(&ir1)
+            .expect_err("current markerless generator IR1 must fail structurally");
+        assert!(matches!(
+            current_error,
+            LoweringPipelineError::IrContractValidation { ref code, .. }
+                if code == "IR_INVALID_GENERATOR_BOUNDARY"
+        ));
+
+        let legacy_version = crate::ir_contract::IrSchemaVersion {
+            major: 0,
+            minor: 9,
+            patch: 0,
+        };
+        ir1.header.schema_version = legacy_version;
+        let ir2 = lower_ir1_to_ir2(&ir1)
+            .expect("legacy markerless IR1 should lower")
+            .module;
+        assert_eq!(ir2.header.schema_version, legacy_version);
+        let ir3 = lower_ir2_to_ir3(&ir2)
+            .expect("legacy markerless IR2 should lower")
+            .module;
+        assert_eq!(ir3.header.schema_version, legacy_version);
+        assert!(
+            !ir3.instructions
+                .iter()
+                .any(|instruction| matches!(instruction, Ir3Instruction::GeneratorBodyStart))
+        );
+
+        let mut config = InterpreterConfig::quickjs_defaults();
+        config.granted_capabilities = BTreeSet::from([
+            RuntimeCapability::VmDispatch,
+            RuntimeCapability::HeapAllocate,
+        ]);
+        let value = QuickJsLane::with_config(config)
+            .execute(&ir3, "trace-legacy-generator-bd-093id")
+            .expect("legacy markerless generator should retain first-next start timing")
+            .value;
+        assert_eq!(value, Value::Int(7));
+    }
+
+    #[test]
+    fn private_self_defaults_survive_body_shadowing_and_remain_immutable_bd_wqbac() {
+        let (_, _, value) = lower_and_execute_deferred_source_bd_6pvhn(
+            "let functionOuter = 9;\
+             let wrapped = function functionOuter(value = functionOuter) {\
+                 let functionOuter = 1;\
+                 return value === wrapped && functionOuter === 1;\
+             };\
+             let classOuter = 8;\
+             let Wrapped = class classOuter {\
+                 constructor(value = classOuter) {\
+                     let classOuter = 2;\
+                     this.ctor = value === Wrapped && classOuter === 2;\
+                 }\
+                 method(value = classOuter) {\
+                     let classOuter = 3;\
+                     return value === Wrapped && classOuter === 3;\
+                 }\
+             };\
+             let immutable = function self() {\
+                 'use strict';\
+                 try { self = 7; return false; }\
+                 catch (error) { return error.name === 'TypeError' && self === immutable; }\
+             };\
+             let instance = new Wrapped();\
+             (wrapped() ? 100 : 0) + (instance.ctor ? 10 : 0)\
+                 + (instance.method() ? 1 : 0) + (immutable() ? 1000 : 0)\
+                 + functionOuter + classOuter;",
+        );
+        assert_eq!(value, Value::Int(1_128));
+    }
+
+    #[test]
+    fn generator_rest_metadata_reaches_suspended_runtime_bd_ur3tk_5() {
+        let module = lower_rest_source_to_ir3("function* generated(...tail) { yield tail; }")
+            .expect("generator rest arguments should lower once the frame persists its tail");
+        let function = module
+            .function_table
+            .iter()
+            .find(|function| function.name.as_deref() == Some("generated"))
+            .expect("lowered generator descriptor");
+        assert_eq!(function.rest_param_index, Some(0));
+        assert_eq!(
+            module
+                .instructions
+                .iter()
+                .filter(|instruction| matches!(instruction, Ir3Instruction::GeneratorBodyStart))
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn malformed_ir1_rest_metadata_fails_ir3_lowering_bd_ur3tk_9() {
+        let mut ir1 = Ir1Module::new(ContentHash::compute(b"malformed-rest-ir0"), "rest_ir1.js");
+        ir1.ops.push(Ir1Op::DeclareFunction {
+            name: "malformedRest".to_string(),
+            binding_id: 0,
+            param_names: vec!["head".to_string(), "tail".to_string()],
+            body_ops: vec![
+                Ir1Op::LoadLiteral {
+                    value: Ir1Literal::Undefined,
+                },
+                Ir1Op::Return,
+            ],
+            free_vars: Vec::new(),
+            free_var_ids: Vec::new(),
+            free_var_outer_ids: Vec::new(),
+            local_lexical_bindings: None,
+            is_generator: false,
+            rest_param_index: Some(0),
+        });
+        ir1.ops.push(Ir1Op::Pop);
+        ir1.ops.push(Ir1Op::Return);
+        let ir2 = lower_ir1_to_ir2(&ir1)
+            .expect("IR1->IR2 should preserve hand-built metadata for validation")
+            .module;
+
+        assert_eq!(
+            lower_ir2_to_ir3(&ir2).expect_err("non-final rest metadata must fail closed"),
+            LoweringPipelineError::InvariantViolation {
+                detail: "Function rest metadata must identify the final positional parameter",
+            }
+        );
+    }
+
+    #[test]
+    fn rest_only_function_and_class_expressions_reach_ir3_bd_ur3tk_9() {
+        let ir3 = lower_rest_source_to_ir3(
+            "let expressed = function expressed(...expressionTail) { return expressionTail; };\
+             let BucketExpression = class BucketExpression {\
+               constructor(...ctorTail) {}\
+               collectExpression(...methodTail) { return methodTail; }\
+             };",
+        )
+        .expect("rest-only expression forms should lower");
+
+        for name in ["expressed", "BucketExpression", "collectExpression"] {
+            let desc = ir3
+                .function_table
+                .iter()
+                .find(|desc| desc.name.as_deref() == Some(name))
+                .unwrap_or_else(|| panic!("missing IR3 descriptor for {name}"));
+            assert_eq!(desc.arity, 1, "{name} positional arity");
+            assert_eq!(desc.rest_param_index, Some(0), "{name} rest slot");
+        }
+    }
+
+    #[test]
     fn lower_anonymous_function_declaration() {
         let ir0 = stmt_ir0(vec![Statement::FunctionDeclaration(FunctionDeclaration {
             name: None,
@@ -10878,6 +19684,602 @@ mod tests {
                 .iter()
                 .any(|instruction| matches!(instruction, Ir3Instruction::Return { .. })),
             "deferred function body should lower to executable IR3"
+        );
+    }
+
+    #[test]
+    fn deferred_nullish_jump_lowers_and_executes_bd_6pvhn() {
+        let (ir1, module, value) = lower_and_execute_deferred_source_bd_6pvhn(
+            "function fallback(value) { return value ?? 7; } fallback(null) * 10 + fallback(3);",
+        );
+        assert!(
+            deferred_ir1_body_bd_6pvhn(&ir1, "fallback")
+                .iter()
+                .any(|op| matches!(op, Ir1Op::JumpIfNullish { .. })),
+            "the source must reach the affected deferred IR1 operation"
+        );
+        assert!(
+            deferred_ir3_body_bd_6pvhn(&module, "fallback")
+                .iter()
+                .any(|instruction| matches!(instruction, Ir3Instruction::JumpIfNullish { .. })),
+            "the deferred body must retain its nullish branch"
+        );
+        assert_eq!(value, Value::Int(73));
+    }
+
+    #[test]
+    fn deferred_delete_property_lowers_and_executes_bd_6pvhn() {
+        let (ir1, module, value) = lower_and_execute_deferred_source_bd_6pvhn(
+            "function remove(key) {\
+                 let object = { fixed: 1, dynamic: 2 };\
+                 let fixed = delete object.fixed;\
+                 let dynamic = delete object[key];\
+                 return fixed && dynamic;\
+             }\
+             remove('dynamic');",
+        );
+        assert_eq!(
+            deferred_ir1_body_bd_6pvhn(&ir1, "remove")
+                .iter()
+                .filter(|op| matches!(op, Ir1Op::DeleteProperty { .. }))
+                .count(),
+            2,
+            "the source must reach static and dynamic deferred delete operations"
+        );
+        assert_eq!(
+            deferred_ir3_body_bd_6pvhn(&module, "remove")
+                .iter()
+                .filter(|instruction| matches!(instruction, Ir3Instruction::DeleteProperty { .. }))
+                .count(),
+            2,
+            "the deferred body must retain both delete operations"
+        );
+        assert_eq!(value, Value::Bool(true));
+    }
+
+    #[test]
+    fn postfix_member_and_call_on_new_result_execute_bd_7rj0t() {
+        let (_, _, value) = lower_and_execute_deferred_source_bd_6pvhn(
+            "function Constructor(value) {\
+                 this.value = value;\
+                 this.method = function() { return 9; };\
+             }\
+             new Constructor(5).value + new Constructor().method() + new Constructor(4)['value'];",
+        );
+        assert_eq!(value, Value::Int(18));
+    }
+
+    #[test]
+    fn parenthesized_callee_postfix_executes_bd_7rj0t() {
+        let (_, _, value) = lower_and_execute_deferred_source_bd_6pvhn(
+            "function Constructor(value) { this.value = value; }\
+             new (Constructor)(6).value;",
+        );
+        assert_eq!(value, Value::Int(6));
+    }
+
+    #[test]
+    fn deferred_construct_lowers_and_executes_bd_6pvhn() {
+        let (ir1, module, value) = lower_and_execute_deferred_source_bd_6pvhn(
+            "function Empty() { this.value = 1; }\
+             function Pair(left, right) { this.value = left + right; }\
+             function make(EmptyConstructor, PairConstructor) {\
+                 return (new EmptyConstructor()).value * 10\
+                     + (new PairConstructor(3, 4)).value;\
+             }\
+             make(Empty, Pair);",
+        );
+        assert_eq!(
+            deferred_ir1_body_bd_6pvhn(&ir1, "make")
+                .iter()
+                .filter(|op| matches!(op, Ir1Op::Construct { .. }))
+                .count(),
+            2,
+            "the source must reach zero- and multi-argument deferred construction"
+        );
+        let construct_arg_counts = deferred_ir3_body_bd_6pvhn(&module, "make")
+            .iter()
+            .filter_map(|instruction| match instruction {
+                Ir3Instruction::Construct { args, .. } => Some(args.count),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(construct_arg_counts, vec![0, 2]);
+        assert_eq!(value, Value::Int(17));
+    }
+
+    #[test]
+    fn deferred_template_literal_lowers_and_executes_bd_6pvhn() {
+        let (ir1, module, value) = lower_and_execute_deferred_source_bd_6pvhn(
+            "function render(left, right) { return `${left}:${right}` + ``; } render('a', 7);",
+        );
+        assert_eq!(
+            deferred_ir1_body_bd_6pvhn(&ir1, "render")
+                .iter()
+                .filter(|op| matches!(op, Ir1Op::TemplateLiteral { .. }))
+                .count(),
+            2,
+            "the source must reach interpolated and empty deferred templates"
+        );
+        assert_eq!(
+            deferred_ir3_body_bd_6pvhn(&module, "render")
+                .iter()
+                .filter(|instruction| matches!(instruction, Ir3Instruction::TemplateLiteral { .. }))
+                .count(),
+            2,
+            "the deferred body must retain both template concatenations"
+        );
+        assert_eq!(value, Value::Str("a:7".into()));
+    }
+
+    #[test]
+    fn malformed_module_ops_in_deferred_body_fail_closed_bd_6pvhn() {
+        for (body_op, expected_detail) in [
+            (
+                Ir1Op::ImportModule {
+                    specifier: "./dependency.js".into(),
+                },
+                "ImportModule is not valid in a deferred function body",
+            ),
+            (
+                Ir1Op::ExportBinding {
+                    name: "value".to_string(),
+                    binding_id: 0,
+                },
+                "ExportBinding is not valid in a deferred function body",
+            ),
+        ] {
+            let ir2 = malformed_deferred_ir2_bd_6pvhn(vec![body_op]);
+            assert_eq!(
+                lower_ir2_to_ir3(&ir2)
+                    .expect_err("module-only operations in deferred bodies must fail closed"),
+                LoweringPipelineError::InvariantViolation {
+                    detail: expected_detail,
+                }
+            );
+        }
+    }
+
+    #[test]
+    fn malformed_empty_nested_declaration_fails_closed_bd_6pvhn() {
+        let ir2 = malformed_deferred_ir2_bd_6pvhn(vec![Ir1Op::DeclareFunction {
+            name: "empty".to_string(),
+            binding_id: 1,
+            param_names: Vec::new(),
+            body_ops: Vec::new(),
+            free_vars: Vec::new(),
+            free_var_ids: Vec::new(),
+            free_var_outer_ids: Vec::new(),
+            local_lexical_bindings: None,
+            is_generator: false,
+            rest_param_index: None,
+        }]);
+
+        assert_eq!(
+            lower_ir2_to_ir3(&ir2)
+                .expect_err("empty nested deferred declarations must fail closed"),
+            LoweringPipelineError::InvariantViolation {
+                detail: "Deferred function declaration has an empty body",
+            }
+        );
+    }
+
+    #[test]
+    fn valid_empty_nested_source_function_still_lowers_bd_6pvhn() {
+        let (ir1, _, value) = lower_and_execute_deferred_source_bd_6pvhn(
+            "function outer() { function inner() {} return inner(); } outer();",
+        );
+        let inner_body = deferred_ir1_body_bd_6pvhn(&ir1, "outer")
+            .iter()
+            .find_map(|op| match op {
+                Ir1Op::DeclareFunction { name, body_ops, .. } if name == "inner" => Some(body_ops),
+                _ => None,
+            })
+            .expect("source nested declaration should reach the deferred matcher");
+        assert!(
+            !inner_body.is_empty(),
+            "source lowering must synthesize the empty function's return body"
+        );
+        assert_eq!(value, Value::Undefined);
+    }
+
+    #[test]
+    fn malformed_deferred_hostcall_underflow_fails_closed_bd_6pvhn() {
+        let ir2 = malformed_deferred_ir2_bd_6pvhn(vec![Ir1Op::HostCall {
+            capability: "hostcall.invoke".to_string(),
+            arg_count: 1,
+        }]);
+
+        assert_eq!(
+            lower_ir2_to_ir3(&ir2)
+                .expect_err("hostcalls must pass through checked capability lowering"),
+            LoweringPipelineError::InvariantViolation {
+                detail: "Value stack underflow in function-body HostCall",
+            }
+        );
+    }
+
+    #[test]
+    fn malformed_deferred_operation_underflows_fail_closed_bd_6pvhn() {
+        for (body_op, expected_detail) in [
+            (
+                Ir1Op::JumpIfNullish { label_id: 0 },
+                "JumpIfNullish requires a condition register in a function body",
+            ),
+            (
+                Ir1Op::DeleteProperty {
+                    key: Ir1PropertyKey::Static("value".into()),
+                },
+                "DeleteProperty requires an object register in a function body",
+            ),
+            (
+                Ir1Op::Construct { arg_count: 0 },
+                "Value stack underflow in function-body Construct",
+            ),
+            (
+                Ir1Op::TemplateLiteral { quasi_count: 1 },
+                "Value stack underflow in function-body TemplateLiteral",
+            ),
+        ] {
+            let ir2 = malformed_deferred_ir2_bd_6pvhn(vec![body_op]);
+            assert_eq!(
+                lower_ir2_to_ir3(&ir2)
+                    .expect_err("malformed deferred stack consumers must fail closed"),
+                LoweringPipelineError::InvariantViolation {
+                    detail: expected_detail,
+                }
+            );
+        }
+    }
+
+    #[test]
+    fn malformed_deferred_jump_target_fails_closed_bd_6pvhn() {
+        let ir2 = malformed_deferred_ir2_bd_6pvhn(vec![
+            Ir1Op::LoadLiteral {
+                value: Ir1Literal::Null,
+            },
+            Ir1Op::JumpIfNullish { label_id: 99 },
+        ]);
+
+        assert_eq!(
+            lower_ir2_to_ir3(&ir2)
+                .expect_err("an unresolved deferred jump must not retain target zero"),
+            LoweringPipelineError::InvariantViolation {
+                detail: "function-body control-flow references missing label",
+            }
+        );
+    }
+
+    #[test]
+    fn malformed_duplicate_deferred_labels_fail_closed_bd_6pvhn() {
+        let ir2 =
+            malformed_deferred_ir2_bd_6pvhn(vec![Ir1Op::Label { id: 7 }, Ir1Op::Label { id: 7 }]);
+
+        assert_eq!(
+            lower_ir2_to_ir3(&ir2)
+                .expect_err("duplicate labels must not overwrite deferred jump targets"),
+            LoweringPipelineError::InvariantViolation {
+                detail: "Deferred function body contains duplicate label ids",
+            }
+        );
+    }
+
+    #[test]
+    fn zero_quasi_deferred_template_loads_real_empty_string_bd_6pvhn() {
+        let ir2 = malformed_deferred_ir2_bd_6pvhn(vec![
+            Ir1Op::TemplateLiteral { quasi_count: 0 },
+            Ir1Op::Return,
+        ]);
+        let module = lower_ir2_to_ir3(&ir2)
+            .expect("zero-quasi compatibility artifact should lower deterministically")
+            .module;
+        let entry = module
+            .function_table
+            .iter()
+            .find(|desc| desc.name.as_deref() == Some("outer"))
+            .expect("deferred function descriptor should exist")
+            .entry as usize;
+
+        let Ir3Instruction::LoadStr { pool_index, .. } = module.instructions[entry] else {
+            panic!("zero-quasi template must materialize an empty string")
+        };
+        assert_eq!(module.constant_pool[pool_index as usize], "");
+    }
+
+    #[test]
+    fn deferred_function_try_catch_relocates_and_executes_bd_47p8z() {
+        let module = lower_exception_source_to_ir3_bd_47p8z(
+            "function f(){ try { throw 7; } catch(e){ return e; } } f();",
+        );
+        let entry = module
+            .function_table
+            .iter()
+            .find(|desc| desc.name.as_deref() == Some("f"))
+            .expect("deferred function descriptor should exist")
+            .entry as usize;
+
+        assert!(matches!(
+            module.instructions[entry],
+            Ir3Instruction::BeginTry {
+                catch_target,
+                finally_target: None,
+            } if catch_target == (entry + 5) as u32
+        ));
+        assert!(matches!(
+            module.instructions[entry + 3],
+            Ir3Instruction::EndTry
+        ));
+        assert!(matches!(
+            module.instructions[entry + 5],
+            Ir3Instruction::EnterCatch { .. }
+        ));
+        assert_eq!(execute_exception_module_bd_47p8z(&module), Value::Int(7));
+    }
+
+    #[test]
+    fn deferred_function_finally_overrides_pending_return_bd_47p8z() {
+        let module = lower_exception_source_to_ir3_bd_47p8z(
+            "function f(){ try { return 1; } finally { return 2; } } f();",
+        );
+        let function = module
+            .function_table
+            .iter()
+            .find(|desc| desc.name.as_deref() == Some("f"))
+            .expect("deferred function descriptor should exist");
+        let entry = function.entry as usize;
+        let body = &module.instructions[entry..];
+
+        assert!(matches!(
+            module.instructions[entry],
+            Ir3Instruction::BeginTry {
+                catch_target,
+                finally_target: Some(finally_target),
+            } if catch_target == (entry + 5) as u32
+                && finally_target == (entry + 5) as u32
+        ));
+        assert!(matches!(
+            module.instructions[entry + 5],
+            Ir3Instruction::EnterFinally
+        ));
+        assert!(
+            !body
+                .iter()
+                .any(|instruction| matches!(instruction, Ir3Instruction::EnterCatch { .. })),
+            "a finally-only handler must not consume the pending abrupt completion"
+        );
+        assert_eq!(execute_exception_module_bd_47p8z(&module), Value::Int(2));
+    }
+
+    #[test]
+    fn deferred_nested_catch_finally_targets_stay_in_function_bd_47p8z() {
+        let module = lower_exception_source_to_ir3_bd_47p8z(
+            "function f(){ try { try { throw 1; } catch(inner){ throw 2; } finally {} } catch(outer){ return outer; } } f();",
+        );
+        let entry = module
+            .function_table
+            .iter()
+            .find(|desc| desc.name.as_deref() == Some("f"))
+            .expect("deferred function descriptor should exist")
+            .entry as usize;
+        let body = &module.instructions[entry..];
+
+        assert!(matches!(
+            module.instructions[entry],
+            Ir3Instruction::BeginTry {
+                catch_target,
+                finally_target: None,
+            } if catch_target == (entry + 18) as u32
+        ));
+        assert!(matches!(
+            module.instructions[entry + 1],
+            Ir3Instruction::BeginTry {
+                catch_target,
+                finally_target: Some(finally_target),
+            } if catch_target == (entry + 6) as u32
+                && finally_target == (entry + 13) as u32
+        ));
+        assert!(matches!(
+            module.instructions[entry + 7],
+            Ir3Instruction::BeginTry {
+                catch_target,
+                finally_target: Some(finally_target),
+            } if catch_target == (entry + 13) as u32
+                && finally_target == (entry + 13) as u32
+        ));
+        assert!(matches!(
+            module.instructions[entry + 6],
+            Ir3Instruction::EnterCatch { .. }
+        ));
+        assert!(matches!(
+            module.instructions[entry + 13],
+            Ir3Instruction::EnterFinally
+        ));
+        assert!(matches!(
+            module.instructions[entry + 18],
+            Ir3Instruction::EnterCatch { .. }
+        ));
+        assert_eq!(
+            body.iter()
+                .filter(|instruction| matches!(instruction, Ir3Instruction::BeginTry { .. }))
+                .count(),
+            3
+        );
+        assert_eq!(
+            body.iter()
+                .filter(|instruction| matches!(instruction, Ir3Instruction::EndTry))
+                .count(),
+            3
+        );
+        assert_eq!(
+            body.iter()
+                .filter(|instruction| matches!(instruction, Ir3Instruction::EnterCatch { .. }))
+                .count(),
+            2
+        );
+        assert_eq!(
+            body.iter()
+                .filter(|instruction| matches!(instruction, Ir3Instruction::EnterFinally))
+                .count(),
+            1
+        );
+        assert_eq!(
+            body.iter()
+                .filter(|instruction| matches!(instruction, Ir3Instruction::EndFinally))
+                .count(),
+            1
+        );
+        assert_eq!(execute_exception_module_bd_47p8z(&module), Value::Int(2));
+    }
+
+    fn execute_exception_source_bd_kfxwe(source: &str) -> Value {
+        let module = lower_exception_source_to_ir3_bd_47p8z(source);
+        execute_exception_module_bd_47p8z(&module)
+    }
+
+    #[test]
+    fn break_through_finally_pops_handler_before_later_throw_bd_kfxwe() {
+        assert_eq!(
+            execute_exception_source_bd_kfxwe(
+                "let hits=0; try { while(true) { try { break; } finally { hits=hits+1; } } throw 0; } catch(e) {} hits;",
+            ),
+            Value::Int(1)
+        );
+    }
+
+    #[test]
+    fn continue_through_finally_does_not_accumulate_handlers_bd_kfxwe() {
+        assert_eq!(
+            execute_exception_source_bd_kfxwe(
+                "let hits=0; let i=0; try { while(i<2) { i=i+1; try { continue; } finally { hits=hits+1; } } throw 0; } catch(e) {} hits;",
+            ),
+            Value::Int(2)
+        );
+    }
+
+    #[test]
+    fn break_through_try_catch_without_finally_pops_handler_bd_kfxwe() {
+        assert_eq!(
+            execute_exception_source_bd_kfxwe(
+                "let caught=0; try { while(true) { try { break; } catch(e) { caught=99; } } throw 1; } catch(e) { caught=caught+1; } caught;",
+            ),
+            Value::Int(1)
+        );
+    }
+
+    #[test]
+    fn break_from_catch_pops_finally_guard_bd_kfxwe() {
+        assert_eq!(
+            execute_exception_source_bd_kfxwe(
+                "let hits=0; try { while(true) { try { throw 1; } catch(e) { break; } finally { hits=hits+1; } } throw 2; } catch(e) { hits=hits+10; } hits;",
+            ),
+            Value::Int(11)
+        );
+    }
+
+    #[test]
+    fn return_from_break_forwarder_does_not_replay_finalizer_bd_kfxwe() {
+        assert_eq!(
+            execute_exception_source_bd_kfxwe(
+                "function f(){ let hits=0; while(true) { try { break; } finally { hits=hits+1; return hits*10+7; } } return 0; } f();",
+            ),
+            Value::Int(17)
+        );
+    }
+
+    #[test]
+    fn throw_from_break_forwarder_does_not_replay_finalizer_bd_kfxwe() {
+        assert_eq!(
+            execute_exception_source_bd_kfxwe(
+                "let hits=0; try { while(true) { try { break; } finally { hits=hits+1; throw \"new\"; } } } catch(e) { hits=hits+10; } hits;",
+            ),
+            Value::Int(11)
+        );
+    }
+
+    #[test]
+    fn continue_inside_finally_discards_overridden_exception_bd_kfxwe() {
+        let module = lower_exception_source_to_ir3_bd_47p8z(
+            "let log=\"\"; let i=0; while(i<1) { i=i+1; try { throw \"old\"; } finally { log=log+\"f\"; continue; } } try { log=log+\"n\"; } finally { log=log+\"g\"; } log;",
+        );
+        assert!(
+            module
+                .instructions
+                .iter()
+                .any(|instruction| matches!(instruction, Ir3Instruction::DiscardAbruptCompletion))
+        );
+        assert_eq!(
+            execute_exception_module_bd_47p8z(&module),
+            Value::str("fng")
+        );
+    }
+
+    #[test]
+    fn local_finally_break_restores_suspended_outer_throw_bd_kfxwe() {
+        assert_eq!(
+            execute_exception_source_bd_kfxwe(
+                "let log=\"\"; try { try { throw \"outer\"; } finally { while(true) { try { throw \"inner\"; } finally { break; } } log=log+\"after;\"; } } catch(e) { log=log+\"caught:\"+e; } log;",
+            ),
+            Value::str("after;caught:outer")
+        );
+    }
+
+    #[test]
+    fn local_finally_continue_restores_suspended_outer_return_bd_kfxwe() {
+        assert_eq!(
+            execute_exception_source_bd_kfxwe(
+                "function f(){ try { return \"outer\"; } finally { let i=0; while(i<1) { i=i+1; try { throw \"inner\"; } finally { continue; } } } } f();",
+            ),
+            Value::str("outer")
+        );
+    }
+
+    #[test]
+    fn normal_nested_finally_break_preserves_outer_throw_bd_kfxwe() {
+        assert_eq!(
+            execute_exception_source_bd_kfxwe(
+                "let log=\"\"; try { try { throw \"outer\"; } finally { while(true) { try {} finally { break; } } log=log+\"after;\"; } } catch(e) { log=log+\"caught:\"+e; } log;",
+            ),
+            Value::str("after;caught:outer")
+        );
+    }
+
+    #[test]
+    fn normal_nested_finally_break_preserves_outer_return_bd_kfxwe() {
+        assert_eq!(
+            execute_exception_source_bd_kfxwe(
+                "function f(){ try { return \"outer\"; } finally { while(true) { try {} finally { break; } } } } f();",
+            ),
+            Value::str("outer")
+        );
+    }
+
+    #[test]
+    fn escaping_throw_discards_inner_return_but_preserves_outer_return_bd_kfxwe() {
+        assert_eq!(
+            execute_exception_source_bd_kfxwe(
+                "function f(){ try { return \"outer\"; } finally { try { try { return \"inner\"; } finally { throw \"new\"; } } catch(e) {} } } f();",
+            ),
+            Value::str("outer")
+        );
+    }
+
+    #[test]
+    fn throw_caught_inside_same_finally_resumes_owned_return_bd_kfxwe() {
+        assert_eq!(
+            execute_exception_source_bd_kfxwe(
+                "function f(){ try { return \"outer\"; } finally { try { throw \"new\"; } catch(e) {} } } f();",
+            ),
+            Value::str("outer")
+        );
+    }
+
+    #[test]
+    fn throw_caught_inside_same_finally_resumes_owned_exception_bd_kfxwe() {
+        assert_eq!(
+            execute_exception_source_bd_kfxwe(
+                "let log=\"\"; try { try { throw \"outer\"; } finally { try { throw \"new\"; } catch(e) { log=e+\";\"; } log=log+\"after;\"; } } catch(e) { log=log+e; } log;",
+            ),
+            Value::str("new;after;outer")
         );
     }
 
@@ -11027,6 +20429,7 @@ mod tests {
             Statement::ForIn(ForInStatement {
                 binding: BindingPattern::Identifier("k".into()),
                 binding_kind: Some(VariableDeclarationKind::Let),
+                pre_loop_initializer: None,
                 object: Expression::Identifier("obj".into()),
                 body: Box::new(Statement::Expression(ExpressionStatement {
                     expression: Expression::NumericLiteral(1),
@@ -11096,21 +20499,66 @@ mod tests {
     }
 
     #[test]
-    fn for_in_without_binding_kind_defaults_to_let() {
-        let ir0 = stmt_ir0(vec![Statement::ForIn(ForInStatement {
-            binding: BindingPattern::Identifier("k".into()),
-            binding_kind: None,
-            object: Expression::Identifier("obj".into()),
-            body: Box::new(Statement::Expression(ExpressionStatement {
-                expression: Expression::NumericLiteral(1),
+    fn for_in_without_binding_kind_reuses_existing_assignment_target() {
+        let ir0 = stmt_ir0(vec![
+            Statement::VariableDeclaration(VariableDeclaration {
+                kind: VariableDeclarationKind::Let,
+                declarations: vec![VariableDeclarator {
+                    pattern: BindingPattern::Identifier("k".into()),
+                    initializer: Some(Expression::StringLiteral(String::new().into())),
+                    span: span(),
+                }],
                 span: span(),
-            })),
-            span: span(),
-        })]);
+            }),
+            Statement::ForIn(ForInStatement {
+                binding: BindingPattern::Identifier("k".into()),
+                binding_kind: None,
+                pre_loop_initializer: None,
+                object: Expression::Identifier("obj".into()),
+                body: Box::new(Statement::Expression(ExpressionStatement {
+                    expression: Expression::NumericLiteral(1),
+                    span: span(),
+                })),
+                span: span(),
+            }),
+        ]);
         let result =
-            lower_ir0_to_ir1(&ir0).expect("for-in with no binding_kind should default to Let");
-        let ops = &result.module.ops;
-        assert!(ops.iter().any(|op| matches!(op, Ir1Op::ForInInit)));
+            lower_ir0_to_ir1(&ir0).expect("a bare for-in target should assign an existing binding");
+        let k_bindings = result.module.scopes[0]
+            .bindings
+            .iter()
+            .filter(|binding| binding.name == "k")
+            .collect::<Vec<_>>();
+        assert_eq!(k_bindings.len(), 1);
+        let k_id = k_bindings[0].binding_id;
+        assert_eq!(
+            result
+                .module
+                .ops
+                .iter()
+                .filter(
+                    |op| matches!(op, Ir1Op::StoreBinding { binding_id } if *binding_id == k_id)
+                )
+                .count(),
+            1,
+            "the declaration initializer must initialize the existing binding"
+        );
+        assert_eq!(
+            result
+                .module
+                .ops
+                .iter()
+                .filter(|op| matches!(
+                    op,
+                    Ir1Op::AssignOp {
+                        binding_id,
+                        operator: AssignmentOperator::Assign
+                    } if *binding_id == k_id
+                ))
+                .count(),
+            1,
+            "the bare loop head must assign that same existing binding"
+        );
     }
 
     #[test]
@@ -11330,6 +20778,7 @@ mod tests {
     fn flow_proof_artifact_entry_serde_roundtrip() {
         let entry = FlowProofArtifactEntry {
             op_index: 7,
+            body_path: vec![2, 4],
             source_label: Label::Confidential,
             sink_clearance: Label::Internal,
             capability: Some("hostcall.invoke".to_string()),
@@ -11344,6 +20793,7 @@ mod tests {
     fn denied_flow_artifact_entry_serde_roundtrip() {
         let entry = DeniedFlowArtifactEntry {
             op_index: 3,
+            body_path: vec![1],
             source_label: Label::Secret,
             sink_clearance: Label::Public,
             capability: None,
@@ -11359,6 +20809,7 @@ mod tests {
     fn required_declassification_artifact_entry_serde_roundtrip() {
         let entry = RequiredDeclassificationArtifactEntry {
             op_index: 5,
+            body_path: vec![0, 3],
             source_label: Label::Confidential,
             sink_clearance: Label::Public,
             capability: Some("ifc.declassify".to_string()),
@@ -11378,6 +20829,7 @@ mod tests {
     fn runtime_checkpoint_artifact_entry_serde_roundtrip() {
         let entry = RuntimeCheckpointArtifactEntry {
             op_index: 9,
+            body_path: vec![6],
             source_label: Label::Internal,
             sink_clearance: Label::Custom {
                 name: "audit".to_string(),
@@ -11407,6 +20859,7 @@ mod tests {
     fn runtime_checkpoint_artifact_entry_confidential_roundtrip() {
         let entry = RuntimeCheckpointArtifactEntry {
             op_index: 7,
+            body_path: Vec::new(),
             source_label: Label::Confidential,
             sink_clearance: Label::Public,
             capability: Some("ifc.check_flow".to_string()),
@@ -11694,7 +21147,7 @@ mod tests {
                     key: Ir1PropertyKey::Static(k),
                 } = op
                 {
-                    Some(k.as_str())
+                    k.as_str()
                 } else {
                     None
                 }
@@ -11708,6 +21161,35 @@ mod tests {
             get_props.contains(&"b"),
             "should emit GetProperty for 'b', got: {get_props:?}"
         );
+    }
+
+    #[test]
+    fn object_destructuring_lone_surrogate_key_stays_static_bd_b12xs_6() {
+        let expected = JsString::from_code_units(&[0xD800]);
+        let ir0 = stmt_ir0(vec![Statement::VariableDeclaration(VariableDeclaration {
+            kind: VariableDeclarationKind::Const,
+            declarations: vec![VariableDeclarator {
+                pattern: BindingPattern::ObjectPattern(vec![ObjectPatternProperty {
+                    key: Expression::StringLiteral(expected.clone()),
+                    value: BindingPattern::Identifier("value".into()),
+                    computed: false,
+                    shorthand: false,
+                }]),
+                initializer: Some(Expression::Identifier("source".into())),
+                span: span(),
+            }],
+            span: span(),
+        })]);
+
+        let module = lower_ir0_to_ir1(&ir0)
+            .expect("exact object-pattern key should lower")
+            .module;
+        assert!(module.ops.iter().any(|op| matches!(
+            op,
+            Ir1Op::GetProperty {
+                key: Ir1PropertyKey::Static(key)
+            } if key == &expected
+        )));
     }
 
     #[test]
@@ -11744,12 +21226,136 @@ mod tests {
             })
             .collect();
         assert!(
-            get_props.contains(&"a".to_string()),
+            get_props.contains(&JsString::from("a")),
             "should emit GetProperty for key 'a', got: {get_props:?}"
         );
         // Verify binding "x" exists.
         let scope = result.module.scopes.first().expect("root scope");
         assert!(scope.bindings.iter().any(|b| b.name == "x"));
+    }
+
+    #[test]
+    fn object_rest_declaration_clones_and_excludes_static_keys_bd_vkf78() {
+        let ir0 = stmt_ir0(vec![Statement::VariableDeclaration(VariableDeclaration {
+            kind: VariableDeclarationKind::Const,
+            declarations: vec![VariableDeclarator {
+                pattern: BindingPattern::ObjectPattern(vec![
+                    ObjectPatternProperty {
+                        key: Expression::Identifier("kept".into()),
+                        value: BindingPattern::Identifier("kept".into()),
+                        computed: false,
+                        shorthand: true,
+                    },
+                    ObjectPatternProperty {
+                        key: Expression::FloatLiteral(1.5_f64.to_bits()),
+                        value: BindingPattern::Identifier("decimal".into()),
+                        computed: false,
+                        shorthand: false,
+                    },
+                    ObjectPatternProperty {
+                        key: Expression::Identifier("rest".into()),
+                        value: BindingPattern::Rest(Box::new(BindingPattern::Identifier(
+                            "rest".into(),
+                        ))),
+                        computed: false,
+                        shorthand: false,
+                    },
+                ]),
+                initializer: Some(Expression::Identifier("source".into())),
+                span: span(),
+            }],
+            span: span(),
+        })]);
+
+        let ir1 = lower_ir0_to_ir1(&ir0)
+            .expect("object-rest declaration should lower to IR1")
+            .module;
+        assert_eq!(
+            ir1.ops
+                .iter()
+                .filter(|op| matches!(op, Ir1Op::CopyDataProperties { excluded_count: 2 }))
+                .count(),
+            1
+        );
+        assert_eq!(
+            ir1.ops
+                .iter()
+                .filter(|op| matches!(op, Ir1Op::DeleteProperty { .. }))
+                .count(),
+            0
+        );
+        let exclusion_literals = ir1.ops.windows(3).find_map(|window| match window {
+            [
+                Ir1Op::LoadLiteral {
+                    value: Ir1Literal::String(first),
+                },
+                Ir1Op::LoadLiteral {
+                    value: Ir1Literal::String(second),
+                },
+                Ir1Op::CopyDataProperties { excluded_count: 2 },
+            ] => Some((first.to_string(), second.to_string())),
+            _ => None,
+        });
+        assert_eq!(
+            exclusion_literals,
+            Some(("kept".to_string(), "1.5".to_string()))
+        );
+        let scope = ir1.scopes.first().expect("root scope");
+        assert!(scope.bindings.iter().any(|binding| binding.name == "rest"));
+
+        let ir3 = lower_ir0_to_ir3(
+            &ir0,
+            &LoweringContext::new("trace-object-rest", "decision-object-rest", "policy"),
+        )
+        .expect("object-rest declaration should lower through IR3")
+        .ir3;
+        assert!(ir3.instructions.iter().any(|instruction| matches!(
+            instruction,
+            Ir3Instruction::CopyDataProperties {
+                excluded: RegRange { count: 2, .. },
+                ..
+            }
+        )));
+        assert_eq!(
+            ir3.instructions
+                .iter()
+                .filter(|instruction| matches!(instruction, Ir3Instruction::DeleteProperty { .. }))
+                .count(),
+            0
+        );
+    }
+
+    #[test]
+    fn object_rest_declaration_executes_without_aliasing_source_bd_vkf78() {
+        let (_, _, value) = lower_and_execute_deferred_source_bd_6pvhn(
+            "let source = { kept: 1, left: 2 };\
+             let { kept, ...rest } = source;\
+             rest.left = 9;\
+             let { ...copy } = { a: 3, b: 4 };\
+             source.left * 100 + rest.left * 10 + copy.a + copy.b;",
+        );
+        assert_eq!(value, Value::Int(297));
+    }
+
+    #[test]
+    fn object_rest_filters_exclusions_before_accessor_reads_bd_f1ixz() {
+        let (_, _, value) = lower_and_execute_deferred_source_bd_6pvhn(
+            "let source = { marker: 7, excludedReads: 0, includedReads: 0 };\
+             source['__franken_ir_accessor_get__:excluded'] = function() {\
+                 this.excludedReads = this.excludedReads + 1; return 2;\
+             };\
+             source['__franken_ir_accessor_get__:included'] = function() {\
+                 this.includedReads = this.includedReads + 1; return this.marker;\
+             };\
+             let { excluded, ...rest } = source;\
+             source.excludedReads * 1000 + source.includedReads * 100\
+                 + excluded * 10 + rest.included;",
+        );
+        assert_eq!(
+            value,
+            Value::Int(1_127),
+            "the consumed getter runs once, the included getter runs once, and its receiver is source"
+        );
     }
 
     #[test]
@@ -11784,11 +21390,11 @@ mod tests {
             })
             .collect();
         assert!(
-            get_props.contains(&"0".to_string()),
+            get_props.contains(&JsString::from("0")),
             "should emit GetProperty for index '0'"
         );
         assert!(
-            get_props.contains(&"1".to_string()),
+            get_props.contains(&JsString::from("1")),
             "should emit GetProperty for index '1'"
         );
     }
@@ -11826,11 +21432,11 @@ mod tests {
             .collect();
         // Should only have index "1" (skipping hole at 0).
         assert!(
-            get_props.contains(&"1".to_string()),
+            get_props.contains(&JsString::from("1")),
             "should emit GetProperty for index '1', got: {get_props:?}"
         );
         assert!(
-            !get_props.contains(&"0".to_string()),
+            !get_props.contains(&JsString::from("0")),
             "should NOT emit GetProperty for hole at index '0'"
         );
     }
@@ -11931,11 +21537,11 @@ mod tests {
             })
             .collect();
         assert!(
-            get_props.contains(&"a".to_string()),
+            get_props.contains(&JsString::from("a")),
             "should emit GetProperty for outer key 'a'"
         );
         assert!(
-            get_props.contains(&"b".to_string()),
+            get_props.contains(&JsString::from("b")),
             "should emit GetProperty for nested key 'b'"
         );
     }

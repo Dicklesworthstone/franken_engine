@@ -1,0 +1,6 @@
+# Allowlist build context: only the Dockerfile and the standalone proof-checker
+# may enter the image. Everything else is excluded so engine source can never
+# leak into the third-party verifier image (bd-cixqu.25.2 no-leakage pin).
+*
+!Dockerfile
+!verify_proof_bundle.py

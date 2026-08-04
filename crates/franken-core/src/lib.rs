@@ -32,6 +32,7 @@ pub mod hash_tiers;
 pub mod hindsight_boundary_capture;
 pub mod ifc_artifacts;
 pub mod ir_contract;
+pub mod js_string;
 pub mod lowering_pipeline;
 pub mod object_model;
 pub mod optimal_stopping;

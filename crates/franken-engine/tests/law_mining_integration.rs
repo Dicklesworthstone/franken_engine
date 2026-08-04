@@ -19,7 +19,8 @@ use frankenengine_engine::counterexample_synthesizer::{
 };
 use frankenengine_engine::engine_object_id::EngineObjectId;
 use frankenengine_engine::evidence_ledger::{
-    CandidateAction, ChosenAction, Constraint, DecisionType, EvidenceEntryBuilder, Witness,
+    CandidateAction, ChosenAction, Constraint, DecisionType, EvidenceEntryBuilder,
+    LabFixtureEvidenceEntryBuilderExt as _, Witness,
 };
 use frankenengine_engine::hash_tiers::ContentHash;
 use frankenengine_engine::law_mining::{

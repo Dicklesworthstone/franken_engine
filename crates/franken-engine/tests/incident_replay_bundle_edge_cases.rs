@@ -22,8 +22,11 @@ use std::collections::{BTreeMap, BTreeSet};
 use frankenengine_engine::causal_replay::{
     ActionDeltaReport, CounterfactualConfig, DecisionSnapshot, NondeterminismLog,
     NondeterminismSource, RecorderConfig, RecordingMode, TraceRecord, TraceRecorder,
+    causal_replay_lab_trust_registry,
 };
-use frankenengine_engine::evidence_ledger::{ChosenAction, DecisionType, EvidenceEntryBuilder};
+use frankenengine_engine::evidence_ledger::{
+    ChosenAction, DecisionType, EvidenceEntryBuilder, LabFixtureEvidenceEntryBuilderExt as _,
+};
 use frankenengine_engine::hash_tiers::ContentHash;
 use frankenengine_engine::incident_replay_bundle::{
     ArtifactEntry, BUNDLE_FORMAT_VERSION, BundleArtifactKind, BundleBuilder, BundleError,
@@ -48,15 +51,13 @@ fn test_signing_key() -> SigningKey {
 }
 
 fn make_trace(trace_id: &str, num_decisions: usize) -> TraceRecord {
-    let key = test_signing_key();
     let config = RecorderConfig {
         trace_id: trace_id.to_string(),
         recording_mode: RecordingMode::Full,
         epoch: SecurityEpoch::from_raw(100),
         start_tick: 1000,
-        signing_key: key.as_bytes().to_vec(),
     };
-    let mut recorder = TraceRecorder::new(config);
+    let mut recorder = TraceRecorder::new_lab(config);
 
     recorder.record_nondeterminism(
         NondeterminismSource::Timestamp,
@@ -85,7 +86,7 @@ fn make_trace(trace_id: &str, num_decisions: usize) -> TraceRecord {
         recorder.record_decision(snapshot);
     }
 
-    recorder.finalize()
+    recorder.finalize().expect("lab trace should finalize")
 }
 
 fn make_evidence_entry() -> frankenengine_engine::evidence_ledger::EvidenceEntry {
@@ -195,7 +196,7 @@ fn format_version_incompatible_future_minor() {
 
 #[test]
 fn bundle_format_version_constant() {
-    assert_eq!(BUNDLE_FORMAT_VERSION.major, 1);
+    assert_eq!(BUNDLE_FORMAT_VERSION.major, 2);
     assert_eq!(BUNDLE_FORMAT_VERSION.minor, 0);
 }
 
@@ -789,7 +790,7 @@ fn verifier_replay_empty_bundle_skips() {
     .unwrap();
 
     let verifier = BundleVerifier::new();
-    let report = verifier.verify_replay(&bundle, 6000);
+    let report = verifier.verify_replay_lab(&bundle, &causal_replay_lab_trust_registry(), 6000);
     assert!(report.passed);
 
     let skipped: Vec<_> = report
@@ -820,9 +821,11 @@ fn verifier_receipts_empty_skips() {
 fn verifier_counterfactual_empty_configs_produces_empty_report() {
     let bundle = build_test_bundle();
     let verifier = BundleVerifier::new();
-    let report = verifier.verify_counterfactual(&bundle, &[], 6000);
+    let report =
+        verifier.verify_counterfactual_lab(&bundle, &[], &causal_replay_lab_trust_registry(), 6000);
     assert!(report.passed);
-    assert_eq!(report.checks.len(), 0);
+    assert_eq!(report.checks.len(), 1);
+    assert_eq!(report.checks[0].name, "trace-trust-lab-fixture-scope");
 }
 
 // ===========================================================================
@@ -1117,7 +1120,7 @@ fn multi_trace_bundle_replay() {
     .unwrap();
 
     let verifier = BundleVerifier::new();
-    let report = verifier.verify_replay(&bundle, 6000);
+    let report = verifier.verify_replay_lab(&bundle, &causal_replay_lab_trust_registry(), 6000);
     assert!(report.passed, "multi-trace replay: {report:?}");
 
     // Should have chain integrity + replay fidelity checks for each trace.

@@ -1,6 +1,6 @@
 # FrankenEngine Performance Baseline
 
-**Last Updated:** 2026-05-25  
+**Last Updated:** 2026-06-18
 **Baseline Version:** FrankenEngine baseline interpreter (not JIT-optimized)  
 **Artifact Location:** `artifacts/performance_baselines/2026-04-16_12-41-04/`
 
@@ -95,6 +95,21 @@ static DEFAULT_EVIDENCE_VERIFICATION_KEY: std::sync::LazyLock<VerificationKey> =
 For evidence supporting this optimization, see `tests/artifacts/perf/20260520T214829Z-prof-pass1/06_HYPOTHESIS_LEDGER.md#h1`.
 
 **Note:** Any additional cached cryptographic material must follow this same pattern: deterministic construction from constant bytes with LazyLock initialization to ensure thread-safety and replay compatibility.
+
+### PERF-H1 validation snapshot
+
+The current H1 proof chain is anchored by the frozen `pass1`
+`evidence_ledger_bundle` baseline plus the 2026-06-18 remote-only H1.4/H1.5
+validation runs. The H1.4 bench validator remains the statistical authority for
+the performance claim; the H1.6 smoke script is the one-shot operator check that
+the evidence-ledger tests, signature golden, and hot Criterion target still run
+under the accepted cap.
+
+| bead | artifact | result |
+|---|---|---|
+| PERF-H1.4 (`bd-o4cbn.1.4`) | `tests/artifacts/perf/h1_bench/20260618T1410Z/summary.md` | `evidence_ledger_bundle` mean `225145.0 ns` -> `71346.4 ns` (`-68.31 %`), CI95 `[70296.4, 72432.0] ns`, CV `7.7 %`; gate verdict PASS |
+| PERF-H1.5 (`bd-o4cbn.1.5`) | `tests/artifacts/perf/h1_replay/20260618T144245Z/` | replay coverage `3/3`, fail-closed fixture rejects as expected, metamorphic suite `12` relations / `12000` pairs / `0` violations |
+| PERF-H1.6 (`bd-o4cbn.1.6`) | `scripts/perf/run_perf_h1_smoke.sh` | remote-only E2E smoke emits `tests/artifacts/perf/h1_smoke/<run-id>/events.jsonl` with `perf.profile.run_start`, `perf.profile.sample_collected`, and `perf.profile.run_complete`; `evidence_ledger_bundle` cap is `<= 110000 ns` |
 
 ## Reusable canonical-encoding buffers
 
@@ -239,6 +254,64 @@ problem entirely because there is exactly one buffer and recursion only appends.
 - Design note recorded here and in the bead body. ✅
 - Recursion-safety property stated explicitly (§4, and the "Reality check"). ✅
 - No code change in this bead (implementation is `bd-o4cbn.5.3`). ✅
+
+### Bench validation (H4.5)
+
+PERF-H4.5 (`bd-o4cbn.5.5`) is now encoded by
+`scripts/perf/h4_bench_validate.sh`. The validator consumes a preserved
+`real_runtime_hot_paths` timing run and applies the original H4.5 gate:
+
+- `parser_arena_materialization` mean <= 27 us.
+- `lowering_pipeline_ir3` mean <= 72 us.
+- the combined sum of those two target means drops >= 15 % vs frozen `pass1`;
+- every H4 target's post 95 % CI upper bound is below the `pass1` 95 % CI
+  lower bound;
+- no other sub-bench regresses by > 5 %, except separately-tracked known
+  regressions that are still reported.
+
+The recorded H4.5 verdict uses the preserved H7.2 timing artifact
+`tests/artifacts/perf/h7_bench/20260526T071059Z/events.jsonl`. H4 did not freeze
+a separate post-H4 Criterion artifact before later perf passes landed, so this
+is a cumulative end-state validation rather than H4-isolated attribution.
+
+| sub-bench | pass1 mean (ns) | current mean (ns) | current CI95 (ns) | delta |
+|---|---:|---:|---:|---:|
+| parser_arena_materialization *(H4 target)* | 31354.0 | 25278.0 | [25231, 25344] | -19.38 % |
+| lowering_pipeline_ir3 *(H4 target)* | 87917.0 | 68532.0 | [68449, 68658] | -22.05 % |
+| baseline_interpreter_eval | 494407.0 | 316176.0 | [315651, 316766] | -36.05 % |
+| baseline_value_string_clone | 245112.0 | 276893.0 | [276574, 277294] | +12.97 % |
+| iterator_protocol_trace | 6098.0 | 1451.0 | [1449, 1452] | -76.21 % |
+| scheduler_queue_commit | 58223.0 | 45217.0 | [45134, 45318] | -22.34 % |
+| evidence_ledger_bundle | 225145.0 | 146203.0 | [145924, 146585] | -35.06 % |
+| transport_certificate_serialization | 6675.0 | 3039.0 | [3030, 3051] | -54.47 % |
+
+**H4.5 gate verdict: PASS.** The two H4 targets move from a combined
+119271 ns to 93810 ns, a **21.35 %** drop vs `pass1`. Their post CI95 upper
+bounds are also below the corresponding `pass1` CI95 lower bounds
+(`parser_arena_materialization`: 25344 ns < 31205 ns;
+`lowering_pipeline_ir3`: 68658 ns < 87720 ns). The only >5 % cross-bench
+increase is `baseline_value_string_clone`, the documented allocator/measurement
+artifact tracked by `bd-o4cbn.15` and already handled as a `KNOWN_REGRESSIONS`
+entry in adjacent perf gates.
+
+### E2E smoke (H4.6)
+
+`scripts/perf/run_perf_h4_smoke.sh` is the H4 E2E smoke companion to the H4.5
+statistical gate. It mirrors the H3/H5/H6 smoke-script shape:
+
+- `--self-check` validates the H4 prerequisites without Cargo: the two
+  `real_runtime_hot_paths` target benches exist, the `encode_value_into` /
+  `EncodeBufferPool` APIs exist, the H4.7 golden is present, and the H4.5
+  validator exists.
+- `--quick` runs the H4.7 `perf_h4_encode_buffer_integration` golden only.
+- full mode additionally builds `hot_paths` with the canonical pass1 flags and
+  runs short Criterion liveness checks for `parser_arena_materialization`
+  (<= 27 us) and `lowering_pipeline_ir3` (<= 72 us).
+
+The smoke's output/semantic check is the checked-in H4.7 frankenctl golden:
+compile hashes remain byte-identical and strict replay completes over a captured
+trace. The H4.5 script above remains the authority for the statistical combined
+drop.
 
 ## EngineObjectId hex zero-alloc rewrite (H3)
 
@@ -555,6 +628,44 @@ Three facts follow, and one **corrects the `bd-o4cbn.3.6` filing hypothesis**:
 `scripts/perf/h7_mimalloc_rss_probe.sh` to re-confirm the floor mechanism and
 the `MIMALLOC_PURGE_DELAY=0` lever.
 
+## Same-day hot-path code-drift audit (bd-bwztz)
+
+`bd-bwztz` records the 2026-06-12 same-day, same-allocator endpoint comparison
+that separates accumulated code drift from frozen-`pass1` allocator and
+environment effects. CopperFinch rebuilt the 2026-05-20 pass1 code on the same
+day as HEAD and compared both endpoints under glibc with CI-separated Criterion
+runs:
+
+| sub-bench | same-day endpoint result |
+|---|---:|
+| parser_arena_materialization | 36.2 us -> 38.4 us (+6.0 %) |
+| lowering_pipeline_ir3 | 94.3 us -> 103.6 us (+9.9 %) |
+| baseline_interpreter_eval | 512.4 us -> 540.6 us (+5.5 %) |
+| baseline_value_string_clone | 255.7 us -> 278.3 us (+8.8 %) |
+| iterator_protocol_trace | -70.7 % |
+| scheduler_queue_commit | -3.9 % |
+| evidence_ledger_bundle | -53.1 % |
+| transport_certificate_serialization | -47.1 % |
+
+Decision:
+
+- The parser, lowering, interpreter, and string-clone slowdowns are recorded as
+  quantified performance debt, not as claim-supporting evidence and not as
+  proof of a single culprit commit. The window also added substantial language
+  and IFC feature mass, so attribution requires a dedicated profile or bisect.
+- Frozen-`pass1` gates may still report the `bd-o4cbn.15`
+  `baseline_value_string_clone` allocator artifact as a known regression, but
+  they must not use a favourable frozen-`pass1` result to claim that the
+  same-day code-window drift is absent.
+- Per-optimization validation beads can still close when they prove their own
+  target and either demonstrate commit-scoped no-regression or explicitly cite
+  this audit as pre-existing debt. This prevents `bd-bwztz` from blocking
+  unrelated wins while keeping the code-window drift visible.
+- Any future gate that claims "no accumulated hot-path regression" must compare
+  same-day, same-allocator endpoint builds or an equally tight commit-scoped
+  pre/post pair. Cross-day or cross-allocator `pass1` comparisons are
+  measurement context, not sufficient proof for that claim.
+
 ## Region arena for IR lowering (ALIEN-2)
 
 The ALIEN-2 pass (`bd-o4cbn.10`) is a **Tofte/Talpin-style region** refactor of
@@ -750,8 +861,9 @@ sources — `baseline_interpreter.rs`, `lowering_pipeline.rs`, `parser_arena.rs`
 
 **What it does.**
 
-1. Builds and runs `cargo bench --bench hot_paths` (canonical flags:
-   `CARGO_INCREMENTAL=0`, `RUSTFLAGS=-C linker=cc`).
+1. Builds and runs `cargo bench --bench hot_paths` with
+   `CARGO_INCREMENTAL=0`; the linker policy is inherited from
+   `.cargo/config.toml` (`cc` with rust-lld disabled).
 2. Resolves the most recent frozen baseline under
    `tests/artifacts/perf/baselines/<git-sha>/` (newest `baseline_summary.json`
    timestamp).
@@ -851,9 +963,10 @@ macro scripts widen coverage so the optimizer does not over-fit to the
 micro benches. The instrumentation/collection pass that consumes this
 corpus is tracked separately in `bd-o4cbn.11.2` (PERF-ALIEN-3.2).
 
-Collection and optimization runs use the canonical perf build flags
-(`CARGO_INCREMENTAL=0`, `RUSTFLAGS=-C linker=cc`) so PGO artifacts compare
-cleanly against the frozen baselines above.
+Collection and optimization runs use `CARGO_INCREMENTAL=0` and inherit the
+repository linker policy from `.cargo/config.toml` so PGO artifacts compare
+cleanly against the frozen baselines above without replacing the target-level
+rustflags.
 
 ## Honest Performance Statement
 

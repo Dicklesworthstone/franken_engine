@@ -25,6 +25,7 @@ pub mod adversarial_campaign;
 pub mod adversarial_coevolution_harness;
 pub mod adversarial_supremacy_synthesis;
 pub mod adversarial_workload_synthesis;
+pub mod agent_sandbox;
 pub mod algebraic_effects;
 pub mod algebraic_effects_composition_proofs;
 pub mod alloc_domain;
@@ -45,9 +46,11 @@ pub mod attack_surface_game_model;
 pub mod attestation_handshake;
 pub mod attested_execution_cell;
 pub mod audit_closure_matrix;
+pub mod authority_footprint;
 pub mod baseline_interpreter;
 pub mod bayesian_error_recovery;
 pub mod bayesian_posterior;
+pub mod behavioral_diff;
 pub mod benchmark_behavior_equivalence;
 pub mod benchmark_coverage_saturation;
 pub mod benchmark_coverage_saturation_gate;
@@ -72,6 +75,7 @@ pub mod cancellation_lifecycle;
 pub mod canonical_encoding;
 pub mod canonical_evidence_emitter;
 pub mod capability;
+pub mod capability_lease;
 pub mod capability_pruned_dispatch;
 pub mod capability_token;
 pub mod capability_witness;
@@ -93,6 +97,9 @@ pub mod checkpoint_frontier;
 pub mod claim_atom_lattice;
 pub mod claim_entitlement;
 pub mod claim_envelope_contract;
+pub mod claim_evidence_lattice;
+pub mod claim_evidence_ledger;
+pub mod claim_integrity_flow;
 pub mod claim_publication_gate;
 pub mod cliff_margin_certificate;
 pub mod closure_model;
@@ -102,6 +109,7 @@ pub mod compatibility_advisory;
 pub mod compiler_policy;
 pub mod component_shape_catalog;
 pub mod composable_gate_framework;
+pub mod compounding_red_team_campaign;
 pub mod compression_residual_gate;
 pub mod compromise_rate_disruptive_floor_metric_gate;
 pub mod conformal_calibration;
@@ -121,11 +129,17 @@ pub mod controller_composition_matrix;
 pub mod controller_composition_stability_gate;
 pub mod controller_interference_guard;
 pub mod convergence_slo;
+pub mod corpus_promotion;
 pub mod counterexample_synthesizer;
 pub mod counterfactual_evaluator;
 pub mod counterfactual_generation_guard;
 pub mod counterfactual_intervention_planner;
 pub mod counterfactual_replay_engine;
+pub mod coverage_frontier;
+pub mod coverage_frontier_filing;
+pub mod coverage_frontier_rank;
+pub mod coverage_frontier_xref;
+pub mod coverage_summary;
 pub mod cross_arch_reproducibility;
 pub mod cross_platform_reproducibility;
 pub mod cross_repo_contract;
@@ -133,6 +147,7 @@ pub mod cross_workload_transfer;
 pub mod cut_line_automation;
 pub mod cx_threading;
 pub mod dark_matter_saturation_gate;
+pub mod data_contract;
 pub mod declassification_pipeline;
 pub mod delegate_cell_harness;
 pub mod delegation_chain;
@@ -145,6 +160,7 @@ pub mod deterministic_replay;
 pub mod deterministic_serde;
 pub mod deterministic_sim_scheduler;
 pub mod differential_oracle;
+pub mod differential_oracle_perf;
 pub mod differential_privacy_posterior;
 pub mod disruption_scorecard;
 pub mod disruptive_floor_metric_gate;
@@ -153,6 +169,10 @@ pub mod docs_accuracy_gate;
 pub mod dp_budget_accountant;
 pub mod dual_backend_parser;
 pub mod e2e_harness;
+pub mod e8_analyzed_subset;
+pub mod e9_equivalence_receipts;
+pub mod e9_first_activation;
+pub mod e9_shadow_candidate_discovery;
 pub mod effect_set;
 pub mod engine_object_id;
 pub mod engine_product_blocker_ledger;
@@ -161,6 +181,8 @@ pub mod entropy_evidence_compressor;
 pub mod epoch_barrier;
 pub mod epoch_invalidation;
 pub mod eprocess_guardrail;
+pub mod erasure_bandwidth_accounting;
+pub mod erasure_reconstruction_receipts;
 pub mod error_code;
 pub mod escape_analysis_certificate;
 pub mod esm_cjs_interop_parity;
@@ -169,11 +191,13 @@ pub mod esm_loader;
 pub mod evidence_contract;
 pub mod evidence_emission;
 pub mod evidence_ledger;
+pub mod evidence_manifest;
 pub mod evidence_ordering;
 pub mod evidence_replay_checker;
 pub mod exception_translation_validator;
 pub mod execution_cell;
 pub mod execution_orchestrator;
+pub mod execution_truth_ledger;
 pub mod expected_info_value_scoring;
 pub mod expected_loss_selector;
 pub mod extension_host_authority_guard;
@@ -253,10 +277,14 @@ pub mod ifc_provenance_index;
 pub mod incentive_governance_mechanism;
 pub mod incident_replay_bundle;
 pub mod interleaving_explorer;
+pub mod intl_surface_contract;
+pub mod intrinsics_codegen;
+pub mod intrinsics_table;
 pub mod ir_contract;
 pub mod iterator_protocol;
 pub mod iterator_protocol_translation_validator;
 pub mod js_runtime_lane;
+pub mod js_string;
 pub mod json_capabilities;
 pub mod jsx_tsx_parser;
 pub mod kernel_shift_monitor;
@@ -264,6 +292,7 @@ pub mod kernel_synthesis_contract;
 pub mod kernelized_shift_guard;
 pub mod key_attestation;
 pub mod key_derivation;
+pub mod kl_rate_limited_adversary;
 pub mod lab_runtime;
 pub mod lamport_evidence_annotation;
 pub mod lamport_total_order_merger;
@@ -271,6 +300,7 @@ pub mod law_mining;
 pub mod law_promotion_lifecycle;
 pub mod law_promotion_pack;
 pub mod law_proof_refutation;
+pub mod lean_proof_producer;
 pub mod lease_tracker;
 pub mod live_revocation_first_gate_example;
 pub mod lowering_arena;
@@ -307,6 +337,7 @@ pub mod native_addon_cohort_gate;
 pub mod native_addon_membrane;
 pub mod native_addon_parity_gate;
 pub mod nitrosketch_telemetry;
+pub mod non_use_certificate;
 pub mod northstar_scorecard;
 pub mod novelty_scoring_contract;
 pub mod novelty_synthesis_engine;
@@ -332,6 +363,8 @@ pub mod optimized_metadata_substrate;
 pub mod oracle_release_gate;
 pub mod orchestration_context_contract;
 pub mod outcome_capability_narrowing;
+pub mod pac_bayes_bound;
+pub mod package_intake;
 pub mod parallel_interference_gate;
 pub mod parallel_parser;
 pub mod parser;
@@ -354,6 +387,7 @@ pub mod plas_burn_in_gate;
 pub mod plas_lockstep;
 pub mod plas_release_gate;
 pub mod policy_as_data_security;
+pub mod policy_backtest;
 pub mod policy_checkpoint;
 pub mod policy_controller;
 pub mod policy_theorem_compiler;
@@ -371,6 +405,7 @@ pub mod promise_model;
 pub mod promotion_gate_runner;
 pub mod proof_artifact;
 pub mod proof_backed_compression;
+pub mod proof_bundle_status_panel;
 pub mod proof_chain_composition;
 pub mod proof_evidence_index;
 pub mod proof_ingestion;
@@ -379,6 +414,7 @@ pub mod proof_release_gate;
 pub mod proof_schema;
 pub mod proof_specialization_linkage;
 pub mod proof_specialization_receipt;
+pub mod proof_spine_claim_gate;
 pub mod quarantine_deescalation;
 pub mod quarantine_mesh_gate;
 pub mod quarantine_propagation;
@@ -418,6 +454,8 @@ pub mod remote_computation_registry;
 pub mod render_lane_specializer;
 pub mod replacement_lineage_log;
 pub mod replay_coverage_metric_gate;
+pub mod replay_time_travel;
+pub mod replay_vaccine;
 pub mod replication_checklist;
 pub mod replication_claim;
 pub mod reproducibility_provenance_pack;
@@ -445,6 +483,7 @@ pub mod runtime_decision_core;
 pub mod runtime_decision_theory;
 pub mod runtime_diagnostics_cli;
 pub mod runtime_explain_bundle;
+pub mod runtime_explain_views;
 pub mod runtime_hotspot_optimization_campaign;
 pub mod runtime_image_contract;
 pub mod runtime_kernel_lane_charter;
@@ -499,6 +538,7 @@ pub mod simd_lexer;
 pub mod simd_morsel_kernel;
 pub mod slot_differential;
 pub mod slot_registry;
+pub mod sme;
 pub mod sorted_multisig;
 pub mod specialization_conformance;
 pub mod specialization_index;
@@ -548,6 +588,7 @@ pub mod throughput_disruptive_floor_metric_gate;
 pub mod tier_eligibility_substrate;
 pub mod tier_telemetry_contract;
 pub mod tier_up_profiler;
+pub mod time_travel_debugger;
 pub mod timescale_separation_certificate;
 pub mod trace_fusion;
 pub mod trace_fusion_superinstruction;
@@ -561,6 +602,7 @@ pub mod transport_certificate_ledger;
 pub mod tropical_semiring;
 pub mod trust_card;
 pub mod trust_economics;
+pub mod verification_coverage_contract;
 pub mod windows_x64_worker;
 pub mod worker_env_capture;
 pub use capability::trust_zone;
@@ -600,7 +642,9 @@ use crate::baseline_interpreter::{
 use crate::capability::RuntimeCapability;
 use crate::hash_tiers::ContentHash;
 use crate::ir_contract::{Ir0Module, Ir3Instruction, Ir3Module};
-use crate::lowering_pipeline::{LoweringContext, LoweringPipelineError, lower_ir0_to_ir3};
+use crate::lowering_pipeline::{
+    AmbientAuthorityGrant, LoweringContext, LoweringPipelineError, lower_ir0_to_ir3,
+};
 use crate::parser::{CanonicalEs2020Parser, ParseError, ParseErrorCode, ParserOptions};
 use crate::ts_normalization::{
     SourceIngestionSummary, classify_source_language, prepare_source_entry_for_public_entrypoints,
@@ -1252,11 +1296,34 @@ impl<'de> Deserialize<'de> for RouteReason {
 pub struct EvalOutcome {
     pub engine: EngineKind,
     pub value: String,
+    /// Exact UTF-16 code units of the completion value, present iff it is a
+    /// string containing lone surrogates (bd-2vzgi). `value` then carries the
+    /// U+FFFD projection; exact-semantics consumers (the differential oracle)
+    /// compare the (projection, units) pair. `None` for every well-formed
+    /// completion value, so the serialized form is unchanged for them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub value_wtf16: Option<Vec<u16>>,
     pub route_reason: RouteReason,
     #[serde(default)]
     pub console_output: Vec<baseline_interpreter::ConsoleEntry>,
     #[serde(default)]
     pub source_ingestion: SourceIngestionSummary,
+    /// Audit trail for `Function`-constructor-generated code executed during
+    /// this eval (bd-8enww.3.4 / YTBG-C4): content-addressed source identity
+    /// plus per-invocation instruction-budget spend. Empty unless the source
+    /// constructed and ran dynamic code.
+    #[serde(default)]
+    pub generated_code_audit: Vec<baseline_interpreter::GeneratedCodeAuditEntry>,
+    /// Total deterministic interpreter instructions consumed by this eval — the
+    /// "consumed steps" of the execution-budget log (bd-8enww.5.5 / YTBG-E5).
+    /// Compare it against the budget passed to `eval_with_instruction_budget` /
+    /// `eval_with_budgets` (or the containment default for plain `eval`). This is
+    /// populated only for a completed eval; a budget-exhaustion fault is surfaced
+    /// as an error whose message carries the consumed/limit pair, not as an
+    /// outcome. The per-`Function`-constructor breakdown lives in
+    /// `generated_code_audit`.
+    #[serde(default)]
+    pub instructions_executed: u64,
 }
 
 #[allow(clippy::result_large_err)]
@@ -1300,7 +1367,22 @@ impl QuickJsInspiredNativeEngine {
         prepared: PreparedEvalSource,
         route_reason: RouteReason,
     ) -> EvalResult<EvalOutcome> {
-        eval_with_lane(prepared, LaneChoice::QuickJs, route_reason)
+        eval_with_lane(
+            prepared,
+            LaneChoice::QuickJs,
+            route_reason,
+            EngineEvalBudgets::default(),
+        )
+    }
+
+    #[allow(clippy::result_large_err)]
+    fn eval_prepared_with_budget(
+        &mut self,
+        prepared: PreparedEvalSource,
+        route_reason: RouteReason,
+        budgets: EngineEvalBudgets,
+    ) -> EvalResult<EvalOutcome> {
+        eval_with_lane(prepared, LaneChoice::QuickJs, route_reason, budgets)
     }
 }
 
@@ -1311,8 +1393,53 @@ impl V8InspiredNativeEngine {
         prepared: PreparedEvalSource,
         route_reason: RouteReason,
     ) -> EvalResult<EvalOutcome> {
-        eval_with_lane(prepared, LaneChoice::V8, route_reason)
+        eval_with_lane(
+            prepared,
+            LaneChoice::V8,
+            route_reason,
+            EngineEvalBudgets::default(),
+        )
     }
+
+    #[allow(clippy::result_large_err)]
+    fn eval_prepared_with_budget(
+        &mut self,
+        prepared: PreparedEvalSource,
+        route_reason: RouteReason,
+        budgets: EngineEvalBudgets,
+    ) -> EvalResult<EvalOutcome> {
+        eval_with_lane(prepared, LaneChoice::V8, route_reason, budgets)
+    }
+}
+
+/// Override of the engine lane's heap budget for measurement/benchmark callers.
+///
+/// The containment defaults (`DEFAULT_QUICKJS_MAX_HEAP_OBJECTS` /
+/// `DEFAULT_QUICKJS_MAX_TOTAL_MEMORY_BYTES`) are sized for untrusted extension
+/// code, not for object-allocating benchmark loops. The differential-oracle
+/// performance arm and corpus sweeps raise this so large-but-terminating
+/// workloads can complete rather than failing closed on the containment
+/// ceiling. Like the instruction budget, the override is a
+/// measurement-configuration fact and must be recorded in whatever artifact the
+/// caller emits.
+///
+/// Note: the baseline interpreter heap is append-only (no live-object
+/// reclamation), so the budget counts total allocations rather than live
+/// objects. This lever raises the ceiling; it does not introduce GC.
+#[derive(Debug, Clone, Copy)]
+pub struct EngineMemoryBudget {
+    /// Maximum heap objects the interpreter may allocate before failing closed.
+    pub max_heap_objects: u32,
+    /// Maximum estimated live memory (bytes) before failing closed.
+    pub max_total_memory_bytes: u64,
+}
+
+/// Bundle of optional per-lane interpreter budget overrides threaded through the
+/// routed eval path. Both default to `None` (use the containment defaults).
+#[derive(Debug, Clone, Copy, Default)]
+struct EngineEvalBudgets {
+    instruction_budget: Option<u64>,
+    memory_budget: Option<EngineMemoryBudget>,
 }
 
 #[derive(Debug)]
@@ -1337,14 +1464,64 @@ impl HybridRouter {
 
     #[allow(clippy::result_large_err)]
     pub fn eval(&mut self, source: &str) -> EvalResult<EvalOutcome> {
+        self.eval_routed(source, EngineEvalBudgets::default())
+    }
+
+    /// Same routing and semantics as [`Self::eval`], but with the per-lane
+    /// interpreter instruction budget overridden. The defaults
+    /// (`DEFAULT_QUICKJS_BUDGET` / `DEFAULT_V8_BUDGET`) are a containment
+    /// posture for untrusted extension code; measurement and benchmarking
+    /// callers (e.g. the differential-oracle performance arm) use this so
+    /// large-but-terminating workloads can complete. The override is a
+    /// measurement-configuration fact and must be recorded in whatever
+    /// artifact the caller emits.
+    #[allow(clippy::result_large_err)]
+    pub fn eval_with_instruction_budget(
+        &mut self,
+        source: &str,
+        instruction_budget: u64,
+    ) -> EvalResult<EvalOutcome> {
+        self.eval_routed(
+            source,
+            EngineEvalBudgets {
+                instruction_budget: Some(instruction_budget),
+                memory_budget: None,
+            },
+        )
+    }
+
+    /// Same routing and semantics as [`Self::eval`], but with the per-lane
+    /// interpreter instruction budget and/or heap budget overridden. Either
+    /// override may be `None` to keep the containment default for that
+    /// dimension. Both overrides are measurement-configuration facts (see
+    /// [`EngineMemoryBudget`]); the caller must record them in its artifact.
+    #[allow(clippy::result_large_err)]
+    pub fn eval_with_budgets(
+        &mut self,
+        source: &str,
+        instruction_budget: Option<u64>,
+        memory_budget: Option<EngineMemoryBudget>,
+    ) -> EvalResult<EvalOutcome> {
+        self.eval_routed(
+            source,
+            EngineEvalBudgets {
+                instruction_budget,
+                memory_budget,
+            },
+        )
+    }
+
+    #[allow(clippy::result_large_err)]
+    fn eval_routed(&mut self, source: &str, budgets: EngineEvalBudgets) -> EvalResult<EvalOutcome> {
         let prepared = prepare_eval_source(source, "hybrid")?;
         let route_reason = Self::classify_source_route(prepared.prepared_source.as_str());
         match route_reason {
-            RouteReason::ContainsImportKeyword | RouteReason::ContainsAwaitKeyword => {
-                self.v8_lineage.eval_prepared(prepared, route_reason)
-            }
+            RouteReason::ContainsImportKeyword | RouteReason::ContainsAwaitKeyword => self
+                .v8_lineage
+                .eval_prepared_with_budget(prepared, route_reason, budgets),
             RouteReason::DefaultQuickJsPath => {
-                self.quickjs_lineage.eval_prepared(prepared, route_reason)
+                self.quickjs_lineage
+                    .eval_prepared_with_budget(prepared, route_reason, budgets)
             }
             RouteReason::DirectEngineInvocation => Err(EvalError::new(
                 EvalErrorCode::InvariantViolation,
@@ -1701,14 +1878,18 @@ fn eval_with_lane(
     prepared: PreparedEvalSource,
     lane: LaneChoice,
     route_reason: RouteReason,
+    budgets: EngineEvalBudgets,
 ) -> EvalResult<EvalOutcome> {
-    let output = eval_via_native_pipeline(&prepared, lane)?;
+    let output = eval_via_native_pipeline(&prepared, lane, budgets)?;
     Ok(EvalOutcome {
         engine: engine_kind_for_lane(lane),
         value: output.value,
+        value_wtf16: output.value_wtf16,
         route_reason,
         console_output: output.console_output,
         source_ingestion: prepared.source_ingestion,
+        generated_code_audit: output.generated_code_audit,
+        instructions_executed: output.instructions_executed,
     })
 }
 
@@ -1721,13 +1902,17 @@ fn engine_kind_for_lane(lane: LaneChoice) -> EngineKind {
 
 struct NativeEvalOutput {
     value: String,
+    value_wtf16: Option<Vec<u16>>,
     console_output: Vec<baseline_interpreter::ConsoleEntry>,
+    generated_code_audit: Vec<baseline_interpreter::GeneratedCodeAuditEntry>,
+    instructions_executed: u64,
 }
 
 #[allow(clippy::result_large_err)]
 fn eval_via_native_pipeline(
     prepared: &PreparedEvalSource,
     lane: LaneChoice,
+    budgets: EngineEvalBudgets,
 ) -> EvalResult<NativeEvalOutput> {
     let parser = CanonicalEs2020Parser;
     let syntax_tree = parser
@@ -1780,11 +1965,19 @@ fn eval_via_native_pipeline(
         ));
     }
 
+    // bd-xewby: a direct `QuickJsInspiredNativeEngine::eval` is a TRUSTED
+    // top-level eval context, so it is granted the benign process-shape ambient
+    // profile (only statically allowlisted `process.<shape>` reads lower; bare,
+    // aliased, computed, env-value, and every other ambient access stays denied).
+    // Untrusted extension execution
+    // goes through `ExecutionOrchestrator`, which builds its own deny-all
+    // `LoweringContext`, so this grant never widens the extension lowering path.
     let lowering_context = LoweringContext::new(
         prepared.trace_id.as_str(),
         prepared.decision_id.as_str(),
         prepared.policy_id.as_str(),
-    );
+    )
+    .with_ambient_authority_grant(AmbientAuthorityGrant::TrustedProcessShape);
     let ir0 = Ir0Module::from_syntax_tree(syntax_tree, "<eval>");
     let lowering_output = lower_ir0_to_ir3(&ir0, &lowering_context)
         .map_err(map_lowering_error)
@@ -1804,7 +1997,7 @@ fn eval_via_native_pipeline(
     let mut ir3 = lowering_output.ir3;
     patch_eval_completion_value(&mut ir3);
 
-    let lane_router = eval_lane_router_for_ir3(&ir3);
+    let lane_router = eval_lane_router_for_ir3(&ir3, budgets);
     let routed = lane_router
         .execute(&ir3, prepared.trace_id.as_str(), Some(lane))
         .map_err(map_interpreter_error)
@@ -1817,13 +2010,22 @@ fn eval_via_native_pipeline(
             )
         })?;
 
+    // A lone-surrogate string completion value cannot survive the Display
+    // projection below; carry its exact code units alongside (bd-2vzgi).
+    let value_wtf16 = match &routed.result.value {
+        baseline_interpreter::Value::Str(s) if !s.is_well_formed() => Some(s.code_units_vec()),
+        _ => None,
+    };
     Ok(NativeEvalOutput {
         value: routed.result.value.to_string(),
+        value_wtf16,
         console_output: routed.result.console_output,
+        generated_code_audit: routed.result.generated_code_audit,
+        instructions_executed: routed.result.instructions_executed,
     })
 }
 
-fn eval_lane_router_for_ir3(ir3: &Ir3Module) -> LaneRouter {
+fn eval_lane_router_for_ir3(ir3: &Ir3Module, budgets: EngineEvalBudgets) -> LaneRouter {
     let mut granted_capabilities = std::collections::BTreeSet::from([
         RuntimeCapability::VmDispatch,
         RuntimeCapability::HeapAllocate,
@@ -1844,6 +2046,16 @@ fn eval_lane_router_for_ir3(ir3: &Ir3Module) -> LaneRouter {
     quickjs_config.granted_capabilities = granted_capabilities.clone();
     let mut v8_config = InterpreterConfig::v8_defaults();
     v8_config.granted_capabilities = granted_capabilities;
+    if let Some(budget) = budgets.instruction_budget {
+        quickjs_config.instruction_budget = budget;
+        v8_config.instruction_budget = budget;
+    }
+    if let Some(memory_budget) = budgets.memory_budget {
+        quickjs_config.max_heap_objects = memory_budget.max_heap_objects;
+        quickjs_config.max_total_memory_bytes = memory_budget.max_total_memory_bytes;
+        v8_config.max_heap_objects = memory_budget.max_heap_objects;
+        v8_config.max_total_memory_bytes = memory_budget.max_total_memory_bytes;
+    }
     LaneRouter::with_configs(quickjs_config, v8_config)
 }
 
@@ -1917,6 +2129,7 @@ fn ir3_destination_register(instr: &Ir3Instruction) -> Option<u32> {
         | Ir3Instruction::LoadFloat { dst, .. }
         | Ir3Instruction::LoadUndefined { dst }
         | Ir3Instruction::LoadNull { dst }
+        | Ir3Instruction::LoadName { dst, .. }
         | Ir3Instruction::Add { dst, .. }
         | Ir3Instruction::Sub { dst, .. }
         | Ir3Instruction::Mul { dst, .. }
@@ -1939,6 +2152,7 @@ fn ir3_destination_register(instr: &Ir3Instruction) -> Option<u32> {
         | Ir3Instruction::ImportModule { dst, .. }
         | Ir3Instruction::NewObject { dst }
         | Ir3Instruction::NewArray { dst }
+        | Ir3Instruction::LoadNewTarget { dst }
         | Ir3Instruction::Lt { dst, .. }
         | Ir3Instruction::Lte { dst, .. }
         | Ir3Instruction::Gt { dst, .. }
@@ -1959,7 +2173,9 @@ fn ir3_destination_register(instr: &Ir3Instruction) -> Option<u32> {
         | Ir3Instruction::TemplateLiteral { dst, .. }
         | Ir3Instruction::Call { dst, .. }
         | Ir3Instruction::HostCall { dst, .. }
-        | Ir3Instruction::EnterCatch { dst } => Some(*dst),
+        | Ir3Instruction::EnterCatch { dst }
+        | Ir3Instruction::PutName { src: dst, .. }
+        | Ir3Instruction::PutNameWithStatus { src: dst, .. } => Some(*dst),
         _ => None,
     }
 }
@@ -2521,9 +2737,12 @@ mod tests {
         let outcome = EvalOutcome {
             engine: EngineKind::V8InspiredNative,
             value: "42".to_string(),
+            value_wtf16: None,
             route_reason: RouteReason::ContainsAwaitKeyword,
             console_output: Vec::new(),
             source_ingestion: SourceIngestionSummary::default(),
+            generated_code_audit: Vec::new(),
+            instructions_executed: 7,
         };
         let json = serde_json::to_string(&outcome).expect("eval outcome should serialize to JSON");
         let decoded: EvalOutcome =

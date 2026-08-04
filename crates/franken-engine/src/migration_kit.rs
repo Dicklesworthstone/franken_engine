@@ -665,14 +665,14 @@ const KNOWN_APIS: &[KnownApi] = &[
     KnownApi {
         module_name: "url",
         api_name: "URL",
-        support_level: ApiSupportLevel::FullySupported,
-        notes: "WHATWG URL",
+        support_level: ApiSupportLevel::PartiallySupported,
+        notes: "partial WHATWG global: getters plus pathname/hash setters; legacy require('url') helpers tracked by bd-4awsz",
     },
     KnownApi {
         module_name: "url",
         api_name: "URLSearchParams",
-        support_level: ApiSupportLevel::FullySupported,
-        notes: "",
+        support_level: ApiSupportLevel::PartiallySupported,
+        notes: "partial WHATWG global: get/has/getAll/append/sort/delete/set/toString; legacy require('url') helpers tracked by bd-4awsz",
     },
     KnownApi {
         module_name: "util",
@@ -2683,6 +2683,7 @@ mod tests {
     #[test]
     fn test_lookup_module_support() {
         assert_eq!(lookup_module("fs"), ApiSupportLevel::FullySupported);
+        assert_eq!(lookup_module("url"), ApiSupportLevel::PartiallySupported);
         assert_eq!(lookup_module("child_process"), ApiSupportLevel::Unsupported);
         assert_eq!(lookup_module("nonexistent"), ApiSupportLevel::Unsupported);
     }

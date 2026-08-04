@@ -20,7 +20,7 @@ use serde::{Deserialize, Serialize};
 use crate::engine_object_id::{self, EngineObjectId, ObjectDomain, SchemaId};
 use crate::evidence_ledger::{
     CandidateAction, ChosenAction, DecisionType, EvidenceEmitter, EvidenceEntry,
-    EvidenceEntryBuilder, InMemoryLedger, Witness as EvidenceWitness,
+    EvidenceEntryBuilder, InMemoryLedger, RuntimeEvidenceAuthority, Witness as EvidenceWitness,
 };
 use crate::hash_tiers::ContentHash;
 use crate::mmr_proof::{
@@ -3348,6 +3348,7 @@ pub struct WitnessPublicationPipeline {
     config: WitnessPublicationConfig,
     current_epoch: SecurityEpoch,
     head_signing_key: SigningKey,
+    evidence_authority: RuntimeEvidenceAuthority,
     witness_trust_root: Option<CapabilityWitnessTrustRoot>,
     log_entries: Vec<PublicationLogEntry>,
     mmr: MerkleMountainRange,
@@ -3385,23 +3386,33 @@ impl WitnessPublicationPipeline {
             None
         };
 
-        // Use this pipeline's head signing key as the evidence-emission
-        // signing identity, scoped to its policy_id. Without this binding the
-        // builder/ledger would both fall back to the well-known constant key
-        // baked into evidence_ledger.rs (`DEFAULT_EVIDENCE_SIGNING_KEY_BYTES
-        // = [0x7B; 32]`) — i.e. the "signed entries" requirement from
-        // bd-i7ke2 would be satisfied structurally but provide zero
-        // origin authentication because any caller could mint entries with
-        // the same publicly-known key. Cross-review-round-1 finding.
+        // Use this pipeline's head signing key as an explicit evidence
+        // identity scoped to its policy. The ledger receives only the public
+        // trust coordinates; no ambient signer or private-key registration
+        // exists in production builds.
         let producer_id = format!("franken-engine.witness-pipeline:{}", config.policy_id);
-        let mut evidence_ledger = InMemoryLedger::new();
-        evidence_ledger
-            .authorize_producer(producer_id.clone(), head_signing_key.verification_key());
+        let evidence_authority = RuntimeEvidenceAuthority::from_signing_key(
+            producer_id,
+            head_signing_key.clone(),
+            current_epoch,
+            1,
+            None,
+        )
+        .map_err(|error| WitnessPublicationError::EvidenceLedger {
+            detail: error.to_string(),
+        })?;
+        let evidence_ledger =
+            InMemoryLedger::for_runtime_authority(current_epoch, &evidence_authority).map_err(
+                |error| WitnessPublicationError::EvidenceLedger {
+                    detail: error.to_string(),
+                },
+            )?;
 
         Ok(Self {
             config,
             current_epoch,
             head_signing_key,
+            evidence_authority,
             witness_trust_root: None,
             log_entries: Vec::new(),
             mmr: MerkleMountainRange::new(current_epoch.as_u64()),
@@ -3914,20 +3925,14 @@ impl WitnessPublicationPipeline {
         let chosen_loss = if action == "revoke" { 5_000 } else { 50_000 };
         let alt_loss = if action == "revoke" { 200_000 } else { 100_000 };
         let decision_id = format!("{action}:{}", artifact.publication_id);
-        // bd-i7ke2 cross-review hardening: sign with the pipeline's real
-        // head_signing_key under the per-policy producer id registered in
-        // `new()` — instead of letting the builder fall back to the
-        // well-known constant key baked into evidence_ledger.rs. This is
-        // what gives the emitted entries actual origin authentication.
-        let producer_id = format!("franken-engine.witness-pipeline:{}", self.config.policy_id);
-        let mut builder = EvidenceEntryBuilder::new(
+        let mut builder = EvidenceEntryBuilder::new_with_runtime_authority(
             format!("trace:{}", artifact.publication_id),
             decision_id,
             self.config.policy_id.clone(),
             artifact.witness.epoch,
             DecisionType::CapabilityDecision,
+            &self.evidence_authority,
         )
-        .signed_by(producer_id, self.head_signing_key.clone())
         .timestamp_ns(bundle.tree_head.timestamp_ns)
         .candidate(CandidateAction::new(action, chosen_loss))
         .candidate(CandidateAction::new("hold", alt_loss))

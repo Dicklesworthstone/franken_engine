@@ -1,0 +1,4 @@
+Selected worker: vmi1167313
+Executing command remotely: cargo run -p frankenengine-engine --bin franken_engine_product_blocker_ledger
+Compiling asupersync v0.3.4
+No ledger artifact or remote exit code was emitted before build 29890796996001817 was cancelled.

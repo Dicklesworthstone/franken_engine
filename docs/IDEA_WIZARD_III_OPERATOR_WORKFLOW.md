@@ -44,7 +44,7 @@ git diff --check -- docs/HIGH_CORE_VALIDATION_PRESSURE_DASHBOARD.md docs/high_co
 target directory:
 
 ```bash
-RCH_PRIORITY=low RCH_VISIBILITY=summary rch exec -- env RUSTUP_TOOLCHAIN=nightly CARGO_TARGET_DIR=/tmp/rch-target-franken-engine-idea-wizard-iii CARGO_INCREMENTAL=0 RUSTFLAGS='-C linker=cc' CARGO_BUILD_JOBS=1 cargo check --all-targets
+env -u CARGO_ENCODED_RUSTFLAGS RCH_PRIORITY=low RCH_VISIBILITY=summary rch exec -- env -u CARGO_ENCODED_RUSTFLAGS RUSTUP_TOOLCHAIN=nightly CARGO_TARGET_DIR=/tmp/rch-target-franken-engine-idea-wizard-iii CARGO_INCREMENTAL=0 RUSTFLAGS='-C linker=cc -Clinker-features=-lld' CARGO_BUILD_JOBS=1 cargo check --all-targets
 ```
 
 Local heavy Cargo validation is not green proof for this workflow.

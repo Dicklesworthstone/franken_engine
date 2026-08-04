@@ -1,0 +1,100 @@
+---
+source: tests/benchmark_evidence_bundle_golden.rs
+expression: report_json
+---
+{
+  "schema_version": "franken-engine.benchmark-evidence-bundle.v1",
+  "bundle_id": "test-bundle-001",
+  "status": "sealed",
+  "epoch": 42,
+  "total_workloads": 2,
+  "total_effective_runs": 4,
+  "total_warmup_runs": 0,
+  "workload_stats": [
+    {
+      "workload_id": "micro-001",
+      "category": "micro",
+      "stats": {
+        "count": 2,
+        "min_us": 1450,
+        "max_us": 1500,
+        "mean_us": 1475,
+        "median_us": 1475,
+        "stddev_us": 35,
+        "cv_millionths": 23728,
+        "p95_us": 1500,
+        "p99_us": 1500
+      },
+      "parity_verdicts": 1,
+      "all_parity_passed": true
+    },
+    {
+      "workload_id": "app-001",
+      "category": "application",
+      "stats": {
+        "count": 2,
+        "min_us": 14800,
+        "max_us": 15000,
+        "mean_us": 14900,
+        "median_us": 14900,
+        "stddev_us": 141,
+        "cv_millionths": 9463,
+        "p95_us": 15000,
+        "p99_us": 15000
+      },
+      "parity_verdicts": 1,
+      "all_parity_passed": true
+    }
+  ],
+  "parity_verdict_count": 2,
+  "parity_pass_count": 2,
+  "environment_drift_count": 0,
+  "categories": [
+    "micro",
+    "application"
+  ],
+  "has_reproducibility_pack": false,
+  "verdict": {
+    "verdict": "pass",
+    "workload_count": 2,
+    "total_runs": 4,
+    "categories": [
+      "micro",
+      "application"
+    ]
+  },
+  "report_hash": [
+    114,
+    106,
+    217,
+    240,
+    99,
+    136,
+    33,
+    27,
+    48,
+    92,
+    208,
+    209,
+    3,
+    146,
+    206,
+    182,
+    74,
+    192,
+    167,
+    7,
+    12,
+    153,
+    182,
+    123,
+    178,
+    162,
+    237,
+    202,
+    31,
+    86,
+    109,
+    187
+  ]
+}

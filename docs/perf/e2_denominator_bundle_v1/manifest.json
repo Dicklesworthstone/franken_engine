@@ -1,0 +1,67 @@
+{
+  "artifacts": {
+    "env": {
+      "path": "env.json",
+      "sha256": "sha256:46de1de773e47d0aa25a4c056c75b15e0a0ad0dfffdb236f8fd97bcdd77b462a"
+    },
+    "lock": {
+      "path": "repro.lock",
+      "sha256": "sha256:f14b1b92d2abdfd6f7067725d38dbd670510947563b241eae26ff7edd511c7c6"
+    },
+    "results": {
+      "path": "denominator.json",
+      "sha256": "sha256:3ea83069c0cbf2a29c85dcfcd7f6bafdee68a8fe659a97e4b0cbf8fb5791a340"
+    }
+  },
+  "canonicalization": {
+    "format": "json",
+    "hash_algorithm": "sha256",
+    "key_order": "lexicographic",
+    "newline": "lf"
+  },
+  "claim": {
+    "bundle_root": "docs/perf/e2_denominator_bundle_v1",
+    "claim_id": "FE-CLAIM-010",
+    "class": "PERFORMANCE",
+    "statement": ">= 3x weighted-geometric-mean throughput versus Node and Bun under the benchmark denominator contract.",
+    "status": "target"
+  },
+  "generated_at_utc": "20260622T032013Z",
+  "inputs": [
+    {
+      "path": "benchmarks/runtime_comparison/manifest.json",
+      "sha256": "sha256:969a05f1a8950b29a02992f2daf1ec21d03dea795d2394ca4b0ccde0e8576c7a"
+    }
+  ],
+  "manifest_id": "sha256:36c340013dc3bdda603d8993a68f6e11cd1f825d8e1fa9eae2aa286a9d61efcc",
+  "outputs": [
+    {
+      "path": "denominator.json",
+      "sha256": "sha256:3ea83069c0cbf2a29c85dcfcd7f6bafdee68a8fe659a97e4b0cbf8fb5791a340"
+    }
+  ],
+  "provenance": {
+    "decision_id": "decision-e2-denominator-f70502cf5b29",
+    "evidence_pointer": "evidence://e2-denominator/sha256:36c340013dc3bdda603d8993a68f6e11cd1f825d8e1fa9eae2aa286a9d61efcc",
+    "policy_id": "policy-e2-denominator-bundle-v1",
+    "receipt_ids": [],
+    "replay_pointer": "replay://e2-denominator/sha256:209b5ff204ed0f68d819986b2bdf9f53d23ad7f4d4d4f47f0444ec9b3ca6cde8",
+    "trace_id": "trace-e2-denominator-f70502cf5b29"
+  },
+  "retention": {
+    "high_impact_min_days": 730,
+    "min_days": 365,
+    "rotation_policy": "archive-with-addressable-retrieval"
+  },
+  "schema_hash": "sha256:2dff1a565d36acbfed0c2a48c3abfea53f0033546c7fe6359bbaa93e7c05ba40",
+  "schema_version": "franken-engine.manifest.v1",
+  "source_revision": {
+    "branch": "main",
+    "commit": "f70502cf5b29593d938a6f173e60a059f7974bfa",
+    "repo": "franken_engine"
+  },
+  "validation": {
+    "error_taxonomy": "FE-REPRO-0001..FE-REPRO-0008",
+    "validator": "./scripts/run_e2_denominator_bundle_gate.sh ci"
+  }
+}

@@ -7,6 +7,11 @@ use chrono::{SecondsFormat, Utc};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+use crate::evidence_ledger::{
+    EvidenceSignatureEnvelope, EvidenceVerificationIdentity, LedgerError, RuntimeEvidenceAuthority,
+};
+use crate::security_epoch::SecurityEpoch;
+
 pub const FRX_LOCKSTEP_TRACE_SCHEMA_VERSION: &str = "frx.react.observable.trace.v1";
 pub const FRX_LOCKSTEP_REPORT_SCHEMA_VERSION: &str = "frx.react.lockstep.oracle.report.v1";
 pub const FRX_LOCKSTEP_COMPONENT: &str = "frx_react_lockstep_oracle";
@@ -288,14 +293,52 @@ pub struct SignedDivergenceEvidence {
     pub original_divergence: FrxDivergenceDetail,
     pub classification_confidence: ClassificationConfidence,
     pub evidence_sources: Vec<EvidenceSource>,
-    /// Detached signature authenticating this evidence atom.
-    ///
-    /// FIXME (bd-1lw7r.4): always `None` today — [`create_divergence_evidence`]
-    /// never signs, because no evidence-signing facility (key management +
-    /// sign API) is wired here yet. Despite the `Signed` in the type name,
-    /// emitted divergence evidence is currently UNAUTHENTICATED. See
-    /// [`divergence_evidence_signing_wired`].
+    /// Legacy hex projection of `signature_envelope.signature`.
     pub signature: Option<String>,
+    /// Runtime producer/key/epoch/rotation provenance bound by the detached
+    /// signature. Older records omit this field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signature_envelope: Option<EvidenceSignatureEnvelope>,
+}
+
+impl SignedDivergenceEvidence {
+    fn unsigned_signature_payload(&self) -> Result<Vec<u8>, LedgerError> {
+        let mut unsigned = self.clone();
+        unsigned.signature = None;
+        unsigned.signature_envelope = None;
+        serde_json::to_vec(&unsigned).map_err(|error| LedgerError::SchemaValidationFailed {
+            reason: format!("divergence evidence serialization failed: {error}"),
+        })
+    }
+
+    /// Verify both the legacy signature projection and the runtime
+    /// producer/key/epoch/rotation provenance that authenticates this record.
+    ///
+    /// Records predating `signature_envelope` fail closed because a raw
+    /// signature alone does not identify the originating runtime.
+    pub fn verify_signature(
+        &self,
+        trusted_identity: &EvidenceVerificationIdentity,
+    ) -> Result<(), LedgerError> {
+        let signature =
+            self.signature
+                .as_ref()
+                .ok_or_else(|| LedgerError::SchemaValidationFailed {
+                    reason: "divergence evidence is missing signature bytes".to_string(),
+                })?;
+        let envelope = self.signature_envelope.as_ref().ok_or_else(|| {
+            LedgerError::SchemaValidationFailed {
+                reason: "divergence evidence is missing signer provenance".to_string(),
+            }
+        })?;
+        if signature != &hex::encode(envelope.signature.to_bytes()) {
+            return Err(LedgerError::SchemaValidationFailed {
+                reason: "divergence evidence signature bytes do not match the provenance envelope"
+                    .to_string(),
+            });
+        }
+        envelope.verify_detached(&self.unsigned_signature_payload()?, trusted_identity)
+    }
 }
 
 /// Classification confidence levels.
@@ -1361,7 +1404,9 @@ pub fn create_divergence_evidence(
     divergence: &FrxDivergenceDetail,
     case_id: &str,
     confidence: ClassificationConfidence,
-) -> SignedDivergenceEvidence {
+    epoch: SecurityEpoch,
+    evidence_authority: &RuntimeEvidenceAuthority,
+) -> Result<SignedDivergenceEvidence, LedgerError> {
     let evidence_id = format!("divergence-evidence-{}", uuid_v4_like());
     let classification = classify_divergence(divergence);
 
@@ -1379,30 +1424,25 @@ pub fn create_divergence_evidence(
             description: "Automated lockstep oracle divergence detection".to_string(),
         }],
         signature: None,
+        signature_envelope: None,
     };
 
-    // bd-k2bz7: sign the unsigned evidence view (signature == None) with the
-    // engine's default Ed25519 evidence signer so this `Signed`DivergenceEvidence
-    // is actually authenticated. The detached signature is hex-encoded; a
-    // verifier re-serializes with `signature` cleared and checks it against
-    // `evidence_ledger::shared_evidence_verification_key()`.
-    let preimage = serde_json::to_vec(&evidence)
-        .expect("SignedDivergenceEvidence serializes (derives Serialize, no non-string map keys)");
-    evidence.signature = Some(hex::encode(
-        crate::evidence_ledger::sign_evidence_preimage(&preimage).to_bytes(),
-    ));
-    evidence
+    // The caller owns the runtime identity and epoch. Both are recorded in
+    // the signed envelope; the legacy `signature` field remains a byte-for-byte
+    // hex projection for existing artifact readers.
+    let preimage = evidence.unsigned_signature_payload()?;
+    let signature_envelope = evidence_authority.sign_detached(&preimage, epoch)?;
+    evidence.signature = Some(hex::encode(signature_envelope.signature.to_bytes()));
+    evidence.signature_envelope = Some(signature_envelope);
+    Ok(evidence)
 }
 
 /// Whether an evidence-signing facility is wired into divergence-evidence
 /// creation.
 ///
-/// Returns `true` (bd-k2bz7): [`create_divergence_evidence`] populates
-/// `signature` with an Ed25519 signature over the unsigned evidence view,
-/// produced by the engine's default evidence signer
-/// (`evidence_ledger::sign_evidence_preimage`). Emitted divergence evidence is
-/// therefore authenticated and verifiable with
-/// `evidence_ledger::shared_evidence_verification_key()`.
+/// Returns `true` (bd-k2bz7): [`create_divergence_evidence`] requires an
+/// explicit runtime identity and populates both the legacy signature bytes
+/// and signed producer/key/epoch/rotation provenance.
 pub const fn divergence_evidence_signing_wired() -> bool {
     true
 }
@@ -1472,10 +1512,14 @@ pub fn classify_divergence(divergence: &FrxDivergenceDetail) -> DivergenceEviden
 pub fn create_batch_divergence_evidence(
     divergences: &[(FrxDivergenceDetail, String)], // (divergence, case_id)
     confidence: ClassificationConfidence,
-) -> Vec<SignedDivergenceEvidence> {
+    epoch: SecurityEpoch,
+    evidence_authority: &RuntimeEvidenceAuthority,
+) -> Result<Vec<SignedDivergenceEvidence>, LedgerError> {
     divergences
         .iter()
-        .map(|(div, case_id)| create_divergence_evidence(div, case_id, confidence.clone()))
+        .map(|(div, case_id)| {
+            create_divergence_evidence(div, case_id, confidence.clone(), epoch, evidence_authority)
+        })
         .collect()
 }
 
@@ -1640,11 +1684,11 @@ fn is_console_output_difference(divergence: &FrxDivergenceDetail) -> bool {
         || divergence
             .react_signature
             .as_ref()
-            .map_or(false, |sig| sig.event.contains("console_output"))
+            .is_some_and(|sig| sig.event.contains("console_output"))
         || divergence
             .franken_signature
             .as_ref()
-            .map_or(false, |sig| sig.event.contains("console_output"))
+            .is_some_and(|sig| sig.event.contains("console_output"))
 }
 
 fn classify_console_output_divergence(divergence: &FrxDivergenceDetail) -> DivergenceEvidenceAtom {
@@ -1707,6 +1751,18 @@ fn extract_franken_behavior(divergence: &FrxDivergenceDetail) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn test_evidence_identity() -> RuntimeEvidenceAuthority {
+        RuntimeEvidenceAuthority::from_signing_key(
+            "frx-lockstep-test-runtime",
+            crate::signature_preimage::SigningKey::from_bytes([0x53; 32])
+                .expect("non-zero test key"),
+            SecurityEpoch::from_raw(3),
+            1,
+            None,
+        )
+        .expect("test evidence identity")
+    }
 
     fn mk_event(seq: u64, timing_us: u64) -> FrxTraceEvent {
         FrxTraceEvent {
@@ -2946,6 +3002,7 @@ mod tests {
                 description: "Node.js reference execution".to_string(),
             }],
             signature: Some("mock-signature".to_string()),
+            signature_envelope: None,
         };
 
         let json = serde_json::to_string(&evidence).expect("should serialize");
@@ -2980,11 +3037,10 @@ mod tests {
 
     #[test]
     fn divergence_evidence_is_signed_and_verifies_bd_k2bz7() {
-        use crate::signature_preimage::{SIGNATURE_LEN, Signature, verify_signature};
+        use crate::signature_preimage::{SIGNATURE_LEN, Signature};
 
-        // bd-k2bz7: divergence evidence is now signed by the engine's default
-        // evidence signer. Verify both the helper flag and that the emitted
-        // signature verifies against the unsigned evidence view.
+        // bd-k2bz7/bd-90u6o: divergence evidence requires a caller-owned
+        // identity and records its signed public provenance.
         assert!(divergence_evidence_signing_wired());
 
         let divergence = FrxDivergenceDetail {
@@ -2994,8 +3050,31 @@ mod tests {
             react_signature: None,
             franken_signature: None,
         };
-        let evidence =
-            create_divergence_evidence(&divergence, "case-1", ClassificationConfidence::Automated);
+        let identity = test_evidence_identity();
+        let trusted_identity = identity.verification_identity();
+        let evidence = create_divergence_evidence(
+            &divergence,
+            "case-1",
+            ClassificationConfidence::Automated,
+            SecurityEpoch::from_raw(3),
+            &identity,
+        )
+        .expect("explicit evidence identity");
+        evidence
+            .verify_signature(&trusted_identity)
+            .expect("public verifier must accept emitted evidence");
+        let mut raw_signature_tamper = evidence.clone();
+        raw_signature_tamper
+            .signature
+            .as_mut()
+            .expect("signature")
+            .push('0');
+        assert!(
+            raw_signature_tamper
+                .verify_signature(&trusted_identity)
+                .is_err(),
+            "legacy signature projection must match the signed envelope"
+        );
         let sig_hex = evidence
             .signature
             .clone()
@@ -3006,18 +3085,48 @@ mod tests {
                 .expect("64-byte Ed25519 signature"),
         );
 
-        // Re-derive the unsigned preimage (signature cleared) and verify.
+        let envelope = evidence
+            .signature_envelope
+            .clone()
+            .expect("divergence evidence must record signer provenance");
+        assert_eq!(signature, envelope.signature);
+
+        // Re-derive the unsigned payload and verify the provenance-bound
+        // detached signature.
         let mut unsigned = evidence.clone();
         unsigned.signature = None;
+        unsigned.signature_envelope = None;
         let preimage = serde_json::to_vec(&unsigned).expect("serializable");
+        envelope
+            .verify_detached(&preimage, &trusted_identity)
+            .expect("signature and provenance must verify");
+
+        let mut tampered = envelope;
+        tampered.producer_id.push_str("-forged");
         assert!(
-            verify_signature(
-                &crate::evidence_ledger::shared_evidence_verification_key(),
-                &preimage,
-                &signature,
-            )
-            .is_ok(),
-            "emitted divergence-evidence signature must verify against the shared evidence key"
+            tampered
+                .verify_detached(&preimage, &trusted_identity)
+                .is_err(),
+            "producer identity must be bound by the signature"
+        );
+
+        let source_known_identity = RuntimeEvidenceAuthority::from_signing_key(
+            identity.producer_id(),
+            crate::signature_preimage::SigningKey::from_bytes([0x7B; 32])
+                .expect("historical source-known seed"),
+            SecurityEpoch::from_raw(3),
+            1,
+            None,
+        )
+        .expect("attacker-controlled identity");
+        let forged_envelope = source_known_identity
+            .sign_detached(&preimage, SecurityEpoch::from_raw(3))
+            .expect("attacker can self-sign");
+        assert!(
+            forged_envelope
+                .verify_detached(&preimage, &trusted_identity)
+                .is_err(),
+            "a source-known claimant key must not authenticate as the trusted runtime"
         );
     }
 
@@ -3140,11 +3249,19 @@ mod tests {
             franken_signature: None,
         };
 
+        let identity = test_evidence_identity();
+        let trusted_identity = identity.verification_identity();
         let evidence = create_divergence_evidence(
             &divergence,
             "test-case-123",
             ClassificationConfidence::Automated,
-        );
+            SecurityEpoch::from_raw(3),
+            &identity,
+        )
+        .expect("explicit evidence identity");
+        evidence
+            .verify_signature(&trusted_identity)
+            .expect("emitted evidence must verify");
 
         assert_eq!(evidence.schema_version, DIVERGENCE_EVIDENCE_SCHEMA_VERSION);
         assert!(!evidence.evidence_id.is_empty());
@@ -3159,9 +3276,9 @@ mod tests {
             evidence.evidence_sources[0].source_type,
             EvidenceSourceType::ReferenceImplementation
         );
-        // bd-k2bz7: divergence evidence is now Ed25519-signed by the engine's
-        // default evidence signer (see divergence_evidence_is_signed_and_verifies_bd_k2bz7).
+        // bd-k2bz7/bd-90u6o: the signature and runtime provenance are present.
         assert!(evidence.signature.is_some());
+        assert!(evidence.signature_envelope.is_some());
     }
 
     #[test]
@@ -3192,7 +3309,10 @@ mod tests {
         let evidence_batch = create_batch_divergence_evidence(
             &divergences,
             ClassificationConfidence::HumanConfirmed,
-        );
+            SecurityEpoch::from_raw(3),
+            &test_evidence_identity(),
+        )
+        .expect("explicit evidence identity");
 
         assert_eq!(evidence_batch.len(), 2);
         assert_eq!(evidence_batch[0].lockstep_case_id, "case-1");
@@ -3231,6 +3351,7 @@ mod tests {
             classification_confidence: ClassificationConfidence::Automated,
             evidence_sources: vec![],
             signature: None,
+            signature_envelope: None,
         };
 
         let triage = apply_triage_rules(&evidence);
@@ -3263,6 +3384,7 @@ mod tests {
             classification_confidence: ClassificationConfidence::HumanConfirmed,
             evidence_sources: vec![],
             signature: None,
+            signature_envelope: None,
         };
 
         let triage = apply_triage_rules(&evidence);
@@ -3296,6 +3418,7 @@ mod tests {
             classification_confidence: ClassificationConfidence::Tentative,
             evidence_sources: vec![],
             signature: None,
+            signature_envelope: None,
         };
 
         let triage = apply_triage_rules(&evidence);

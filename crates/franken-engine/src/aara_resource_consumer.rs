@@ -577,9 +577,14 @@ impl ResourceConsumer {
                 .push(receipt.decision);
         }
 
+        // Widen to u128 before the fixed-point scale so a large grant count
+        // cannot saturate `count * MILLIONTHS` (and the u64 counts are never
+        // squeezed through a lossy `as i64` cast).
         let grant_rate = if total > 0 {
-            (full_budget_count.saturating_add(reduced_count) as i64).saturating_mul(MILLIONTHS)
-                / total as i64
+            let wide = (full_budget_count.saturating_add(reduced_count) as u128)
+                .saturating_mul(MILLIONTHS as u128)
+                / (total as u128);
+            i64::try_from(wide).unwrap_or(i64::MAX)
         } else {
             0
         };

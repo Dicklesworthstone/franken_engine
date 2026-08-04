@@ -3,17 +3,19 @@
 //! Validates that lazy-seed implementation and eager baseline implementation
 //! produce byte-identical interpreter state at every reset point.
 
-use proptest::prelude::*;
 use proptest::collection::vec;
+use proptest::prelude::*;
 
-use frankenengine_core::baseline_interpreter::{InterpreterCore, ExecutionSeed, EagerExecutionSeed, Value};
+use frankenengine_core::baseline_interpreter::{
+    EagerExecutionSeed, ExecutionSeed, InterpreterCore, Value,
+};
 
 #[derive(Debug, Clone)]
 enum Op {
     WriteRegister(u8, Value),
     WriteHeapSlot(u32, Value),
     Capture,
-    Reset(usize),   // index into the live seed list
+    Reset(usize), // index into the live seed list
 }
 
 fn arbitrary_value() -> impl Strategy<Value = Value> {
@@ -22,7 +24,7 @@ fn arbitrary_value() -> impl Strategy<Value = Value> {
         Just(Value::Null),
         any::<bool>().prop_map(Value::Bool),
         any::<i32>().prop_map(|n| Value::Int(n as i64)),
-        ".*".prop_map(Value::Str),
+        ".*".prop_map(|s: String| Value::str(s)),
     ]
 }
 
@@ -34,7 +36,6 @@ fn arbitrary_op() -> impl Strategy<Value = Op> {
         (0..4usize).prop_map(Op::Reset),
     ]
 }
-
 
 proptest! {
     #[test]
@@ -64,8 +65,12 @@ proptest! {
                 Op::Reset(i) => {
                     if !lazy_seeds.is_empty() {
                         let idx = i % lazy_seeds.len();
-                        lazy.reset_execution_state_from_seed(&lazy_seeds[idx]);
-                        eager.reset_execution_state_from_seed_eager_for_test(&eager_seeds[idx]);
+                        lazy
+                            .reset_execution_state_from_seed(&lazy_seeds[idx])
+                            .expect("captured seed must remain valid");
+                        eager
+                            .reset_execution_state_from_seed_eager_for_test(&eager_seeds[idx])
+                            .expect("captured eager seed must remain valid");
                     }
                 }
             }

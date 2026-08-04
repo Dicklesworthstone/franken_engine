@@ -42,6 +42,23 @@ fn hex_encode(bytes: &[u8]) -> String {
     out
 }
 
+fn push_hash_field(out: &mut Vec<u8>, tag: &str, value: &str) {
+    out.extend_from_slice(&(tag.len() as u64).to_le_bytes());
+    out.extend_from_slice(tag.as_bytes());
+    out.extend_from_slice(&(value.len() as u64).to_le_bytes());
+    out.extend_from_slice(value.as_bytes());
+}
+
+fn tagged_content_hash(domain: &str, fields: &[(&str, &str)]) -> String {
+    let mut input = Vec::new();
+    push_hash_field(&mut input, "domain", domain);
+    input.extend_from_slice(&(fields.len() as u64).to_le_bytes());
+    for (tag, value) in fields {
+        push_hash_field(&mut input, tag, value);
+    }
+    hex_encode(ContentHash::compute(&input).as_bytes())
+}
+
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
@@ -995,11 +1012,16 @@ pub fn build_deopt_witness(
     let witness_id = format!("dw_{}_{}", cert.site.site_id, transform_kind);
     // SAFETY: DeoptTrigger enum derives Serialize and BTreeSet serialization cannot fail
     let triggers_str = serde_json::to_string(&triggers).expect("serialize derived Serialize");
-    let hash_input = format!(
-        "witness:{}:{}:{}:{}",
-        witness_id, transform_kind, triggers_str, cert.certificate_hash
+    let transform_kind_str = transform_kind.as_str();
+    let witness_hash = tagged_content_hash(
+        "scalar_replacement_engine.deopt_witness.v1",
+        &[
+            ("witness_id", witness_id.as_str()),
+            ("transform_kind", transform_kind_str),
+            ("trigger_set", triggers_str.as_str()),
+            ("certificate_hash", cert.certificate_hash.as_str()),
+        ],
     );
-    let witness_hash = hex_encode(ContentHash::compute(hash_input.as_bytes()).as_bytes());
 
     DeoptWitness {
         witness_id,
@@ -1023,11 +1045,16 @@ pub fn build_validation_receipt(
     epoch: SecurityEpoch,
 ) -> TranslationValidationReceipt {
     let receipt_id = format!("tvr_{}_{}", cert.site.site_id, transform_kind);
-    let hash_input = format!(
-        "receipt:{}:{}:{}:{}:{}",
-        receipt_id, pre_hash, post_hash, cert.certificate_hash, witness.witness_hash
+    let receipt_hash = tagged_content_hash(
+        "scalar_replacement_engine.translation_validation_receipt.v1",
+        &[
+            ("receipt_id", receipt_id.as_str()),
+            ("pre_transform_hash", pre_hash),
+            ("post_transform_hash", post_hash),
+            ("certificate_hash", cert.certificate_hash.as_str()),
+            ("witness_hash", witness.witness_hash.as_str()),
+        ],
     );
-    let receipt_hash = hex_encode(ContentHash::compute(hash_input.as_bytes()).as_bytes());
 
     TranslationValidationReceipt {
         receipt_id,
@@ -2094,7 +2121,82 @@ mod tests {
         );
     }
 
+    fn legacy_deopt_witness_hash(
+        cert: &EscapeCertificate,
+        transform_kind: TransformKind,
+        trigger_set: &BTreeSet<DeoptTrigger>,
+    ) -> String {
+        let witness_id = format!("dw_{}_{}", cert.site.site_id, transform_kind);
+        let triggers_str = serde_json::to_string(trigger_set).expect("serialize derived Serialize");
+        let hash_input = format!(
+            "witness:{}:{}:{}:{}",
+            witness_id, transform_kind, triggers_str, cert.certificate_hash
+        );
+        hex_encode(ContentHash::compute(hash_input.as_bytes()).as_bytes())
+    }
+
+    #[test]
+    fn deopt_witness_hash_is_length_prefixed() {
+        let transform_kind = TransformKind::ScalarReplacement;
+        let mut cert_a = make_cert(
+            "site",
+            AllocationKind::ObjectLiteral,
+            EscapeState::NoEscape,
+            true,
+            true,
+        );
+        let witness_a = build_deopt_witness(&cert_a, transform_kind, &[], test_epoch());
+        let trigger_set = witness_a.trigger_set.clone();
+        let triggers_str =
+            serde_json::to_string(&trigger_set).expect("serialize derived Serialize");
+        cert_a.certificate_hash = format!(
+            "tail_{}:{}:{}:cert",
+            transform_kind, transform_kind, triggers_str
+        );
+
+        let mut cert_b = make_cert(
+            &format!(
+                "site_{}:{}:{}:tail",
+                transform_kind, transform_kind, triggers_str
+            ),
+            AllocationKind::ObjectLiteral,
+            EscapeState::NoEscape,
+            true,
+            true,
+        );
+        cert_b.certificate_hash = "cert".to_string();
+
+        let witness_a = build_deopt_witness(&cert_a, transform_kind, &[], test_epoch());
+        let witness_b = build_deopt_witness(&cert_b, transform_kind, &[], test_epoch());
+
+        assert_ne!(witness_a.witness_id, witness_b.witness_id);
+        assert_ne!(
+            cert_a.certificate_hash, cert_b.certificate_hash,
+            "certificates must be genuinely distinct"
+        );
+        assert_eq!(
+            legacy_deopt_witness_hash(&cert_a, transform_kind, &witness_a.trigger_set),
+            legacy_deopt_witness_hash(&cert_b, transform_kind, &witness_b.trigger_set),
+            "old colon-joined witness preimage admitted this collision"
+        );
+        assert_ne!(witness_a.witness_hash, witness_b.witness_hash);
+    }
+
     // --- Validation receipt ---
+
+    fn legacy_validation_receipt_hash(
+        receipt_id: &str,
+        pre_hash: &str,
+        post_hash: &str,
+        certificate_hash: &str,
+        witness_hash: &str,
+    ) -> String {
+        let hash_input = format!(
+            "receipt:{}:{}:{}:{}:{}",
+            receipt_id, pre_hash, post_hash, certificate_hash, witness_hash
+        );
+        hex_encode(ContentHash::compute(hash_input.as_bytes()).as_bytes())
+    }
 
     #[test]
     fn validation_receipt_construction() {
@@ -2119,6 +2221,59 @@ mod tests {
         assert!(receipt.failure_reason.is_none());
         assert!(!receipt.receipt_hash.is_empty());
         assert_eq!(receipt.schema_version, SRE_SCHEMA_VERSION);
+    }
+
+    #[test]
+    fn validation_receipt_hash_is_length_prefixed() {
+        let mut cert = make_cert(
+            "s1",
+            AllocationKind::ObjectLiteral,
+            EscapeState::NoEscape,
+            true,
+            true,
+        );
+        cert.certificate_hash = "certificate".to_string();
+        let mut witness =
+            build_deopt_witness(&cert, TransformKind::ScalarReplacement, &[], test_epoch());
+        witness.witness_hash = "witness".to_string();
+
+        let receipt_a = build_validation_receipt(
+            &cert,
+            TransformKind::ScalarReplacement,
+            &witness,
+            "pre",
+            "post:split",
+            test_epoch(),
+        );
+        let receipt_b = build_validation_receipt(
+            &cert,
+            TransformKind::ScalarReplacement,
+            &witness,
+            "pre:post",
+            "split",
+            test_epoch(),
+        );
+
+        assert_ne!(receipt_a.pre_transform_hash, receipt_b.pre_transform_hash);
+        assert_ne!(receipt_a.post_transform_hash, receipt_b.post_transform_hash);
+        assert_eq!(
+            legacy_validation_receipt_hash(
+                receipt_a.receipt_id.as_str(),
+                receipt_a.pre_transform_hash.as_str(),
+                receipt_a.post_transform_hash.as_str(),
+                receipt_a.certificate_hash.as_str(),
+                receipt_a.witness_hash.as_str()
+            ),
+            legacy_validation_receipt_hash(
+                receipt_b.receipt_id.as_str(),
+                receipt_b.pre_transform_hash.as_str(),
+                receipt_b.post_transform_hash.as_str(),
+                receipt_b.certificate_hash.as_str(),
+                receipt_b.witness_hash.as_str()
+            ),
+            "old colon-joined receipt preimage admitted this collision"
+        );
+        assert_ne!(receipt_a.receipt_hash, receipt_b.receipt_hash);
     }
 
     // --- Full pipeline ---

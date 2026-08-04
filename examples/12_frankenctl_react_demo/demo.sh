@@ -59,11 +59,11 @@ set +e
 status=$?
 set -e
 
-if [[ "${status}" -ne 25 ]]; then
-  echo "expected frankenctl react compile to fail closed with exit code 25, got ${status}" >&2
+if [[ "${status}" -ne 0 ]]; then
+  echo "expected frankenctl react compile to exit 0 for shipped TSX automatic compile, got ${status}" >&2
   exit 1
 fi
 
-echo "frankenctl react compile exited with expected fail-closed status 25"
+echo "frankenctl react compile exited with shipped status 0"
 echo "captured report: ${report_path}"
 cat "${report_path}"

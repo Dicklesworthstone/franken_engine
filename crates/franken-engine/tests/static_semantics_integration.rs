@@ -17,9 +17,9 @@
 )]
 
 use frankenengine_engine::ast::{
-    AssignmentOperator, BindingPattern, BlockStatement, BreakStatement, ContinueStatement,
-    ExportDeclaration, ExportKind, Expression, ExpressionStatement, ForInStatement,
-    FunctionDeclaration, FunctionParam, ImportClause, ImportDeclaration, ParseGoal,
+    AssignmentOperator, AssignmentStrictness, BindingPattern, BlockStatement, BreakStatement,
+    ContinueStatement, ExportDeclaration, ExportKind, Expression, ExpressionStatement,
+    ForInStatement, FunctionDeclaration, FunctionParam, ImportClause, ImportDeclaration, ParseGoal,
     ReturnStatement, SourceSpan, Statement, SyntaxTree, UnaryOperator, VariableDeclaration,
     VariableDeclarationKind, VariableDeclarator,
 };
@@ -81,7 +81,7 @@ fn import_stmt(binding: Option<&str>, source: &str, line: u64) -> Statement {
             None => ImportClause::SideEffect,
         },
         binding: binding.map(ToString::to_string),
-        source: source.to_string(),
+        source: source.into(),
         span: span(line),
     })
 }
@@ -95,7 +95,7 @@ fn export_default(expr: Expression, line: u64) -> Statement {
 
 fn export_named(name: &str, line: u64) -> Statement {
     Statement::Export(ExportDeclaration {
-        kind: ExportKind::NamedClause(name.to_string()),
+        kind: ExportKind::NamedClause(name.into()),
         span: span(line),
     })
 }
@@ -528,7 +528,7 @@ fn binding_names_match_declarations() {
             var_decl(
                 VariableDeclarationKind::Let,
                 "beta",
-                Some(Expression::StringLiteral("hi".to_string())),
+                Some(Expression::StringLiteral("hi".to_string().into())),
                 2,
             ),
             var_decl(
@@ -866,7 +866,7 @@ fn expression_only_program() {
         ParseGoal::Script,
         vec![
             expr_stmt(Expression::NumericLiteral(1), 1),
-            expr_stmt(Expression::StringLiteral("hello".to_string()), 2),
+            expr_stmt(Expression::StringLiteral("hello".to_string().into()), 2),
             expr_stmt(Expression::BooleanLiteral(false), 3),
             expr_stmt(Expression::NullLiteral, 4),
             expr_stmt(Expression::UndefinedLiteral, 5),
@@ -1322,6 +1322,7 @@ fn assignment_to_const_detected() {
                     operator: AssignmentOperator::Assign,
                     left: Box::new(Expression::Identifier("x".to_string())),
                     right: Box::new(Expression::NumericLiteral(2)),
+                    assignment_strictness: AssignmentStrictness::Sloppy,
                 },
                 2,
             ),
@@ -1767,6 +1768,7 @@ fn for_in_with_var_initializer_detected_in_module() {
         vec![Statement::ForIn(ForInStatement {
             binding: BindingPattern::Identifier("x".to_string()),
             binding_kind: Some(VariableDeclarationKind::Var),
+            assignment_strictness: AssignmentStrictness::Sloppy,
             object: Expression::Identifier("obj".to_string()),
             body: Box::new(Statement::Expression(ExpressionStatement {
                 expression: Expression::NumericLiteral(1),

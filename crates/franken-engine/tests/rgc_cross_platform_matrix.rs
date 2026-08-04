@@ -222,7 +222,7 @@ fn rgc_063_contract_is_versioned_and_target_complete() {
     let contract = parse_contract();
     assert_eq!(contract.schema_version, MATRIX_SCHEMA_VERSION);
     assert_eq!(contract.contract_version, "1.1.3");
-    assert_eq!(contract.bead_id, "bd-1lsy.11.13");
+    assert_eq!(contract.bead_id, "bd-cixqu.11.4");
     assert_eq!(contract.policy_id, "policy-rgc-cross-platform-matrix-v1");
 
     let target_ids: BTreeSet<_> = contract
@@ -1183,6 +1183,10 @@ fn rgc_063_gate_fails_on_silent_platform_absence() {
         .arg("-c")
         .arg("cd /data/projects/franken_engine && RGC_CROSS_PLATFORM_REQUIRE_MATRIX=1 ./scripts/run_rgc_cross_platform_matrix_gate.sh matrix")
         .env("RGC_CROSS_PLATFORM_LINUX_X64_MANIFEST", "/dev/null") // Provide minimal baseline
+        // Avoid re-entering `cargo test` from inside this test run (the nested
+        // gate would cascade into a process explosion / exit 139). The gate's
+        // matrix-evaluation manifest check still runs.
+        .env("RGC_CROSS_PLATFORM_SKIP_CARGO", "1")
         .env_remove("RGC_CROSS_PLATFORM_MACOS_X64_MANIFEST") // Remove macOS x64 without skip
         .env_remove("RGC_CROSS_PLATFORM_WINDOWS_X64_MANIFEST") // Remove Windows x64 without skip
         .output()
@@ -1211,9 +1215,20 @@ fn rgc_063_gate_succeeds_with_explicit_platform_skip() {
     let output = Command::new("bash")
         .arg("-c")
         .arg("cd /data/projects/franken_engine && ./scripts/run_rgc_cross_platform_matrix_gate.sh matrix")
-        .env("RGC_CROSS_PLATFORM_LINUX_X64_MANIFEST", "/dev/null") // Provide minimal baseline
+        // Avoid re-entering `cargo test` from inside this test run (see the
+        // sibling silent-absence test); the matrix-evaluation skip check still runs.
+        .env("RGC_CROSS_PLATFORM_SKIP_CARGO", "1")
+        // Explicitly skip every target in the current matrix (x64 + arm64 for
+        // linux/macOS/Windows). The point of this test is that explicit skips are
+        // honored — i.e. no target is reported as silently absent — so we provide
+        // no real manifest (none exists in the test env) and assert the failure,
+        // if any, is never "required target manifest input missing".
+        .env("RGC_CROSS_PLATFORM_LINUX_X64_SKIP", "test environment - linux x64 unavailable")
+        .env("RGC_CROSS_PLATFORM_LINUX_ARM64_SKIP", "test environment - linux arm64 unavailable")
         .env("RGC_CROSS_PLATFORM_MACOS_X64_SKIP", "test environment - macOS unavailable")
+        .env("RGC_CROSS_PLATFORM_MACOS_ARM64_SKIP", "test environment - macOS arm64 unavailable")
         .env("RGC_CROSS_PLATFORM_WINDOWS_X64_SKIP", "test environment - Windows unavailable")
+        .env("RGC_CROSS_PLATFORM_WINDOWS_ARM64_SKIP", "test environment - Windows arm64 unavailable")
         .output()
         .expect("failed to execute gate script");
 

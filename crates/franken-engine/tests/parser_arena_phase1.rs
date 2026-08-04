@@ -15,8 +15,7 @@ mod ast {
     pub use frankenengine_engine::ast::*;
 }
 
-#[path = "../src/parser_arena.rs"]
-mod parser_arena;
+use frankenengine_engine::parser_arena;
 
 use ast::{
     BindingPattern, ExportDeclaration, ExportKind, Expression, ExpressionStatement, ImportClause,
@@ -41,7 +40,7 @@ fn fixture_tree() -> SyntaxTree {
                     local: "alpha".to_string(),
                 },
                 binding: Some("alpha".to_string()),
-                source: "./dep.mjs".to_string(),
+                source: "./dep.mjs".into(),
                 span: span(0, 24, 1, 1),
             }),
             Statement::Expression(ExpressionStatement {
@@ -51,7 +50,7 @@ fn fixture_tree() -> SyntaxTree {
                 span: span(25, 37, 2, 1),
             }),
             Statement::Export(ExportDeclaration {
-                kind: ExportKind::NamedClause("alpha".to_string()),
+                kind: ExportKind::NamedClause("alpha".into()),
                 span: span(38, 55, 3, 1),
             }),
         ],
@@ -634,7 +633,7 @@ fn arena_export_default_roundtrip() {
     let tree = SyntaxTree {
         goal: ParseGoal::Module,
         body: vec![Statement::Export(ExportDeclaration {
-            kind: ExportKind::Default(Expression::StringLiteral("hello".to_string())),
+            kind: ExportKind::Default(Expression::StringLiteral("hello".to_string().into())),
             span: span(0, 22, 1, 1),
         })],
         span: span(0, 22, 1, 1),
@@ -651,7 +650,7 @@ fn arena_import_without_binding_roundtrip() {
         body: vec![Statement::Import(ImportDeclaration {
             clause: ImportClause::SideEffect,
             binding: None,
-            source: "./side-effect.js".to_string(),
+            source: "./side-effect.js".into(),
             span: span(0, 30, 1, 1),
         })],
         span: span(0, 30, 1, 1),

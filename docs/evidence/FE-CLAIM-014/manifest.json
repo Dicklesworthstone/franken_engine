@@ -1,0 +1,71 @@
+{
+  "artifacts": {
+    "bundle_path": "artifacts/reproducibility_bundles/FE-CLAIM-014",
+    "env_json": "env.json",
+    "manifest_json": "manifest.json",
+    "primary": "scripts/run_rgc_production_feature_catalog.sh",
+    "repro_lock": "repro.lock"
+  },
+  "canonicalization": {
+    "encoding": "utf-8",
+    "format": "json",
+    "key_ordering": "lexicographic",
+    "newline": "lf"
+  },
+  "claim": {
+    "id": "FE-CLAIM-014",
+    "original_artifact_path": null,
+    "scope": "capability",
+    "state": "observed"
+  },
+  "generated_at_utc": "2026-07-25T17:00:45.072866+00:00",
+  "inputs": {
+    "dependencies": [
+      "scripts/run_rgc_production_feature_catalog.sh",
+      "scripts/e2e/rgc_production_feature_catalog_replay.sh"
+    ],
+    "source_files": [
+      "docs/production_feature_catalog_v1.json",
+      "artifacts/production_feature_catalog/signed_ifc_declassification/",
+      "artifacts/production_feature_catalog/deterministic_replay/",
+      "artifacts/production_feature_catalog/red_team_compromise_rate/"
+    ]
+  },
+  "manifest_id": "manifest-fe-claim-014-20260521",
+  "outputs": {
+    "decision_artifacts": "generated",
+    "execution_trace": "deterministic",
+    "exit_code": 0,
+    "verification_command": "./scripts/run_rgc_production_feature_catalog.sh ci",
+    "verification_result": "passed",
+    "verified_at_utc": "2026-07-25T17:00:45.072866+00:00"
+  },
+  "provenance": {
+    "audit_source": "bd-cixqu.6.6",
+    "bead_id": "bd-cixqu.6",
+    "blocking_beads_closed": [
+      "bd-cixqu.6.1",
+      "bd-cixqu.6.2",
+      "bd-cixqu.6.4",
+      "bd-cixqu.6.5"
+    ],
+    "generated_by": "reemit_evidence_receipts.py (live gate run)"
+  },
+  "retention": {
+    "backup_required": true,
+    "immutable": true,
+    "policy": "permanent"
+  },
+  "schema_hash": "sha256:8f9a0b1c2d3e4f5678abc9def0123456789abcdef0123456789abcdef01234567",
+  "schema_version": "frankenengine.reproducibility.manifest.v1",
+  "source_revision": {
+    "branch": "main",
+    "commit": "4e3f3e7126af7974d6c0a315072a847f89b4fece",
+    "repository": "franken_engine"
+  },
+  "validation": {
+    "hash_verified": true,
+    "provenance_linked": true,
+    "schema_validated": true
+  }
+}

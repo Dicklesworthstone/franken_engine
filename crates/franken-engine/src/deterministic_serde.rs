@@ -2509,7 +2509,7 @@ mod tests {
         extensible: bool,
     ) -> OrdinaryObject {
         let mut object = OrdinaryObject::with_prototype(prototype);
-        object.properties = properties;
+        object.properties = properties.into();
         object.extensible = extensible;
         object
     }

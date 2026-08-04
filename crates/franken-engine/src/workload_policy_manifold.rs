@@ -29,6 +29,22 @@ use crate::hash_tiers::ContentHash;
 use crate::regime_signature_feature::RegimeLabel;
 use crate::security_epoch::SecurityEpoch;
 
+/// Append a variable-length field to a `Sha256` content-hash preimage with a
+/// fixed-width `u64` length prefix.
+///
+/// These content hashes commit to schema / witness identity, so their preimages
+/// must be injective. Concatenating adjacent variable-length `String` fields
+/// (or looping a collection with no count prefix) is not injective — e.g.
+/// `schema_version="a", schema_id="bc"` and `schema_version="ab", schema_id="c"`
+/// both serialize to `abc`. Length-prefixing every variable-length field and
+/// count-prefixing every collection removes the ambiguity; fixed-width fields
+/// (`u64` via `to_le_bytes`, the single-byte operation discriminant) are
+/// self-delimiting. Cf. the same fix crate-wide in commits 7f500570 / 1d3e0542.
+fn hash_field(hasher: &mut Sha256, bytes: &[u8]) {
+    hasher.update((bytes.len() as u64).to_le_bytes());
+    hasher.update(bytes);
+}
+
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
@@ -189,10 +205,11 @@ impl ManifoldSchema {
     /// Content hash of the schema (deterministic).
     pub fn content_hash(&self) -> ContentHash {
         let mut hasher = Sha256::new();
-        hasher.update(self.schema_version.as_bytes());
-        hasher.update(self.schema_id.as_bytes());
+        hash_field(&mut hasher, self.schema_version.as_bytes());
+        hash_field(&mut hasher, self.schema_id.as_bytes());
+        hasher.update((self.axes.len() as u64).to_le_bytes());
         for (key, axis) in &self.axes {
-            hasher.update(key.as_bytes());
+            hash_field(&mut hasher, key.as_bytes());
             hasher.update(axis.content_hash().as_bytes());
         }
         hasher.update(self.epoch.as_u64().to_le_bytes());
@@ -749,11 +766,11 @@ impl ManifoldWitness {
         detail: &str,
     ) -> Self {
         let mut hasher = Sha256::new();
-        hasher.update(witness_id.as_bytes());
+        hash_field(&mut hasher, witness_id.as_bytes());
         hasher.update([operation as u8]);
-        hasher.update(schema_id.as_bytes());
+        hash_field(&mut hasher, schema_id.as_bytes());
         hasher.update(epoch.as_u64().to_le_bytes());
-        hasher.update(detail.as_bytes());
+        hash_field(&mut hasher, detail.as_bytes());
         let hash = ContentHash::compute(&hasher.finalize());
 
         Self {
@@ -1101,6 +1118,44 @@ mod tests {
         let s1 = test_schema();
         let s2 = test_schema();
         assert_eq!(s1.content_hash(), s2.content_hash());
+    }
+
+    #[test]
+    fn schema_content_hash_is_injective_across_version_id_boundary() {
+        // bd-k6psw: schema_version and schema_id were bare-concatenated, so
+        // ("ab","c") and ("a","bc") both hashed "abc". Length-prefixing pins them
+        // to distinct hashes (axes empty and epoch equal in both).
+        let mk = |schema_version: &str, schema_id: &str| {
+            ManifoldSchema {
+                schema_version: schema_version.to_string(),
+                schema_id: schema_id.to_string(),
+                axes: BTreeMap::new(),
+                epoch: SecurityEpoch::from_raw(1),
+            }
+            .content_hash()
+        };
+        assert_ne!(
+            mk("ab", "c"),
+            mk("a", "bc"),
+            "schema_version/schema_id boundary must not collide"
+        );
+    }
+
+    #[test]
+    fn witness_hash_is_injective_across_id_boundary() {
+        // bd-k6psw: witness_id and schema_id were separated only by the 1-byte
+        // operation discriminant, so a field containing chr(op) collided. With
+        // op = Placement (discriminant 0 = NUL): ("a\0","b") and ("a","\0b") both
+        // hashed "a\0\0b". Length-prefixing each id pins them apart.
+        let op = ManifoldOperation::Placement;
+        let sep = String::from_utf8(vec![op as u8]).expect("op discriminant is valid UTF-8");
+        let epoch = SecurityEpoch::from_raw(1);
+        let w1 = ManifoldWitness::new(&format!("a{sep}"), op, "b", epoch, "d");
+        let w2 = ManifoldWitness::new("a", op, &format!("{sep}b"), epoch, "d");
+        assert_ne!(
+            w1.content_hash, w2.content_hash,
+            "witness_id/schema_id boundary must not collide"
+        );
     }
 
     #[test]

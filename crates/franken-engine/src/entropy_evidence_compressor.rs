@@ -1,18 +1,19 @@
 //! Information-theoretic evidence compression with Shannon lower bounds.
 //!
 //! Evidence streams grow linearly with runtime operations.  This module
-//! provides **entropy-optimal** compression:
+//! provides deterministic empirical-entropy diagnostics and compression:
 //!
 //! - **Empirical entropy estimation** over `ActionCategory` and `DecisionType`
 //!   distributions using streaming histogram updates.
-//! - **Arithmetic coding** (ANS variant) with adaptive symbol probabilities
-//!   for near-optimal compression ratio.
-//! - **Sufficient statistic extraction** preserving Fisher information for
-//!   deterministic replay — ensures that compressed evidence retains all
-//!   information needed for exact posterior reconstruction.
-//! - **Shannon lower bound certificate**: `compressed_bits ≥ n · H(X) - O(log n)`,
-//!   proving that the compression is within a provable factor of optimal.
-//! - **Kraft inequality verification** for prefix-free encoding correctness.
+//! - **Arithmetic coding** with a deterministic static frequency model for
+//!   near-optimal compression ratio and exact symbol-stream restoration.
+//! - **Sufficient statistic extraction** for deterministic empirical
+//!   diagnostics. This summary is separate from the codec's exact restoration
+//!   of its derived symbol stream and is not a full-evidence replay claim.
+//! - **Empirical Shannon comparison certificate** for tracking achieved size
+//!   against the module's deterministic entropy estimate.
+//! - **Frequency-mass normalization checks** retained under the legacy Kraft
+//!   field name.
 //!
 //! All arithmetic is integer-only.  No floating point.  Deterministic
 //! encoding and certificate generation.
@@ -36,10 +37,31 @@ use crate::hash_tiers::ContentHash;
 
 const MILLION: i64 = 1_000_000;
 /// Schema version for compressed evidence artifacts.
-pub const ENTROPY_SCHEMA_VERSION: &str = "franken-engine.entropy-evidence-compressor.v1";
+pub const ENTROPY_SCHEMA_VERSION: &str = "franken-engine.entropy-evidence-compressor.v2";
+/// Schema version for compression certificates.
+pub const COMPRESSION_CERTIFICATE_SCHEMA_VERSION: &str =
+    "franken-engine.entropy-compression-certificate.v1";
+
+/// Allowed rounding distance from unit model mass.
+const KRAFT_NORMALIZATION_TOLERANCE_MILLIONTHS: i64 = 1_000;
 
 /// Maximum alphabet size for the compressor.
 const MAX_ALPHABET_SIZE: usize = 256;
+
+/// Arithmetic-coder state width. A 32-bit interval leaves ample headroom for
+/// deterministic `u128` scaling while keeping the decoder portable.
+const CODE_VALUE_BITS: usize = 32;
+const CODE_MAX: u64 = (1u64 << CODE_VALUE_BITS) - 1;
+const HALF: u64 = 1u64 << (CODE_VALUE_BITS - 1);
+const FIRST_QUARTER: u64 = HALF >> 1;
+const THIRD_QUARTER: u64 = FIRST_QUARTER * 3;
+
+/// Cumulative frequencies must remain well below the coding interval so every
+/// admitted symbol retains a non-empty sub-interval after renormalization.
+const MAX_TOTAL_FREQUENCY: u64 = (1u64 << 24) - 1;
+
+/// Bound allocation and CPU work before trusting serialized symbol counts.
+const MAX_DECODED_SYMBOLS: usize = 1 << 20;
 
 /// Minimum symbol count before entropy estimate is reliable.
 const MIN_SAMPLES_FOR_ENTROPY: u64 = 10;
@@ -61,7 +83,7 @@ pub enum EntropyError {
     DecodeError { message: String },
     /// Insufficient samples for reliable entropy estimate.
     InsufficientSamples { count: u64, min: u64 },
-    /// Kraft inequality violated (encoding is not prefix-free).
+    /// Canonical model frequency mass is not normalized (legacy Kraft name).
     KraftViolation { kraft_sum_millionths: i64 },
 }
 
@@ -84,7 +106,10 @@ impl fmt::Display for EntropyError {
             Self::KraftViolation {
                 kraft_sum_millionths,
             } => {
-                write!(f, "Kraft inequality violated: sum = {kraft_sum_millionths}")
+                write!(
+                    f,
+                    "model frequency mass is not normalized: sum = {kraft_sum_millionths}"
+                )
             }
         }
     }
@@ -316,10 +341,11 @@ impl SufficientStatistic {
 
 /// Integer arithmetic coder for evidence symbol streams.
 ///
-/// Uses scaled-integer arithmetic with `PRECISION_BITS`-bit state.
-/// This is a simplified ANS (Asymmetric Numeral Systems) variant
-/// that operates entirely in integer arithmetic.
+/// Uses a canonical static model and a 32-bit E1/E2/E3 interval. The matching
+/// decoder verifies framing, model identity, content identity, and canonical
+/// re-encoding before returning symbols.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ArithmeticCoder {
     /// Cumulative frequency table: symbol → (cum_freq, freq).
     /// Frequencies are counts, not probabilities — scaled by total.
@@ -333,7 +359,13 @@ pub struct ArithmeticCoder {
 impl ArithmeticCoder {
     /// Build a coder from an entropy estimator.
     pub fn from_estimator(estimator: &EntropyEstimator) -> Result<Self, EntropyError> {
-        let alphabet_size = estimator.frequencies.len();
+        let observed_frequencies: Vec<(u32, u64)> = estimator
+            .frequencies
+            .iter()
+            .filter(|(_, frequency)| **frequency > 0)
+            .map(|(&symbol, &frequency)| (symbol, frequency))
+            .collect();
+        let alphabet_size = observed_frequencies.len();
         if alphabet_size == 0 {
             return Err(EntropyError::EmptyInput);
         }
@@ -344,41 +376,76 @@ impl ArithmeticCoder {
             });
         }
 
+        let raw_total = observed_frequencies
+            .iter()
+            .try_fold(0u64, |total, (_, frequency)| {
+                total
+                    .checked_add(*frequency)
+                    .ok_or_else(|| decode_error("frequency table overflow"))
+            })?;
+        if raw_total == 0 {
+            return Err(EntropyError::EmptyInput);
+        }
+
+        let alphabet_reserve = u64::try_from(alphabet_size).map_err(|_| {
+            decode_error("alphabet size cannot be represented by the frequency model")
+        })?;
+        let proportional_budget = MAX_TOTAL_FREQUENCY
+            .checked_sub(alphabet_reserve)
+            .ok_or_else(|| decode_error("alphabet exceeds the arithmetic coding budget"))?;
+
         let mut cum_freq_table = BTreeMap::new();
         let mut cumulative = 0u64;
-        for (&symbol, &freq) in &estimator.frequencies {
-            let adjusted_freq = freq.max(1); // Laplace smoothing: min freq = 1
+        for (symbol, frequency) in observed_frequencies {
+            let adjusted_freq = if raw_total <= MAX_TOTAL_FREQUENCY {
+                frequency
+            } else {
+                // Preserve every observed symbol while scaling the table into
+                // the arithmetic interval. The sorted BTreeMap traversal makes
+                // this model canonical across platforms and crate mirrors.
+                1u64.saturating_add(u64_from_u128_saturating(
+                    u128::from(frequency).saturating_mul(u128::from(proportional_budget))
+                        / u128::from(raw_total),
+                ))
+            };
             cum_freq_table.insert(symbol, (cumulative, adjusted_freq));
-            cumulative =
-                cumulative
-                    .checked_add(adjusted_freq)
-                    .ok_or_else(|| EntropyError::DecodeError {
-                        message: "frequency table overflow".to_string(),
-                    })?;
+            cumulative = cumulative
+                .checked_add(adjusted_freq)
+                .ok_or_else(|| decode_error("frequency table overflow"))?;
         }
 
         if cumulative == 0 {
             return Err(EntropyError::EmptyInput);
         }
 
-        Ok(Self {
+        let coder = Self {
             frequency_table: cum_freq_table,
             total_frequency: cumulative,
             alphabet_size,
-        })
+        };
+        coder.validate_model()?;
+        Ok(coder)
     }
 
     /// Encode a sequence of symbols into a compressed byte vector.
     ///
     /// Uses range-based arithmetic coding with integer arithmetic.
     pub fn encode(&self, symbols: &[u32]) -> Result<CompressedEvidence, EntropyError> {
-        if symbols.is_empty() || self.total_frequency == 0 {
+        self.validate_model()?;
+        if symbols.is_empty() {
             return Err(EntropyError::EmptyInput);
+        }
+        if symbols.len() > MAX_DECODED_SYMBOLS {
+            return Err(decode_error(format!(
+                "symbol count {} exceeds decode limit {MAX_DECODED_SYMBOLS}",
+                symbols.len()
+            )));
         }
 
         let mut low: u64 = 0;
-        let mut range: u64 = u64::MAX;
-        let mut output_bytes = Vec::new();
+        let mut high: u64 = CODE_MAX;
+        let mut pending_underflow_bits = 0usize;
+        let mut writer = BitWriter::new();
 
         for &sym in symbols {
             let (cum_freq, freq) = self
@@ -386,41 +453,44 @@ impl ArithmeticCoder {
                 .get(&sym)
                 .ok_or(EntropyError::UnknownSymbol { symbol: sym })?;
 
-            let step = range / self.total_frequency;
-            if step == 0 {
-                // Output accumulated bits and reset.
-                output_bytes.extend_from_slice(&low.to_be_bytes());
-                low = 0;
-                range = u64::MAX;
-                let step = range / self.total_frequency;
-                // Use u128 to avoid overflow in step * cum_freq.
-                low = low.wrapping_add(scale_frequency(step, *cum_freq));
-                range = scale_frequency(step, *freq);
-            } else {
-                low = low.wrapping_add(scale_frequency(step, *cum_freq));
-                range = scale_frequency(step, *freq);
-            }
+            update_interval(&mut low, &mut high, *cum_freq, *freq, self.total_frequency)?;
 
-            // Normalize: emit bytes when top byte is determined.
-            while range < (1u64 << 56) {
-                output_bytes.push(u8::try_from(low >> 56).unwrap_or(u8::MAX));
-                low <<= 8;
-                range <<= 8;
+            loop {
+                if high < HALF {
+                    emit_bit_with_follow(&mut writer, false, &mut pending_underflow_bits);
+                } else if low >= HALF {
+                    emit_bit_with_follow(&mut writer, true, &mut pending_underflow_bits);
+                    low -= HALF;
+                    high -= HALF;
+                } else if low >= FIRST_QUARTER && high < THIRD_QUARTER {
+                    pending_underflow_bits =
+                        pending_underflow_bits.checked_add(1).ok_or_else(|| {
+                            decode_error("arithmetic coder underflow counter overflow")
+                        })?;
+                    low -= FIRST_QUARTER;
+                    high -= FIRST_QUARTER;
+                } else {
+                    break;
+                }
+
+                low <<= 1;
+                high = (high << 1) | 1;
             }
         }
 
-        // Flush remaining state.
-        output_bytes.extend_from_slice(&low.to_be_bytes());
+        pending_underflow_bits = pending_underflow_bits
+            .checked_add(1)
+            .ok_or_else(|| decode_error("arithmetic coder finalization overflow"))?;
+        emit_bit_with_follow(
+            &mut writer,
+            low >= FIRST_QUARTER,
+            &mut pending_underflow_bits,
+        );
+        let (output_bytes, valid_bits) = writer.finish();
 
-        let original_bits = i64_from_i128_saturating(
-            i128_from_usize_saturating(symbols.len()).saturating_mul(i128::from(
-                integer_log2_millionths(u64_from_usize_saturating(self.alphabet_size)),
-            )) / i128::from(MILLION),
-        );
+        let original_bits = original_bits_estimate(symbols.len(), self.alphabet_size);
         let compressed_bytes = output_bytes.len();
-        let compressed_bits = i64_from_i128_saturating(
-            i128_from_usize_saturating(output_bytes.len()).saturating_mul(8),
-        );
+        let compressed_bits = i64_from_i128_saturating(i128_from_usize_saturating(valid_bits));
 
         Ok(CompressedEvidence {
             schema: ENTROPY_SCHEMA_VERSION.to_string(),
@@ -429,36 +499,163 @@ impl ArithmeticCoder {
             compressed_bytes,
             original_bits_estimate: original_bits,
             compressed_bits,
-            compression_ratio_millionths: if original_bits > 0 {
-                i64_from_i128_saturating(
-                    i128::from(compressed_bits).saturating_mul(i128::from(MILLION))
-                        / i128::from(original_bits),
-                )
-            } else {
-                MILLION
-            },
-            content_hash: ContentHash::compute(
-                &symbols
-                    .iter()
-                    .flat_map(|s| s.to_be_bytes())
-                    .collect::<Vec<_>>(),
-            ),
+            compression_ratio_millionths: compression_ratio(compressed_bits, original_bits),
+            content_hash: content_hash_for_symbols(symbols),
+            model_hash: content_hash_for_model(self),
         })
     }
 
-    /// Verify the Kraft inequality: Σ 2^(-l_i) ≤ 1.
+    /// Decode and verify a compressed evidence artifact.
     ///
-    /// For a valid prefix-free code, the sum of 2^(-codeword_length) over
-    /// all symbols must not exceed 1.  This verifies encoding correctness.
+    /// Verification is deliberately stronger than merely producing symbols:
+    /// the decoded count and original content hash must match, and re-encoding
+    /// must reproduce the complete artifact byte-for-byte. This rejects
+    /// corrupted, truncated, overlong, and otherwise non-canonical streams.
+    pub fn decode(&self, compressed: &CompressedEvidence) -> Result<Vec<u32>, EntropyError> {
+        self.validate_model()?;
+        compressed.validate_metadata(self)?;
+
+        let valid_bits = usize::try_from(compressed.compressed_bits)
+            .map_err(|_| decode_error("compressed bit length cannot be represented"))?;
+        let mut reader = BitReader::new(&compressed.compressed_data, valid_bits);
+        let mut low = 0u64;
+        let mut high = CODE_MAX;
+        let mut code = 0u64;
+        for _ in 0..CODE_VALUE_BITS {
+            code = (code << 1) | u64::from(reader.read_bit_or_zero());
+        }
+
+        let model_intervals: Vec<(u32, u64, u64)> = self
+            .frequency_table
+            .iter()
+            .map(|(&symbol, &(cumulative, frequency))| (symbol, cumulative, frequency))
+            .collect();
+        let mut symbols = Vec::with_capacity(compressed.original_symbol_count);
+        for _ in 0..compressed.original_symbol_count {
+            let interval = high
+                .checked_sub(low)
+                .and_then(|value| value.checked_add(1))
+                .ok_or_else(|| decode_error("invalid arithmetic decoder interval"))?;
+            let code_offset = code
+                .checked_sub(low)
+                .ok_or_else(|| decode_error("arithmetic code fell below its interval"))?;
+            if code > high {
+                return Err(decode_error("arithmetic code exceeded its interval"));
+            }
+            let scaled = u64_from_u128_saturating(
+                (u128::from(code_offset).saturating_add(1))
+                    .saturating_mul(u128::from(self.total_frequency))
+                    .saturating_sub(1)
+                    / u128::from(interval),
+            );
+
+            let selected_index = model_intervals
+                .partition_point(|&(_, cumulative, frequency)| cumulative + frequency <= scaled);
+            let &(symbol, cum_freq, frequency) = model_intervals
+                .get(selected_index)
+                .filter(|&&(_, cumulative, frequency)| {
+                    (cumulative..cumulative + frequency).contains(&scaled)
+                })
+                .ok_or_else(|| decode_error("arithmetic code selects no model symbol"))?;
+            symbols.push(symbol);
+
+            update_interval(
+                &mut low,
+                &mut high,
+                cum_freq,
+                frequency,
+                self.total_frequency,
+            )?;
+
+            loop {
+                if high < HALF {
+                    // Interval already lies in the lower half.
+                } else if low >= HALF {
+                    low -= HALF;
+                    high -= HALF;
+                    code = code
+                        .checked_sub(HALF)
+                        .ok_or_else(|| decode_error("decoder half-range underflow"))?;
+                } else if low >= FIRST_QUARTER && high < THIRD_QUARTER {
+                    low -= FIRST_QUARTER;
+                    high -= FIRST_QUARTER;
+                    code = code
+                        .checked_sub(FIRST_QUARTER)
+                        .ok_or_else(|| decode_error("decoder quarter-range underflow"))?;
+                } else {
+                    break;
+                }
+
+                low <<= 1;
+                high = (high << 1) | 1;
+                code = ((code << 1) & CODE_MAX) | u64::from(reader.read_bit_or_zero());
+            }
+        }
+
+        if content_hash_for_symbols(&symbols) != compressed.content_hash {
+            return Err(decode_error("decoded content hash mismatch"));
+        }
+
+        let canonical = self.encode(&symbols)?;
+        if canonical != *compressed {
+            return Err(decode_error("non-canonical compressed evidence artifact"));
+        }
+
+        Ok(symbols)
+    }
+
+    fn validate_model(&self) -> Result<(), EntropyError> {
+        let actual_alphabet_size = self.frequency_table.len();
+        if actual_alphabet_size == 0 || self.total_frequency == 0 {
+            return Err(EntropyError::EmptyInput);
+        }
+        if actual_alphabet_size > MAX_ALPHABET_SIZE {
+            return Err(EntropyError::AlphabetTooLarge {
+                size: actual_alphabet_size,
+                max: MAX_ALPHABET_SIZE,
+            });
+        }
+        if self.alphabet_size != actual_alphabet_size {
+            return Err(decode_error("arithmetic coder alphabet metadata mismatch"));
+        }
+        if self.total_frequency > MAX_TOTAL_FREQUENCY {
+            return Err(decode_error(
+                "arithmetic coder frequency total exceeds limit",
+            ));
+        }
+
+        let mut expected_cumulative = 0u64;
+        for &(cumulative, frequency) in self.frequency_table.values() {
+            if frequency == 0 {
+                return Err(decode_error("arithmetic coder contains a zero frequency"));
+            }
+            if cumulative != expected_cumulative {
+                return Err(decode_error(
+                    "arithmetic coder cumulative table is not canonical",
+                ));
+            }
+            expected_cumulative = expected_cumulative
+                .checked_add(frequency)
+                .ok_or_else(|| decode_error("arithmetic coder frequency table overflow"))?;
+        }
+        if expected_cumulative != self.total_frequency {
+            return Err(decode_error("arithmetic coder frequency total mismatch"));
+        }
+        Ok(())
+    }
+
+    /// Verify that the canonical model frequencies normalize to unit mass.
+    ///
+    /// The method retains its legacy public name, but it does not prove that a
+    /// framed block stream is prefix-free and is not a substitute for decode
+    /// plus canonical re-encode verification.
     pub fn verify_kraft_inequality(&self) -> Result<i64, EntropyError> {
         // For arithmetic coding with frequencies, effective codeword length
         // l_i = -log₂(freq_i / total) = log₂(total) - log₂(freq_i).
-        // Kraft sum = Σ 2^(-l_i) = Σ freq_i / total = 1 (by construction).
-        // This is always satisfied for arithmetic coding, but we verify.
+        // The legacy Kraft-named value is Σ freq_i / total = 1 for a valid
+        // canonical model.
 
-        if self.total_frequency == 0 {
-            return Err(EntropyError::EmptyInput);
-        }
+        self.validate_model()?;
 
         let mut sum: u64 = 0;
         for &(_, freq) in self.frequency_table.values() {
@@ -501,6 +698,7 @@ impl ArithmeticCoder {
 
 /// Compressed evidence artifact.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct CompressedEvidence {
     /// Schema version.
     pub schema: String,
@@ -518,22 +716,112 @@ pub struct CompressedEvidence {
     pub compression_ratio_millionths: i64,
     /// Content hash of original symbol sequence.
     pub content_hash: ContentHash,
+    /// Hash of the exact canonical arithmetic model used for this artifact.
+    pub model_hash: ContentHash,
+}
+
+impl CompressedEvidence {
+    /// Content identity of the complete serialized artifact semantics.
+    ///
+    /// This hash commits to the payload, schema, framing metadata, restored
+    /// symbol-stream hash, and arithmetic-model hash. It is an identity, not a
+    /// substitute for [`ArithmeticCoder::decode`] validation.
+    pub fn artifact_hash(&self) -> ContentHash {
+        content_hash_for_compressed_artifact(self)
+    }
+
+    fn validate_metadata(&self, coder: &ArithmeticCoder) -> Result<(), EntropyError> {
+        if self.schema != ENTROPY_SCHEMA_VERSION {
+            return Err(decode_error(format!(
+                "unsupported compressed evidence schema: {}",
+                self.schema
+            )));
+        }
+        if self.original_symbol_count == 0 {
+            return Err(EntropyError::EmptyInput);
+        }
+        if self.original_symbol_count > MAX_DECODED_SYMBOLS {
+            return Err(decode_error(format!(
+                "declared symbol count {} exceeds decode limit {MAX_DECODED_SYMBOLS}",
+                self.original_symbol_count
+            )));
+        }
+        if self.compressed_bytes != self.compressed_data.len() {
+            return Err(decode_error("compressed byte-length metadata mismatch"));
+        }
+        if self.model_hash != content_hash_for_model(coder) {
+            return Err(decode_error("arithmetic model hash mismatch"));
+        }
+
+        let valid_bits = usize::try_from(self.compressed_bits)
+            .map_err(|_| decode_error("compressed bit length must be positive"))?;
+        let maximum_canonical_bits = self
+            .original_symbol_count
+            .checked_mul(CODE_VALUE_BITS)
+            .and_then(|bits| bits.checked_add(2))
+            .ok_or_else(|| decode_error("declared symbol count exceeds codec framing limit"))?;
+        if valid_bits > maximum_canonical_bits {
+            return Err(decode_error(
+                "compressed payload exceeds codec framing limit",
+            ));
+        }
+        let maximum_bits = self
+            .compressed_data
+            .len()
+            .checked_mul(8)
+            .ok_or_else(|| decode_error("compressed byte length overflow"))?;
+        let minimum_bits = self
+            .compressed_data
+            .len()
+            .saturating_sub(1)
+            .saturating_mul(8)
+            .saturating_add(1);
+        if valid_bits == 0 || valid_bits < minimum_bits || valid_bits > maximum_bits {
+            return Err(decode_error("compressed bit-length metadata mismatch"));
+        }
+
+        let remainder = valid_bits % 8;
+        if remainder != 0 {
+            let padding_mask = (1u8 << (8 - remainder)) - 1;
+            let final_byte = self
+                .compressed_data
+                .last()
+                .copied()
+                .ok_or_else(|| decode_error("compressed payload is empty"))?;
+            if final_byte & padding_mask != 0 {
+                return Err(decode_error("compressed payload has non-zero padding bits"));
+            }
+        }
+
+        let expected_original_bits =
+            original_bits_estimate(self.original_symbol_count, coder.alphabet_size);
+        if self.original_bits_estimate != expected_original_bits {
+            return Err(decode_error("original bit-estimate metadata mismatch"));
+        }
+        let expected_ratio = compression_ratio(self.compressed_bits, expected_original_bits);
+        if self.compression_ratio_millionths != expected_ratio {
+            return Err(decode_error("compression-ratio metadata mismatch"));
+        }
+        Ok(())
+    }
 }
 
 // ---------------------------------------------------------------------------
 // CompressionCertificate — Shannon bound proof
 // ---------------------------------------------------------------------------
 
-/// Machine-checkable certificate proving compression quality.
+/// Deterministic certificate recording empirical compression diagnostics.
 ///
-/// Verifies that the achieved compression ratio is within a provable
-/// bound of the Shannon entropy (information-theoretic optimal).
+/// `build_verified` establishes codec restoration and estimator association.
+/// The Shannon- and Kraft-named fields are empirical comparison and model-mass
+/// diagnostics, not a source-distribution or prefix-freeness proof.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct CompressionCertificate {
     pub schema: String,
     /// Empirical entropy H(X) in millionths of bits per symbol.
     pub entropy_millibits_per_symbol: i64,
-    /// Shannon lower bound (total bits, raw integer bits).
+    /// Module-specific empirical Shannon comparison (raw integer bits).
     pub shannon_lower_bound_bits: i64,
     /// Achieved compressed size (bits).
     pub achieved_bits: i64,
@@ -541,20 +829,48 @@ pub struct CompressionCertificate {
     pub overhead_bits_millionths: i64,
     /// Overhead ratio (millionths): achieved / lower_bound.
     pub overhead_ratio_millionths: i64,
-    /// Kraft inequality sum (millionths, should be ≤ 1_000_000).
+    /// Canonical model frequency-mass sum (legacy Kraft name, millionths).
     pub kraft_sum_millionths: i64,
-    /// Whether the Kraft inequality is satisfied.
+    /// Whether the canonical model mass is normalized within tolerance.
     pub kraft_satisfied: bool,
     /// Redundancy (millionths of bits): H_max - H(X).
     pub redundancy_millibits: i64,
     /// Number of symbols.
     pub symbol_count: u64,
-    /// Content hash for audit.
+    /// Content identity of the complete compressed artifact.
+    pub compressed_artifact_hash: ContentHash,
+    /// Content identity of the restored symbol stream.
+    pub content_hash: ContentHash,
+    /// Content identity of the canonical arithmetic model.
+    pub model_hash: ContentHash,
+    /// Content hash committing to every preceding certificate field.
     pub certificate_hash: ContentHash,
 }
 
 impl CompressionCertificate {
-    /// Build a certificate from compression results.
+    /// Build a certificate only after the artifact has been decoded and shown
+    /// to reproduce the exact estimator histogram.
+    pub fn build_verified(
+        estimator: &EntropyEstimator,
+        coder: &ArithmeticCoder,
+        compressed: &CompressedEvidence,
+    ) -> Result<Self, EntropyError> {
+        let restored_estimator = estimator_for_verified_artifact(coder, compressed)?;
+        if restored_estimator != *estimator {
+            return Err(decode_error(
+                "decoded symbol histogram does not match certificate estimator",
+            ));
+        }
+        let kraft_sum = coder.verify_kraft_inequality()?;
+        let certificate = Self::build(estimator, compressed, kraft_sum);
+        certificate.verify_integrity()?;
+        Ok(certificate)
+    }
+
+    /// Build an unchecked structural certificate from compression results.
+    ///
+    /// Production issuers must use [`Self::build_verified`]. This helper does
+    /// not prove estimator/artifact association or canonical model mass.
     pub fn build(
         estimator: &EntropyEstimator,
         compressed: &CompressedEvidence,
@@ -563,45 +879,119 @@ impl CompressionCertificate {
         let entropy = estimator.entropy_millibits();
         let lower_bound = estimator.shannon_lower_bound_bits();
         let achieved = compressed.compressed_bits;
-        let achieved_bits_millionths = i128::from(achieved).saturating_mul(i128::from(MILLION));
-        let lower_bound_millionths = i128::from(lower_bound).saturating_mul(i128::from(MILLION));
-        let overhead = (achieved_bits_millionths - lower_bound_millionths).max(0);
-        let overhead_ratio = if lower_bound_millionths > 0 {
-            let ratio = achieved_bits_millionths.saturating_mul(i128::from(MILLION))
-                / lower_bound_millionths;
-            i64_from_i128_saturating(ratio)
-        } else if achieved <= 0 {
-            // Degenerate zero/zero case: treat as exact.
-            MILLION
-        } else {
-            // Positive achieved size over a zero theoretical lower bound is
-            // effectively unbounded overhead; fail closed in ratio checks.
-            i64::MAX
-        };
+        let (overhead, overhead_ratio) = certificate_overhead(achieved, lower_bound);
 
-        let cert_data = format!(
-            "{}:{}:{}:{}",
-            entropy, lower_bound, achieved, estimator.total_count
-        );
-
-        Self {
-            schema: ENTROPY_SCHEMA_VERSION.to_string(),
+        let mut certificate = Self {
+            schema: COMPRESSION_CERTIFICATE_SCHEMA_VERSION.to_string(),
             entropy_millibits_per_symbol: entropy,
             shannon_lower_bound_bits: lower_bound,
             achieved_bits: achieved,
-            overhead_bits_millionths: i64_from_i128_saturating(overhead),
+            overhead_bits_millionths: overhead,
             overhead_ratio_millionths: overhead_ratio,
             kraft_sum_millionths: kraft_sum,
-            kraft_satisfied: kraft_sum <= MILLION + 1000,
+            kraft_satisfied: kraft_mass_is_normalized(kraft_sum),
             redundancy_millibits: estimator.redundancy_millibits(),
             symbol_count: estimator.total_count,
-            certificate_hash: ContentHash::compute(cert_data.as_bytes()),
-        }
+            compressed_artifact_hash: compressed.artifact_hash(),
+            content_hash: compressed.content_hash,
+            model_hash: compressed.model_hash,
+            certificate_hash: ContentHash::default(),
+        };
+        certificate.certificate_hash = content_hash_for_compression_certificate(&certificate);
+        certificate
     }
 
-    /// Verify: is the compression within `factor` of Shannon optimal?
-    pub fn is_within_factor(&self, factor_millionths: i64) -> bool {
-        self.overhead_ratio_millionths <= factor_millionths
+    /// Verify certificate-internal schema, arithmetic, model-mass, and hash
+    /// invariants.
+    ///
+    /// This proves that the stored fields form one canonical certificate. Use
+    /// [`Self::verify`] when the coder and artifact are available, because
+    /// only contextual verification proves that those inputs are the ones
+    /// committed by this certificate.
+    pub fn verify_integrity(&self) -> Result<(), EntropyError> {
+        if self.schema != COMPRESSION_CERTIFICATE_SCHEMA_VERSION {
+            return Err(certificate_error(format!(
+                "unsupported schema: {}",
+                self.schema
+            )));
+        }
+        if self.entropy_millibits_per_symbol < 0
+            || self.shannon_lower_bound_bits < 0
+            || self.achieved_bits <= 0
+            || self.overhead_bits_millionths < 0
+            || self.overhead_ratio_millionths < 0
+            || self.redundancy_millibits < 0
+            || self.symbol_count == 0
+        {
+            return Err(certificate_error(
+                "negative, zero, or otherwise invalid certificate metric",
+            ));
+        }
+
+        let (expected_overhead, expected_ratio) =
+            certificate_overhead(self.achieved_bits, self.shannon_lower_bound_bits);
+        if self.overhead_bits_millionths != expected_overhead {
+            return Err(certificate_error("overhead-bit metadata mismatch"));
+        }
+        if self.overhead_ratio_millionths != expected_ratio {
+            return Err(certificate_error("overhead-ratio metadata mismatch"));
+        }
+
+        let expected_kraft_satisfied = kraft_mass_is_normalized(self.kraft_sum_millionths);
+        if self.kraft_satisfied != expected_kraft_satisfied {
+            return Err(certificate_error("Kraft normalization flag mismatch"));
+        }
+        if !expected_kraft_satisfied {
+            return Err(EntropyError::KraftViolation {
+                kraft_sum_millionths: self.kraft_sum_millionths,
+            });
+        }
+
+        let expected_hash = content_hash_for_compression_certificate(self);
+        if self.certificate_hash != expected_hash {
+            return Err(certificate_error("certificate hash mismatch"));
+        }
+        Ok(())
+    }
+
+    /// Verify this certificate against the estimator reconstructed from the
+    /// exact model and compressed artifact.
+    pub fn verify(
+        &self,
+        coder: &ArithmeticCoder,
+        compressed: &CompressedEvidence,
+    ) -> Result<(), EntropyError> {
+        self.verify_integrity()?;
+        let restored_estimator = estimator_for_verified_artifact(coder, compressed)?;
+        let kraft_sum = coder.verify_kraft_inequality()?;
+        let expected = Self::build(&restored_estimator, compressed, kraft_sum);
+        expected.verify_integrity()?;
+        if *self != expected {
+            return Err(certificate_error(
+                "certificate does not match estimator, model, and artifact",
+            ));
+        }
+        Ok(())
+    }
+
+    /// Contextually verify the certificate before comparing its empirical
+    /// overhead ratio with `factor`.
+    ///
+    /// A malformed certificate, invalid model mass, mismatched model or
+    /// artifact, degenerate lower bound, or negative factor fails
+    /// closed. A bare certificate cannot authorize this gate because its
+    /// public content hash is not an authenticity proof.
+    pub fn is_within_factor(
+        &self,
+        coder: &ArithmeticCoder,
+        compressed: &CompressedEvidence,
+        factor_millionths: i64,
+    ) -> bool {
+        factor_millionths >= 0
+            && self.shannon_lower_bound_bits > 0
+            && self.overhead_ratio_millionths != i64::MAX
+            && self.verify(coder, compressed).is_ok()
+            && self.overhead_ratio_millionths <= factor_millionths
     }
 }
 
@@ -661,16 +1051,275 @@ fn i128_from_usize_saturating(value: usize) -> i128 {
     u64::try_from(value).map(i128::from).unwrap_or(i128::MAX)
 }
 
+fn decode_error(message: impl Into<String>) -> EntropyError {
+    EntropyError::DecodeError {
+        message: message.into(),
+    }
+}
+
+fn update_interval(
+    low: &mut u64,
+    high: &mut u64,
+    cumulative: u64,
+    frequency: u64,
+    total: u64,
+) -> Result<(), EntropyError> {
+    let upper = cumulative
+        .checked_add(frequency)
+        .ok_or_else(|| decode_error("arithmetic model upper bound overflow"))?;
+    if frequency == 0 || upper > total || total == 0 {
+        return Err(decode_error("invalid arithmetic model interval"));
+    }
+
+    let interval = high
+        .checked_sub(*low)
+        .and_then(|value| value.checked_add(1))
+        .ok_or_else(|| decode_error("invalid arithmetic coding interval"))?;
+    let scaled_low = u64_from_u128_saturating(
+        u128::from(interval).saturating_mul(u128::from(cumulative)) / u128::from(total),
+    );
+    let scaled_high = u64_from_u128_saturating(
+        u128::from(interval).saturating_mul(u128::from(upper)) / u128::from(total),
+    );
+    if scaled_high == 0 {
+        return Err(decode_error("arithmetic model interval collapsed"));
+    }
+
+    let next_low = (*low)
+        .checked_add(scaled_low)
+        .ok_or_else(|| decode_error("arithmetic coding low bound overflow"))?;
+    let next_high = (*low)
+        .checked_add(scaled_high - 1)
+        .ok_or_else(|| decode_error("arithmetic coding high bound overflow"))?;
+    if next_low > next_high {
+        return Err(decode_error("arithmetic model interval collapsed"));
+    }
+    *low = next_low;
+    *high = next_high;
+    Ok(())
+}
+
+#[derive(Debug, Default)]
+struct BitWriter {
+    bytes: Vec<u8>,
+    current_byte: u8,
+    used_bits: u8,
+    bit_len: usize,
+}
+
+impl BitWriter {
+    fn new() -> Self {
+        Self::default()
+    }
+
+    fn write_bit(&mut self, bit: bool) {
+        if bit {
+            self.current_byte |= 1u8 << (7 - self.used_bits);
+        }
+        self.used_bits += 1;
+        self.bit_len = self.bit_len.saturating_add(1);
+        if self.used_bits == 8 {
+            self.bytes.push(self.current_byte);
+            self.current_byte = 0;
+            self.used_bits = 0;
+        }
+    }
+
+    fn finish(mut self) -> (Vec<u8>, usize) {
+        if self.used_bits > 0 {
+            self.bytes.push(self.current_byte);
+        }
+        (self.bytes, self.bit_len)
+    }
+}
+
+fn emit_bit_with_follow(writer: &mut BitWriter, bit: bool, pending: &mut usize) {
+    writer.write_bit(bit);
+    for _ in 0..*pending {
+        writer.write_bit(!bit);
+    }
+    *pending = 0;
+}
+
+#[derive(Debug)]
+struct BitReader<'a> {
+    bytes: &'a [u8],
+    valid_bits: usize,
+    position: usize,
+}
+
+impl<'a> BitReader<'a> {
+    fn new(bytes: &'a [u8], valid_bits: usize) -> Self {
+        Self {
+            bytes,
+            valid_bits,
+            position: 0,
+        }
+    }
+
+    fn read_bit_or_zero(&mut self) -> u8 {
+        if self.position >= self.valid_bits {
+            return 0;
+        }
+        let byte = self.bytes[self.position / 8];
+        let bit = (byte >> (7 - (self.position % 8))) & 1;
+        self.position += 1;
+        bit
+    }
+}
+
+fn original_bits_estimate(symbol_count: usize, alphabet_size: usize) -> i64 {
+    i64_from_i128_saturating(
+        i128_from_usize_saturating(symbol_count).saturating_mul(i128::from(
+            integer_log2_millionths(u64_from_usize_saturating(alphabet_size)),
+        )) / i128::from(MILLION),
+    )
+}
+
+fn compression_ratio(compressed_bits: i64, original_bits: i64) -> i64 {
+    if original_bits > 0 {
+        i64_from_i128_saturating(
+            i128::from(compressed_bits).saturating_mul(i128::from(MILLION))
+                / i128::from(original_bits),
+        )
+    } else {
+        MILLION
+    }
+}
+
+fn content_hash_for_symbols(symbols: &[u32]) -> ContentHash {
+    const DOMAIN: &[u8] = b"franken-engine.entropy-symbol-stream.v2\0";
+    let mut bytes = Vec::with_capacity(
+        DOMAIN
+            .len()
+            .saturating_add(symbols.len().saturating_mul(std::mem::size_of::<u32>())),
+    );
+    bytes.extend_from_slice(DOMAIN);
+    for symbol in symbols {
+        bytes.extend_from_slice(&symbol.to_be_bytes());
+    }
+    ContentHash::compute(&bytes)
+}
+
+fn content_hash_for_model(coder: &ArithmeticCoder) -> ContentHash {
+    const DOMAIN: &[u8] = b"franken-engine.arithmetic-model.v2\0";
+    let entry_bytes = std::mem::size_of::<u32>() + 2 * std::mem::size_of::<u64>();
+    let mut bytes = Vec::with_capacity(
+        DOMAIN.len()
+            + 2 * std::mem::size_of::<u64>()
+            + coder.frequency_table.len().saturating_mul(entry_bytes),
+    );
+    bytes.extend_from_slice(DOMAIN);
+    bytes.extend_from_slice(&u64_from_usize_saturating(coder.alphabet_size).to_be_bytes());
+    bytes.extend_from_slice(&coder.total_frequency.to_be_bytes());
+    for (&symbol, &(cumulative, frequency)) in &coder.frequency_table {
+        bytes.extend_from_slice(&symbol.to_be_bytes());
+        bytes.extend_from_slice(&cumulative.to_be_bytes());
+        bytes.extend_from_slice(&frequency.to_be_bytes());
+    }
+    ContentHash::compute(&bytes)
+}
+
+fn estimator_for_verified_artifact(
+    coder: &ArithmeticCoder,
+    compressed: &CompressedEvidence,
+) -> Result<EntropyEstimator, EntropyError> {
+    let restored = coder.decode(compressed)?;
+    let mut estimator = EntropyEstimator::new();
+    for symbol in restored {
+        estimator.observe(symbol);
+    }
+    Ok(estimator)
+}
+
+fn content_hash_for_compressed_artifact(compressed: &CompressedEvidence) -> ContentHash {
+    const DOMAIN: &[u8] = b"franken-engine.entropy-compressed-artifact.v2\0";
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(DOMAIN);
+    extend_len_prefixed(&mut bytes, compressed.schema.as_bytes());
+    extend_len_prefixed(&mut bytes, &compressed.compressed_data);
+    bytes.extend_from_slice(
+        &u64::try_from(compressed.original_symbol_count)
+            .unwrap_or(u64::MAX)
+            .to_be_bytes(),
+    );
+    bytes.extend_from_slice(
+        &u64::try_from(compressed.compressed_bytes)
+            .unwrap_or(u64::MAX)
+            .to_be_bytes(),
+    );
+    bytes.extend_from_slice(&compressed.original_bits_estimate.to_be_bytes());
+    bytes.extend_from_slice(&compressed.compressed_bits.to_be_bytes());
+    bytes.extend_from_slice(&compressed.compression_ratio_millionths.to_be_bytes());
+    bytes.extend_from_slice(compressed.content_hash.as_bytes());
+    bytes.extend_from_slice(compressed.model_hash.as_bytes());
+    ContentHash::compute(&bytes)
+}
+
+fn content_hash_for_compression_certificate(certificate: &CompressionCertificate) -> ContentHash {
+    const DOMAIN: &[u8] = b"franken-engine.entropy-compression-certificate.v1\0";
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(DOMAIN);
+    extend_len_prefixed(&mut bytes, certificate.schema.as_bytes());
+    bytes.extend_from_slice(&certificate.entropy_millibits_per_symbol.to_be_bytes());
+    bytes.extend_from_slice(&certificate.shannon_lower_bound_bits.to_be_bytes());
+    bytes.extend_from_slice(&certificate.achieved_bits.to_be_bytes());
+    bytes.extend_from_slice(&certificate.overhead_bits_millionths.to_be_bytes());
+    bytes.extend_from_slice(&certificate.overhead_ratio_millionths.to_be_bytes());
+    bytes.extend_from_slice(&certificate.kraft_sum_millionths.to_be_bytes());
+    bytes.push(u8::from(certificate.kraft_satisfied));
+    bytes.extend_from_slice(&certificate.redundancy_millibits.to_be_bytes());
+    bytes.extend_from_slice(&certificate.symbol_count.to_be_bytes());
+    bytes.extend_from_slice(certificate.compressed_artifact_hash.as_bytes());
+    bytes.extend_from_slice(certificate.content_hash.as_bytes());
+    bytes.extend_from_slice(certificate.model_hash.as_bytes());
+    ContentHash::compute(&bytes)
+}
+
+fn extend_len_prefixed(bytes: &mut Vec<u8>, value: &[u8]) {
+    bytes.extend_from_slice(&u64::try_from(value.len()).unwrap_or(u64::MAX).to_be_bytes());
+    bytes.extend_from_slice(value);
+}
+
+fn certificate_overhead(achieved_bits: i64, lower_bound_bits: i64) -> (i64, i64) {
+    let achieved_millionths = i128::from(achieved_bits).saturating_mul(i128::from(MILLION));
+    let lower_bound_millionths = i128::from(lower_bound_bits).saturating_mul(i128::from(MILLION));
+    let overhead = i64_from_i128_saturating(
+        achieved_millionths
+            .saturating_sub(lower_bound_millionths)
+            .max(0),
+    );
+    let ratio = if lower_bound_millionths > 0 {
+        i64_from_i128_saturating(
+            achieved_millionths.saturating_mul(i128::from(MILLION)) / lower_bound_millionths,
+        )
+    } else if achieved_bits <= 0 {
+        MILLION
+    } else {
+        i64::MAX
+    };
+    (overhead, ratio)
+}
+
+fn kraft_mass_is_normalized(kraft_sum_millionths: i64) -> bool {
+    (MILLION - KRAFT_NORMALIZATION_TOLERANCE_MILLIONTHS
+        ..=MILLION + KRAFT_NORMALIZATION_TOLERANCE_MILLIONTHS)
+        .contains(&kraft_sum_millionths)
+}
+
+fn certificate_error(message: impl Into<String>) -> EntropyError {
+    decode_error(format!(
+        "compression certificate verification failed: {}",
+        message.into()
+    ))
+}
+
 fn i64_from_i128_saturating(value: i128) -> i64 {
     i64::try_from(value).unwrap_or(if value.is_negative() {
         i64::MIN
     } else {
         i64::MAX
     })
-}
-
-fn scale_frequency(step: u64, frequency: u64) -> u64 {
-    u64_from_u128_saturating(u128::from(step).saturating_mul(u128::from(frequency)))
 }
 
 fn u64_from_u128_saturating(value: u128) -> u64 {
@@ -1058,9 +1707,7 @@ mod tests {
 
         assert!(matches!(
             coder.verify_kraft_inequality(),
-            Err(EntropyError::KraftViolation {
-                kraft_sum_millionths: i64::MAX
-            })
+            Err(EntropyError::DecodeError { .. })
         ));
     }
 
@@ -1105,6 +1752,7 @@ mod tests {
             compressed_bits: 32,
             compression_ratio_millionths: 160_000,
             content_hash: ContentHash::compute(b"test"),
+            model_hash: ContentHash::compute(b"test-model"),
         };
         let json = serde_json::to_string(&ce).expect("serialize derived Serialize");
         let restored: CompressedEvidence =
@@ -1139,7 +1787,7 @@ mod tests {
     #[test]
     fn compression_certificate_serde_roundtrip() {
         let cert = CompressionCertificate {
-            schema: ENTROPY_SCHEMA_VERSION.to_string(),
+            schema: COMPRESSION_CERTIFICATE_SCHEMA_VERSION.to_string(),
             entropy_millibits_per_symbol: MILLION,
             shannon_lower_bound_bits: 100,
             achieved_bits: 120,
@@ -1149,6 +1797,9 @@ mod tests {
             kraft_satisfied: true,
             redundancy_millibits: 0,
             symbol_count: 100,
+            compressed_artifact_hash: ContentHash::compute(b"cert-artifact"),
+            content_hash: ContentHash::compute(b"cert-content"),
+            model_hash: ContentHash::compute(b"cert-model"),
             certificate_hash: ContentHash::compute(b"cert"),
         };
         let json = serde_json::to_string(&cert).expect("serialize derived Serialize");
@@ -1239,7 +1890,8 @@ mod tests {
         assert_eq!(cert.shannon_lower_bound_bits, 0);
         assert!(cert.achieved_bits > 0);
         assert_eq!(cert.overhead_ratio_millionths, i64::MAX);
-        assert!(!cert.is_within_factor(10_000_000));
+        assert!(!cert.is_within_factor(&coder, &compressed, 10_000_000));
+        assert!(!cert.is_within_factor(&coder, &compressed, i64::MAX));
     }
 
     // === Error display ===
@@ -1255,7 +1907,7 @@ mod tests {
         let err = EntropyError::KraftViolation {
             kraft_sum_millionths: 1_100_000,
         };
-        assert!(format!("{err}").contains("Kraft"));
+        assert!(format!("{err}").contains("frequency mass"));
     }
 
     // === Edge cases ===
@@ -1475,23 +2127,24 @@ mod tests {
 
     #[test]
     fn is_within_factor_passing() {
-        let cert = CompressionCertificate {
-            schema: ENTROPY_SCHEMA_VERSION.to_string(),
-            entropy_millibits_per_symbol: MILLION,
-            shannon_lower_bound_bits: 100,
-            achieved_bits: 120,
-            overhead_bits_millionths: 20 * MILLION,
-            overhead_ratio_millionths: 1_200_000,
-            kraft_sum_millionths: MILLION,
-            kraft_satisfied: true,
-            redundancy_millibits: 0,
-            symbol_count: 100,
-            certificate_hash: ContentHash::compute(b"x"),
-        };
-        // 1.2x overhead — within 2.0x factor
-        assert!(cert.is_within_factor(2_000_000));
-        // But not within 1.1x factor
-        assert!(!cert.is_within_factor(1_100_000));
+        let mut estimator = EntropyEstimator::new();
+        for _ in 0..100 {
+            estimator.observe(0);
+            estimator.observe(1);
+        }
+        let coder = ArithmeticCoder::from_estimator(&estimator)
+            .expect("uniform estimator should build a coder");
+        let symbols: Vec<u32> = (0..200).map(|index| index % 2).collect();
+        let compressed = coder.encode(&symbols).expect("symbols should encode");
+        let cert = CompressionCertificate::build_verified(&estimator, &coder, &compressed)
+            .expect("canonical inputs should certify");
+
+        assert!(cert.is_within_factor(&coder, &compressed, cert.overhead_ratio_millionths));
+        assert!(!cert.is_within_factor(
+            &coder,
+            &compressed,
+            cert.overhead_ratio_millionths.saturating_sub(1)
+        ));
     }
 
     // -----------------------------------------------------------------------
@@ -1596,6 +2249,7 @@ mod tests {
             compressed_bits: 24,
             compression_ratio_millionths: 240_000,
             content_hash: ContentHash::compute(b"clone_test"),
+            model_hash: ContentHash::compute(b"clone-model"),
         };
         let cloned = ce.clone();
         assert_eq!(ce, cloned);
@@ -1604,7 +2258,7 @@ mod tests {
     #[test]
     fn enrichment_clone_eq_compression_certificate() {
         let cert = CompressionCertificate {
-            schema: ENTROPY_SCHEMA_VERSION.to_string(),
+            schema: COMPRESSION_CERTIFICATE_SCHEMA_VERSION.to_string(),
             entropy_millibits_per_symbol: 500_000,
             shannon_lower_bound_bits: 50,
             achieved_bits: 60,
@@ -1614,6 +2268,9 @@ mod tests {
             kraft_satisfied: true,
             redundancy_millibits: 500_000,
             symbol_count: 200,
+            compressed_artifact_hash: ContentHash::compute(b"clone-artifact"),
+            content_hash: ContentHash::compute(b"clone-content"),
+            model_hash: ContentHash::compute(b"clone-model"),
             certificate_hash: ContentHash::compute(b"cert_clone"),
         };
         let cloned = cert.clone();
@@ -1649,7 +2306,7 @@ mod tests {
     #[test]
     fn enrichment_json_fields_compression_certificate() {
         let cert = CompressionCertificate {
-            schema: ENTROPY_SCHEMA_VERSION.to_string(),
+            schema: COMPRESSION_CERTIFICATE_SCHEMA_VERSION.to_string(),
             entropy_millibits_per_symbol: MILLION,
             shannon_lower_bound_bits: 80,
             achieved_bits: 90,
@@ -1659,6 +2316,9 @@ mod tests {
             kraft_satisfied: true,
             redundancy_millibits: 0,
             symbol_count: 100,
+            compressed_artifact_hash: ContentHash::compute(b"fields-artifact"),
+            content_hash: ContentHash::compute(b"fields-content"),
+            model_hash: ContentHash::compute(b"fields-model"),
             certificate_hash: ContentHash::compute(b"fld"),
         };
         let json = serde_json::to_string(&cert).expect("serialize derived Serialize");
@@ -1807,6 +2467,7 @@ mod tests {
             compressed_bits: 8,
             compression_ratio_millionths: MILLION,
             content_hash: ContentHash::compute(b"da"),
+            model_hash: ContentHash::compute(b"model-a"),
         };
         let ce_b = CompressedEvidence {
             schema: ENTROPY_SCHEMA_VERSION.to_string(),
@@ -1817,6 +2478,7 @@ mod tests {
             compressed_bits: 8,
             compression_ratio_millionths: MILLION,
             content_hash: ContentHash::compute(b"db"),
+            model_hash: ContentHash::compute(b"model-b"),
         };
         assert_ne!(format!("{ce_a:?}"), format!("{ce_b:?}"));
     }
@@ -1824,7 +2486,7 @@ mod tests {
     #[test]
     fn debug_distinct_compression_certificate() {
         let cert_a = CompressionCertificate {
-            schema: ENTROPY_SCHEMA_VERSION.to_string(),
+            schema: COMPRESSION_CERTIFICATE_SCHEMA_VERSION.to_string(),
             entropy_millibits_per_symbol: 500_000,
             shannon_lower_bound_bits: 50,
             achieved_bits: 60,
@@ -1834,10 +2496,13 @@ mod tests {
             kraft_satisfied: true,
             redundancy_millibits: 500_000,
             symbol_count: 100,
+            compressed_artifact_hash: ContentHash::compute(b"ca-artifact"),
+            content_hash: ContentHash::compute(b"ca-content"),
+            model_hash: ContentHash::compute(b"ca-model"),
             certificate_hash: ContentHash::compute(b"ca"),
         };
         let cert_b = CompressionCertificate {
-            schema: ENTROPY_SCHEMA_VERSION.to_string(),
+            schema: COMPRESSION_CERTIFICATE_SCHEMA_VERSION.to_string(),
             entropy_millibits_per_symbol: 800_000,
             shannon_lower_bound_bits: 80,
             achieved_bits: 90,
@@ -1847,6 +2512,9 @@ mod tests {
             kraft_satisfied: true,
             redundancy_millibits: 200_000,
             symbol_count: 200,
+            compressed_artifact_hash: ContentHash::compute(b"cb-artifact"),
+            content_hash: ContentHash::compute(b"cb-content"),
+            model_hash: ContentHash::compute(b"cb-model"),
             certificate_hash: ContentHash::compute(b"cb"),
         };
         assert_ne!(format!("{cert_a:?}"), format!("{cert_b:?}"));
@@ -1893,6 +2561,7 @@ mod tests {
             compressed_bits: 24,
             compression_ratio_millionths: MILLION,
             content_hash: ContentHash::compute(b"ci_ce"),
+            model_hash: ContentHash::compute(b"ci-model"),
         };
         let original = ce.clone();
         ce.compressed_data.push(4);
@@ -1929,6 +2598,7 @@ mod tests {
             compressed_bits: 8,
             compression_ratio_millionths: 200_000,
             content_hash: ContentHash::compute(b"fs"),
+            model_hash: ContentHash::compute(b"fs-model"),
         };
         let json = serde_json::to_string(&ce).expect("serialize derived Serialize");
         for field in &[
@@ -1940,6 +2610,7 @@ mod tests {
             "compressed_bits",
             "compression_ratio_millionths",
             "content_hash",
+            "model_hash",
         ] {
             assert!(
                 json.contains(&format!("\"{field}\"")),
@@ -2269,22 +2940,22 @@ mod tests {
 
     #[test]
     fn certificate_is_within_factor_exact_boundary() {
-        let cert = CompressionCertificate {
-            schema: ENTROPY_SCHEMA_VERSION.to_string(),
-            entropy_millibits_per_symbol: MILLION,
-            shannon_lower_bound_bits: 100,
-            achieved_bits: 150,
-            overhead_bits_millionths: 50 * MILLION,
-            overhead_ratio_millionths: 1_500_000,
-            kraft_sum_millionths: MILLION,
-            kraft_satisfied: true,
-            redundancy_millibits: 0,
-            symbol_count: 100,
-            certificate_hash: ContentHash::compute(b"boundary"),
-        };
-        assert!(cert.is_within_factor(1_500_000));
-        assert!(cert.is_within_factor(1_500_001));
-        assert!(!cert.is_within_factor(1_499_999));
+        let mut estimator = EntropyEstimator::new();
+        for _ in 0..64 {
+            estimator.observe(0);
+            estimator.observe(1);
+        }
+        let coder = ArithmeticCoder::from_estimator(&estimator)
+            .expect("uniform estimator should build a coder");
+        let symbols: Vec<u32> = (0..128).map(|index| index % 2).collect();
+        let compressed = coder.encode(&symbols).expect("symbols should encode");
+        let cert = CompressionCertificate::build_verified(&estimator, &coder, &compressed)
+            .expect("canonical inputs should certify");
+        let boundary = cert.overhead_ratio_millionths;
+
+        assert!(cert.is_within_factor(&coder, &compressed, boundary));
+        assert!(cert.is_within_factor(&coder, &compressed, boundary.saturating_add(1)));
+        assert!(!cert.is_within_factor(&coder, &compressed, boundary.saturating_sub(1)));
     }
 
     #[test]
@@ -2387,7 +3058,10 @@ mod tests {
         let err = EntropyError::KraftViolation {
             kraft_sum_millionths: 1_200_000,
         };
-        assert_eq!(format!("{err}"), "Kraft inequality violated: sum = 1200000");
+        assert_eq!(
+            format!("{err}"),
+            "model frequency mass is not normalized: sum = 1200000"
+        );
     }
 
     // -----------------------------------------------------------------------

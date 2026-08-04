@@ -16,6 +16,34 @@ cargo_build_jobs="${CARGO_BUILD_JOBS:-4}"
 seed="${ASUPERSYNC_LEVERAGE_ADOPTION_GATE_SEED:-1317}"
 run_dir="${artifact_root}/${timestamp}_${mode}_$$"
 step_logs_dir="${run_dir}/rch_step_logs"
+linker_policy_rustflag="-Clinker-features=-lld"
+
+linker_policy_is_effective() {
+  local rustflags="${1-}"
+  local -a tokens=()
+  local index
+  local effective_state="unset"
+
+  read -r -a tokens <<<"$rustflags"
+  for index in "${!tokens[@]}"; do
+    case "${tokens[$index]}" in
+      "$linker_policy_rustflag") effective_state="disabled" ;;
+      -Clinker-features=*) effective_state="other" ;;
+      -C)
+        case "${tokens[$((index + 1))]:-}" in
+          linker-features=-lld) effective_state="disabled" ;;
+          linker-features=*) effective_state="other" ;;
+        esac
+        ;;
+    esac
+  done
+  [[ "$effective_state" == "disabled" ]]
+}
+
+gate_rustflags="${RUSTFLAGS:--C linker=cc -Clinker-features=-lld}"
+if ! linker_policy_is_effective "$gate_rustflags"; then
+  gate_rustflags="${gate_rustflags:+${gate_rustflags} }${linker_policy_rustflag}"
+fi
 
 mkdir -p "$run_dir" "$step_logs_dir"
 
@@ -25,16 +53,25 @@ if ! command -v rch >/dev/null 2>&1; then
 fi
 
 run_rch() {
-  rch exec -- env \
+  env -u CARGO_ENCODED_RUSTFLAGS \
+    rch exec -- env -u CARGO_ENCODED_RUSTFLAGS \
     "RUSTUP_TOOLCHAIN=${toolchain}" \
     "CARGO_TARGET_DIR=${target_dir}" \
     "CARGO_BUILD_JOBS=${cargo_build_jobs}" \
     "CARGO_INCREMENTAL=0" \
+    "RUSTFLAGS=${gate_rustflags}" \
     "$@"
 }
 
 run_test_rch() {
-  rch exec "env RUSTFLAGS=\"-C linker=cc\" RUSTUP_TOOLCHAIN=${toolchain} CARGO_TARGET_DIR=${target_dir} CARGO_BUILD_JOBS=${cargo_build_jobs} CARGO_INCREMENTAL=0 $*"
+  env -u CARGO_ENCODED_RUSTFLAGS \
+    rch exec -- env -u CARGO_ENCODED_RUSTFLAGS \
+    "RUSTUP_TOOLCHAIN=${toolchain}" \
+    "CARGO_TARGET_DIR=${target_dir}" \
+    "CARGO_BUILD_JOBS=${cargo_build_jobs}" \
+    "CARGO_INCREMENTAL=0" \
+    "RUSTFLAGS=${gate_rustflags}" \
+    "$@"
 }
 
 run_step() {

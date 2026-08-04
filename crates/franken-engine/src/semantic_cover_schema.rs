@@ -30,6 +30,43 @@ pub const MAX_SURFACES: usize = 16;
 pub const MAX_FEATURES_PER_SURFACE: usize = 512;
 
 // ---------------------------------------------------------------------------
+// Content-hash preimage helpers
+// ---------------------------------------------------------------------------
+//
+// Content hashes over these artifacts must be *injective*: distinct logical
+// inputs must never share a preimage. Concatenating variable-length fields
+// (or appending an `Option` only when `Some`) without length/count markers
+// breaks that — e.g. `("ab","c")` collides with `("a","bc")`, and
+// `Some("")` aliases `None`. These helpers append self-delimiting fields so
+// boundaries are unambiguous. They mirror `hash_len_prefixed` in the sibling
+// `semantic_canonical_basis` module.
+
+/// Append `bytes` with a fixed-width `u64` little-endian length prefix so that
+/// adjacent variable-length fields cannot share a preimage.
+fn push_len_prefixed(buf: &mut Vec<u8>, bytes: &[u8]) {
+    buf.extend_from_slice(&(bytes.len() as u64).to_le_bytes());
+    buf.extend_from_slice(bytes);
+}
+
+/// Append a `u64` little-endian count prefix so the boundaries between the
+/// items of an uncounted collection cannot be re-segmented.
+fn push_count(buf: &mut Vec<u8>, count: usize) {
+    buf.extend_from_slice(&(count as u64).to_le_bytes());
+}
+
+/// Append an optional byte field with an explicit presence tag so that
+/// `Some("")` (tag `1`, length `0`) cannot alias `None` (tag `0`).
+fn push_opt_len_prefixed(buf: &mut Vec<u8>, value: Option<&[u8]>) {
+    match value {
+        Some(bytes) => {
+            buf.push(1);
+            push_len_prefixed(buf, bytes);
+        }
+        None => buf.push(0),
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Surface taxonomy
 // ---------------------------------------------------------------------------
 
@@ -231,15 +268,19 @@ impl OverlapRestrictionMap {
     /// Build from a list of entries, computing the content hash.
     pub fn new(entries: Vec<OverlapEntry>) -> Self {
         let content_hash = {
+            // Injective preimage: count-prefix the entries, length-prefix every
+            // variable field, and tag the optional `scope_prefix` so an entry
+            // with `scope_prefix = Some("")` cannot share a hash with the same
+            // entry carrying `scope_prefix = None` — `restriction_for` treats
+            // those as semantically distinct (scoped vs. general rule).
             let mut buf = Vec::new();
-            buf.extend_from_slice(COVER_SCHEMA_VERSION.as_bytes());
+            push_len_prefixed(&mut buf, COVER_SCHEMA_VERSION.as_bytes());
+            push_count(&mut buf, entries.len());
             for e in &entries {
-                buf.extend_from_slice(e.surface_a.to_string().as_bytes());
-                buf.extend_from_slice(e.surface_b.to_string().as_bytes());
-                buf.extend_from_slice(e.restriction.to_string().as_bytes());
-                if let Some(scope) = &e.scope_prefix {
-                    buf.extend_from_slice(scope.as_bytes());
-                }
+                push_len_prefixed(&mut buf, e.surface_a.to_string().as_bytes());
+                push_len_prefixed(&mut buf, e.surface_b.to_string().as_bytes());
+                push_len_prefixed(&mut buf, e.restriction.to_string().as_bytes());
+                push_opt_len_prefixed(&mut buf, e.scope_prefix.as_deref().map(str::as_bytes));
             }
             ContentHash::compute(&buf)
         };
@@ -358,10 +399,16 @@ impl SemanticCover {
         epoch: SecurityEpoch,
     ) -> Self {
         let content_hash = {
+            // Injective preimage: count-prefix the features and length-prefix
+            // the variable-length `key` so an uncounted run of `key + fixed
+            // coverage bytes` cannot be re-segmented. The trailing fields
+            // (`coverage_ratio_millionths`, `overlap_map.content_hash`) are
+            // fixed-width and need no prefix.
             let mut buf = Vec::new();
-            buf.extend_from_slice(COVER_SCHEMA_VERSION.as_bytes());
+            push_len_prefixed(&mut buf, COVER_SCHEMA_VERSION.as_bytes());
+            push_count(&mut buf, features.len());
             for f in &features {
-                buf.extend_from_slice(f.key.as_bytes());
+                push_len_prefixed(&mut buf, f.key.as_bytes());
                 buf.extend_from_slice(&f.coverage_ratio_millionths().to_le_bytes());
             }
             buf.extend_from_slice(overlap_map.content_hash.as_bytes());
@@ -795,11 +842,15 @@ pub fn build_evidence_corpus() -> Vec<CoverSpecimen> {
 /// Run evidence corpus and return manifest hash.
 pub fn run_evidence_corpus() -> (Vec<CoverSpecimen>, ContentHash) {
     let specimens = build_evidence_corpus();
+    // Injective preimage: count-prefix the specimens and length-prefix each of
+    // the two adjacent variable-length fields (`id`, `feature.key`) so that
+    // e.g. `id="a", key="bc"` cannot collide with `id="ab", key="c"`.
     let mut buf = Vec::new();
-    buf.extend_from_slice(COVER_SCHEMA_VERSION.as_bytes());
+    push_len_prefixed(&mut buf, COVER_SCHEMA_VERSION.as_bytes());
+    push_count(&mut buf, specimens.len());
     for s in &specimens {
-        buf.extend_from_slice(s.id.as_bytes());
-        buf.extend_from_slice(s.feature.key.as_bytes());
+        push_len_prefixed(&mut buf, s.id.as_bytes());
+        push_len_prefixed(&mut buf, s.feature.key.as_bytes());
     }
     let hash = ContentHash::compute(&buf);
     (specimens, hash)
@@ -1516,6 +1567,57 @@ mod tests {
         let m1 = OverlapRestrictionMap::new(vec![e1]);
         let m2 = OverlapRestrictionMap::new(vec![e2]);
         assert_ne!(m1.content_hash, m2.content_hash);
+    }
+
+    #[test]
+    fn overlap_map_hash_distinguishes_empty_scope_from_none() {
+        // Regression (bd-n3c7f): an unmarked `Option<String>` scope_prefix made
+        // `Some("")` produce the same preimage as `None`, yet `restriction_for`
+        // treats `scope_prefix.is_none()` (general rule) as semantically
+        // distinct from a scoped rule. The presence tag must keep their hashes
+        // apart so the two logically-distinct maps cannot certify under one hash.
+        let general = OverlapEntry {
+            surface_a: EngineSurface::Parser,
+            surface_b: EngineSurface::Lowering,
+            restriction: OverlapRestriction::Allowed,
+            scope_prefix: None,
+            rationale: "general".into(),
+        };
+        let empty_scope = OverlapEntry {
+            scope_prefix: Some(String::new()),
+            ..general.clone()
+        };
+        let m_none = OverlapRestrictionMap::new(vec![general]);
+        let m_empty = OverlapRestrictionMap::new(vec![empty_scope]);
+        assert_ne!(
+            m_none.content_hash, m_empty.content_hash,
+            "Some(\"\") scope_prefix must not alias None in the content hash"
+        );
+    }
+
+    #[test]
+    fn preimage_helpers_are_injective_across_field_boundary() {
+        // Regression (bd-n3c7f): bare concatenation of two adjacent
+        // variable-length fields (e.g. `id` + `feature.key` in
+        // `run_evidence_corpus`, or `key` runs in `SemanticCover::new`) made
+        // `("ab","c")` collide with `("a","bc")`. The length prefix the three
+        // preimage sites now use must keep those distinct.
+        let mut left = Vec::new();
+        push_len_prefixed(&mut left, b"ab");
+        push_len_prefixed(&mut left, b"c");
+
+        let mut right = Vec::new();
+        push_len_prefixed(&mut right, b"a");
+        push_len_prefixed(&mut right, b"bc");
+
+        assert_ne!(left, right);
+
+        // And the presence tag keeps `Some("")` distinct from `None`.
+        let mut some_empty = Vec::new();
+        push_opt_len_prefixed(&mut some_empty, Some(b"".as_slice()));
+        let mut none = Vec::new();
+        push_opt_len_prefixed(&mut none, None);
+        assert_ne!(some_empty, none);
     }
 
     #[test]

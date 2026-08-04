@@ -1,0 +1,1 @@
+./scripts/run_claim_to_proof_matrix_gate.sh ci

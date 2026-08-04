@@ -42,12 +42,14 @@ benchmark evidence.
 The repository benchmark is the evidence-oriented path:
 
 ```bash
-rch exec -- env CARGO_TARGET_DIR=/data/tmp/franken_engine_comparative_node_target \
-  CARGO_INCREMENTAL=0 RUSTFLAGS='-C linker=cc' \
+env -u CARGO_ENCODED_RUSTFLAGS rch exec -- env -u CARGO_ENCODED_RUSTFLAGS \
+  CARGO_TARGET_DIR=/data/tmp/franken_engine_comparative_node_target \
+  CARGO_INCREMENTAL=0 RUSTFLAGS='-C linker=cc -Clinker-features=-lld' \
   cargo build -p frankenengine-engine --bin frankenctl --release
 
-rch exec -- env CARGO_TARGET_DIR=/data/tmp/franken_engine_comparative_node_target \
-  CARGO_INCREMENTAL=0 RUSTFLAGS='-C linker=cc' \
+env -u CARGO_ENCODED_RUSTFLAGS rch exec -- env -u CARGO_ENCODED_RUSTFLAGS \
+  CARGO_TARGET_DIR=/data/tmp/franken_engine_comparative_node_target \
+  CARGO_INCREMENTAL=0 RUSTFLAGS='-C linker=cc -Clinker-features=-lld' \
   cargo bench -p frankenengine-engine --bench comparative_node -- --noplot
 ```
 

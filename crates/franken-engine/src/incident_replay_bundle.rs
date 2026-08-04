@@ -18,7 +18,7 @@ use crate::causal_replay::{
     ActionDeltaReport, CausalReplayEngine, CounterfactualConfig, NondeterminismLog, TraceRecord,
 };
 use crate::engine_object_id::{self, EngineObjectId, ObjectDomain, SchemaId};
-use crate::evidence_ledger::EvidenceEntry;
+use crate::evidence_ledger::{EvidenceEntry, EvidenceTrustRegistry};
 use crate::fleet_immune_protocol::QuorumCheckpoint;
 use crate::hash_tiers::ContentHash;
 use crate::proof_schema::OptReceipt;
@@ -31,11 +31,13 @@ use crate::signature_preimage::{
 // Constants
 // ---------------------------------------------------------------------------
 
-const BUNDLE_SCHEMA_DEF: &[u8] = b"IncidentReplayBundle.v1";
+const BUNDLE_SCHEMA_DEF: &[u8] = b"IncidentReplayBundle.v2";
 const BUNDLE_ZONE: &str = "incident-replay-bundle";
+const BUNDLE_MANIFEST_SIGNATURE_DOMAIN: &[u8] =
+    b"franken-engine/incident-replay-bundle/manifest-signature/v2";
 
 /// Current bundle format version.
-pub const BUNDLE_FORMAT_VERSION: BundleFormatVersion = BundleFormatVersion { major: 1, minor: 0 };
+pub const BUNDLE_FORMAT_VERSION: BundleFormatVersion = BundleFormatVersion { major: 2, minor: 0 };
 
 // ---------------------------------------------------------------------------
 // BundleFormatVersion
@@ -242,25 +244,16 @@ pub struct BundleManifest {
 impl BundleManifest {
     /// Bytes used for signing (everything except the signature field itself).
     pub fn signing_bytes(&self) -> Vec<u8> {
-        let mut buf = Vec::new();
-        buf.extend_from_slice(&self.format_version.major.to_be_bytes());
-        buf.extend_from_slice(&self.format_version.minor.to_be_bytes());
-        buf.extend_from_slice(self.bundle_id.as_bytes());
-        buf.extend_from_slice(self.incident_id.as_bytes());
-        buf.extend_from_slice(&self.creation_epoch.as_u64().to_be_bytes());
-        buf.extend_from_slice(&self.created_at_ns.to_be_bytes());
-        buf.extend_from_slice(self.producer_key_id.as_bytes());
-        buf.extend_from_slice(self.merkle_root.as_bytes());
-        for (aid, entry) in &self.artifacts {
-            buf.extend_from_slice(aid.as_bytes());
-            buf.extend_from_slice(entry.content_hash.as_bytes());
-        }
-        buf.extend_from_slice(&self.window_start_tick.to_be_bytes());
-        buf.extend_from_slice(&self.window_end_tick.to_be_bytes());
-        for (k, v) in &self.metadata {
-            buf.extend_from_slice(k.as_bytes());
-            buf.extend_from_slice(v.as_bytes());
-        }
+        let mut unsigned = self.clone();
+        unsigned.signature.clear();
+        let canonical_manifest = serde_json::to_vec(&unsigned)
+            .expect("serializing an incident replay manifest should be infallible");
+        let mut buf = Vec::with_capacity(
+            BUNDLE_MANIFEST_SIGNATURE_DOMAIN.len() + 8 + canonical_manifest.len(),
+        );
+        buf.extend_from_slice(BUNDLE_MANIFEST_SIGNATURE_DOMAIN);
+        buf.extend_from_slice(&(canonical_manifest.len() as u64).to_be_bytes());
+        buf.extend_from_slice(&canonical_manifest);
         buf
     }
 }
@@ -429,16 +422,32 @@ pub fn verify_merkle_proof(
     &current == expected_root
 }
 
-fn serialized_content_hash<T: Serialize>(value: &T) -> Result<ContentHash, serde_json::Error> {
-    let json = serde_json::to_vec(value)?;
-    Ok(ContentHash::compute(&json))
-}
-
 fn serialized_content_hash_and_size<T: Serialize>(
     value: &T,
 ) -> Result<(ContentHash, u64), serde_json::Error> {
     let json = serde_json::to_vec(value)?;
     Ok((ContentHash::compute(&json), json.len() as u64))
+}
+
+fn derive_bundle_id(
+    incident_id: &str,
+    creation_epoch: SecurityEpoch,
+    created_at_ns: u64,
+    merkle_root: &ContentHash,
+) -> Result<EngineObjectId, String> {
+    let schema_id = SchemaId::from_definition(BUNDLE_SCHEMA_DEF);
+    let mut canonical = Vec::new();
+    canonical.extend_from_slice(incident_id.as_bytes());
+    canonical.extend_from_slice(&creation_epoch.as_u64().to_be_bytes());
+    canonical.extend_from_slice(&created_at_ns.to_be_bytes());
+    canonical.extend_from_slice(merkle_root.as_bytes());
+    engine_object_id::derive_id(
+        ObjectDomain::EvidenceRecord,
+        BUNDLE_ZONE,
+        &schema_id,
+        &canonical,
+    )
+    .map_err(|error| error.to_string())
 }
 
 // ---------------------------------------------------------------------------
@@ -731,6 +740,29 @@ impl BundleBuilder {
 
     /// Build the bundle with computed Merkle root and signature.
     pub fn build(self) -> Result<IncidentReplayBundle, BundleError> {
+        if self.window_start_tick > self.window_end_tick {
+            return Err(BundleError::IdDerivation(format!(
+                "bundle window starts at {} after ending at {}",
+                self.window_start_tick, self.window_end_tick
+            )));
+        }
+        for (trace_id, trace) in &self.traces {
+            if trace.trace_id != *trace_id {
+                return Err(BundleError::IdDerivation(format!(
+                    "trace map key {trace_id:?} does not match signed trace id {:?}",
+                    trace.trace_id
+                )));
+            }
+            if let Some(trace_incident_id) = trace.incident_id.as_deref()
+                && trace_incident_id != self.incident_id
+            {
+                return Err(BundleError::IdDerivation(format!(
+                    "trace {trace_id:?} names incident {trace_incident_id:?}, not bundle incident {:?}",
+                    self.incident_id
+                )));
+            }
+        }
+
         let mut artifact_entries = BTreeMap::new();
 
         // Collect all artifact entries with composite keys ("{kind}:{id}") to
@@ -863,21 +895,13 @@ impl BundleBuilder {
             artifact_entries.values().map(|e| e.content_hash).collect();
         let merkle_root = compute_merkle_root(&leaf_hashes);
 
-        // Derive bundle ID.
-        let schema_id = SchemaId::from_definition(BUNDLE_SCHEMA_DEF);
-        let mut canonical = Vec::new();
-        canonical.extend_from_slice(self.incident_id.as_bytes());
-        canonical.extend_from_slice(&self.creation_epoch.as_u64().to_be_bytes());
-        canonical.extend_from_slice(&self.created_at_ns.to_be_bytes());
-        canonical.extend_from_slice(merkle_root.as_bytes());
-
-        let bundle_id = engine_object_id::derive_id(
-            ObjectDomain::EvidenceRecord,
-            BUNDLE_ZONE,
-            &schema_id,
-            &canonical,
+        let bundle_id = derive_bundle_id(
+            &self.incident_id,
+            self.creation_epoch,
+            self.created_at_ns,
+            &merkle_root,
         )
-        .map_err(|e| BundleError::IdDerivation(e.to_string()))?;
+        .map_err(BundleError::IdDerivation)?;
 
         let mut manifest = BundleManifest {
             format_version: BUNDLE_FORMAT_VERSION,
@@ -972,6 +996,14 @@ impl BundleVerifier {
         });
 
         // Verify individual artifact content hashes.
+        report.add_check(VerificationCheck {
+            name: "artifact-inventory-closed".to_string(),
+            category: VerificationCategory::Integrity,
+            outcome: match self.validate_artifact_inventory(bundle) {
+                Ok(()) => CheckOutcome::Pass,
+                Err(reason) => CheckOutcome::Fail { reason },
+            },
+        });
         self.verify_artifact_hashes(bundle, &mut report);
 
         // Verify Merkle root.
@@ -993,6 +1025,43 @@ impl BundleVerifier {
                         "computed root {} != manifest root {}",
                         computed_root.to_hex(),
                         bundle.manifest.merkle_root.to_hex()
+                    ),
+                }
+            },
+        });
+
+        report.add_check(VerificationCheck {
+            name: "bundle-id-valid".to_string(),
+            category: VerificationCategory::Integrity,
+            outcome: match derive_bundle_id(
+                &bundle.manifest.incident_id,
+                bundle.manifest.creation_epoch,
+                bundle.manifest.created_at_ns,
+                &computed_root,
+            ) {
+                Ok(expected_id) if expected_id == bundle.manifest.bundle_id => CheckOutcome::Pass,
+                Ok(expected_id) => CheckOutcome::Fail {
+                    reason: format!(
+                        "derived bundle id {expected_id} != manifest bundle id {}",
+                        bundle.manifest.bundle_id
+                    ),
+                },
+                Err(error) => CheckOutcome::Fail {
+                    reason: format!("failed to derive bundle id: {error}"),
+                },
+            },
+        });
+
+        report.add_check(VerificationCheck {
+            name: "bundle-window-valid".to_string(),
+            category: VerificationCategory::Integrity,
+            outcome: if bundle.manifest.window_start_tick <= bundle.manifest.window_end_tick {
+                CheckOutcome::Pass
+            } else {
+                CheckOutcome::Fail {
+                    reason: format!(
+                        "bundle window starts at {} after ending at {}",
+                        bundle.manifest.window_start_tick, bundle.manifest.window_end_tick
                     ),
                 }
             },
@@ -1052,10 +1121,12 @@ impl BundleVerifier {
         report
     }
 
-    /// Re-execute traces from the bundle and verify bit-for-bit replay fidelity.
+    /// Re-execute traces from the bundle under runtime-scoped trust and verify
+    /// bit-for-bit replay fidelity.
     pub fn verify_replay(
         &self,
         bundle: &IncidentReplayBundle,
+        trace_trust_registry: &EvidenceTrustRegistry,
         current_ns: u64,
     ) -> VerificationReport {
         let mut report = VerificationReport::new(
@@ -1063,6 +1134,75 @@ impl BundleVerifier {
             bundle.manifest.incident_id.clone(),
             current_ns,
         );
+        if let Err(error) = trace_trust_registry.ensure_runtime_scope() {
+            report.add_check(VerificationCheck {
+                name: "trace-trust-runtime-scope".to_string(),
+                category: VerificationCategory::Compatibility,
+                outcome: CheckOutcome::Fail {
+                    reason: error.to_string(),
+                },
+            });
+            return report;
+        }
+        report.add_check(VerificationCheck {
+            name: "trace-trust-runtime-scope".to_string(),
+            category: VerificationCategory::Compatibility,
+            outcome: CheckOutcome::Pass,
+        });
+        self.verify_replay_with_scoped_registry(bundle, trace_trust_registry, report)
+    }
+
+    /// Explicit deterministic-fixture replay path. Reports its lab scope and
+    /// rejects runtime registries so lab reports cannot be confused with
+    /// production verification.
+    pub fn verify_replay_lab(
+        &self,
+        bundle: &IncidentReplayBundle,
+        trace_trust_registry: &EvidenceTrustRegistry,
+        current_ns: u64,
+    ) -> VerificationReport {
+        let mut report = VerificationReport::new(
+            bundle.manifest.bundle_id.clone(),
+            bundle.manifest.incident_id.clone(),
+            current_ns,
+        );
+        if let Err(error) = trace_trust_registry.ensure_lab_scope() {
+            report.add_check(VerificationCheck {
+                name: "trace-trust-lab-fixture-scope".to_string(),
+                category: VerificationCategory::Compatibility,
+                outcome: CheckOutcome::Fail {
+                    reason: error.to_string(),
+                },
+            });
+            return report;
+        }
+        report.add_check(VerificationCheck {
+            name: "trace-trust-lab-fixture-scope".to_string(),
+            category: VerificationCategory::Compatibility,
+            outcome: CheckOutcome::Pass,
+        });
+        self.verify_replay_with_scoped_registry(bundle, trace_trust_registry, report)
+    }
+
+    fn verify_replay_with_scoped_registry(
+        &self,
+        bundle: &IncidentReplayBundle,
+        trace_trust_registry: &EvidenceTrustRegistry,
+        mut report: VerificationReport,
+    ) -> VerificationReport {
+        if let Err(reason) = self.validate_artifact_inventory(bundle) {
+            report.add_check(VerificationCheck {
+                name: "artifact-inventory-closed".to_string(),
+                category: VerificationCategory::Integrity,
+                outcome: CheckOutcome::Fail { reason },
+            });
+            return report;
+        }
+        report.add_check(VerificationCheck {
+            name: "artifact-inventory-closed".to_string(),
+            category: VerificationCategory::Integrity,
+            outcome: CheckOutcome::Pass,
+        });
 
         if bundle.traces.is_empty() {
             report.add_check(VerificationCheck {
@@ -1075,9 +1215,40 @@ impl BundleVerifier {
             return report;
         }
 
-        let engine = CausalReplayEngine::new();
+        let engine = CausalReplayEngine::from_trust_registry(trace_trust_registry.clone());
 
         for (trace_id, trace) in &bundle.traces {
+            let authenticity = engine.verify_trace_authenticity(trace);
+            report.add_check(VerificationCheck {
+                name: format!("trace-authenticity:{trace_id}"),
+                category: VerificationCategory::Replay,
+                outcome: match &authenticity {
+                    Ok(()) => CheckOutcome::Pass,
+                    Err(error) => CheckOutcome::Fail {
+                        reason: error.to_string(),
+                    },
+                },
+            });
+            if let Err(error) = authenticity {
+                report.add_check(VerificationCheck {
+                    name: format!("trace-chain-integrity:{trace_id}"),
+                    category: VerificationCategory::Replay,
+                    outcome: CheckOutcome::Fail {
+                        reason: format!(
+                            "trace authenticity failed before chain inspection: {error}"
+                        ),
+                    },
+                });
+                report.add_check(VerificationCheck {
+                    name: format!("replay-fidelity:{trace_id}"),
+                    category: VerificationCategory::Replay,
+                    outcome: CheckOutcome::Fail {
+                        reason: format!("trace authenticity failed: {error}"),
+                    },
+                });
+                continue;
+            }
+
             // Chain integrity.
             let chain_ok = trace.verify_chain_integrity().is_ok();
             report.add_check(VerificationCheck {
@@ -1196,11 +1367,13 @@ impl BundleVerifier {
         report
     }
 
-    /// Re-run counterfactual analysis with auditor-specified parameters.
+    /// Re-run counterfactual analysis under runtime-scoped trust with
+    /// auditor-specified parameters.
     pub fn verify_counterfactual(
         &self,
         bundle: &IncidentReplayBundle,
         configs: &[CounterfactualConfig],
+        trace_trust_registry: &EvidenceTrustRegistry,
         current_ns: u64,
     ) -> VerificationReport {
         let mut report = VerificationReport::new(
@@ -1208,21 +1381,136 @@ impl BundleVerifier {
             bundle.manifest.incident_id.clone(),
             current_ns,
         );
+        if let Err(error) = trace_trust_registry.ensure_runtime_scope() {
+            report.add_check(VerificationCheck {
+                name: "trace-trust-runtime-scope".to_string(),
+                category: VerificationCategory::Compatibility,
+                outcome: CheckOutcome::Fail {
+                    reason: error.to_string(),
+                },
+            });
+            return report;
+        }
+        report.add_check(VerificationCheck {
+            name: "trace-trust-runtime-scope".to_string(),
+            category: VerificationCategory::Compatibility,
+            outcome: CheckOutcome::Pass,
+        });
+        self.verify_counterfactual_with_scoped_registry(
+            bundle,
+            configs,
+            trace_trust_registry,
+            report,
+        )
+    }
 
-        let engine = CausalReplayEngine::new();
+    /// Explicit deterministic-fixture counterfactual path. Reports its lab
+    /// scope and rejects runtime registries.
+    pub fn verify_counterfactual_lab(
+        &self,
+        bundle: &IncidentReplayBundle,
+        configs: &[CounterfactualConfig],
+        trace_trust_registry: &EvidenceTrustRegistry,
+        current_ns: u64,
+    ) -> VerificationReport {
+        let mut report = VerificationReport::new(
+            bundle.manifest.bundle_id.clone(),
+            bundle.manifest.incident_id.clone(),
+            current_ns,
+        );
+        if let Err(error) = trace_trust_registry.ensure_lab_scope() {
+            report.add_check(VerificationCheck {
+                name: "trace-trust-lab-fixture-scope".to_string(),
+                category: VerificationCategory::Compatibility,
+                outcome: CheckOutcome::Fail {
+                    reason: error.to_string(),
+                },
+            });
+            return report;
+        }
+        report.add_check(VerificationCheck {
+            name: "trace-trust-lab-fixture-scope".to_string(),
+            category: VerificationCategory::Compatibility,
+            outcome: CheckOutcome::Pass,
+        });
+        self.verify_counterfactual_with_scoped_registry(
+            bundle,
+            configs,
+            trace_trust_registry,
+            report,
+        )
+    }
+
+    fn verify_counterfactual_with_scoped_registry(
+        &self,
+        bundle: &IncidentReplayBundle,
+        configs: &[CounterfactualConfig],
+        trace_trust_registry: &EvidenceTrustRegistry,
+        mut report: VerificationReport,
+    ) -> VerificationReport {
+        if configs.is_empty() {
+            return report;
+        }
+
+        if let Err(reason) = self.validate_artifact_inventory(bundle) {
+            report.add_check(VerificationCheck {
+                name: "artifact-inventory-closed".to_string(),
+                category: VerificationCategory::Integrity,
+                outcome: CheckOutcome::Fail { reason },
+            });
+            return report;
+        }
+        report.add_check(VerificationCheck {
+            name: "artifact-inventory-closed".to_string(),
+            category: VerificationCategory::Integrity,
+            outcome: CheckOutcome::Pass,
+        });
+
+        let engine = CausalReplayEngine::from_trust_registry(trace_trust_registry.clone());
 
         for config in configs {
             let branch_id = &config.branch_id;
 
-            // Find the source trace.
-            let trace_id_key = bundle
+            let matching_results: Vec<_> = bundle
                 .counterfactual_results
-                .values()
-                .find(|r| r.config.branch_id == *branch_id)
-                .map(|r| r.source_trace_id.clone());
+                .iter()
+                .filter(|(_, result)| result.config.branch_id == *branch_id)
+                .collect();
+            if matching_results.len() > 1 {
+                let artifact_ids: Vec<_> = matching_results
+                    .iter()
+                    .map(|(artifact_id, _)| artifact_id.as_str())
+                    .collect();
+                report.add_check(VerificationCheck {
+                    name: format!("counterfactual-result-unique:{branch_id}"),
+                    category: VerificationCategory::Counterfactual,
+                    outcome: CheckOutcome::Fail {
+                        reason: format!(
+                            "multiple bundled artifacts claim branch {branch_id:?}: {artifact_ids:?}"
+                        ),
+                    },
+                });
+                continue;
+            }
+            let bundled = matching_results.first().copied();
+            if let Some((artifact_id, result)) = bundled
+                && (result.config != result.delta_report.config || result.config != *config)
+            {
+                report.add_check(VerificationCheck {
+                    name: format!("counterfactual-result-context:{branch_id}"),
+                    category: VerificationCategory::Counterfactual,
+                    outcome: CheckOutcome::Fail {
+                        reason: format!(
+                            "bundled artifact {artifact_id:?} does not use one exact branch configuration across the request, result, and delta report"
+                        ),
+                    },
+                });
+                continue;
+            }
 
-            let trace_id = match trace_id_key {
-                Some(ref tid) => tid,
+            // Find the source trace.
+            let trace_id = match bundled {
+                Some((_, result)) => result.source_trace_id.as_str(),
                 None => {
                     // No existing result for this branch — run fresh.
                     // Pick the first trace as default.
@@ -1246,25 +1534,16 @@ impl BundleVerifier {
                 match engine.counterfactual_branch(trace, config.clone()) {
                     Ok(fresh_report) => {
                         // If there's a bundled result, compare.
-                        if let Some(bundled) = bundle.counterfactual_results.get(branch_id) {
-                            let divergence_match = fresh_report.divergence_count()
-                                == bundled.delta_report.divergence_count();
-                            let improvement_match = fresh_report.is_improvement()
-                                == bundled.delta_report.is_improvement();
-
+                        if let Some((artifact_id, bundled)) = bundled {
                             report.add_check(VerificationCheck {
                                 name: format!("counterfactual-match:{branch_id}"),
                                 category: VerificationCategory::Counterfactual,
-                                outcome: if divergence_match && improvement_match {
+                                outcome: if fresh_report == bundled.delta_report {
                                     CheckOutcome::Pass
                                 } else {
                                     CheckOutcome::Fail {
                                         reason: format!(
-                                            "fresh analysis differs: divergence_count {}!={}, improvement {}!={}",
-                                            fresh_report.divergence_count(),
-                                            bundled.delta_report.divergence_count(),
-                                            fresh_report.is_improvement(),
-                                            bundled.delta_report.is_improvement(),
+                                            "fresh analysis differs from the full bundled delta report in artifact {artifact_id:?}"
                                         ),
                                     }
                                 },
@@ -1308,10 +1587,11 @@ impl BundleVerifier {
         let mut redacted_count = 0u64;
 
         for entry in bundle.manifest.artifacts.values() {
-            *artifact_counts.entry(entry.kind.to_string()).or_insert(0) += 1;
-            total_size_bytes += entry.size_bytes;
+            let kind_count = artifact_counts.entry(entry.kind.to_string()).or_insert(0);
+            *kind_count = (*kind_count).saturating_add(1);
+            total_size_bytes = total_size_bytes.saturating_add(entry.size_bytes);
             if entry.redacted {
-                redacted_count += 1;
+                redacted_count = redacted_count.saturating_add(1);
             }
         }
 
@@ -1348,6 +1628,80 @@ impl BundleVerifier {
     // Internal helpers
     // -----------------------------------------------------------------------
 
+    fn validate_artifact_inventory(&self, bundle: &IncidentReplayBundle) -> Result<(), String> {
+        for (manifest_key, entry) in &bundle.manifest.artifacts {
+            let canonical_key = format!("{}:{}", entry.kind, entry.artifact_id);
+            if manifest_key != &canonical_key {
+                return Err(format!(
+                    "manifest key {manifest_key:?} is not canonical for {} artifact {:?}",
+                    entry.kind, entry.artifact_id
+                ));
+            }
+
+            if !entry.redacted && !artifact_is_present(bundle, entry.kind, &entry.artifact_id) {
+                return Err(format!(
+                    "manifest {} artifact {:?} is absent from bundle data",
+                    entry.kind, entry.artifact_id
+                ));
+            }
+        }
+
+        validate_map_inventory(
+            &bundle.manifest.artifacts,
+            BundleArtifactKind::Trace,
+            bundle.traces.keys(),
+        )?;
+        validate_map_inventory(
+            &bundle.manifest.artifacts,
+            BundleArtifactKind::Evidence,
+            bundle.evidence_entries.keys(),
+        )?;
+        validate_map_inventory(
+            &bundle.manifest.artifacts,
+            BundleArtifactKind::OptReceipt,
+            bundle.opt_receipts.keys(),
+        )?;
+        validate_map_inventory(
+            &bundle.manifest.artifacts,
+            BundleArtifactKind::QuorumCheckpoint,
+            bundle.quorum_checkpoints.keys(),
+        )?;
+        validate_map_inventory(
+            &bundle.manifest.artifacts,
+            BundleArtifactKind::NondeterminismLog,
+            bundle.nondeterminism_logs.keys(),
+        )?;
+        validate_map_inventory(
+            &bundle.manifest.artifacts,
+            BundleArtifactKind::CounterfactualResult,
+            bundle.counterfactual_results.keys(),
+        )?;
+        validate_map_inventory(
+            &bundle.manifest.artifacts,
+            BundleArtifactKind::PolicySnapshot,
+            bundle.policy_snapshots.keys(),
+        )?;
+
+        for (trace_id, trace) in &bundle.traces {
+            if trace.trace_id != *trace_id {
+                return Err(format!(
+                    "trace map key {trace_id:?} does not match signed trace id {:?}",
+                    trace.trace_id
+                ));
+            }
+            if let Some(trace_incident_id) = trace.incident_id.as_deref()
+                && trace_incident_id != bundle.manifest.incident_id
+            {
+                return Err(format!(
+                    "trace {trace_id:?} names incident {trace_incident_id:?}, not manifest incident {:?}",
+                    bundle.manifest.incident_id
+                ));
+            }
+        }
+
+        Ok(())
+    }
+
     fn verify_artifact_hashes(
         &self,
         bundle: &IncidentReplayBundle,
@@ -1356,12 +1710,12 @@ impl BundleVerifier {
         for entry in bundle.manifest.artifacts.values() {
             let aid = &entry.artifact_id;
             let check_name = format!("artifact-hash:{}:{aid}", entry.kind);
-            let computed_hash: Result<Option<ContentHash>, String> = match entry.kind {
+            let computed_artifact: Result<Option<(ContentHash, u64)>, String> = match entry.kind {
                 BundleArtifactKind::Trace => bundle
                     .traces
                     .get(aid)
                     .map(|t| {
-                        serialized_content_hash(t)
+                        serialized_content_hash_and_size(t)
                             .map_err(|e| format!("failed to serialize trace artifact {aid}: {e}"))
                     })
                     .transpose(),
@@ -1369,7 +1723,7 @@ impl BundleVerifier {
                     .evidence_entries
                     .get(aid)
                     .map(|e| {
-                        serialized_content_hash(e).map_err(|err| {
+                        serialized_content_hash_and_size(e).map_err(|err| {
                             format!("failed to serialize evidence artifact {aid}: {err}")
                         })
                     })
@@ -1378,7 +1732,7 @@ impl BundleVerifier {
                     .opt_receipts
                     .get(aid)
                     .map(|r| {
-                        serialized_content_hash(r).map_err(|err| {
+                        serialized_content_hash_and_size(r).map_err(|err| {
                             format!("failed to serialize receipt artifact {aid}: {err}")
                         })
                     })
@@ -1387,7 +1741,7 @@ impl BundleVerifier {
                     .quorum_checkpoints
                     .get(aid)
                     .map(|c| {
-                        serialized_content_hash(c).map_err(|err| {
+                        serialized_content_hash_and_size(c).map_err(|err| {
                             format!("failed to serialize quorum artifact {aid}: {err}")
                         })
                     })
@@ -1396,7 +1750,7 @@ impl BundleVerifier {
                     .nondeterminism_logs
                     .get(aid)
                     .map(|l| {
-                        serialized_content_hash(l).map_err(|err| {
+                        serialized_content_hash_and_size(l).map_err(|err| {
                             format!("failed to serialize nondeterminism artifact {aid}: {err}")
                         })
                     })
@@ -1405,7 +1759,7 @@ impl BundleVerifier {
                     .counterfactual_results
                     .get(aid)
                     .map(|r| {
-                        serialized_content_hash(r).map_err(|err| {
+                        serialized_content_hash_and_size(r).map_err(|err| {
                             format!("failed to serialize counterfactual artifact {aid}: {err}")
                         })
                     })
@@ -1414,21 +1768,19 @@ impl BundleVerifier {
                     .policy_snapshots
                     .get(aid)
                     .map(|s| {
-                        serialized_content_hash(s).map_err(|err| {
+                        serialized_content_hash_and_size(s).map_err(|err| {
                             format!("failed to serialize policy artifact {aid}: {err}")
                         })
                     })
                     .transpose(),
             };
 
-            match computed_hash {
-                Ok(Some(hash)) => {
+            match computed_artifact {
+                Ok(Some((hash, size_bytes))) => {
                     report.add_check(VerificationCheck {
                         name: check_name.clone(),
                         category: VerificationCategory::ArtifactHash,
-                        outcome: if hash == entry.content_hash {
-                            CheckOutcome::Pass
-                        } else {
+                        outcome: if hash != entry.content_hash {
                             CheckOutcome::Fail {
                                 reason: format!(
                                     "hash mismatch: computed {} != manifest {}",
@@ -1436,6 +1788,15 @@ impl BundleVerifier {
                                     entry.content_hash.to_hex()
                                 ),
                             }
+                        } else if size_bytes != entry.size_bytes {
+                            CheckOutcome::Fail {
+                                reason: format!(
+                                    "size mismatch: computed {size_bytes} != manifest {}",
+                                    entry.size_bytes
+                                ),
+                            }
+                        } else {
+                            CheckOutcome::Pass
                         },
                     });
                 }
@@ -1466,6 +1827,47 @@ impl BundleVerifier {
     }
 }
 
+fn artifact_is_present(
+    bundle: &IncidentReplayBundle,
+    kind: BundleArtifactKind,
+    artifact_id: &str,
+) -> bool {
+    match kind {
+        BundleArtifactKind::Trace => bundle.traces.contains_key(artifact_id),
+        BundleArtifactKind::Evidence => bundle.evidence_entries.contains_key(artifact_id),
+        BundleArtifactKind::OptReceipt => bundle.opt_receipts.contains_key(artifact_id),
+        BundleArtifactKind::QuorumCheckpoint => bundle.quorum_checkpoints.contains_key(artifact_id),
+        BundleArtifactKind::NondeterminismLog => {
+            bundle.nondeterminism_logs.contains_key(artifact_id)
+        }
+        BundleArtifactKind::CounterfactualResult => {
+            bundle.counterfactual_results.contains_key(artifact_id)
+        }
+        BundleArtifactKind::PolicySnapshot => bundle.policy_snapshots.contains_key(artifact_id),
+    }
+}
+
+fn validate_map_inventory<'a>(
+    manifest_artifacts: &BTreeMap<String, ArtifactEntry>,
+    kind: BundleArtifactKind,
+    artifact_ids: impl Iterator<Item = &'a String>,
+) -> Result<(), String> {
+    for artifact_id in artifact_ids {
+        let canonical_key = format!("{kind}:{artifact_id}");
+        let Some(entry) = manifest_artifacts.get(&canonical_key) else {
+            return Err(format!(
+                "bundle data contains unmanifested {kind} artifact {artifact_id:?}"
+            ));
+        };
+        if entry.kind != kind || entry.artifact_id != *artifact_id {
+            return Err(format!(
+                "manifest entry {canonical_key:?} does not identify its {kind} bundle artifact"
+            ));
+        }
+    }
+    Ok(())
+}
+
 // ===========================================================================
 // Tests
 // ===========================================================================
@@ -1475,6 +1877,7 @@ mod tests {
     use super::*;
     use crate::causal_replay::{
         DecisionSnapshot, NondeterminismSource, RecorderConfig, RecordingMode, TraceRecorder,
+        causal_replay_lab_trust_registry,
     };
     use crate::evidence_ledger::EvidenceEntryBuilder;
     use crate::security_epoch::SecurityEpoch;
@@ -1497,20 +1900,18 @@ mod tests {
     }
 
     fn make_trace(trace_id: &str, num_decisions: usize) -> TraceRecord {
-        let key = test_signing_key();
         let config = RecorderConfig {
             trace_id: trace_id.to_string(),
             recording_mode: RecordingMode::Full,
             epoch: SecurityEpoch::from_raw(100),
             start_tick: 1000,
-            signing_key: key.as_bytes().to_vec(),
         };
-        let mut recorder = TraceRecorder::new(config);
+        let mut recorder = TraceRecorder::new_lab(config);
 
         recorder.record_nondeterminism(
             NondeterminismSource::Timestamp,
             vec![0, 0, 0, 0, 0, 0, 3, 232],
-            1001,
+            1000,
             None,
         );
 
@@ -1534,7 +1935,7 @@ mod tests {
             recorder.record_decision(snapshot);
         }
 
-        recorder.finalize()
+        recorder.finalize().expect("lab trace should finalize")
     }
 
     fn make_evidence_entry(_entry_id: &str) -> EvidenceEntry {
@@ -1780,6 +2181,36 @@ mod tests {
     }
 
     #[test]
+    fn bd_mpu1z_builder_rejects_trace_alias_and_conflicting_incident() {
+        let aliased = BundleBuilder::new(
+            "incident-001".to_string(),
+            SecurityEpoch::from_raw(100),
+            5000,
+            "producer-key-1".to_string(),
+            test_signing_key(),
+        )
+        .trace("alias".to_string(), make_trace("trace-001", 1))
+        .build();
+        assert!(matches!(aliased, Err(BundleError::IdDerivation(_))));
+
+        let mut conflicting = make_trace("trace-001", 1);
+        conflicting.incident_id = Some("different-incident".to_string());
+        let mismatched_incident = BundleBuilder::new(
+            "incident-001".to_string(),
+            SecurityEpoch::from_raw(100),
+            5000,
+            "producer-key-1".to_string(),
+            test_signing_key(),
+        )
+        .trace("trace-001".to_string(), conflicting)
+        .build();
+        assert!(matches!(
+            mismatched_incident,
+            Err(BundleError::IdDerivation(_))
+        ));
+    }
+
+    #[test]
     fn build_full_bundle() {
         let bundle = build_test_bundle();
         assert_eq!(bundle.manifest.incident_id, "incident-001");
@@ -1894,6 +2325,304 @@ mod tests {
     }
 
     #[test]
+    fn bd_mpu1z_closed_inventory_rejects_signed_bundle_trace_injection() {
+        let mut bundle = build_test_bundle();
+        let verifier = BundleVerifier::new();
+        assert!(
+            verifier
+                .verify_signature(&bundle, &test_verification_key(), 6000)
+                .passed
+        );
+
+        bundle
+            .traces
+            .insert("aaa-injected".to_string(), make_trace("aaa-injected", 1));
+
+        let integrity = verifier.verify_integrity(&bundle, 6000);
+        assert!(!integrity.passed);
+        assert!(
+            integrity.checks.iter().any(|check| {
+                check.name == "artifact-inventory-closed" && check.outcome.is_fail()
+            })
+        );
+
+        let replay = verifier.verify_replay_lab(&bundle, &causal_replay_lab_trust_registry(), 6000);
+        assert!(!replay.passed);
+        assert!(replay.checks.iter().any(|check| {
+            check.name == "trace-trust-lab-fixture-scope" && check.outcome.is_pass()
+        }));
+        assert!(
+            replay.checks.iter().any(|check| {
+                check.name == "artifact-inventory-closed" && check.outcome.is_fail()
+            })
+        );
+
+        let config = CounterfactualConfig {
+            branch_id: "fresh-branch".to_string(),
+            threshold_override_millionths: None,
+            loss_matrix_overrides: BTreeMap::new(),
+            policy_version_override: None,
+            containment_overrides: BTreeMap::new(),
+            evidence_weight_overrides: BTreeMap::new(),
+            branch_from_index: 0,
+        };
+        let counterfactual = verifier.verify_counterfactual_lab(
+            &bundle,
+            &[config],
+            &causal_replay_lab_trust_registry(),
+            6000,
+        );
+        assert!(!counterfactual.passed);
+        assert!(counterfactual.checks.iter().any(|check| {
+            check.name == "trace-trust-lab-fixture-scope" && check.outcome.is_pass()
+        }));
+        assert!(
+            counterfactual.checks.iter().any(|check| {
+                check.name == "artifact-inventory-closed" && check.outcome.is_fail()
+            })
+        );
+    }
+
+    #[test]
+    fn bd_mpu1z_counterfactual_verifier_checks_full_aliased_result() {
+        let trace = make_trace("trace-aliased", 3);
+        let config = CounterfactualConfig {
+            branch_id: "branch-aliased".to_string(),
+            threshold_override_millionths: None,
+            loss_matrix_overrides: BTreeMap::new(),
+            policy_version_override: None,
+            containment_overrides: BTreeMap::new(),
+            evidence_weight_overrides: BTreeMap::new(),
+            branch_from_index: 0,
+        };
+        let mut delta_report = CausalReplayEngine::new_lab()
+            .counterfactual_branch(&trace, config.clone())
+            .expect("lab trace should support deterministic counterfactual replay");
+        delta_report.false_positive_cost_delta_millionths = 1;
+        let bundle = BundleBuilder::new(
+            "incident-counterfactual-alias".to_string(),
+            SecurityEpoch::from_raw(100),
+            5000,
+            "producer-key-1".to_string(),
+            test_signing_key(),
+        )
+        .window(1000, 2000)
+        .trace("trace-aliased".to_string(), trace)
+        .counterfactual(
+            "artifact-id-not-branch-id".to_string(),
+            CounterfactualResult {
+                config: config.clone(),
+                delta_report,
+                source_trace_id: "trace-aliased".to_string(),
+            },
+        )
+        .build()
+        .expect("bundle should preserve independent artifact and branch identifiers");
+
+        let report = BundleVerifier::new().verify_counterfactual_lab(
+            &bundle,
+            &[config],
+            &causal_replay_lab_trust_registry(),
+            6000,
+        );
+        assert!(!report.passed);
+        assert!(report.checks.iter().any(|check| {
+            check.name == "counterfactual-match:branch-aliased" && check.outcome.is_fail()
+        }));
+        assert!(!report.checks.iter().any(|check| {
+            check.name == "counterfactual-fresh:branch-aliased" && check.outcome.is_pass()
+        }));
+    }
+
+    #[test]
+    fn bd_mpu1z_counterfactual_verifier_rejects_ambiguous_branch_artifacts() {
+        let trace = make_trace("trace-ambiguous", 1);
+        let config = CounterfactualConfig {
+            branch_id: "branch-ambiguous".to_string(),
+            threshold_override_millionths: None,
+            loss_matrix_overrides: BTreeMap::new(),
+            policy_version_override: None,
+            containment_overrides: BTreeMap::new(),
+            evidence_weight_overrides: BTreeMap::new(),
+            branch_from_index: 0,
+        };
+        let delta_report = CausalReplayEngine::new_lab()
+            .counterfactual_branch(&trace, config.clone())
+            .expect("lab trace should support deterministic counterfactual replay");
+        let result = CounterfactualResult {
+            config: config.clone(),
+            delta_report,
+            source_trace_id: "trace-ambiguous".to_string(),
+        };
+        let bundle = BundleBuilder::new(
+            "incident-counterfactual-ambiguous".to_string(),
+            SecurityEpoch::from_raw(100),
+            5000,
+            "producer-key-1".to_string(),
+            test_signing_key(),
+        )
+        .window(1000, 2000)
+        .trace("trace-ambiguous".to_string(), trace)
+        .counterfactual("artifact-a".to_string(), result.clone())
+        .counterfactual("artifact-b".to_string(), result)
+        .build()
+        .expect("bundle should remain structurally serializable");
+
+        let report = BundleVerifier::new().verify_counterfactual_lab(
+            &bundle,
+            &[config],
+            &causal_replay_lab_trust_registry(),
+            6000,
+        );
+        assert!(!report.passed);
+        assert!(report.checks.iter().any(|check| {
+            check.name == "counterfactual-result-unique:branch-ambiguous" && check.outcome.is_fail()
+        }));
+    }
+
+    #[test]
+    fn bd_mpu1z_bundle_inspection_saturates_untrusted_size_totals() {
+        let mut bundle = build_test_bundle();
+        let mut artifacts = bundle.manifest.artifacts.values_mut();
+        artifacts
+            .next()
+            .expect("test bundle should contain a first artifact")
+            .size_bytes = u64::MAX;
+        artifacts
+            .next()
+            .expect("test bundle should contain a second artifact")
+            .size_bytes = 1;
+
+        let inspection = BundleVerifier::new().inspect(&bundle);
+        assert_eq!(inspection.total_size_bytes, u64::MAX);
+    }
+
+    #[test]
+    fn bd_mpu1z_bundle_verifier_separates_runtime_and_lab_trust_scopes() {
+        let bundle = build_test_bundle();
+        let verifier = BundleVerifier::new();
+        let lab_registry = causal_replay_lab_trust_registry();
+
+        let replay = verifier.verify_replay(&bundle, &lab_registry, 6000);
+        assert!(!replay.passed);
+        assert_eq!(replay.checks.len(), 1);
+        assert_eq!(replay.checks[0].name, "trace-trust-runtime-scope");
+        assert!(replay.checks[0].outcome.is_fail());
+
+        let counterfactual = verifier.verify_counterfactual(&bundle, &[], &lab_registry, 6000);
+        assert!(!counterfactual.passed);
+        assert_eq!(counterfactual.checks.len(), 1);
+        assert_eq!(counterfactual.checks[0].name, "trace-trust-runtime-scope");
+        assert!(counterfactual.checks[0].outcome.is_fail());
+
+        let runtime_registry =
+            EvidenceTrustRegistry::new_runtime(SecurityEpoch::from_raw(u64::MAX));
+        let mislabeled_lab = verifier.verify_replay_lab(&bundle, &runtime_registry, 6000);
+        assert!(!mislabeled_lab.passed);
+        assert_eq!(mislabeled_lab.checks.len(), 1);
+        assert_eq!(
+            mislabeled_lab.checks[0].name,
+            "trace-trust-lab-fixture-scope"
+        );
+        assert!(mislabeled_lab.checks[0].outcome.is_fail());
+    }
+
+    #[test]
+    fn bd_mpu1z_manifest_signature_binds_full_inventory_metadata() {
+        let mut bundle = build_test_bundle();
+        let verifier = BundleVerifier::new();
+        assert!(
+            verifier
+                .verify_signature(&bundle, &test_verification_key(), 6000)
+                .passed
+        );
+
+        let trace_entry = bundle
+            .manifest
+            .artifacts
+            .get_mut("trace:trace-001")
+            .expect("test bundle should manifest its trace");
+        trace_entry.redacted = true;
+        trace_entry.size_bytes = trace_entry.size_bytes.saturating_add(1);
+
+        assert!(
+            !verifier
+                .verify_signature(&bundle, &test_verification_key(), 6000)
+                .passed
+        );
+        let integrity = verifier.verify_integrity(&bundle, 6000);
+        assert!(!integrity.passed);
+        assert!(integrity.checks.iter().any(|check| {
+            check.name == "artifact-hash:trace:trace-001" && check.outcome.is_fail()
+        }));
+    }
+
+    #[test]
+    fn bd_mpu1z_integrity_recomputes_bundle_id_and_validates_window() {
+        let verifier = BundleVerifier::new();
+        let mut bundle = build_test_bundle();
+        let arbitrary_bundle_id = derive_bundle_id(
+            "different-incident",
+            bundle.manifest.creation_epoch,
+            bundle.manifest.created_at_ns,
+            &bundle.manifest.merkle_root,
+        )
+        .expect("alternate bundle id should derive");
+        assert_ne!(arbitrary_bundle_id, bundle.manifest.bundle_id);
+        bundle.manifest.bundle_id = arbitrary_bundle_id;
+        let signing_bytes = bundle.manifest.signing_bytes();
+        bundle.manifest.signature = sign_preimage(&test_signing_key(), &signing_bytes)
+            .expect("test manifest should re-sign")
+            .to_bytes()
+            .to_vec();
+
+        assert!(
+            verifier
+                .verify_signature(&bundle, &test_verification_key(), 6000)
+                .passed,
+            "a valid signature alone must not establish a content-addressed bundle id"
+        );
+        let integrity = verifier.verify_integrity(&bundle, 6000);
+        assert!(
+            integrity
+                .checks
+                .iter()
+                .any(|check| { check.name == "bundle-id-valid" && check.outcome.is_fail() })
+        );
+
+        let mut inverted_window = build_test_bundle();
+        inverted_window.manifest.window_start_tick = 2001;
+        inverted_window.manifest.window_end_tick = 2000;
+        let signing_bytes = inverted_window.manifest.signing_bytes();
+        inverted_window.manifest.signature = sign_preimage(&test_signing_key(), &signing_bytes)
+            .expect("test manifest should re-sign")
+            .to_bytes()
+            .to_vec();
+        let window_integrity = verifier.verify_integrity(&inverted_window, 6000);
+        assert!(
+            window_integrity
+                .checks
+                .iter()
+                .any(|check| { check.name == "bundle-window-valid" && check.outcome.is_fail() })
+        );
+
+        let invalid_builder = BundleBuilder::new(
+            "incident-window-invalid".to_string(),
+            SecurityEpoch::from_raw(1),
+            5000,
+            "producer-key-001".to_string(),
+            test_signing_key(),
+        )
+        .window(2, 1)
+        .build();
+        assert!(matches!(
+            invalid_builder,
+            Err(BundleError::IdDerivation(message))
+                if message.contains("starts at 2 after ending at 1")
+        ));
+    }
+
+    #[test]
     fn verify_integrity_detects_incompatible_version() {
         let mut bundle = build_test_bundle();
         bundle.manifest.format_version = BundleFormatVersion {
@@ -1946,7 +2675,7 @@ mod tests {
     fn verify_replay_passes_for_valid_traces() {
         let bundle = build_test_bundle();
         let verifier = BundleVerifier::new();
-        let report = verifier.verify_replay(&bundle, 6000);
+        let report = verifier.verify_replay_lab(&bundle, &causal_replay_lab_trust_registry(), 6000);
 
         assert!(report.passed);
         let replay_checks: Vec<_> = report
@@ -1972,7 +2701,7 @@ mod tests {
         .expect("builder should produce a valid value");
 
         let verifier = BundleVerifier::new();
-        let report = verifier.verify_replay(&bundle, 6000);
+        let report = verifier.verify_replay_lab(&bundle, &causal_replay_lab_trust_registry(), 6000);
 
         assert!(report.passed);
         let replay_checks: Vec<_> = report
@@ -1998,7 +2727,7 @@ mod tests {
         }
 
         let verifier = BundleVerifier::new();
-        let report = verifier.verify_replay(&bundle, 6000);
+        let report = verifier.verify_replay_lab(&bundle, &causal_replay_lab_trust_registry(), 6000);
 
         let chain_checks: Vec<_> = report
             .checks
@@ -2289,7 +3018,7 @@ mod tests {
         let integrity = verifier.verify_integrity(&bundle, 6000);
         assert!(integrity.passed, "integrity: {integrity:?}");
 
-        let replay = verifier.verify_replay(&bundle, 6000);
+        let replay = verifier.verify_replay_lab(&bundle, &causal_replay_lab_trust_registry(), 6000);
         assert!(replay.passed, "replay: {replay:?}");
     }
 
@@ -2887,8 +3616,8 @@ mod tests {
     // -------------------------------------------------------------------
 
     #[test]
-    fn bundle_format_version_constant_is_1_0() {
-        assert_eq!(BUNDLE_FORMAT_VERSION.major, 1);
+    fn bundle_format_version_constant_is_2_0() {
+        assert_eq!(BUNDLE_FORMAT_VERSION.major, 2);
         assert_eq!(BUNDLE_FORMAT_VERSION.minor, 0);
     }
 
@@ -3053,10 +3782,16 @@ mod tests {
     fn verify_counterfactual_empty_configs() {
         let bundle = build_test_bundle();
         let verifier = BundleVerifier::new();
-        let report = verifier.verify_counterfactual(&bundle, &[], 6000);
-        // No configs => no checks => report passes by default.
+        let report = verifier.verify_counterfactual_lab(
+            &bundle,
+            &[],
+            &causal_replay_lab_trust_registry(),
+            6000,
+        );
+        // No configs still records that this was an explicitly lab-scoped run.
         assert!(report.passed);
-        assert!(report.checks.is_empty());
+        assert_eq!(report.checks.len(), 1);
+        assert_eq!(report.checks[0].name, "trace-trust-lab-fixture-scope");
     }
 
     // -------------------------------------------------------------------

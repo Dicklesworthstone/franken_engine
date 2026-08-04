@@ -74,6 +74,17 @@ fn make_failing_result(id: &str, outcome: WorkloadOutcome) -> ScenarioResult {
     r
 }
 
+fn expected_mutation_contract_honored(
+    contract: MutationContract,
+    strategy: DispatchStrategy,
+) -> bool {
+    !contract.permits_in_place_mutation()
+        || matches!(
+            strategy,
+            DispatchStrategy::InterpreterCallback | DispatchStrategy::FallbackSlow
+        )
+}
+
 // ===========================================================================
 // 1. Constants (6 tests)
 // ===========================================================================
@@ -497,11 +508,12 @@ fn verify_scenario_records_cost_and_deopt_from_decision() {
 // ===========================================================================
 
 #[test]
-fn check_mutation_contract_always_true_for_all_variants() {
+fn check_mutation_contract_matches_strategy_safety() {
     for contract in MutationContract::ALL {
         for strategy in DispatchStrategy::ALL {
-            assert!(
+            assert_eq!(
                 check_mutation_contract(*contract, strategy),
+                expected_mutation_contract_honored(*contract, *strategy),
                 "contract={contract}, strategy={strategy}"
             );
         }

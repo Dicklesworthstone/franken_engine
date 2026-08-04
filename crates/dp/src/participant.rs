@@ -234,13 +234,13 @@ impl Participant {
         // Generate random values in the field
         for i in 0..dimension {
             let mut value_hasher = Sha256::new();
-            value_hasher.update(&pair_seed);
-            value_hasher.update(&(i as u64).to_le_bytes());
+            value_hasher.update(pair_seed);
+            value_hasher.update((i as u64).to_le_bytes());
 
             // Add some randomness from the RNG
             let mut random_bytes = [0u8; 8];
             rng.fill_bytes(&mut random_bytes);
-            value_hasher.update(&random_bytes);
+            value_hasher.update(random_bytes);
 
             let value_hash = value_hasher.finalize();
             let value = u64::from_le_bytes([
@@ -272,7 +272,7 @@ impl Participant {
         let mut hasher = Sha256::new();
         hasher.update(recipient.as_str());
         for &value in share_values {
-            hasher.update(&value.to_le_bytes());
+            hasher.update(value.to_le_bytes());
         }
         hasher.finalize().to_vec()
     }

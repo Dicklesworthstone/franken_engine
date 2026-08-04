@@ -1,0 +1,13 @@
+{
+  "schema_version": "franken-engine.perf-rch-closeout-fixture.v1",
+  "case_id": "partial_perf_rch_no_verdict",
+  "truth_state": "degraded",
+  "artifact_paths": {
+    "events_jsonl": "events.jsonl",
+    "commands_txt": "commands.txt",
+    "report_md": "report.md",
+    "bench_output_txt": "bench_output.txt",
+    "summary_md": "summary.md",
+    "target_estimate_json": "target_estimate.json"
+  }
+}

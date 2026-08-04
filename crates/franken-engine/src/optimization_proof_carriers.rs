@@ -27,9 +27,25 @@ use proptest::{
 };
 use serde::{Deserialize, Serialize};
 
+use crate::hash_tiers::ContentHash;
 use crate::policy_theorem_engine::{
-    EmittedProofBundle, ProofBundleBody, Z3Outcome, invoke_z3, write_proof_bundle,
+    EmittedProofBundle, ProofBundleBody, Z3Outcome, invoke_z3, write_proof_bundle, z3_tool_version,
 };
+
+/// Deterministic certificate id: a stable prefix plus the first 16 hex chars
+/// of a SHA-256 over the certified content (each part length-prefixed so
+/// distinct part decompositions cannot collide). Certificate identity must be
+/// a function of certificate content — never allocation addresses — or the
+/// exported verification artifact stops being reproducible.
+fn deterministic_certificate_id(prefix: &str, parts: &[&str]) -> String {
+    let mut bytes = Vec::new();
+    for part in parts {
+        bytes.extend_from_slice(&(part.len() as u64).to_be_bytes());
+        bytes.extend_from_slice(part.as_bytes());
+    }
+    let hex = ContentHash::compute(&bytes).to_hex();
+    format!("{prefix}_{}", &hex[..16])
+}
 
 /// Types of optimization passes supported by proof carriers.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -534,10 +550,8 @@ impl OptimizationProofCarrier {
         let verification_results = verification_results?;
 
         // Then apply the results
-        for (proof, verification_result) in self
-            .equivalence_proofs
-            .iter_mut()
-            .zip(verification_results.into_iter())
+        for (proof, verification_result) in
+            self.equivalence_proofs.iter_mut().zip(verification_results)
         {
             match verification_result {
                 ProofResult::Verified => {
@@ -673,10 +687,11 @@ impl OptimizationProofCarrier {
             .collect();
 
         if !verified_passes.is_empty() {
+            let semantic_id_parts: Vec<&str> = verified_passes.iter().map(String::as_str).collect();
             let semantic_cert = ProofCertificate {
-                certificate_id: format!(
-                    "semantic_equiv_cert_{:016x}",
-                    std::ptr::addr_of!(verified_passes) as usize
+                certificate_id: deterministic_certificate_id(
+                    "semantic_equiv_cert",
+                    &semantic_id_parts,
                 ),
                 optimization_passes: verified_passes.clone(),
                 certificate_type: CertificateType::SemanticEquivalence,
@@ -703,10 +718,22 @@ impl OptimizationProofCarrier {
 
         // Generate performance improvement certificate
         if self.performance_metrics.overall_performance_improvement > 0.0 {
+            let improvement_text = self
+                .performance_metrics
+                .overall_performance_improvement
+                .to_string();
+            let safety_text = self
+                .performance_metrics
+                .optimization_safety_score
+                .to_string();
+            let mut performance_id_parts: Vec<&str> =
+                verified_passes.iter().map(String::as_str).collect();
+            performance_id_parts.push(improvement_text.as_str());
+            performance_id_parts.push(safety_text.as_str());
             let performance_cert = ProofCertificate {
-                certificate_id: format!(
-                    "performance_cert_{:016x}",
-                    std::ptr::addr_of!(self.performance_metrics) as usize
+                certificate_id: deterministic_certificate_id(
+                    "performance_cert",
+                    &performance_id_parts,
                 ),
                 optimization_passes: verified_passes,
                 certificate_type: CertificateType::PerformanceImprovement,
@@ -795,6 +822,15 @@ impl OptimizationProofCarrier {
                 verdict: "proven".to_string(),
                 generated_utc: chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string(),
                 source_module: "frankenengine_engine::optimization_proof_carriers".to_string(),
+                producer_tool: "z3".to_string(),
+                producer_version: z3_tool_version()
+                    .unwrap_or_else(|err| format!("unavailable: {err}")),
+                timeout_policy: format!(
+                    "per-obligation z3 -t:{}ms",
+                    Z3_VERIFY_TIMEOUT_SECONDS.saturating_mul(1_000)
+                ),
+                timeout_seconds: Z3_VERIFY_TIMEOUT_SECONDS,
+                theorem_count: theorem_ids.len(),
                 theorem_ids: theorem_ids.clone(),
             };
             emitted.push(write_proof_bundle(&body, bundle_dir)?);
@@ -1762,7 +1798,12 @@ mod tests {
 
         let verification_result = carrier.verify_all_proofs().unwrap();
         assert_eq!(verification_result.total_proofs, proof_count);
-        assert!(verification_result.verification_time_ms > 0);
+        // Elapsed-ms can legitimately be 0 on a fast host (bd-2869t); assert the
+        // result and the carrier metrics agree on the same measurement instead.
+        assert_eq!(
+            verification_result.verification_time_ms,
+            carrier.performance_metrics.verification_time_ms
+        );
     }
 
     #[test]
@@ -2083,10 +2124,7 @@ mod tests {
 
     /// Reuse the policy_theorem_engine availability probe.
     fn z3_is_available() -> bool {
-        match invoke_z3("(check-sat)", 1) {
-            Ok(_) => true,
-            Err(_) => false,
-        }
+        invoke_z3("(check-sat)", 1).is_ok()
     }
 
     #[test]

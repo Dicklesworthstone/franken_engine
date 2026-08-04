@@ -13,8 +13,8 @@ This ledger inventories every public module exported by
 `crates/franken-engine/src/lib.rs`. It is a graduation-readiness artifact only:
 it does not change APIs, move code, or approve workspace membership.
 
-The current inventory has 41 franken-core module exports. All 41 names are also
-exported by `franken-engine`, but most corresponding source files differ. That
+The current inventory has 42 franken-core module exports. All 42 names are also
+exported by `franken-engine`, but all corresponding source files differ. That
 means the current state is parity-visible, not parity-proven.
 
 ## Contract Version
@@ -42,11 +42,11 @@ alone.
 
 | Metric | Value |
 | --- | --- |
-| franken-core public modules | 41 |
-| matching franken-engine public modules | 41 |
+| franken-core public modules | 42 |
+| matching franken-engine public modules | 42 |
 | missing engine module names | 0 |
 | identical source files | 0 |
-| different source files | 41 |
+| different source files | 42 |
 | workspace inclusion complete | true |
 
 ## Historical Inputs
@@ -60,6 +60,160 @@ alone.
 | `bd-77ec1` | Open engine follow-up for suspended async-generator `.next()` body execution and truthful support claims. |
 | `bd-la2e0` | Fail-closed async-function placeholder fix in franken-core. |
 | `bd-nwhcp` | Timer placeholder tests replaced with executable regressions. |
+| `bd-n8eta.4` | Executable Symbol property-key parity wave; ADR/API contract, engine/core carriers, hook migration, and donor closeout are separate children. |
+| `bd-b12xs` | Exact UTF-16 property-key migration; exact lookup, ordered storage, governed runtime adoption, and consumer parity are separate children. |
+| `bd-b12xs.3` | Freezes the private `JsString` runtime-key, legacy-wire, public-field, and fail-closed hook contract before heap adoption. |
+| `bd-f1ixz` | Adds the versioned core-only `CopyDataProperties` IR path for object rest; the engine mirror remains a separate parity concern. |
+
+## Active Parity Exception: `CopyDataProperties` IR
+
+`bd-f1ixz` advanced the core IR schema to `0.3.0` with additive
+`Ir1Op::CopyDataProperties` and `Ir3Instruction::CopyDataProperties` variants.
+`bd-lfq44` subsequently advanced the core schema to `0.4.0` and the engine
+mirror to `0.3.0` for exact module-specifier carriers. `bd-b12xs.6` advances
+core to `0.5.0` and engine to `0.4.0` because `Ir1PropertyKey::Static` now
+carries exact `JsString`. The engine mirror still lacks the
+`CopyDataProperties` variants, so the `ir_contract` row remains
+`pending_graduation` with ownership unsettled: future parity work must
+reconcile the versioned wire, lowering, and execution behavior before changing
+that status.
+
+`bd-0k19b` subsequently advances only the engine IR to `0.6.0` for explicit
+`LoadName`/`PutName` plus pre-RHS `ResolveNameStatus`/`PutNameWithStatus`
+operations. Engine `0.5.0` is intentionally skipped because
+that numeric version already identifies the incompatible core wire. The new
+engine operations preserve parser-authored strict/sloppy assignment semantics;
+they do not resolve the existing cross-seam ownership exception.
+
+`bd-g73mg` advances the engine IR again to `0.7.0` for the externally tagged
+`IteratorCloseReason::Continue` variant used by labelled continues that cross a
+`for..of` boundary. The engine iterator-protocol replay schema advances from
+`v1` to `v2` for the matching close reason. `bd-t9n3s` adds the corresponding
+core IR variant and advances core from `0.5.0` to `0.8.0`. Core minors `0.6.0`
+and `0.7.0` are deliberately skipped because those numbers identify the
+incompatible engine unresolved-name and follow-on `Continue` wires. Core
+`0.8.0` readers retain historical core minors through `0.5.0` while explicitly
+rejecting engine-owned `0.6.x` and `0.7.x` artifacts. The matching core
+lowering/runtime work supplies the ordinary JavaScript parity obligation;
+neither schema change settles ownership of the otherwise divergent IR rows.
+
+`bd-uhf1m` subsequently advances only core IR to `0.9.0`. Its function
+operations carry optional exact metadata for body-local `let`/`const` bindings
+captured by immediate child functions, allowing deferred lowering to preserve
+TDZ, const, and declaration-initialization semantics. Empty metadata is
+omitted from serde and canonical forms, so historical `0.8.x` artifacts remain
+readable with their prior bytes. Old readers must reject a `0.9.x` header
+rather than ignore the semantics-bearing field. The engine mirror remains on
+its independently versioned `0.7.0` wire, and the `ir_contract` row remains
+`pending_graduation`.
+
+`bd-093id` advances core IR again to `0.10.0` for the serialized
+`GeneratorBodyStart` operation in IR1, IR2's `Ir2Op::inner` carrier, and IR3.
+Lowering places the boundary after a generator's parameter prologue and before
+its first body statement, so invocation can evaluate defaults synchronously
+and persist the initialized activation without starting the body. Core
+`0.10.0` readers retain supported `0.9.x` artifacts and preserve their version
+through IR1-to-IR3 lowering; legacy generator artifacts without the marker
+therefore keep their historical first-`.next()` start timing. Schema and
+structural gates reject unsupported headers and malformed current boundaries
+before execution. Older readers must reject `0.10.x` before decoding the new
+variant. Engine IR remains independently versioned at `0.7.0`, and this change
+does not alter the `ir_contract` row's `pending_graduation` status. The public
+enum audit found only the engine differential oracle as a workspace consumer;
+its fallback match remains source-compatible, while `franken_node` has no
+direct core-IR match or construction site.
+
+## Active Parity Exception: Executable Symbol Keys
+
+`bd-n8eta.4.1` records a wire-additive but Rust-source-breaking versioned
+evolution in ADR-0008. Both descriptor object models already have typed Symbol
+identities and correct `[[OwnPropertyKeys]]` order, but their executable
+baseline heaps are not at parity: franken-core has no executable Symbol value,
+while franken-engine uses heap objects and projects computed Symbol keys to
+strings.
+
+The parity row therefore remains `pending_graduation`. Evidence must land in
+this order:
+
+| Bead | Required evidence |
+| --- | --- |
+| `bd-n8eta.4.6` | Stages both public runtime crates at unreleased `0.2.0`, marks both `Value` enums non-exhaustive, preserves historical serde bytes, and records the clean downstream match audit. |
+| `bd-n8eta.4.2` | Engine uses typed Symbol identity for lookup, ordering, replay, memory, and the correct consumer filters. |
+| `bd-n8eta.4.3` | Core adds the same executable value/key contract and proves QuickJS/V8 profile parity. |
+| `bd-n8eta.4.4` | Both lanes add exact `HookPropertyKey` and a defaulted typed callback; legacy hooks remain source-compatible and reject Symbols/exact-only strings without callback or heap effects. |
+| `bd-n8eta.4.5` | Node/Bun donor cases and lockstep engine/core tests prove the combined surface before DISC-013 closes. |
+
+Legacy string-only heap payloads must remain readable, and a historical string
+such as `"Symbol(14)"` must remain distinct from `SymbolId(14)`. Workspace
+membership or a passing descriptor-model test is not evidence that this
+executable parity gap is closed. Legacy object-backed engine Symbols may be
+canonicalized only by the versioned whole-artifact migration specified in
+ADR-0008, never by guessing from an arbitrary heap object.
+
+## Exact UTF-16 String-Key Parity Evidence
+
+`bd-b12xs.1` added `js_string::ExactPropertyMap`, which keeps lone-surrogate
+keys exact and uses a dual JSON wire shape. `bd-b12xs.2` adds the corresponding
+`object_model::ExactOrderedStringMap` as a stable, additive core API: canonical
+array indices iterate numerically first, other exact strings retain creation
+order, and borrowed and owning iterators return `JsString` keys without a lossy
+projection.
+
+`bd-b12xs.3` governs adoption without widening the stable descriptor-model
+`PropertyKey::String(String)` or replacing public executable `HeapObject`
+fields. Executable baselines instead use a private `JsString`-backed runtime
+key, and `OrderedStringMap` may delegate to the exact carrier privately while
+retaining its historical APIs as a well-formed compatibility view. Those APIs,
+including both iterator families, never project or expose exact-only keys;
+runtime semantics and artifacts use new exact APIs. Exact access proceeds with
+no hook installed. With the legacy string-only hook installed, a
+non-well-formed key fails before callback or heap access with zero callback
+invocations and no mutation; typed-hook migration remains owner-reviewed and
+outside this ordinary lane.
+
+Runtime evidence must land in dependency order:
+
+| Bead | Required evidence |
+| --- | --- |
+| `bd-b12xs.4` | Core dynamic computed keys stay exact through get/set/delete/`in`/prototype, descriptor conversion, compatibility/exact views, mixed Symbol order and wire, serde, seed, memory, and rollback. |
+| `bd-b12xs.5` | Engine mirrors the proven core carrier and wire behavior without touching the legacy hook API or inventing a core-style accessor field. |
+| `bd-b12xs.6` | Both lanes preserve exact static and dynamic string keys through parser/AST/IR/lowering, enumeration, JSON, ordinary Reflect/Proxy fallback, assign/spread, querystring, and the project-defined CommonJS named-export projection; D800, D801, and U+FFFD remain distinct. The engine exposes donor-compatible malformed-querystring error identity while core retains its typed interpreter error. |
+
+`bd-b12xs.6` closes the ordinary exact-string consumer/static-source wave.
+Well-formed IR1 static keys retain their historical string wire; exact-only
+keys use the established `$wtf16` form. Node/Bun donor evidence keeps D800,
+D801, and U+FFFD distinct in ordinary own-key consumers and JSON. Both lanes
+reject lone-surrogate querystring components before lossy encoding: the engine
+exposes donor-compatible `URIError`/`ERR_INVALID_URI`, while core retains
+`InterpreterError::TypeError`; U+FFFD encodes normally in both. CommonJS
+coverage proves the engine/core namespace contract, not Node's static
+named-export lexer.
+
+The independent engine executable Symbol-key and dual-lane typed-hook slices
+are now implemented. Later cross-lane Symbol closeout,
+accessor-continuation, and engine `CopyDataProperties` parity work remains.
+The stable descriptor-model `PropertyKey::String(String)` still deliberately
+rejects non-well-formed strings.
+
+The `js_string`, `object_model`, and `baseline_interpreter` rows remain
+`pending_graduation`. Required adoption evidence must preserve all of these
+properties:
+
+- lone D800, lone D801, and literal U+FFFD keys remain three distinct entries
+- all-well-formed maps retain the historical map-shaped bytes
+- any lone-surrogate key selects an ES-ordered exact pair sequence for the
+  whole map
+- decoders reject duplicate canonical keys while accepting both wire shapes
+- public `HeapObject` field names/types and all-well-formed heap bytes remain
+  unchanged
+- core exact-string adoption preserves its existing Symbol sidecars,
+  `symbol_properties` wire, mixed own-key category order, and rollback
+- legacy `OrderedStringMap` iteration/count/retain APIs are a well-formed view;
+  `clear` empties both that view and exact-only private storage
+
+`bd-n8eta.4.2` depends on the `.6` closeout so its engine Symbol work starts
+from exact string-key operations instead of introducing a temporary
+`PropertyKey::String(String)` migration.
 
 ## Fail-Closed Rules
 

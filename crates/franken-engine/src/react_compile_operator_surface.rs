@@ -25,7 +25,6 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
 use franken_engine_deterministic_derive::Deterministic;
-use franken_engine_deterministic_trait::Deterministic;
 use serde::{Deserialize, Serialize};
 
 use crate::deterministic_serde::{CanonicalValue, encode_value};
@@ -184,8 +183,7 @@ impl ReactOperatorCommand {
 
     /// Whether this command is currently shipped.
     pub const fn is_shipped(self) -> bool {
-        // Currently none are shipped — they're all roadmap
-        false
+        matches!(self, Self::ReactCompile)
     }
 }
 
@@ -730,9 +728,15 @@ mod tests {
     }
 
     #[test]
-    fn operator_command_none_shipped() {
-        for cmd in ReactOperatorCommand::ALL {
-            assert!(!cmd.is_shipped());
+    fn operator_command_only_compile_is_shipped() {
+        assert!(ReactOperatorCommand::ReactCompile.is_shipped());
+        for cmd in [
+            ReactOperatorCommand::ReactBuild,
+            ReactOperatorCommand::ReactVerify,
+            ReactOperatorCommand::ReactDoctor,
+            ReactOperatorCommand::ReactStatus,
+        ] {
+            assert!(!cmd.is_shipped(), "{cmd} should remain unshipped");
         }
     }
 
@@ -831,7 +835,13 @@ mod tests {
     #[test]
     fn seed_contract_shipped_commands() {
         let contract = build_seed_contract();
-        assert!(contract.shipped_commands().is_empty()); // None shipped yet
+        // `ReactCompile` shipped in 77e117735 (`frankenctl react compile` for
+        // JSX/TSX classic & automatic rows); it is the only currently-shipped
+        // command (`ReactOperatorCommand::is_shipped`). bd-bu6dt: the prior
+        // "None shipped yet" expectation was stale after that ship.
+        let shipped = contract.shipped_commands();
+        assert_eq!(shipped.len(), 1);
+        assert_eq!(shipped[0].command, ReactOperatorCommand::ReactCompile);
     }
 
     #[test]

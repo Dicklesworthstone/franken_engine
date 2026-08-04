@@ -19,6 +19,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use frankenengine_engine::ast::ParseGoal;
 use frankenengine_engine::baseline_interpreter::LaneChoice;
 use frankenengine_engine::bayesian_posterior::RiskState;
+use frankenengine_engine::execution_orchestrator::LabFixtureExecutionOrchestratorExt as _;
 use frankenengine_engine::execution_orchestrator::{
     ExecutionOrchestrator, ExtensionPackage, LossMatrixPreset, OrchestratorConfig,
     OrchestratorError, OrchestratorResult,

@@ -1,7 +1,6 @@
 #![forbid(unsafe_code)]
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::PathBuf;
 
 use frankenengine_engine::benchmark_evidence_bundle::{
     BenchmarkRun, BundleConfig, EnvironmentSnapshot, EvidenceBundle, ParityTarget, ParityVerdict,
@@ -15,10 +14,6 @@ use frankenengine_engine::runtime_diagnostics_cli::{
 };
 use frankenengine_engine::security_epoch::SecurityEpoch;
 use serde::Serialize;
-
-// bd-ub6x8.6.3: migrated from tests/golden_vectors/ to tests/golden/wire_vectors/.
-const GOLDEN_RELATIVE_PATH: &str = "tests/golden/wire_vectors/benchmark_diagnostics_output_v1.json";
-const EXPECTED: &str = include_str!("golden/wire_vectors/benchmark_diagnostics_output_v1.json");
 
 #[derive(Debug, Serialize)]
 struct BenchmarkDiagnosticsGolden {
@@ -208,14 +203,6 @@ fn golden_snapshot() -> BenchmarkDiagnosticsGolden {
     }
 }
 
-fn update_goldens_enabled() -> bool {
-    std::env::var_os("UPDATE_GOLDENS").is_some()
-}
-
-fn golden_path() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(GOLDEN_RELATIVE_PATH)
-}
-
 #[test]
 fn benchmark_and_runtime_diagnostics_outputs_match_golden() {
     let actual = format!(
@@ -223,9 +210,8 @@ fn benchmark_and_runtime_diagnostics_outputs_match_golden() {
         serde_json::to_string_pretty(&golden_snapshot()).expect("golden serialization should work")
     );
 
-    if update_goldens_enabled() {
-        std::fs::write(golden_path(), &actual).expect("golden update should write fixture");
-    }
-
-    assert_eq!(actual, EXPECTED);
+    insta::assert_snapshot!(
+        "benchmark_and_runtime_diagnostics_outputs_match_golden",
+        actual
+    );
 }

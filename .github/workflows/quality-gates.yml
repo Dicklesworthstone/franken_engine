@@ -3,7 +3,107 @@ name: Quality Gates
 on:
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
+  workspace-policy:
+    name: workspace policy (franken-core re-exclude guard)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # bd-cixqu.10.8 (Track J): the root Cargo.toml must never silently
+      # re-exclude crates/franken-core. `check` fails the build if the live
+      # workspace state regresses; `negative` proves the guard still detects
+      # a re-excluded fixture, so the guard itself cannot rot.
+      - name: franken-core status-truth gate (check + negative)
+        run: |
+          bash scripts/e2e/franken_core_status_truth_gate_smoke.sh check
+          bash scripts/e2e/franken_core_status_truth_gate_smoke.sh negative
+
+      # BRIDGE-00.8 item 3: the claim-to-proof matrix governs capability *wording*;
+      # nothing governed inventory *counts*, so the README architecture tables drifted
+      # for two months (495 modules against a real 615, baseline_interpreter.rs
+      # described at a third of its real size, three named modules that do not exist).
+      # Regenerating once fixes the symptom; this fixes the cause. Needs no cargo and
+      # no /dp siblings, so it runs anywhere.
+      #
+      # On failure: `python3 scripts/check_readme_inventory.py --fix` corrects the
+      # numbers in place, line-count neutral so the matrix's pinned README claim spans
+      # do not shift.
+      # Covers docs/ARCHITECTURE_INVENTORY.md too. That file calls itself an exact
+      # golden artifact and nothing enforced it, so it reported 495 modules from
+      # April to July against a real 621. The generator's own --check would catch
+      # that but needs the engine crate compiled and the /dp siblings present; this
+      # re-measures the tree in pure Python, so it runs here. The drill proves the
+      # guard can still fail -- a guard that only ever returns 0 is not a guard.
+      - name: structural-inventory gate (check + negative drill)
+        run: |
+          python3 scripts/check_readme_inventory.py
+          bash scripts/e2e/architecture_inventory_gate_drift.sh
+
+      # BRIDGE-18.10: bd-2noh9 was a real shipped SWAR-vs-scalar token divergence, and
+      # the ISA surface is about to grow by an order of magnitude (BRIDGE-10.2 NEON,
+      # BRIDGE-11.2 AVX-512, BRIDGE-07.20 guarded vectorization). There are zero real
+      # ISA-specific execution paths today, which is exactly when this is cheap to
+      # install. The drill matters more than usual here: the gate will sit green for
+      # months before a real ISA path exists to exercise it.
+      - name: ISA path registration gate (check + negative drill)
+        run: |
+          python3 scripts/check_isa_path_registration.py
+          bash scripts/e2e/isa_path_registration_drift.sh
+
+      # bd-h5cl7: no [patch.*] entry may substitute a crate whose version differs from
+      # what its consumers declare, and the guard saying so must itself be able to fail.
+      - name: patch version consistency (check + negative drill)
+        run: |
+          python3 scripts/check_patch_version_consistency.py
+          bash scripts/e2e/patch_version_consistency_drift.sh
+
+      # BRIDGE-19.18 / ADR-0012 5.3. The environment-drift comparison was LOOSENED
+      # (build ids and kernel ABI suffixes no longer force staleness) because on an
+      # unpinned nightly the strict version saturated: one rustc roll took all 16
+      # OBSERVED claims stale within hours of a refresh. A loosened check is exactly
+      # the kind that decays into a no-op, so the drill asserts both directions --
+      # advisory changes are not stale AND material ones still are. Without the
+      # second half, "clean" would be unfalsifiable.
+      #
+      # Hermetic: no cargo, no /dp siblings, no receipt is read or written.
+      - name: evidence environment-drift precision (both-direction drill)
+        run: bash scripts/e2e/evidence_environment_drift_precision_drill.sh
+
+  standalone-release:
+    name: standalone frankenctl release build (clean hosted runner)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      RUSTUP_TOOLCHAIN: nightly
+      CARGO_INCREMENTAL: 0
+      CARGO_BUILD_JOBS: 1
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@nightly
+
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: quality-gates-standalone-release
+
+      # bd-gw4cg: this is the acceptance build, not a dependency-graph proxy.
+      # The explicit /dp assertion makes the environmental premise fail closed.
+      - name: Prove absent-checkout standalone release build
+        shell: bash
+        run: |
+          set -euo pipefail
+          test ! -e /dp
+          cargo build --release --no-default-features -p frankenengine-engine --bin frankenctl
+
   frankenengine-engine:
     name: frankenengine-engine quality gates
     runs-on: ubuntu-latest
@@ -15,9 +115,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Setup Rust
-        uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: nightly
+        uses: dtolnay/rust-toolchain@nightly
 
       - name: Cache Cargo
         uses: Swatinem/rust-cache@v2

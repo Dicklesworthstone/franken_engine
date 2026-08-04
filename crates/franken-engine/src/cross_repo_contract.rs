@@ -593,6 +593,7 @@ mod tests {
         SlotStatusOverviewRow, SpecializationFallbackEventView, SpecializationFallbackReason,
         SpecializationInvalidationRowView, ThresholdComparator, UpdateKind,
     };
+    #[cfg(feature = "sibling-service-api")]
     use crate::policy_controller::service_endpoint_template::{
         AuthContext, ControlAction, EndpointResponse, ErrorEnvelope, HealthStatusResponse,
         ReplayCommand, RequestContext, SCOPE_CONTROL_WRITE, SCOPE_EVIDENCE_READ, SCOPE_HEALTH_READ,
@@ -1143,6 +1144,7 @@ mod tests {
             StoreKind::ReplacementLineage,
             StoreKind::IfcProvenance,
             StoreKind::SpecializationIndex,
+            StoreKind::FleetTrustState,
         ];
 
         let mut seen_names = BTreeSet::new();
@@ -1173,6 +1175,7 @@ mod tests {
             (StoreKind::ReplacementLineage, "ReplacementLineage"),
             (StoreKind::IfcProvenance, "IfcProvenance"),
             (StoreKind::SpecializationIndex, "SpecializationIndex"),
+            (StoreKind::FleetTrustState, "FleetTrustState"),
         ];
         for (kind, expected_json) in &kinds {
             let json = serde_json::to_value(kind).expect("serialization should succeed");
@@ -1339,7 +1342,13 @@ mod tests {
     }
 
     // ── fastapi_rust / service endpoint boundary ───────────────────────
+    // Every item down to the "cross-boundary / meta tests" divider exercises
+    // `service_endpoint_template`, which exists only under `sibling-service-api`
+    // (bd-ndpm2). The boundary's *schema* contracts above are pure data and stay
+    // ungated, so the contract registry keeps asserting the fastapi_rust row even
+    // in a no-siblings build.
 
+    #[cfg(feature = "sibling-service-api")]
     fn sample_health_response() -> EndpointResponse<HealthStatusResponse> {
         EndpointResponse {
             status: "ok".to_string(),
@@ -1366,6 +1375,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "sibling-service-api")]
     fn fastapi_endpoint_response_schema_compliance() {
         let contract = fastapi_endpoint_response_contract();
         let response = sample_health_response();
@@ -1374,12 +1384,14 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "sibling-service-api")]
     fn fastapi_endpoint_response_deterministic_serde() {
         let response = sample_health_response();
         verify_deterministic_serde(&response).expect("must be deterministic");
     }
 
     #[test]
+    #[cfg(feature = "sibling-service-api")]
     fn fastapi_endpoint_response_log_structured_compliance() {
         let response = sample_health_response();
         let json = serde_json::to_value(&response).expect("serialization should succeed");
@@ -1389,6 +1401,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "sibling-service-api")]
     fn fastapi_error_envelope_schema_stable() {
         let error = ErrorEnvelope {
             error_code: "unauthorized".to_string(),
@@ -1408,6 +1421,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "sibling-service-api")]
     fn fastapi_control_action_enum_values_stable() {
         let actions = [
             ControlAction::Start,
@@ -1427,6 +1441,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "sibling-service-api")]
     fn fastapi_replay_command_enum_values_stable() {
         let commands = [
             ReplayCommand::Start,
@@ -1445,6 +1460,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "sibling-service-api")]
     fn fastapi_scope_constants_are_non_empty() {
         for scope in [
             SCOPE_HEALTH_READ,
@@ -1462,6 +1478,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "sibling-service-api")]
     fn fastapi_request_context_serde_round_trip() {
         let ctx = RequestContext {
             trace_id: "trace-1".to_string(),
@@ -1474,6 +1491,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "sibling-service-api")]
     fn fastapi_auth_context_serde_round_trip() {
         let auth = AuthContext {
             subject: "operator@example".to_string(),
@@ -1697,6 +1715,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "sibling-service-api")]
     fn cross_boundary_service_error_contract_matches_storage_error() {
         // Verify that service endpoint errors and storage errors both carry
         // structured fields suitable for the same telemetry pipeline.

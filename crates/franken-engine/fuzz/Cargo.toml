@@ -14,11 +14,10 @@ libfuzzer-sys = "0.4"
 serde_json = "1.0"
 tempfile = "3"
 
-[patch.crates-io]
-fsqlite = { path = "/dp/frankensqlite/crates/fsqlite" }
-fsqlite-core = { path = "/dp/frankensqlite/crates/fsqlite-core" }
-fsqlite-types = { path = "/dp/frankensqlite/crates/fsqlite-types" }
-fsqlite-error = { path = "/dp/frankensqlite/crates/fsqlite-error" }
+# NO `[patch.crates-io]` BLOCK. Removed 2026-07-25 (bd-h5cl7) together with the
+# root workspace's copy, which this one duplicated verbatim. See the rationale in
+# the root `Cargo.toml`; `scripts/check_patch_version_consistency.py` covers this
+# manifest too, so the two cannot drift apart again.
 
 [[bin]]
 name = "audit_markdown_parser"
@@ -121,6 +120,16 @@ bench = false
 [[bin]]
 name = "semantic_cover_schema"
 path = "fuzz_targets/semantic_cover_schema.rs"
+test = false
+doc = false
+bench = false
+
+# BRIDGE-18.10: SWAR-vs-scalar lexer differential shaped at word-width
+# boundaries. bd-2noh9 was exactly this defect class and it shipped; until this
+# target, neither fuzz tree touched simd_lexer at all.
+[[bin]]
+name = "swar_scalar_boundary_differential"
+path = "fuzz_targets/swar_scalar_boundary_differential.rs"
 test = false
 doc = false
 bench = false

@@ -13,11 +13,14 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use crate::causal_replay::{CounterfactualConfig, DecisionSnapshot, TraceRecord};
+use crate::causal_replay::{
+    CounterfactualConfig, DecisionSnapshot, TraceRecord, causal_replay_lab_trust_registry,
+};
 use crate::counterfactual_evaluator::{
     ConfidenceEnvelope, EnvelopeStatus, EstimatorKind, PolicyId,
 };
 use crate::engine_object_id::IdError;
+use crate::evidence_ledger::EvidenceTrustRegistry;
 use crate::hash_tiers::ContentHash;
 use crate::runtime_decision_theory::LaneAction;
 use crate::security_epoch::SecurityEpoch;
@@ -614,6 +617,8 @@ pub enum ReplayEngineError {
     InsufficientDecisions { found: u64, required: u64 },
     /// Trace integrity check failed.
     TraceIntegrityFailure { trace_id: String, detail: String },
+    /// Runtime trace trust registry was missing or lab-scoped.
+    TraceTrustInvalid { detail: String },
     /// ID derivation error.
     IdDerivation(String),
     /// Scope excludes all decisions.
@@ -650,6 +655,9 @@ impl fmt::Display for ReplayEngineError {
             }
             Self::TraceIntegrityFailure { trace_id, detail } => {
                 write!(f, "trace integrity failure in {trace_id}: {detail}")
+            }
+            Self::TraceTrustInvalid { detail } => {
+                write!(f, "runtime trace trust is invalid: {detail}")
             }
             Self::IdDerivation(msg) => write!(f, "ID derivation error: {msg}"),
             Self::EmptyScope => write!(f, "replay scope excludes all decisions"),
@@ -708,8 +716,6 @@ pub struct ReplayEngineConfig {
     pub record_divergences: bool,
     /// Maximum divergent decisions to record per policy.
     pub max_divergences_per_policy: usize,
-    /// Whether to verify trace chain integrity before replay.
-    pub verify_integrity: bool,
 }
 
 impl Default for ReplayEngineConfig {
@@ -722,7 +728,6 @@ impl Default for ReplayEngineConfig {
             regime_breakdown: true,
             record_divergences: true,
             max_divergences_per_policy: 100,
-            verify_integrity: true,
         }
     }
 }
@@ -738,15 +743,50 @@ impl Default for ReplayEngineConfig {
 pub struct CounterfactualReplayEngine {
     config: ReplayEngineConfig,
     replay_count: u64,
+    #[serde(skip)]
+    trace_trust_registry: Option<EvidenceTrustRegistry>,
 }
 
 impl CounterfactualReplayEngine {
-    /// Create a new replay engine.
-    pub fn new(config: ReplayEngineConfig) -> Self {
+    /// Create a new replay engine with externally authenticated trace trust.
+    pub fn new(
+        config: ReplayEngineConfig,
+        trace_trust_registry: EvidenceTrustRegistry,
+    ) -> Result<Self, ReplayEngineError> {
+        trace_trust_registry
+            .ensure_runtime_scope()
+            .map_err(|error| ReplayEngineError::TraceTrustInvalid {
+                detail: error.to_string(),
+            })?;
+        Ok(Self {
+            config,
+            replay_count: 0,
+            trace_trust_registry: Some(trace_trust_registry),
+        })
+    }
+
+    /// Create an explicitly lab-scoped engine for deterministic fixtures.
+    pub fn new_lab(config: ReplayEngineConfig) -> Self {
         Self {
             config,
             replay_count: 0,
+            trace_trust_registry: Some(causal_replay_lab_trust_registry()),
         }
+    }
+
+    /// Reattach an externally authenticated trust registry after restoring
+    /// serialized engine state.
+    pub fn attach_trace_trust_registry(
+        &mut self,
+        trace_trust_registry: EvidenceTrustRegistry,
+    ) -> Result<(), ReplayEngineError> {
+        trace_trust_registry
+            .ensure_runtime_scope()
+            .map_err(|error| ReplayEngineError::TraceTrustInvalid {
+                detail: error.to_string(),
+            })?;
+        self.trace_trust_registry = Some(trace_trust_registry);
+        Ok(())
     }
 
     /// Access the configuration.
@@ -779,6 +819,10 @@ impl CounterfactualReplayEngine {
                 count: alternate_policies.len(),
                 max: MAX_ALTERNATE_POLICIES,
             });
+        }
+
+        for trace in traces {
+            self.verify_trace(trace)?;
         }
 
         // Check for duplicate policy IDs
@@ -830,7 +874,7 @@ impl CounterfactualReplayEngine {
             Vec::new()
         };
 
-        self.replay_count += 1;
+        self.replay_count = self.replay_count.saturating_add(1);
 
         let mut result = ReplayComparisonResult {
             schema_version: REPLAY_ENGINE_SCHEMA_VERSION.to_string(),
@@ -976,16 +1020,6 @@ impl CounterfactualReplayEngine {
                 continue;
             }
 
-            // Optionally verify integrity
-            if self.config.verify_integrity
-                && let Err(e) = trace.verify_chain_integrity()
-            {
-                return Err(ReplayEngineError::TraceIntegrityFailure {
-                    trace_id: trace.trace_id.clone(),
-                    detail: format!("{e}"),
-                });
-            }
-
             for entry in &trace.entries {
                 if scope.includes(&entry.decision) {
                     decisions.push(&entry.decision);
@@ -1001,6 +1035,22 @@ impl CounterfactualReplayEngine {
         }
 
         Ok(decisions)
+    }
+
+    /// Authenticate and validate a trace without evaluating a policy.
+    pub fn verify_trace(&self, trace: &TraceRecord) -> Result<(), ReplayEngineError> {
+        let trace_trust_registry = self.trace_trust_registry.as_ref().ok_or_else(|| {
+            ReplayEngineError::TraceIntegrityFailure {
+                trace_id: trace.trace_id.clone(),
+                detail: "trace trust registry was not reattached after restore".to_string(),
+            }
+        })?;
+        trace
+            .verify_for_replay(trace_trust_registry)
+            .map_err(|error| ReplayEngineError::TraceIntegrityFailure {
+                trace_id: trace.trace_id.clone(),
+                detail: error.to_string(),
+            })
     }
 
     // ── Internal: Evaluate alternate policy ───────────────────────
@@ -1045,8 +1095,12 @@ impl CounterfactualReplayEngine {
                 .cloned()
                 .unwrap_or_else(|| "unknown".to_string());
 
-            *regime_original.entry(regime_key.clone()).or_insert(0) += original_outcome;
-            *regime_counterfactual.entry(regime_key.clone()).or_insert(0) += cf_outcome;
+            let regime_original_total = regime_original.entry(regime_key.clone()).or_insert(0);
+            *regime_original_total = (*regime_original_total).saturating_add(original_outcome);
+            let regime_counterfactual_total =
+                regime_counterfactual.entry(regime_key.clone()).or_insert(0);
+            *regime_counterfactual_total =
+                (*regime_counterfactual_total).saturating_add(cf_outcome);
 
             if diverged
                 && self.config.record_divergences
@@ -1160,8 +1214,9 @@ impl CounterfactualReplayEngine {
         let max_loss = loss_matrix.values().max().copied().unwrap_or(0);
         if max_loss > threshold {
             // Higher threshold → less conservative → potentially different outcome
+            let threshold_delta = i128::from(threshold) - i128::from(snapshot.threshold_millionths);
             let cf_outcome =
-                snapshot.outcome_millionths + (threshold - snapshot.threshold_millionths) / 10;
+                clamp_i128_to_i64(i128::from(snapshot.outcome_millionths) + threshold_delta / 10);
             (snapshot.chosen_action.clone(), cf_outcome)
         } else {
             (snapshot.chosen_action.clone(), snapshot.outcome_millionths)
@@ -1196,23 +1251,23 @@ impl CounterfactualReplayEngine {
             };
         }
 
-        let avg_improvement = net_improvement / n as i64;
+        let avg_improvement = i128::from(net_improvement) / i128::from(n);
 
         // Standard error estimate using sqrt(n) scaling
         // z * sigma / sqrt(n), approximate sigma as |avg_improvement| + 1
-        let z = z_multiplier(self.config.confidence_millionths);
-        let sigma_estimate = avg_improvement.abs().max(MILLION / 10);
+        let z = i128::from(z_multiplier(self.config.confidence_millionths));
+        let sigma_estimate = avg_improvement.abs().max(i128::from(MILLION / 10));
         let sqrt_n = isqrt(n);
         let margin = if sqrt_n > 0 {
-            (z * sigma_estimate) / (sqrt_n as i64 * 1000)
+            (z * sigma_estimate) / (i128::from(sqrt_n) * 1000)
         } else {
             sigma_estimate
         };
 
         ConfidenceEnvelope {
-            estimate_millionths: avg_improvement,
-            lower_millionths: avg_improvement - margin,
-            upper_millionths: avg_improvement + margin,
+            estimate_millionths: clamp_i128_to_i64(avg_improvement),
+            lower_millionths: clamp_i128_to_i64(avg_improvement - margin),
+            upper_millionths: clamp_i128_to_i64(avg_improvement + margin),
             confidence_millionths: self.config.confidence_millionths,
             effective_samples: n,
         }
@@ -1457,6 +1512,10 @@ fn isqrt(n: u64) -> u64 {
     n.isqrt()
 }
 
+fn clamp_i128_to_i64(value: i128) -> i64 {
+    value.clamp(i128::from(i64::MIN), i128::from(i64::MAX)) as i64
+}
+
 /// The engine's outcome model: estimate the decision outcome (in millionths,
 /// higher is better) of taking `action` given a per-action `loss_matrix` and a
 /// risk `threshold`. The outcome is the inverse of the chosen action's loss,
@@ -1476,9 +1535,11 @@ pub fn estimate_lane_outcome_millionths(
 ) -> i64 {
     let action_loss = loss_matrix.get(action).copied().unwrap_or(0);
     if threshold > 0 {
-        MILLION - (action_loss * MILLION) / (threshold + MILLION)
+        let scaled_loss = i128::from(action_loss) * i128::from(MILLION);
+        let denominator = i128::from(threshold) + i128::from(MILLION);
+        clamp_i128_to_i64(i128::from(MILLION) - scaled_loss / denominator)
     } else {
-        MILLION - action_loss
+        clamp_i128_to_i64(i128::from(MILLION) - i128::from(action_loss))
     }
 }
 
@@ -1527,19 +1588,18 @@ mod tests {
     }
 
     fn make_trace(decisions: Vec<DecisionSnapshot>) -> TraceRecord {
-        let mut recorder = TraceRecorder::new(RecorderConfig {
+        let mut recorder = TraceRecorder::new_lab(RecorderConfig {
             trace_id: "test-trace".to_string(),
             recording_mode: RecordingMode::Full,
             epoch: SecurityEpoch::from_raw(1),
             start_tick: 100,
-            signing_key: b"test-key".to_vec(),
         });
 
         for d in decisions {
             recorder.record_decision(d);
         }
 
-        recorder.finalize()
+        recorder.finalize().expect("lab trace should finalize")
     }
 
     fn make_alternate_policy(id: &str, desc: &str) -> AlternatePolicy {
@@ -1581,7 +1641,7 @@ mod tests {
     }
 
     fn default_engine() -> CounterfactualReplayEngine {
-        CounterfactualReplayEngine::new(ReplayEngineConfig::default())
+        CounterfactualReplayEngine::new_lab(ReplayEngineConfig::default())
     }
 
     // ── Constructor tests ────────────────────────────────────────
@@ -1597,12 +1657,32 @@ mod tests {
     }
 
     #[test]
+    fn bd_mpu1z_runtime_constructor_and_restore_reject_lab_trust() {
+        assert!(matches!(
+            CounterfactualReplayEngine::new(
+                ReplayEngineConfig::default(),
+                causal_replay_lab_trust_registry(),
+            ),
+            Err(ReplayEngineError::TraceTrustInvalid { .. })
+        ));
+
+        let mut restored: CounterfactualReplayEngine = serde_json::from_str(
+            &serde_json::to_string(&default_engine()).expect("serialize lab engine state"),
+        )
+        .expect("restore engine state without trust");
+        assert!(matches!(
+            restored.attach_trace_trust_registry(causal_replay_lab_trust_registry()),
+            Err(ReplayEngineError::TraceTrustInvalid { .. })
+        ));
+    }
+
+    #[test]
     fn config_accessible() {
         let config = ReplayEngineConfig {
             baseline_policy_id: PolicyId("custom".to_string()),
             ..Default::default()
         };
-        let engine = CounterfactualReplayEngine::new(config.clone());
+        let engine = CounterfactualReplayEngine::new_lab(config.clone());
         assert_eq!(engine.config().baseline_policy_id.0, "custom");
         assert_eq!(
             engine.config().confidence_millionths,
@@ -1616,8 +1696,9 @@ mod tests {
         assert_eq!(config.estimator, EstimatorKind::DoublyRobust);
         assert!(config.regime_breakdown);
         assert!(config.record_divergences);
-        assert!(config.verify_integrity);
         assert_eq!(config.max_divergences_per_policy, 100);
+        let serialized = serde_json::to_string(&config).expect("config should serialize");
+        assert!(!serialized.contains("verify_integrity"));
     }
 
     // ── Validation error tests ───────────────────────────────────
@@ -1739,6 +1820,78 @@ mod tests {
             .compare(&[trace], &[alt], &default_scope(), None)
             .expect("operation should succeed for valid inputs");
         assert_eq!(engine.replay_count(), 2);
+    }
+
+    #[test]
+    fn bd_mpu1z_restored_replay_count_saturates_without_panicking() {
+        let mut engine = default_engine();
+        engine.replay_count = u64::MAX;
+        let trace = make_trace(vec![make_decision(0, "native", 500_000)]);
+        let alternate = make_alternate_policy("alt-saturated", "test");
+
+        engine
+            .compare(&[trace], &[alternate], &default_scope(), None)
+            .expect("a saturated diagnostic counter must not prevent authenticated replay");
+        assert_eq!(engine.replay_count(), u64::MAX);
+    }
+
+    #[test]
+    fn bd_mpu1z_authenticated_extreme_counterfactual_arithmetic_saturates() {
+        let mut decisions = vec![
+            make_decision(0, "native", i64::MIN),
+            make_decision(1, "native", i64::MIN),
+        ];
+        for decision in &mut decisions {
+            decision.threshold_millionths = i64::MAX;
+            decision.loss_matrix = BTreeMap::from([("native".to_string(), i64::MAX)]);
+        }
+        let trace = make_trace(decisions);
+        let mut alternate = make_alternate_policy("extreme-threshold", "extreme threshold");
+        alternate
+            .counterfactual_config
+            .threshold_override_millionths = Some(i64::MIN);
+
+        let result = default_engine()
+            .compare(&[trace], &[alternate], &default_scope(), None)
+            .expect("authenticated extreme inputs must produce a bounded report");
+        let report = &result.policy_reports[0];
+        assert_eq!(report.total_original_outcome_millionths, i64::MIN);
+        assert_eq!(report.total_counterfactual_outcome_millionths, i64::MIN);
+        assert_eq!(report.net_improvement_millionths, 0);
+        assert_eq!(report.regime_breakdown.get("native"), Some(&0));
+    }
+
+    #[test]
+    fn bd_mpu1z_extreme_outcome_model_and_confidence_envelope_saturate() {
+        let extreme_loss = BTreeMap::from([("route_to:native".to_string(), i64::MAX)]);
+        assert_eq!(
+            estimate_lane_outcome_millionths("route_to:native", &extreme_loss, i64::MAX),
+            1
+        );
+        let extreme_gain = BTreeMap::from([("route_to:native".to_string(), i64::MIN)]);
+        assert_eq!(
+            estimate_lane_outcome_millionths("route_to:native", &extreme_gain, i64::MIN),
+            i64::MAX
+        );
+
+        let mut decision = make_decision(0, "native", i64::MAX);
+        decision.threshold_millionths = 0;
+        decision.loss_matrix = extreme_loss;
+        let trace = make_trace(vec![decision]);
+        let alternate = make_override_policy(
+            "extreme-confidence",
+            LaneAction::RouteTo(LaneId("native".into())),
+        );
+
+        let result = default_engine()
+            .compare(&[trace], &[alternate], &default_scope(), None)
+            .expect("an extreme signed outcome must not panic or wrap");
+        let report = &result.policy_reports[0];
+        assert_eq!(report.net_improvement_millionths, i64::MIN);
+        assert_eq!(report.confidence_envelope.estimate_millionths, i64::MIN);
+        assert_eq!(report.confidence_envelope.lower_millionths, i64::MIN);
+        assert!(report.confidence_envelope.upper_millionths > 0);
+        assert_eq!(report.safety_status, EnvelopeStatus::Inconclusive);
     }
 
     #[test]
@@ -1864,18 +2017,19 @@ mod tests {
     #[test]
     fn scope_filters_by_incident() {
         let mut engine = default_engine();
-        let mut recorder = TraceRecorder::new(RecorderConfig {
+        let mut recorder = TraceRecorder::new_lab(RecorderConfig {
             trace_id: "incident-trace".to_string(),
             recording_mode: RecordingMode::Full,
             epoch: SecurityEpoch::from_raw(1),
             start_tick: 100,
-            signing_key: b"test-key".to_vec(),
         });
         recorder.set_incident_id("INC-001".to_string());
-        recorder.record_decision(make_decision(0, "native", 500_000));
-        let trace_with_incident = recorder.finalize();
+        let mut incident_decision = make_decision(0, "native", 500_000);
+        incident_decision.trace_id = "incident-trace".to_string();
+        recorder.record_decision(incident_decision);
+        let trace_with_incident = recorder.finalize().expect("lab trace should finalize");
 
-        let trace_without = make_trace(vec![make_decision(1, "native", 600_000)]);
+        let trace_without = make_trace(vec![make_decision(0, "native", 600_000)]);
 
         let alt = make_alternate_policy("alt-1", "test");
         let scope = ReplayScope {
@@ -2273,7 +2427,7 @@ mod tests {
             max_divergences_per_policy: 3,
             ..Default::default()
         };
-        let mut engine = CounterfactualReplayEngine::new(config);
+        let mut engine = CounterfactualReplayEngine::new_lab(config);
         let decisions: Vec<_> = (0..10)
             .map(|i| make_decision(i, "native", 500_000))
             .collect();
@@ -2296,7 +2450,7 @@ mod tests {
             record_divergences: false,
             ..Default::default()
         };
-        let mut engine = CounterfactualReplayEngine::new(config);
+        let mut engine = CounterfactualReplayEngine::new_lab(config);
         let decisions: Vec<_> = (0..5)
             .map(|i| make_decision(i, "native", 500_000))
             .collect();
@@ -2315,18 +2469,17 @@ mod tests {
     // ── Integrity verification tests ─────────────────────────────
 
     #[test]
-    fn integrity_check_can_be_disabled() {
-        let config = ReplayEngineConfig {
-            verify_integrity: false,
-            ..Default::default()
-        };
-        let mut engine = CounterfactualReplayEngine::new(config);
-        let trace = make_trace(vec![make_decision(0, "native", 500_000)]);
+    fn trace_authentication_cannot_be_disabled() {
+        let mut engine = CounterfactualReplayEngine::new_lab(ReplayEngineConfig::default());
+        let mut trace = make_trace(vec![make_decision(0, "native", 500_000)]);
+        trace.signature.producer_id = "attacker".to_string();
         let alt = make_alternate_policy("alt-1", "test");
 
-        // Should succeed even if integrity would normally fail
         let result = engine.compare(&[trace], &[alt], &default_scope(), None);
-        assert!(result.is_ok());
+        assert!(matches!(
+            result,
+            Err(ReplayEngineError::TraceIntegrityFailure { .. })
+        ));
     }
 
     // ── PolicyComparisonReport method tests ──────────────────────

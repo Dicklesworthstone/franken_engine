@@ -25,6 +25,14 @@ fn eval_value(src: &str) -> String {
         .to_string()
 }
 
+fn eval_error(src: &str) -> String {
+    let mut engine = HybridRouter::default();
+    engine
+        .eval(src)
+        .expect_err("source should fail deterministically")
+        .to_string()
+}
+
 #[test]
 fn pop_returns_last_element_and_decrements_length() {
     // pop returns the removed last element.
@@ -110,4 +118,49 @@ fn shift_then_unshift_round_trips() {
     assert_eq!(eval_value(src), "9");
     let src_len = "let a = [1, 2, 3]; a.shift(); a.unshift(9); a.length;";
     assert_eq!(eval_value(src_len), "3");
+}
+
+#[test]
+fn array_length_assignment_rejects_invalid_lengths_bd_xulus() {
+    // ES2020 ArraySetLength rejects values whose ToUint32 value does not match
+    // the numeric length. The IR path previously accepted these writes and
+    // later read them back as 0/truncated length through array_like_length.
+    for src in [
+        "let a = [1, 2]; a.length = -1;",
+        "let a = [1, 2]; a.length = 1.5;",
+        "let a = [1, 2]; a.length = 'not-a-length';",
+        "let a = [1, 2]; a.length = 4294967296;",
+    ] {
+        let out = eval_error(src);
+        assert!(
+            out.contains("range error") && out.contains("array length"),
+            "{src} should be an array length RangeError, got {out:?}"
+        );
+    }
+}
+
+#[test]
+fn array_length_assignment_accepts_valid_integer_lengths_bd_xulus() {
+    assert_eq!(eval_value("let a = [1, 2]; a.length = 0; a.length;"), "0");
+    assert_eq!(eval_value("let a = [1, 2]; a.length = '2'; a.length;"), "2");
+}
+
+#[test]
+fn array_length_assignment_truncates_elements_bd_xulus() {
+    assert_eq!(
+        eval_value("let a = [1, 2, 3]; a.length = 1; a[1] === undefined ? 'gone' : 'kept';"),
+        "gone"
+    );
+    assert_eq!(
+        eval_value("let a = [1, 2, 3]; a.length = 0; a[0] === undefined ? 'gone' : 'kept';"),
+        "gone"
+    );
+    assert_eq!(
+        eval_value("let a = [1, 2, 3]; a.length = 1; a.push(9); a[1];"),
+        "9"
+    );
+    assert_eq!(
+        eval_value("let a = [1, 2, 3]; a.length = 1; a.push(9); a.length;"),
+        "2"
+    );
 }

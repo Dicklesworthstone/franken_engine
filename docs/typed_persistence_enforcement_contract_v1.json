@@ -2,15 +2,31 @@
   "schema_version": "franken-engine.typed-persistence-enforcement-contract.v1",
   "bead_id": "bd-gvnex",
   "parent_bead_id": "bd-xyku0",
+  "extension_bead_ids": [
+    "bd-q8x8x.5",
+    "bd-q8x8x.8",
+    "bd-q8x8x.9",
+    "bd-q8x8x.9.1",
+    "bd-q8x8x.9.2"
+  ],
   "docs": "docs/TYPED_PERSISTENCE_ENFORCEMENT_CONTRACT.md",
   "smoke_script": "scripts/e2e/typed_persistence_enforcement_contract_smoke.sh",
   "inventory_doc": "docs/FRANKENSQLITE_PERSISTENCE_INVENTORY.md",
   "scope_store_kinds": [
+    "FleetTrustState",
     "ReplacementLineage",
     "IfcProvenance",
     "SpecializationIndex"
   ],
   "scope_inventory_rows": [
+    {
+      "store_label": "fleet trust state",
+      "model_layer": "sqlmodel_rust on frankensqlite",
+      "store_kind": "FleetTrustState",
+      "typed_model": "FleetTrustStateEntry",
+      "integration_point": "sqlmodel_rust::FleetTrustStateEntry",
+      "primary_surface": "crates/franken-engine/src/fleet_immune_protocol.rs"
+    },
     {
       "store_label": "replacement lineage log",
       "model_layer": "sqlmodel_rust on frankensqlite",
@@ -40,6 +56,10 @@
     "primary_authority_required": true,
     "authoritative_helpers": [
       "TypedStoreRecord",
+      "FleetAuthorityId",
+      "FleetVerificationRegistryPersistence",
+      "StorageAdapter.compare_and_swap_fleet_trust_state",
+      "FleetTrustStateFrankensqliteStorageAdapter.open_fleet_trust_state_file",
       "TypedStorageAdapterExt.put_typed",
       "TypedStorageAdapterExt.get_typed_by_id",
       "TypedStorageAdapterExt.query_typed"
@@ -64,6 +84,9 @@
         "pub fn map_legacy_replacement_lineage_record",
         "pub fn map_legacy_ifc_provenance_record",
         "pub fn map_legacy_specialization_index_record",
+        "pub fn fleet_trust_state_create_table_sql",
+        "pub const FLEET_TRUST_STATE_SCHEMA_VERSION: &str = \"fleet_trust_state_v2\"",
+        "pub struct FleetTrustStateEntry",
         "pub struct ReplacementLineageEntry",
         "pub struct IfcProvenanceEntry",
         "pub struct SpecializationIndexEntry"
@@ -72,9 +95,24 @@
     {
       "path": "crates/franken-engine/src/storage_adapter.rs",
       "must_contain": [
+        "Self::FleetTrustState => \"sqlmodel_rust::FleetTrustStateEntry\"",
+        "fn compare_and_swap_fleet_trust_state",
+        "pub struct FleetTrustStateFrankensqliteBackend",
+        "pub type FleetTrustStateFrankensqliteStorageAdapter",
+        "pub fn open_fleet_trust_state_file",
         "Self::ReplacementLineage => \"sqlmodel_rust::ReplacementLineageEntry\"",
         "Self::IfcProvenance => \"sqlmodel_rust::IfcProvenanceEntry\"",
         "Self::SpecializationIndex => \"sqlmodel_rust::SpecializationIndexEntry\""
+      ]
+    },
+    {
+      "path": "crates/franken-engine/src/fleet_immune_protocol.rs",
+      "must_contain": [
+        "pub struct FleetAuthorityId",
+        "pub struct FleetVerificationRegistryPersistence",
+        "pub struct PendingFleetRegistryPublication",
+        "compare_and_swap_fleet_trust_state",
+        "VerifiedFleetRegistrySnapshotAnchor"
       ]
     },
     {
@@ -103,9 +141,18 @@
     "sqlmodel_rust on frankensqlite",
     "Primary authoritative writes and reads",
     "Generic `StorageAdapter` operations for these typed-heavy stores must become non-authoritative",
+    "Fleet trust state has a stricter mutation rule",
+    "Backends without one transactional CAS must reject the operation",
+    "The current generic `FrankensqliteBackend` default remains fail closed",
+    "FleetTrustStateFrankensqliteStorageAdapter",
     "Legacy `StoreRecord` inputs are allowed only for explicit lossless backfill planning",
     "Ambiguous legacy data must fail closed",
     "does not require rewriting unrelated `raw frankensqlite` stores"
+  ],
+  "current_limitations": [
+    "The generic FrankensqliteBackend remains fail closed; only the isolated FleetTrustStateFrankensqliteStorageAdapter implements real sibling-backed fleet authority CAS.",
+    "The current generic SQLModel file open uses NORMAL deferred WAL synchronization, lacks strict multi-process identity-bound admission, and exposes no streaming or metadata-only hard ingress bound for hostile oversized rows; bd-q8x8x.9.1 must close these sibling API gaps before production use.",
+    "bd-q8x8x.9.2 still requires retained-file no-mock restart, true subprocess crash, lost-response, simultaneous cross-process CAS, and stale or forked rollback proof against the real isolated fleet authority database."
   ],
   "selftest_scenarios": [
     "missing_scope_store_fails",
@@ -133,6 +180,7 @@
     ]
   },
   "real_surface_paths": [
+    "crates/franken-engine/src/fleet_immune_protocol.rs",
     "crates/franken-engine/src/replacement_lineage_log.rs",
     "crates/franken-engine/src/ifc_provenance_index.rs",
     "crates/franken-engine/src/specialization_index.rs",

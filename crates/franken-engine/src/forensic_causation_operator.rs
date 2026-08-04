@@ -38,17 +38,14 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use crate::causation_graph_schema::{
-    CausationEdge, CausationGraph, CausationNode, CausationType, DecisionOutcome, EdgeId,
-    InfluenceWeight, NodeId, NodeType,
+    CausationEdge, CausationType, DecisionOutcome, InfluenceWeight, NodeId, NodeType,
 };
 use crate::forensic_query_api::{
-    CausalExplanationResult, CausalSubgraph, CounterfactualAnalysisResult, ForensicQuery,
-    ForensicQueryEngine, ForensicQueryResult, InfluenceAnalysisResult, QueryError, QueryParameters,
-    QueryStatus, QueryTarget, QueryType,
+    CausalExplanationResult, CausalSubgraph, ForensicQuery, ForensicQueryEngine,
+    InfluenceAnalysisResult, QueryError, QueryParameters, QueryTarget, QueryType,
 };
 use crate::minimal_causal_set_inference::DecisionFactor;
 
@@ -293,13 +290,13 @@ impl ForensicOperator {
         }
 
         // Build decision chain
-        reading.decision_chain = self.build_decision_chain(&subgraph, &decision_nodes)?;
+        reading.decision_chain = self.build_decision_chain(subgraph, &decision_nodes)?;
 
         // Analyze influence breakdown
-        reading.influence_breakdown = self.analyze_influence_breakdown(&subgraph)?;
+        reading.influence_breakdown = self.analyze_influence_breakdown(subgraph)?;
 
         // Identify critical paths
-        reading.critical_paths = self.identify_critical_paths(&subgraph)?;
+        reading.critical_paths = self.identify_critical_paths(subgraph)?;
 
         Ok(reading)
     }
@@ -459,10 +456,7 @@ impl ForensicOperator {
         output.push_str("\n## Decision Summary\n\n");
         output.push_str(&format!("**Decision ID**: {}\n", report.decision_id));
         if let NodeType::Decision {
-            outcome,
-            factor,
-            context_hash,
-            ..
+            outcome, factor, ..
         } = &report.causal_explanation.decision_node.node_type
         {
             output.push_str(&format!("**Outcome**: {:?}\n", outcome));
@@ -559,7 +553,7 @@ impl ForensicOperator {
     fn interpret_causation_data(
         &self,
         explanation: &CausalExplanationResult,
-        influence: &InfluenceAnalysisResult,
+        _influence: &InfluenceAnalysisResult,
     ) -> Result<CausationInterpretation, OperatorError> {
         // Assess risk level based on decision outcome and influence strength
         let risk_level = match &explanation.decision_node.node_type {
@@ -629,7 +623,7 @@ impl ForensicOperator {
     fn generate_recommendations(
         &self,
         explanation: &CausalExplanationResult,
-        influence: &InfluenceAnalysisResult,
+        _influence: &InfluenceAnalysisResult,
     ) -> Result<Vec<OperatorRecommendation>, OperatorError> {
         let mut recommendations = Vec::new();
 
@@ -834,7 +828,7 @@ impl ForensicOperator {
 
     fn build_decision_chain(
         &self,
-        subgraph: &CausalSubgraph,
+        _subgraph: &CausalSubgraph,
         decision_nodes: &[(NodeId, String, DecisionFactor, DecisionOutcome)],
     ) -> Result<Vec<DecisionStep>, OperatorError> {
         let mut chain = Vec::new();
@@ -1256,6 +1250,7 @@ impl From<QueryError> for OperatorError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::causation_graph_schema::CausationGraph;
 
     #[test]
     fn test_operator_config_default() {

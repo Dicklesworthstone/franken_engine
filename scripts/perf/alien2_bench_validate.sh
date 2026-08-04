@@ -114,11 +114,13 @@ while [[ $# -gt 0 ]]; do
 done
 
 CARGO="${CARGO:-/home/ubuntu/.cargo/bin/cargo}"
+CURRENT_RUSTFLAGS="-C force-frame-pointers=yes -C linker=cc -Clinker-features=-lld"
 
 if [[ "$MODE" == "default" ]]; then
     echo "[alien2.4] building hot_paths bench..."
+    env -u CARGO_ENCODED_RUSTFLAGS \
     RCH_CARGO_WRAPPER_BYPASS=1 \
-    RUSTFLAGS="-C force-frame-pointers=yes -C linker=cc" \
+    RUSTFLAGS="$CURRENT_RUSTFLAGS" \
     CARGO_INCREMENTAL=0 \
     "$CARGO" bench --bench hot_paths --no-run
 
@@ -173,9 +175,9 @@ fi
 # --------------------------------------------------------------------------
 # Fingerprint.
 # --------------------------------------------------------------------------
-python3 - "$RUN_DIR" "$BEAD" "$PASS1_DIR" "$MODE" "$FROM_RUN" <<'PYFP'
-import json, subprocess, sys, time, platform
-run_dir, bead, pass1_dir, mode, from_run = sys.argv[1:6]
+python3 - "$RUN_DIR" "$BEAD" "$PASS1_DIR" "$MODE" "$FROM_RUN" "$CURRENT_RUSTFLAGS" <<'PYFP'
+import json, os, subprocess, sys, time, platform
+run_dir, bead, pass1_dir, mode, from_run, current_rustflags = sys.argv[1:7]
 def sh(*a):
     try:
         return subprocess.check_output(a, text=True, stderr=subprocess.DEVNULL).strip()
@@ -198,6 +200,54 @@ fp = {
     },
     "toolchain": {"rustc": sh("rustc", "--version"), "python": platform.python_version()},
 }
+if mode == "default":
+    fp["build_flags"] = {
+        "RUSTFLAGS": current_rustflags,
+        "CARGO_ENCODED_RUSTFLAGS": None,
+        "CARGO_INCREMENTAL": "0",
+    }
+    fp["build_provenance"] = {
+        "status": "executed_build_command",
+        "effective_channel": "RUSTFLAGS",
+    }
+elif mode == "from-run":
+    source_fingerprint_path = os.path.join(from_run, "fingerprint.json")
+    try:
+        with open(source_fingerprint_path, encoding="utf-8") as fh:
+            source_fingerprint = json.load(fh)
+        source_flags = source_fingerprint.get("build_flags")
+        source_provenance = source_fingerprint.get("build_provenance") or {}
+        required = {"RUSTFLAGS", "CARGO_ENCODED_RUSTFLAGS", "CARGO_INCREMENTAL"}
+        if not isinstance(source_flags, dict) or required - source_flags.keys():
+            raise ValueError("source fingerprint does not explicitly bind all Cargo flag channels")
+        if source_provenance.get("status") != "executed_build_command":
+            raise ValueError("source fingerprint lacks executed-build provenance")
+        rustflags = source_flags["RUSTFLAGS"]
+        encoded = source_flags["CARGO_ENCODED_RUSTFLAGS"]
+        if encoded is None:
+            if not isinstance(rustflags, str) or not rustflags:
+                raise ValueError("source fingerprint has no effective RUSTFLAGS payload")
+        elif not isinstance(encoded, str) or not encoded or rustflags not in (None, ""):
+            raise ValueError("source fingerprint does not bind one unshadowed rustflags channel")
+        if str(source_flags["CARGO_INCREMENTAL"]) not in {"0", "1"}:
+            raise ValueError("source fingerprint has invalid CARGO_INCREMENTAL provenance")
+        fp["build_flags"] = source_flags
+        fp["build_provenance"] = {
+            "status": "copied_from_validated_source_run",
+            "source_fingerprint": source_fingerprint_path,
+            "source": source_provenance,
+        }
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        fp["build_provenance"] = {
+            "status": "unknown",
+            "reason": f"from-run provenance is not bound: {exc}",
+            "source_fingerprint": source_fingerprint_path,
+        }
+else:
+    fp["build_provenance"] = {
+        "status": "unknown",
+        "reason": "verdict-only mode reused Criterion artifacts without a bound source-run fingerprint",
+    }
 json.dump(fp, open(f"{run_dir}/fingerprint.json", "w"), indent=2)
 PYFP
 

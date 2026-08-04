@@ -69,12 +69,27 @@ fn standalone_build_gate_script_routes_heavy_lanes_through_rch() {
         "script should route heavy cargo lanes through rch"
     );
     assert!(
+        script.contains(r#""RCH_BUILD_TIMEOUT_SEC=${rch_timeout_seconds}""#)
+            && script.contains(r#""RCH_TEST_TIMEOUT_SEC=${rch_timeout_seconds}""#),
+        "the gate should propagate its one-hour cold-build budget into rch"
+    );
+    assert!(
+        script.contains(r#""RCH_REQUIRE_REMOTE=1""#),
+        "the gate should refuse local cargo fallback before it starts"
+    );
+    assert!(
         script.contains("cargo check -p frankenengine-engine --no-default-features"),
         "script should verify standalone cargo check"
     );
     assert!(
         script.contains("cargo test -p frankenengine-engine --no-default-features"),
         "script should verify standalone cargo test"
+    );
+    assert!(
+        script.contains(
+            "cargo build --release --no-default-features -p frankenengine-engine --bin frankenctl"
+        ),
+        "script should verify the standalone frankenctl release build"
     );
     assert!(
         script.contains("cargo check -p frankenengine-engine --all-features"),
@@ -88,6 +103,22 @@ fn standalone_build_gate_script_routes_heavy_lanes_through_rch() {
         script.contains("overall_status"),
         "script should emit an overall manifest status"
     );
+    assert!(
+        script.contains(r#"[[ "$run_failures" -gt 0 || "$failed_lane_count" -gt 0 ]]"#),
+        "every recorded lane failure should make the gate fail closed"
+    );
+
+    let workflow = read_repo_text(".github/workflows/quality-gates.yml");
+    assert!(
+        workflow.contains("test ! -e /dp"),
+        "the PR release lane should prove that the hosted runner has no /dp checkout"
+    );
+    assert!(
+        workflow.contains(
+            "cargo build --release --no-default-features -p frankenengine-engine --bin frankenctl"
+        ),
+        "the PR workflow should enforce the exact standalone release build"
+    );
 }
 
 #[test]
@@ -99,6 +130,10 @@ fn standalone_build_gate_skip_mode_emits_manifest_and_commands() {
         .arg("ci")
         .env("STANDALONE_BUILD_GATE_ARTIFACT_ROOT", &out_dir)
         .env("STANDALONE_BUILD_GATE_SKIP_REMOTE", "1")
+        .env(
+            "STANDALONE_BUILD_GATE_SIBLING_ROOT",
+            out_dir.join("intentionally-absent-siblings"),
+        )
         .output()
         .expect("run standalone build gate script");
     assert!(
@@ -131,9 +166,43 @@ fn standalone_build_gate_skip_mode_emits_manifest_and_commands() {
     let lanes = manifest["lanes"]
         .as_array()
         .expect("lanes should be an array");
-    assert_eq!(lanes.len(), 3, "ci mode should report three lanes");
-    for lane in lanes {
-        assert_eq!(lane["status"], "skipped");
+    assert_eq!(lanes.len(), 12, "ci mode should report every declared lane");
+    for lane_name in [
+        "standalone-check",
+        "standalone-test",
+        "standalone-release",
+        "full-check",
+    ] {
+        let lane = lanes
+            .iter()
+            .find(|lane| lane["lane"] == lane_name)
+            .unwrap_or_else(|| panic!("missing lane {lane_name}"));
+        assert_eq!(lane["status"], "skipped", "heavy lane {lane_name}");
+    }
+    for sibling in [
+        "asupersync",
+        "frankentui",
+        "frankensqlite",
+        "sqlmodel_rust",
+        "fastapi_rust",
+        "frankenpandas",
+    ] {
+        let lane_name = format!("full-integration-{sibling}");
+        let lane = lanes
+            .iter()
+            .find(|lane| lane["lane"] == lane_name)
+            .unwrap_or_else(|| panic!("missing lane {lane_name}"));
+        assert_eq!(
+            lane["status"], "skipped",
+            "the fixture makes sibling lane {lane_name} deterministically absent"
+        );
+    }
+    for lane_name in ["sibling-isolation", "patch-version-consistency"] {
+        let lane = lanes
+            .iter()
+            .find(|lane| lane["lane"] == lane_name)
+            .unwrap_or_else(|| panic!("missing lane {lane_name}"));
+        assert_eq!(lane["status"], "passed", "policy lane {lane_name}");
     }
 
     let commands = fs::read_to_string(run_dir.join("commands.txt")).expect("read commands");
@@ -146,9 +215,57 @@ fn standalone_build_gate_skip_mode_emits_manifest_and_commands() {
         "commands.txt should record the standalone test lane"
     );
     assert!(
+        commands.contains(
+            "cargo build --release --no-default-features -p frankenengine-engine --bin frankenctl"
+        ),
+        "commands.txt should record the standalone release lane"
+    );
+    assert!(
         commands.contains("cargo check -p frankenengine-engine --all-features"),
         "commands.txt should record the full integration lane"
     );
+}
+
+#[test]
+fn standalone_build_gate_fails_closed_on_a_non_standalone_lane() {
+    let out_dir = unique_temp_dir("standalone-build-gate-failure");
+    let sibling_root = unique_temp_dir("standalone-build-gate-siblings");
+    let malformed_sibling = sibling_root.join("asupersync");
+    fs::create_dir_all(&malformed_sibling).expect("create malformed sibling fixture");
+    fs::write(
+        malformed_sibling.join("Cargo.toml"),
+        "this is deliberately not a Cargo manifest\n",
+    )
+    .expect("write malformed sibling fixture");
+
+    let script = repo_root().join("scripts/test_standalone_build.sh");
+    let output = Command::new("bash")
+        .arg(&script)
+        .arg("ci")
+        .env("STANDALONE_BUILD_GATE_ARTIFACT_ROOT", &out_dir)
+        .env("STANDALONE_BUILD_GATE_SKIP_REMOTE", "1")
+        .env("STANDALONE_BUILD_GATE_SIBLING_ROOT", &sibling_root)
+        .output()
+        .expect("run standalone build gate failure drill");
+    assert!(
+        !output.status.success(),
+        "a failed sibling lane must make ci mode fail closed"
+    );
+
+    let run_dir = single_run_dir(&out_dir);
+    let manifest: serde_json::Value = serde_json::from_slice(
+        &fs::read(run_dir.join("manifest.json")).expect("read failure manifest"),
+    )
+    .expect("failure manifest must be valid json");
+    let failed_lane = manifest["lanes"]
+        .as_array()
+        .expect("lanes should be an array")
+        .iter()
+        .find(|lane| lane["lane"] == "full-integration-asupersync")
+        .expect("malformed sibling lane should be recorded");
+    assert_eq!(failed_lane["status"], "failed");
+    assert_eq!(manifest["summary"]["failed_lane_count"], 1);
+    assert_eq!(manifest["summary"]["overall_status"], "blocked");
 }
 
 #[test]
@@ -204,6 +321,12 @@ fn dependency_isolation_contract_documents_standalone_and_full_integration_modes
         "dependency isolation doc should document the standalone check command"
     );
     assert!(
+        doc.contains(
+            "cargo build --release --no-default-features -p frankenengine-engine --bin frankenctl"
+        ),
+        "dependency isolation doc should document the standalone release command"
+    );
+    assert!(
         doc.contains("cargo check -p frankenengine-engine --all-features"),
         "dependency isolation doc should document the full integration command"
     );
@@ -251,6 +374,12 @@ fn dependency_isolation_contract_documents_standalone_and_full_integration_modes
         command
             .as_str()
             .is_some_and(|command| command.contains("--no-default-features"))
+    }));
+    assert!(standalone_commands.iter().any(|command| {
+        command.as_str().is_some_and(|command| {
+            command
+                == "cargo build --release --no-default-features -p frankenengine-engine --bin frankenctl"
+        })
     }));
 
     let full_commands = contract["build_modes"]["full_integration"]["commands"]

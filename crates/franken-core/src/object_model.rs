@@ -10,7 +10,8 @@
 //! - **Reflect**: mirrors of each Proxy trap as ordinary functions
 //! - **Symbol keys**: property keys that are either strings or symbols
 //!
-//! `BTreeMap`/`BTreeSet` for deterministic ordering.
+//! `BTreeMap`/`BTreeSet` for deterministic lookup plus explicit property
+//! insertion order where ECMAScript makes that order observable.
 //! `#![forbid(unsafe_code)]` — no unsafe anywhere.
 //!
 //! Plan reference: Section 10.2 item 10, bd-1m9.
@@ -20,28 +21,1086 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
-/// Serialize/deserialize `BTreeMap<PropertyKey, PropertyDescriptor>` as a
-/// sorted sequence of `[key, descriptor]` pairs.  serde_json requires string
-/// keys for JSON maps but `PropertyKey` is an enum, so we use a vec-of-pairs
-/// representation to preserve full round-trip fidelity.
-mod properties_as_seq {
-    use super::{BTreeMap, PropertyDescriptor, PropertyKey};
-    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use crate::js_string::{ExactPropertyMap, JsString};
 
-    pub fn serialize<S: Serializer>(
-        map: &BTreeMap<PropertyKey, PropertyDescriptor>,
-        serializer: S,
-    ) -> Result<S::Ok, S::Error> {
-        let pairs: Vec<(&PropertyKey, &PropertyDescriptor)> = map.iter().collect();
-        pairs.serialize(serializer)
+// ---------------------------------------------------------------------------
+// OrderedStringMap — baseline string-key property carrier
+// ---------------------------------------------------------------------------
+
+/// A string-keyed map with deterministic ES own-property iteration order.
+///
+/// Lookup remains backed by a [`BTreeMap`]. Observable iteration follows
+/// ECMAScript `[[OwnPropertyKeys]]` string-key order: canonical array indices
+/// (`0` through `4294967294`) numerically first, followed by all other strings
+/// in property-creation order. Updating an existing key retains its position;
+/// deleting and re-inserting a non-index key appends it.
+///
+/// The public compatibility APIs expose only well-formed keys. Lossless
+/// crate-internal APIs include exact-only keys without changing the historical
+/// allocation-free lookup path. Serde keeps the historical map shape while
+/// every key is well formed; exact-only keys switch to an ordered pair
+/// sequence. The dual-shape decoder therefore requires a self-describing
+/// format, matching the JSON replay/checkpoint boundary used by this carrier.
+#[derive(Debug, Clone)]
+pub struct OrderedStringMap<V> {
+    by_key: BTreeMap<String, V>,
+    // Exact-only data keys. Keeping ordinary strings in the historical map
+    // preserves its allocation-free hot path; this sidecar's invariant is
+    // that every key is non-well-formed.
+    exact_only_by_key: ExactPropertyMap<V>,
+    array_indices: BTreeMap<u32, String>,
+    string_insertion_order: Vec<String>,
+    // Activated only while exact-only data exists. It merges well-formed and
+    // exact-only ordinary data keys in creation order for lossless iteration
+    // and the pair-sequence wire.
+    exact_string_insertion_order: Option<Vec<JsString>>,
+    // Optional mixed data/accessor chronology used by the core baseline
+    // HeapObject. It lives inside this already-public field type so HeapObject
+    // keeps its ADR-frozen public struct shape; OrderedStringMap's standalone
+    // map-shaped serde intentionally ignores it.
+    baseline_string_key_order: Option<Vec<JsString>>,
+    // Exact-only accessor descriptors for the executable core baseline.
+    // Well-formed accessors remain in HeapObject::accessors; this private
+    // sidecar preserves the frozen public HeapObject field shape.
+    baseline_exact_string_accessors: ExactPropertyMap<BaselineStringAccessor<V>>,
+    // Typed Symbol-keyed data/accessor properties for the executable core
+    // baseline. These remain private metadata for the same public-shape
+    // reason as `baseline_string_key_order`; HeapObject's custom serde owns
+    // their additive wire representation.
+    baseline_symbol_properties: BTreeMap<SymbolId, BaselineSymbolProperty<V>>,
+    baseline_symbol_key_order: Vec<SymbolId>,
+}
+
+/// Descriptor carrier used by the executable baseline heaps while their
+/// public `HeapObject` fields remain frozen to string-keyed maps.
+///
+/// This is public only so the `frankenengine-engine` mirror can reuse the
+/// canonical ordered sidecar instead of defining a second Symbol-key store.
+/// It is not part of the general-purpose `OrderedStringMap` compatibility
+/// view or its standalone serde representation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[doc(hidden)]
+pub enum BaselineSymbolProperty<V> {
+    Data(V),
+    Accessor { get: Option<V>, set: Option<V> },
+}
+
+/// Private exact-only accessor descriptor used by the executable baseline.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct BaselineStringAccessor<V> {
+    pub(crate) get: Option<V>,
+    pub(crate) set: Option<V>,
+}
+
+impl<V: PartialEq> PartialEq for OrderedStringMap<V> {
+    fn eq(&self, other: &Self) -> bool {
+        self.by_key == other.by_key
+            && self.exact_only_by_key == other.exact_only_by_key
+            && self.array_indices == other.array_indices
+            && self.string_insertion_order == other.string_insertion_order
+            && self.exact_string_insertion_order == other.exact_string_insertion_order
+            && self.baseline_exact_string_accessors == other.baseline_exact_string_accessors
+            && self.baseline_symbol_properties == other.baseline_symbol_properties
+            && self.baseline_symbol_key_order == other.baseline_symbol_key_order
+    }
+}
+
+impl<V: Eq> Eq for OrderedStringMap<V> {}
+
+impl<V> Default for OrderedStringMap<V> {
+    fn default() -> Self {
+        Self {
+            by_key: BTreeMap::new(),
+            exact_only_by_key: ExactPropertyMap::new(),
+            array_indices: BTreeMap::new(),
+            string_insertion_order: Vec::new(),
+            exact_string_insertion_order: None,
+            baseline_string_key_order: None,
+            baseline_exact_string_accessors: ExactPropertyMap::new(),
+            baseline_symbol_properties: BTreeMap::new(),
+            baseline_symbol_key_order: Vec::new(),
+        }
+    }
+}
+
+impl<V> OrderedStringMap<V> {
+    /// Create empty ordered storage.
+    pub fn new() -> Self {
+        Self::default()
     }
 
-    pub fn deserialize<'de, D: Deserializer<'de>>(
-        deserializer: D,
-    ) -> Result<BTreeMap<PropertyKey, PropertyDescriptor>, D::Error> {
-        let pairs: Vec<(PropertyKey, PropertyDescriptor)> = Vec::deserialize(deserializer)?;
-        Ok(pairs.into_iter().collect())
+    /// Return the number of well-formed entries in the compatibility view.
+    pub fn len(&self) -> usize {
+        self.array_indices.len() + self.string_insertion_order.len()
     }
+
+    /// Return whether the well-formed compatibility view has no entries.
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    /// Return a shared value for `key`.
+    pub fn get(&self, key: &str) -> Option<&V> {
+        self.by_key.get(key)
+    }
+
+    /// Return a mutable value for `key` without changing its position.
+    pub fn get_mut(&mut self, key: &str) -> Option<&mut V> {
+        self.by_key.get_mut(key)
+    }
+
+    /// Return whether `key` is present.
+    pub fn contains_key(&self, key: &str) -> bool {
+        self.by_key.contains_key(key)
+    }
+
+    /// Insert or replace a value.
+    ///
+    /// New canonical array indices join the numeric index set. New ordinary
+    /// strings append to creation order. Replacing a value moves neither.
+    pub fn insert(&mut self, key: String, value: V) -> Option<V> {
+        if !self.by_key.contains_key(&key) {
+            if let Some(index) = canonical_array_index(&key) {
+                self.array_indices.insert(index, key.clone());
+            } else {
+                self.string_insertion_order.push(key.clone());
+                let exact_key = JsString::from(&key);
+                if let Some(order) = self.exact_string_insertion_order.as_mut() {
+                    order.push(exact_key.clone());
+                }
+                if let Some(order) = self.baseline_string_key_order.as_mut()
+                    && !order.iter().any(|candidate| candidate == &exact_key)
+                {
+                    order.push(exact_key);
+                }
+            }
+        }
+        self.by_key.insert(key, value)
+    }
+
+    /// Return the number of exact data entries, including exact-only keys.
+    pub fn exact_len(&self) -> usize {
+        self.by_key.len() + self.exact_only_by_key.len()
+    }
+
+    /// Return whether the exact data carrier has no entries.
+    pub fn exact_is_empty(&self) -> bool {
+        self.by_key.is_empty() && self.exact_only_by_key.is_empty()
+    }
+
+    /// Return a shared value for an exact key.
+    pub fn get_exact(&self, key: &JsString) -> Option<&V> {
+        match key.as_str() {
+            Some(key) => self.by_key.get(key),
+            None => self.exact_only_by_key.get(key),
+        }
+    }
+
+    /// Return a mutable value for an exact key without changing its position.
+    pub fn get_exact_mut(&mut self, key: &JsString) -> Option<&mut V> {
+        match key.as_str() {
+            Some(key) => self.by_key.get_mut(key),
+            None => self.exact_only_by_key.get_mut(key),
+        }
+    }
+
+    /// Return whether an exact data key is present.
+    pub fn contains_exact_key(&self, key: &JsString) -> bool {
+        match key.as_str() {
+            Some(key) => self.by_key.contains_key(key),
+            None => self.exact_only_by_key.contains_key(key),
+        }
+    }
+
+    /// Insert or replace an exact data key without projecting its code units.
+    pub fn insert_exact(&mut self, key: JsString, value: V) -> Option<V> {
+        if let Some(key) = key.as_str() {
+            return self.insert(key.to_string(), value);
+        }
+        if !self.exact_only_by_key.contains_key(&key) {
+            let order = self.exact_string_insertion_order.get_or_insert_with(|| {
+                self.string_insertion_order
+                    .iter()
+                    .map(JsString::from)
+                    .collect()
+            });
+            order.push(key.clone());
+            match self.baseline_string_key_order.as_mut() {
+                Some(order) if !order.iter().any(|candidate| candidate == &key) => {
+                    order.push(key.clone());
+                }
+                None => {
+                    self.baseline_string_key_order = Some(order.clone());
+                }
+                Some(_) => {}
+            }
+        }
+        self.exact_only_by_key.insert(key, value)
+    }
+
+    /// Return all exact data keys in ES string-key order.
+    pub fn exact_keys(&self) -> Vec<JsString> {
+        let array_indices = self.array_indices.values().map(JsString::from);
+        let ordinary = self
+            .exact_string_insertion_order
+            .as_ref()
+            .map_or_else(
+                || {
+                    self.string_insertion_order
+                        .iter()
+                        .map(JsString::from)
+                        .collect::<Vec<_>>()
+                },
+                |order| order.clone(),
+            )
+            .into_iter()
+            .filter(|key| self.contains_exact_key(key));
+        array_indices.chain(ordinary).collect()
+    }
+
+    /// Return exact data entries in ES string-key order.
+    pub fn exact_entries(&self) -> Vec<(JsString, &V)> {
+        self.exact_keys()
+            .into_iter()
+            .filter_map(|key| self.get_exact(&key).map(|value| (key, value)))
+            .collect()
+    }
+
+    /// Return exact data values in ES string-key order.
+    pub fn exact_values(&self) -> Vec<&V> {
+        self.exact_entries()
+            .into_iter()
+            .map(|(_, value)| value)
+            .collect()
+    }
+
+    /// Borrow every data value without allocating or imposing observable
+    /// property order. Used by seed validation and other whole-carrier scans.
+    pub fn all_data_values(&self) -> impl Iterator<Item = &V> {
+        self.by_key.values().chain(self.exact_only_by_key.values())
+    }
+
+    /// Borrow well-formed data entries in deterministic storage order.
+    pub fn well_formed_data_entries(&self) -> impl Iterator<Item = (&String, &V)> {
+        self.by_key.iter()
+    }
+
+    /// Borrow exact-only data entries in deterministic storage order.
+    pub fn exact_only_data_entries(&self) -> impl Iterator<Item = (&JsString, &V)> {
+        self.exact_only_by_key.iter()
+    }
+
+    /// Drop exact-key ordering metadata in place after the final exact-only
+    /// data key is removed from a descriptor-as-value carrier.
+    ///
+    /// This allocation-free normalization is for consumers that store
+    /// accessors directly as map values. Symbol properties have their own
+    /// independent chronology, so they do not require the ordinary-string
+    /// sidecars to remain allocated after the final exact-only string leaves.
+    /// Exact string accessors still do require that chronology.
+    pub fn normalize_data_only_exact_sidecars(&mut self) -> bool {
+        if !self.exact_only_by_key.is_empty() || !self.baseline_exact_string_accessors.is_empty() {
+            return false;
+        }
+        self.exact_string_insertion_order = None;
+        self.baseline_string_key_order = None;
+        true
+    }
+
+    pub(crate) fn exact_string_insertion_order(&self) -> Option<&[JsString]> {
+        self.exact_string_insertion_order.as_deref()
+    }
+
+    /// Return the ordinary-string creation position for `key`.
+    ///
+    /// Canonical array indices have numeric rather than creation ordering, so
+    /// they return `None` even when present. This is crate-visible for exact
+    /// rollback of a temporarily removed baseline data property.
+    pub(crate) fn string_insertion_position(&self, key: &str) -> Option<usize> {
+        self.string_insertion_order
+            .iter()
+            .position(|candidate| candidate == key)
+    }
+
+    /// Return an exact ordinary data key's position in the lossless order.
+    pub(crate) fn exact_string_insertion_position(&self, key: &JsString) -> Option<usize> {
+        if exact_canonical_array_index(key).is_some() || !self.contains_exact_key(key) {
+            return None;
+        }
+        match &self.exact_string_insertion_order {
+            Some(order) => order.iter().position(|candidate| candidate == key),
+            None => key
+                .as_str()
+                .and_then(|key| self.string_insertion_position(key)),
+        }
+    }
+
+    /// Restore an exact ordinary data key at its prior lossless position.
+    pub(crate) fn insert_exact_at_string_position(
+        &mut self,
+        key: JsString,
+        value: V,
+        position: usize,
+    ) -> Option<V> {
+        if self.contains_exact_key(&key) || exact_canonical_array_index(&key).is_some() {
+            return self.insert_exact(key, value);
+        }
+        if self.exact_string_insertion_order.is_none()
+            && let Some(text) = key.as_str()
+        {
+            let position = position.min(self.string_insertion_order.len());
+            self.string_insertion_order
+                .insert(position, text.to_string());
+            return self.by_key.insert(text.to_string(), value);
+        }
+        let order = self.exact_string_insertion_order.get_or_insert_with(|| {
+            self.string_insertion_order
+                .iter()
+                .map(JsString::from)
+                .collect()
+        });
+        let position = position.min(order.len());
+        order.insert(position, key.clone());
+        if let Some(text) = key.as_str() {
+            let legacy_position = order[..position]
+                .iter()
+                .filter(|candidate| candidate.as_str().is_some())
+                .count();
+            self.string_insertion_order
+                .insert(legacy_position, text.to_string());
+            self.by_key.insert(text.to_string(), value)
+        } else {
+            self.exact_only_by_key.insert(key, value)
+        }
+    }
+
+    /// Remove `key` and its ordering entry.
+    pub fn remove(&mut self, key: &str) -> Option<V> {
+        self.remove_internal(key, true)
+    }
+
+    /// Remove an exact data key and its ordering entry.
+    pub fn remove_exact(&mut self, key: &JsString) -> Option<V> {
+        self.remove_exact_internal(key, true)
+    }
+
+    /// Remove exact data while retaining the shared data/accessor chronology.
+    pub(crate) fn remove_exact_preserving_baseline_order(&mut self, key: &JsString) -> Option<V> {
+        self.remove_exact_internal(key, false)
+    }
+
+    fn remove_internal(&mut self, key: &str, remove_from_baseline_order: bool) -> Option<V> {
+        let removed = self.by_key.remove(key);
+        if removed.is_some() {
+            if let Some(index) = canonical_array_index(key) {
+                self.array_indices.remove(&index);
+            } else {
+                self.string_insertion_order
+                    .retain(|candidate| candidate != key);
+                if let Some(order) = self.exact_string_insertion_order.as_mut() {
+                    let exact_key = JsString::from(key);
+                    order.retain(|candidate| candidate != &exact_key);
+                }
+                if remove_from_baseline_order
+                    && let Some(order) = self.baseline_string_key_order.as_mut()
+                {
+                    let exact_key = JsString::from(key);
+                    order.retain(|candidate| candidate != &exact_key);
+                }
+            }
+        }
+        removed
+    }
+
+    fn remove_exact_internal(
+        &mut self,
+        key: &JsString,
+        remove_from_baseline_order: bool,
+    ) -> Option<V> {
+        if let Some(key) = key.as_str() {
+            return self.remove_internal(key, remove_from_baseline_order);
+        }
+        let removed = self.exact_only_by_key.remove(key);
+        if removed.is_some() {
+            if let Some(order) = self.exact_string_insertion_order.as_mut() {
+                order.retain(|candidate| candidate != key);
+            }
+            if remove_from_baseline_order
+                && let Some(order) = self.baseline_string_key_order.as_mut()
+            {
+                order.retain(|candidate| candidate != key);
+            }
+            if self.exact_only_by_key.is_empty() {
+                self.exact_string_insertion_order = None;
+            }
+        }
+        removed
+    }
+
+    /// Remove all data entries and their ordering state.
+    pub fn clear(&mut self) {
+        let removed_keys = self.exact_keys().into_iter().collect::<BTreeSet<_>>();
+        self.by_key.clear();
+        self.exact_only_by_key = ExactPropertyMap::new();
+        self.array_indices.clear();
+        self.string_insertion_order.clear();
+        self.exact_string_insertion_order = None;
+        if let Some(order) = self.baseline_string_key_order.as_mut() {
+            order.retain(|key| !removed_keys.contains(key));
+        }
+        self.baseline_symbol_properties.clear();
+        self.baseline_symbol_key_order.clear();
+    }
+
+    /// Retain only entries for which `keep` returns true.
+    pub fn retain<F>(&mut self, mut keep: F)
+    where
+        F: FnMut(&String, &mut V) -> bool,
+    {
+        let old_keys = self.by_key.keys().cloned().collect::<BTreeSet<_>>();
+        self.by_key.retain(|key, value| keep(key, value));
+        let by_key = &self.by_key;
+        self.array_indices.retain(|_, key| by_key.contains_key(key));
+        self.string_insertion_order
+            .retain(|key| by_key.contains_key(key));
+        if let Some(order) = self.exact_string_insertion_order.as_mut() {
+            order.retain(|key| {
+                key.as_str().map_or_else(
+                    || self.exact_only_by_key.contains_key(key),
+                    |key| by_key.contains_key(key),
+                )
+            });
+        }
+        if let Some(order) = self.baseline_string_key_order.as_mut() {
+            order.retain(|key| {
+                key.as_str()
+                    .is_none_or(|key| !old_keys.contains(key) || by_key.contains_key(key))
+            });
+        }
+    }
+
+    /// Iterate keys in ES own-property string-key order.
+    pub fn keys(&self) -> impl Iterator<Item = &String> {
+        self.array_indices
+            .values()
+            .chain(self.string_insertion_order.iter())
+    }
+
+    /// Iterate values in ES own-property string-key order.
+    pub fn values(&self) -> impl Iterator<Item = &V> {
+        self.iter().map(|(_, value)| value)
+    }
+
+    /// Iterate entries in ES own-property string-key order.
+    pub fn iter(&self) -> OrderedStringMapIter<'_, V> {
+        OrderedStringMapIter {
+            keys: self
+                .array_indices
+                .values()
+                .chain(self.string_insertion_order.iter()),
+            by_key: &self.by_key,
+        }
+    }
+
+    pub(crate) fn baseline_string_key_order(&self) -> Option<&[JsString]> {
+        self.baseline_string_key_order.as_deref()
+    }
+
+    pub(crate) fn baseline_string_key_order_mut(&mut self) -> Option<&mut Vec<JsString>> {
+        self.baseline_string_key_order.as_mut()
+    }
+
+    pub(crate) fn set_baseline_string_key_order(&mut self, order: Option<Vec<JsString>>) {
+        self.baseline_string_key_order = order;
+    }
+
+    pub(crate) fn baseline_exact_string_accessor(
+        &self,
+        key: &JsString,
+    ) -> Option<&BaselineStringAccessor<V>> {
+        self.baseline_exact_string_accessors.get(key)
+    }
+
+    pub(crate) fn baseline_exact_string_accessors(
+        &self,
+    ) -> impl Iterator<Item = (&JsString, &BaselineStringAccessor<V>)> {
+        self.baseline_exact_string_accessors.iter()
+    }
+
+    pub(crate) fn insert_baseline_exact_string_accessor(
+        &mut self,
+        key: JsString,
+        accessor: BaselineStringAccessor<V>,
+    ) -> Option<BaselineStringAccessor<V>> {
+        assert!(
+            !key.is_well_formed(),
+            "exact-only accessor sidecar requires a non-well-formed key"
+        );
+        self.baseline_exact_string_accessors.insert(key, accessor)
+    }
+
+    pub(crate) fn remove_baseline_exact_string_accessor(
+        &mut self,
+        key: &JsString,
+    ) -> Option<BaselineStringAccessor<V>> {
+        self.baseline_exact_string_accessors.remove(key)
+    }
+
+    /// Return one executable-baseline Symbol property by exact identity.
+    #[doc(hidden)]
+    pub fn baseline_symbol_property(&self, symbol: SymbolId) -> Option<&BaselineSymbolProperty<V>> {
+        self.baseline_symbol_properties.get(&symbol)
+    }
+
+    /// Iterate executable-baseline Symbol properties in creation order.
+    #[doc(hidden)]
+    pub fn baseline_symbol_properties(
+        &self,
+    ) -> impl Iterator<Item = (SymbolId, &BaselineSymbolProperty<V>)> {
+        self.baseline_symbol_key_order.iter().filter_map(|symbol| {
+            self.baseline_symbol_properties
+                .get(symbol)
+                .map(|property| (*symbol, property))
+        })
+    }
+
+    /// Return executable-baseline Symbol identities in creation order.
+    #[doc(hidden)]
+    pub fn baseline_symbol_key_order(&self) -> &[SymbolId] {
+        &self.baseline_symbol_key_order
+    }
+
+    /// Insert or replace a typed Symbol property. Replacing an existing
+    /// descriptor retains its creation position; deleting and re-inserting
+    /// appends it.
+    #[doc(hidden)]
+    pub fn insert_baseline_symbol_property(
+        &mut self,
+        symbol: SymbolId,
+        property: BaselineSymbolProperty<V>,
+    ) -> Option<BaselineSymbolProperty<V>> {
+        if !self.baseline_symbol_properties.contains_key(&symbol) {
+            self.baseline_symbol_key_order.push(symbol);
+        }
+        self.baseline_symbol_properties.insert(symbol, property)
+    }
+
+    /// Remove one executable-baseline Symbol property by exact identity.
+    #[doc(hidden)]
+    pub fn remove_baseline_symbol_property(
+        &mut self,
+        symbol: SymbolId,
+    ) -> Option<BaselineSymbolProperty<V>> {
+        let removed = self.baseline_symbol_properties.remove(&symbol);
+        if removed.is_some() {
+            self.baseline_symbol_key_order
+                .retain(|candidate| *candidate != symbol);
+        }
+        removed
+    }
+
+    /// Restore a removed Symbol property at its prior creation-order position.
+    #[doc(hidden)]
+    pub fn restore_baseline_symbol_property(
+        &mut self,
+        symbol: SymbolId,
+        property: BaselineSymbolProperty<V>,
+        position: usize,
+    ) {
+        self.baseline_symbol_properties.insert(symbol, property);
+        self.baseline_symbol_key_order
+            .retain(|candidate| *candidate != symbol);
+        let position = position.min(self.baseline_symbol_key_order.len());
+        self.baseline_symbol_key_order.insert(position, symbol);
+    }
+}
+
+impl<V> From<BTreeMap<String, V>> for OrderedStringMap<V> {
+    fn from(by_key: BTreeMap<String, V>) -> Self {
+        by_key.into_iter().collect()
+    }
+}
+
+impl<V> FromIterator<(String, V)> for OrderedStringMap<V> {
+    fn from_iter<T: IntoIterator<Item = (String, V)>>(iter: T) -> Self {
+        let mut map = Self::new();
+        for (key, value) in iter {
+            map.insert(key, value);
+        }
+        map
+    }
+}
+
+impl<V: Serialize> Serialize for OrderedStringMap<V> {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        if self.exact_only_by_key.is_empty() {
+            use serde::ser::SerializeMap as _;
+
+            let mut map = serializer.serialize_map(Some(self.len()))?;
+            for (key, value) in self {
+                map.serialize_entry(key, value)?;
+            }
+            map.end()
+        } else {
+            use serde::ser::SerializeSeq as _;
+
+            let entries = self.exact_entries();
+            let mut pairs = serializer.serialize_seq(Some(entries.len()))?;
+            for pair in entries {
+                pairs.serialize_element(&pair)?;
+            }
+            pairs.end()
+        }
+    }
+}
+
+impl<'de, V: Deserialize<'de>> Deserialize<'de> for OrderedStringMap<V> {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct OrderedStringMapVisitor<V>(std::marker::PhantomData<fn() -> V>);
+
+        impl<'de, V: Deserialize<'de>> serde::de::Visitor<'de> for OrderedStringMapVisitor<V> {
+            type Value = OrderedStringMap<V>;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+                formatter.write_str("a string-keyed map or an exact JsString/value pair sequence")
+            }
+
+            fn visit_map<A: serde::de::MapAccess<'de>>(
+                self,
+                mut access: A,
+            ) -> Result<Self::Value, A::Error> {
+                let mut map = OrderedStringMap::new();
+                while let Some((key, value)) = access.next_entry::<String, V>()? {
+                    if map.contains_key(&key) {
+                        return Err(serde::de::Error::custom(
+                            "duplicate property key in ordered string map",
+                        ));
+                    }
+                    map.insert(key, value);
+                }
+                Ok(map)
+            }
+
+            fn visit_seq<A: serde::de::SeqAccess<'de>>(
+                self,
+                mut sequence: A,
+            ) -> Result<Self::Value, A::Error> {
+                let mut map = OrderedStringMap::new();
+                while let Some((key, value)) = sequence.next_element::<(JsString, V)>()? {
+                    if map.contains_exact_key(&key) {
+                        return Err(serde::de::Error::custom(
+                            "duplicate property key in ordered string map",
+                        ));
+                    }
+                    map.insert_exact(key, value);
+                }
+                Ok(map)
+            }
+        }
+
+        deserializer.deserialize_any(OrderedStringMapVisitor(std::marker::PhantomData))
+    }
+}
+
+/// Iterator over [`OrderedStringMap`] entries.
+pub struct OrderedStringMapIter<'a, V> {
+    keys: std::iter::Chain<
+        std::collections::btree_map::Values<'a, u32, String>,
+        std::slice::Iter<'a, String>,
+    >,
+    by_key: &'a BTreeMap<String, V>,
+}
+
+impl<'a, V> Iterator for OrderedStringMapIter<'a, V> {
+    type Item = (&'a String, &'a V);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        for key in self.keys.by_ref() {
+            if let Some(value) = self.by_key.get(key) {
+                return Some((key, value));
+            }
+        }
+        None
+    }
+}
+
+impl<'a, V> IntoIterator for &'a OrderedStringMap<V> {
+    type Item = (&'a String, &'a V);
+    type IntoIter = OrderedStringMapIter<'a, V>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.iter()
+    }
+}
+
+/// Owning iterator over [`OrderedStringMap`] entries.
+pub struct OrderedStringMapIntoIter<V> {
+    keys: std::vec::IntoIter<String>,
+    by_key: BTreeMap<String, V>,
+}
+
+impl<V> Iterator for OrderedStringMapIntoIter<V> {
+    type Item = (String, V);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        for key in self.keys.by_ref() {
+            if let Some(value) = self.by_key.remove(&key) {
+                return Some((key, value));
+            }
+        }
+        None
+    }
+}
+
+impl<V> IntoIterator for OrderedStringMap<V> {
+    type Item = (String, V);
+    type IntoIter = OrderedStringMapIntoIter<V>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        let keys = self
+            .array_indices
+            .into_values()
+            .chain(self.string_insertion_order)
+            .collect::<Vec<_>>()
+            .into_iter();
+        OrderedStringMapIntoIter {
+            keys,
+            by_key: self.by_key,
+        }
+    }
+}
+
+pub(crate) fn canonical_array_index(key: &str) -> Option<u32> {
+    let index = key.parse::<u32>().ok()?;
+    (index < u32::MAX && index.to_string() == key).then_some(index)
+}
+
+// ---------------------------------------------------------------------------
+// ExactOrderedStringMap — exact UTF-16 string-key property carrier
+// ---------------------------------------------------------------------------
+
+/// An exact UTF-16 string-keyed map with ES own-property iteration order.
+///
+/// Lookup delegates to [`ExactPropertyMap`], so keys that differ only after a
+/// lossy UTF-8 projection (for example, a lone surrogate and U+FFFD) remain
+/// distinct. Observable iteration follows ECMAScript `[[OwnPropertyKeys]]`
+/// string-key order: canonical array indices (`0` through `4294967294`)
+/// numerically first, followed by all other strings in property-creation
+/// order. Updating an existing key retains its position; deleting and
+/// re-inserting a non-index key appends it.
+///
+/// Serde preserves the historical [`OrderedStringMap`] representation when
+/// every key is well formed. If any key contains a lone surrogate, the whole
+/// map is encoded as an ES-ordered sequence of `[JsString, value]` pairs so no
+/// key passes through a lossy projection. Deserialization accepts both shapes
+/// and rejects exact duplicates, including aliases that normalize to the same
+/// canonical [`JsString`]. The dual-shape decoder requires a self-describing
+/// serde format, matching the JSON replay/snapshot boundary this carrier is
+/// designed for.
+#[derive(Debug, Clone)]
+pub struct ExactOrderedStringMap<V> {
+    by_key: ExactPropertyMap<V>,
+    array_indices: BTreeMap<u32, JsString>,
+    string_insertion_order: Vec<JsString>,
+}
+
+impl<V: PartialEq> PartialEq for ExactOrderedStringMap<V> {
+    fn eq(&self, other: &Self) -> bool {
+        self.by_key == other.by_key
+            && self.array_indices == other.array_indices
+            && self.string_insertion_order == other.string_insertion_order
+    }
+}
+
+impl<V: Eq> Eq for ExactOrderedStringMap<V> {}
+
+impl<V> Default for ExactOrderedStringMap<V> {
+    fn default() -> Self {
+        Self {
+            by_key: ExactPropertyMap::new(),
+            array_indices: BTreeMap::new(),
+            string_insertion_order: Vec::new(),
+        }
+    }
+}
+
+impl<V> ExactOrderedStringMap<V> {
+    /// Create empty exact ordered storage.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Return the number of entries.
+    pub fn len(&self) -> usize {
+        self.by_key.len()
+    }
+
+    /// Return whether the map has no entries.
+    pub fn is_empty(&self) -> bool {
+        self.by_key.is_empty()
+    }
+
+    /// Return a shared value for the exact `key`.
+    pub fn get(&self, key: &JsString) -> Option<&V> {
+        self.by_key.get(key)
+    }
+
+    /// Return a mutable value for the exact `key` without changing its position.
+    pub fn get_mut(&mut self, key: &JsString) -> Option<&mut V> {
+        self.by_key.get_mut(key)
+    }
+
+    /// Return whether the exact `key` is present.
+    pub fn contains_key(&self, key: &JsString) -> bool {
+        self.by_key.contains_key(key)
+    }
+
+    /// Insert or replace an exact key/value pair.
+    ///
+    /// New canonical array indices join the numeric index set. New ordinary
+    /// strings append to creation order. Replacing a value moves neither.
+    pub fn insert(&mut self, key: JsString, value: V) -> Option<V> {
+        if !self.by_key.contains_key(&key) {
+            if let Some(index) = exact_canonical_array_index(&key) {
+                self.array_indices.insert(index, key.clone());
+            } else {
+                self.string_insertion_order.push(key.clone());
+            }
+        }
+        self.by_key.insert(key, value)
+    }
+
+    /// Remove an exact key and its ordering entry.
+    pub fn remove(&mut self, key: &JsString) -> Option<V> {
+        let removed = self.by_key.remove(key);
+        if removed.is_some() {
+            if let Some(index) = exact_canonical_array_index(key) {
+                self.array_indices.remove(&index);
+            } else {
+                self.string_insertion_order
+                    .retain(|candidate| candidate != key);
+            }
+        }
+        removed
+    }
+
+    /// Remove all entries and their ordering state.
+    pub fn clear(&mut self) {
+        self.by_key = ExactPropertyMap::new();
+        self.array_indices.clear();
+        self.string_insertion_order.clear();
+    }
+
+    /// Retain only entries for which `keep` returns true.
+    ///
+    /// Callback visitation order is unspecified. Retained entries keep their
+    /// prior observable ES iteration positions.
+    pub fn retain<F>(&mut self, mut keep: F)
+    where
+        F: FnMut(&JsString, &mut V) -> bool,
+    {
+        let keys = self.by_key.keys().cloned().collect::<Vec<_>>();
+        for key in keys {
+            let should_keep = {
+                let value = self
+                    .by_key
+                    .get_mut(&key)
+                    .expect("key snapshot must remain present until visited");
+                keep(&key, value)
+            };
+            if !should_keep {
+                self.remove(&key);
+            }
+        }
+    }
+
+    /// Iterate exact keys in ES own-property string-key order.
+    pub fn keys(&self) -> impl Iterator<Item = &JsString> {
+        self.array_indices
+            .values()
+            .chain(self.string_insertion_order.iter())
+    }
+
+    /// Iterate values in ES own-property string-key order.
+    pub fn values(&self) -> impl Iterator<Item = &V> {
+        self.iter().map(|(_, value)| value)
+    }
+
+    /// Iterate entries in ES own-property string-key order.
+    pub fn iter(&self) -> ExactOrderedStringMapIter<'_, V> {
+        ExactOrderedStringMapIter {
+            keys: self
+                .array_indices
+                .values()
+                .chain(self.string_insertion_order.iter()),
+            by_key: &self.by_key,
+        }
+    }
+}
+
+impl<V> From<BTreeMap<String, V>> for ExactOrderedStringMap<V> {
+    fn from(by_key: BTreeMap<String, V>) -> Self {
+        by_key
+            .into_iter()
+            .map(|(key, value)| (JsString::from(key), value))
+            .collect()
+    }
+}
+
+impl<V> FromIterator<(JsString, V)> for ExactOrderedStringMap<V> {
+    fn from_iter<T: IntoIterator<Item = (JsString, V)>>(iter: T) -> Self {
+        let mut map = Self::new();
+        for (key, value) in iter {
+            map.insert(key, value);
+        }
+        map
+    }
+}
+
+impl<V: Serialize> Serialize for ExactOrderedStringMap<V> {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        if self.by_key.keys().all(JsString::is_well_formed) {
+            use serde::ser::{Error as _, SerializeMap as _};
+
+            let mut map = serializer.serialize_map(Some(self.len()))?;
+            for (key, value) in self {
+                let key = key.as_str().ok_or_else(|| {
+                    S::Error::custom("well-formed property key has no exact str view")
+                })?;
+                map.serialize_entry(key, value)?;
+            }
+            map.end()
+        } else {
+            use serde::ser::SerializeSeq as _;
+
+            let mut pairs = serializer.serialize_seq(Some(self.len()))?;
+            for pair in self {
+                pairs.serialize_element(&pair)?;
+            }
+            pairs.end()
+        }
+    }
+}
+
+impl<'de, V: Deserialize<'de>> Deserialize<'de> for ExactOrderedStringMap<V> {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct ExactOrderedStringMapVisitor<V>(std::marker::PhantomData<fn() -> V>);
+
+        impl<'de, V: Deserialize<'de>> serde::de::Visitor<'de> for ExactOrderedStringMapVisitor<V> {
+            type Value = ExactOrderedStringMap<V>;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+                formatter.write_str("a string-keyed map or an exact JsString/value pair sequence")
+            }
+
+            fn visit_map<A: serde::de::MapAccess<'de>>(
+                self,
+                mut access: A,
+            ) -> Result<Self::Value, A::Error> {
+                let mut map = ExactOrderedStringMap::new();
+                while let Some((key, value)) = access.next_entry::<String, V>()? {
+                    let key = JsString::from(key);
+                    if map.contains_key(&key) {
+                        return Err(serde::de::Error::custom(
+                            "duplicate property key in exact ordered string map",
+                        ));
+                    }
+                    map.insert(key, value);
+                }
+                Ok(map)
+            }
+
+            fn visit_seq<A: serde::de::SeqAccess<'de>>(
+                self,
+                mut sequence: A,
+            ) -> Result<Self::Value, A::Error> {
+                let mut map = ExactOrderedStringMap::new();
+                while let Some((key, value)) = sequence.next_element::<(JsString, V)>()? {
+                    if map.contains_key(&key) {
+                        return Err(serde::de::Error::custom(
+                            "duplicate property key in exact ordered string map",
+                        ));
+                    }
+                    map.insert(key, value);
+                }
+                Ok(map)
+            }
+        }
+
+        deserializer.deserialize_any(ExactOrderedStringMapVisitor::<V>(std::marker::PhantomData))
+    }
+}
+
+/// Iterator over [`ExactOrderedStringMap`] entries.
+pub struct ExactOrderedStringMapIter<'a, V> {
+    keys: std::iter::Chain<
+        std::collections::btree_map::Values<'a, u32, JsString>,
+        std::slice::Iter<'a, JsString>,
+    >,
+    by_key: &'a ExactPropertyMap<V>,
+}
+
+impl<'a, V> Iterator for ExactOrderedStringMapIter<'a, V> {
+    type Item = (&'a JsString, &'a V);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        for key in self.keys.by_ref() {
+            if let Some(value) = self.by_key.get(key) {
+                return Some((key, value));
+            }
+        }
+        None
+    }
+}
+
+impl<'a, V> IntoIterator for &'a ExactOrderedStringMap<V> {
+    type Item = (&'a JsString, &'a V);
+    type IntoIter = ExactOrderedStringMapIter<'a, V>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.iter()
+    }
+}
+
+/// Owning iterator over [`ExactOrderedStringMap`] entries.
+pub struct ExactOrderedStringMapIntoIter<V> {
+    keys: std::vec::IntoIter<JsString>,
+    by_key: ExactPropertyMap<V>,
+}
+
+impl<V> Iterator for ExactOrderedStringMapIntoIter<V> {
+    type Item = (JsString, V);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        for key in self.keys.by_ref() {
+            if let Some(value) = self.by_key.remove(&key) {
+                return Some((key, value));
+            }
+        }
+        None
+    }
+}
+
+impl<V> IntoIterator for ExactOrderedStringMap<V> {
+    type Item = (JsString, V);
+    type IntoIter = ExactOrderedStringMapIntoIter<V>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        let keys = self
+            .array_indices
+            .into_values()
+            .chain(self.string_insertion_order)
+            .collect::<Vec<_>>()
+            .into_iter();
+        ExactOrderedStringMapIntoIter {
+            keys,
+            by_key: self.by_key,
+        }
+    }
+}
+
+fn exact_canonical_array_index(key: &JsString) -> Option<u32> {
+    key.as_str().and_then(canonical_array_index)
 }
 
 // ---------------------------------------------------------------------------
@@ -79,6 +1138,176 @@ impl From<&str> for PropertyKey {
 impl From<String> for PropertyKey {
     fn from(s: String) -> Self {
         Self::String(s)
+    }
+}
+
+/// Deterministic property storage with logarithmic lookup and stable creation
+/// order.
+///
+/// The serialized representation intentionally remains the historical
+/// sequence of `[PropertyKey, PropertyDescriptor]` pairs. Legacy payloads are
+/// therefore still readable; their encoded pair order becomes the recovered
+/// insertion order. Updating an existing key keeps its position, while
+/// deleting and later re-inserting it appends it at the end.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct OrderedProperties {
+    by_key: BTreeMap<PropertyKey, PropertyDescriptor>,
+    insertion_order: Vec<PropertyKey>,
+}
+
+impl OrderedProperties {
+    /// Create empty property storage.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Return the number of stored properties.
+    pub fn len(&self) -> usize {
+        self.by_key.len()
+    }
+
+    /// Return whether no properties are stored.
+    pub fn is_empty(&self) -> bool {
+        self.by_key.is_empty()
+    }
+
+    /// Return a shared descriptor for `key`.
+    pub fn get(&self, key: &PropertyKey) -> Option<&PropertyDescriptor> {
+        self.by_key.get(key)
+    }
+
+    /// Return a mutable descriptor for `key` without changing its position.
+    pub fn get_mut(&mut self, key: &PropertyKey) -> Option<&mut PropertyDescriptor> {
+        self.by_key.get_mut(key)
+    }
+
+    /// Return whether `key` is present.
+    pub fn contains_key(&self, key: &PropertyKey) -> bool {
+        self.by_key.contains_key(key)
+    }
+
+    /// Insert or replace a descriptor.
+    ///
+    /// A new key is appended to the observable creation order. Replacing an
+    /// existing key leaves that order unchanged.
+    pub fn insert(
+        &mut self,
+        key: PropertyKey,
+        descriptor: PropertyDescriptor,
+    ) -> Option<PropertyDescriptor> {
+        if !self.by_key.contains_key(&key) {
+            self.insertion_order.push(key.clone());
+        }
+        self.by_key.insert(key, descriptor)
+    }
+
+    /// Remove `key` and its creation-order entry.
+    pub fn remove(&mut self, key: &PropertyKey) -> Option<PropertyDescriptor> {
+        let removed = self.by_key.remove(key);
+        if removed.is_some() {
+            self.insertion_order.retain(|candidate| candidate != key);
+        }
+        removed
+    }
+
+    /// Iterate keys in property creation order.
+    pub fn keys(&self) -> impl Iterator<Item = &PropertyKey> {
+        self.insertion_order.iter()
+    }
+
+    /// Iterate descriptors in property creation order.
+    pub fn values(&self) -> impl Iterator<Item = &PropertyDescriptor> {
+        self.iter().map(|(_, descriptor)| descriptor)
+    }
+
+    /// Iterate mutable descriptors in deterministic key order.
+    ///
+    /// Callers use this for order-insensitive bulk descriptor updates such as
+    /// freeze and seal.
+    pub fn values_mut(
+        &mut self,
+    ) -> std::collections::btree_map::ValuesMut<'_, PropertyKey, PropertyDescriptor> {
+        self.by_key.values_mut()
+    }
+
+    /// Iterate key/descriptor pairs in property creation order.
+    pub fn iter(&self) -> OrderedPropertiesIter<'_> {
+        OrderedPropertiesIter {
+            keys: self.insertion_order.iter(),
+            by_key: &self.by_key,
+        }
+    }
+}
+
+impl From<BTreeMap<PropertyKey, PropertyDescriptor>> for OrderedProperties {
+    fn from(by_key: BTreeMap<PropertyKey, PropertyDescriptor>) -> Self {
+        let insertion_order = by_key.keys().cloned().collect();
+        Self {
+            by_key,
+            insertion_order,
+        }
+    }
+}
+
+impl FromIterator<(PropertyKey, PropertyDescriptor)> for OrderedProperties {
+    fn from_iter<T: IntoIterator<Item = (PropertyKey, PropertyDescriptor)>>(iter: T) -> Self {
+        let mut properties = Self::new();
+        for (key, descriptor) in iter {
+            properties.insert(key, descriptor);
+        }
+        properties
+    }
+}
+
+impl Serialize for OrderedProperties {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        self.iter().collect::<Vec<_>>().serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for OrderedProperties {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        use serde::de::Error as _;
+
+        let pairs = Vec::<(PropertyKey, PropertyDescriptor)>::deserialize(deserializer)?;
+        let mut properties = Self::new();
+        for (key, descriptor) in pairs {
+            if properties.contains_key(&key) {
+                return Err(D::Error::custom(
+                    "duplicate property key in ordered property sequence",
+                ));
+            }
+            properties.insert(key, descriptor);
+        }
+        Ok(properties)
+    }
+}
+
+/// Iterator over ordered property entries.
+pub struct OrderedPropertiesIter<'a> {
+    keys: std::slice::Iter<'a, PropertyKey>,
+    by_key: &'a BTreeMap<PropertyKey, PropertyDescriptor>,
+}
+
+impl<'a> Iterator for OrderedPropertiesIter<'a> {
+    type Item = (&'a PropertyKey, &'a PropertyDescriptor);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        for key in self.keys.by_ref() {
+            if let Some(descriptor) = self.by_key.get(key) {
+                return Some((key, descriptor));
+            }
+        }
+        None
+    }
+}
+
+impl<'a> IntoIterator for &'a OrderedProperties {
+    type Item = (&'a PropertyKey, &'a PropertyDescriptor);
+    type IntoIter = OrderedPropertiesIter<'a>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.iter()
     }
 }
 
@@ -161,13 +1390,22 @@ pub enum JsValue {
     /// IEEE 754 floating-point, stored as bits for Eq/Ord derivation.
     /// Use `f64::from_bits()` to recover the value.
     Float(u64),
-    Str(String),
+    /// String. [`JsString`]-backed for lone-surrogate exactness (bd-2vzgi);
+    /// property keys intentionally remain `String` (lossy projection), the
+    /// same documented boundary as the engine.
+    Str(JsString),
     Symbol(SymbolId),
     Object(ObjectHandle),
     Function(u32),
 }
 
 impl JsValue {
+    /// Convenience constructor funneling any string-ish payload into the
+    /// canonical [`JsString`] backing (mirrors `Value::str`).
+    pub fn str(value: impl Into<JsString>) -> Self {
+        Self::Str(value.into())
+    }
+
     pub fn is_object(&self) -> bool {
         matches!(self, Self::Object(_))
     }
@@ -417,9 +1655,9 @@ pub struct OrdinaryObject {
     pub prototype: Option<ObjectHandle>,
     /// `[[Extensible]]` internal slot.
     pub extensible: bool,
-    /// Own properties with descriptors, keyed by PropertyKey.
-    #[serde(with = "properties_as_seq")]
-    pub properties: BTreeMap<PropertyKey, PropertyDescriptor>,
+    /// Own properties with descriptors, keyed by PropertyKey and retaining
+    /// ECMAScript-observable creation order.
+    pub properties: OrderedProperties,
     /// `[[Class]]` tag for intrinsic identification.
     pub class_tag: Option<String>,
     /// Is this object callable (i.e. a function)?
@@ -433,7 +1671,7 @@ impl Default for OrdinaryObject {
         Self {
             prototype: None,
             extensible: true,
-            properties: BTreeMap::new(),
+            properties: OrderedProperties::new(),
             class_tag: None,
             callable: false,
             constructable: false,
@@ -566,8 +1804,8 @@ impl OrdinaryObject {
     // -- [[OwnPropertyKeys]] (§9.1.11) -------------------------------------
 
     /// `[[OwnPropertyKeys]]()` — returns own keys in ES2020 order:
-    /// integer indices (sorted numerically), then string keys (insertion order
-    /// approximated by BTreeMap order), then symbol keys.
+    /// integer indices (sorted numerically), then string keys (in insertion
+    /// order), then symbol keys (in insertion order).
     pub fn own_property_keys(&self) -> Vec<PropertyKey> {
         let mut int_keys: Vec<(u64, PropertyKey)> = Vec::new();
         let mut str_keys: Vec<PropertyKey> = Vec::new();
@@ -578,6 +1816,7 @@ impl OrdinaryObject {
                 PropertyKey::String(s) => {
                     if let Ok(n) = s.parse::<u32>()
                         && n < u32::MAX
+                        && n.to_string() == *s
                     {
                         int_keys.push((u64::from(n), key.clone()));
                     } else {
@@ -2213,7 +3452,487 @@ mod tests {
     }
 
     fn str_val(s: &str) -> JsValue {
-        JsValue::Str(s.to_string())
+        JsValue::str(s)
+    }
+
+    #[test]
+    fn ordered_string_map_uses_es_string_key_order() {
+        let mut map = OrderedStringMap::new();
+        for (key, value) in [
+            ("b", 1),
+            ("10", 2),
+            ("2", 3),
+            ("01", 4),
+            ("4294967295", 5),
+            ("0", 6),
+            ("a", 7),
+            ("4294967294", 8),
+        ] {
+            map.insert(key.to_string(), value);
+        }
+
+        assert_eq!(
+            map.keys().map(String::as_str).collect::<Vec<_>>(),
+            vec!["0", "2", "10", "4294967294", "b", "01", "4294967295", "a"]
+        );
+        assert_eq!(
+            map.values().copied().collect::<Vec<_>>(),
+            vec![6, 3, 2, 8, 1, 4, 5, 7]
+        );
+    }
+
+    #[test]
+    fn ordered_string_map_updates_in_place_and_readds_at_end() {
+        let mut map = OrderedStringMap::new();
+        map.insert("b".to_string(), 1);
+        map.insert("a".to_string(), 2);
+        assert_eq!(map.insert("b".to_string(), 3), Some(1));
+        assert_eq!(
+            map.iter()
+                .map(|(key, value)| (key.as_str(), *value))
+                .collect::<Vec<_>>(),
+            vec![("b", 3), ("a", 2)]
+        );
+
+        assert_eq!(map.remove("b"), Some(3));
+        map.insert("b".to_string(), 4);
+        assert_eq!(
+            map.keys().map(String::as_str).collect::<Vec<_>>(),
+            vec!["a", "b"]
+        );
+    }
+
+    #[test]
+    fn ordered_string_map_serde_stays_map_shaped_and_recovers_order() {
+        const LEGACY_MAP: &str = r#"{"b":1,"a":2,"2":3,"1":4}"#;
+        let map: OrderedStringMap<i32> =
+            serde_json::from_str(LEGACY_MAP).expect("legacy map should deserialize");
+
+        assert_eq!(
+            map.keys().map(String::as_str).collect::<Vec<_>>(),
+            vec!["1", "2", "b", "a"]
+        );
+        assert_eq!(
+            serde_json::to_string(&map).expect("ordered map should serialize"),
+            r#"{"1":4,"2":3,"b":1,"a":2}"#
+        );
+    }
+
+    #[test]
+    fn ordered_string_map_exact_sidecar_preserves_legacy_view_bd_b12xs_4() {
+        let d800 = JsString::from_code_units(&[0xD800]);
+        let d801 = JsString::from_code_units(&[0xD801]);
+        let d802 = JsString::from_code_units(&[0xD802]);
+        let replacement = JsString::from("\u{FFFD}");
+        let mut exact_only = OrderedStringMap::new();
+        exact_only.insert_exact(d800.clone(), 8);
+        assert_eq!(exact_only.len(), 0);
+        assert!(exact_only.is_empty());
+        assert_eq!(exact_only.values().count(), 0);
+        assert_eq!(exact_only.exact_len(), 1);
+        assert!(!exact_only.exact_is_empty());
+
+        let mut map = OrderedStringMap::new();
+        map.insert("2".to_string(), 2);
+        map.insert_exact(d800.clone(), 8);
+        map.insert(replacement.to_string(), 0xFFFD);
+        map.insert_exact(d801.clone(), 9);
+        map.insert("a".to_string(), 1);
+
+        assert_eq!(map.len(), 3);
+        assert!(!map.is_empty());
+        assert_eq!(map.get("\u{FFFD}"), Some(&0xFFFD));
+        assert_eq!(map.get_exact(&d800), Some(&8));
+        assert_eq!(map.get_exact(&d801), Some(&9));
+        assert_eq!(map.get_exact(&replacement), Some(&0xFFFD));
+        assert_eq!(map.exact_len(), 5);
+        assert_eq!(
+            map.keys().map(String::as_str).collect::<Vec<_>>(),
+            vec!["2", "\u{FFFD}", "a"]
+        );
+        assert_eq!(
+            map.values().copied().collect::<Vec<_>>(),
+            vec![2, 0xFFFD, 1]
+        );
+        assert_eq!(
+            map.exact_keys()
+                .iter()
+                .map(JsString::code_units_vec)
+                .collect::<Vec<_>>(),
+            vec![
+                vec![0x32],
+                vec![0xD800],
+                vec![0xFFFD],
+                vec![0xD801],
+                vec![0x61],
+            ]
+        );
+        assert_eq!(
+            (&map)
+                .into_iter()
+                .map(|(_, value)| *value)
+                .collect::<Vec<_>>(),
+            vec![2, 0xFFFD, 1]
+        );
+        assert_eq!(
+            map.clone()
+                .into_iter()
+                .map(|(_, value)| value)
+                .collect::<Vec<_>>(),
+            vec![2, 0xFFFD, 1]
+        );
+
+        map.retain(|key, _| key != "\u{FFFD}");
+        assert_eq!(map.get_exact(&d800), Some(&8));
+        assert_eq!(map.get_exact(&d801), Some(&9));
+        assert_eq!(map.get_exact(&replacement), None);
+        let wire = serde_json::to_string(&map).expect("exact map should serialize");
+        assert!(wire.starts_with('['));
+        let restored: OrderedStringMap<i32> =
+            serde_json::from_str(&wire).expect("exact map should round-trip");
+        assert_eq!(restored, map);
+        assert!(
+            serde_json::from_str::<OrderedStringMap<i32>>(
+                r#"[[{"$wtf16":[55296]},1],[{"$wtf16":[55296]},2]]"#,
+            )
+            .is_err()
+        );
+
+        map.insert_baseline_exact_string_accessor(
+            d802.clone(),
+            BaselineStringAccessor {
+                get: Some(10),
+                set: None,
+            },
+        );
+        map.clear();
+        assert!(map.is_empty());
+        assert!(map.exact_is_empty());
+        assert!(map.exact_keys().is_empty());
+        assert_eq!(
+            map.baseline_exact_string_accessor(&d802),
+            Some(&BaselineStringAccessor {
+                get: Some(10),
+                set: None,
+            })
+        );
+    }
+
+    #[test]
+    fn exact_ordered_string_map_uses_es_order_without_projecting_keys() {
+        let d800 = JsString::from_code_units(&[0xD800]);
+        let d801 = JsString::from_code_units(&[0xD801]);
+        let replacement = JsString::from("\u{FFFD}");
+        let mut map = ExactOrderedStringMap::new();
+        for (key, value) in [
+            (JsString::from("b"), 1),
+            (JsString::from("10"), 2),
+            (d800.clone(), 3),
+            (JsString::from("2"), 4),
+            (replacement.clone(), 5),
+            (d801.clone(), 6),
+            (JsString::from("01"), 7),
+            (JsString::from("0"), 8),
+            (JsString::from("4294967294"), 9),
+            (JsString::from("4294967295"), 10),
+        ] {
+            map.insert(key, value);
+        }
+
+        assert_eq!(
+            map.keys().map(JsString::code_units_vec).collect::<Vec<_>>(),
+            vec![
+                vec![0x30],
+                vec![0x32],
+                vec![0x31, 0x30],
+                "4294967294".encode_utf16().collect(),
+                vec![0x62],
+                vec![0xD800],
+                vec![0xFFFD],
+                vec![0xD801],
+                vec![0x30, 0x31],
+                "4294967295".encode_utf16().collect(),
+            ]
+        );
+        assert_eq!(
+            map.values().copied().collect::<Vec<_>>(),
+            vec![8, 4, 2, 9, 1, 3, 5, 6, 7, 10]
+        );
+        assert_eq!(map.get(&d800), Some(&3));
+        assert_eq!(map.get(&d801), Some(&6));
+        assert_eq!(map.get(&replacement), Some(&5));
+    }
+
+    #[test]
+    fn exact_ordered_string_map_updates_in_place_and_readds_at_end() {
+        let d800 = JsString::from_code_units(&[0xD800]);
+        let a = JsString::from("a");
+        let mut map = ExactOrderedStringMap::new();
+        map.insert(d800.clone(), 1);
+        map.insert(a.clone(), 2);
+        assert_eq!(map.insert(d800.clone(), 3), Some(1));
+        assert_eq!(
+            map.iter()
+                .map(|(key, value)| (key.code_units_vec(), *value))
+                .collect::<Vec<_>>(),
+            vec![(vec![0xD800], 3), (vec![0x61], 2)]
+        );
+
+        assert_eq!(map.remove(&d800), Some(3));
+        map.insert(d800.clone(), 4);
+        assert_eq!(
+            map.keys().map(JsString::code_units_vec).collect::<Vec<_>>(),
+            vec![vec![0x61], vec![0xD800]]
+        );
+
+        let same_observable_map =
+            ExactOrderedStringMap::from_iter([(a.clone(), 2), (d800.clone(), 4)]);
+        assert_eq!(map, same_observable_map);
+        let different_order = ExactOrderedStringMap::from_iter([(d800, 4), (a, 2)]);
+        assert_ne!(map, different_order);
+
+        let indices_forward = ExactOrderedStringMap::from_iter([
+            (JsString::from("2"), 2),
+            (JsString::from("10"), 10),
+        ]);
+        let indices_reverse = ExactOrderedStringMap::from_iter([
+            (JsString::from("10"), 10),
+            (JsString::from("2"), 2),
+        ]);
+        assert_eq!(indices_forward, indices_reverse);
+
+        let mut numeric_readd = ExactOrderedStringMap::from_iter([
+            (JsString::from("a"), 2),
+            (JsString::from("1"), 1),
+            (JsString::from("2"), 6),
+            (JsString::from("b"), 7),
+        ]);
+        assert_eq!(numeric_readd.remove(&JsString::from("1")), Some(1));
+        numeric_readd.insert(JsString::from("1"), 8);
+        assert_eq!(
+            serde_json::to_string(&numeric_readd).expect("serialize numeric re-add"),
+            r#"{"1":8,"2":6,"a":2,"b":7}"#
+        );
+    }
+
+    #[test]
+    fn exact_ordered_string_map_iteration_apis_agree_on_exact_es_order() {
+        let d800 = JsString::from_code_units(&[0xD800]);
+        let d801 = JsString::from_code_units(&[0xD801]);
+        let map = ExactOrderedStringMap::from_iter([
+            (JsString::from("b"), 1),
+            (d801, 2),
+            (JsString::from("10"), 3),
+            (JsString::from("2"), 4),
+            (d800, 5),
+            (JsString::from("a"), 6),
+        ]);
+        let expected = vec![
+            (vec![0x32], 4),
+            (vec![0x31, 0x30], 3),
+            (vec![0x62], 1),
+            (vec![0xD801], 2),
+            (vec![0xD800], 5),
+            (vec![0x61], 6),
+        ];
+
+        let borrowed = |key: &JsString, value: &i32| (key.code_units_vec(), *value);
+        assert_eq!(
+            map.iter()
+                .map(|(key, value)| borrowed(key, value))
+                .collect::<Vec<_>>(),
+            expected
+        );
+        assert_eq!(
+            (&map)
+                .into_iter()
+                .map(|(key, value)| borrowed(key, value))
+                .collect::<Vec<_>>(),
+            expected
+        );
+        assert_eq!(
+            map.keys()
+                .zip(map.values())
+                .map(|(key, value)| borrowed(key, value))
+                .collect::<Vec<_>>(),
+            expected
+        );
+        assert_eq!(
+            map.into_iter()
+                .map(|(key, value)| (key.code_units_vec(), value))
+                .collect::<Vec<_>>(),
+            expected
+        );
+    }
+
+    #[test]
+    fn exact_ordered_string_map_preserves_legacy_ordered_map_bytes() {
+        let entries = [("b", 1), ("10", 2), ("2", 3), ("a", 4)];
+        let mut legacy = OrderedStringMap::new();
+        let mut exact = ExactOrderedStringMap::new();
+        for (key, value) in entries {
+            legacy.insert(key.to_string(), value);
+            exact.insert(JsString::from(key), value);
+        }
+
+        let legacy_json = serde_json::to_string(&legacy).expect("serialize legacy ordered map");
+        let exact_json = serde_json::to_string(&exact).expect("serialize exact ordered map");
+        assert_eq!(legacy_json, r#"{"2":3,"10":2,"b":1,"a":4}"#);
+        assert_eq!(exact_json, legacy_json);
+
+        let restored: ExactOrderedStringMap<i32> =
+            serde_json::from_str(&legacy_json).expect("deserialize legacy object shape");
+        assert_eq!(restored, exact);
+    }
+
+    #[test]
+    fn exact_ordered_string_map_lone_keys_use_es_ordered_pair_sequence() {
+        let d800 = JsString::from_code_units(&[0xD800]);
+        let d801 = JsString::from_code_units(&[0xD801]);
+        let replacement = JsString::from("\u{FFFD}");
+        let mut map = ExactOrderedStringMap::new();
+        map.insert(JsString::from("b"), 1_u32);
+        map.insert(d801.clone(), 2);
+        map.insert(JsString::from("2"), 3);
+        map.insert(d800.clone(), 4);
+        map.insert(replacement.clone(), 5);
+
+        let json = serde_json::to_string(&map).expect("serialize exact ordered map");
+        assert_eq!(
+            json,
+            r#"[["2",3],["b",1],[{"$wtf16":[55297]},2],[{"$wtf16":[55296]},4],["�",5]]"#
+        );
+
+        let restored: ExactOrderedStringMap<u32> =
+            serde_json::from_str(&json).expect("deserialize exact pair sequence");
+        assert_eq!(restored, map);
+        assert_eq!(restored.get(&d800), Some(&4));
+        assert_eq!(restored.get(&d801), Some(&2));
+        assert_eq!(restored.get(&replacement), Some(&5));
+    }
+
+    #[test]
+    fn exact_ordered_string_map_accepts_well_formed_pair_sequence() {
+        let restored: ExactOrderedStringMap<u32> =
+            serde_json::from_str(r#"[["b",1],["10",2],["a",3],["2",4]]"#)
+                .expect("deserialize well-formed pair sequence");
+
+        assert_eq!(
+            restored
+                .keys()
+                .map(|key| key.as_str().expect("well-formed key"))
+                .collect::<Vec<_>>(),
+            vec!["2", "10", "b", "a"]
+        );
+        assert_eq!(
+            serde_json::to_string(&restored).expect("canonicalize to legacy map shape"),
+            r#"{"2":4,"10":2,"b":1,"a":3}"#
+        );
+    }
+
+    #[test]
+    fn exact_ordered_string_map_canonicalizes_pair_input_to_es_order() {
+        let restored: ExactOrderedStringMap<u32> = serde_json::from_str(
+            r#"[["b",1],["10",2],[{"$wtf16":[55296]},3],["2",4],["a",5],["0",6]]"#,
+        )
+        .expect("deserialize non-canonical exact pair order");
+
+        assert_eq!(
+            serde_json::to_string(&restored).expect("serialize canonical exact pair order"),
+            r#"[["0",6],["2",4],["10",2],["b",1],[{"$wtf16":[55296]},3],["a",5]]"#
+        );
+    }
+
+    #[test]
+    fn exact_ordered_string_map_rejects_duplicate_and_malformed_wire_keys() {
+        let duplicate_object =
+            serde_json::from_str::<ExactOrderedStringMap<u32>>(r#"{"a":1,"a":2}"#)
+                .expect_err("duplicate object keys must fail closed");
+        assert!(
+            duplicate_object
+                .to_string()
+                .contains("duplicate property key in exact ordered string map")
+        );
+
+        let duplicate_sequence = serde_json::from_str::<ExactOrderedStringMap<u32>>(
+            r#"[[{"$wtf16":[55296]},1],[{"$wtf16":[55296]},2]]"#,
+        )
+        .expect_err("duplicate exact keys must fail closed");
+        assert!(
+            duplicate_sequence
+                .to_string()
+                .contains("duplicate property key in exact ordered string map")
+        );
+
+        let duplicate_after_normalization =
+            serde_json::from_str::<ExactOrderedStringMap<u32>>(r#"[["a",1],[{"$wtf16":[97]},2]]"#)
+                .expect_err("canonical aliases must fail closed");
+        assert!(
+            duplicate_after_normalization
+                .to_string()
+                .contains("duplicate property key in exact ordered string map")
+        );
+
+        let duplicate_replacement_after_normalization =
+            serde_json::from_str::<ExactOrderedStringMap<u32>>(
+                r#"[["�",1],[{"$wtf16":[65533]},2]]"#,
+            )
+            .expect_err("well-formed replacement-character aliases must fail closed");
+        assert!(
+            duplicate_replacement_after_normalization
+                .to_string()
+                .contains("duplicate property key in exact ordered string map")
+        );
+
+        assert!(
+            serde_json::from_str::<ExactOrderedStringMap<u32>>(r#"[["a",1],["bad"]]"#).is_err()
+        );
+        assert!(
+            serde_json::from_str::<ExactOrderedStringMap<u32>>(r#"[[{"$other":[55296]},1]]"#,)
+                .is_err()
+        );
+        for malformed in [
+            "null",
+            "42",
+            r#"[["a",1,2]]"#,
+            r#"[[{},1]]"#,
+            r#"[[{"$wtf16":[55296],"extra":0},1]]"#,
+            r#"[[{"$wtf16":[65536]},1]]"#,
+            r#"{"\uD800":1}"#,
+        ] {
+            assert!(
+                serde_json::from_str::<ExactOrderedStringMap<u32>>(malformed).is_err(),
+                "malformed wire shape must fail: {malformed}"
+            );
+        }
+    }
+
+    #[test]
+    fn exact_ordered_string_map_retain_clear_and_owned_iteration_keep_order() {
+        let d800 = JsString::from_code_units(&[0xD800]);
+        let mut map = ExactOrderedStringMap::from_iter([
+            (JsString::from("b"), 1),
+            (d800.clone(), 2),
+            (JsString::from("2"), 3),
+            (JsString::from("a"), 4),
+        ]);
+        map.retain(|key, value| {
+            if key == &d800 {
+                *value = 20;
+            }
+            *value % 2 == 0
+        });
+
+        assert_eq!(
+            map.clone()
+                .into_iter()
+                .map(|(key, value)| (key.code_units_vec(), value))
+                .collect::<Vec<_>>(),
+            vec![(vec![0xD800], 20), (vec![0x61], 4)]
+        );
+        map.clear();
+        assert!(map.is_empty());
+        assert_eq!(map.keys().count(), 0);
     }
 
     // -----------------------------------------------------------------------
@@ -2439,13 +4158,80 @@ mod tests {
             .expect("operation should succeed for valid inputs");
 
         let keys = obj.own_property_keys();
-        // Integer indices first (sorted numerically), then strings, then symbols.
+        // Integer indices first (sorted numerically), then strings and symbols
+        // in their respective insertion orders.
         assert_eq!(keys[0], str_key("0"));
         assert_eq!(keys[1], str_key("2"));
         assert_eq!(keys[2], str_key("10"));
-        assert_eq!(keys[3], str_key("a"));
-        assert_eq!(keys[4], str_key("b"));
+        assert_eq!(keys[3], str_key("b"));
+        assert_eq!(keys[4], str_key("a"));
         assert_eq!(keys[5], PropertyKey::Symbol(SymbolId(100)));
+    }
+
+    #[test]
+    fn own_property_keys_update_delete_and_symbol_order() {
+        let mut obj = OrdinaryObject::default();
+        obj.define_own_property(str_key("a"), PropertyDescriptor::data(int_val(1)))
+            .expect("operation should succeed for valid inputs");
+        obj.define_own_property(str_key("b"), PropertyDescriptor::data(int_val(2)))
+            .expect("operation should succeed for valid inputs");
+        obj.define_own_property(
+            PropertyKey::Symbol(SymbolId(20)),
+            PropertyDescriptor::data(int_val(3)),
+        )
+        .expect("operation should succeed for valid inputs");
+        obj.define_own_property(
+            PropertyKey::Symbol(SymbolId(10)),
+            PropertyDescriptor::data(int_val(4)),
+        )
+        .expect("operation should succeed for valid inputs");
+
+        // Updating an existing property must not move it.
+        obj.define_own_property(str_key("a"), PropertyDescriptor::data(int_val(5)))
+            .expect("operation should succeed for valid inputs");
+        assert_eq!(
+            obj.own_property_keys(),
+            vec![
+                str_key("a"),
+                str_key("b"),
+                PropertyKey::Symbol(SymbolId(20)),
+                PropertyKey::Symbol(SymbolId(10)),
+            ]
+        );
+
+        // Deleting and re-creating a key gives it a new creation position.
+        assert!(obj.delete(&str_key("a")));
+        obj.define_own_property(str_key("a"), PropertyDescriptor::data(int_val(6)))
+            .expect("operation should succeed for valid inputs");
+        assert_eq!(
+            obj.own_property_keys(),
+            vec![
+                str_key("b"),
+                str_key("a"),
+                PropertyKey::Symbol(SymbolId(20)),
+                PropertyKey::Symbol(SymbolId(10)),
+            ]
+        );
+    }
+
+    #[test]
+    fn own_property_keys_only_hoists_canonical_array_indices() {
+        let mut obj = OrdinaryObject::default();
+        for key in ["01", "2", "4294967295", "1", "+3"] {
+            obj.define_own_property(str_key(key), PropertyDescriptor::data(int_val(1)))
+                .expect("operation should succeed for valid inputs");
+        }
+
+        assert_eq!(
+            obj.own_property_keys(),
+            vec![
+                str_key("1"),
+                str_key("2"),
+                str_key("01"),
+                str_key("4294967295"),
+                str_key("+3"),
+            ]
+        );
     }
 
     // -----------------------------------------------------------------------
@@ -2656,7 +4442,9 @@ mod tests {
         )
         .expect("operation should succeed for valid inputs");
 
-        let keys = heap.keys(h).expect("operation should succeed for valid inputs");
+        let keys = heap
+            .keys(h)
+            .expect("operation should succeed for valid inputs");
         assert_eq!(keys, vec!["a".to_string()]);
     }
 
@@ -2702,7 +4490,8 @@ mod tests {
         heap.set_property(h, str_key("x"), int_val(1))
             .expect("operation should succeed for valid inputs");
         // SAFETY: Test-only unwrap with valid heap object
-        heap.seal(h).expect("operation should succeed for valid inputs");
+        heap.seal(h)
+            .expect("operation should succeed for valid inputs");
 
         // SAFETY: Test-only unwrap with valid heap object
         assert!(
@@ -3967,7 +5756,8 @@ mod tests {
                 .expect("operation should succeed for valid inputs")
         );
         assert_eq!(
-            Reflect::get(&heap, h, &str_key("x")).expect("operation should succeed for valid inputs"),
+            Reflect::get(&heap, h, &str_key("x"))
+                .expect("operation should succeed for valid inputs"),
             int_val(42)
         );
     }
@@ -3979,10 +5769,12 @@ mod tests {
         Reflect::set(&mut heap, h, str_key("x"), int_val(1))
             .expect("operation should succeed for valid inputs");
         assert!(
-            Reflect::has(&heap, h, &str_key("x")).expect("operation should succeed for valid inputs")
+            Reflect::has(&heap, h, &str_key("x"))
+                .expect("operation should succeed for valid inputs")
         );
         assert!(
-            !Reflect::has(&heap, h, &str_key("y")).expect("operation should succeed for valid inputs")
+            !Reflect::has(&heap, h, &str_key("y"))
+                .expect("operation should succeed for valid inputs")
         );
     }
 
@@ -3997,7 +5789,8 @@ mod tests {
                 .expect("operation should succeed for valid inputs")
         );
         assert!(
-            !Reflect::has(&heap, h, &str_key("x")).expect("operation should succeed for valid inputs")
+            !Reflect::has(&heap, h, &str_key("x"))
+                .expect("operation should succeed for valid inputs")
         );
     }
 
@@ -4019,7 +5812,8 @@ mod tests {
         let proto = heap.alloc_plain();
         let obj = heap.alloc(Some(proto));
         assert_eq!(
-            Reflect::get_prototype_of(&heap, obj).expect("operation should succeed for valid inputs"),
+            Reflect::get_prototype_of(&heap, obj)
+                .expect("operation should succeed for valid inputs"),
             Some(proto)
         );
     }
@@ -4043,12 +5837,16 @@ mod tests {
     fn reflect_is_extensible_and_prevent() {
         let mut heap = ObjectHeap::new();
         let h = heap.alloc_plain();
-        assert!(Reflect::is_extensible(&heap, h).expect("operation should succeed for valid inputs"));
+        assert!(
+            Reflect::is_extensible(&heap, h).expect("operation should succeed for valid inputs")
+        );
         assert!(
             Reflect::prevent_extensions(&mut heap, h)
                 .expect("operation should succeed for valid inputs")
         );
-        assert!(!Reflect::is_extensible(&heap, h).expect("operation should succeed for valid inputs"));
+        assert!(
+            !Reflect::is_extensible(&heap, h).expect("operation should succeed for valid inputs")
+        );
     }
 
     #[test]
@@ -4159,7 +5957,8 @@ mod tests {
         let h = heap.alloc_plain();
         heap.set_property(h, str_key("x"), int_val(1))
             .expect("operation should succeed for valid inputs");
-        heap.seal(h).expect("operation should succeed for valid inputs");
+        heap.seal(h)
+            .expect("operation should succeed for valid inputs");
 
         // Data property is sealed (non-configurable) but writable.
         // Define with same attributes but different value should succeed.
@@ -4427,7 +6226,8 @@ mod tests {
             .expect("operation should succeed for valid inputs");
         assert!(desc.is_some());
         assert_eq!(
-            desc.expect("operation should succeed for valid inputs").value(),
+            desc.expect("operation should succeed for valid inputs")
+                .value(),
             Some(&int_val(1))
         );
     }
@@ -4459,17 +6259,77 @@ mod tests {
     #[allow(clippy::field_reassign_with_default)]
     fn ordinary_object_serde_roundtrip() {
         let mut obj = OrdinaryObject::default();
-        obj.define_own_property(str_key("x"), PropertyDescriptor::data(int_val(42)))
+        obj.define_own_property(str_key("b"), PropertyDescriptor::data(int_val(42)))
             .expect("operation should succeed for valid inputs");
+        obj.define_own_property(str_key("a"), PropertyDescriptor::data(int_val(43)))
+            .expect("operation should succeed for valid inputs");
+        obj.define_own_property(
+            PropertyKey::Symbol(SymbolId(20)),
+            PropertyDescriptor::data(int_val(44)),
+        )
+        .expect("operation should succeed for valid inputs");
+        obj.define_own_property(
+            PropertyKey::Symbol(SymbolId(10)),
+            PropertyDescriptor::data(int_val(45)),
+        )
+        .expect("operation should succeed for valid inputs");
         obj.prototype = Some(ObjectHandle(5));
         obj.class_tag = Some("TestObj".to_string());
 
-        let json = serde_json::to_string(&obj).expect("serialization should succeed");
+        let encoded = serde_json::to_value(&obj).expect("serialization should succeed");
+        let encoded_object = encoded
+            .as_object()
+            .expect("ordinary object serializes as map");
+        assert!(encoded_object["properties"].is_array());
+        assert!(!encoded_object.contains_key("by_key"));
+        assert!(!encoded_object.contains_key("insertion_order"));
+
         let deser: OrdinaryObject =
-            serde_json::from_str(&json).expect("deserialization should succeed");
+            serde_json::from_value(encoded.clone()).expect("deserialization should succeed");
         assert_eq!(deser.prototype, Some(ObjectHandle(5)));
         assert_eq!(deser.class_tag.as_deref(), Some("TestObj"));
-        assert!(deser.has_own_property(&str_key("x")));
+        assert_eq!(
+            deser.own_property_keys(),
+            vec![
+                str_key("b"),
+                str_key("a"),
+                PropertyKey::Symbol(SymbolId(20)),
+                PropertyKey::Symbol(SymbolId(10)),
+            ]
+        );
+
+        // Exact bytes produced by the pre-bd-n8eta.1 properties_as_seq
+        // serializer remain readable and stable after a round trip.
+        const LEGACY_SORTED_OBJECT_JSON: &str = r#"{"prototype":null,"extensible":true,"properties":[[{"String":"a"},{"Data":{"value":{"Int":1},"writable":true,"enumerable":true,"configurable":true}}],[{"String":"b"},{"Data":{"value":{"Int":2},"writable":true,"enumerable":true,"configurable":true}}]],"class_tag":null,"callable":false,"constructable":false}"#;
+        let legacy_deser: OrdinaryObject = serde_json::from_str(LEGACY_SORTED_OBJECT_JSON)
+            .expect("deserialize legacy sorted pair sequence");
+        assert_eq!(
+            legacy_deser.own_property_keys(),
+            vec![str_key("a"), str_key("b")]
+        );
+        assert_eq!(
+            serde_json::to_string(&legacy_deser).expect("re-serialize legacy object"),
+            LEGACY_SORTED_OBJECT_JSON
+        );
+
+        let mut duplicate: serde_json::Value = serde_json::from_str(LEGACY_SORTED_OBJECT_JSON)
+            .expect("parse legacy fixture as generic JSON");
+        let duplicate_pair = duplicate["properties"]
+            .as_array()
+            .and_then(|pairs| pairs.first())
+            .cloned()
+            .expect("legacy fixture has a property pair");
+        duplicate["properties"]
+            .as_array_mut()
+            .expect("properties remain a pair sequence")
+            .push(duplicate_pair);
+        let error = serde_json::from_value::<OrdinaryObject>(duplicate)
+            .expect_err("duplicate property keys must fail closed");
+        assert!(
+            error
+                .to_string()
+                .contains("duplicate property key in ordered property sequence")
+        );
     }
 
     // -----------------------------------------------------------------------
@@ -4672,7 +6532,8 @@ mod tests {
         assert!(!result);
         // Value unchanged.
         assert_eq!(
-            Reflect::get(&heap, h, &str_key("x")).expect("operation should succeed for valid inputs"),
+            Reflect::get(&heap, h, &str_key("x"))
+                .expect("operation should succeed for valid inputs"),
             int_val(1)
         );
     }
@@ -4889,7 +6750,8 @@ mod tests {
             .as_proxy()
             .expect("operation should succeed for valid inputs");
         assert_eq!(
-            p3.target().expect("operation should succeed for valid inputs"),
+            p3.target()
+                .expect("operation should succeed for valid inputs"),
             proxy2
         );
     }
@@ -5167,7 +7029,8 @@ mod tests {
             .expect("operation should succeed for valid inputs");
         assert!(desc.is_some());
         assert_eq!(
-            desc.expect("operation should succeed for valid inputs").value(),
+            desc.expect("operation should succeed for valid inputs")
+                .value(),
             Some(&str_val("Source"))
         );
     }
@@ -5182,7 +7045,8 @@ mod tests {
         let h = heap.alloc_plain();
         heap.set_property(h, str_key("x"), int_val(1))
             .expect("operation should succeed for valid inputs");
-        heap.seal(h).expect("operation should succeed for valid inputs");
+        heap.seal(h)
+            .expect("operation should succeed for valid inputs");
 
         // Can update existing property.
         assert!(
@@ -5719,7 +7583,7 @@ mod tests {
     fn property_key_ordering() {
         let string_key = str_key("z");
         let symbol_key = PropertyKey::Symbol(SymbolId(1));
-        // In BTreeMap, String comes before Symbol due to enum discriminant ordering.
+        // Derived ordering keeps String before Symbol for deterministic keyed lookup.
         assert!(string_key < symbol_key);
     }
 
@@ -5994,8 +7858,7 @@ mod tests {
     fn symbol_id_serde_roundtrip() {
         let id = SymbolId(42);
         let json = serde_json::to_string(&id).expect("serialization should succeed");
-        let back: SymbolId =
-            serde_json::from_str(&json).expect("deserialization should succeed");
+        let back: SymbolId = serde_json::from_str(&json).expect("deserialization should succeed");
         assert_eq!(id, back);
     }
 

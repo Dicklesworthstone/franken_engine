@@ -146,10 +146,10 @@ done
 canonical_command() {
   case "$1" in
     cargo-check-lib)
-      printf '%s\n' "rch exec -- env RUSTUP_TOOLCHAIN=nightly CARGO_TARGET_DIR=/data/tmp/rch_target_franken_engine_stall_check CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 CARGO_PROFILE_DEV_DEBUG=0 cargo check -p frankenengine-engine --lib"
+      printf '%s\n' "env -u CARGO_ENCODED_RUSTFLAGS rch exec -- env -u CARGO_ENCODED_RUSTFLAGS RUSTUP_TOOLCHAIN=nightly CARGO_TARGET_DIR=/data/tmp/rch_target_franken_engine_stall_check CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 CARGO_PROFILE_DEV_DEBUG=0 cargo check -p frankenengine-engine --lib"
       ;;
     focused-engine-test)
-      printf '%s\n' "rch exec -- env RUSTUP_TOOLCHAIN=nightly RUSTFLAGS='-Cdebuginfo=0' CARGO_TARGET_DIR=/data/tmp/rch_target_franken_engine_stall_test CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 CARGO_PROFILE_DEV_DEBUG=0 cargo test -p frankenengine-engine replacement_lineage_log::tests:: --lib"
+      printf '%s\n' "env -u CARGO_ENCODED_RUSTFLAGS rch exec -- env -u CARGO_ENCODED_RUSTFLAGS RUSTUP_TOOLCHAIN=nightly RUSTFLAGS='-Cdebuginfo=0 -Clinker-features=-lld' CARGO_TARGET_DIR=/data/tmp/rch_target_franken_engine_stall_test CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 CARGO_PROFILE_DEV_DEBUG=0 cargo test -p frankenengine-engine replacement_lineage_log::tests:: --lib"
       ;;
     *)
       printf 'unknown case-id: %s\n' "$1" >&2

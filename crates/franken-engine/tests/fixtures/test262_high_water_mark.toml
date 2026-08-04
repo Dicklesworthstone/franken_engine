@@ -1,22 +1,36 @@
 schema_version = "franken-engine.test262-high-water-mark.v1"
-measurement_date = "2026-04-16T08:14:15-04:00"
+measurement_date = "2026-06-21T06:22:06Z"
 es_profile = "ES2020"
-created_by = "test262_regression_gate.sh"
+# Real measurement, NOT a fabricated seed. Produced by
+# scripts/run_test262_real_corpus_pass_rate.sh over the full ES2020-normative
+# profile of a pinned tc39/test262 checkout (commit d0c1b455) via
+# `franken_test262_runner --suite-path` (CEI D.2, bd-sde5e.4.2). This replaces the
+# prior fabricated 100/64 numbers (which corresponded to no real run). The full,
+# reproducible measurement with its provenance and limitations lives in
+# docs/test262_real_corpus_pass_rate_v1.json. The low pass-rate is honest: the
+# harness does not preload Test262 includes (assert.js/sta.js/propertyHelper.js),
+# so include-dependent tests fail — it is a conservative lower bound, which is why
+# full-suite conformance (FE-CLAIM-TEST262) remains TARGETED.
+created_by = "scripts/run_test262_real_corpus_pass_rate.sh (real tc39/test262 d0c1b455 full es2020-normative profile)"
 
 [pass_counts]
-total_tests = 100
-passed_tests = 64
-failed_tests = 36
+total_tests = 47157
+passed_tests = 120
+failed_tests = 47036
 skipped_tests = 0
-waived_tests = 2
+waived_tests = 1
 
+# Per-chapter pass-rate breakdown requires a runner enhancement (the runner emits
+# aggregate counts only), so these are recorded as 0.0 rather than fabricated.
 [chapter_breakdown]
-chapter_8_types_pass_rate = 0.75
-chapter_12_expressions_pass_rate = 0.60
-chapter_13_statements_pass_rate = 0.65
-chapter_14_functions_pass_rate = 0.55
+chapter_8_types_pass_rate = 0.0
+chapter_12_expressions_pass_rate = 0.0
+chapter_13_statements_pass_rate = 0.0
+chapter_14_functions_pass_rate = 0.0
 
 [regression_policy]
 allow_pass_rate_decrease = false
-min_pass_rate_threshold = 0.60
+# Floor just below the measured 0.2544% (120/47157) so the rate-based regression
+# gate tolerates only noise, not a real drop.
+min_pass_rate_threshold = 0.002
 regression_acknowledgment_required = true

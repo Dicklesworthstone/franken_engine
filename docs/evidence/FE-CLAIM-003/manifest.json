@@ -1,0 +1,74 @@
+{
+  "artifacts": {
+    "bundle_path": "artifacts/reproducibility_bundles/FE-CLAIM-003",
+    "env_json": "env.json",
+    "manifest_json": "manifest.json",
+    "primary": "crates/franken-engine/src/counterfactual_replay_engine.rs",
+    "repro_lock": "repro.lock"
+  },
+  "canonicalization": {
+    "encoding": "utf-8",
+    "format": "json",
+    "key_ordering": "lexicographic",
+    "newline": "lf"
+  },
+  "claim": {
+    "id": "FE-CLAIM-003",
+    "original_artifact_path": "crates/franken-engine/src/counterfactual_replay_engine.rs",
+    "scope": "replay",
+    "state": "observed"
+  },
+  "generated_at_utc": "2026-07-26T02:15:28.745224+00:00",
+  "inputs": {
+    "dependencies": [
+      "frankenengine-engine",
+      "franken-extension-host"
+    ],
+    "source_files": [
+      "crates/franken-engine/src/counterfactual_replay_engine.rs"
+    ]
+  },
+  "manifest_id": "manifest-fe-claim-003-20260521",
+  "outputs": {
+    "decision_artifacts": "generated",
+    "environment_fingerprint": {
+      "digest": "sha256:d5d114d10c94d14a19e8c93482179af4537b2b0764bae3efa2e733476212dcc6",
+      "fields": {
+        "architecture": "x86_64",
+        "cargo_version": "cargo 1.99.0-nightly (3efb1f477 2026-07-17)",
+        "kernel_release": "6.17.0-41-generic",
+        "platform": "linux",
+        "rustc_host_triple": "x86_64-unknown-linux-gnu",
+        "rustc_version": "rustc 1.99.0-nightly (da86f4d07 2026-07-24)"
+      },
+      "schema_version": "franken-engine.evidence-environment-fingerprint.v1"
+    },
+    "execution_trace": "deterministic",
+    "exit_code": 0,
+    "verification_command": "CARGO_TARGET_DIR=/data/projects/franken_engine/target_rch_ob_on CARGO_INCREMENTAL=0 RUSTFLAGS=\"-C linker=cc -Clinker-features=-lld\" cargo test -p frankenengine-engine --test deterministic_replay_integration --test counterfactual_replay_engine_integration",
+    "verification_result": "passed",
+    "verified_at_utc": "2026-07-26T02:15:28.745224+00:00"
+  },
+  "provenance": {
+    "audit_source": "bd-cixqu.4.1",
+    "bead_id": "bd-cixqu.4.2",
+    "generated_by": "reemit_evidence_receipts.py (live gate run)"
+  },
+  "retention": {
+    "backup_required": true,
+    "immutable": true,
+    "policy": "permanent"
+  },
+  "schema_hash": "sha256:8f9a0b1c2d3e4f5678abc9def0123456789abcdef0123456789abcdef01234567",
+  "schema_version": "frankenengine.reproducibility.manifest.v1",
+  "source_revision": {
+    "branch": "main",
+    "commit": "534f4cb0a8eab6fa33f8b3f96e2901f35622461a",
+    "repository": "franken_engine"
+  },
+  "validation": {
+    "hash_verified": true,
+    "provenance_linked": true,
+    "schema_validated": true
+  }
+}

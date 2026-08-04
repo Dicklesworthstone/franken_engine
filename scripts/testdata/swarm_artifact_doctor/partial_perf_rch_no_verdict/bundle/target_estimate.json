@@ -1,0 +1,7 @@
+{
+  "schema_version": "franken-engine.perf-target-estimate-fixture.v1",
+  "benchmark": "evidence_ledger_batch",
+  "baseline_seconds": 10.0,
+  "candidate_seconds": null,
+  "drop_fraction": null
+}

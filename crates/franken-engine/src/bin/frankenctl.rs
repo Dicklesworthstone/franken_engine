@@ -6,13 +6,21 @@ static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 use std::collections::{BTreeMap, BTreeSet};
 use std::env;
 use std::fs;
+#[cfg(all(unix, not(any(target_os = "redox", target_os = "espidf"))))]
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use chrono::{NaiveDate, SecondsFormat, Utc};
+use chrono::{NaiveDate, NaiveDateTime, SecondsFormat, Utc};
 use frankenengine_engine::ast::ParseGoal;
-use frankenengine_engine::baseline_interpreter::{ConsoleEntry, InterpreterError};
+use frankenengine_engine::authority_footprint::{
+    AuthorityFootprintReport, analyze_authority_footprint,
+};
+use frankenengine_engine::baseline_interpreter::{
+    ConsoleEntry, InterpreterConfig, InterpreterError,
+};
+use frankenengine_engine::behavioral_diff::{BehavioralDiffReport, diff_package_behavior};
 use frankenengine_engine::benchmark_denominator::{
     PublicationContext, PublicationGateInput, evaluate_publication_gate,
 };
@@ -21,23 +29,59 @@ use frankenengine_engine::benchmark_e2e::{
     run_benchmark_comparison_suite, run_benchmark_suite, write_benchmark_comparison_artifacts,
     write_evidence_artifacts,
 };
+use std::sync::Arc;
+
+use frankenengine_engine::agent_sandbox::{
+    AGENT_SANDBOX_MANIFEST_SCHEMA_VERSION, AgentSandboxManifest, AgentSandboxReport,
+};
 use frankenengine_engine::capability::{CapabilityProfile, RuntimeCapability};
+use frankenengine_engine::data_contract::{
+    DEFAULT_DATA_CONTRACT_PURPOSE, DataContract, DataContractRunBinding,
+    E8_REFUSAL_LEDGER_SCHEMA_VERSION, E8RefusalLedgerReceipt,
+};
 use frankenengine_engine::deterministic_replay::{NondeterminismTrace, ReplayEngine, ReplayMode};
-use frankenengine_engine::differential_oracle::{DifferentialOracleInput, run_differential_oracle};
+use frankenengine_engine::differential_oracle::{
+    DifferentialBackend, DifferentialBackendStatus, DifferentialComparisonVerdict,
+    DifferentialOracleInput, DifferentialOracleReport, default_backend_selection,
+    run_differential_oracle,
+};
+use frankenengine_engine::differential_oracle_perf::{
+    PerfArmConfig, load_runtime_comparison_corpus, run_differential_perf,
+};
+use frankenengine_engine::e8_analyzed_subset::{E8AnalyzedSubsetScan, scan_source};
+use frankenengine_engine::evidence_ledger::{
+    EVIDENCE_CHAIN_RECEIPT_SCHEMA_VERSION, EvidenceChainArtifact, EvidenceVerificationIdentity,
+    RuntimeEvidenceAuthority,
+};
 use frankenengine_engine::execution_orchestrator::{
     ExecutionOrchestrator, ExtensionPackage, OrchestratorConfig, OrchestratorError,
-    OrchestratorResult,
+    OrchestratorResult, UncommittedEvidenceChainEvidence,
 };
 use frankenengine_engine::fleet_trace_total_order::{
     FleetTraceNode, flatten_to_events, merge_fleet_traces, node_id_from_session,
 };
 use frankenengine_engine::hash_tiers::ContentHash;
 use frankenengine_engine::ir_contract::Ir0Module;
+use frankenengine_engine::jsx_tsx_parser::JsxRuntimeMode;
 use frankenengine_engine::lowering_pipeline::{
     LoweringContext, LoweringPipelineOutput, lower_ir0_to_ir3,
 };
 use frankenengine_engine::module_compatibility_matrix::CompatibilityScenarioReport;
+use frankenengine_engine::non_use_certificate::{
+    CertificateStatus, CertifierInputs, E8_CERTIFIER_PRODUCER_ID,
+    emit_certificate_bundle_with_runtime_authority,
+};
+use frankenengine_engine::package_intake::{PackageIntakeReport, onboard_package};
 use frankenengine_engine::parser::{CanonicalEs2020Parser, ParseEventIr, ParserOptions};
+use frankenengine_engine::parser_oracle::{
+    DEFAULT_FIXTURE_CATALOG_PATH, OracleGateMode, OraclePartition, ParserOracleConfig,
+    run_parser_oracle,
+};
+use frankenengine_engine::react_compilation_pipeline::{
+    ReactCompileConfig, ReactCompileEvidence, ReactCompileResult,
+    ReactInputLanguage as ReactPipelineInputLanguage, compile_react_source,
+    generate_compilation_evidence,
+};
 use frankenengine_engine::react_doctor_preflight::{
     DoctorConfig as ReactDoctorConfig, DoctorReport as ReactDoctorReport,
     PreflightResult as ReactPreflightResult, SupportBundle as ReactSupportBundle,
@@ -52,6 +96,7 @@ use frankenengine_engine::receipt_verifier_pipeline::{
     ReceiptVerifierCliInput, UnifiedReceiptVerificationVerdict, render_verdict_summary,
     verify_receipt_by_id,
 };
+use frankenengine_engine::replay_time_travel::{TimeTravelConfig, TimeTravelCursor};
 use frankenengine_engine::runtime_diagnostics_cli::{
     CompatibilityAdvisoryInput, CompatibilityAdvisoryOutput, EvidenceExportFilter,
     OnboardingReadinessClass, OnboardingScorecardInput, OnboardingScorecardOutput,
@@ -69,26 +114,43 @@ use frankenengine_engine::runtime_explain_bundle::{
     RuntimeExplainBundle, RuntimeExplainBundleBuilder, RuntimeExplainLink, RuntimeExplainRelation,
     RuntimeExplainRole, StableArtifactRef,
 };
+use frankenengine_engine::runtime_explain_views::{
+    EXPLAIN_META_CHOSEN_ACTION, EXPLAIN_META_EXPECTED_LOSS, EXPLAIN_META_LANE,
+    EXPLAIN_META_LANE_REASON, build_explain_bundle,
+};
 use frankenengine_engine::security_epoch::SecurityEpoch;
 use frankenengine_engine::third_party_verifier::{
     BenchmarkClaimBundle, ClaimedBenchmarkOutcome, THIRD_PARTY_VERIFIER_COMPONENT,
     ThirdPartyVerificationReport, VerificationCheckResult, VerificationVerdict, VerifierEvent,
     render_report_summary, verify_benchmark_claim,
 };
+use frankenengine_engine::time_travel_debugger::{
+    DebuggerEvent, InterpreterStateSnapshot, ReplayStateProducer, RobotSession, TimeTravelDebugger,
+};
 use frankenengine_engine::ts_normalization::{
     SourceIngestionSummary, prepare_source_entry_for_public_entrypoints,
 };
+use frankenengine_extension_host::host_io::{InMemoryHostIoTranscript, SandboxedHostIo};
+use rand::RngCore;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use sha2::{Digest, Sha256};
 
 const FRANKENCTL_SCHEMA_VERSION: &str = "franken-engine.frankenctl.v1";
+const RUN_COMMAND_SCHEMA_VERSION: &str = "franken-engine.frankenctl.run.v2";
+const AGENT_SANDBOX_COMMAND_SCHEMA_VERSION: &str = "franken-engine.frankenctl.agent-sandbox.v2";
+const ORCHESTRATION_FAILURE_SCHEMA_VERSION: &str =
+    "franken-engine.frankenctl.orchestration-failure.v1";
 const COMPILE_ARTIFACT_SCHEMA_VERSION: &str = "franken-engine.frankenctl.compile-artifact.v1";
-const RUN_REPORT_SCHEMA_VERSION: &str = "franken-engine.frankenctl.run-report.v1";
+const RUN_REPORT_SCHEMA_VERSION: &str = RUN_COMMAND_SCHEMA_VERSION;
 const RUN_SOURCE_SCHEMA_VERSION: &str = "franken-engine.frankenctl.run-source.v1";
 const RUN_ACTION_DECISION_SCHEMA_VERSION: &str = "franken-engine.frankenctl.run-action-decision.v1";
 const RUN_POSTERIOR_SCHEMA_VERSION: &str = "franken-engine.frankenctl.run-posterior.v1";
 const RUN_CONTAINMENT_RECEIPT_SCHEMA_VERSION: &str =
     "franken-engine.frankenctl.run-containment-receipt.v1";
+const CLAIM_EXPLAINER_SCHEMA_VERSION: &str = "franken-engine.external-trust-claim-explainer.v1";
+const CLAIM_MATRIX_SCHEMA_VERSION: &str = "franken-engine.claim-to-proof-matrix.v1";
+const DEFAULT_CLAIM_MATRIX_PATH: &str = "docs/claim_to_proof_matrix_v1.json";
+const DEFAULT_BEADS_JSONL_PATH: &str = ".beads/issues.jsonl";
 const REACT_CLI_CONTRACT_SCHEMA_VERSION: &str = "franken-engine.frankenctl.react-cli-contract.v1";
 const REACT_CLI_REPORT_SCHEMA_VERSION: &str = "franken-engine.frankenctl.react-cli-report.v1";
 const REACT_DOCTOR_REPORT_SCHEMA_VERSION: &str = "franken-engine.frankenctl.react-doctor.v1";
@@ -126,13 +188,20 @@ enum CommandSpec {
     Help,
     HelpTopic(HelpTopic),
     Compile(CompileArgs),
+    Check(CheckArgs),
+    Onboard(OnboardArgs),
+    DiffBehavior(DiffBehaviorArgs),
     Run(RunArgs),
+    AgentSandbox(AgentSandboxArgs),
     Explain(ExplainArgs),
+    Claims(ClaimsArgs),
     Doctor(Box<DoctorArgs>),
     Verify(VerifyArgs),
     Benchmark(BenchmarkArgs),
     Replay(ReplayArgs),
+    ReplayDebug(ReplayDebugArgs),
     DifferentialOracle(DifferentialOracleArgs),
+    Oracle(OracleArgs),
     React(ReactArgs),
     Gates(GatesArgs),
     Reports(ReportsArgs),
@@ -145,8 +214,14 @@ enum CommandSpec {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum HelpTopic {
     Compile,
+    Check,
+    Onboard,
+    DiffBehavior,
     Run,
+    AgentSandbox,
     Explain,
+    Claims,
+    ClaimsExplain,
     Doctor,
     Verify,
     VerifyCompileArtifact,
@@ -158,8 +233,13 @@ enum HelpTopic {
     BenchmarkVerify,
     Replay,
     ReplayRun,
+    ReplayDebug,
     DifferentialOracle,
     DifferentialOracleRun,
+    DifferentialOraclePerf,
+    Oracle,
+    OracleRun,
+    OracleReport,
     React,
     ReactCompile,
     ReactBuild,
@@ -177,8 +257,14 @@ impl HelpTopic {
     fn render(self) -> String {
         match self {
             Self::Compile => compile_usage(),
+            Self::Check => check_usage(),
+            Self::Onboard => onboard_usage(),
+            Self::DiffBehavior => diff_behavior_usage(),
             Self::Run => run_usage(),
+            Self::AgentSandbox => agent_sandbox_usage(),
             Self::Explain => explain_usage(),
+            Self::Claims => claims_usage(),
+            Self::ClaimsExplain => claims_explain_usage(),
             Self::Doctor => doctor_usage(),
             Self::Verify => verify_usage(),
             Self::VerifyCompileArtifact => verify_compile_artifact_usage(),
@@ -190,8 +276,13 @@ impl HelpTopic {
             Self::BenchmarkVerify => benchmark_verify_usage(),
             Self::Replay => replay_usage(),
             Self::ReplayRun => replay_run_usage(),
+            Self::ReplayDebug => replay_debug_usage(),
             Self::DifferentialOracle => differential_oracle_usage(),
             Self::DifferentialOracleRun => differential_oracle_run_usage(),
+            Self::DifferentialOraclePerf => differential_oracle_perf_usage(),
+            Self::Oracle => oracle_usage(),
+            Self::OracleRun => oracle_run_usage(),
+            Self::OracleReport => oracle_report_usage(),
             Self::React => react_usage(),
             Self::ReactCompile => react_compile_usage(),
             Self::ReactBuild => react_build_usage(),
@@ -218,6 +309,48 @@ struct CompileArgs {
     generated_unix_ns: Option<u64>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CheckOutputFormat {
+    Human,
+    Json,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct CheckArgs {
+    input: PathBuf,
+    parse_goal: ParseGoal,
+    format: CheckOutputFormat,
+    /// Optional bundle directory for `run_manifest.json` + `events.jsonl`.
+    out: Option<PathBuf>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct OnboardArgs {
+    /// Package directory (entry auto-detected) or an explicit entry file.
+    target: PathBuf,
+    /// Optional package root override (defaults: dir target → itself; file
+    /// target → the file's parent directory).
+    root: Option<PathBuf>,
+    parse_goal: ParseGoal,
+    format: CheckOutputFormat,
+    /// Optional bundle directory for `run_manifest.json` + `events.jsonl`.
+    out: Option<PathBuf>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct DiffBehaviorArgs {
+    before: PathBuf,
+    after: PathBuf,
+    before_root: Option<PathBuf>,
+    after_root: Option<PathBuf>,
+    before_label: Option<String>,
+    after_label: Option<String>,
+    parse_goal: ParseGoal,
+    format: CheckOutputFormat,
+    /// Optional bundle directory for diff + per-side intake reports.
+    out: Option<PathBuf>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct RunArgs {
     input: PathBuf,
@@ -226,6 +359,34 @@ struct RunArgs {
     out: Option<PathBuf>,
     explain: bool,
     explain_out: Option<PathBuf>,
+    /// Write the run's recorded nondeterminism trace here (bd-9mr8o), the
+    /// exact input `frankenctl replay debug --trace` consumes.
+    emit_trace: Option<PathBuf>,
+    data_contract: Option<PathBuf>,
+    data_contract_purpose: String,
+    /// Directory for the E8 certificate bundle (bd-fqlfw.8.3); requires
+    /// `--data-contract`.
+    certificate_out: Option<PathBuf>,
+    /// Override the execution-cell close budget for policy testing.
+    cell_close_budget_ms: Option<u64>,
+}
+
+/// `frankenctl agent-sandbox` (bd-fqlfw.8.5): run agent-generated code under
+/// a manifest-declared tool authority and hand back the certificate bundle.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct AgentSandboxArgs {
+    manifest: PathBuf,
+    input: PathBuf,
+    parse_goal: ParseGoal,
+    out: Option<PathBuf>,
+    data_contract: Option<PathBuf>,
+    /// Purpose override; falls back to the manifest purpose, then the
+    /// data-contract default purpose.
+    purpose: Option<String>,
+    /// Directory for the E8 certificate bundle; requires `--data-contract`.
+    certificate_out: Option<PathBuf>,
+    /// Override the execution-cell close budget for policy testing.
+    cell_close_budget_ms: Option<u64>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -238,6 +399,29 @@ enum ExplainOutputFormat {
 struct ExplainArgs {
     input: PathBuf,
     format: ExplainOutputFormat,
+    out: Option<PathBuf>,
+    /// Directory to emit the full derived view bundle (E3.T4): explain.md,
+    /// evidence_graph.json, replay.json, counterfactuals.json, commands.txt,
+    /// repro.lock, plus a copy of the index (explain.json).
+    emit_bundle: Option<PathBuf>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ClaimsArgs {
+    mode: ClaimsMode,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ClaimsMode {
+    Explain(ClaimsExplainArgs),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ClaimsExplainArgs {
+    claim_id: String,
+    matrix: PathBuf,
+    beads_jsonl: Option<PathBuf>,
+    format: CheckOutputFormat,
     out: Option<PathBuf>,
 }
 
@@ -329,6 +513,23 @@ struct ReplayArgs {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+struct ReplayDebugArgs {
+    trace: PathBuf,
+    script: Option<PathBuf>,
+    events: Option<PathBuf>,
+    state_snapshots: Option<PathBuf>,
+    /// Source file to re-execute for on-demand interpreter-state inspection
+    /// (bd-fqlfw.3.5.5 / E3.T5d). When set, `inspect` requests for ticks
+    /// without a pre-supplied snapshot replay the real interpreter.
+    input: Option<PathBuf>,
+    /// Parse goal for `--input` (default `script`).
+    input_goal: ParseGoal,
+    checkpoint_interval: u64,
+    mode: ReplayMode,
+    out: Option<PathBuf>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct DifferentialOracleArgs {
     mode: DifferentialOracleMode,
 }
@@ -336,6 +537,7 @@ struct DifferentialOracleArgs {
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum DifferentialOracleMode {
     Run(DifferentialOracleRunArgs),
+    Perf(DifferentialOraclePerfArgs),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -344,6 +546,62 @@ struct DifferentialOracleRunArgs {
     case_id: Option<String>,
     timeout_ms: u64,
     out: Option<PathBuf>,
+    engine_budget: Option<u64>,
+    engine_memory_budget: Option<u64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct DifferentialOraclePerfArgs {
+    manifest: PathBuf,
+    out: Option<PathBuf>,
+    events: Option<PathBuf>,
+    warmup: u32,
+    samples: u32,
+    case_timeout_ms: u64,
+    engine_budget: Option<u64>,
+    node_bin: Option<String>,
+    bun_bin: Option<String>,
+    case_filter: Vec<String>,
+}
+
+/// User-facing wrapper over the differential oracle. Where `differential-oracle`
+/// is the CI-gate-shaped surface, `oracle` is the operator/frontier-facing
+/// surface: it selects engines, emits a content-addressed bundle, renders it,
+/// and reports documented exit codes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct OracleArgs {
+    mode: OracleMode,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum OracleMode {
+    Run(OracleRunArgs),
+    Report(OracleReportArgs),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct OracleRunArgs {
+    input: PathBuf,
+    /// Resolved, deduplicated, canonically-ordered engine selection.
+    engines: Vec<DifferentialBackend>,
+    case_id: Option<String>,
+    timeout_ms: u64,
+    engine_budget: Option<u64>,
+    engine_memory_budget: Option<u64>,
+    node_bin: Option<String>,
+    bun_bin: Option<String>,
+    /// When set, write a content-addressed oracle-run bundle to this directory.
+    bundle: Option<PathBuf>,
+    /// When set, also write the raw `DifferentialOracleReport` JSON here.
+    out: Option<PathBuf>,
+    format: CheckOutputFormat,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct OracleReportArgs {
+    /// A bundle directory, or a path to its `manifest.json`/`report.json`.
+    bundle: PathBuf,
+    format: CheckOutputFormat,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -414,6 +672,14 @@ enum GatesMode {
         out_dir: PathBuf,
         config: Option<PathBuf>,
     },
+    CompoundingRedTeam {
+        out_dir: PathBuf,
+        config: Option<PathBuf>,
+    },
+    ErasureBandwidth {
+        out_dir: PathBuf,
+        config: Option<PathBuf>,
+    },
     AdversarialCampaign {
         out_dir: PathBuf,
     },
@@ -444,7 +710,13 @@ struct ReportsArgs {
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum ReportsMode {
     ParserOracle {
-        config: Option<PathBuf>,
+        partition: OraclePartition,
+        gate_mode: OracleGateMode,
+        seed: u64,
+        fixture_catalog: PathBuf,
+        trace_id: Option<String>,
+        decision_id: Option<String>,
+        policy_id: Option<String>,
         out: Option<PathBuf>,
     },
     ParserPhase0 {
@@ -671,6 +943,12 @@ struct RunCommandOutput {
     report_path: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     explain_bundle_path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    data_contract: Option<DataContractRunBinding>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    e8_preflight_receipt: Option<E8RefusalLedgerReceipt>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    certificate_bundle: Option<CertificateBundleSummary>,
     source_ingestion: SourceIngestionSummary,
     lane: String,
     lane_reason: String,
@@ -679,8 +957,52 @@ struct RunCommandOutput {
     expected_loss_millionths: i64,
     instructions_executed: u64,
     evidence_entries: usize,
+    evidence_chain_instance_id: String,
+    evidence_ledger_id: String,
+    evidence_chain_head: String,
+    evidence_chain_artifact: EvidenceChainArtifact,
     console_output: Vec<ConsoleEntry>,
     observability_mode: ObservabilityModeOutput,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct OrchestrationFailureOutput {
+    schema_version: String,
+    command: String,
+    input_path: String,
+    trace_id: String,
+    exit_code: i32,
+    error: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    classification: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    report_path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    report_write_error: Option<String>,
+    evidence_chain_instance_id: String,
+    evidence_ledger_id: String,
+    evidence_chain_next_sequence: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    evidence_chain_head: Option<String>,
+    uncommitted_evidence_chain: UncommittedEvidenceChainEvidence,
+    observability_mode: ObservabilityModeOutput,
+}
+
+/// Summary of an emitted E8 certificate bundle (bd-fqlfw.8.3) in the run
+/// report: where it landed, its status, and per-file digests.
+#[derive(Debug, Clone, Serialize)]
+struct CertificateBundleSummary {
+    path: String,
+    certificate_status: CertificateStatus,
+    bundle_content_hash_hex: String,
+    evidence_verification_identity: EvidenceVerificationIdentity,
+    files: Vec<CertificateBundleFileSummary>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct CertificateBundleFileSummary {
+    name: String,
+    sha256_hex: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1206,7 +1528,32 @@ struct ReactCliReportOutput {
     request: ReactCliRequest,
     diagnostic: ReactCliDiagnostic,
     required_artifacts: Vec<String>,
+    compilation: Option<ReactCliCompilationOutput>,
     output: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct ReactCliCompilationOutput {
+    language: String,
+    runtime_mode: String,
+    generated_code: String,
+    source_map: Option<String>,
+    input_hash: String,
+    generated_code_hash: String,
+    config_hash: String,
+    feature_families: Vec<String>,
+    transform_counts: BTreeMap<String, u32>,
+    receipt: ReactCliCompilationReceiptOutput,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct ReactCliCompilationReceiptOutput {
+    schema_version: String,
+    component: String,
+    input_hash: String,
+    output_hash: String,
+    config_hash: String,
+    process_hash: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1320,13 +1667,20 @@ fn run(raw_args: Vec<String>) -> Result<i32, String> {
             Ok(0)
         }
         CommandSpec::Compile(args) => execute_compile(args),
+        CommandSpec::Check(args) => execute_check(args),
+        CommandSpec::Onboard(args) => execute_onboard(args),
+        CommandSpec::DiffBehavior(args) => execute_diff_behavior(args),
         CommandSpec::Run(args) => execute_run(args),
+        CommandSpec::AgentSandbox(args) => execute_agent_sandbox(args),
         CommandSpec::Explain(args) => execute_explain(args),
+        CommandSpec::Claims(args) => execute_claims(args),
         CommandSpec::Doctor(args) => execute_doctor(*args),
         CommandSpec::Verify(args) => execute_verify(args),
         CommandSpec::Benchmark(args) => execute_benchmark(args),
         CommandSpec::Replay(args) => execute_replay(args),
+        CommandSpec::ReplayDebug(args) => execute_replay_debug(args),
         CommandSpec::DifferentialOracle(args) => execute_differential_oracle(args),
+        CommandSpec::Oracle(args) => execute_oracle(args),
         CommandSpec::React(args) => execute_react(args),
         CommandSpec::Gates(args) => execute_gates(args),
         CommandSpec::Reports(args) => execute_reports(args),
@@ -1355,13 +1709,19 @@ fn parse_command(args: &[String]) -> Result<CommandSpec, String> {
         "--help" | "-h" => Ok(CommandSpec::Help),
         "version" => Ok(CommandSpec::Version),
         "compile" => parse_compile_command(&args[1..]),
+        "check" => parse_check_command(&args[1..]),
+        "onboard" => parse_onboard_command(&args[1..]),
+        "diff-behavior" => parse_diff_behavior_command(&args[1..]),
         "run" => parse_run_command(&args[1..]),
+        "agent-sandbox" => parse_agent_sandbox_command(&args[1..]),
         "explain" => parse_explain_command(&args[1..]),
+        "claims" => parse_claims_command(&args[1..]),
         "doctor" => parse_doctor_command(&args[1..]),
         "verify" => parse_verify_command(&args[1..]),
         "benchmark" => parse_benchmark_command(&args[1..]),
         "replay" => parse_replay_command(&args[1..]),
         "differential-oracle" => parse_differential_oracle_command(&args[1..]),
+        "oracle" => parse_oracle_command(&args[1..]),
         "react" => parse_react_command(&args[1..]),
         "gates" => parse_gates_command(&args[1..]),
         "reports" => parse_reports_command(&args[1..]),
@@ -1380,8 +1740,17 @@ fn parse_help_command(args: &[String]) -> Result<CommandSpec, String> {
 
     match args[0].as_str() {
         "compile" => parse_leaf_help_topic("compile", HelpTopic::Compile, &args[1..]),
+        "check" => parse_leaf_help_topic("check", HelpTopic::Check, &args[1..]),
+        "onboard" => parse_leaf_help_topic("onboard", HelpTopic::Onboard, &args[1..]),
+        "diff-behavior" => {
+            parse_leaf_help_topic("diff-behavior", HelpTopic::DiffBehavior, &args[1..])
+        }
         "run" => parse_leaf_help_topic("run", HelpTopic::Run, &args[1..]),
+        "agent-sandbox" => {
+            parse_leaf_help_topic("agent-sandbox", HelpTopic::AgentSandbox, &args[1..])
+        }
         "explain" => parse_leaf_help_topic("explain", HelpTopic::Explain, &args[1..]),
+        "claims" => parse_claims_help_command(&args[1..]),
         "doctor" => parse_leaf_help_topic("doctor", HelpTopic::Doctor, &args[1..]),
         "verify" => parse_verify_help_command(&args[1..]),
         "benchmark" => parse_benchmark_help_command(&args[1..]),
@@ -1395,8 +1764,18 @@ fn parse_help_command(args: &[String]) -> Result<CommandSpec, String> {
         "orchestrate" => parse_leaf_help_topic("orchestrate", HelpTopic::Orchestrate, &args[1..]),
         "runtime" => parse_leaf_help_topic("runtime", HelpTopic::Runtime, &args[1..]),
         other => Err(format!(
-            "unknown help topic `{other}` (expected compile|run|explain|doctor|verify|benchmark|replay|differential-oracle|react|gates|reports|test|synth|orchestrate|runtime)"
+            "unknown help topic `{other}` (expected compile|check|onboard|diff-behavior|run|agent-sandbox|explain|doctor|verify|benchmark|replay|differential-oracle|react|gates|reports|test|synth|orchestrate|runtime)"
         )),
+    }
+}
+
+fn parse_claims_help_command(args: &[String]) -> Result<CommandSpec, String> {
+    if args.is_empty() || matches!(args[0].as_str(), "--help" | "-h") {
+        return Ok(CommandSpec::HelpTopic(HelpTopic::Claims));
+    }
+    match args[0].as_str() {
+        "explain" => parse_leaf_help_topic("claims explain", HelpTopic::ClaimsExplain, &args[1..]),
+        other => Err(format!("unknown claims help topic `{other}`")),
     }
 }
 
@@ -1457,8 +1836,9 @@ fn parse_replay_help_command(args: &[String]) -> Result<CommandSpec, String> {
 
     match args[0].as_str() {
         "run" => parse_leaf_help_topic("replay run", HelpTopic::ReplayRun, &args[1..]),
+        "debug" => parse_leaf_help_topic("replay debug", HelpTopic::ReplayDebug, &args[1..]),
         other => Err(format!(
-            "unknown replay help topic `{other}` (expected run)"
+            "unknown replay help topic `{other}` (expected run|debug)"
         )),
     }
 }
@@ -1472,6 +1852,11 @@ fn parse_differential_oracle_help_command(args: &[String]) -> Result<CommandSpec
         "run" => parse_leaf_help_topic(
             "differential-oracle run",
             HelpTopic::DifferentialOracleRun,
+            &args[1..],
+        ),
+        "perf" => parse_leaf_help_topic(
+            "differential-oracle perf",
+            HelpTopic::DifferentialOraclePerf,
             &args[1..],
         ),
         other => Err(format!(
@@ -1543,6 +1928,225 @@ fn parse_compile_command(args: &[String]) -> Result<CommandSpec, String> {
     }))
 }
 
+fn parse_check_command(args: &[String]) -> Result<CommandSpec, String> {
+    if has_help_flag(args) {
+        return Ok(CommandSpec::HelpTopic(HelpTopic::Check));
+    }
+
+    let mut input: Option<PathBuf> = None;
+    let mut goal = ParseGoal::Script;
+    let mut format = CheckOutputFormat::Human;
+    let mut out: Option<PathBuf> = None;
+
+    let mut index = 0usize;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--input" => input = Some(PathBuf::from(next_arg(args, &mut index, "--input")?)),
+            "--goal" => goal = parse_goal(&next_arg(args, &mut index, "--goal")?)?,
+            "--format" => {
+                format = parse_check_output_format(&next_arg(args, &mut index, "--format")?)?
+            }
+            "--out" => out = Some(PathBuf::from(next_arg(args, &mut index, "--out")?)),
+            value if !value.starts_with("--") && input.is_none() => {
+                input = Some(PathBuf::from(value));
+            }
+            flag => return Err(format!("unknown check flag `{flag}`")),
+        }
+        index += 1;
+    }
+
+    let input = input.ok_or_else(|| "check requires <file> or --input <path>".to_string())?;
+
+    Ok(CommandSpec::Check(CheckArgs {
+        input,
+        parse_goal: goal,
+        format,
+        out,
+    }))
+}
+
+fn parse_check_output_format(value: &str) -> Result<CheckOutputFormat, String> {
+    match value {
+        "human" | "text" => Ok(CheckOutputFormat::Human),
+        "json" => Ok(CheckOutputFormat::Json),
+        other => Err(format!(
+            "unknown check --format `{other}` (expected human|json)"
+        )),
+    }
+}
+
+fn parse_onboard_command(args: &[String]) -> Result<CommandSpec, String> {
+    if has_help_flag(args) {
+        return Ok(CommandSpec::HelpTopic(HelpTopic::Onboard));
+    }
+
+    let mut target: Option<PathBuf> = None;
+    let mut root: Option<PathBuf> = None;
+    // Packages are ES-module graphs; default the analysis goal to `module`.
+    let mut goal = ParseGoal::Module;
+    let mut format = CheckOutputFormat::Human;
+    let mut out: Option<PathBuf> = None;
+
+    let mut index = 0usize;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--target" => target = Some(PathBuf::from(next_arg(args, &mut index, "--target")?)),
+            "--root" => root = Some(PathBuf::from(next_arg(args, &mut index, "--root")?)),
+            "--goal" => goal = parse_goal(&next_arg(args, &mut index, "--goal")?)?,
+            "--format" => {
+                format = parse_check_output_format(&next_arg(args, &mut index, "--format")?)?
+            }
+            "--out" => out = Some(PathBuf::from(next_arg(args, &mut index, "--out")?)),
+            value if !value.starts_with("--") && target.is_none() => {
+                target = Some(PathBuf::from(value));
+            }
+            flag => return Err(format!("unknown onboard flag `{flag}`")),
+        }
+        index += 1;
+    }
+
+    let target = target
+        .ok_or_else(|| "onboard requires <pkg-dir|entry-file> or --target <path>".to_string())?;
+
+    Ok(CommandSpec::Onboard(OnboardArgs {
+        target,
+        root,
+        parse_goal: goal,
+        format,
+        out,
+    }))
+}
+
+fn parse_diff_behavior_command(args: &[String]) -> Result<CommandSpec, String> {
+    if has_help_flag(args) {
+        return Ok(CommandSpec::HelpTopic(HelpTopic::DiffBehavior));
+    }
+
+    let mut before: Option<PathBuf> = None;
+    let mut after: Option<PathBuf> = None;
+    let mut before_root: Option<PathBuf> = None;
+    let mut after_root: Option<PathBuf> = None;
+    let mut before_label: Option<String> = None;
+    let mut after_label: Option<String> = None;
+    let mut goal = ParseGoal::Module;
+    let mut format = CheckOutputFormat::Human;
+    let mut out: Option<PathBuf> = None;
+    let mut positionals: Vec<PathBuf> = Vec::new();
+
+    let mut index = 0usize;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--before" => before = Some(PathBuf::from(next_arg(args, &mut index, "--before")?)),
+            "--after" => after = Some(PathBuf::from(next_arg(args, &mut index, "--after")?)),
+            "--before-root" => {
+                before_root = Some(PathBuf::from(next_arg(args, &mut index, "--before-root")?))
+            }
+            "--after-root" => {
+                after_root = Some(PathBuf::from(next_arg(args, &mut index, "--after-root")?))
+            }
+            "--before-label" => before_label = Some(next_arg(args, &mut index, "--before-label")?),
+            "--after-label" => after_label = Some(next_arg(args, &mut index, "--after-label")?),
+            "--goal" => goal = parse_goal(&next_arg(args, &mut index, "--goal")?)?,
+            "--format" => {
+                format = parse_check_output_format(&next_arg(args, &mut index, "--format")?)?
+            }
+            "--out" => out = Some(PathBuf::from(next_arg(args, &mut index, "--out")?)),
+            value if !value.starts_with("--") => positionals.push(PathBuf::from(value)),
+            flag => return Err(format!("unknown diff-behavior flag `{flag}`")),
+        }
+        index += 1;
+    }
+
+    if before.is_none() {
+        before = positionals.first().cloned();
+    }
+    if after.is_none() {
+        after = positionals.get(1).cloned();
+    }
+    if positionals.len() > 2 {
+        return Err(
+            "diff-behavior accepts at most two positional paths: <before> <after>".to_string(),
+        );
+    }
+
+    let before =
+        before.ok_or_else(|| "diff-behavior requires a before package/path".to_string())?;
+    let after = after.ok_or_else(|| "diff-behavior requires an after package/path".to_string())?;
+
+    Ok(CommandSpec::DiffBehavior(DiffBehaviorArgs {
+        before,
+        after,
+        before_root,
+        after_root,
+        before_label,
+        after_label,
+        parse_goal: goal,
+        format,
+        out,
+    }))
+}
+
+fn onboard_usage() -> String {
+    [
+        "onboard usage:",
+        "  frankenctl onboard <pkg-dir|entry.js> [--root <dir>] [--goal module|script]",
+        "      [--format human|json] [--out <bundle-dir>]",
+        "  frankenctl onboard --target <pkg-dir|entry.js> [--root <dir>] [--format json]",
+        "",
+        "  Walks the static ES-module graph reachable from the entry and reports,",
+        "  with module + source-span citations:",
+        "    - a normalized manifest proposal (entry, local modules, external deps),",
+        "    - a capability-profile proposal (each capability + the exact span(s)",
+        "      and owning module that require it),",
+        "    - a denied-ambient-authority report (error[FE-CAP-0001] across modules),",
+        "    - an IFC flow inventory (required declassifications / runtime checkpoints,",
+        "      unsupported flows, and unanalyzable modules),",
+        "    - a per-mode module-resolution report (Native/NodeCompat/BunCompat",
+        "      differences + extension-probe sequences).",
+        "",
+        "  v1 is a compiler, not a wizard: only ES `import` declarations are followed",
+        "  as graph edges; CommonJS `require`/dynamic `import()` and external (bare)",
+        "  specifiers are reported, never silently covered. This is the inferred",
+        "  authority footprint for SUPPORTED syntax — not a proof of noninterference",
+        "  for arbitrary JS/TS. Most real npm packages honestly report bounded",
+        "  coverage until language support rises.",
+        "",
+        "  If <target> is a directory, the entry is auto-detected from package.json",
+        "  (`module` then `main`) and then index.{js,mjs,cjs,ts,jsx,tsx}.",
+        "",
+        "  exit codes: 0 = clean, 1 = findings present, 2 = unanalyzable (fail-closed)",
+        "  --out <dir> writes a content-addressed run_manifest.json + events.jsonl bundle.",
+    ]
+    .join("\n")
+}
+
+fn diff_behavior_usage() -> String {
+    [
+        "diff-behavior usage:",
+        "  frankenctl diff-behavior <before-pkg|entry.js> <after-pkg|entry.js> [--goal module|script]",
+        "      [--before-root <dir>] [--after-root <dir>] [--before-label <label>] [--after-label <label>]",
+        "      [--format human|json] [--out <bundle-dir>]",
+        "  frankenctl diff-behavior --before <pkg> --after <pkg> [--format json]",
+        "",
+        "  Reuses `frankenctl onboard` package intake for both versions, then emits",
+        "  a content-addressed behavioral delta over the supported analyzable subset:",
+        "    - added/removed capability and hostcall tags,",
+        "    - new denied ambient-authority accesses,",
+        "    - new IFC declassification obligations or denied flows,",
+        "    - external dependency, mode-divergence, and unanalyzable-surface growth,",
+        "    - severity ranking (ProcessSpawn or NetworkEgress additions are critical).",
+        "",
+        "  This is a supply-chain signal for the supported subset, not a proof of",
+        "  package safety. External packages, dynamic import/require, native addons,",
+        "  and unanalyzable modules are listed as boundary growth instead of covered.",
+        "",
+        "  exit codes: 0 = unchanged, 1 = deltas present, 2 = unanalyzable (fail-closed)",
+        "  --out <dir> writes behavior_diff_report.json, before/after intake reports,",
+        "  run_manifest.json, and events.jsonl.",
+    ]
+    .join("\n")
+}
+
 fn parse_run_command(args: &[String]) -> Result<CommandSpec, String> {
     if has_help_flag(args) {
         return Ok(CommandSpec::HelpTopic(HelpTopic::Run));
@@ -1554,6 +2158,11 @@ fn parse_run_command(args: &[String]) -> Result<CommandSpec, String> {
     let mut out: Option<PathBuf> = None;
     let mut explain = false;
     let mut explain_out: Option<PathBuf> = None;
+    let mut emit_trace: Option<PathBuf> = None;
+    let mut data_contract: Option<PathBuf> = None;
+    let mut data_contract_purpose = DEFAULT_DATA_CONTRACT_PURPOSE.to_string();
+    let mut certificate_out: Option<PathBuf> = None;
+    let mut cell_close_budget_ms: Option<u64> = None;
 
     let mut index = 0usize;
     while index < args.len() {
@@ -1562,6 +2171,29 @@ fn parse_run_command(args: &[String]) -> Result<CommandSpec, String> {
             "--extension-id" => extension_id = Some(next_arg(args, &mut index, "--extension-id")?),
             "--goal" => goal = parse_goal(&next_arg(args, &mut index, "--goal")?)?,
             "--out" => out = Some(PathBuf::from(next_arg(args, &mut index, "--out")?)),
+            "--data-contract" => {
+                data_contract = Some(PathBuf::from(next_arg(
+                    args,
+                    &mut index,
+                    "--data-contract",
+                )?));
+            }
+            "--purpose" => {
+                data_contract_purpose = next_arg(args, &mut index, "--purpose")?;
+            }
+            "--certificate-out" => {
+                certificate_out = Some(PathBuf::from(next_arg(
+                    args,
+                    &mut index,
+                    "--certificate-out",
+                )?));
+            }
+            "--cell-close-budget-ms" => {
+                cell_close_budget_ms = Some(parse_positive_u64(
+                    &next_arg(args, &mut index, "--cell-close-budget-ms")?,
+                    "--cell-close-budget-ms",
+                )?);
+            }
             "--explain" => {
                 explain = true;
                 if let Some(candidate) = args.get(index + 1)
@@ -1575,6 +2207,9 @@ fn parse_run_command(args: &[String]) -> Result<CommandSpec, String> {
                 explain = true;
                 explain_out = Some(PathBuf::from(next_arg(args, &mut index, "--explain-out")?));
             }
+            "--emit-trace" => {
+                emit_trace = Some(PathBuf::from(next_arg(args, &mut index, "--emit-trace")?));
+            }
             flag => return Err(format!("unknown run flag `{flag}`")),
         }
         index += 1;
@@ -1583,6 +2218,11 @@ fn parse_run_command(args: &[String]) -> Result<CommandSpec, String> {
     let input = input.ok_or_else(|| "run requires --input <path>".to_string())?;
     let extension_id =
         extension_id.ok_or_else(|| "run requires --extension-id <id>".to_string())?;
+    // Fail closed: a certificate bundle is meaningless without the data
+    // contract that declares the claims it certifies.
+    if certificate_out.is_some() && data_contract.is_none() {
+        return Err("--certificate-out requires --data-contract <contract.json>".to_string());
+    }
 
     Ok(CommandSpec::Run(RunArgs {
         input,
@@ -1591,6 +2231,79 @@ fn parse_run_command(args: &[String]) -> Result<CommandSpec, String> {
         out,
         explain,
         explain_out,
+        emit_trace,
+        data_contract,
+        data_contract_purpose,
+        certificate_out,
+        cell_close_budget_ms,
+    }))
+}
+
+fn parse_agent_sandbox_command(args: &[String]) -> Result<CommandSpec, String> {
+    if has_help_flag(args) {
+        return Ok(CommandSpec::HelpTopic(HelpTopic::AgentSandbox));
+    }
+
+    let mut manifest: Option<PathBuf> = None;
+    let mut input: Option<PathBuf> = None;
+    let mut goal = ParseGoal::Script;
+    let mut out: Option<PathBuf> = None;
+    let mut data_contract: Option<PathBuf> = None;
+    let mut purpose: Option<String> = None;
+    let mut certificate_out: Option<PathBuf> = None;
+    let mut cell_close_budget_ms: Option<u64> = None;
+
+    let mut index = 0usize;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--manifest" => {
+                manifest = Some(PathBuf::from(next_arg(args, &mut index, "--manifest")?));
+            }
+            "--input" => input = Some(PathBuf::from(next_arg(args, &mut index, "--input")?)),
+            "--goal" => goal = parse_goal(&next_arg(args, &mut index, "--goal")?)?,
+            "--out" => out = Some(PathBuf::from(next_arg(args, &mut index, "--out")?)),
+            "--data-contract" => {
+                data_contract = Some(PathBuf::from(next_arg(
+                    args,
+                    &mut index,
+                    "--data-contract",
+                )?));
+            }
+            "--purpose" => purpose = Some(next_arg(args, &mut index, "--purpose")?),
+            "--certificate-out" => {
+                certificate_out = Some(PathBuf::from(next_arg(
+                    args,
+                    &mut index,
+                    "--certificate-out",
+                )?));
+            }
+            "--cell-close-budget-ms" => {
+                cell_close_budget_ms = Some(parse_positive_u64(
+                    &next_arg(args, &mut index, "--cell-close-budget-ms")?,
+                    "--cell-close-budget-ms",
+                )?);
+            }
+            flag => return Err(format!("unknown agent-sandbox flag `{flag}`")),
+        }
+        index += 1;
+    }
+
+    let manifest =
+        manifest.ok_or_else(|| "agent-sandbox requires --manifest <manifest.json>".to_string())?;
+    let input = input.ok_or_else(|| "agent-sandbox requires --input <generated.js>".to_string())?;
+    if certificate_out.is_some() && data_contract.is_none() {
+        return Err("--certificate-out requires --data-contract <contract.json>".to_string());
+    }
+
+    Ok(CommandSpec::AgentSandbox(AgentSandboxArgs {
+        manifest,
+        input,
+        parse_goal: goal,
+        out,
+        data_contract,
+        purpose,
+        certificate_out,
+        cell_close_budget_ms,
     }))
 }
 
@@ -1602,6 +2315,7 @@ fn parse_explain_command(args: &[String]) -> Result<CommandSpec, String> {
     let mut input: Option<PathBuf> = None;
     let mut format = ExplainOutputFormat::Summary;
     let mut out: Option<PathBuf> = None;
+    let mut emit_bundle: Option<PathBuf> = None;
 
     let mut index = 0usize;
     while index < args.len() {
@@ -1611,6 +2325,9 @@ fn parse_explain_command(args: &[String]) -> Result<CommandSpec, String> {
                 format = parse_explain_output_format(&next_arg(args, &mut index, "--format")?)?
             }
             "--out" => out = Some(PathBuf::from(next_arg(args, &mut index, "--out")?)),
+            "--emit-bundle" => {
+                emit_bundle = Some(PathBuf::from(next_arg(args, &mut index, "--emit-bundle")?))
+            }
             value if !value.starts_with("--") && input.is_none() => {
                 input = Some(PathBuf::from(value));
             }
@@ -1624,6 +2341,63 @@ fn parse_explain_command(args: &[String]) -> Result<CommandSpec, String> {
             .ok_or_else(|| "explain requires <bundle.json> or --input <bundle.json>".to_string())?,
         format,
         out,
+        emit_bundle,
+    }))
+}
+
+fn parse_claims_command(args: &[String]) -> Result<CommandSpec, String> {
+    if args.is_empty() {
+        return Ok(CommandSpec::HelpTopic(HelpTopic::Claims));
+    }
+    match args[0].as_str() {
+        "help" | "--help" | "-h" => Ok(CommandSpec::HelpTopic(HelpTopic::Claims)),
+        "explain" => parse_claims_explain_command(&args[1..]),
+        other => Err(format!("unknown claims subcommand `{other}`")),
+    }
+}
+
+fn parse_claims_explain_command(args: &[String]) -> Result<CommandSpec, String> {
+    if has_help_flag(args) {
+        return Ok(CommandSpec::HelpTopic(HelpTopic::ClaimsExplain));
+    }
+
+    let mut claim_id: Option<String> = None;
+    let mut matrix = PathBuf::from(DEFAULT_CLAIM_MATRIX_PATH);
+    let mut beads_jsonl = Some(PathBuf::from(DEFAULT_BEADS_JSONL_PATH));
+    let mut format = CheckOutputFormat::Human;
+    let mut out: Option<PathBuf> = None;
+
+    let mut index = 0usize;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--claim-id" => claim_id = Some(next_arg(args, &mut index, "--claim-id")?),
+            "--matrix" => matrix = PathBuf::from(next_arg(args, &mut index, "--matrix")?),
+            "--beads-jsonl" => {
+                beads_jsonl = Some(PathBuf::from(next_arg(args, &mut index, "--beads-jsonl")?))
+            }
+            "--no-beads" => beads_jsonl = None,
+            "--format" => {
+                format = parse_check_output_format(&next_arg(args, &mut index, "--format")?)?
+            }
+            "--out" => out = Some(PathBuf::from(next_arg(args, &mut index, "--out")?)),
+            value if !value.starts_with("--") && claim_id.is_none() => {
+                claim_id = Some(value.to_string());
+            }
+            flag => return Err(format!("unknown claims explain flag `{flag}`")),
+        }
+        index += 1;
+    }
+
+    let claim_id = claim_id
+        .ok_or_else(|| "claims explain requires <claim-id> or --claim-id <id>".to_string())?;
+    Ok(CommandSpec::Claims(ClaimsArgs {
+        mode: ClaimsMode::Explain(ClaimsExplainArgs {
+            claim_id,
+            matrix,
+            beads_jsonl,
+            format,
+            out,
+        }),
     }))
 }
 
@@ -1980,14 +2754,15 @@ fn parse_benchmark_verify_command(args: &[String]) -> Result<CommandSpec, String
 
 fn parse_replay_command(args: &[String]) -> Result<CommandSpec, String> {
     if args.is_empty() {
-        return Err("replay requires subcommand `run`".to_string());
+        return Err("replay requires subcommand `run` or `debug`".to_string());
     }
 
     match args[0].as_str() {
         "help" | "--help" | "-h" => Ok(CommandSpec::HelpTopic(HelpTopic::Replay)),
         "run" => parse_replay_run_command(&args[1..]),
+        "debug" => parse_replay_debug_command(&args[1..]),
         other => Err(format!(
-            "unknown replay subcommand `{other}` (expected run)"
+            "unknown replay subcommand `{other}` (expected run|debug)"
         )),
     }
 }
@@ -2033,6 +2808,64 @@ fn parse_replay_run_command(args: &[String]) -> Result<CommandSpec, String> {
     }))
 }
 
+fn parse_replay_debug_command(args: &[String]) -> Result<CommandSpec, String> {
+    if has_help_flag(args) {
+        return Ok(CommandSpec::HelpTopic(HelpTopic::ReplayDebug));
+    }
+
+    let mut trace: Option<PathBuf> = None;
+    let mut script: Option<PathBuf> = None;
+    let mut events: Option<PathBuf> = None;
+    let mut state_snapshots: Option<PathBuf> = None;
+    let mut input: Option<PathBuf> = None;
+    let mut input_goal = ParseGoal::Script;
+    let mut checkpoint_interval: u64 = 64;
+    let mut mode = ReplayMode::Strict;
+    let mut out: Option<PathBuf> = None;
+
+    let mut index = 0usize;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--trace" => trace = Some(PathBuf::from(next_arg(args, &mut index, "--trace")?)),
+            "--script" => script = Some(PathBuf::from(next_arg(args, &mut index, "--script")?)),
+            "--events" => events = Some(PathBuf::from(next_arg(args, &mut index, "--events")?)),
+            "--state-snapshots" => {
+                state_snapshots = Some(PathBuf::from(next_arg(
+                    args,
+                    &mut index,
+                    "--state-snapshots",
+                )?))
+            }
+            "--input" => input = Some(PathBuf::from(next_arg(args, &mut index, "--input")?)),
+            "--input-goal" => {
+                input_goal = parse_goal(&next_arg(args, &mut index, "--input-goal")?)?
+            }
+            "--checkpoint-interval" => {
+                let raw = next_arg(args, &mut index, "--checkpoint-interval")?;
+                checkpoint_interval = raw
+                    .parse::<u64>()
+                    .map_err(|error| format!("invalid --checkpoint-interval `{raw}`: {error}"))?;
+            }
+            "--mode" => mode = parse_replay_mode(&next_arg(args, &mut index, "--mode")?)?,
+            "--out" => out = Some(PathBuf::from(next_arg(args, &mut index, "--out")?)),
+            flag => return Err(format!("unknown replay debug flag `{flag}`")),
+        }
+        index += 1;
+    }
+
+    Ok(CommandSpec::ReplayDebug(ReplayDebugArgs {
+        trace: trace.ok_or_else(|| "replay debug requires --trace <path>".to_string())?,
+        script,
+        events,
+        state_snapshots,
+        input,
+        input_goal,
+        checkpoint_interval,
+        mode,
+        out,
+    }))
+}
+
 fn parse_differential_oracle_command(args: &[String]) -> Result<CommandSpec, String> {
     if args.is_empty() {
         return Ok(CommandSpec::HelpTopic(HelpTopic::DifferentialOracle));
@@ -2041,14 +2874,16 @@ fn parse_differential_oracle_command(args: &[String]) -> Result<CommandSpec, Str
     match args[0].as_str() {
         "help" | "--help" | "-h" => match args.get(1).map(String::as_str) {
             Some("run") => Ok(CommandSpec::HelpTopic(HelpTopic::DifferentialOracleRun)),
+            Some("perf") => Ok(CommandSpec::HelpTopic(HelpTopic::DifferentialOraclePerf)),
             Some(other) => Err(format!(
-                "unknown differential-oracle help topic `{other}` (expected run)"
+                "unknown differential-oracle help topic `{other}` (expected run|perf)"
             )),
             None => Ok(CommandSpec::HelpTopic(HelpTopic::DifferentialOracle)),
         },
         "run" => parse_differential_oracle_run_command(&args[1..]),
+        "perf" => parse_differential_oracle_perf_command(&args[1..]),
         other => Err(format!(
-            "unknown differential-oracle subcommand `{other}` (expected run)"
+            "unknown differential-oracle subcommand `{other}` (expected run|perf)"
         )),
     }
 }
@@ -2062,6 +2897,8 @@ fn parse_differential_oracle_run_command(args: &[String]) -> Result<CommandSpec,
     let mut case_id: Option<String> = None;
     let mut timeout_ms = 2_000_u64;
     let mut out: Option<PathBuf> = None;
+    let mut engine_budget: Option<u64> = None;
+    let mut engine_memory_budget: Option<u64> = None;
 
     let mut index = 0usize;
     while index < args.len() {
@@ -2073,6 +2910,18 @@ fn parse_differential_oracle_run_command(args: &[String]) -> Result<CommandSpec,
                     parse_u64(&next_arg(args, &mut index, "--timeout-ms")?, "--timeout-ms")?.max(1)
             }
             "--out" => out = Some(PathBuf::from(next_arg(args, &mut index, "--out")?)),
+            "--engine-budget" => {
+                engine_budget = Some(parse_u64(
+                    &next_arg(args, &mut index, "--engine-budget")?,
+                    "--engine-budget",
+                )?)
+            }
+            "--engine-memory-budget" => {
+                engine_memory_budget = Some(parse_u64(
+                    &next_arg(args, &mut index, "--engine-memory-budget")?,
+                    "--engine-memory-budget",
+                )?)
+            }
             flag => return Err(format!("unknown differential-oracle run flag `{flag}`")),
         }
         index += 1;
@@ -2086,6 +2935,257 @@ fn parse_differential_oracle_run_command(args: &[String]) -> Result<CommandSpec,
             case_id,
             timeout_ms,
             out,
+            engine_budget,
+            engine_memory_budget,
+        }),
+    }))
+}
+
+fn parse_differential_oracle_perf_command(args: &[String]) -> Result<CommandSpec, String> {
+    if has_help_flag(args) {
+        return Ok(CommandSpec::HelpTopic(HelpTopic::DifferentialOraclePerf));
+    }
+
+    let mut manifest: Option<PathBuf> = None;
+    let mut out: Option<PathBuf> = None;
+    let mut events: Option<PathBuf> = None;
+    let mut warmup = 3_u32;
+    let mut samples = 30_u32;
+    let mut case_timeout_ms = 120_000_u64;
+    let mut engine_budget: Option<u64> = None;
+    let mut node_bin: Option<String> = None;
+    let mut bun_bin: Option<String> = None;
+    let mut case_filter: Vec<String> = Vec::new();
+
+    let mut index = 0usize;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--manifest" => {
+                manifest = Some(PathBuf::from(next_arg(args, &mut index, "--manifest")?))
+            }
+            "--out" => out = Some(PathBuf::from(next_arg(args, &mut index, "--out")?)),
+            "--events" => events = Some(PathBuf::from(next_arg(args, &mut index, "--events")?)),
+            "--warmup" => {
+                warmup = u32::try_from(parse_u64(
+                    &next_arg(args, &mut index, "--warmup")?,
+                    "--warmup",
+                )?)
+                .map_err(|_| "--warmup value does not fit in u32".to_string())?
+            }
+            "--samples" => {
+                samples = u32::try_from(parse_u64(
+                    &next_arg(args, &mut index, "--samples")?,
+                    "--samples",
+                )?)
+                .map_err(|_| "--samples value does not fit in u32".to_string())?
+            }
+            "--case-timeout-ms" => {
+                case_timeout_ms = parse_u64(
+                    &next_arg(args, &mut index, "--case-timeout-ms")?,
+                    "--case-timeout-ms",
+                )?
+                .max(1)
+            }
+            "--engine-budget" => {
+                engine_budget = Some(parse_u64(
+                    &next_arg(args, &mut index, "--engine-budget")?,
+                    "--engine-budget",
+                )?)
+            }
+            "--node-bin" => node_bin = Some(next_arg(args, &mut index, "--node-bin")?),
+            "--bun-bin" => bun_bin = Some(next_arg(args, &mut index, "--bun-bin")?),
+            "--case" => case_filter.push(next_arg(args, &mut index, "--case")?),
+            flag => return Err(format!("unknown differential-oracle perf flag `{flag}`")),
+        }
+        index += 1;
+    }
+
+    Ok(CommandSpec::DifferentialOracle(DifferentialOracleArgs {
+        mode: DifferentialOracleMode::Perf(DifferentialOraclePerfArgs {
+            manifest: manifest.ok_or_else(|| {
+                "differential-oracle perf requires --manifest <manifest.json>".to_string()
+            })?,
+            out,
+            events,
+            warmup,
+            samples,
+            case_timeout_ms,
+            engine_budget,
+            node_bin,
+            bun_bin,
+            case_filter,
+        }),
+    }))
+}
+
+fn parse_oracle_command(args: &[String]) -> Result<CommandSpec, String> {
+    if args.is_empty() {
+        return Ok(CommandSpec::HelpTopic(HelpTopic::Oracle));
+    }
+
+    match args[0].as_str() {
+        "help" | "--help" | "-h" => match args.get(1).map(String::as_str) {
+            Some("run") => Ok(CommandSpec::HelpTopic(HelpTopic::OracleRun)),
+            Some("report") => Ok(CommandSpec::HelpTopic(HelpTopic::OracleReport)),
+            Some(other) => Err(format!(
+                "unknown oracle help topic `{other}` (expected run|report)"
+            )),
+            None => Ok(CommandSpec::HelpTopic(HelpTopic::Oracle)),
+        },
+        "run" => parse_oracle_run_command(&args[1..]),
+        "report" => parse_oracle_report_command(&args[1..]),
+        other => Err(format!(
+            "unknown oracle subcommand `{other}` (expected run|report)"
+        )),
+    }
+}
+
+/// Resolve the `--engines` selection. Accepts a comma-separated list of engine
+/// aliases; `None` (flag omitted) yields the full four-lane selection.
+fn parse_engine_selection(raw: Option<&str>) -> Result<Vec<DifferentialBackend>, String> {
+    let Some(raw) = raw else {
+        return Ok(default_backend_selection());
+    };
+    let mut selection: Vec<DifferentialBackend> = Vec::new();
+    for token in raw.split(',') {
+        let token = token.trim();
+        if token.is_empty() {
+            continue;
+        }
+        let backend = match token.to_ascii_lowercase().as_str() {
+            "node" | "nodejs" | "node_lts" | "node-lts" => DifferentialBackend::NodeLts,
+            "bun" | "bun_stable" | "bun-stable" => DifferentialBackend::BunStable,
+            "franken" | "engine" | "franken_engine" | "franken-engine" => {
+                DifferentialBackend::FrankenEngine
+            }
+            "core" | "franken_core" | "franken-core" => DifferentialBackend::FrankenCore,
+            other => {
+                return Err(format!(
+                    "unknown engine `{other}` in --engines (expected comma-separated subset of: node, bun, franken, core)"
+                ));
+            }
+        };
+        if !selection.contains(&backend) {
+            selection.push(backend);
+        }
+    }
+    if selection.is_empty() {
+        return Err(
+            "--engines must select at least one engine (node, bun, franken, core)".to_string(),
+        );
+    }
+    Ok(selection)
+}
+
+fn parse_oracle_run_command(args: &[String]) -> Result<CommandSpec, String> {
+    if has_help_flag(args) {
+        return Ok(CommandSpec::HelpTopic(HelpTopic::OracleRun));
+    }
+
+    let mut input: Option<PathBuf> = None;
+    let mut engines_raw: Option<String> = None;
+    let mut case_id: Option<String> = None;
+    let mut timeout_ms = 2_000_u64;
+    let mut engine_budget: Option<u64> = None;
+    let mut engine_memory_budget: Option<u64> = None;
+    let mut node_bin: Option<String> = None;
+    let mut bun_bin: Option<String> = None;
+    let mut bundle: Option<PathBuf> = None;
+    let mut out: Option<PathBuf> = None;
+    let mut format = CheckOutputFormat::Human;
+
+    let mut index = 0usize;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--input" => input = Some(PathBuf::from(next_arg(args, &mut index, "--input")?)),
+            "--engines" => engines_raw = Some(next_arg(args, &mut index, "--engines")?),
+            "--case-id" => case_id = Some(next_arg(args, &mut index, "--case-id")?),
+            "--timeout-ms" => {
+                timeout_ms =
+                    parse_u64(&next_arg(args, &mut index, "--timeout-ms")?, "--timeout-ms")?.max(1)
+            }
+            "--engine-budget" => {
+                engine_budget = Some(parse_u64(
+                    &next_arg(args, &mut index, "--engine-budget")?,
+                    "--engine-budget",
+                )?)
+            }
+            "--engine-memory-budget" => {
+                engine_memory_budget = Some(parse_u64(
+                    &next_arg(args, &mut index, "--engine-memory-budget")?,
+                    "--engine-memory-budget",
+                )?)
+            }
+            "--node-bin" => node_bin = Some(next_arg(args, &mut index, "--node-bin")?),
+            "--bun-bin" => bun_bin = Some(next_arg(args, &mut index, "--bun-bin")?),
+            "--bundle" => bundle = Some(PathBuf::from(next_arg(args, &mut index, "--bundle")?)),
+            "--out" => out = Some(PathBuf::from(next_arg(args, &mut index, "--out")?)),
+            "--json" => format = CheckOutputFormat::Json,
+            other if !other.starts_with("--") => {
+                if input.is_some() {
+                    return Err(format!(
+                        "unexpected positional argument `{other}` (input already provided)"
+                    ));
+                }
+                input = Some(PathBuf::from(other));
+            }
+            flag => return Err(format!("unknown oracle run flag `{flag}`")),
+        }
+        index += 1;
+    }
+
+    let engines = parse_engine_selection(engines_raw.as_deref())?;
+
+    Ok(CommandSpec::Oracle(OracleArgs {
+        mode: OracleMode::Run(OracleRunArgs {
+            input: input.ok_or_else(|| {
+                "oracle run requires <input.js> (positional or --input)".to_string()
+            })?,
+            engines,
+            case_id,
+            timeout_ms,
+            engine_budget,
+            engine_memory_budget,
+            node_bin,
+            bun_bin,
+            bundle,
+            out,
+            format,
+        }),
+    }))
+}
+
+fn parse_oracle_report_command(args: &[String]) -> Result<CommandSpec, String> {
+    if has_help_flag(args) {
+        return Ok(CommandSpec::HelpTopic(HelpTopic::OracleReport));
+    }
+
+    let mut bundle: Option<PathBuf> = None;
+    let mut format = CheckOutputFormat::Human;
+
+    let mut index = 0usize;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--bundle" => bundle = Some(PathBuf::from(next_arg(args, &mut index, "--bundle")?)),
+            "--json" => format = CheckOutputFormat::Json,
+            other if !other.starts_with("--") => {
+                if bundle.is_some() {
+                    return Err(format!(
+                        "unexpected positional argument `{other}` (bundle already provided)"
+                    ));
+                }
+                bundle = Some(PathBuf::from(other));
+            }
+            flag => return Err(format!("unknown oracle report flag `{flag}`")),
+        }
+        index += 1;
+    }
+
+    Ok(CommandSpec::Oracle(OracleArgs {
+        mode: OracleMode::Report(OracleReportArgs {
+            bundle: bundle
+                .ok_or_else(|| "oracle report requires <bundle-dir|manifest.json>".to_string())?,
+            format,
         }),
     }))
 }
@@ -2368,6 +3468,54 @@ fn parse_gates_command(args: &[String]) -> Result<CommandSpec, String> {
                 mode: GatesMode::SignatureDrift { out_dir, config },
             }))
         }
+        "compounding-red-team" => {
+            let mut out_dir: Option<PathBuf> = None;
+            let mut config: Option<PathBuf> = None;
+
+            let mut index = 1; // Skip "compounding-red-team"
+            while index < args.len() {
+                match args[index].as_str() {
+                    "--out-dir" => {
+                        out_dir = Some(PathBuf::from(next_arg(args, &mut index, "--out-dir")?))
+                    }
+                    "--config" => {
+                        config = Some(PathBuf::from(next_arg(args, &mut index, "--config")?))
+                    }
+                    flag => return Err(format!("unknown compounding-red-team flag `{flag}`")),
+                }
+                index += 1;
+            }
+
+            let out_dir = out_dir
+                .ok_or_else(|| "gates compounding-red-team requires --out-dir <dir>".to_string())?;
+            Ok(CommandSpec::Gates(GatesArgs {
+                mode: GatesMode::CompoundingRedTeam { out_dir, config },
+            }))
+        }
+        "erasure-bandwidth" => {
+            let mut out_dir: Option<PathBuf> = None;
+            let mut config: Option<PathBuf> = None;
+
+            let mut index = 1; // Skip "erasure-bandwidth"
+            while index < args.len() {
+                match args[index].as_str() {
+                    "--out-dir" => {
+                        out_dir = Some(PathBuf::from(next_arg(args, &mut index, "--out-dir")?))
+                    }
+                    "--config" => {
+                        config = Some(PathBuf::from(next_arg(args, &mut index, "--config")?))
+                    }
+                    flag => return Err(format!("unknown erasure-bandwidth flag `{flag}`")),
+                }
+                index += 1;
+            }
+
+            let out_dir = out_dir
+                .ok_or_else(|| "gates erasure-bandwidth requires --out-dir <dir>".to_string())?;
+            Ok(CommandSpec::Gates(GatesArgs {
+                mode: GatesMode::ErasureBandwidth { out_dir, config },
+            }))
+        }
         other => Err(format!("unknown gates subcommand `{other}`")),
     }
 }
@@ -2380,14 +3528,45 @@ fn parse_reports_command(args: &[String]) -> Result<CommandSpec, String> {
     match args[0].as_str() {
         "help" | "--help" | "-h" => Ok(CommandSpec::HelpTopic(HelpTopic::Reports)),
         "parser-oracle" => {
-            let mut config: Option<PathBuf> = None;
+            let mut partition = OraclePartition::Smoke;
+            let mut gate_mode = OracleGateMode::ReportOnly;
+            let mut seed = 1u64;
+            let mut fixture_catalog = PathBuf::from(DEFAULT_FIXTURE_CATALOG_PATH);
+            let mut trace_id = None;
+            let mut decision_id = None;
+            let mut policy_id = None;
             let mut out: Option<PathBuf> = None;
 
             let mut index = 1; // Skip "parser-oracle"
             while index < args.len() {
                 match args[index].as_str() {
-                    "--config" => {
-                        config = Some(PathBuf::from(next_arg(args, &mut index, "--config")?))
+                    "--partition" => {
+                        let value = next_arg(args, &mut index, "--partition")?;
+                        partition = value.parse::<OraclePartition>()?;
+                    }
+                    "--gate-mode" => {
+                        let value = next_arg(args, &mut index, "--gate-mode")?;
+                        gate_mode = value.parse::<OracleGateMode>()?;
+                    }
+                    "--seed" => {
+                        let value = next_arg(args, &mut index, "--seed")?;
+                        seed = value
+                            .parse::<u64>()
+                            .map_err(|error| format!("invalid --seed `{value}`: {error}"))?;
+                    }
+                    "--fixture-catalog" => {
+                        fixture_catalog =
+                            PathBuf::from(next_arg(args, &mut index, "--fixture-catalog")?);
+                    }
+                    "--trace-id" => {
+                        trace_id = Some(next_arg(args, &mut index, "--trace-id")?.to_string());
+                    }
+                    "--decision-id" => {
+                        decision_id =
+                            Some(next_arg(args, &mut index, "--decision-id")?.to_string());
+                    }
+                    "--policy-id" => {
+                        policy_id = Some(next_arg(args, &mut index, "--policy-id")?.to_string());
                     }
                     "--out" => out = Some(PathBuf::from(next_arg(args, &mut index, "--out")?)),
                     flag => return Err(format!("unknown parser-oracle flag `{flag}`")),
@@ -2396,7 +3575,16 @@ fn parse_reports_command(args: &[String]) -> Result<CommandSpec, String> {
             }
 
             Ok(CommandSpec::Reports(ReportsArgs {
-                mode: ReportsMode::ParserOracle { config, out },
+                mode: ReportsMode::ParserOracle {
+                    partition,
+                    gate_mode,
+                    seed,
+                    fixture_catalog,
+                    trace_id,
+                    decision_id,
+                    policy_id,
+                    out,
+                },
             }))
         }
         "lowering-gap" => {
@@ -2712,12 +3900,352 @@ fn execute_compile(args: CompileArgs) -> Result<i32, String> {
     Ok(0)
 }
 
+fn execute_check(args: CheckArgs) -> Result<i32, String> {
+    let source = fs::read_to_string(&args.input)
+        .map_err(|error| format!("failed to read source `{}`: {error}", args.input.display()))?;
+    let source_label = args.input.display().to_string();
+    let report = analyze_authority_footprint(&source, source_label.as_str(), args.parse_goal);
+
+    // Optional content-addressed bundle: run_manifest.json + events.jsonl.
+    // The report carries no wall-clock/host facts, so the bundle is replay-stable.
+    if let Some(out_dir) = args.out.as_ref() {
+        write_json_file(&out_dir.join("run_manifest.json"), &report)?;
+        write_bytes_file(
+            &out_dir.join("events.jsonl"),
+            render_check_events_jsonl(&report)?.as_bytes(),
+        )?;
+    }
+
+    match args.format {
+        CheckOutputFormat::Human => println!("{}", report.render_human()),
+        CheckOutputFormat::Json => print_json(&report)?,
+    }
+
+    Ok(report.outcome().exit_code())
+}
+
+/// One JSON object per finding, newline-delimited (`events.jsonl`). Deterministic
+/// for a given report (struct field order is fixed; no wall-clock content).
+fn render_check_events_jsonl(report: &AuthorityFootprintReport) -> Result<String, String> {
+    let mut lines = String::new();
+    for finding in &report.findings {
+        let encoded = serde_json::to_string(finding)
+            .map_err(|error| format!("failed to encode check finding: {error}"))?;
+        lines.push_str(&encoded);
+        lines.push('\n');
+    }
+    Ok(lines)
+}
+
+fn execute_onboard(args: OnboardArgs) -> Result<i32, String> {
+    let (root_dir, entry_relative) = resolve_package_entry(&args.target, args.root.as_deref())?;
+    let root_label = root_dir.display().to_string();
+    let report = onboard_package(&root_dir, &entry_relative, &root_label, args.parse_goal);
+
+    // Optional content-addressed bundle: run_manifest.json + events.jsonl.
+    // The report carries no wall-clock/host facts beyond the root label, so the
+    // bundle is replay-stable for a fixed package + invocation.
+    if let Some(out_dir) = args.out.as_ref() {
+        write_json_file(&out_dir.join("run_manifest.json"), &report)?;
+        write_bytes_file(
+            &out_dir.join("events.jsonl"),
+            render_onboard_events_jsonl(&report)?.as_bytes(),
+        )?;
+    }
+
+    match args.format {
+        CheckOutputFormat::Human => println!("{}", report.render_human()),
+        CheckOutputFormat::Json => print_json(&report)?,
+    }
+
+    Ok(report.outcome().exit_code())
+}
+
+fn execute_diff_behavior(args: DiffBehaviorArgs) -> Result<i32, String> {
+    let (before_root, before_entry) =
+        resolve_package_entry(&args.before, args.before_root.as_deref())?;
+    let (after_root, after_entry) = resolve_package_entry(&args.after, args.after_root.as_deref())?;
+    let before_label = args
+        .before_label
+        .unwrap_or_else(|| args.before.display().to_string());
+    let after_label = args
+        .after_label
+        .unwrap_or_else(|| args.after.display().to_string());
+
+    let before_report =
+        onboard_package(&before_root, &before_entry, &before_label, args.parse_goal);
+    let after_report = onboard_package(&after_root, &after_entry, &after_label, args.parse_goal);
+    let report = diff_package_behavior(&before_label, &before_report, &after_label, &after_report);
+
+    if let Some(out_dir) = args.out.as_ref() {
+        write_json_file(&out_dir.join("run_manifest.json"), &report)?;
+        write_json_file(&out_dir.join("behavior_diff_report.json"), &report)?;
+        write_json_file(&out_dir.join("before_intake_report.json"), &before_report)?;
+        write_json_file(&out_dir.join("after_intake_report.json"), &after_report)?;
+        write_bytes_file(
+            &out_dir.join("events.jsonl"),
+            render_diff_behavior_events_jsonl(&report)?.as_bytes(),
+        )?;
+    }
+
+    match args.format {
+        CheckOutputFormat::Human => println!("{}", report.render_human()),
+        CheckOutputFormat::Json => print_json(&report)?,
+    }
+
+    Ok(report.outcome().exit_code())
+}
+
+/// One JSON object per actionable item (denied ambient access, IFC finding,
+/// unanalyzable module, mode-divergent edge), newline-delimited. Deterministic
+/// for a given report (the report's vectors are pre-sorted; no wall-clock).
+fn render_onboard_events_jsonl(report: &PackageIntakeReport) -> Result<String, String> {
+    let mut lines = String::new();
+    let mut push = |value: serde_json::Value| -> Result<(), String> {
+        let encoded = serde_json::to_string(&value)
+            .map_err(|error| format!("failed to encode onboard event: {error}"))?;
+        lines.push_str(&encoded);
+        lines.push('\n');
+        Ok(())
+    };
+    for denied in &report.denied_ambient_authority {
+        push(serde_json::json!({
+            "event": "onboard.denied_ambient_authority",
+            "module": denied.module,
+            "accessor": denied.accessor,
+            "message": denied.message,
+        }))?;
+    }
+    for finding in &report.ifc_flow_inventory.required_declassifications {
+        push(serde_json::json!({
+            "event": "onboard.required_declassification",
+            "module": finding.module,
+            "message": finding.message,
+        }))?;
+    }
+    for finding in &report.ifc_flow_inventory.unsupported_flows {
+        push(serde_json::json!({
+            "event": "onboard.unsupported_flow",
+            "module": finding.module,
+            "message": finding.message,
+        }))?;
+    }
+    for module in &report.ifc_flow_inventory.unanalyzable_modules {
+        push(serde_json::json!({
+            "event": "onboard.unanalyzable_module",
+            "module": module.module,
+            "reason": module.reason,
+        }))?;
+    }
+    for edge in &report.module_resolution_report.edges {
+        if edge.modes_agree {
+            continue;
+        }
+        push(serde_json::json!({
+            "event": "onboard.resolution_divergence",
+            "from_module": edge.from_module,
+            "specifier": edge.specifier,
+        }))?;
+    }
+    Ok(lines)
+}
+
+fn render_diff_behavior_events_jsonl(report: &BehavioralDiffReport) -> Result<String, String> {
+    let mut lines = String::new();
+    let mut push = |value: serde_json::Value| -> Result<(), String> {
+        let encoded = serde_json::to_string(&value)
+            .map_err(|error| format!("failed to encode diff-behavior event: {error}"))?;
+        lines.push_str(&encoded);
+        lines.push('\n');
+        Ok(())
+    };
+
+    for capability in &report.capability_delta.added {
+        push(serde_json::json!({
+            "event": "diff_behavior.capability_added",
+            "capability_tag": &capability.capability_tag,
+            "capability": capability.capability,
+            "sites": &capability.sites,
+        }))?;
+    }
+    for capability in &report.capability_delta.removed {
+        push(serde_json::json!({
+            "event": "diff_behavior.capability_removed",
+            "capability_tag": &capability.capability_tag,
+            "capability": capability.capability,
+        }))?;
+    }
+    for finding in &report.ambient_authority_delta.added {
+        push(serde_json::json!({
+            "event": "diff_behavior.ambient_authority_added",
+            "module": &finding.module,
+            "accessor": &finding.accessor,
+            "implied_capability": finding.implied_capability,
+            "message": &finding.message,
+        }))?;
+    }
+    for finding in &report.ifc_delta.added_required_declassifications {
+        push(serde_json::json!({
+            "event": "diff_behavior.required_declassification_added",
+            "module": &finding.module,
+            "message": &finding.message,
+        }))?;
+    }
+    for finding in &report.ifc_delta.added_unsupported_flows {
+        push(serde_json::json!({
+            "event": "diff_behavior.unsupported_flow_added",
+            "module": &finding.module,
+            "message": &finding.message,
+        }))?;
+    }
+    for dep in &report.boundary_delta.added_external_dependencies {
+        push(serde_json::json!({
+            "event": "diff_behavior.external_dependency_added",
+            "specifier": &dep.specifier,
+            "sites": &dep.sites,
+        }))?;
+    }
+    for module in &report.boundary_delta.added_unanalyzable_modules {
+        push(serde_json::json!({
+            "event": "diff_behavior.unanalyzable_module_added",
+            "module": &module.module,
+            "reason": &module.reason,
+        }))?;
+    }
+    for edge in &report.boundary_delta.added_resolution_divergences {
+        push(serde_json::json!({
+            "event": "diff_behavior.resolution_divergence_added",
+            "from_module": &edge.from_module,
+            "specifier": &edge.specifier,
+            "outcomes": &edge.outcomes,
+        }))?;
+    }
+    if report.delta_count == 0 {
+        push(serde_json::json!({
+            "event": "diff_behavior.unchanged",
+            "before": &report.before.report_sha256,
+            "after": &report.after.report_sha256,
+        }))?;
+    }
+    Ok(lines)
+}
+
+/// Resolve the onboard target into `(root_dir, entry-relative-forward-slash)`.
+/// A directory target auto-detects its entry; a file target derives its root
+/// from `--root` or the file's parent directory. Fail-closed: the entry must
+/// exist and live under the root.
+fn resolve_package_entry(
+    target: &Path,
+    root_override: Option<&Path>,
+) -> Result<(PathBuf, String), String> {
+    let metadata = fs::metadata(target)
+        .map_err(|error| format!("cannot stat `{}`: {error}", target.display()))?;
+    if metadata.is_dir() {
+        let root = fs::canonicalize(target)
+            .map_err(|error| format!("cannot canonicalize root `{}`: {error}", target.display()))?;
+        let entry_abs = detect_package_entry(&root)?;
+        let entry_relative = relative_within_root(&root, &entry_abs)?;
+        Ok((root, entry_relative))
+    } else {
+        let entry_abs = fs::canonicalize(target).map_err(|error| {
+            format!("cannot canonicalize entry `{}`: {error}", target.display())
+        })?;
+        let root = match root_override {
+            Some(root) => fs::canonicalize(root).map_err(|error| {
+                format!("cannot canonicalize root `{}`: {error}", root.display())
+            })?,
+            None => entry_abs
+                .parent()
+                .map(Path::to_path_buf)
+                .ok_or_else(|| "entry file has no parent directory".to_string())?,
+        };
+        let entry_relative = relative_within_root(&root, &entry_abs)?;
+        Ok((root, entry_relative))
+    }
+}
+
+/// Detect the entry file of a package directory: package.json `module` then
+/// `main`, else the first existing `index.{js,mjs,cjs,ts,jsx,tsx}`.
+fn detect_package_entry(root: &Path) -> Result<PathBuf, String> {
+    let package_json = root.join("package.json");
+    if let Ok(contents) = fs::read_to_string(&package_json)
+        && let Ok(value) = serde_json::from_str::<serde_json::Value>(&contents)
+    {
+        for key in ["module", "main"] {
+            if let Some(rel) = value.get(key).and_then(|v| v.as_str()) {
+                let candidate = root.join(rel);
+                if candidate.is_file() {
+                    return fs::canonicalize(&candidate).map_err(|error| {
+                        format!(
+                            "cannot canonicalize entry `{}`: {error}",
+                            candidate.display()
+                        )
+                    });
+                }
+            }
+        }
+    }
+    for name in [
+        "index.js",
+        "index.mjs",
+        "index.cjs",
+        "index.ts",
+        "index.jsx",
+        "index.tsx",
+    ] {
+        let candidate = root.join(name);
+        if candidate.is_file() {
+            return fs::canonicalize(&candidate).map_err(|error| {
+                format!(
+                    "cannot canonicalize entry `{}`: {error}",
+                    candidate.display()
+                )
+            });
+        }
+    }
+    Err(format!(
+        "no entry detected in `{}` (no package.json main/module and no index.{{js,mjs,cjs,ts,jsx,tsx}})",
+        root.display()
+    ))
+}
+
+/// Strip `root` from `entry` and return a forward-slash relative path. Errors if
+/// the entry is not under the root (fail-closed).
+fn relative_within_root(root: &Path, entry: &Path) -> Result<String, String> {
+    let relative = entry.strip_prefix(root).map_err(|_| {
+        format!(
+            "entry `{}` is not within the package root `{}`",
+            entry.display(),
+            root.display()
+        )
+    })?;
+    let mut parts = Vec::new();
+    for component in relative.components() {
+        if let std::path::Component::Normal(part) = component {
+            parts.push(part.to_string_lossy().to_string());
+        }
+    }
+    if parts.is_empty() {
+        return Err("entry resolved to the package root itself".to_string());
+    }
+    Ok(parts.join("/"))
+}
+
 fn execute_run(args: RunArgs) -> Result<i32, String> {
     let source = fs::read_to_string(&args.input)
         .map_err(|error| format!("failed to read source `{}`: {error}", args.input.display()))?;
     let source_hash = ContentHash::compute(source.as_bytes());
+    let bound_contract = load_and_bind_data_contract(&args, &source_hash)?;
+    let data_contract = bound_contract.as_ref().map(|(_, binding)| binding.clone());
 
     let source_label = args.input.display().to_string();
+    // bd-fqlfw.8.4: classify every construct of the run source against the
+    // analyzed explicit-flow subset before execution consumes it; the E8
+    // refusal ledger derives from this scan (unanalyzed construct =>
+    // uncertified with span provenance, never a silent non-use claim).
+    let e8_scan: Option<E8AnalyzedSubsetScan> = bound_contract
+        .as_ref()
+        .map(|_| scan_source(&source, &source_label, args.parse_goal));
     let capabilities = run_cli_capabilities(args.parse_goal);
     let package = ExtensionPackage {
         extension_id: args.extension_id.clone(),
@@ -2728,27 +4256,124 @@ fn execute_run(args: RunArgs) -> Result<i32, String> {
         metadata: BTreeMap::new(),
     };
     let policy_id = OrchestratorConfig::default().policy_id;
-    let mut orchestrator = ExecutionOrchestrator::new(OrchestratorConfig {
+    let mut orchestrator_config = OrchestratorConfig {
         parse_goal: args.parse_goal,
         trace_id_prefix: "frankenctl-run".to_string(),
         ..OrchestratorConfig::default()
-    });
-    let result = orchestrator
-        .execute(&package)
-        .map_err(|error| format_run_error(&args.input, &error))?;
+    };
+    if let Some(cell_close_budget_ms) = args.cell_close_budget_ms {
+        orchestrator_config.cell_close_budget_ms = cell_close_budget_ms;
+    }
+    let evidence_authority = RuntimeEvidenceAuthority::generate_runtime_owned(
+        fresh_runtime_evidence_producer_id("frankenctl.run", &source_hash.to_hex())?,
+        orchestrator_config.epoch,
+        1,
+        None,
+    )
+    .map_err(|error| format!("failed to initialize runtime evidence authority: {error}"))?;
+    let mut orchestrator = ExecutionOrchestrator::try_new_with_runtime_authority(
+        orchestrator_config,
+        evidence_authority,
+    )
+    .map_err(|error| format!("failed to initialize execution orchestrator: {error}"))?;
+    // bd-fqlfw.8.2: the bound contract's ingress label + sink surface gates
+    // execution fail-closed and records flow edges in the provenance index.
+    if let Some((contract, binding)) = bound_contract.as_ref() {
+        let ingress = contract.ifc_ingress(binding).map_err(|error| {
+            format!("failed to derive data-contract IFC ingress binding: {error}")
+        })?;
+        orchestrator.set_data_contract_ingress(ingress);
+    }
+    let result = match orchestrator.execute(&package) {
+        Ok(result) => result,
+        Err(error) => {
+            return emit_orchestration_failure(
+                "run",
+                &args.input,
+                args.out.as_deref(),
+                &orchestrator,
+                &error,
+            );
+        }
+    };
+    // Authenticate the exact emitted entries against the composition root's
+    // in-memory trust anchor before any trace, certificate, explain bundle, or
+    // report write becomes externally visible. The serialized report does not
+    // carry this identity as a self-authenticating trust root; later verifiers
+    // must resolve the receipt's signer through their own registry.
+    let trusted_runtime_identity = orchestrator.evidence_verification_identity();
+    let evidence_chain_instance_id = orchestrator.evidence_chain_instance_id().to_string();
+    let evidence_ledger_id = orchestrator.evidence_ledger_id().to_string();
+    let evidence_chain_artifact = EvidenceChainArtifact::new(
+        result.evidence_entries.clone(),
+        result.evidence_chain_receipt.clone(),
+    );
+    evidence_chain_artifact
+        .verify_genesis(
+            &trusted_runtime_identity,
+            &evidence_ledger_id,
+            &result.trace_id,
+        )
+        .map_err(|error| {
+            format!("generated run evidence chain failed exact verification: {error}")
+        })?;
+    // bd-9mr8o: hand operators the exact trace `frankenctl replay debug
+    // --trace` consumes, enabling the end-to-end --input inspection loop.
+    if let Some(path) = args.emit_trace.as_ref() {
+        write_json_file(path, &result.nondeterminism_trace)?;
+    }
     let explain_bundle_path = resolve_run_explain_path(&args);
 
+    let explain_bundle_path_string = explain_bundle_path
+        .as_ref()
+        .map(|path| path.display().to_string());
+    let e8_preflight_receipt = data_contract.as_ref().map(|binding| {
+        binding.preflight_receipt(
+            &result.trace_id,
+            explain_bundle_path_string.as_deref(),
+            e8_scan.as_ref(),
+            &[],
+        )
+    });
+
+    // bd-fqlfw.8.3: assemble, sign, and write the E8 certificate bundle from
+    // the run's recorded evidence (flow edges, host-effect transcript, refusal
+    // receipt) before the report is built, so the report can bind its digests.
+    let certificate_bundle = match (args.certificate_out.as_ref(), bound_contract.as_ref()) {
+        (Some(dir), Some((contract, binding))) => {
+            let receipt = e8_preflight_receipt
+                .as_ref()
+                .expect("data-contract runs always build a preflight receipt");
+            Some(write_certificate_bundle(
+                dir,
+                contract,
+                binding,
+                receipt,
+                &orchestrator,
+                &result,
+                &policy_id,
+                args.parse_goal,
+                run_cli_capability_set(args.parse_goal),
+            )?)
+        }
+        (Some(_), None) => {
+            return Err("--certificate-out requires --data-contract <contract.json>".to_string());
+        }
+        _ => None,
+    };
+
     let output = RunCommandOutput {
-        schema_version: FRANKENCTL_SCHEMA_VERSION.to_string(),
+        schema_version: RUN_COMMAND_SCHEMA_VERSION.to_string(),
         extension_id: result.extension_id.clone(),
         trace_id: result.trace_id.clone(),
         decision_id: result.decision_id.clone(),
         policy_id,
         parse_goal: args.parse_goal.as_str().to_string(),
         report_path: args.out.as_ref().map(|path| path.display().to_string()),
-        explain_bundle_path: explain_bundle_path
-            .as_ref()
-            .map(|path| path.display().to_string()),
+        explain_bundle_path: explain_bundle_path_string,
+        data_contract,
+        e8_preflight_receipt,
+        certificate_bundle,
         source_ingestion: result.source_ingestion.clone(),
         lane: result.lane.to_string(),
         lane_reason: result.lane_reason.to_string(),
@@ -2757,6 +4382,10 @@ fn execute_run(args: RunArgs) -> Result<i32, String> {
         expected_loss_millionths: result.expected_loss_millionths,
         instructions_executed: result.instructions_executed,
         evidence_entries: result.evidence_entries.len(),
+        evidence_chain_instance_id,
+        evidence_ledger_id,
+        evidence_chain_head: result.evidence_chain_receipt.head_chain_hash.clone(),
+        evidence_chain_artifact,
         console_output: result.console_output.clone(),
         observability_mode: default_capture_observability_mode(),
     };
@@ -2767,6 +4396,300 @@ fn execute_run(args: RunArgs) -> Result<i32, String> {
         write_json_file(path, &bundle)?;
     }
 
+    if let Some(path) = args.out.as_ref() {
+        write_json_file(path, &output)?;
+    }
+    print_json(&output)?;
+
+    Ok(0)
+}
+
+fn load_and_bind_data_contract(
+    args: &RunArgs,
+    source_hash: &ContentHash,
+) -> Result<Option<(DataContract, DataContractRunBinding)>, String> {
+    let Some(path) = args.data_contract.as_ref() else {
+        return Ok(None);
+    };
+    let contract: DataContract = load_json_file(path)?;
+    let input_path = args.input.display().to_string();
+    let binding = contract
+        .bind_to_run(
+            &args.extension_id,
+            &input_path,
+            &args.data_contract_purpose,
+            Some(source_hash),
+        )
+        .map_err(|error| format!("failed to bind data contract `{}`: {error}", path.display()))?;
+    Ok(Some((contract, binding)))
+}
+
+/// Assemble, sign, and write the E8 certificate bundle (bd-fqlfw.8.3) for a
+/// completed data-contract run, returning the report summary.
+#[allow(clippy::too_many_arguments)]
+fn write_certificate_bundle(
+    dir: &Path,
+    contract: &DataContract,
+    binding: &DataContractRunBinding,
+    refusal_receipt: &E8RefusalLedgerReceipt,
+    orchestrator: &ExecutionOrchestrator,
+    result: &OrchestratorResult,
+    policy_id: &str,
+    parse_goal: ParseGoal,
+    granted: BTreeSet<RuntimeCapability>,
+) -> Result<CertificateBundleSummary, String> {
+    let replay_trace_hash =
+        content_hash_for_json(&result.nondeterminism_trace, "nondeterminism trace")?.to_hex();
+    let containment_action = result.containment_action.to_string();
+    let inputs = CertifierInputs {
+        contract,
+        binding,
+        flow_events: orchestrator.data_contract_flow_events(),
+        host_effects: &result.host_effect_transcript,
+        // v1: `frankenctl run` has no receipt-staging surface, so no
+        // declassification receipts can have been consumed by the run.
+        declassification_receipts: &[],
+        refusal_receipt,
+        runtime_granted_capabilities: &granted,
+        policy_id,
+        policy_epoch: result.epoch.as_u64(),
+        parse_goal: parse_goal.as_str(),
+        trace_id: &result.trace_id,
+        decision_id: &result.decision_id,
+        engine_version: env!("CARGO_PKG_VERSION"),
+        containment_action: &containment_action,
+        instructions_executed: result.instructions_executed,
+        console_entry_count: result.console_output.len() as u64,
+        execution_value: &result.execution_value,
+        replay_trace_content_hash_hex: &replay_trace_hash,
+    };
+    let certificate_authority = RuntimeEvidenceAuthority::generate_runtime_owned(
+        fresh_runtime_evidence_producer_id(E8_CERTIFIER_PRODUCER_ID, &result.trace_id)?,
+        result.epoch,
+        1,
+        None,
+    )
+    .map_err(|error| format!("failed to initialize E8 certificate authority: {error}"))?;
+    let certificate_verification_identity = certificate_authority.verification_identity();
+    let bundle = emit_certificate_bundle_with_runtime_authority(&inputs, &certificate_authority)
+        .map_err(|error| format!("failed to emit E8 certificate bundle: {error}"))?;
+    for file in &bundle.files {
+        write_bytes_file(&dir.join(&file.name), &file.bytes)?;
+    }
+    Ok(CertificateBundleSummary {
+        path: dir.display().to_string(),
+        certificate_status: bundle.non_use_certificate.certificate_status,
+        bundle_content_hash_hex: bundle.bundle_content_hash_hex.clone(),
+        evidence_verification_identity: certificate_verification_identity,
+        files: bundle
+            .files
+            .iter()
+            .map(|file| CertificateBundleFileSummary {
+                name: file.name.clone(),
+                sha256_hex: ContentHash::compute(&file.bytes).to_hex(),
+            })
+            .collect(),
+    })
+}
+
+/// Report emitted by `frankenctl agent-sandbox` (bd-fqlfw.8.5): the sandbox
+/// run summary plus the E8 evidence artifacts the agent framework consumes.
+#[derive(Debug, Clone, Serialize)]
+struct AgentSandboxCommandOutput {
+    schema_version: String,
+    manifest_schema_version: String,
+    report: AgentSandboxReport,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    report_path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    data_contract: Option<DataContractRunBinding>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    e8_preflight_receipt: Option<E8RefusalLedgerReceipt>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    certificate_bundle: Option<CertificateBundleSummary>,
+    evidence_chain_instance_id: String,
+    evidence_ledger_id: String,
+    evidence_chain_head: String,
+    evidence_chain_artifact: EvidenceChainArtifact,
+    observability_mode: ObservabilityModeOutput,
+}
+
+/// `frankenctl agent-sandbox` (bd-fqlfw.8.5, E8.T5): execute agent-generated
+/// code under the manifest's tool authority, with the guardplane armed as a
+/// behavior firewall, and hand the certificate bundle back on exit.
+fn execute_agent_sandbox(args: AgentSandboxArgs) -> Result<i32, String> {
+    let manifest: AgentSandboxManifest = load_json_file(&args.manifest)?;
+    manifest.validate().map_err(|error| {
+        format!(
+            "invalid agent-sandbox manifest `{}`: {error}",
+            args.manifest.display()
+        )
+    })?;
+
+    let source = fs::read_to_string(&args.input)
+        .map_err(|error| format!("failed to read source `{}`: {error}", args.input.display()))?;
+    let source_hash = ContentHash::compute(source.as_bytes());
+    let module_goal = args.parse_goal == ParseGoal::Module;
+
+    let purpose = args
+        .purpose
+        .clone()
+        .or_else(|| manifest.purpose.clone())
+        .unwrap_or_else(|| DEFAULT_DATA_CONTRACT_PURPOSE.to_string());
+    let bound_contract: Option<(DataContract, DataContractRunBinding)> =
+        match args.data_contract.as_ref() {
+            Some(path) => {
+                let contract: DataContract = load_json_file(path)?;
+                let binding = contract
+                    .bind_to_run(
+                        &manifest.agent_id,
+                        &args.input.display().to_string(),
+                        &purpose,
+                        Some(&source_hash),
+                    )
+                    .map_err(|error| {
+                        format!("failed to bind data contract `{}`: {error}", path.display())
+                    })?;
+                Some((contract, binding))
+            }
+            None => None,
+        };
+    if args.certificate_out.is_some() && bound_contract.is_none() {
+        return Err("--certificate-out requires --data-contract <contract.json>".to_string());
+    }
+
+    // bd-fqlfw.8.4: scan the agent's source against the analyzed
+    // explicit-flow subset before the package consumes it. The sandbox has no
+    // explain-bundle surface yet, so its receipts stay evidence-incomplete
+    // (uncertified) even for a clean scan — honest until that surface lands.
+    let e8_scan: Option<E8AnalyzedSubsetScan> = bound_contract
+        .as_ref()
+        .map(|_| scan_source(&source, &args.input.display().to_string(), args.parse_goal));
+    let package = manifest
+        .to_extension_package(
+            source,
+            Some(args.input.display().to_string()),
+            env!("CARGO_PKG_VERSION"),
+            module_goal,
+        )
+        .map_err(|error| format!("agent-sandbox manifest rejected: {error}"))?;
+
+    let policy_id = OrchestratorConfig::default().policy_id;
+    let mut orchestrator_config = OrchestratorConfig {
+        parse_goal: args.parse_goal,
+        trace_id_prefix: "frankenctl-agent-sandbox".to_string(),
+        ..OrchestratorConfig::default()
+    };
+    if let Some(cell_close_budget_ms) = args.cell_close_budget_ms {
+        orchestrator_config.cell_close_budget_ms = cell_close_budget_ms;
+    }
+    let evidence_authority = RuntimeEvidenceAuthority::generate_runtime_owned(
+        fresh_runtime_evidence_producer_id("frankenctl.agent-sandbox", &source_hash.to_hex())?,
+        orchestrator_config.epoch,
+        1,
+        None,
+    )
+    .map_err(|error| format!("failed to initialize runtime evidence authority: {error}"))?;
+    let mut orchestrator = ExecutionOrchestrator::try_new_with_runtime_authority(
+        orchestrator_config,
+        evidence_authority,
+    )
+    .map_err(|error| format!("failed to initialize execution orchestrator: {error}"))?;
+    if let Some((contract, binding)) = bound_contract.as_ref() {
+        let ingress = contract.ifc_ingress(binding).map_err(|error| {
+            format!("failed to derive data-contract IFC ingress binding: {error}")
+        })?;
+        orchestrator.set_data_contract_ingress(ingress);
+    }
+    // Host I/O stays deny-all unless the manifest declares a sandbox root
+    // (fail-closed default); the transcript recorder feeds the certificate's
+    // capability trace.
+    if let Some(root) = manifest.host_io_root.as_ref() {
+        let provider = match manifest.host_io_max_bytes {
+            Some(limit) => SandboxedHostIo::with_root_and_limit(PathBuf::from(root), limit),
+            None => SandboxedHostIo::with_root(PathBuf::from(root)),
+        }
+        .map_err(|error| format!("failed to open agent-sandbox host I/O root `{root}`: {error}"))?;
+        orchestrator.set_host_io(
+            Arc::new(provider),
+            Some(Arc::new(InMemoryHostIoTranscript::recording())),
+        );
+    }
+
+    let result = match orchestrator.execute(&package) {
+        Ok(result) => result,
+        Err(error) => {
+            return emit_orchestration_failure(
+                "agent-sandbox",
+                &args.input,
+                args.out.as_deref(),
+                &orchestrator,
+                &error,
+            );
+        }
+    };
+    let trusted_runtime_identity = orchestrator.evidence_verification_identity();
+    let evidence_chain_instance_id = orchestrator.evidence_chain_instance_id().to_string();
+    let evidence_ledger_id = orchestrator.evidence_ledger_id().to_string();
+    let evidence_chain_artifact = EvidenceChainArtifact::new(
+        result.evidence_entries.clone(),
+        result.evidence_chain_receipt.clone(),
+    );
+    evidence_chain_artifact
+        .verify_genesis(
+            &trusted_runtime_identity,
+            &evidence_ledger_id,
+            &result.trace_id,
+        )
+        .map_err(|error| {
+            format!("generated agent-sandbox evidence chain failed exact verification: {error}")
+        })?;
+
+    let report = AgentSandboxReport::from_run(&manifest, &result, module_goal)
+        .map_err(|error| format!("failed to build agent-sandbox report: {error}"))?;
+    let e8_preflight_receipt = bound_contract.as_ref().map(|(_, binding)| {
+        binding.preflight_receipt(&result.trace_id, None, e8_scan.as_ref(), &[])
+    });
+
+    let certificate_bundle = match (args.certificate_out.as_ref(), bound_contract.as_ref()) {
+        (Some(dir), Some((contract, binding))) => {
+            let receipt = e8_preflight_receipt
+                .as_ref()
+                .expect("data-contract sandbox runs always build a preflight receipt");
+            // The certificate's runtime-granted set is the agent's effective
+            // tool authority, not the fixed CLI profile.
+            let granted = manifest
+                .effective_runtime_capabilities(module_goal)
+                .map_err(|error| format!("agent-sandbox manifest rejected: {error}"))?;
+            Some(write_certificate_bundle(
+                dir,
+                contract,
+                binding,
+                receipt,
+                &orchestrator,
+                &result,
+                &policy_id,
+                args.parse_goal,
+                granted,
+            )?)
+        }
+        _ => None,
+    };
+
+    let output = AgentSandboxCommandOutput {
+        schema_version: AGENT_SANDBOX_COMMAND_SCHEMA_VERSION.to_string(),
+        manifest_schema_version: AGENT_SANDBOX_MANIFEST_SCHEMA_VERSION.to_string(),
+        report,
+        report_path: args.out.as_ref().map(|path| path.display().to_string()),
+        data_contract: bound_contract.map(|(_, binding)| binding),
+        e8_preflight_receipt,
+        certificate_bundle,
+        evidence_chain_instance_id,
+        evidence_ledger_id,
+        evidence_chain_head: result.evidence_chain_receipt.head_chain_hash.clone(),
+        evidence_chain_artifact,
+        observability_mode: default_capture_observability_mode(),
+    };
     if let Some(path) = args.out.as_ref() {
         write_json_file(path, &output)?;
     }
@@ -2821,6 +4744,41 @@ fn build_run_explain_bundle(
         .add_artifact(source_ref)
         .map_err(|error| error.to_string())?;
 
+    if let Some(binding) = output.data_contract.as_ref() {
+        let contract_ref = RuntimeArtifactRef::new(
+            "data-contract",
+            RuntimeArtifactKind::Other {
+                schema_id: binding.schema_version.clone(),
+            },
+            content_hash_for_json(binding, "data contract binding")?,
+            StableArtifactRef::new("data_contract", binding.contract_id.clone())
+                .with_revision(binding.contract_hash_hex.clone()),
+        )
+        .with_schema_id(binding.schema_version.clone())
+        .with_producer("frankenctl")
+        .with_metadata(
+            RUNTIME_EXPLAIN_ORIGIN_SURFACE_METADATA_KEY,
+            "frankenctl_run",
+        )
+        .with_metadata(
+            RUNTIME_EXPLAIN_ORIGIN_SCHEMA_METADATA_KEY,
+            binding.schema_version.clone(),
+        )
+        .with_metadata(
+            RUNTIME_EXPLAIN_ORIGIN_ARTIFACT_METADATA_KEY,
+            "DataContractRunBinding",
+        );
+        builder = builder
+            .add_artifact(contract_ref)
+            .map_err(|error| error.to_string())?;
+        builder = builder.add_link(RuntimeExplainLink::new(
+            "data-contract-to-source",
+            "data-contract",
+            "source",
+            RuntimeExplainRelation::DerivedFrom,
+        ));
+    }
+
     let report_stable_key = output
         .report_path
         .clone()
@@ -2857,6 +4815,50 @@ fn build_run_explain_bundle(
         .add_artifact(run_report_ref)
         .map_err(|error| error.to_string())?;
 
+    if let Some(receipt) = output.e8_preflight_receipt.as_ref() {
+        let receipt_ref = RuntimeArtifactRef::new(
+            "e8-preflight-refusal-ledger",
+            RuntimeArtifactKind::Other {
+                schema_id: E8_REFUSAL_LEDGER_SCHEMA_VERSION.to_string(),
+            },
+            content_hash_for_json(receipt, "E8 preflight refusal ledger")?,
+            StableArtifactRef::new("e8_refusal_ledger", receipt.ledger_id.clone())
+                .with_revision(receipt.run_id.clone()),
+        )
+        .with_schema_id(E8_REFUSAL_LEDGER_SCHEMA_VERSION)
+        .with_producer("frankenctl")
+        .with_roles([RuntimeExplainRole::ReplayStatus])
+        .with_metadata(
+            RUNTIME_EXPLAIN_ORIGIN_SURFACE_METADATA_KEY,
+            "frankenctl_run",
+        )
+        .with_metadata(
+            RUNTIME_EXPLAIN_ORIGIN_SCHEMA_METADATA_KEY,
+            E8_REFUSAL_LEDGER_SCHEMA_VERSION,
+        )
+        .with_metadata(
+            RUNTIME_EXPLAIN_ORIGIN_ARTIFACT_METADATA_KEY,
+            "E8RefusalLedgerReceipt",
+        );
+        builder = builder
+            .add_artifact(receipt_ref)
+            .map_err(|error| error.to_string())?;
+        if output.data_contract.is_some() {
+            builder = builder.add_link(RuntimeExplainLink::new(
+                "e8-preflight-from-data-contract",
+                "e8-preflight-refusal-ledger",
+                "data-contract",
+                RuntimeExplainRelation::DerivedFrom,
+            ));
+        }
+        builder = builder.add_link(RuntimeExplainLink::new(
+            "e8-preflight-to-run-report",
+            "e8-preflight-refusal-ledger",
+            "run-report",
+            RuntimeExplainRelation::DerivedFrom,
+        ));
+    }
+
     let action_hash = content_hash_for_json(&result.action_decision, "run action decision")?;
     let action_ref = RuntimeArtifactRef::new(
         "action-decision",
@@ -2871,6 +4873,18 @@ fn build_run_explain_bundle(
         RuntimeExplainRole::ChosenAction,
         RuntimeExplainRole::ExpectedLoss,
     ])
+    // Deterministic display metadata for the E3.T4 narrative views (ADR-0009:
+    // metadata over the index, not a new authoritative schema).
+    .with_metadata(
+        EXPLAIN_META_CHOSEN_ACTION,
+        output.containment_action.clone(),
+    )
+    .with_metadata(EXPLAIN_META_LANE, output.lane.clone())
+    .with_metadata(EXPLAIN_META_LANE_REASON, output.lane_reason.clone())
+    .with_metadata(
+        EXPLAIN_META_EXPECTED_LOSS,
+        output.expected_loss_millionths.to_string(),
+    )
     .with_metadata(
         RUNTIME_EXPLAIN_ORIGIN_SURFACE_METADATA_KEY,
         "execution_orchestrator",
@@ -2963,6 +4977,44 @@ fn build_run_explain_bundle(
             ));
     }
 
+    let evidence_chain_ref = RuntimeArtifactRef::new(
+        "evidence-chain-receipt",
+        RuntimeArtifactKind::Other {
+            schema_id: EVIDENCE_CHAIN_RECEIPT_SCHEMA_VERSION.to_string(),
+        },
+        content_hash_for_json(&result.evidence_chain_receipt, "run evidence chain receipt")?,
+        StableArtifactRef::new(
+            "evidence_ledger",
+            result.evidence_chain_receipt.ledger_id.clone(),
+        )
+        .with_revision(result.evidence_chain_receipt.head_chain_hash.clone()),
+    )
+    .with_schema_id(EVIDENCE_CHAIN_RECEIPT_SCHEMA_VERSION)
+    .with_producer("evidence_ledger")
+    .with_role(RuntimeExplainRole::EvidenceEntry)
+    .with_logical_epoch(result.epoch.as_u64())
+    .with_metadata(
+        RUNTIME_EXPLAIN_ORIGIN_SURFACE_METADATA_KEY,
+        "evidence_ledger",
+    )
+    .with_metadata(
+        RUNTIME_EXPLAIN_ORIGIN_SCHEMA_METADATA_KEY,
+        EVIDENCE_CHAIN_RECEIPT_SCHEMA_VERSION,
+    )
+    .with_metadata(
+        RUNTIME_EXPLAIN_ORIGIN_ARTIFACT_METADATA_KEY,
+        "EvidenceChainReceipt",
+    );
+    builder = builder
+        .add_artifact(evidence_chain_ref)
+        .map_err(|error| error.to_string())?
+        .add_link(RuntimeExplainLink::new(
+            "action-to-evidence-chain-receipt",
+            "action-decision",
+            "evidence-chain-receipt",
+            RuntimeExplainRelation::EmitsEvidence,
+        ));
+
     if let Some(receipt) = &result.containment_receipt {
         let containment_ref = RuntimeArtifactRef::new(
             "containment-receipt",
@@ -3000,6 +5052,46 @@ fn build_run_explain_bundle(
     Ok(builder.build())
 }
 
+fn fresh_runtime_evidence_producer_id(
+    producer_prefix: &str,
+    run_binding: &str,
+) -> Result<String, String> {
+    if producer_prefix.trim().is_empty() || run_binding.trim().is_empty() {
+        return Err(
+            "runtime evidence producer prefix and run binding must not be empty".to_string(),
+        );
+    }
+    let mut nonce = [0u8; 16];
+    rand::rngs::OsRng
+        .try_fill_bytes(&mut nonce)
+        .map_err(|error| format!("failed to generate runtime evidence producer nonce: {error}"))?;
+    runtime_evidence_producer_id_from_nonce(producer_prefix, run_binding, &nonce)
+}
+
+fn runtime_evidence_producer_id_from_nonce(
+    producer_prefix: &str,
+    run_binding: &str,
+    nonce: &[u8; 16],
+) -> Result<String, String> {
+    if producer_prefix.trim().is_empty() || run_binding.trim().is_empty() {
+        return Err(
+            "runtime evidence producer prefix and run binding must not be empty".to_string(),
+        );
+    }
+    let mut nonce_preimage =
+        Vec::with_capacity(producer_prefix.len() + run_binding.len() + nonce.len() + 24);
+    nonce_preimage.extend_from_slice(b"frankenctl-runtime-evidence-producer-v1");
+    nonce_preimage.extend_from_slice(&(producer_prefix.len() as u64).to_be_bytes());
+    nonce_preimage.extend_from_slice(producer_prefix.as_bytes());
+    nonce_preimage.extend_from_slice(&(run_binding.len() as u64).to_be_bytes());
+    nonce_preimage.extend_from_slice(run_binding.as_bytes());
+    nonce_preimage.extend_from_slice(nonce);
+    Ok(format!(
+        "{producer_prefix}:{run_binding}:{}",
+        ContentHash::compute(&nonce_preimage).to_hex()
+    ))
+}
+
 fn content_hash_for_json<T: Serialize>(value: &T, target: &str) -> Result<ContentHash, String> {
     serde_json::to_vec(value)
         .map(|bytes| ContentHash::compute(&bytes))
@@ -3008,11 +5100,28 @@ fn content_hash_for_json<T: Serialize>(value: &T, target: &str) -> Result<Conten
 
 fn execute_explain(args: ExplainArgs) -> Result<i32, String> {
     let bundle: RuntimeExplainBundle = load_json_file(&args.input)?;
+
+    // E3.T4: emit the full derived view bundle (explain.md + evidence_graph.json
+    // + replay.json + counterfactuals.json + commands.txt + repro.lock + a copy
+    // of the index) to a directory. All views are pure projections over the
+    // index, so the directory is byte-deterministic and repro.lock-addressed.
+    if let Some(dir) = args.emit_bundle.as_ref() {
+        let views = build_explain_bundle(&bundle);
+        write_bytes_file(&dir.join("explain.md"), views.explain_md.as_bytes())?;
+        write_json_file(&dir.join("evidence_graph.json"), &views.evidence_graph)?;
+        write_json_file(&dir.join("replay.json"), &views.replay)?;
+        write_json_file(&dir.join("counterfactuals.json"), &views.counterfactuals)?;
+        write_bytes_file(&dir.join("commands.txt"), views.commands_txt.as_bytes())?;
+        write_json_file(&dir.join("repro.lock"), &views.repro_lock)?;
+        // Preserve the index alongside its views so the bundle is self-contained.
+        write_json_file(&dir.join("explain.json"), &bundle)?;
+    }
+
     match args.format {
         ExplainOutputFormat::Json => {
             if let Some(path) = args.out.as_ref() {
                 write_json_file(path, &bundle)?;
-            } else {
+            } else if args.emit_bundle.is_none() {
                 print_json(&bundle)?;
             }
         }
@@ -3020,7 +5129,7 @@ fn execute_explain(args: ExplainArgs) -> Result<i32, String> {
             let summary = render_runtime_explain_summary(&bundle, &args.input);
             if let Some(path) = args.out.as_ref() {
                 write_bytes_file(path, summary.as_bytes())?;
-            } else {
+            } else if args.emit_bundle.is_none() {
                 println!("{summary}");
             }
         }
@@ -3060,8 +5169,1369 @@ fn render_runtime_explain_summary(bundle: &RuntimeExplainBundle, input: &Path) -
     .join("\n")
 }
 
-fn format_run_error(input: &Path, error: &OrchestratorError) -> String {
-    let mut detail = format!("run failed for `{}`: {error}", input.display());
+fn execute_claims(args: ClaimsArgs) -> Result<i32, String> {
+    match args.mode {
+        ClaimsMode::Explain(args) => execute_claims_explain(args),
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct ClaimMatrixDocument {
+    max_observed_freshness_days: Option<u64>,
+    stale_threshold_days: Option<u64>,
+    claims: Vec<ClaimMatrixRow>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct ClaimMatrixRow {
+    actual_wording_state: String,
+    allowed_state: String,
+    artifact_path: Option<String>,
+    claim_id: String,
+    claim_scope: String,
+    claim_text: String,
+    decision: String,
+    downgrade_text: Option<String>,
+    #[serde(
+        default,
+        alias = "artifact_hash",
+        alias = "artifact_sha256",
+        alias = "content_hash",
+        alias = "expected_content_hash"
+    )]
+    expected_hash: Option<String>,
+    freshness_days: Option<u64>,
+    owning_bead: String,
+    reason: String,
+    source_path: String,
+    source_span: Option<ClaimSourceSpan>,
+    verification_command: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct ClaimSourceSpan {
+    start_line: u64,
+    end_line: u64,
+    must_contain: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct ClaimExplanationOutput {
+    schema_version: String,
+    receipt_id: String,
+    claim_id: String,
+    decision: String,
+    reason_codes: Vec<String>,
+    matrix_path: String,
+    matrix_schema_version: String,
+    claim: Option<ClaimExplanationClaim>,
+    artifact: Option<ClaimExplanationArtifact>,
+    bead: Option<ClaimExplanationBead>,
+    mock_status: String,
+    local_fallback_status: String,
+    replay_commands: Vec<String>,
+    remediation: Vec<String>,
+    source_line_refs: Vec<ClaimExplanationSourceRef>,
+    mutation_policy: ClaimExplanationMutationPolicy,
+    renderer_boundary: ClaimExplanationRendererBoundary,
+}
+
+impl ClaimExplanationOutput {
+    fn exit_code(&self) -> i32 {
+        match self.decision.as_str() {
+            "supported" => 0,
+            "degraded" | "not_promotable" | "unsupported" => 1,
+            _ => 2,
+        }
+    }
+
+    fn render_human(&self) -> String {
+        let mut lines = vec![
+            "claim explanation:".to_string(),
+            format!("  claim_id: {}", self.claim_id),
+            format!("  decision: {}", self.decision),
+            format!("  reason_codes: {}", self.reason_codes.join(", ")),
+            format!("  receipt_id: {}", self.receipt_id),
+            format!("  matrix: {}", self.matrix_path),
+        ];
+        if let Some(claim) = self.claim.as_ref() {
+            lines.push(format!("  allowed_state: {}", claim.allowed_state));
+            lines.push(format!(
+                "  actual_wording_state: {}",
+                claim.actual_wording_state
+            ));
+            lines.push(format!("  owning_bead: {}", claim.owning_bead));
+            lines.push(format!("  artifact_path: {}", claim.artifact_path));
+        }
+        if let Some(artifact) = self.artifact.as_ref() {
+            lines.push(format!("  artifact_present: {}", artifact.present));
+            lines.push(format!(
+                "  artifact_hash: {}",
+                artifact.content_hash.as_deref().unwrap_or("unavailable")
+            ));
+            lines.push(format!(
+                "  expected_hash: {}",
+                artifact.expected_hash.as_deref().unwrap_or("unasserted")
+            ));
+            lines.push(format!("  hash_status: {}", artifact.hash_status));
+            lines.push(format!("  freshness_status: {}", artifact.freshness_status));
+            if let Some(days) = artifact.actual_freshness_days {
+                lines.push(format!("  actual_freshness_days: {days}"));
+            }
+        }
+        if let Some(bead) = self.bead.as_ref() {
+            lines.push(format!("  bead_status: {}", bead.status));
+            if let Some(assignee) = bead.assignee.as_ref() {
+                lines.push(format!("  bead_assignee: {assignee}"));
+            }
+        }
+        lines.push(format!("  mock_status: {}", self.mock_status));
+        lines.push(format!(
+            "  local_fallback_status: {}",
+            self.local_fallback_status
+        ));
+        if !self.remediation.is_empty() {
+            lines.push("  remediation:".to_string());
+            lines.extend(self.remediation.iter().map(|item| format!("    - {item}")));
+        }
+        lines.join("\n")
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct ClaimExplanationClaim {
+    claim_scope: String,
+    claim_text: String,
+    allowed_state: String,
+    actual_wording_state: String,
+    decision: String,
+    reason: String,
+    downgrade_text: Option<String>,
+    freshness_days: Option<u64>,
+    owning_bead: String,
+    verification_command: String,
+    artifact_path: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct ClaimExplanationArtifact {
+    path: String,
+    present: bool,
+    kind: String,
+    content_hash: Option<String>,
+    expected_hash: Option<String>,
+    hash_status: String,
+    required_for_supported: bool,
+    actual_freshness_days: Option<u64>,
+    freshness_status: String,
+    stale_threshold_days: u64,
+    max_observed_freshness_days: u64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct ClaimExplanationBead {
+    bead_id: String,
+    status: String,
+    assignee: Option<String>,
+    source: String,
+    found: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct ClaimExplanationSourceRef {
+    source_path: String,
+    start_line: Option<u64>,
+    end_line: Option<u64>,
+    must_contain: Option<String>,
+    status: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct ClaimExplanationMutationPolicy {
+    mutates_br: bool,
+    mutates_agent_mail: bool,
+    mutates_file_reservations: bool,
+    mutates_remote_workers: bool,
+    mutates_evidence_bundles: bool,
+    mutates_claim_matrix: bool,
+    mutates_git: bool,
+    runs_cargo: bool,
+    runs_rch: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct ClaimExplanationRendererBoundary {
+    future_rich_renderer_provider: String,
+    local_rich_renderer_shipped: bool,
+}
+
+fn execute_claims_explain(args: ClaimsExplainArgs) -> Result<i32, String> {
+    let output = build_claim_explanation(
+        args.claim_id.as_str(),
+        &args.matrix,
+        args.beads_jsonl.as_deref(),
+    )?;
+    match args.format {
+        CheckOutputFormat::Human => {
+            let rendered = output.render_human();
+            if let Some(path) = args.out.as_ref() {
+                write_bytes_file(path, rendered.as_bytes())?;
+            } else {
+                println!("{rendered}");
+            }
+        }
+        CheckOutputFormat::Json => {
+            if let Some(path) = args.out.as_ref() {
+                write_json_file(path, &output)?;
+            } else {
+                print_json(&output)?;
+            }
+        }
+    }
+    Ok(output.exit_code())
+}
+
+fn build_claim_explanation(
+    claim_id: &str,
+    matrix_path: &Path,
+    beads_jsonl: Option<&Path>,
+) -> Result<ClaimExplanationOutput, String> {
+    let matrix_value: serde_json::Value = match load_json_file(matrix_path) {
+        Ok(value) => value,
+        Err(error) => {
+            return Ok(claim_explanation_fail_closed(
+                claim_id,
+                matrix_path,
+                "unavailable".to_string(),
+                "unreadable_matrix",
+                format!(
+                    "Read or regenerate the claim-to-proof matrix, then rerun the claim gate: {error}"
+                ),
+            ));
+        }
+    };
+    let matrix_schema_version = matrix_value
+        .get("schema_version")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("missing")
+        .to_string();
+    if matrix_schema_version != CLAIM_MATRIX_SCHEMA_VERSION {
+        return Ok(claim_explanation_fail_closed(
+            claim_id,
+            matrix_path,
+            matrix_schema_version,
+            "invalid_matrix_schema",
+            "Regenerate or fix the claim-to-proof matrix and rerun the claim gate.",
+        ));
+    }
+
+    let matrix: ClaimMatrixDocument = match serde_json::from_value(matrix_value) {
+        Ok(matrix) => matrix,
+        Err(error) => {
+            return Ok(claim_explanation_fail_closed(
+                claim_id,
+                matrix_path,
+                matrix_schema_version,
+                "missing_required_field",
+                format!("Fix required claim matrix fields before explaining this claim: {error}"),
+            ));
+        }
+    };
+    let max_observed_freshness_days = matrix.max_observed_freshness_days.unwrap_or(30);
+    let stale_threshold_days = matrix
+        .stale_threshold_days
+        .unwrap_or(max_observed_freshness_days);
+    let mut matching_claim_rows = matrix
+        .claims
+        .into_iter()
+        .filter(|row| row.claim_id == claim_id);
+    let Some(row) = matching_claim_rows.next() else {
+        return Ok(claim_explanation_fail_closed(
+            claim_id,
+            matrix_path,
+            matrix_schema_version,
+            "missing_claim_row",
+            "Add or correct the matrix row before explaining the claim.",
+        ));
+    };
+    if matching_claim_rows.next().is_some() {
+        return Ok(claim_explanation_fail_closed(
+            claim_id,
+            matrix_path,
+            matrix_schema_version,
+            "duplicate_claim_row",
+            "Deduplicate the claim-to-proof matrix row before explaining the claim.",
+        ));
+    }
+
+    let bead = load_bead_status(beads_jsonl, row.owning_bead.as_str())?;
+    Ok(explain_claim_row(
+        claim_id,
+        matrix_path,
+        matrix_schema_version,
+        row,
+        bead,
+        stale_threshold_days,
+        max_observed_freshness_days,
+    ))
+}
+
+fn explain_claim_row(
+    claim_id: &str,
+    matrix_path: &Path,
+    matrix_schema_version: String,
+    row: ClaimMatrixRow,
+    bead: Option<ClaimExplanationBead>,
+    stale_threshold_days: u64,
+    max_observed_freshness_days: u64,
+) -> ClaimExplanationOutput {
+    let mut reason_codes = Vec::new();
+    let mut remediation = Vec::new();
+    let artifact_path = row.artifact_path.clone().unwrap_or_default();
+    let resolved_artifact_path = resolve_claim_artifact_path(matrix_path, &artifact_path);
+    let artifact = explain_claim_artifact(
+        &artifact_path,
+        &resolved_artifact_path,
+        row.allowed_state.as_str(),
+        row.expected_hash.as_deref(),
+        stale_threshold_days,
+        max_observed_freshness_days,
+    );
+
+    let missing_fields = claim_row_missing_required_fields(&row);
+    if !missing_fields.is_empty() {
+        let fix = format!(
+            "Fill required matrix fields before this claim can be explained: {}.",
+            missing_fields.join(", ")
+        );
+        push_reason(
+            &mut reason_codes,
+            &mut remediation,
+            "missing_required_field",
+            &fix,
+        );
+    }
+
+    if !claim_state_is_known(row.allowed_state.as_str())
+        || !claim_state_is_known(row.actual_wording_state.as_str())
+    {
+        let mut invalid_fields = Vec::new();
+        if !claim_state_is_known(row.allowed_state.as_str()) {
+            invalid_fields.push("allowed_state");
+        }
+        if !claim_state_is_known(row.actual_wording_state.as_str()) {
+            invalid_fields.push("actual_wording_state");
+        }
+        let fix = format!(
+            "Use one of hypothesis, target, or observed for {}.",
+            invalid_fields.join(", ")
+        );
+        push_reason(
+            &mut reason_codes,
+            &mut remediation,
+            "invalid_wording_state",
+            &fix,
+        );
+    }
+
+    if state_rank(row.actual_wording_state.as_str()) > state_rank(row.allowed_state.as_str()) {
+        push_reason(
+            &mut reason_codes,
+            &mut remediation,
+            "wording_stronger_than_allowed",
+            "Downgrade the claim wording or promote the matrix row only after upstream proof gates pass.",
+        );
+    }
+    if row.allowed_state != "observed" {
+        push_reason(
+            &mut reason_codes,
+            &mut remediation,
+            "claim_not_observed",
+            "Keep the explanation degraded/not-promotable until observed proof artifacts are linked.",
+        );
+    }
+    if row.allowed_state == "observed" && !artifact.present {
+        push_reason(
+            &mut reason_codes,
+            &mut remediation,
+            "absent_artifact",
+            "Produce or attach the upstream proof artifact before treating the claim as supported.",
+        );
+    }
+    if row.allowed_state == "observed"
+        && row
+            .freshness_days
+            .is_some_and(|days| days > max_observed_freshness_days)
+    {
+        push_reason(
+            &mut reason_codes,
+            &mut remediation,
+            "stale_artifact",
+            "Declared claim freshness exceeds the matrix max_observed_freshness_days budget.",
+        );
+    }
+    if row.allowed_state == "observed"
+        && matches!(artifact.freshness_status.as_str(), "stale" | "unknown")
+    {
+        push_reason(
+            &mut reason_codes,
+            &mut remediation,
+            "stale_artifact",
+            "Refresh the observed proof artifact or downgrade the claim before treating it as supported.",
+        );
+    }
+    if row.allowed_state == "observed"
+        && artifact.present
+        && !claim_artifact_has_reproducibility_bundle(&resolved_artifact_path)
+    {
+        push_reason(
+            &mut reason_codes,
+            &mut remediation,
+            "missing_reproducibility_bundle",
+            "Add a repro.lock beside or under the observed proof artifact before treating the claim as supported.",
+        );
+    }
+    if artifact.hash_status == "invalid_expected_hash" {
+        push_reason(
+            &mut reason_codes,
+            &mut remediation,
+            "invalid_expected_hash",
+            "Replace the expected artifact hash with a sha256:<64-hex> value or omit it until an authority source exists.",
+        );
+    } else if artifact.hash_status == "mismatch" {
+        push_reason(
+            &mut reason_codes,
+            &mut remediation,
+            "artifact_hash_mismatch",
+            "Regenerate the artifact from the recorded replay command or correct the matrix hash authority.",
+        );
+    }
+
+    let mock_contaminated = claim_row_contains_mock_contamination(&row)
+        || claim_artifact_contains_mock_contamination(&resolved_artifact_path);
+    let local_fallback_contaminated = claim_row_contains_local_fallback(&row)
+        || claim_artifact_contains_local_fallback(&resolved_artifact_path);
+    if mock_contaminated {
+        push_reason(
+            &mut reason_codes,
+            &mut remediation,
+            "mock_contaminated",
+            "Replace mock or simulation evidence with a live/preserved non-mock proof artifact.",
+        );
+    }
+    if local_fallback_contaminated {
+        push_reason(
+            &mut reason_codes,
+            &mut remediation,
+            "local_fallback_contaminated",
+            "Replace local-fallback transport evidence with a remote-only preserved proof artifact.",
+        );
+    }
+
+    let source_check = validate_claim_source_ref(matrix_path, &row);
+    if let Some(reason_code) = source_check.reason_code.as_deref() {
+        push_reason(
+            &mut reason_codes,
+            &mut remediation,
+            reason_code,
+            source_check
+                .remediation
+                .as_deref()
+                .unwrap_or("Repair the matrix source_path/source_span and rerun the claim gate."),
+        );
+    }
+
+    if let Some(bead_ref) = bead.as_ref()
+        && row.allowed_state == "observed"
+        && bead_ref.found
+        && bead_ref.status != "closed"
+    {
+        push_reason(
+            &mut reason_codes,
+            &mut remediation,
+            "contradictory_bead_status",
+            "Resolve tracker status or downgrade the claim before treating it as supported.",
+        );
+    }
+    if let Some(bead_ref) = bead.as_ref()
+        && row.allowed_state == "observed"
+        && !bead_ref.found
+    {
+        push_reason(
+            &mut reason_codes,
+            &mut remediation,
+            "stale_tracker_state",
+            "Refresh the Beads JSONL snapshot or pass --no-beads only for an explicit artifact-only review.",
+        );
+    }
+
+    let decision = claim_explanation_decision(row.allowed_state.as_str(), &reason_codes);
+    let source_ref = ClaimExplanationSourceRef {
+        source_path: row.source_path.clone(),
+        start_line: row.source_span.as_ref().map(|span| span.start_line),
+        end_line: row.source_span.as_ref().map(|span| span.end_line),
+        must_contain: row
+            .source_span
+            .as_ref()
+            .and_then(|span| span.must_contain.clone()),
+        status: source_check.status,
+    };
+    let replay_commands = if row.verification_command.trim().is_empty() {
+        Vec::new()
+    } else {
+        vec![row.verification_command.clone()]
+    };
+    let claim = ClaimExplanationClaim {
+        claim_scope: row.claim_scope,
+        claim_text: row.claim_text,
+        allowed_state: row.allowed_state,
+        actual_wording_state: row.actual_wording_state,
+        decision: row.decision,
+        reason: row.reason,
+        downgrade_text: row.downgrade_text,
+        freshness_days: row.freshness_days,
+        owning_bead: row.owning_bead,
+        verification_command: row.verification_command,
+        artifact_path,
+    };
+    let mock_status = if mock_contaminated {
+        "present_fail_closed"
+    } else {
+        "absent"
+    };
+    let local_fallback_status = if local_fallback_contaminated {
+        "present_fail_closed"
+    } else {
+        "absent"
+    };
+    let mut output = ClaimExplanationOutput {
+        schema_version: CLAIM_EXPLAINER_SCHEMA_VERSION.to_string(),
+        receipt_id: String::new(),
+        claim_id: claim_id.to_string(),
+        decision,
+        reason_codes,
+        matrix_path: matrix_path.display().to_string(),
+        matrix_schema_version,
+        claim: Some(claim),
+        artifact: Some(artifact),
+        bead,
+        mock_status: mock_status.to_string(),
+        local_fallback_status: local_fallback_status.to_string(),
+        replay_commands,
+        remediation,
+        source_line_refs: vec![source_ref],
+        mutation_policy: claim_explanation_mutation_policy(),
+        renderer_boundary: claim_explanation_renderer_boundary(),
+    };
+    output.receipt_id = derive_claim_explanation_receipt_id(&output);
+    output
+}
+
+fn claim_explanation_fail_closed(
+    claim_id: &str,
+    matrix_path: &Path,
+    matrix_schema_version: String,
+    reason_code: &str,
+    remediation: impl Into<String>,
+) -> ClaimExplanationOutput {
+    let mut output = ClaimExplanationOutput {
+        schema_version: CLAIM_EXPLAINER_SCHEMA_VERSION.to_string(),
+        receipt_id: String::new(),
+        claim_id: claim_id.to_string(),
+        decision: "fail_closed".to_string(),
+        reason_codes: vec![reason_code.to_string()],
+        matrix_path: matrix_path.display().to_string(),
+        matrix_schema_version,
+        claim: None,
+        artifact: None,
+        bead: None,
+        mock_status: "unknown_fail_closed".to_string(),
+        local_fallback_status: "unknown_fail_closed".to_string(),
+        replay_commands: Vec::new(),
+        remediation: vec![remediation.into()],
+        source_line_refs: Vec::new(),
+        mutation_policy: claim_explanation_mutation_policy(),
+        renderer_boundary: claim_explanation_renderer_boundary(),
+    };
+    output.receipt_id = derive_claim_explanation_receipt_id(&output);
+    output
+}
+
+fn explain_claim_artifact(
+    path: &str,
+    resolved_path: &Path,
+    allowed_state: &str,
+    expected_hash: Option<&str>,
+    stale_threshold_days: u64,
+    max_observed_freshness_days: u64,
+) -> ClaimExplanationArtifact {
+    let present = !path.is_empty() && resolved_path.exists();
+    let kind = if path.is_empty() {
+        "missing".to_string()
+    } else if resolved_path.is_dir() {
+        "directory".to_string()
+    } else if resolved_path.is_file() {
+        "file".to_string()
+    } else {
+        "missing".to_string()
+    };
+    let content_hash = compute_artifact_content_hash(resolved_path);
+    let expected_hash = expected_hash
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string);
+    let expected_hash_normalized = expected_hash
+        .as_deref()
+        .and_then(normalize_claim_expected_hash);
+    let hash_status = match (&content_hash, &expected_hash, &expected_hash_normalized) {
+        (_, None, _) => "unasserted",
+        (_, Some(_), None) => "invalid_expected_hash",
+        (None, Some(_), Some(_)) => "unavailable",
+        (Some(actual), Some(_), Some(expected)) if actual == expected => "matched",
+        (Some(_), Some(_), Some(_)) => "mismatch",
+    };
+    let actual_freshness_days = if allowed_state == "observed" && present {
+        derive_artifact_freshness_days(resolved_path)
+    } else {
+        None
+    };
+    let freshness_status = if allowed_state != "observed" {
+        "not_required"
+    } else {
+        match actual_freshness_days {
+            Some(days) if days > stale_threshold_days => "stale",
+            Some(_) => "fresh",
+            None => "unknown",
+        }
+    };
+    ClaimExplanationArtifact {
+        path: if path.is_empty() {
+            String::new()
+        } else {
+            resolved_path.display().to_string()
+        },
+        present,
+        kind,
+        content_hash,
+        expected_hash,
+        hash_status: hash_status.to_string(),
+        required_for_supported: allowed_state == "observed",
+        actual_freshness_days,
+        freshness_status: freshness_status.to_string(),
+        stale_threshold_days,
+        max_observed_freshness_days,
+    }
+}
+
+fn resolve_claim_artifact_path(matrix_path: &Path, artifact_path: &str) -> PathBuf {
+    let path = Path::new(artifact_path);
+    if artifact_path.trim().is_empty() || path.is_absolute() {
+        return path.to_path_buf();
+    }
+    if let Some(matrix_relative) = matrix_path
+        .parent()
+        .map(|parent| parent.join(path))
+        .filter(|candidate| candidate.exists())
+    {
+        return matrix_relative;
+    }
+    if let Some(repo_relative) = matrix_path
+        .parent()
+        .and_then(Path::parent)
+        .map(|parent| parent.join(path))
+        .filter(|candidate| candidate.exists())
+    {
+        return repo_relative;
+    }
+    if path.exists() {
+        return path.to_path_buf();
+    }
+    path.to_path_buf()
+}
+
+fn claim_row_missing_required_fields(row: &ClaimMatrixRow) -> Vec<&'static str> {
+    let mut missing = Vec::new();
+    if row.claim_id.trim().is_empty() {
+        missing.push("claim_id");
+    }
+    if row.claim_scope.trim().is_empty() {
+        missing.push("claim_scope");
+    }
+    if row.claim_text.trim().is_empty() {
+        missing.push("claim_text");
+    }
+    if row.source_path.trim().is_empty() {
+        missing.push("source_path");
+    }
+    if row.source_span.is_none() {
+        missing.push("source_span");
+    } else if row
+        .source_span
+        .as_ref()
+        .and_then(|span| span.must_contain.as_deref())
+        .is_none_or(|must_contain| must_contain.trim().is_empty())
+    {
+        missing.push("source_span.must_contain");
+    }
+    if row.allowed_state.trim().is_empty() {
+        missing.push("allowed_state");
+    }
+    if row.actual_wording_state.trim().is_empty() {
+        missing.push("actual_wording_state");
+    }
+    if row.decision.trim().is_empty() {
+        missing.push("decision");
+    }
+    if row.reason.trim().is_empty() {
+        missing.push("reason");
+    }
+    if row.owning_bead.trim().is_empty() {
+        missing.push("owning_bead");
+    }
+    if row.allowed_state == "observed" {
+        if row
+            .artifact_path
+            .as_deref()
+            .is_none_or(|path| path.trim().is_empty())
+        {
+            missing.push("artifact_path");
+        }
+        if row.verification_command.trim().is_empty() {
+            missing.push("verification_command");
+        }
+        if row.freshness_days.is_none() {
+            missing.push("freshness_days");
+        }
+    } else if row
+        .downgrade_text
+        .as_deref()
+        .is_none_or(|text| text.trim().is_empty())
+    {
+        missing.push("downgrade_text");
+    }
+    missing
+}
+
+fn compute_artifact_content_hash(path: &Path) -> Option<String> {
+    if path.is_file() {
+        return fs::read(path)
+            .ok()
+            .map(|bytes| ContentHash::compute(&bytes).to_hex());
+    }
+    if !path.is_dir() {
+        return None;
+    }
+
+    let mut files = Vec::new();
+    collect_artifact_files(path, &mut files).ok()?;
+    files.sort();
+    let mut preimage = Vec::new();
+    append_claim_hash_field(
+        &mut preimage,
+        b"franken-engine.claim-artifact-directory-hash.v1",
+    );
+    for file in files {
+        let relative = file.strip_prefix(path).ok()?;
+        let bytes = fs::read(&file).ok()?;
+        append_claim_hash_field(&mut preimage, relative.to_string_lossy().as_bytes());
+        append_claim_hash_field(
+            &mut preimage,
+            ContentHash::compute(&bytes).to_hex().as_bytes(),
+        );
+    }
+    Some(ContentHash::compute(&preimage).to_hex())
+}
+
+fn append_claim_hash_field(preimage: &mut Vec<u8>, bytes: &[u8]) {
+    let length = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
+    preimage.extend_from_slice(&length.to_be_bytes());
+    preimage.extend_from_slice(bytes);
+}
+
+fn collect_artifact_files(dir: &Path, files: &mut Vec<PathBuf>) -> Result<(), String> {
+    for entry in
+        fs::read_dir(dir).map_err(|error| format!("read dir `{}`: {error}", dir.display()))?
+    {
+        let entry =
+            entry.map_err(|error| format!("read dir entry `{}`: {error}", dir.display()))?;
+        let path = entry.path();
+        let file_type = entry
+            .file_type()
+            .map_err(|error| format!("read file type `{}`: {error}", path.display()))?;
+        if file_type.is_dir() {
+            collect_artifact_files(&path, files)?;
+        } else if file_type.is_file() {
+            files.push(path);
+        }
+    }
+    Ok(())
+}
+
+#[derive(Debug, Clone)]
+struct ClaimSourceValidation {
+    status: String,
+    reason_code: Option<String>,
+    remediation: Option<String>,
+}
+
+impl ClaimSourceValidation {
+    fn ok(status: impl Into<String>) -> Self {
+        Self {
+            status: status.into(),
+            reason_code: None,
+            remediation: None,
+        }
+    }
+
+    fn fail(
+        status: impl Into<String>,
+        reason_code: impl Into<String>,
+        remediation: impl Into<String>,
+    ) -> Self {
+        Self {
+            status: status.into(),
+            reason_code: Some(reason_code.into()),
+            remediation: Some(remediation.into()),
+        }
+    }
+}
+
+fn validate_claim_source_ref(matrix_path: &Path, row: &ClaimMatrixRow) -> ClaimSourceValidation {
+    let Some(span) = row.source_span.as_ref() else {
+        return ClaimSourceValidation::ok("missing_required_field");
+    };
+    if row.source_path.trim().is_empty() {
+        return ClaimSourceValidation::ok("missing_required_field");
+    }
+    let Some(must_contain) = span
+        .must_contain
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return ClaimSourceValidation::ok("missing_required_field");
+    };
+
+    if span.start_line == 0 || span.end_line < span.start_line {
+        return ClaimSourceValidation::fail(
+            "invalid_span",
+            "invalid_source_span",
+            "Use one-based source_span line numbers with start_line <= end_line.",
+        );
+    }
+
+    let resolved_path = resolve_claim_source_path(matrix_path, row.source_path.as_str());
+    if !resolved_path.is_file() {
+        return ClaimSourceValidation::fail(
+            "missing_source",
+            "source_path_missing",
+            format!(
+                "Restore `{}` or update the matrix source_path before treating this claim as supported.",
+                row.source_path
+            ),
+        );
+    }
+
+    let Ok(contents) = fs::read_to_string(&resolved_path) else {
+        return ClaimSourceValidation::fail(
+            "unreadable_source",
+            "source_path_unreadable",
+            format!(
+                "Make `{}` readable or update the matrix source_path before explaining this claim.",
+                resolved_path.display()
+            ),
+        );
+    };
+    let span_text = select_claim_source_span_text(&contents, span.start_line, span.end_line);
+    if !span_text.contains(must_contain) {
+        return ClaimSourceValidation::fail(
+            "span_mismatch",
+            "source_span_mismatch",
+            "Update the matrix source_span/must_contain or downgrade the claim until the source text matches.",
+        );
+    }
+
+    ClaimSourceValidation::ok("matched")
+}
+
+fn resolve_claim_source_path(matrix_path: &Path, source_path: &str) -> PathBuf {
+    let path = Path::new(source_path);
+    if source_path.trim().is_empty() || path.is_absolute() {
+        return path.to_path_buf();
+    }
+    if let Some(matrix_relative) = matrix_path
+        .parent()
+        .map(|parent| parent.join(path))
+        .filter(|candidate| candidate.exists())
+    {
+        return matrix_relative;
+    }
+    if let Some(repo_relative) = matrix_path
+        .parent()
+        .and_then(Path::parent)
+        .map(|parent| parent.join(path))
+        .filter(|candidate| candidate.exists())
+    {
+        return repo_relative;
+    }
+    if path.exists() {
+        return path.to_path_buf();
+    }
+    path.to_path_buf()
+}
+
+fn select_claim_source_span_text(contents: &str, start_line: u64, end_line: u64) -> String {
+    contents
+        .lines()
+        .enumerate()
+        .filter_map(|(index, line)| {
+            let line_number = u64::try_from(index).ok()?.saturating_add(1);
+            if (start_line..=end_line).contains(&line_number) {
+                Some(line)
+            } else {
+                None
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn normalize_claim_expected_hash(value: &str) -> Option<String> {
+    let normalized = value
+        .trim()
+        .strip_prefix("sha256:")
+        .or_else(|| value.trim().strip_prefix("content:"))
+        .unwrap_or_else(|| value.trim())
+        .to_ascii_lowercase();
+    if normalized.len() == 64 && normalized.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        Some(normalized)
+    } else {
+        None
+    }
+}
+
+fn derive_artifact_freshness_days(path: &Path) -> Option<u64> {
+    if path.is_file() {
+        return fs::metadata(path)
+            .ok()
+            .and_then(|metadata| metadata.modified().ok())
+            .and_then(freshness_days_since);
+    }
+
+    if path.is_dir() {
+        let mut manifests = Vec::new();
+        collect_artifact_manifest_candidates(path, &mut manifests).ok()?;
+        manifests.sort();
+        for manifest in manifests {
+            let Ok(contents) = fs::read_to_string(&manifest) else {
+                continue;
+            };
+            let Ok(value) = serde_json::from_str::<serde_json::Value>(&contents) else {
+                continue;
+            };
+            if let Some(days) = freshness_days_from_manifest(&value) {
+                return Some(days);
+            }
+        }
+    }
+
+    None
+}
+
+fn collect_artifact_manifest_candidates(
+    dir: &Path,
+    manifests: &mut Vec<PathBuf>,
+) -> Result<(), String> {
+    for entry in
+        fs::read_dir(dir).map_err(|error| format!("read dir `{}`: {error}", dir.display()))?
+    {
+        let entry =
+            entry.map_err(|error| format!("read dir entry `{}`: {error}", dir.display()))?;
+        let path = entry.path();
+        let file_type = entry
+            .file_type()
+            .map_err(|error| format!("read file type `{}`: {error}", path.display()))?;
+        if file_type.is_dir() {
+            collect_artifact_manifest_candidates(&path, manifests)?;
+        } else if file_type.is_file()
+            && path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name == "manifest.json" || name.ends_with("_manifest.json"))
+        {
+            manifests.push(path);
+        }
+    }
+    Ok(())
+}
+
+fn freshness_days_from_manifest(value: &serde_json::Value) -> Option<u64> {
+    let generated_utc = value
+        .pointer("/freshness/generated_utc")
+        .or_else(|| value.get("generated_utc"))
+        .or_else(|| value.get("generated_at_utc"))
+        .and_then(serde_json::Value::as_str)?;
+    let generated_epoch = parse_claim_artifact_timestamp_epoch(generated_utc)?;
+    let now_epoch = Utc::now().timestamp();
+    if now_epoch <= generated_epoch {
+        return Some(0);
+    }
+    Some(((now_epoch - generated_epoch) as u64) / 86_400)
+}
+
+fn parse_claim_artifact_timestamp_epoch(value: &str) -> Option<i64> {
+    if let Ok(parsed) = chrono::DateTime::parse_from_rfc3339(value) {
+        return Some(parsed.timestamp());
+    }
+    NaiveDateTime::parse_from_str(value, "%Y%m%dT%H%M%SZ")
+        .ok()
+        .map(|parsed| parsed.and_utc().timestamp())
+}
+
+fn freshness_days_since(time: SystemTime) -> Option<u64> {
+    SystemTime::now()
+        .duration_since(time)
+        .ok()
+        .map(|duration| duration.as_secs() / 86_400)
+}
+
+fn claim_artifact_has_reproducibility_bundle(path: &Path) -> bool {
+    if path.is_file() {
+        return path
+            .parent()
+            .is_some_and(|parent| parent.join("repro.lock").is_file());
+    }
+    if path.is_dir() {
+        return directory_contains_repro_lock(path, 0, 4);
+    }
+    false
+}
+
+fn directory_contains_repro_lock(dir: &Path, depth: usize, max_depth: usize) -> bool {
+    let Ok(entries) = fs::read_dir(dir) else {
+        return false;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let entry_depth = depth.saturating_add(1);
+        if path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name == "repro.lock")
+            && path.is_file()
+            && entry_depth <= max_depth
+        {
+            return true;
+        }
+        if entry_depth < max_depth
+            && path.is_dir()
+            && directory_contains_repro_lock(&path, entry_depth, max_depth)
+        {
+            return true;
+        }
+    }
+    false
+}
+
+fn load_bead_status(
+    beads_jsonl: Option<&Path>,
+    bead_id: &str,
+) -> Result<Option<ClaimExplanationBead>, String> {
+    let Some(path) = beads_jsonl else {
+        return Ok(None);
+    };
+    let Ok(contents) = fs::read_to_string(path) else {
+        return Ok(Some(ClaimExplanationBead {
+            bead_id: bead_id.to_string(),
+            status: "unavailable".to_string(),
+            assignee: None,
+            source: path.display().to_string(),
+            found: false,
+        }));
+    };
+    for line in contents.lines() {
+        if !line.contains(bead_id) {
+            continue;
+        }
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(line) else {
+            return Ok(Some(ClaimExplanationBead {
+                bead_id: bead_id.to_string(),
+                status: "unreadable".to_string(),
+                assignee: None,
+                source: path.display().to_string(),
+                found: false,
+            }));
+        };
+        if value
+            .get("id")
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|id| id == bead_id)
+        {
+            return Ok(Some(ClaimExplanationBead {
+                bead_id: bead_id.to_string(),
+                status: value
+                    .get("status")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("unknown")
+                    .to_string(),
+                assignee: value
+                    .get("assignee")
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::to_string),
+                source: path.display().to_string(),
+                found: true,
+            }));
+        }
+    }
+    Ok(Some(ClaimExplanationBead {
+        bead_id: bead_id.to_string(),
+        status: "not_found".to_string(),
+        assignee: None,
+        source: path.display().to_string(),
+        found: false,
+    }))
+}
+
+fn claim_row_contains_mock_contamination(row: &ClaimMatrixRow) -> bool {
+    claim_row_text_fields(row)
+        .iter()
+        .any(|value| contains_claim_mock_marker(value))
+}
+
+fn claim_row_contains_local_fallback(row: &ClaimMatrixRow) -> bool {
+    claim_row_text_fields(row)
+        .iter()
+        .any(|value| contains_claim_local_fallback_marker(value))
+}
+
+fn claim_row_text_fields(row: &ClaimMatrixRow) -> [&str; 5] {
+    [
+        row.artifact_path.as_deref().unwrap_or_default(),
+        row.claim_text.as_str(),
+        row.decision.as_str(),
+        row.reason.as_str(),
+        row.downgrade_text.as_deref().unwrap_or_default(),
+    ]
+}
+
+fn claim_artifact_contains_mock_contamination(path: &Path) -> bool {
+    claim_artifact_contains_marker(path, contains_claim_mock_marker)
+}
+
+fn claim_artifact_contains_local_fallback(path: &Path) -> bool {
+    claim_artifact_contains_marker(path, contains_claim_local_fallback_marker)
+}
+
+fn claim_artifact_contains_marker(path: &Path, contains_marker: fn(&str) -> bool) -> bool {
+    if path.is_file() {
+        return artifact_file_contains_marker(path, contains_marker);
+    }
+    if !path.is_dir() {
+        return false;
+    }
+
+    let mut files = Vec::new();
+    if collect_artifact_files(path, &mut files).is_err() {
+        return false;
+    }
+    files
+        .iter()
+        .any(|file| artifact_file_contains_marker(file, contains_marker))
+}
+
+fn artifact_file_contains_marker(path: &Path, contains_marker: fn(&str) -> bool) -> bool {
+    let Ok(bytes) = fs::read(path) else {
+        return false;
+    };
+    let contents = String::from_utf8_lossy(&bytes);
+    contains_marker(contents.as_ref())
+}
+
+fn contains_claim_mock_marker(value: &str) -> bool {
+    let value = value.to_ascii_lowercase();
+    value.contains("mockcertificate")
+        || value.contains("mock_certificate")
+        || value.contains("mock-certificate")
+        || value.contains("hot_paths_simulation")
+}
+
+fn contains_claim_local_fallback_marker(value: &str) -> bool {
+    let value = value.to_ascii_lowercase();
+    value.contains("localfallback")
+        || value.contains("local_fallback_contaminated")
+        || value.contains("local_fallback_observed")
+        || value.contains("local-fallback-contaminated")
+        || value.contains("local fallback was used")
+        || value.contains("local fallback observed")
+        || value.contains("falling back to local")
+        || value.contains("fallback to local")
+        || value.contains("ran locally instead of rch")
+        || value.contains("running locally")
+}
+
+fn claim_explanation_decision(allowed_state: &str, reason_codes: &[String]) -> String {
+    if reason_codes.iter().any(|code| {
+        matches!(
+            code.as_str(),
+            "absent_artifact"
+                | "artifact_hash_mismatch"
+                | "contradictory_bead_status"
+                | "duplicate_claim_row"
+                | "invalid_matrix_schema"
+                | "invalid_expected_hash"
+                | "invalid_wording_state"
+                | "local_fallback_contaminated"
+                | "missing_reproducibility_bundle"
+                | "missing_claim_row"
+                | "missing_required_field"
+                | "mock_contaminated"
+                | "invalid_source_span"
+                | "stale_artifact"
+                | "stale_tracker_state"
+                | "source_path_missing"
+                | "source_path_unreadable"
+                | "source_span_mismatch"
+                | "wording_stronger_than_allowed"
+        )
+    }) {
+        return "fail_closed".to_string();
+    }
+    match allowed_state {
+        "observed" => "supported".to_string(),
+        "target" | "hypothesis" => "not_promotable".to_string(),
+        _ => "unsupported".to_string(),
+    }
+}
+
+fn push_reason(
+    reason_codes: &mut Vec<String>,
+    remediation: &mut Vec<String>,
+    reason: &str,
+    fix: &str,
+) {
+    if !reason_codes.iter().any(|existing| existing == reason) {
+        reason_codes.push(reason.to_string());
+        remediation.push(format!("{reason}: {fix}"));
+    }
+}
+
+fn state_rank(state: &str) -> u8 {
+    match state {
+        "hypothesis" => 0,
+        "target" => 1,
+        "observed" => 2,
+        _ => 3,
+    }
+}
+
+fn claim_state_is_known(state: &str) -> bool {
+    matches!(state, "hypothesis" | "target" | "observed")
+}
+
+fn claim_explanation_mutation_policy() -> ClaimExplanationMutationPolicy {
+    ClaimExplanationMutationPolicy {
+        mutates_br: false,
+        mutates_agent_mail: false,
+        mutates_file_reservations: false,
+        mutates_remote_workers: false,
+        mutates_evidence_bundles: false,
+        mutates_claim_matrix: false,
+        mutates_git: false,
+        runs_cargo: false,
+        runs_rch: false,
+    }
+}
+
+fn claim_explanation_renderer_boundary() -> ClaimExplanationRendererBoundary {
+    ClaimExplanationRendererBoundary {
+        future_rich_renderer_provider: "/dp/frankentui".to_string(),
+        local_rich_renderer_shipped: false,
+    }
+}
+
+fn derive_claim_explanation_receipt_id(output: &ClaimExplanationOutput) -> String {
+    let mut value = serde_json::to_value(output).expect("claim explanation serializes");
+    if let Some(object) = value.as_object_mut() {
+        object.insert(
+            "receipt_id".to_string(),
+            serde_json::Value::String(String::new()),
+        );
+    }
+    let encoded = serde_json::to_vec(&value).expect("claim explanation JSON serializes");
+    format!("claim-explain-{}", ContentHash::compute(&encoded).to_hex())
+}
+
+fn emit_orchestration_failure(
+    command: &str,
+    input: &Path,
+    out: Option<&Path>,
+    orchestrator: &ExecutionOrchestrator,
+    error: &OrchestratorError,
+) -> Result<i32, String> {
+    let lifecycle = error
+        .post_cell_failure()
+        .ok_or_else(|| format_orchestration_error(command, input, error))?;
+    let uncommitted_evidence_chain = error
+        .uncommitted_evidence_chain()
+        .ok_or_else(|| format_orchestration_error(command, input, error))?;
+    let trusted_identity = orchestrator.evidence_verification_identity();
+    let evidence_chain_instance_id = orchestrator.evidence_chain_instance_id().to_string();
+    let evidence_ledger_id = orchestrator.evidence_ledger_id().to_string();
+    let evidence_chain_next_sequence = orchestrator.ledger().evidence_chain_next_sequence();
+    let evidence_chain_head = orchestrator
+        .ledger()
+        .evidence_chain_head()
+        .map(str::to_string);
+    uncommitted_evidence_chain
+        .verify_with_context(
+            &trusted_identity,
+            &evidence_chain_instance_id,
+            &evidence_ledger_id,
+            &lifecycle.cleanup.trace_id,
+            evidence_chain_next_sequence,
+            evidence_chain_head.as_deref(),
+        )
+        .map_err(|verification_error| {
+            format!(
+                "{}; refusing to emit unverified failure evidence: {verification_error}",
+                format_orchestration_error(command, input, error)
+            )
+        })?;
+
+    let error_message = format_orchestration_error(command, input, error);
+    let mut output = OrchestrationFailureOutput {
+        schema_version: ORCHESTRATION_FAILURE_SCHEMA_VERSION.to_string(),
+        command: command.to_string(),
+        input_path: input.display().to_string(),
+        trace_id: lifecycle.cleanup.trace_id.clone(),
+        exit_code: 2,
+        error: error_message.clone(),
+        classification: classify_run_error(error).map(str::to_string),
+        report_path: out.map(|path| path.display().to_string()),
+        report_write_error: None,
+        evidence_chain_instance_id,
+        evidence_ledger_id,
+        evidence_chain_next_sequence,
+        evidence_chain_head,
+        uncommitted_evidence_chain: uncommitted_evidence_chain.clone(),
+        observability_mode: default_capture_observability_mode(),
+    };
+    if let Some(path) = out
+        && let Err(write_error) = write_json_file(path, &output)
+    {
+        output.report_path = None;
+        output.report_write_error = Some(write_error);
+    }
+    print_json(&output)?;
+    eprintln!("{error_message}");
+    if let Some(write_error) = output.report_write_error.as_deref() {
+        eprintln!("failure report file was not written: {write_error}");
+    }
+    Ok(output.exit_code)
+}
+
+fn format_orchestration_error(command: &str, input: &Path, error: &OrchestratorError) -> String {
+    let mut detail = format!("{command} failed for `{}`: {error}", input.display());
     if let Some(classification) = classify_run_error(error) {
         detail.push_str(format!("\nclassification: {classification}").as_str());
     }
@@ -3069,7 +6539,7 @@ fn format_run_error(input: &Path, error: &OrchestratorError) -> String {
 }
 
 fn classify_run_error(error: &OrchestratorError) -> Option<&'static str> {
-    match error {
+    match error.primary_error() {
         OrchestratorError::Interpreter(
             InterpreterError::ModuleResolutionFailed { .. }
             | InterpreterError::ModuleReadFailed { .. }
@@ -3081,12 +6551,18 @@ fn classify_run_error(error: &OrchestratorError) -> Option<&'static str> {
     }
 }
 
-fn run_cli_capabilities(parse_goal: ParseGoal) -> Vec<String> {
+/// The typed capability profile a `frankenctl run` grants (the certifier's
+/// runtime-granted set; bd-fqlfw.8.3).
+fn run_cli_capability_set(parse_goal: ParseGoal) -> BTreeSet<RuntimeCapability> {
     let mut capabilities = CapabilityProfile::engine_core().capabilities().clone();
     if parse_goal == ParseGoal::Module {
         capabilities.insert(RuntimeCapability::ModuleLoad);
     }
     capabilities
+}
+
+fn run_cli_capabilities(parse_goal: ParseGoal) -> Vec<String> {
+    run_cli_capability_set(parse_goal)
         .into_iter()
         .map(|capability| capability.to_string())
         .collect()
@@ -5284,10 +8760,205 @@ fn execute_replay(args: ReplayArgs) -> Result<i32, String> {
     Ok(0)
 }
 
+/// `frankenctl replay debug`: drive the evidence-aware time-travel debugger
+/// over a captured nondeterminism trace via the JSON-line robot protocol
+/// (bd-fqlfw.3.5.3 / E3.T5c). Commands come from `--script` (one JSON
+/// object per line; blank lines and `#` comment lines are skipped) or from
+/// stdin; every command line yields exactly one JSON response line on
+/// stdout, and `--out` additionally captures the full transcript. Identical
+/// trace + script input produces a byte-identical transcript. Protocol-level
+/// failures (malformed lines, out-of-range ticks) are fail-closed
+/// `{"ok":false,...}` RESPONSES, not process errors.
+/// Compile `--input` through the real lowering pipeline and pair it with the
+/// loaded trace as an on-demand interpreter-state producer for `inspect`
+/// (bd-fqlfw.3.5.5 / E3.T5d). The interpreter config mirrors the direct
+/// `InterpreterCore` execution surface (quickjs defaults + VmDispatch +
+/// HeapAllocate); when the module/config does not correspond to the trace,
+/// the producer's re-execution consistency check fails closed at inspect
+/// time rather than serving state from the wrong program.
+fn build_replay_debug_state_producer(
+    input: &Path,
+    goal: ParseGoal,
+    trace_path: &Path,
+) -> Result<ReplayStateProducer, String> {
+    let source = fs::read_to_string(input)
+        .map_err(|error| format!("failed to read --input `{}`: {error}", input.display()))?;
+    let source_label = input.display().to_string();
+    let prepared = prepare_source_entry_for_public_entrypoints(
+        source.as_str(),
+        source_label.as_str(),
+        "replay-debug",
+        "replay-debug",
+        "replay-debug",
+    )
+    .map_err(|error| format!("source ingestion failed for `{source_label}`: {error}"))?;
+    let parser = CanonicalEs2020Parser;
+    let syntax_tree = parser
+        .parse_with_options(
+            prepared.prepared_source.as_str(),
+            goal,
+            &ParserOptions::default(),
+        )
+        .map_err(|error| format!("parse failed for `{source_label}`: {error}"))?;
+    let ir0 = Ir0Module::from_syntax_tree(syntax_tree, &source_label);
+    let lowering = lower_ir0_to_ir3(
+        &ir0,
+        &LoweringContext::new(
+            "replay-debug".to_string(),
+            "replay-debug".to_string(),
+            "replay-debug".to_string(),
+        ),
+    )
+    .map_err(|error| format!("lowering failed for `{source_label}`: {error}"))?;
+
+    let expected_trace = load_json_file::<NondeterminismTrace>(trace_path)?;
+    let mut config = InterpreterConfig::quickjs_defaults();
+    // Console mirrors the orchestrated run path (`frankenctl run` grants the
+    // engine-core profile, and the orchestrator default-grants Console): a
+    // trace recorded from a console-logging program must not diverge at
+    // replay-debug time with a CapabilityDenied the original run never hit
+    // (bd-lduxz).
+    config.granted_capabilities = BTreeSet::from([
+        RuntimeCapability::VmDispatch,
+        RuntimeCapability::HeapAllocate,
+        RuntimeCapability::Console,
+    ]);
+    Ok(ReplayStateProducer::new(
+        lowering.ir3,
+        config,
+        expected_trace,
+    ))
+}
+
+fn execute_replay_debug(args: ReplayDebugArgs) -> Result<i32, String> {
+    let trace = load_json_file::<NondeterminismTrace>(&args.trace)?;
+    let cursor = TimeTravelCursor::new(
+        trace,
+        args.mode,
+        TimeTravelConfig {
+            checkpoint_interval: args.checkpoint_interval,
+        },
+    )
+    .map_err(|error| format!("replay debug failed to open trace: {error}"))?;
+
+    let debugger_events: Vec<DebuggerEvent> = match args.events.as_ref() {
+        Some(path) => load_json_file::<Vec<DebuggerEvent>>(path)?,
+        None => Vec::new(),
+    };
+    let state_snapshots: Vec<InterpreterStateSnapshot> = match args.state_snapshots.as_ref() {
+        Some(path) => load_json_file::<Vec<InterpreterStateSnapshot>>(path)?,
+        None => Vec::new(),
+    };
+    let debugger =
+        TimeTravelDebugger::new_with_state_snapshots(cursor, debugger_events, state_snapshots);
+    let mut session = match args.input.as_ref() {
+        Some(input) => {
+            let producer = build_replay_debug_state_producer(input, args.input_goal, &args.trace)?;
+            RobotSession::new_with_producer(debugger, producer)
+        }
+        None => RobotSession::new(debugger),
+    };
+
+    let command_lines: Vec<String> = match args.script.as_ref() {
+        Some(path) => fs::read_to_string(path)
+            .map_err(|error| format!("failed to read script `{}`: {error}", path.display()))?
+            .lines()
+            .map(str::to_string)
+            .collect(),
+        None => {
+            let mut buffer = String::new();
+            std::io::Read::read_to_string(&mut std::io::stdin(), &mut buffer)
+                .map_err(|error| format!("failed to read robot commands from stdin: {error}"))?;
+            buffer.lines().map(str::to_string).collect()
+        }
+    };
+
+    let mut transcript: Vec<String> = Vec::new();
+    for line in command_lines {
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            continue;
+        }
+        let response = session.handle_line(trimmed);
+        println!("{response}");
+        transcript.push(response);
+    }
+
+    if let Some(path) = args.out.as_ref() {
+        let mut body = transcript.join("\n");
+        body.push('\n');
+        fs::write(path, body)
+            .map_err(|error| format!("failed to write transcript `{}`: {error}", path.display()))?;
+    }
+    Ok(0)
+}
+
 fn execute_differential_oracle(args: DifferentialOracleArgs) -> Result<i32, String> {
     match args.mode {
         DifferentialOracleMode::Run(args) => execute_differential_oracle_run(args),
+        DifferentialOracleMode::Perf(args) => execute_differential_oracle_perf(args),
     }
+}
+
+fn execute_differential_oracle_perf(args: DifferentialOraclePerfArgs) -> Result<i32, String> {
+    let mut corpus = load_runtime_comparison_corpus(&args.manifest)?;
+    if !args.case_filter.is_empty() {
+        corpus.retain(|case| args.case_filter.iter().any(|id| id == &case.case_id));
+        if corpus.is_empty() {
+            return Err("--case filters matched no corpus case".to_string());
+        }
+    }
+
+    let mut config = PerfArmConfig {
+        warmup_iterations: args.warmup,
+        measured_iterations: args.samples,
+        case_timeout_ms: args.case_timeout_ms,
+        ..PerfArmConfig::default()
+    };
+    if let Some(engine_budget) = args.engine_budget {
+        config.engine_instruction_budget = engine_budget;
+    }
+    if let Some(node_bin) = args.node_bin {
+        config.node.program = node_bin;
+    }
+    if let Some(bun_bin) = args.bun_bin {
+        config.bun.program = bun_bin;
+    }
+
+    let (report, iteration_events) = run_differential_perf(&corpus, &config);
+
+    if let Some(path) = &args.events {
+        let mut lines = String::new();
+        for event in &iteration_events {
+            let line = serde_json::to_string(event)
+                .map_err(|error| format!("failed to serialize iteration event: {error}"))?;
+            lines.push_str(&line);
+            lines.push('\n');
+        }
+        fs::write(path, lines)
+            .map_err(|error| format!("failed to write events `{}`: {error}", path.display()))?;
+    }
+    if let Some(path) = &args.out {
+        write_json_file(path, &report)?;
+    }
+
+    // stdout gets a compact operator summary; raw per-iteration data lives in
+    // the --out report and --events stream.
+    let summary = serde_json::json!({
+        "schema_version": report.schema_version,
+        "fairness": report.fairness,
+        "case_count": report.cases.len(),
+        "admitted_case_ids": report
+            .cases
+            .iter()
+            .filter(|case| case.admitted)
+            .map(|case| case.case_id.clone())
+            .collect::<Vec<_>>(),
+        "node_denominator": report.node_denominator,
+        "bun_denominator": report.bun_denominator,
+    });
+    print_json(&summary)?;
+    Ok(0)
 }
 
 fn execute_differential_oracle_run(args: DifferentialOracleRunArgs) -> Result<i32, String> {
@@ -5300,16 +8971,1106 @@ fn execute_differential_oracle_run(args: DifferentialOracleRunArgs) -> Result<i3
             .unwrap_or("differential-oracle-case")
             .to_string()
     });
-    let input = DifferentialOracleInput::new(case_id, source)
+    let mut input = DifferentialOracleInput::new(case_id, source)
         .with_source_path(args.input.display().to_string())
         .with_timeout_ms(args.timeout_ms);
+    if let Some(budget) = args.engine_budget {
+        input = input.with_engine_instruction_budget(budget);
+    }
+    if let Some(memory_budget) = args.engine_memory_budget {
+        input = input.with_engine_memory_budget(memory_budget);
+    }
     let report = run_differential_oracle(&input);
 
     if let Some(path) = args.out {
         write_json_file(&path, &report)?;
     }
     print_json(&report)?;
-    Ok(0)
+    let degraded = !oracle_external_degradations(&report).is_empty();
+    Ok(oracle_exit_for_report(&report, degraded))
+}
+
+// ── oracle (operator-facing differential oracle) ───────────────────────────
+
+/// Schema id for the content-addressed bundle emitted by `oracle run --bundle`.
+const ORACLE_RUN_BUNDLE_SCHEMA_VERSION: &str = "franken-engine.oracle-run-bundle.v1";
+const ORACLE_RUN_DEGRADED_RECEIPT_SCHEMA_VERSION: &str =
+    "franken-engine.oracle-run-degraded-receipt.v1";
+const ORACLE_RUN_SUMMARY_SCHEMA_VERSION: &str = "franken-engine.oracle-run-summary.v1";
+const ORACLE_REPRO_LOCK_SCHEMA_VERSION: &str = "franken-engine.repro-lock.v1";
+
+/// Documented `oracle` exit codes (part of the CLI contract; see `oracle_usage`).
+const ORACLE_EXIT_CONSENSUS: i32 = 0;
+const ORACLE_EXIT_DIVERGENCE: i32 = 3;
+const ORACLE_EXIT_INSUFFICIENT: i32 = 4;
+
+/// A summary handle returned by [`emit_oracle_run_bundle`] for display.
+struct OracleBundleSummary {
+    dir: PathBuf,
+    bundle_id: String,
+    degraded: bool,
+}
+
+fn oracle_verdict_label(verdict: DifferentialComparisonVerdict) -> &'static str {
+    match verdict {
+        DifferentialComparisonVerdict::Consensus => "consensus",
+        DifferentialComparisonVerdict::Divergence => "divergence",
+        DifferentialComparisonVerdict::InsufficientData => "insufficient_data",
+    }
+}
+
+/// Map a backend to its short `--engines` alias (the reproducible CLI token).
+fn oracle_engine_alias(backend: DifferentialBackend) -> &'static str {
+    match backend {
+        DifferentialBackend::NodeLts => "node",
+        DifferentialBackend::BunStable => "bun",
+        DifferentialBackend::FrankenEngine => "franken",
+        DifferentialBackend::FrankenCore => "core",
+    }
+}
+
+fn oracle_engines_csv(report: &DifferentialOracleReport) -> String {
+    report
+        .backends
+        .iter()
+        .map(|receipt| oracle_engine_alias(receipt.backend))
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
+/// Reasons a selected reference runtime (Node/Bun) failed to produce a
+/// comparable runtime result.
+/// Non-empty ⇒ the run is degraded: the engine output is unverified against at
+/// least one requested reference runtime.
+fn oracle_external_degradations(report: &DifferentialOracleReport) -> Vec<String> {
+    report
+        .backends
+        .iter()
+        .filter_map(|receipt| {
+            if !matches!(
+                receipt.backend,
+                DifferentialBackend::NodeLts | DifferentialBackend::BunStable
+            ) {
+                return None;
+            }
+            let status = report
+                .canonicalization
+                .observations
+                .iter()
+                .find(|observation| observation.backend == receipt.backend)
+                .map(|observation| observation.status)
+                .unwrap_or(DifferentialBackendStatus::Degraded);
+            matches!(
+                status,
+                DifferentialBackendStatus::Unavailable
+                    | DifferentialBackendStatus::Timeout
+                    | DifferentialBackendStatus::Degraded
+            )
+            .then_some((receipt.backend, status))
+        })
+        .map(|(backend, status)| {
+            format!(
+                "{} is {} and was excluded from cross-runtime consensus",
+                backend,
+                status.stable_label()
+            )
+        })
+        .collect()
+}
+
+/// Derive the documented exit code from the recorded verdict. A consensus only
+/// counts as a pass (`0`) when no requested reference runtime was unavailable,
+/// timed out, or infrastructure-degraded;
+/// otherwise it is downgraded to insufficient-data (`4`). A divergence is always
+/// surfaced (`3`).
+fn oracle_exit_for_report(report: &DifferentialOracleReport, degraded: bool) -> i32 {
+    match report.canonicalization.semantic_verdict {
+        DifferentialComparisonVerdict::Divergence => ORACLE_EXIT_DIVERGENCE,
+        DifferentialComparisonVerdict::Consensus => {
+            if degraded {
+                ORACLE_EXIT_INSUFFICIENT
+            } else {
+                ORACLE_EXIT_CONSENSUS
+            }
+        }
+        DifferentialComparisonVerdict::InsufficientData => ORACLE_EXIT_INSUFFICIENT,
+    }
+}
+
+/// Sort object keys recursively and pretty-print with a trailing newline, so the
+/// bytes are independent of serde_json's `preserve_order` feature and stable for
+/// content addressing.
+fn oracle_canonical_json_bytes(value: &serde_json::Value) -> String {
+    let sorted = frankenengine_engine::evidence_manifest::sort_value_keys(value);
+    let mut text = serde_json::to_string_pretty(&sorted).expect("json value pretty-prints");
+    text.push('\n');
+    text
+}
+
+fn oracle_repro_lock_value(report: &DifferentialOracleReport) -> serde_json::Value {
+    let selected = report
+        .backends
+        .iter()
+        .map(|receipt| receipt.backend.to_string())
+        .collect::<Vec<_>>();
+    let verdict_label = oracle_verdict_label(report.canonicalization.semantic_verdict);
+    serde_json::json!({
+        "schema_version": ORACLE_REPRO_LOCK_SCHEMA_VERSION,
+        "case_id": report.case_id,
+        "source_sha256": format!("sha256:{}", report.source_sha256),
+        "selected_backends": selected,
+        "commands": [
+            format!(
+                "frankenctl oracle run <input.js> --engines {} --bundle <dir>",
+                oracle_engines_csv(report)
+            ),
+        ],
+        "determinism": {
+            "allow_network": false,
+            "allow_randomness": false,
+            "allow_wall_clock": true,
+            "note": "per-backend wall-clock timing is non-deterministic; the reproducible assertion is the semantic verdict over canonical structured values and exception classes, not raw stdout timing",
+            "reproducible_assertion": "semantic_verdict",
+        },
+        "expected_outputs": [
+            {
+                "kind": "semantic_verdict",
+                "path": "report.json#canonicalization.semantic_verdict",
+                "value": verdict_label,
+            },
+        ],
+        "verification": {
+            "command": "frankenctl oracle report <dir>",
+            "expected_verdict": verdict_label,
+        },
+    })
+}
+
+fn oracle_degraded_receipt_value(report: &DifferentialOracleReport) -> Option<serde_json::Value> {
+    let degradations = oracle_external_degradations(report);
+    (!degradations.is_empty()).then(|| {
+        serde_json::json!({
+            "schema_version": ORACLE_RUN_DEGRADED_RECEIPT_SCHEMA_VERSION,
+            "error_code": "FE-REPRO-0007",
+            "verdict": "degraded",
+            "case_id": report.case_id,
+            "reasons": degradations,
+            "policy": "Degraded oracle runs do not assert cross-runtime consensus: a requested reference runtime (Node/Bun) was unavailable, timed out, or infrastructure-degraded, so the engine output is unverified against it.",
+        })
+    })
+}
+
+fn execute_oracle(args: OracleArgs) -> Result<i32, String> {
+    match args.mode {
+        OracleMode::Run(args) => execute_oracle_run(args),
+        OracleMode::Report(args) => execute_oracle_report(args),
+    }
+}
+
+/// Resolve an explicit `--node-bin`/`--bun-bin` override, falling back to the
+/// `$NODE`/`$BUN` environment variable, so an operator on a host where `node` is
+/// a Bun shim can point the oracle at a genuine binary.
+fn oracle_runtime_program(explicit: Option<&str>, env_var: &str) -> Option<String> {
+    if let Some(value) = explicit {
+        return Some(value.to_string());
+    }
+    env::var(env_var)
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+}
+
+fn execute_oracle_run(args: OracleRunArgs) -> Result<i32, String> {
+    let source = fs::read_to_string(&args.input)
+        .map_err(|error| format!("failed to read input `{}`: {error}", args.input.display()))?;
+    let case_id = args.case_id.clone().unwrap_or_else(|| {
+        args.input
+            .file_stem()
+            .and_then(|value| value.to_str())
+            .unwrap_or("oracle-case")
+            .to_string()
+    });
+
+    let mut input = DifferentialOracleInput::new(case_id, source)
+        .with_source_path(args.input.display().to_string())
+        .with_timeout_ms(args.timeout_ms)
+        .with_selected_backends(args.engines.iter().copied());
+    if let Some(budget) = args.engine_budget {
+        input = input.with_engine_instruction_budget(budget);
+    }
+    if let Some(memory_budget) = args.engine_memory_budget {
+        input = input.with_engine_memory_budget(memory_budget);
+    }
+    if let Some(program) = oracle_runtime_program(args.node_bin.as_deref(), "NODE") {
+        input.node.program = program;
+    }
+    if let Some(program) = oracle_runtime_program(args.bun_bin.as_deref(), "BUN") {
+        input.bun.program = program;
+    }
+
+    let report = run_differential_oracle(&input);
+
+    if let Some(path) = &args.out {
+        write_json_file(path, &report)?;
+    }
+
+    let bundle_summary = match &args.bundle {
+        Some(dir) => Some(emit_oracle_run_bundle(dir, &report)?),
+        None => None,
+    };
+
+    let degraded = bundle_summary
+        .as_ref()
+        .map(|summary| summary.degraded)
+        .unwrap_or_else(|| !oracle_external_degradations(&report).is_empty());
+    let exit_code = oracle_exit_for_report(&report, degraded);
+
+    match args.format {
+        CheckOutputFormat::Json => {
+            let payload =
+                oracle_run_json_summary(&report, bundle_summary.as_ref(), degraded, exit_code);
+            print_json(&payload)?;
+        }
+        CheckOutputFormat::Human => {
+            println!(
+                "{}",
+                render_oracle_run_human(&report, bundle_summary.as_ref(), degraded, exit_code)
+            );
+        }
+    }
+    Ok(exit_code)
+}
+
+/// Write a content-addressed oracle-run bundle: `report.json` (the full report),
+/// `repro.lock` (re-run recipe + the reproducible semantic-verdict assertion),
+/// `manifest.json` (sha256-indexed artifact set + `bundle_id`), and, when a
+/// requested reference runtime was unavailable, timed out, or
+/// infrastructure-degraded, `degraded_receipt.json`.
+fn emit_oracle_run_bundle(
+    dir: &Path,
+    report: &DifferentialOracleReport,
+) -> Result<OracleBundleSummary, String> {
+    let dir_handle = create_oracle_bundle_dir(dir)?;
+
+    let report_value = serde_json::to_value(report)
+        .map_err(|error| format!("failed to encode oracle report: {error}"))?;
+    let report_bytes = oracle_canonical_json_bytes(&report_value);
+    let report_sha = sha256_prefixed(report_bytes.as_bytes());
+    write_oracle_bundle_file(
+        &dir_handle,
+        "report.json",
+        "report",
+        report_bytes.as_bytes(),
+    )?;
+
+    let selected: Vec<String> = report
+        .backends
+        .iter()
+        .map(|receipt| receipt.backend.to_string())
+        .collect();
+    let verdict_label = oracle_verdict_label(report.canonicalization.semantic_verdict);
+
+    let lock_value = oracle_repro_lock_value(report);
+    let lock_bytes = oracle_canonical_json_bytes(&lock_value);
+    let lock_sha = sha256_prefixed(lock_bytes.as_bytes());
+    write_oracle_bundle_file(
+        &dir_handle,
+        "repro.lock",
+        "reproduction lock",
+        lock_bytes.as_bytes(),
+    )?;
+
+    let degraded_receipt_value = oracle_degraded_receipt_value(report);
+    let degraded = degraded_receipt_value.is_some();
+    let degraded_receipt_bytes = degraded_receipt_value
+        .as_ref()
+        .map(oracle_canonical_json_bytes);
+    let mut artifacts = serde_json::json!({
+        "report": { "path": "report.json", "sha256": report_sha },
+        "lock": { "path": "repro.lock", "sha256": lock_sha },
+    });
+    if let (Some(artifacts), Some(receipt_bytes)) =
+        (artifacts.as_object_mut(), degraded_receipt_bytes.as_ref())
+    {
+        artifacts.insert(
+            "degraded_receipt".to_string(),
+            serde_json::json!({
+                "path": "degraded_receipt.json",
+                "sha256": sha256_prefixed(receipt_bytes.as_bytes()),
+            }),
+        );
+    }
+
+    let mut manifest = serde_json::json!({
+        "schema_version": ORACLE_RUN_BUNDLE_SCHEMA_VERSION,
+        "case_id": report.case_id,
+        "source_sha256": format!("sha256:{}", report.source_sha256),
+        "semantic_verdict": verdict_label,
+        "divergence_count": report.divergence_taxonomy.findings.len(),
+        "degraded": degraded,
+        "selected_backends": selected,
+        "host": {
+            "os": report.host.os,
+            "arch": report.host.arch,
+            "franken_engine_version": report.host.franken_engine_version,
+        },
+        "artifacts": artifacts,
+        "validation": {
+            "command": "frankenctl oracle report <bundle-dir>",
+            "exit_codes": "0 consensus | 3 divergence | 4 insufficient-data/degraded",
+        },
+    });
+    // Inject the u128 timestamp by copying the already-serialized report field,
+    // sidestepping any `json!` integer-width edge case.
+    if let Some(object) = manifest.as_object_mut() {
+        object.insert(
+            "generated_unix_ns".to_string(),
+            report_value
+                .get("generated_unix_ns")
+                .cloned()
+                .unwrap_or(serde_json::Value::Null),
+        );
+    }
+
+    // bundle_id content-addresses the manifest body (excluding its own id).
+    let manifest_preimage = oracle_canonical_json_bytes(&manifest);
+    let bundle_id = sha256_prefixed(manifest_preimage.as_bytes());
+    if let Some(object) = manifest.as_object_mut() {
+        object.insert(
+            "bundle_id".to_string(),
+            serde_json::Value::String(bundle_id.clone()),
+        );
+    }
+    let manifest_bytes = oracle_canonical_json_bytes(&manifest);
+
+    if let Some(receipt_bytes) = degraded_receipt_bytes.as_ref() {
+        write_oracle_bundle_file(
+            &dir_handle,
+            "degraded_receipt.json",
+            "degraded receipt",
+            receipt_bytes.as_bytes(),
+        )?;
+    }
+    dir_handle.sync_all().map_err(|error| {
+        format!(
+            "failed to sync bundle artifacts in `{}`: {error}",
+            dir.display()
+        )
+    })?;
+
+    // The manifest is the publication marker. Emit it only after every indexed
+    // artifact was created, written, and synced through the pinned directory.
+    write_oracle_bundle_file(
+        &dir_handle,
+        "manifest.json",
+        "manifest",
+        manifest_bytes.as_bytes(),
+    )?;
+    dir_handle.sync_all().map_err(|error| {
+        format!(
+            "failed to publish bundle manifest in `{}`: {error}",
+            dir.display()
+        )
+    })?;
+
+    Ok(OracleBundleSummary {
+        dir: dir.to_path_buf(),
+        bundle_id,
+        degraded,
+    })
+}
+
+fn oracle_run_json_summary(
+    report: &DifferentialOracleReport,
+    bundle: Option<&OracleBundleSummary>,
+    degraded: bool,
+    exit_code: i32,
+) -> serde_json::Value {
+    let bundle_value = match bundle {
+        Some(summary) => serde_json::json!({
+            "dir": summary.dir.display().to_string(),
+            "bundle_id": summary.bundle_id,
+        }),
+        None => serde_json::Value::Null,
+    };
+    let backends_value = serde_json::to_value(&report.backends).unwrap_or(serde_json::Value::Null);
+    let divergences_value = serde_json::to_value(&report.divergence_taxonomy.findings)
+        .unwrap_or(serde_json::Value::Null);
+    let engines: Vec<String> = report
+        .backends
+        .iter()
+        .map(|receipt| receipt.backend.to_string())
+        .collect();
+
+    serde_json::json!({
+        "schema_version": ORACLE_RUN_SUMMARY_SCHEMA_VERSION,
+        "case_id": report.case_id,
+        "source_path": report.source_path,
+        "engines": engines,
+        "semantic_verdict": oracle_verdict_label(report.canonicalization.semantic_verdict),
+        "divergence_count": report.divergence_taxonomy.findings.len(),
+        "degraded": degraded,
+        "exit_code": exit_code,
+        "backends": backends_value,
+        "divergences": divergences_value,
+        "bundle": bundle_value,
+    })
+}
+
+/// Render untrusted oracle text without allowing it to alter terminal state or
+/// the visual ordering of the surrounding audit record.
+///
+/// Ordinary Unicode remains readable. Terminal controls, line separators, and
+/// Unicode bidirectional formatting controls are rendered as visible escapes.
+fn escape_oracle_human_text(value: &str) -> String {
+    let mut escaped = String::with_capacity(value.len());
+    for character in value.chars() {
+        match character {
+            '\n' => escaped.push_str("\\n"),
+            '\r' => escaped.push_str("\\r"),
+            '\t' => escaped.push_str("\\t"),
+            character
+                if character.is_control()
+                    || matches!(character, '\u{2028}' | '\u{2029}')
+                    || is_unicode_directional_control(character) =>
+            {
+                escaped.extend(character.escape_unicode());
+            }
+            character => escaped.push(character),
+        }
+    }
+    escaped
+}
+
+fn is_unicode_directional_control(character: char) -> bool {
+    matches!(
+        character,
+        '\u{061c}'
+            | '\u{200e}'
+            | '\u{200f}'
+            | '\u{202a}'..='\u{202e}'
+            | '\u{2066}'..='\u{2069}'
+    )
+}
+
+fn render_oracle_run_human(
+    report: &DifferentialOracleReport,
+    bundle: Option<&OracleBundleSummary>,
+    degraded: bool,
+    exit_code: i32,
+) -> String {
+    let mut lines = vec![
+        format!("oracle run: {}", escape_oracle_human_text(&report.case_id)),
+        format!(
+            "  source: {} (sha256:{})",
+            escape_oracle_human_text(report.source_path.as_deref().unwrap_or("<inline>")),
+            report.source_sha256
+        ),
+        format!(
+            "  verdict: {} (exit {exit_code})",
+            oracle_verdict_label(report.canonicalization.semantic_verdict)
+        ),
+    ];
+    lines.push("  backends:".to_string());
+    for receipt in &report.backends {
+        let value = escape_oracle_human_text(receipt.value.as_deref().unwrap_or("-"));
+        let version = escape_oracle_human_text(receipt.version.as_deref().unwrap_or("n/a"));
+        lines.push(format!(
+            "    {:<16} {:<11} value={value} ({version}, {}us)",
+            receipt.backend.to_string(),
+            receipt.status.stable_label(),
+            receipt.duration_micros
+        ));
+    }
+    if report.divergence_taxonomy.findings.is_empty() {
+        lines.push("  divergences: none".to_string());
+    } else {
+        lines.push(format!(
+            "  divergences: {}",
+            report.divergence_taxonomy.findings.len()
+        ));
+        for finding in &report.divergence_taxonomy.findings {
+            lines.push(format!(
+                "    [{}] {}",
+                finding.class.stable_label(),
+                escape_oracle_human_text(&finding.message)
+            ));
+        }
+    }
+    if degraded {
+        for reason in oracle_external_degradations(report) {
+            lines.push(format!("  degraded: {}", escape_oracle_human_text(&reason)));
+        }
+    }
+    if let Some(summary) = bundle {
+        lines.push(format!(
+            "  bundle: {} ({})",
+            escape_oracle_human_text(&summary.dir.display().to_string()),
+            escape_oracle_human_text(&summary.bundle_id)
+        ));
+    }
+    lines.join("\n")
+}
+
+/// Resolve a `report` argument to `(bundle_dir, manifest_path)`. Accepts a
+/// directory containing `manifest.json`, or a direct path to a `manifest.json`.
+fn resolve_oracle_bundle(path: &Path) -> Result<(PathBuf, PathBuf), String> {
+    if path.is_dir() {
+        let manifest = path.join("manifest.json");
+        if !manifest.is_file() {
+            return Err(format!(
+                "no manifest.json found in bundle dir `{}`",
+                path.display()
+            ));
+        }
+        return Ok((path.to_path_buf(), manifest));
+    }
+    if path.is_file() {
+        if path.file_name().and_then(|name| name.to_str()) == Some("manifest.json") {
+            let dir = path
+                .parent()
+                .filter(|parent| !parent.as_os_str().is_empty())
+                .map(Path::to_path_buf)
+                .unwrap_or_else(|| PathBuf::from("."));
+            return Ok((dir, path.to_path_buf()));
+        }
+        return Err(format!(
+            "`{}` is not a bundle directory or a manifest.json",
+            path.display()
+        ));
+    }
+    Err(format!("bundle path `{}` does not exist", path.display()))
+}
+
+fn is_canonical_sha256(value: &str) -> bool {
+    let Some(hex) = value.strip_prefix("sha256:") else {
+        return false;
+    };
+    is_canonical_sha256_hex(hex)
+}
+
+fn is_canonical_sha256_hex(value: &str) -> bool {
+    value.len() == 64
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+}
+
+#[cfg(all(unix, not(any(target_os = "redox", target_os = "espidf"))))]
+fn create_oracle_bundle_dir(dir: &Path) -> Result<fs::File, String> {
+    use rustix::fs::{Mode, OFlags, mkdirat, open, openat};
+
+    let name = dir.file_name().ok_or_else(|| {
+        format!(
+            "oracle bundle output must name a new child directory (`{}`)",
+            dir.display()
+        )
+    })?;
+    let parent = dir
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    let parent_fd = open(
+        parent,
+        OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+        Mode::empty(),
+    )
+    .map_err(|error| {
+        format!(
+            "failed to securely open oracle bundle parent `{}`: {error}",
+            parent.display()
+        )
+    })?;
+    mkdirat(&parent_fd, name, Mode::RWXU).map_err(|error| {
+        format!(
+            "oracle bundle output must be a new directory under an existing trusted parent (`{}`): {error}",
+            dir.display()
+        )
+    })?;
+    let fd = openat(
+        &parent_fd,
+        name,
+        OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+        Mode::empty(),
+    )
+    .map_err(|error| {
+        format!(
+            "failed to securely pin new oracle bundle dir `{}`: {error}",
+            dir.display()
+        )
+    })?;
+    let file = fs::File::from(fd);
+    if !file
+        .metadata()
+        .map_err(|error| {
+            format!(
+                "failed to inspect new bundle dir `{}`: {error}",
+                dir.display()
+            )
+        })?
+        .is_dir()
+    {
+        return Err(format!(
+            "new bundle path `{}` is not a directory",
+            dir.display()
+        ));
+    }
+    Ok(file)
+}
+
+#[cfg(not(all(unix, not(any(target_os = "redox", target_os = "espidf")))))]
+fn create_oracle_bundle_dir(dir: &Path) -> Result<fs::File, String> {
+    Err(format!(
+        "secure no-follow oracle bundle writes are unavailable on this platform: `{}`",
+        dir.display()
+    ))
+}
+
+#[cfg(all(unix, not(any(target_os = "redox", target_os = "espidf"))))]
+fn write_oracle_bundle_file(
+    dir: &fs::File,
+    relative: &str,
+    label: &str,
+    bytes: &[u8],
+) -> Result<(), String> {
+    use rustix::fs::{Mode, OFlags, openat};
+
+    let fd = openat(
+        dir,
+        relative,
+        OFlags::WRONLY | OFlags::CREATE | OFlags::EXCL | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+        Mode::RUSR | Mode::WUSR,
+    )
+    .map_err(|error| format!("failed to securely create bundle {label} `{relative}`: {error}"))?;
+    let mut file = fs::File::from(fd);
+    file.write_all(bytes)
+        .map_err(|error| format!("failed to write bundle {label} `{relative}`: {error}"))?;
+    file.sync_all()
+        .map_err(|error| format!("failed to sync bundle {label} `{relative}`: {error}"))?;
+    Ok(())
+}
+
+#[cfg(not(all(unix, not(any(target_os = "redox", target_os = "espidf")))))]
+fn write_oracle_bundle_file(
+    _dir: &fs::File,
+    relative: &str,
+    label: &str,
+    _bytes: &[u8],
+) -> Result<(), String> {
+    Err(format!(
+        "secure no-follow oracle bundle writes are unavailable for {label} `{relative}` on this platform"
+    ))
+}
+
+#[cfg(all(unix, not(any(target_os = "redox", target_os = "espidf"))))]
+fn open_oracle_bundle_dir(dir: &Path) -> Result<fs::File, String> {
+    use rustix::fs::{Mode, OFlags, open};
+
+    let fd = open(
+        dir,
+        OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+        Mode::empty(),
+    )
+    .map_err(|error| {
+        format!(
+            "failed to securely open bundle dir `{}`: {error}",
+            dir.display()
+        )
+    })?;
+    let file = fs::File::from(fd);
+    if !file
+        .metadata()
+        .map_err(|error| format!("failed to inspect bundle dir `{}`: {error}", dir.display()))?
+        .is_dir()
+    {
+        return Err(format!(
+            "bundle path `{}` is not a directory",
+            dir.display()
+        ));
+    }
+    Ok(file)
+}
+
+#[cfg(not(all(unix, not(any(target_os = "redox", target_os = "espidf")))))]
+fn open_oracle_bundle_dir(dir: &Path) -> Result<fs::File, String> {
+    Err(format!(
+        "secure no-follow oracle bundle reads are unavailable on this platform: `{}`",
+        dir.display()
+    ))
+}
+
+#[cfg(all(unix, not(any(target_os = "redox", target_os = "espidf"))))]
+fn read_oracle_bundle_file(dir: &fs::File, relative: &str, label: &str) -> Result<Vec<u8>, String> {
+    use rustix::fs::{Mode, OFlags, openat};
+
+    let fd = openat(
+        dir,
+        relative,
+        OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::CLOEXEC | OFlags::NONBLOCK,
+        Mode::empty(),
+    )
+    .map_err(|error| format!("failed to securely open bundle {label} `{relative}`: {error}"))?;
+    let mut file = fs::File::from(fd);
+    if !file
+        .metadata()
+        .map_err(|error| format!("failed to inspect bundle {label} `{relative}`: {error}"))?
+        .is_file()
+    {
+        return Err(format!("bundle {label} `{relative}` is not a regular file"));
+    }
+    let mut bytes = Vec::new();
+    file.read_to_end(&mut bytes)
+        .map_err(|error| format!("failed to read bundle {label} `{relative}`: {error}"))?;
+    Ok(bytes)
+}
+
+#[cfg(not(all(unix, not(any(target_os = "redox", target_os = "espidf")))))]
+fn read_oracle_bundle_file(
+    _dir: &fs::File,
+    relative: &str,
+    label: &str,
+) -> Result<Vec<u8>, String> {
+    Err(format!(
+        "secure no-follow oracle bundle reads are unavailable for {label} `{relative}` on this platform"
+    ))
+}
+
+fn validate_oracle_bundle_manifest(
+    manifest: &serde_json::Map<String, serde_json::Value>,
+) -> Result<&serde_json::Map<String, serde_json::Value>, String> {
+    let schema_version = manifest
+        .get("schema_version")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| "manifest is missing `schema_version`".to_string())?;
+    if schema_version != ORACLE_RUN_BUNDLE_SCHEMA_VERSION {
+        return Err(format!(
+            "unsupported oracle bundle schema `{schema_version}`"
+        ));
+    }
+    let bundle_id = manifest
+        .get("bundle_id")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| "manifest is missing required `bundle_id`".to_string())?;
+    if !is_canonical_sha256(bundle_id) {
+        return Err("manifest `bundle_id` is not a sha256 content address".to_string());
+    }
+    let source_sha256 = manifest
+        .get("source_sha256")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| "manifest is missing required `source_sha256`".to_string())?;
+    if !is_canonical_sha256(source_sha256) {
+        return Err("manifest `source_sha256` is not a canonical content address".to_string());
+    }
+
+    let artifacts = manifest
+        .get("artifacts")
+        .and_then(serde_json::Value::as_object)
+        .ok_or_else(|| "manifest is missing the `artifacts` object".to_string())?;
+    let degraded = manifest
+        .get("degraded")
+        .and_then(serde_json::Value::as_bool)
+        .ok_or_else(|| "manifest is missing boolean `degraded`".to_string())?;
+    let required: &[(&str, &str)] = if degraded {
+        &[
+            ("report", "report.json"),
+            ("lock", "repro.lock"),
+            ("degraded_receipt", "degraded_receipt.json"),
+        ]
+    } else {
+        &[("report", "report.json"), ("lock", "repro.lock")]
+    };
+    if artifacts.len() != required.len() {
+        return Err(format!(
+            "manifest artifact set is not canonical for degraded={degraded}"
+        ));
+    }
+    for &(required, expected_path) in required {
+        let entry = artifacts
+            .get(required)
+            .and_then(serde_json::Value::as_object)
+            .ok_or_else(|| format!("manifest is missing required `{required}` artifact"))?;
+        let path = entry
+            .get("path")
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| format!("artifact `{required}` is missing `path`"))?;
+        if path != expected_path {
+            return Err(format!(
+                "artifact `{required}` path `{path}` is not canonical `{expected_path}`"
+            ));
+        }
+        let sha256 = entry
+            .get("sha256")
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| format!("artifact `{required}` is missing `sha256`"))?;
+        if !is_canonical_sha256(sha256) {
+            return Err(format!(
+                "artifact `{required}` sha256 is not a canonical content address"
+            ));
+        }
+    }
+    Ok(artifacts)
+}
+
+fn validate_oracle_bundle_semantics(
+    manifest: &serde_json::Map<String, serde_json::Value>,
+    lock: &serde_json::Value,
+    degraded_receipt: Option<&serde_json::Value>,
+    report: &DifferentialOracleReport,
+) -> Result<(), String> {
+    if !is_canonical_sha256_hex(&report.source_sha256) {
+        return Err("report `source_sha256` is not canonical lowercase sha256 hex".to_string());
+    }
+    if report.backends.is_empty()
+        || report
+            .backends
+            .windows(2)
+            .any(|pair| pair[0].backend >= pair[1].backend)
+    {
+        return Err("report backends are empty, duplicated, or not in canonical order".to_string());
+    }
+    for receipt in &report.backends {
+        let stdout_sha256 = hex::encode(Sha256::digest(receipt.stdout.as_bytes()));
+        let stderr_sha256 = hex::encode(Sha256::digest(receipt.stderr.as_bytes()));
+        if receipt.stdout_sha256 != stdout_sha256 || receipt.stderr_sha256 != stderr_sha256 {
+            return Err(format!(
+                "report receipt stream hash mismatch for {}",
+                receipt.backend
+            ));
+        }
+    }
+
+    let selected_backends = report
+        .backends
+        .iter()
+        .map(|receipt| receipt.backend.to_string())
+        .collect::<Vec<_>>();
+    let verdict = oracle_verdict_label(report.canonicalization.semantic_verdict);
+    let expected_degraded_receipt = oracle_degraded_receipt_value(report);
+    let degraded = expected_degraded_receipt.is_some();
+    let source_sha256 = format!("sha256:{}", report.source_sha256);
+    let manifest_expectations = [
+        ("case_id", serde_json::json!(report.case_id)),
+        ("source_sha256", serde_json::json!(source_sha256)),
+        ("semantic_verdict", serde_json::json!(verdict)),
+        (
+            "divergence_count",
+            serde_json::json!(report.divergence_taxonomy.findings.len()),
+        ),
+        ("degraded", serde_json::json!(degraded)),
+        ("selected_backends", serde_json::json!(selected_backends)),
+        (
+            "generated_unix_ns",
+            serde_json::to_value(report.generated_unix_ns)
+                .map_err(|error| format!("failed to encode report timestamp: {error}"))?,
+        ),
+        (
+            "host",
+            serde_json::json!({
+                "os": report.host.os,
+                "arch": report.host.arch,
+                "franken_engine_version": report.host.franken_engine_version,
+            }),
+        ),
+        (
+            "validation",
+            serde_json::json!({
+                "command": "frankenctl oracle report <bundle-dir>",
+                "exit_codes": "0 consensus | 3 divergence | 4 insufficient-data/degraded",
+            }),
+        ),
+    ];
+    for (field, expected) in manifest_expectations {
+        if manifest.get(field) != Some(&expected) {
+            return Err(format!("manifest `{field}` does not match verified report"));
+        }
+    }
+
+    let lock_expected = oracle_repro_lock_value(report);
+    if lock != &lock_expected {
+        return Err("repro.lock does not match the verified report contract".to_string());
+    }
+
+    if degraded_receipt != expected_degraded_receipt.as_ref() {
+        return Err(
+            "degraded receipt presence or contents do not match the verified report".to_string(),
+        );
+    }
+    Ok(())
+}
+
+fn validate_oracle_bundle_stored_verdict(
+    manifest: &serde_json::Map<String, serde_json::Value>,
+    lock: &serde_json::Value,
+    stored_report: &serde_json::Value,
+) -> Result<(), String> {
+    // Preserve the literal assertion carried by report.json before typed
+    // deserialization migrates canonicalization v1 to the effective v2
+    // verdict. Otherwise a re-authored manifest/lock could assert the migrated
+    // value while its documented JSON pointer still names a different stored
+    // value.
+    let stored_verdict = stored_report
+        .pointer("/canonicalization/semantic_verdict")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| "stored report is missing canonicalization.semantic_verdict".to_string())?;
+    let manifest_verdict = manifest
+        .get("semantic_verdict")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| "manifest is missing string `semantic_verdict`".to_string())?;
+    if manifest_verdict != stored_verdict {
+        return Err(
+            "manifest semantic_verdict does not match the literal stored report verdict"
+                .to_string(),
+        );
+    }
+
+    let lock_verdict = lock
+        .pointer("/verification/expected_verdict")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| "repro.lock is missing verification.expected_verdict".to_string())?;
+    if lock_verdict != stored_verdict {
+        return Err(
+            "repro.lock expected_verdict does not match the literal stored report verdict"
+                .to_string(),
+        );
+    }
+    let assertion = lock
+        .get("expected_outputs")
+        .and_then(serde_json::Value::as_array)
+        .and_then(|outputs| {
+            outputs.iter().find(|output| {
+                output.get("kind").and_then(serde_json::Value::as_str) == Some("semantic_verdict")
+            })
+        })
+        .ok_or_else(|| "repro.lock is missing the semantic_verdict assertion".to_string())?;
+    if assertion.get("path").and_then(serde_json::Value::as_str)
+        != Some("report.json#canonicalization.semantic_verdict")
+        || assertion.get("value").and_then(serde_json::Value::as_str) != Some(stored_verdict)
+    {
+        return Err(
+            "repro.lock semantic_verdict assertion does not match its literal report.json path"
+                .to_string(),
+        );
+    }
+    Ok(())
+}
+
+fn execute_oracle_report(args: OracleReportArgs) -> Result<i32, String> {
+    let (dir, _) = resolve_oracle_bundle(&args.bundle)?;
+    let dir_handle = open_oracle_bundle_dir(&dir)?;
+
+    let manifest_bytes = read_oracle_bundle_file(&dir_handle, "manifest.json", "manifest")?;
+    let manifest: serde_json::Value = serde_json::from_slice(&manifest_bytes)
+        .map_err(|error| format!("failed to parse bundle manifest.json: {error}"))?;
+    let manifest_obj = manifest.as_object().ok_or_else(|| {
+        format!(
+            "manifest `{}/manifest.json` is not a JSON object",
+            dir.display()
+        )
+    })?;
+
+    let artifacts = validate_oracle_bundle_manifest(manifest_obj)?;
+
+    // Open each exact schema-v1 artifact once through the pinned directory fd,
+    // retain its bytes, and use those same bytes for hashing and parsing.
+    let mut artifact_bytes = BTreeMap::new();
+    for (label, entry) in artifacts {
+        let rel = entry
+            .get("path")
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| format!("artifact `{label}` is missing a `path`"))?;
+        let expected = entry
+            .get("sha256")
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| format!("artifact `{label}` is missing a `sha256`"))?;
+        let bytes = read_oracle_bundle_file(&dir_handle, rel, label)?;
+        let actual = sha256_prefixed(&bytes);
+        if actual != expected {
+            return Err(format!(
+                "bundle integrity failure: `{rel}` sha256 {actual} != manifest {expected}"
+            ));
+        }
+        artifact_bytes.insert(label.as_str(), bytes);
+    }
+
+    // Integrity: recompute the manifest's own content address.
+    let expected_id = manifest_obj
+        .get("bundle_id")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| "manifest is missing required `bundle_id`".to_string())?;
+    let mut preimage = manifest.clone();
+    if let Some(object) = preimage.as_object_mut() {
+        object.remove("bundle_id");
+    }
+    let actual_id = sha256_prefixed(oracle_canonical_json_bytes(&preimage).as_bytes());
+    if actual_id != expected_id {
+        return Err(format!(
+            "bundle integrity failure: recomputed bundle_id {actual_id} != manifest {expected_id}"
+        ));
+    }
+
+    let report_bytes = artifact_bytes
+        .get("report")
+        .ok_or_else(|| "verified report bytes are missing".to_string())?;
+    let stored_report: serde_json::Value = serde_json::from_slice(report_bytes)
+        .map_err(|error| format!("failed to parse verified report.json: {error}"))?;
+    let report: DifferentialOracleReport = serde_json::from_slice(report_bytes)
+        .map_err(|error| format!("failed to parse verified report.json: {error}"))?;
+    let lock: serde_json::Value = serde_json::from_slice(
+        artifact_bytes
+            .get("lock")
+            .ok_or_else(|| "verified repro.lock bytes are missing".to_string())?,
+    )
+    .map_err(|error| format!("failed to parse verified repro.lock: {error}"))?;
+    let degraded_receipt = artifact_bytes
+        .get("degraded_receipt")
+        .map(|bytes| {
+            serde_json::from_slice::<serde_json::Value>(bytes)
+                .map_err(|error| format!("failed to parse verified degraded receipt: {error}"))
+        })
+        .transpose()?;
+    validate_oracle_bundle_stored_verdict(manifest_obj, &lock, &stored_report)?;
+    validate_oracle_bundle_semantics(manifest_obj, &lock, degraded_receipt.as_ref(), &report)?;
+
+    let degradations = oracle_external_degradations(&report);
+    let degraded = !degradations.is_empty();
+    let exit_code = oracle_exit_for_report(&report, degraded);
+
+    match args.format {
+        CheckOutputFormat::Json => {
+            let bundle_id = manifest_obj
+                .get("bundle_id")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_string);
+            let payload = serde_json::json!({
+                "schema_version": ORACLE_RUN_SUMMARY_SCHEMA_VERSION,
+                "bundle_dir": dir.display().to_string(),
+                "bundle_id": bundle_id,
+                "integrity": "verified",
+                "taxonomy_provenance": "recomputed_from_receipts_without_live_authority",
+                "case_id": report.case_id,
+                "semantic_verdict": oracle_verdict_label(report.canonicalization.semantic_verdict),
+                "divergence_count": report.divergence_taxonomy.findings.len(),
+                "degraded": degraded,
+                "exit_code": exit_code,
+                "backends": serde_json::to_value(&report.backends).unwrap_or(serde_json::Value::Null),
+                "divergences": serde_json::to_value(&report.divergence_taxonomy.findings)
+                    .unwrap_or(serde_json::Value::Null),
+            });
+            print_json(&payload)?;
+        }
+        CheckOutputFormat::Human => {
+            let mut lines = vec![
+                format!(
+                    "oracle bundle: {}",
+                    escape_oracle_human_text(&dir.display().to_string())
+                ),
+                "  integrity: verified (sha256 artifacts + bundle_id)".to_string(),
+                "  taxonomy: recomputed from receipts; stored classes and waivers are non-authoritative".to_string(),
+            ];
+            lines.push(render_oracle_run_human(&report, None, degraded, exit_code));
+            println!("{}", lines.join("\n"));
+        }
+    }
+    Ok(exit_code)
 }
 
 fn execute_react(args: ReactArgs) -> Result<i32, String> {
@@ -5328,9 +10089,15 @@ fn execute_react_compile(args: ReactCompileArgs) -> Result<i32, String> {
             args.input.display()
         ));
     }
+    let source = fs::read_to_string(&args.input).map_err(|error| {
+        format!(
+            "failed to read React input `{}`: {error}",
+            args.input.display()
+        )
+    })?;
     let contract = parse_react_capability_contract()?;
     let row = select_react_compile_row(&contract, args.source_form, args.runtime_mode)?;
-    let output = build_react_cli_report(
+    let mut output = build_react_cli_report(
         &args.trace_id,
         &args.decision_id,
         &args.policy_id,
@@ -5344,6 +10111,24 @@ fn execute_react_compile(args: ReactCompileArgs) -> Result<i32, String> {
         row,
         args.out.as_ref(),
     );
+    if output.shipped {
+        let language = react_pipeline_language(args.source_form)?;
+        let config = react_compile_config(args.source_form, args.runtime_mode);
+        let result = compile_react_source(&source, language, &config).map_err(|error| {
+            format!(
+                "react compile failed for `{}`: {error}",
+                args.input.display()
+            )
+        })?;
+        let evidence = generate_compilation_evidence(&result, &config, language)
+            .map_err(|error| format!("react compile evidence generation failed: {error}"))?;
+        output.compilation = Some(build_react_cli_compilation_output(
+            &result,
+            &evidence,
+            language,
+            args.runtime_mode,
+        ));
+    }
 
     if let Some(path) = &args.out {
         write_json_file(path, &output)?;
@@ -5523,7 +10308,7 @@ fn execute_react_contract(args: ReactContractArgs) -> Result<i32, String> {
             ReactCliCommandContract {
                 name: "react compile".to_string(),
                 output_schema_version: REACT_CLI_REPORT_SCHEMA_VERSION.to_string(),
-                behavior: "fail_closed_until_capability_row_is_shipped".to_string(),
+                behavior: "execute_shipped_compile_rows_else_fail_closed".to_string(),
                 usage: "frankenctl react compile --input <path> --source-form <jsx|tsx|jsx-fragment> [--runtime <classic|automatic>] [--out <report.json>]".to_string(),
             },
             ReactCliCommandContract {
@@ -5610,6 +10395,138 @@ fn execute_gates(args: GatesArgs) -> Result<i32, String> {
                 config.as_deref(),
             ))
         }
+        GatesMode::CompoundingRedTeam { out_dir, config } => {
+            use frankenengine_engine::compounding_red_team_campaign::{
+                CampaignConfig, engine_containment_oracle, run_campaign, write_bundle,
+            };
+            use frankenengine_engine::corpus_promotion::PromotedLedger;
+
+            let campaign_config = match &config {
+                Some(path) => {
+                    let text = std::fs::read_to_string(path).map_err(|e| {
+                        format!("failed to read campaign config {}: {e}", path.display())
+                    })?;
+                    CampaignConfig::from_toml(&text)
+                        .map_err(|e| format!("invalid campaign config: {e}"))?
+                }
+                None => CampaignConfig::default(),
+            };
+
+            let ledger = PromotedLedger::new();
+            let bundle = run_campaign(&campaign_config, &ledger, engine_containment_oracle)
+                .map_err(|e| format!("compounding red-team campaign failed: {e}"))?;
+            let artifacts = write_bundle(&bundle, &out_dir)
+                .map_err(|e| format!("failed to write campaign bundle: {e}"))?;
+
+            println!("✅ Compounding red-team campaign completed");
+            println!("📁 Bundle directory: {}", out_dir.display());
+            println!("🔖 Bundle digest: {}", bundle.bundle_digest);
+            println!(
+                "📊 explored {} / promoted {} / rejected {} ({} artifacts)",
+                bundle.statistics.candidates_explored,
+                bundle.statistics.promoted,
+                bundle.statistics.rejected,
+                artifacts.len(),
+            );
+            Ok(0)
+        }
+        GatesMode::ErasureBandwidth { out_dir, config } => {
+            use frankenengine_engine::erasure_bandwidth_accounting::{
+                BandwidthComparisonConfig, build_signed_report,
+            };
+
+            let comparison_config = match &config {
+                Some(path) => {
+                    let text = std::fs::read_to_string(path).map_err(|e| {
+                        format!("failed to read bandwidth config {}: {e}", path.display())
+                    })?;
+                    let parsed: BandwidthComparisonConfig = serde_json::from_str(&text)
+                        .map_err(|e| format!("invalid bandwidth config (expected JSON): {e}"))?;
+                    parsed.validate().map_err(|e| e.to_string())?;
+                    parsed
+                }
+                None => BandwidthComparisonConfig::default(),
+            };
+
+            let signed = build_signed_report(&comparison_config)
+                .map_err(|e| format!("bandwidth report failed: {e}"))?;
+
+            std::fs::create_dir_all(&out_dir)
+                .map_err(|e| format!("failed to create output directory: {e}"))?;
+
+            let report_json = serde_json::to_string_pretty(&signed)
+                .map_err(|e| format!("failed to serialize bandwidth report: {e}"))?;
+            std::fs::write(
+                out_dir.join("bandwidth_efficiency_report.json"),
+                &report_json,
+            )
+            .map_err(|e| format!("failed to write bandwidth report: {e}"))?;
+
+            let cell_count = signed.report.cells.len();
+            let overhead_dominated = signed
+                .report
+                .cells
+                .iter()
+                .filter(|c| c.overhead_exceeds_savings)
+                .count();
+
+            let run_manifest = serde_json::json!({
+                "schema_version": "franken-engine.erasure-bandwidth-gate.v1",
+                "bead": "bd-cixqu.35.3",
+                "outcome": "pass",
+                "coding_scheme": signed.report.coding_scheme,
+                "scheme_fault_tolerance_erasures": signed.report.scheme_fault_tolerance_erasures,
+                "report_hash": signed.report_hash,
+                "cells": cell_count,
+                "overhead_dominated_cells": overhead_dominated,
+            });
+            std::fs::write(
+                out_dir.join("run_manifest.json"),
+                serde_json::to_string_pretty(&run_manifest)
+                    .map_err(|e| format!("failed to serialize run manifest: {e}"))?,
+            )
+            .map_err(|e| format!("failed to write run manifest: {e}"))?;
+
+            let mut summary = String::new();
+            summary.push_str("# Erasure vs Full-Replication Bandwidth Gate\n\n");
+            summary.push_str(&format!(
+                "- coding scheme: `{}` (fault tolerance: {} erasure)\n",
+                signed.report.coding_scheme, signed.report.scheme_fault_tolerance_erasures
+            ));
+            summary.push_str(&format!("- report hash: `{}`\n", signed.report_hash));
+            summary.push_str(&format!("- cells: `{cell_count}`\n"));
+            summary.push_str(&format!(
+                "- overhead-dominated cells: `{overhead_dominated}`\n\n"
+            ));
+            summary.push_str(
+                "Honest note: the shipped scheme is XOR single-parity; the \
+                 fault-tolerance-normalized savings ceiling is (k-1)/(2k) (~50%), \
+                 not the 60-70% attributed to tunable Reed-Solomon.\n\n",
+            );
+            summary.push_str("| fleet | payload | k | savings (millionths) | overhead>savings |\n");
+            summary.push_str("| --- | --- | --- | --- | --- |\n");
+            for cell in &signed.report.cells {
+                summary.push_str(&format!(
+                    "| {} | {} | {} | {} | {} |\n",
+                    cell.fleet_size,
+                    cell.payload_bytes,
+                    cell.data_shards,
+                    cell.savings_ratio_millionths,
+                    cell.overhead_exceeds_savings,
+                ));
+            }
+            std::fs::write(out_dir.join("summary.md"), summary)
+                .map_err(|e| format!("failed to write summary: {e}"))?;
+
+            println!("✅ Erasure-bandwidth report completed");
+            println!("📁 Bundle directory: {}", out_dir.display());
+            println!("🔖 Report hash: {}", signed.report_hash);
+            println!(
+                "📊 {cell_count} cells / {overhead_dominated} overhead-dominated (scheme: {})",
+                signed.report.coding_scheme
+            );
+            Ok(0)
+        }
         _ => Err(
             "Unsupported gates subcommand. Use 'frankenctl help gates' to see available commands."
                 .to_string(),
@@ -5619,36 +10536,39 @@ fn execute_gates(args: GatesArgs) -> Result<i32, String> {
 
 fn execute_reports(args: ReportsArgs) -> Result<i32, String> {
     match args.mode {
-        ReportsMode::ParserOracle { config, out } => {
-            // Try to find the installed franken_parser_oracle_report binary
-            let mut cmd = Command::new("franken_parser_oracle_report");
-
-            // Add config file if specified
-            if let Some(config_path) = &config {
-                cmd.arg("--config").arg(path_to_str(config_path)?);
+        ReportsMode::ParserOracle {
+            partition,
+            gate_mode,
+            seed,
+            fixture_catalog,
+            trace_id,
+            decision_id,
+            policy_id,
+            out,
+        } => {
+            let mut config = ParserOracleConfig::with_defaults(partition, gate_mode, seed);
+            config.fixture_catalog_path = fixture_catalog;
+            if let Some(value) = trace_id {
+                config.trace_id = value;
+            }
+            if let Some(value) = decision_id {
+                config.decision_id = value;
+            }
+            if let Some(value) = policy_id {
+                config.policy_id = value;
             }
 
-            // Add output file if specified
-            if let Some(out_path) = &out {
-                cmd.arg("--out").arg(path_to_str(out_path)?);
+            let report = run_parser_oracle(&config)
+                .map_err(|error| format!("parser oracle report failed: {error}"))?;
+            if let Some(path) = &out {
+                write_json_file(path, &report)?;
             }
+            print_json(&report)?;
 
-            // Execute the command
-            let status = cmd
-                .status()
-                .map_err(|e| format!("Failed to execute franken_parser_oracle_report (is it installed?): {e}"))?;
-
-            if status.success() {
-                println!("✅ Parser oracle report completed successfully");
-                if let Some(path) = &out {
-                    println!("📄 Report written to: {}", path.display());
-                }
-                Ok(0)
+            if gate_mode == OracleGateMode::FailClosed && report.decision.promotion_blocked {
+                Ok(2)
             } else {
-                let code = status.code().unwrap_or(-1);
-                Err(format!(
-                    "Parser oracle report failed with exit code: {code}"
-                ))
+                Ok(0)
             }
         }
         ReportsMode::LoweringGap { out } => {
@@ -5675,13 +10595,17 @@ fn execute_test(args: TestArgs) -> Result<i32, String> {
             std::fs::create_dir_all(&out_dir)
                 .map_err(|e| format!("Failed to create output directory: {e}"))?;
 
-            // Try to find the installed franken_test262_runner binary
+            // Try to find the installed franken_test262_runner binary.
+            // The runner names its output flag `--output-root`, and ingests a real
+            // tc39/test262 checkout via `--suite-path` (generating case vectors live
+            // from the pinned suite). The previous `--out-dir` / `--suite` names were
+            // both rejected by the runner as unknown flags.
             let mut cmd = Command::new("franken_test262_runner");
-            cmd.arg("--out-dir").arg(path_to_str(&out_dir)?);
+            cmd.arg("--output-root").arg(path_to_str(&out_dir)?);
 
-            // Add suite path if specified
+            // Point the runner at a real Test262 checkout if specified.
             if let Some(suite) = &suite_path {
-                cmd.arg("--suite").arg(path_to_str(suite)?);
+                cmd.arg("--suite-path").arg(path_to_str(suite)?);
             }
 
             // Execute the command
@@ -6083,6 +11007,7 @@ fn build_react_cli_report(
     row: &ReactCapabilityRow,
     out: Option<&PathBuf>,
 ) -> ReactCliReportOutput {
+    let shipped = row.support_status == "shipped";
     ReactCliReportOutput {
         schema_version: REACT_CLI_REPORT_SCHEMA_VERSION.to_string(),
         trace_id: trace_id.to_string(),
@@ -6090,30 +11015,112 @@ fn build_react_cli_report(
         policy_id: policy_id.to_string(),
         command: command.to_string(),
         support_status: row.support_status.clone(),
-        shipped: row.support_status == "shipped",
-        blocked: row.support_status != "shipped",
+        shipped,
+        blocked: !shipped,
         capability_id: row.capability_id.clone(),
         request,
-        diagnostic: ReactCliDiagnostic {
-            error_code: row.user_visible_diagnostic.error_code.clone(),
+        diagnostic: build_react_cli_diagnostic(row, shipped),
+        required_artifacts: row.required_artifacts.clone(),
+        compilation: None,
+        output: out.map(|path| path.display().to_string()),
+    }
+}
+
+fn build_react_cli_diagnostic(row: &ReactCapabilityRow, shipped: bool) -> ReactCliDiagnostic {
+    if shipped {
+        return ReactCliDiagnostic {
+            error_code: "OK".to_string(),
             diagnostic_surface: row.user_visible_diagnostic.diagnostic_surface.clone(),
-            message: row.user_visible_diagnostic.message_template.clone(),
+            message: format!(
+                "React capability `{}` is shipped; the request executed through the native React compilation pipeline.",
+                row.capability_id
+            ),
             remediation_bead: row.user_visible_diagnostic.remediation_bead.clone(),
-            fallback_mode: row.unsupported_surface_policy.fallback_mode.clone(),
-            waiver_required: row.unsupported_surface_policy.waiver_required,
-            max_waiver_age_hours: row.unsupported_surface_policy.max_waiver_age_hours,
-            user_visible_diagnostics_required: row
-                .unsupported_surface_policy
-                .user_visible_diagnostics_required,
+            fallback_mode: "execute_native_react_pipeline".to_string(),
+            waiver_required: false,
+            max_waiver_age_hours: 0,
+            user_visible_diagnostics_required: false,
             target_milestone: row.unsupported_surface_policy.target_milestone.clone(),
-            claim_language_state: row.unsupported_surface_policy.claim_language_state.clone(),
+            claim_language_state: "shipped".to_string(),
             owning_implementation_bead: row.owning_implementation_bead.clone(),
             parity_gate_bead: row.parity_gate_bead.clone(),
             product_surface_bead: row.product_surface_bead.clone(),
             verification_lane: row.verification_lane.clone(),
+        };
+    }
+
+    ReactCliDiagnostic {
+        error_code: row.user_visible_diagnostic.error_code.clone(),
+        diagnostic_surface: row.user_visible_diagnostic.diagnostic_surface.clone(),
+        message: row.user_visible_diagnostic.message_template.clone(),
+        remediation_bead: row.user_visible_diagnostic.remediation_bead.clone(),
+        fallback_mode: row.unsupported_surface_policy.fallback_mode.clone(),
+        waiver_required: row.unsupported_surface_policy.waiver_required,
+        max_waiver_age_hours: row.unsupported_surface_policy.max_waiver_age_hours,
+        user_visible_diagnostics_required: row
+            .unsupported_surface_policy
+            .user_visible_diagnostics_required,
+        target_milestone: row.unsupported_surface_policy.target_milestone.clone(),
+        claim_language_state: row.unsupported_surface_policy.claim_language_state.clone(),
+        owning_implementation_bead: row.owning_implementation_bead.clone(),
+        parity_gate_bead: row.parity_gate_bead.clone(),
+        product_surface_bead: row.product_surface_bead.clone(),
+        verification_lane: row.verification_lane.clone(),
+    }
+}
+
+fn react_pipeline_language(
+    source_form: ReactSourceForm,
+) -> Result<ReactPipelineInputLanguage, String> {
+    match source_form {
+        ReactSourceForm::Jsx => Ok(ReactPipelineInputLanguage::Jsx),
+        ReactSourceForm::Tsx => Ok(ReactPipelineInputLanguage::Tsx),
+        ReactSourceForm::JsxFragment => Err(
+            "react compile fragment lowering is still contract-gated; use --source-form jsx or tsx"
+                .to_string(),
+        ),
+    }
+}
+
+fn react_compile_config(
+    source_form: ReactSourceForm,
+    runtime_mode: Option<ReactRuntimeMode>,
+) -> ReactCompileConfig {
+    let mut config = ReactCompileConfig::default();
+    config.lowering_config.runtime_mode = match runtime_mode {
+        Some(ReactRuntimeMode::Classic) => JsxRuntimeMode::Classic,
+        Some(ReactRuntimeMode::Automatic) | None => JsxRuntimeMode::Automatic,
+    };
+    config.lowering_config.source_file = Some(source_form.as_str().to_string());
+    config
+}
+
+fn build_react_cli_compilation_output(
+    result: &ReactCompileResult,
+    evidence: &ReactCompileEvidence,
+    language: ReactPipelineInputLanguage,
+    runtime_mode: Option<ReactRuntimeMode>,
+) -> ReactCliCompilationOutput {
+    ReactCliCompilationOutput {
+        language: language.as_str().to_string(),
+        runtime_mode: runtime_mode
+            .map(|mode| mode.as_str().to_string())
+            .unwrap_or_else(|| "automatic".to_string()),
+        generated_code: result.generated_code.clone(),
+        source_map: result.source_map.clone(),
+        input_hash: evidence.input_spec.source_hash.to_hex(),
+        generated_code_hash: evidence.output_spec.code_hash.to_hex(),
+        config_hash: result.metadata.config_hash.to_hex(),
+        feature_families: result.metadata.feature_families.clone(),
+        transform_counts: result.metadata.transform_counts.clone(),
+        receipt: ReactCliCompilationReceiptOutput {
+            schema_version: evidence.compile_receipt.schema_version.clone(),
+            component: evidence.compile_receipt.component.clone(),
+            input_hash: evidence.compile_receipt.input_hash.to_hex(),
+            output_hash: evidence.compile_receipt.output_hash.to_hex(),
+            config_hash: evidence.compile_receipt.config_hash.to_hex(),
+            process_hash: evidence.compile_receipt.process_hash.to_hex(),
         },
-        required_artifacts: row.required_artifacts.clone(),
-        output: out.map(|path| path.display().to_string()),
     }
 }
 
@@ -6337,6 +11344,14 @@ fn parse_u64(value: &str, flag: &str) -> Result<u64, String> {
     value
         .parse::<u64>()
         .map_err(|error| format!("invalid {flag} value `{value}`: {error}"))
+}
+
+fn parse_positive_u64(value: &str, flag: &str) -> Result<u64, String> {
+    let parsed = parse_u64(value, flag)?;
+    if parsed == 0 {
+        return Err(format!("{flag} must be at least 1"));
+    }
+    Ok(parsed)
 }
 
 fn parse_real_yyyy_mm_dd(value: &str, flag: &str) -> Result<String, String> {
@@ -6677,9 +11692,22 @@ fn usage() -> String {
         "  frankenctl version",
         "  frankenctl compile --input <source.js> --out <artifact.json> [--goal script|module]",
         "      [--trace-id <id>] [--decision-id <id>] [--policy-id <id>]",
+        "  frankenctl check <source.js> [--goal script|module] [--format human|json] [--out <bundle-dir>]",
+        "      # inferred per-span authority footprint + ambient-authority/IFC findings",
+        "  frankenctl onboard <pkg-dir|entry.js> [--root <dir>] [--goal module|script] [--format human|json] [--out <bundle-dir>]",
+        "      # package-level intake: manifest + capability-profile + denied-ambient + IFC + per-mode resolution",
+        "  frankenctl diff-behavior <before-pkg|entry.js> <after-pkg|entry.js> [--format human|json] [--out <bundle-dir>]",
+        "      # supply-chain behavioral delta over package authority/IFC intake reports",
         "  frankenctl run --input <source.js> --extension-id <id> [--goal script|module] [--out <report.json>]",
+        "      [--data-contract <contract.json>] [--purpose <purpose>] [--certificate-out <bundle-dir>]",
         "      [--explain [bundle.json]] [--explain-out <bundle.json>]",
-        "  frankenctl explain <bundle.json> [--format summary|json] [--out <path>]",
+        "  frankenctl agent-sandbox --manifest <manifest.json> --input <generated.js> [--goal script|module]",
+        "      [--data-contract <contract.json>] [--purpose <purpose>] [--certificate-out <bundle-dir>] [--out <report.json>]",
+        "      # run agent-generated code under manifest-declared tool authority; certificate bundle on exit",
+        "  frankenctl explain <bundle.json> [--format summary|json] [--out <path>] [--emit-bundle <dir>]",
+        "      # --emit-bundle: explain.md + evidence_graph/replay/counterfactuals.json + commands.txt + repro.lock",
+        "  frankenctl claims explain <FE-CLAIM-NNN> [--format human|json] [--out <path>]",
+        "      # advisory claim-to-proof matrix explainer; never promotes claims or mutates evidence",
         "  frankenctl doctor (--input <runtime_input.json> | --artifact-dir <artifacts/<gate>/<ts>>)",
         "      [--summary] [--out-dir <path>]",
         "      [--workload-id <id>] [--package-name <name>] [--target-platform <value>]...",
@@ -6699,6 +11727,15 @@ fn usage() -> String {
         "      [--mode strict|best-effort|validate] [--out <report.json>]",
         "  frankenctl differential-oracle run --input <source.js>",
         "      [--case-id <id>] [--timeout-ms <u64>] [--out <report.json>]",
+        "  frankenctl differential-oracle perf --manifest <manifest.json>",
+        "      [--out <report.json>] [--events <events.jsonl>] [--warmup <u32>] [--samples <u32>]",
+        "  frankenctl oracle run <input.js> [--engines franken,node,bun,core] [--bundle <dir>]",
+        "      [--case-id <id>] [--timeout-ms <u64>] [--engine-budget <u64>]",
+        "      [--node-bin <path>] [--bun-bin <path>] [--out <report.json>] [--json]",
+        "      # operator-facing differential oracle; emits a content-addressed bundle",
+        "      # exit codes: 0 consensus · 3 divergence · 4 insufficient-data/degraded",
+        "  frankenctl oracle report <bundle-dir|manifest.json> [--json]",
+        "      # validates bundle integrity (sha256) and renders the recorded verdict",
         "  frankenctl react compile|build|doctor|contract [options]  # React integration surfaces",
         "",
         "OPERATOR/DEVELOPMENT SURFACES (unsupported in production):",
@@ -6729,13 +11766,26 @@ fn command_label(command: &CommandSpec) -> &'static str {
         CommandSpec::Help => "help",
         CommandSpec::HelpTopic(_) => "help",
         CommandSpec::Compile(_) => "compile",
+        CommandSpec::Check(_) => "check",
+        CommandSpec::Onboard(_) => "onboard",
+        CommandSpec::DiffBehavior(_) => "diff-behavior",
         CommandSpec::Run(_) => "run",
         CommandSpec::Explain(_) => "explain",
+        CommandSpec::Claims(ClaimsArgs {
+            mode: ClaimsMode::Explain(_),
+        }) => "claims-explain",
         CommandSpec::Doctor(_) => "doctor",
         CommandSpec::Verify(_) => "verify",
         CommandSpec::Benchmark(_) => "benchmark",
         CommandSpec::Replay(_) => "replay",
+        CommandSpec::ReplayDebug(_) => "replay-debug",
         CommandSpec::DifferentialOracle(_) => "differential-oracle",
+        CommandSpec::Oracle(OracleArgs {
+            mode: OracleMode::Run(_),
+        }) => "oracle-run",
+        CommandSpec::Oracle(OracleArgs {
+            mode: OracleMode::Report(_),
+        }) => "oracle-report",
         CommandSpec::React(ReactArgs::Compile(_)) => "react-compile",
         CommandSpec::React(ReactArgs::Build(_)) => "react-build",
         CommandSpec::React(ReactArgs::Doctor(_)) => "react-doctor",
@@ -6746,6 +11796,7 @@ fn command_label(command: &CommandSpec) -> &'static str {
         CommandSpec::Synth(_) => "synth",
         CommandSpec::Orchestrate(_) => "orchestrate",
         CommandSpec::Runtime(_) => "runtime",
+        CommandSpec::AgentSandbox(_) => "agent-sandbox",
     }
 }
 
@@ -6770,8 +11821,14 @@ fn render_react_doctor_summary(output: &ReactDoctorCommandOutput) -> String {
 fn command_remediation(command: &str) -> &'static str {
     match command {
         "compile" => "Verify --input/--out paths and parse goal, then rerun `frankenctl compile`.",
+        "check" => {
+            "Verify the source path and parse goal (try --goal module for files with imports), then rerun `frankenctl check`."
+        }
         "run" => "Verify extension source path and `--extension-id`, then rerun `frankenctl run`.",
         "explain" => "Verify the explain bundle path, then rerun `frankenctl explain`.",
+        "claims-explain" => {
+            "Verify the claim id, matrix path, artifact paths, and optional Beads JSONL snapshot, then rerun `frankenctl claims explain`."
+        }
         "doctor" => {
             "Verify runtime diagnostics input, optional signal paths, and then rerun `frankenctl doctor`."
         }
@@ -6782,6 +11839,12 @@ fn command_remediation(command: &str) -> &'static str {
         "replay" => "Validate trace JSON and mode, then rerun `frankenctl replay run`.",
         "differential-oracle" => {
             "Validate the JS fixture path and timeout, then rerun `frankenctl differential-oracle run`."
+        }
+        "oracle-run" => {
+            "Validate the JS input path, --engines selection, and optional --bundle dir, then rerun `frankenctl oracle run`."
+        }
+        "oracle-report" => {
+            "Point the argument at an oracle-run bundle directory (or its manifest.json/report.json), then rerun `frankenctl oracle report`."
         }
         "react-compile" | "react-build" => {
             "Inspect `frankenctl react contract` and rerun with a declared source-form/runtime/target combination."
@@ -6812,11 +11875,83 @@ fn compile_usage() -> String {
     .join("\n")
 }
 
+fn check_usage() -> String {
+    [
+        "check usage:",
+        "  frankenctl check <file> [--goal script|module] [--format human|json] [--out <bundle-dir>]",
+        "  frankenctl check --input <file> [--format json] [--out <bundle-dir>]",
+        "",
+        "  Parses + lowers <file> to IR2 and reports, projected onto source spans:",
+        "    - the minimal capability footprint required by its SUPPORTED syntax,",
+        "    - each ambient-authority access rejected at the lowering boundary",
+        "      (error[FE-CAP-0001], with the implied RuntimeCapability + span),",
+        "    - IFC findings (denied flow error[FE-CAP-0002]; declassification",
+        "      obligation error[FE-CAP-0003]),",
+        "    - a least-authority suggestion.",
+        "  This is the inferred authority footprint for SUPPORTED syntax — not a proof",
+        "  of noninterference for arbitrary JS/TS. Unanalyzable constructs fail closed.",
+        "",
+        "  exit codes: 0 = clean, 1 = findings present, 2 = unanalyzable (fail-closed)",
+        "  --out <dir> writes a content-addressed run_manifest.json + events.jsonl bundle.",
+    ]
+    .join("\n")
+}
+
 fn run_usage() -> String {
     [
         "run usage:",
         "  frankenctl run --input <source.js> --extension-id <id> [--goal script|module] [--out <report.json>]",
+        "      [--data-contract <contract.json>] [--purpose <purpose>] [--certificate-out <bundle-dir>]",
         "      [--explain [bundle.json]] [--explain-out <bundle.json>]",
+        "      [--emit-trace <trace.json>] [--cell-close-budget-ms <n>]",
+        "",
+        "  --emit-trace writes the run's recorded nondeterminism trace — the",
+        "  exact input `frankenctl replay debug --trace` consumes, enabling",
+        "  end-to-end interpreter-state inspection with `--input <source>`.",
+        "",
+        "  --certificate-out <bundle-dir> (requires --data-contract) writes the",
+        "  signed E8 certificate bundle assembled from the run's recorded",
+        "  evidence: non_use_certificate.json, use_certificate.json,",
+        "  declassification_receipts.jsonl, capability_trace.jsonl, repro.lock,",
+        "  and audit.md. Negative claims are evaluated fail-closed within the",
+        "  explicit-flow analyzed scope; the certificate status stays",
+        "  `uncertified` while the E8 refusal ledger blocks certification.",
+        "",
+        "  A post-evidence lifecycle failure exits 2 and emits a structured",
+        "  orchestration-failure report containing the verified exact batch",
+        "  explicitly marked uncommitted. --out receives the same report.",
+    ]
+    .join("\n")
+}
+
+fn agent_sandbox_usage() -> String {
+    [
+        "agent-sandbox usage:",
+        "  frankenctl agent-sandbox --manifest <agent_sandbox_manifest.json> --input <generated.js>",
+        "      [--goal script|module] [--out <report.json>]",
+        "      [--data-contract <contract.json>] [--purpose <purpose>] [--certificate-out <bundle-dir>]",
+        "      [--cell-close-budget-ms <n>]",
+        "",
+        "  Runs AI-agent-generated code under the tool authority the manifest",
+        "  declares (franken-engine.agent-sandbox-manifest.v1): each tool grant",
+        "  maps to an engine capability tag (unknown tags are refused",
+        "  fail-closed), tool calls route through the capability-typed hostcall",
+        "  membrane, and the guardplane watches agent actions as a behavior",
+        "  firewall (allow -> challenge -> sandbox -> suspend -> terminate ->",
+        "  quarantine) that cannot be opted out of.",
+        "",
+        "  Host I/O stays deny-all unless the manifest declares host_io_root;",
+        "  network tool grants additionally require",
+        "  acknowledge_unfiltered_network: true (the engine ships the network",
+        "  mechanism without a product-layer egress policy).",
+        "",
+        "  With --data-contract and --certificate-out, the signed E8",
+        "  certificate bundle is written on exit with the agent's effective",
+        "  tool authority as its runtime-granted capability set — this is the",
+        "  tool-runner shim contract an agent framework consumes.",
+        "",
+        "  A post-evidence lifecycle failure exits 2 and emits the same",
+        "  structured, explicitly uncommitted exact-chain failure report as run.",
     ]
     .join("\n")
 }
@@ -6824,8 +11959,46 @@ fn run_usage() -> String {
 fn explain_usage() -> String {
     [
         "explain usage:",
-        "  frankenctl explain <bundle.json> [--format summary|json] [--out <path>]",
+        "  frankenctl explain <bundle.json> [--format summary|json] [--out <path>] [--emit-bundle <dir>]",
         "  frankenctl explain --input <bundle.json> [--format summary|json] [--out <path>]",
+        "",
+        "  --emit-bundle <dir> writes the full derived view bundle over the index:",
+        "    explain.md          human-readable allow/deny/.../quarantine \"why\" story",
+        "                        with per-decision source links,",
+        "    evidence_graph.json source/IR/decision/receipt/evidence/replay/claim nodes + edges,",
+        "    replay.json         strict/validate modes + divergence classification,",
+        "    counterfactuals.json indexed counterfactual pointers,",
+        "    commands.txt        operator-verification commands,",
+        "    repro.lock          deterministic content-address over every indexed artifact,",
+        "    explain.json        a copy of the index itself.",
+        "  Every view is a pure projection over the index — never a second truth model.",
+    ]
+    .join("\n")
+}
+
+fn claims_usage() -> String {
+    [
+        "claims usage:",
+        "  frankenctl claims explain <FE-CLAIM-NNN> [--matrix <matrix.json>]",
+        "      [--beads-jsonl <issues.jsonl>|--no-beads] [--format human|json] [--out <path>]",
+        "",
+        "  The claims surface is an advisory proof-reader over existing claim matrix",
+        "  and artifact state. It does not promote claim wording, run replay, mutate",
+        "  Beads, or change evidence bundles.",
+    ]
+    .join("\n")
+}
+
+fn claims_explain_usage() -> String {
+    [
+        "claims explain usage:",
+        "  frankenctl claims explain <FE-CLAIM-NNN> [--matrix docs/claim_to_proof_matrix_v1.json]",
+        "      [--beads-jsonl .beads/issues.jsonl|--no-beads]",
+        "      [--format human|json] [--out <path>]",
+        "",
+        "  Decisions: supported, not_promotable, degraded, unsupported, fail_closed.",
+        "  Observed claims fail closed when required artifacts are absent, mock-",
+        "  contaminated, or contradicted by owning Beads state.",
     ]
     .join("\n")
 }
@@ -6923,6 +12096,51 @@ fn replay_usage() -> String {
     [
         "replay usage:",
         "  frankenctl replay run --trace <trace.json> [--mode strict|best-effort|validate] [--out <report.json>]",
+        "  frankenctl replay debug --trace <trace.json> [--script <commands.jsonl>] [--out <transcript.jsonl>]",
+    ]
+    .join("\n")
+}
+
+fn replay_debug_usage() -> String {
+    [
+        "replay debug usage:",
+        "  frankenctl replay debug --trace <trace.json>",
+        "      [--script <commands.jsonl>] [--events <debugger_events.json>]",
+        "      [--state-snapshots <interpreter_state_snapshots.json>]",
+        "      [--input <source.js>] [--input-goal script|module]",
+        "      [--checkpoint-interval <ticks>] [--mode strict|best-effort|validate]",
+        "      [--out <transcript.jsonl>]",
+        "",
+        "notes:",
+        "  Drives the evidence-aware time-travel debugger over a captured",
+        "  nondeterminism trace through the JSON-line robot protocol. Commands",
+        "  are read from --script (one JSON object per line; blank lines and",
+        "  `#` comments skipped) or stdin; every command yields exactly one",
+        "  JSON response line on stdout. Identical trace + script input gives",
+        "  a byte-identical transcript.",
+        "",
+        "  commands: {\"cmd\":\"state\"} | {\"cmd\":\"step\"} | {\"cmd\":\"back\"} |",
+        "    {\"cmd\":\"goto\",\"tick\":N} | {\"cmd\":\"run_until_break\"} |",
+        "    {\"cmd\":\"inspect\"} | {\"cmd\":\"inspect\",\"tick\":N} |",
+        "    {\"cmd\":\"add_breakpoint\",\"breakpoint\":{...}} |",
+        "    {\"cmd\":\"remove_breakpoint\",\"id\":N} | {\"cmd\":\"list_breakpoints\"} |",
+        "    {\"cmd\":\"why\",\"tick\":N} | {\"cmd\":\"events_at\",\"tick\":N}",
+        "",
+        "  --events supplies a normalized DebuggerEvent JSON array (IFC label",
+        "  levels, capability outcomes, posterior observations) so breakpoints",
+        "  like label_level_at_least / capability_denied /",
+        "  malicious_posterior_above and `why` have evidence to bind to.",
+        "  --state-snapshots supplies InterpreterStateSnapshot JSON captured",
+        "  by the real interpreter replay path; inspect fails closed when the",
+        "  selected tick has no supplied snapshot.",
+        "  --input supplies the program source itself: inspect requests for",
+        "  ticks without a supplied snapshot then re-execute the REAL",
+        "  interpreter (deterministically, with a state capture armed at the",
+        "  tick) and serve registers, heap values, and IFC labels from that",
+        "  run. The re-execution's nondeterminism trace must match the loaded",
+        "  --trace event-for-event or the inspect fails closed (the module",
+        "  does not correspond to the trace). --input-goal sets its parse",
+        "  goal (default script).",
     ]
     .join("\n")
 }
@@ -6949,9 +12167,15 @@ fn differential_oracle_usage() -> String {
         "differential-oracle usage:",
         "  frankenctl differential-oracle run --input <source.js>",
         "      [--case-id <id>] [--timeout-ms <u64>] [--out <report.json>]",
+        "  frankenctl differential-oracle perf --manifest <manifest.json>",
+        "      [--out <report.json>] [--events <events.jsonl>]",
+        "      [--warmup <u32>] [--samples <u32>] [--case-timeout-ms <u64>]",
+        "      [--engine-budget <u64>] [--node-bin <path>] [--bun-bin <path>] [--case <id>]...",
         "",
         "behavior:",
-        "  executes one JS fixture across Node, Bun, franken-engine, and the franken-core-compatible baseline lane.",
+        "  run: executes one JS fixture across Node, Bun, franken-engine, and the franken-core-compatible baseline lane.",
+        "  perf: measures steady-state throughput over a corpus and emits the Node/Bun denominator",
+        "        with fairness enforcement (degraded receipt when rules are unmet).",
         "  missing external runtimes produce unavailable backend receipts instead of failing the run.",
     ]
     .join("\n")
@@ -6962,6 +12186,97 @@ fn differential_oracle_run_usage() -> String {
         "differential-oracle run usage:",
         "  frankenctl differential-oracle run --input <source.js>",
         "      [--case-id <id>] [--timeout-ms <u64>] [--out <report.json>]",
+        "      [--engine-budget <u64>] [--engine-memory-budget <u64>]",
+        "",
+        "  --engine-budget overrides the in-process engine instruction budget so",
+        "  long-running corpus programs can execute (the containment default is",
+        "  intentionally small); node/bun have no analogous cap.",
+        "  --engine-memory-budget overrides the engine heap-object ceiling (default",
+        "  100k; the byte ceiling scales with it) so object-allocating corpus loops",
+        "  can execute. The engine heap is append-only (no live-object reclamation),",
+        "  so the count is total allocations; node/bun reclaim via GC instead.",
+    ]
+    .join("\n")
+}
+
+fn differential_oracle_perf_usage() -> String {
+    [
+        "differential-oracle perf usage:",
+        "  frankenctl differential-oracle perf --manifest <manifest.json>",
+        "      [--out <report.json>] [--events <events.jsonl>]",
+        "      [--warmup <u32>] [--samples <u32>] [--case-timeout-ms <u64>]",
+        "      [--engine-budget <u64>] [--node-bin <path>] [--bun-bin <path>] [--case <id>]...",
+        "",
+        "behavior:",
+        "  measures warm steady-state throughput of every corpus case under Node, Bun, and the",
+        "  native engine; cases enter the denominator only when the correctness arm reports",
+        "  structured-value consensus. per-iteration timings stream to --events so the ratio can",
+        "  be re-derived from raw data. fairness violations (e.g. `node` resolving to Bun's shim)",
+        "  degrade the receipt instead of publishing a number.",
+    ]
+    .join("\n")
+}
+
+fn oracle_usage() -> String {
+    [
+        "oracle usage (operator-facing differential oracle):",
+        "  frankenctl oracle run <input.js> [--engines franken,node,bun,core] [--bundle <dir>]",
+        "      [--case-id <id>] [--timeout-ms <u64>] [--engine-budget <u64>]",
+        "      [--node-bin <path>] [--bun-bin <path>] [--out <report.json>] [--json]",
+        "  frankenctl oracle report <bundle-dir|manifest.json> [--json]",
+        "",
+        "behavior:",
+        "  run: executes one JS input across the selected engines, classifies any cross-runtime",
+        "       divergence, and (with --bundle) writes a content-addressed bundle into a new",
+        "       directory (a trusted/sticky parent must exist; the bundle path must not) that",
+        "       `oracle report` can re-render and integrity-check.",
+        "  report: validates a bundle's sha256 artifact set and bundle_id, then renders the",
+        "          recorded backends, verdict, and any divergences.",
+        "",
+        "exit codes (run and report):",
+        "  0  consensus across the selected engines",
+        "  3  semantic divergence detected",
+        "  4  insufficient data (selected status mismatch or requested reference unavailable / timed out / degraded)",
+        "  2  usage or I/O error (e.g. bundle integrity failure)",
+    ]
+    .join("\n")
+}
+
+fn oracle_run_usage() -> String {
+    [
+        "oracle run usage:",
+        "  frankenctl oracle run <input.js> [--engines franken,node,bun,core] [--bundle <dir>]",
+        "      [--case-id <id>] [--timeout-ms <u64>] [--engine-budget <u64>]",
+        "      [--engine-memory-budget <u64>] [--node-bin <path>] [--bun-bin <path>]",
+        "      [--out <report.json>] [--json]",
+        "",
+        "  --engines  comma-separated subset of {node, bun, franken, core}; default is all four.",
+        "             only the selected engines are executed and compared.",
+        "  --bundle   write a content-addressed bundle (manifest.json + report.json + repro.lock,",
+        "             plus degraded_receipt.json when a reference runtime is unavailable).",
+        "             a trusted/sticky parent must exist; the bundle path must not; existing paths are refused.",
+        "  --node-bin / --bun-bin  override the external binaries; otherwise $NODE / $BUN, then",
+        "             `node` / `bun` on PATH (point --node-bin at genuine Node where `node` is a shim).",
+        "  --engine-budget  raise the in-process engine instruction budget for long programs.",
+        "  --engine-memory-budget  raise the engine heap-object ceiling (default 100k) for",
+        "             object-allocating programs; the byte ceiling scales with it. The engine",
+        "             heap is append-only (no GC), so this counts total allocations.",
+        "  --out      additionally write the raw DifferentialOracleReport JSON to this path.",
+        "  --json     emit a machine-parseable summary (robot mode) instead of the human view.",
+        "",
+        "  missing external runtimes produce unavailable backend receipts rather than failing the run.",
+    ]
+    .join("\n")
+}
+
+fn oracle_report_usage() -> String {
+    [
+        "oracle report usage:",
+        "  frankenctl oracle report <bundle-dir|manifest.json> [--json]",
+        "",
+        "  validates the bundle's artifact sha256 set and its bundle_id content address, then",
+        "  renders the recorded case, per-backend receipts, semantic verdict, and divergences.",
+        "  a mismatched hash is a hard error (exit 2). --json emits the parseable summary.",
     ]
     .join("\n")
 }
@@ -6983,10 +12298,10 @@ fn react_usage() -> String {
         "      [--trace-id <id>] [--decision-id <id>] [--policy-id <id>]",
         "",
         "notes:",
-        "  react compile/build currently fail closed with deterministic unsupported-surface guidance",
-        "  until the owning implementation and parity-gate beads are actually shipped.",
+        "  react compile executes shipped JSX/TSX capability rows and emits native pipeline output;",
+        "  unshipped compile rows and all react build targets still fail closed with guidance.",
         "  react doctor consumes a machine-readable mismatch catalog and emits support guidance",
-        "  even while compile/build surfaces remain blocked.",
+        "  for unsupported React product surfaces.",
     ]
     .join("\n")
 }
@@ -7000,7 +12315,7 @@ fn react_compile_usage() -> String {
         "",
         "behavior:",
         "  emits a deterministic react-cli report tied to the embedded React capability contract",
-        "  and exits non-zero until the requested capability row is shipped.",
+        "  and includes generated code plus receipt metadata for shipped compile rows.",
     ]
     .join("\n")
 }
@@ -7053,6 +12368,8 @@ fn gates_usage() -> String {
         "gates usage:",
         "  frankenctl gates zero-placeholder --out-dir <dir> [--waivers <file>]",
         "  frankenctl gates signature-drift --out-dir <dir> [--config <file>]",
+        "  frankenctl gates compounding-red-team --out-dir <dir> [--config <file>]",
+        "  frankenctl gates erasure-bandwidth --out-dir <dir> [--config <file>]",
         "  frankenctl gates adversarial-campaign --out-dir <dir>",
         "  frankenctl gates ambient-mock-guard --out-dir <dir>",
         "  frankenctl gates ifc-conformance --out-dir <dir>",
@@ -7069,7 +12386,7 @@ fn gates_usage() -> String {
 fn reports_usage() -> String {
     [
         "reports usage:",
-        "  frankenctl reports parser-oracle [--config <file>] [--out <file>]",
+        "  frankenctl reports parser-oracle [--partition <smoke|full|nightly>] [--gate-mode <report_only|fail_closed>] [--seed <u64>] [--fixture-catalog <path>] [--trace-id <id>] [--decision-id <id>] [--policy-id <id>] [--out <path>]",
         "  frankenctl reports parser-phase0 [--out <file>]",
         "  frankenctl reports lowering-gap [--out <file>]",
         "  frankenctl reports parser-gap [--out <file>]",
@@ -7152,8 +12469,25 @@ fn runtime_usage() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use frankenengine_engine::differential_oracle::{
+        DifferentialComparisonMode, DifferentialDivergenceClass, DifferentialDivergenceFinding,
+    };
     use frankenengine_engine::receipt_verifier_pipeline::VerifierLogEvent;
     use frankenengine_engine::runtime_diagnostics_cli::EvidenceSeverity;
+
+    #[test]
+    fn runtime_evidence_producer_ids_bind_each_fresh_run() {
+        let first =
+            runtime_evidence_producer_id_from_nonce("frankenctl.run", "source-hash", &[0x11; 16])
+                .expect("first producer id");
+        let second =
+            runtime_evidence_producer_id_from_nonce("frankenctl.run", "source-hash", &[0x22; 16])
+                .expect("second producer id");
+
+        assert_ne!(first, second);
+        assert!(first.starts_with("frankenctl.run:source-hash:"));
+        assert!(second.starts_with("frankenctl.run:source-hash:"));
+    }
 
     #[test]
     fn parse_version_command() {
@@ -7213,6 +12547,8 @@ mod tests {
                 assert_eq!(spec.out, Some(PathBuf::from("run.json")));
                 assert!(!spec.explain);
                 assert_eq!(spec.explain_out, None);
+                assert_eq!(spec.data_contract, None);
+                assert_eq!(spec.data_contract_purpose, DEFAULT_DATA_CONTRACT_PURPOSE);
             }
             other => panic!("expected run command, got {other:?}"),
         }
@@ -7249,6 +12585,846 @@ mod tests {
     }
 
     #[test]
+    fn parse_run_command_accepts_data_contract() {
+        let args = vec![
+            "run".to_string(),
+            "--input".to_string(),
+            "agent.js".to_string(),
+            "--extension-id".to_string(),
+            "ext-e8".to_string(),
+            "--data-contract".to_string(),
+            "contract.json".to_string(),
+            "--purpose".to_string(),
+            "agent_sandbox".to_string(),
+        ];
+        let parsed = parse_command(&args).expect("run with data contract should parse");
+        match parsed {
+            CommandSpec::Run(spec) => {
+                assert_eq!(spec.data_contract, Some(PathBuf::from("contract.json")));
+                assert_eq!(spec.data_contract_purpose, "agent_sandbox");
+                assert_eq!(spec.certificate_out, None);
+            }
+            other => panic!("expected run command, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_run_command_accepts_certificate_out_with_data_contract() {
+        let args = vec![
+            "run".to_string(),
+            "--input".to_string(),
+            "agent.js".to_string(),
+            "--extension-id".to_string(),
+            "ext-e8".to_string(),
+            "--data-contract".to_string(),
+            "contract.json".to_string(),
+            "--certificate-out".to_string(),
+            "cert-bundle".to_string(),
+        ];
+        let parsed = parse_command(&args).expect("run with certificate out should parse");
+        match parsed {
+            CommandSpec::Run(spec) => {
+                assert_eq!(spec.certificate_out, Some(PathBuf::from("cert-bundle")));
+            }
+            other => panic!("expected run command, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_run_command_rejects_certificate_out_without_data_contract() {
+        let args = vec![
+            "run".to_string(),
+            "--input".to_string(),
+            "agent.js".to_string(),
+            "--extension-id".to_string(),
+            "ext-e8".to_string(),
+            "--certificate-out".to_string(),
+            "cert-bundle".to_string(),
+        ];
+        let error = parse_command(&args)
+            .expect_err("certificate out without data contract must fail closed");
+        assert!(error.contains("--certificate-out requires --data-contract"));
+    }
+
+    #[test]
+    fn parse_agent_sandbox_command_accepts_full_flag_set() {
+        let args = vec![
+            "agent-sandbox".to_string(),
+            "--manifest".to_string(),
+            "manifest.json".to_string(),
+            "--input".to_string(),
+            "generated.js".to_string(),
+            "--goal".to_string(),
+            "module".to_string(),
+            "--data-contract".to_string(),
+            "contract.json".to_string(),
+            "--purpose".to_string(),
+            "agent_sandbox".to_string(),
+            "--certificate-out".to_string(),
+            "cert-bundle".to_string(),
+            "--out".to_string(),
+            "report.json".to_string(),
+        ];
+        let parsed = parse_command(&args).expect("agent-sandbox should parse");
+        match parsed {
+            CommandSpec::AgentSandbox(spec) => {
+                assert_eq!(spec.manifest, PathBuf::from("manifest.json"));
+                assert_eq!(spec.input, PathBuf::from("generated.js"));
+                assert_eq!(spec.parse_goal, ParseGoal::Module);
+                assert_eq!(spec.data_contract, Some(PathBuf::from("contract.json")));
+                assert_eq!(spec.purpose, Some("agent_sandbox".to_string()));
+                assert_eq!(spec.certificate_out, Some(PathBuf::from("cert-bundle")));
+                assert_eq!(spec.out, Some(PathBuf::from("report.json")));
+            }
+            other => panic!("expected agent-sandbox command, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_agent_sandbox_command_requires_manifest_and_input() {
+        let missing_manifest = vec![
+            "agent-sandbox".to_string(),
+            "--input".to_string(),
+            "generated.js".to_string(),
+        ];
+        assert!(
+            parse_command(&missing_manifest)
+                .expect_err("missing manifest must fail")
+                .contains("--manifest")
+        );
+
+        let missing_input = vec![
+            "agent-sandbox".to_string(),
+            "--manifest".to_string(),
+            "manifest.json".to_string(),
+        ];
+        assert!(
+            parse_command(&missing_input)
+                .expect_err("missing input must fail")
+                .contains("--input")
+        );
+    }
+
+    #[test]
+    fn parse_agent_sandbox_command_rejects_certificate_out_without_contract() {
+        let args = vec![
+            "agent-sandbox".to_string(),
+            "--manifest".to_string(),
+            "manifest.json".to_string(),
+            "--input".to_string(),
+            "generated.js".to_string(),
+            "--certificate-out".to_string(),
+            "cert-bundle".to_string(),
+        ];
+        let error = parse_command(&args)
+            .expect_err("certificate out without data contract must fail closed");
+        assert!(error.contains("--certificate-out requires --data-contract"));
+    }
+
+    #[test]
+    fn agent_sandbox_help_topic_renders() {
+        let args = vec!["help".to_string(), "agent-sandbox".to_string()];
+        let parsed = parse_command(&args).expect("help topic parses");
+        assert_eq!(parsed, CommandSpec::HelpTopic(HelpTopic::AgentSandbox));
+        assert!(agent_sandbox_usage().contains("--manifest"));
+        assert!(agent_sandbox_usage().contains("behavior"));
+    }
+
+    #[test]
+    fn parse_claims_explain_command_accepts_defaults_and_json_format() {
+        let args = vec![
+            "claims".to_string(),
+            "explain".to_string(),
+            "FE-CLAIM-001".to_string(),
+            "--format".to_string(),
+            "json".to_string(),
+            "--out".to_string(),
+            "claim.json".to_string(),
+        ];
+        let parsed = parse_command(&args).expect("claims explain command should parse");
+        match parsed {
+            CommandSpec::Claims(ClaimsArgs {
+                mode: ClaimsMode::Explain(spec),
+            }) => {
+                assert_eq!(spec.claim_id, "FE-CLAIM-001");
+                assert_eq!(spec.matrix, PathBuf::from(DEFAULT_CLAIM_MATRIX_PATH));
+                assert_eq!(
+                    spec.beads_jsonl,
+                    Some(PathBuf::from(DEFAULT_BEADS_JSONL_PATH))
+                );
+                assert_eq!(spec.format, CheckOutputFormat::Json);
+                assert_eq!(spec.out, Some(PathBuf::from("claim.json")));
+            }
+            other => panic!("expected claims explain command, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn claim_explainer_supports_observed_fixture() {
+        let dir = frankenctl_test_temp_dir("claim-supported");
+        fs::create_dir_all(&dir).expect("create fixture dir");
+        let artifact_path = dir.join("artifact.json");
+        fs::write(&artifact_path, b"{\"ok\":true}\n").expect("write artifact");
+        write_repro_lock_next_to_file(&artifact_path);
+        let matrix_path = dir.join("matrix.json");
+        write_claim_matrix_fixture(
+            &matrix_path,
+            serde_json::json!([claim_row_fixture(
+                "FE-CLAIM-TEST",
+                "observed",
+                "observed",
+                artifact_path.display().to_string(),
+                "bd-test"
+            )]),
+        );
+        let beads_path = dir.join("issues.jsonl");
+        fs::write(
+            &beads_path,
+            serde_json::json!({"id":"bd-test","status":"closed","assignee":"EmeraldPine"})
+                .to_string(),
+        )
+        .expect("write beads fixture");
+
+        let output = build_claim_explanation("FE-CLAIM-TEST", &matrix_path, Some(&beads_path))
+            .expect("claim should explain");
+        assert_eq!(output.decision, "supported");
+        assert_eq!(output.exit_code(), 0);
+        assert!(output.reason_codes.is_empty());
+        assert_eq!(output.mock_status, "absent");
+        assert!(output.artifact.as_ref().expect("artifact").present);
+        assert_eq!(output.bead.as_ref().expect("bead").status, "closed");
+        assert!(output.receipt_id.starts_with("claim-explain-"));
+    }
+
+    #[test]
+    fn claim_explainer_missing_requested_bead_snapshot_fails_closed() {
+        let dir = frankenctl_test_temp_dir("claim-missing-bead-snapshot");
+        fs::create_dir_all(&dir).expect("create fixture dir");
+        let artifact_path = dir.join("artifact.json");
+        fs::write(&artifact_path, b"{\"ok\":true}\n").expect("write artifact");
+        let matrix_path = dir.join("matrix.json");
+        write_claim_matrix_fixture(
+            &matrix_path,
+            serde_json::json!([claim_row_fixture(
+                "FE-CLAIM-BEAD-MISSING",
+                "observed",
+                "observed",
+                artifact_path.display().to_string(),
+                "bd-missing"
+            )]),
+        );
+        let missing_beads_path = dir.join("missing-issues.jsonl");
+
+        let output = build_claim_explanation(
+            "FE-CLAIM-BEAD-MISSING",
+            &matrix_path,
+            Some(&missing_beads_path),
+        )
+        .expect("missing Beads snapshot should render fail-closed receipt");
+
+        assert_eq!(output.decision, "fail_closed");
+        assert_eq!(output.exit_code(), 2);
+        assert!(
+            output
+                .reason_codes
+                .contains(&"stale_tracker_state".to_string())
+        );
+        assert!(!output.bead.as_ref().expect("bead").found);
+    }
+
+    #[test]
+    fn claim_explainer_corrupt_requested_bead_snapshot_fails_closed() {
+        let dir = frankenctl_test_temp_dir("claim-corrupt-bead-snapshot");
+        fs::create_dir_all(&dir).expect("create fixture dir");
+        let artifact_path = dir.join("artifact.json");
+        fs::write(&artifact_path, b"{\"ok\":true}\n").expect("write artifact");
+        let matrix_path = dir.join("matrix.json");
+        write_claim_matrix_fixture(
+            &matrix_path,
+            serde_json::json!([claim_row_fixture(
+                "FE-CLAIM-BEAD-CORRUPT",
+                "observed",
+                "observed",
+                artifact_path.display().to_string(),
+                "bd-corrupt"
+            )]),
+        );
+        let beads_path = dir.join("issues.jsonl");
+        fs::write(&beads_path, "{not-json-for bd-corrupt\n").expect("write corrupt beads fixture");
+
+        let output =
+            build_claim_explanation("FE-CLAIM-BEAD-CORRUPT", &matrix_path, Some(&beads_path))
+                .expect("corrupt Beads snapshot should render fail-closed receipt");
+
+        assert_eq!(output.decision, "fail_closed");
+        assert_eq!(output.exit_code(), 2);
+        assert!(
+            output
+                .reason_codes
+                .contains(&"stale_tracker_state".to_string())
+        );
+        let bead = output.bead.as_ref().expect("bead");
+        assert!(!bead.found);
+        assert_eq!(bead.status, "unreadable");
+    }
+
+    #[test]
+    fn claim_explainer_keeps_target_claim_not_promotable() {
+        let dir = frankenctl_test_temp_dir("claim-target");
+        fs::create_dir_all(&dir).expect("create fixture dir");
+        let matrix_path = dir.join("matrix.json");
+        write_claim_matrix_fixture(
+            &matrix_path,
+            serde_json::json!([claim_row_fixture(
+                "FE-CLAIM-TARGET",
+                "target",
+                "target",
+                "missing-target-artifact.json",
+                "bd-target"
+            )]),
+        );
+
+        let output = build_claim_explanation("FE-CLAIM-TARGET", &matrix_path, None)
+            .expect("target claim should explain");
+        assert_eq!(output.decision, "not_promotable");
+        assert_eq!(output.exit_code(), 1);
+        assert!(
+            output
+                .reason_codes
+                .contains(&"claim_not_observed".to_string())
+        );
+        assert!(
+            !output
+                .artifact
+                .as_ref()
+                .expect("artifact")
+                .required_for_supported
+        );
+    }
+
+    #[test]
+    fn claim_explainer_resolves_matrix_local_relative_artifact_path() {
+        let dir = frankenctl_test_temp_dir("claim-matrix-local-artifact");
+        let bundle_dir = dir.join("bundle");
+        fs::create_dir_all(&bundle_dir).expect("create fixture dir");
+        fs::write(bundle_dir.join("artifact.json"), b"{\"ok\":true}\n").expect("write artifact");
+        fs::write(bundle_dir.join("repro.lock"), b"fixture repro lock\n")
+            .expect("write repro lock");
+        let matrix_path = bundle_dir.join("matrix.json");
+        write_claim_matrix_fixture(
+            &matrix_path,
+            serde_json::json!([claim_row_fixture(
+                "FE-CLAIM-RELATIVE",
+                "observed",
+                "observed",
+                "artifact.json",
+                "bd-relative"
+            )]),
+        );
+
+        let output = build_claim_explanation("FE-CLAIM-RELATIVE", &matrix_path, None)
+            .expect("matrix-local relative artifact should explain");
+        assert_eq!(output.decision, "supported");
+        let artifact = output.artifact.as_ref().expect("artifact");
+        assert!(artifact.present);
+        assert_eq!(artifact.kind, "file");
+        assert_eq!(
+            artifact.path,
+            bundle_dir.join("artifact.json").display().to_string()
+        );
+    }
+
+    #[test]
+    fn claim_explainer_prefers_matrix_local_artifact_over_cwd_match() {
+        let dir = frankenctl_test_temp_dir("claim-matrix-local-precedence");
+        let bundle_dir = dir.join("bundle");
+        fs::create_dir_all(&bundle_dir).expect("create fixture dir");
+        fs::write(bundle_dir.join("Cargo.toml"), b"matrix-local artifact\n")
+            .expect("write artifact matching repo-root file name");
+
+        let resolved = resolve_claim_artifact_path(&bundle_dir.join("matrix.json"), "Cargo.toml");
+
+        assert_eq!(resolved, bundle_dir.join("Cargo.toml"));
+    }
+
+    #[test]
+    fn claim_explainer_resolves_repo_relative_artifact_from_absolute_matrix_path() {
+        let dir = frankenctl_test_temp_dir("claim-repo-relative-artifact");
+        let docs_dir = dir.join("docs");
+        let artifact_path = dir
+            .join("artifacts")
+            .join("claim-explainer-repo-relative")
+            .join("artifact.json");
+        fs::create_dir_all(&docs_dir).expect("create docs fixture dir");
+        fs::create_dir_all(artifact_path.parent().expect("artifact parent"))
+            .expect("create artifact fixture dir");
+        fs::write(&artifact_path, b"{\"ok\":true}\n").expect("write artifact fixture");
+
+        let resolved = resolve_claim_artifact_path(
+            &docs_dir.join("matrix.json"),
+            "artifacts/claim-explainer-repo-relative/artifact.json",
+        );
+
+        assert_eq!(resolved, artifact_path);
+    }
+
+    #[test]
+    fn claim_explainer_invalid_wording_state_fails_closed() {
+        let dir = frankenctl_test_temp_dir("claim-invalid-state");
+        fs::create_dir_all(&dir).expect("create fixture dir");
+        let artifact_path = dir.join("artifact.json");
+        fs::write(&artifact_path, b"{\"ok\":true}\n").expect("write artifact");
+        let matrix_path = dir.join("matrix.json");
+        write_claim_matrix_fixture(
+            &matrix_path,
+            serde_json::json!([claim_row_fixture(
+                "FE-CLAIM-INVALID-STATE",
+                "verified",
+                "observed",
+                artifact_path.display().to_string(),
+                "bd-invalid-state"
+            )]),
+        );
+
+        let output = build_claim_explanation("FE-CLAIM-INVALID-STATE", &matrix_path, None)
+            .expect("invalid state should render fail-closed receipt");
+
+        assert_eq!(output.decision, "fail_closed");
+        assert_eq!(output.exit_code(), 2);
+        assert!(
+            output
+                .reason_codes
+                .contains(&"invalid_wording_state".to_string())
+        );
+    }
+
+    #[test]
+    fn claim_explainer_missing_claim_fails_closed() {
+        let dir = frankenctl_test_temp_dir("claim-missing");
+        fs::create_dir_all(&dir).expect("create fixture dir");
+        let matrix_path = dir.join("matrix.json");
+        write_claim_matrix_fixture(&matrix_path, serde_json::json!([]));
+
+        let output = build_claim_explanation("FE-CLAIM-MISSING", &matrix_path, None)
+            .expect("missing claim should render fail-closed receipt");
+        assert_eq!(output.decision, "fail_closed");
+        assert_eq!(output.exit_code(), 2);
+        assert_eq!(output.reason_codes, vec!["missing_claim_row"]);
+        assert!(output.claim.is_none());
+    }
+
+    #[test]
+    fn claim_explainer_duplicate_claim_rows_fail_closed() {
+        let dir = frankenctl_test_temp_dir("claim-duplicate-row");
+        fs::create_dir_all(&dir).expect("create fixture dir");
+        let artifact_path = dir.join("artifact.json");
+        fs::write(&artifact_path, b"{\"ok\":true}\n").expect("write artifact");
+        let matrix_path = dir.join("matrix.json");
+        write_claim_matrix_fixture(
+            &matrix_path,
+            serde_json::json!([
+                claim_row_fixture(
+                    "FE-CLAIM-DUPLICATE",
+                    "observed",
+                    "observed",
+                    artifact_path.display().to_string(),
+                    "bd-duplicate-a"
+                ),
+                claim_row_fixture(
+                    "FE-CLAIM-DUPLICATE",
+                    "target",
+                    "target",
+                    "missing-target-artifact.json",
+                    "bd-duplicate-b"
+                )
+            ]),
+        );
+
+        let output = build_claim_explanation("FE-CLAIM-DUPLICATE", &matrix_path, None)
+            .expect("duplicate claim rows should render fail-closed receipt");
+
+        assert_eq!(output.decision, "fail_closed");
+        assert_eq!(output.exit_code(), 2);
+        assert_eq!(output.reason_codes, vec!["duplicate_claim_row"]);
+        assert!(output.claim.is_none());
+    }
+
+    #[test]
+    fn claim_explainer_missing_matrix_fails_closed_with_receipt() {
+        let dir = frankenctl_test_temp_dir("claim-missing-matrix");
+        fs::create_dir_all(&dir).expect("create fixture dir");
+        let matrix_path = dir.join("missing-matrix.json");
+
+        let output = build_claim_explanation("FE-CLAIM-MATRIX-MISSING", &matrix_path, None)
+            .expect("missing matrix should render fail-closed receipt");
+
+        assert_eq!(output.decision, "fail_closed");
+        assert_eq!(output.exit_code(), 2);
+        assert_eq!(output.reason_codes, vec!["unreadable_matrix"]);
+        assert_eq!(output.matrix_schema_version, "unavailable");
+        assert!(output.claim.is_none());
+    }
+
+    #[test]
+    fn claim_explainer_invalid_matrix_schema_fails_closed_with_receipt() {
+        let dir = frankenctl_test_temp_dir("claim-invalid-matrix-schema");
+        fs::create_dir_all(&dir).expect("create fixture dir");
+        let matrix_path = dir.join("matrix.json");
+        fs::write(
+            &matrix_path,
+            serde_json::to_vec_pretty(&serde_json::json!({
+                "schema_version": "franken-engine.claim-to-proof-matrix.v0",
+                "claims": []
+            }))
+            .expect("matrix JSON serializes"),
+        )
+        .expect("write matrix fixture");
+
+        let output = build_claim_explanation("FE-CLAIM-SCHEMA", &matrix_path, None)
+            .expect("invalid schema should render fail-closed receipt");
+
+        assert_eq!(output.decision, "fail_closed");
+        assert_eq!(output.exit_code(), 2);
+        assert_eq!(output.reason_codes, vec!["invalid_matrix_schema"]);
+        assert_eq!(
+            output.matrix_schema_version,
+            "franken-engine.claim-to-proof-matrix.v0"
+        );
+    }
+
+    #[test]
+    fn claim_explainer_source_span_mismatch_fails_closed() {
+        let dir = frankenctl_test_temp_dir("claim-source-span-mismatch");
+        fs::create_dir_all(&dir).expect("create fixture dir");
+        let artifact_path = dir.join("artifact.json");
+        fs::write(&artifact_path, b"{\"ok\":true}\n").expect("write artifact");
+        let source_path = dir.join("source.md");
+        fs::write(&source_path, "Documented claim text changed.\n").expect("write source");
+        let mut row = claim_row_fixture(
+            "FE-CLAIM-SOURCE",
+            "observed",
+            "observed",
+            artifact_path.display().to_string(),
+            "bd-source",
+        );
+        row["source_path"] = serde_json::Value::String(source_path.display().to_string());
+        row["source_span"]["must_contain"] =
+            serde_json::Value::String("Original claim text".to_string());
+        let matrix_path = dir.join("matrix.json");
+        write_claim_matrix_fixture(&matrix_path, serde_json::json!([row]));
+
+        let output = build_claim_explanation("FE-CLAIM-SOURCE", &matrix_path, None)
+            .expect("stale source span should render fail-closed receipt");
+
+        assert_eq!(output.decision, "fail_closed");
+        assert_eq!(output.exit_code(), 2);
+        assert!(
+            output
+                .reason_codes
+                .contains(&"source_span_mismatch".to_string())
+        );
+        assert_eq!(output.source_line_refs[0].status, "span_mismatch");
+    }
+
+    #[test]
+    fn claim_explainer_missing_observed_artifact_fails_closed() {
+        let dir = frankenctl_test_temp_dir("claim-absent-artifact");
+        fs::create_dir_all(&dir).expect("create fixture dir");
+        let matrix_path = dir.join("matrix.json");
+        write_claim_matrix_fixture(
+            &matrix_path,
+            serde_json::json!([claim_row_fixture(
+                "FE-CLAIM-ABSENT",
+                "observed",
+                "observed",
+                dir.join("missing-artifact.json").display().to_string(),
+                "bd-absent"
+            )]),
+        );
+
+        let output = build_claim_explanation("FE-CLAIM-ABSENT", &matrix_path, None)
+            .expect("absent artifact should render fail-closed receipt");
+        assert_eq!(output.decision, "fail_closed");
+        assert_eq!(output.exit_code(), 2);
+        assert!(output.reason_codes.contains(&"absent_artifact".to_string()));
+        assert!(!output.artifact.as_ref().expect("artifact").present);
+    }
+
+    #[test]
+    fn claim_explainer_missing_repro_lock_fails_closed() {
+        let dir = frankenctl_test_temp_dir("claim-missing-repro-lock");
+        fs::create_dir_all(&dir).expect("create fixture dir");
+        let artifact_path = dir.join("artifact.json");
+        fs::write(&artifact_path, b"{\"ok\":true}\n").expect("write artifact");
+        let matrix_path = dir.join("matrix.json");
+        write_claim_matrix_fixture(
+            &matrix_path,
+            serde_json::json!([claim_row_fixture(
+                "FE-CLAIM-NO-REPRO",
+                "observed",
+                "observed",
+                artifact_path.display().to_string(),
+                "bd-no-repro"
+            )]),
+        );
+
+        let output = build_claim_explanation("FE-CLAIM-NO-REPRO", &matrix_path, None)
+            .expect("missing repro lock should render fail-closed receipt");
+
+        assert_eq!(output.decision, "fail_closed");
+        assert_eq!(output.exit_code(), 2);
+        assert!(
+            output
+                .reason_codes
+                .contains(&"missing_reproducibility_bundle".to_string())
+        );
+    }
+
+    #[test]
+    fn claim_explainer_stale_observed_artifact_fails_closed() {
+        let dir = frankenctl_test_temp_dir("claim-stale-artifact");
+        let artifact_dir = dir.join("artifact");
+        fs::create_dir_all(&artifact_dir).expect("create fixture dir");
+        fs::write(
+            artifact_dir.join("manifest.json"),
+            serde_json::to_vec_pretty(&serde_json::json!({
+                "schema_version": "franken-engine.proof-artifact-manifest.v1",
+                "freshness": {
+                    "generated_utc": "2026-01-01T00:00:00Z"
+                }
+            }))
+            .expect("manifest JSON serializes"),
+        )
+        .expect("write stale manifest");
+        let matrix_path = dir.join("matrix.json");
+        write_claim_matrix_fixture(
+            &matrix_path,
+            serde_json::json!([claim_row_fixture(
+                "FE-CLAIM-STALE",
+                "observed",
+                "observed",
+                artifact_dir.display().to_string(),
+                "bd-stale"
+            )]),
+        );
+
+        let output = build_claim_explanation("FE-CLAIM-STALE", &matrix_path, None)
+            .expect("stale artifact should render fail-closed receipt");
+        assert_eq!(output.decision, "fail_closed");
+        assert_eq!(output.exit_code(), 2);
+        assert!(output.reason_codes.contains(&"stale_artifact".to_string()));
+        assert_eq!(
+            output.artifact.as_ref().expect("artifact").freshness_status,
+            "stale"
+        );
+    }
+
+    #[test]
+    fn claim_explainer_hash_mismatch_fails_closed() {
+        let dir = frankenctl_test_temp_dir("claim-hash-mismatch");
+        fs::create_dir_all(&dir).expect("create fixture dir");
+        let artifact_path = dir.join("artifact.json");
+        fs::write(&artifact_path, b"{\"ok\":true}\n").expect("write artifact");
+        let mut row = claim_row_fixture(
+            "FE-CLAIM-HASH",
+            "observed",
+            "observed",
+            artifact_path.display().to_string(),
+            "bd-hash",
+        );
+        row["expected_hash"] = serde_json::Value::String(format!("sha256:{}", "0".repeat(64)));
+        let matrix_path = dir.join("matrix.json");
+        write_claim_matrix_fixture(&matrix_path, serde_json::json!([row]));
+
+        let output = build_claim_explanation("FE-CLAIM-HASH", &matrix_path, None)
+            .expect("hash mismatch should render fail-closed receipt");
+        assert_eq!(output.decision, "fail_closed");
+        assert_eq!(output.exit_code(), 2);
+        assert!(
+            output
+                .reason_codes
+                .contains(&"artifact_hash_mismatch".to_string())
+        );
+        assert_eq!(
+            output.artifact.as_ref().expect("artifact").hash_status,
+            "mismatch"
+        );
+    }
+
+    #[test]
+    fn claim_explainer_explicit_mock_marker_fails_closed_case_insensitive() {
+        let dir = frankenctl_test_temp_dir("claim-mock-marker");
+        fs::create_dir_all(&dir).expect("create fixture dir");
+        let artifact_path = dir.join("artifact.json");
+        fs::write(&artifact_path, b"{\"ok\":true}\n").expect("write artifact");
+        let mut row = claim_row_fixture(
+            "FE-CLAIM-MOCK",
+            "observed",
+            "observed",
+            artifact_path.display().to_string(),
+            "bd-mock",
+        );
+        row["claim_text"] =
+            serde_json::Value::String("Fixture uses mock_certificate evidence.".to_string());
+        let matrix_path = dir.join("matrix.json");
+        write_claim_matrix_fixture(&matrix_path, serde_json::json!([row]));
+
+        let output = build_claim_explanation("FE-CLAIM-MOCK", &matrix_path, None)
+            .expect("mock marker should render fail-closed receipt");
+
+        assert_eq!(output.decision, "fail_closed");
+        assert_eq!(output.exit_code(), 2);
+        assert!(
+            output
+                .reason_codes
+                .contains(&"mock_contaminated".to_string())
+        );
+        assert_eq!(output.mock_status, "present_fail_closed");
+    }
+
+    #[test]
+    fn claim_explainer_artifact_mock_marker_fails_closed_case_insensitive() {
+        let dir = frankenctl_test_temp_dir("claim-artifact-mock-marker");
+        fs::create_dir_all(&dir).expect("create fixture dir");
+        let artifact_path = dir.join("artifact.json");
+        fs::write(&artifact_path, b"{\"producer\":\"MockCertificate\"}\n")
+            .expect("write mock artifact");
+        let matrix_path = dir.join("matrix.json");
+        write_claim_matrix_fixture(
+            &matrix_path,
+            serde_json::json!([claim_row_fixture(
+                "FE-CLAIM-ARTIFACT-MOCK",
+                "observed",
+                "observed",
+                artifact_path.display().to_string(),
+                "bd-artifact-mock"
+            )]),
+        );
+
+        let output = build_claim_explanation("FE-CLAIM-ARTIFACT-MOCK", &matrix_path, None)
+            .expect("artifact mock marker should render fail-closed receipt");
+
+        assert_eq!(output.decision, "fail_closed");
+        assert_eq!(output.exit_code(), 2);
+        assert!(
+            output
+                .reason_codes
+                .contains(&"mock_contaminated".to_string())
+        );
+        assert_eq!(output.mock_status, "present_fail_closed");
+    }
+
+    #[test]
+    fn claim_explainer_local_fallback_marker_fails_closed_case_insensitive() {
+        let dir = frankenctl_test_temp_dir("claim-local-fallback-marker");
+        fs::create_dir_all(&dir).expect("create fixture dir");
+        let artifact_path = dir.join("artifact.json");
+        fs::write(
+            &artifact_path,
+            b"{\"transport\":\"local fallback was used\"}\n",
+        )
+        .expect("write local-fallback artifact");
+        let matrix_path = dir.join("matrix.json");
+        write_claim_matrix_fixture(
+            &matrix_path,
+            serde_json::json!([claim_row_fixture(
+                "FE-CLAIM-LOCAL-FALLBACK",
+                "observed",
+                "observed",
+                artifact_path.display().to_string(),
+                "bd-local-fallback"
+            )]),
+        );
+
+        let output = build_claim_explanation("FE-CLAIM-LOCAL-FALLBACK", &matrix_path, None)
+            .expect("local-fallback marker should render fail-closed receipt");
+
+        assert_eq!(output.decision, "fail_closed");
+        assert_eq!(output.exit_code(), 2);
+        assert!(
+            output
+                .reason_codes
+                .contains(&"local_fallback_contaminated".to_string())
+        );
+        assert_eq!(output.local_fallback_status, "present_fail_closed");
+    }
+
+    #[test]
+    fn claim_explainer_refused_local_fallback_marker_is_not_contamination() {
+        let dir = frankenctl_test_temp_dir("claim-local-fallback-refused");
+        fs::create_dir_all(&dir).expect("create fixture dir");
+        let artifact_path = dir.join("artifact.json");
+        fs::write(
+            &artifact_path,
+            b"{\"transport\":\"Refusing local fallback\"}\n",
+        )
+        .expect("write local-fallback refusal artifact");
+        write_repro_lock_next_to_file(&artifact_path);
+        let matrix_path = dir.join("matrix.json");
+        write_claim_matrix_fixture(
+            &matrix_path,
+            serde_json::json!([claim_row_fixture(
+                "FE-CLAIM-LOCAL-FALLBACK-REFUSED",
+                "observed",
+                "observed",
+                artifact_path.display().to_string(),
+                "bd-local-fallback-refused"
+            )]),
+        );
+
+        let output = build_claim_explanation("FE-CLAIM-LOCAL-FALLBACK-REFUSED", &matrix_path, None)
+            .expect("local-fallback refusal marker should explain");
+
+        assert_eq!(output.decision, "supported");
+        assert_eq!(output.exit_code(), 0);
+        assert!(
+            !output
+                .reason_codes
+                .contains(&"local_fallback_contaminated".to_string())
+        );
+        assert_eq!(output.local_fallback_status, "absent");
+    }
+
+    #[test]
+    fn claim_explainer_directory_hash_uses_length_prefixed_fields() {
+        let dir = frankenctl_test_temp_dir("claim-dir-hash");
+        let nested = dir.join("nested");
+        fs::create_dir_all(&nested).expect("create fixture dir");
+        fs::write(dir.join("a.json"), b"{\"a\":true}\n").expect("write first artifact");
+        fs::write(nested.join("b.json"), b"{\"b\":true}\n").expect("write second artifact");
+
+        let mut files = Vec::new();
+        collect_artifact_files(&dir, &mut files).expect("collect artifact files");
+        files.sort();
+
+        let mut expected_preimage = Vec::new();
+        append_claim_hash_field(
+            &mut expected_preimage,
+            b"franken-engine.claim-artifact-directory-hash.v1",
+        );
+        let mut legacy_preimage = Vec::new();
+        for file in files {
+            let relative = file.strip_prefix(&dir).expect("relative path");
+            let bytes = fs::read(&file).expect("read artifact file");
+            let digest = ContentHash::compute(&bytes).to_hex();
+            append_claim_hash_field(
+                &mut expected_preimage,
+                relative.to_string_lossy().as_bytes(),
+            );
+            append_claim_hash_field(&mut expected_preimage, digest.as_bytes());
+
+            legacy_preimage.extend_from_slice(relative.to_string_lossy().as_bytes());
+            legacy_preimage.push(0);
+            legacy_preimage.extend_from_slice(digest.as_bytes());
+            legacy_preimage.push(b'\n');
+        }
+
+        let actual = compute_artifact_content_hash(&dir).expect("directory hash");
+        assert_eq!(actual, ContentHash::compute(&expected_preimage).to_hex());
+        assert_ne!(actual, ContentHash::compute(&legacy_preimage).to_hex());
+    }
+
+    #[test]
     fn parse_differential_oracle_run_command() {
         let args = vec![
             "differential-oracle".to_string(),
@@ -7274,6 +13450,60 @@ mod tests {
             }
             other => panic!("expected differential-oracle command, got {other:?}"),
         }
+    }
+
+    fn frankenctl_test_temp_dir(label: &str) -> PathBuf {
+        std::env::temp_dir().join(format!(
+            "frankenctl-{label}-{}-{}",
+            std::process::id(),
+            current_unix_ns()
+        ))
+    }
+
+    fn write_claim_matrix_fixture(path: &Path, claims: serde_json::Value) {
+        let matrix = serde_json::json!({
+            "schema_version": CLAIM_MATRIX_SCHEMA_VERSION,
+            "claims": claims,
+        });
+        fs::write(
+            path,
+            serde_json::to_vec_pretty(&matrix).expect("matrix JSON serializes"),
+        )
+        .expect("write matrix fixture");
+    }
+
+    fn write_repro_lock_next_to_file(path: &Path) {
+        let parent = path.parent().expect("artifact parent");
+        fs::write(parent.join("repro.lock"), b"fixture repro lock\n").expect("write repro lock");
+    }
+
+    fn claim_row_fixture(
+        claim_id: &str,
+        allowed_state: &str,
+        actual_wording_state: &str,
+        artifact_path: impl Into<String>,
+        owning_bead: &str,
+    ) -> serde_json::Value {
+        serde_json::json!({
+            "actual_wording_state": actual_wording_state,
+            "allowed_state": allowed_state,
+            "artifact_path": artifact_path.into(),
+            "claim_id": claim_id,
+            "claim_scope": "evidence",
+            "claim_text": "Fixture claim text.",
+            "decision": "fixture decision",
+            "downgrade_text": "Fixture downgrade text.",
+            "freshness_days": 0,
+            "owning_bead": owning_bead,
+            "reason": "Fixture reason.",
+            "source_path": concat!(env!("CARGO_MANIFEST_DIR"), "/src/bin/frankenctl.rs"),
+            "source_span": {
+                "start_line": 1,
+                "end_line": 1,
+                "must_contain": "#![forbid(unsafe_code)]"
+            },
+            "verification_command": "rch exec -- env CARGO_TARGET_DIR=/tmp/rch_target_fixture cargo test -p frankenengine-engine fixture"
+        })
     }
 
     #[test]
@@ -7401,6 +13631,217 @@ mod tests {
                 fleet_trace: None,
             })
         );
+    }
+
+    #[test]
+    fn parse_replay_debug_command_accepts_all_flags() {
+        let args = vec![
+            "replay".to_string(),
+            "debug".to_string(),
+            "--trace".to_string(),
+            "trace.json".to_string(),
+            "--script".to_string(),
+            "commands.jsonl".to_string(),
+            "--events".to_string(),
+            "events.json".to_string(),
+            "--state-snapshots".to_string(),
+            "state.json".to_string(),
+            "--input".to_string(),
+            "program.js".to_string(),
+            "--input-goal".to_string(),
+            "module".to_string(),
+            "--checkpoint-interval".to_string(),
+            "8".to_string(),
+            "--mode".to_string(),
+            "best-effort".to_string(),
+            "--out".to_string(),
+            "transcript.jsonl".to_string(),
+        ];
+        let parsed = parse_command(&args).expect("replay debug should parse all flags");
+        assert_eq!(
+            parsed,
+            CommandSpec::ReplayDebug(ReplayDebugArgs {
+                trace: PathBuf::from("trace.json"),
+                script: Some(PathBuf::from("commands.jsonl")),
+                events: Some(PathBuf::from("events.json")),
+                state_snapshots: Some(PathBuf::from("state.json")),
+                input: Some(PathBuf::from("program.js")),
+                input_goal: ParseGoal::Module,
+                checkpoint_interval: 8,
+                mode: ReplayMode::BestEffort,
+                out: Some(PathBuf::from("transcript.jsonl")),
+            })
+        );
+    }
+
+    #[test]
+    fn parse_replay_debug_command_applies_defaults() {
+        let args = vec![
+            "replay".to_string(),
+            "debug".to_string(),
+            "--trace".to_string(),
+            "trace.json".to_string(),
+        ];
+        let parsed = parse_command(&args).expect("replay debug should parse with defaults");
+        assert_eq!(
+            parsed,
+            CommandSpec::ReplayDebug(ReplayDebugArgs {
+                trace: PathBuf::from("trace.json"),
+                script: None,
+                events: None,
+                state_snapshots: None,
+                input: None,
+                input_goal: ParseGoal::Script,
+                checkpoint_interval: 64,
+                mode: ReplayMode::Strict,
+                out: None,
+            })
+        );
+    }
+
+    #[test]
+    fn parse_replay_debug_command_fails_closed_on_bad_input() {
+        let missing_trace = vec!["replay".to_string(), "debug".to_string()];
+        let error = parse_command(&missing_trace).expect_err("missing --trace should fail");
+        assert!(error.contains("requires --trace"));
+
+        let unknown_flag = vec![
+            "replay".to_string(),
+            "debug".to_string(),
+            "--trace".to_string(),
+            "trace.json".to_string(),
+            "--bogus".to_string(),
+        ];
+        let error = parse_command(&unknown_flag).expect_err("unknown flag should fail");
+        assert!(error.contains("unknown replay debug flag"));
+
+        let bad_interval = vec![
+            "replay".to_string(),
+            "debug".to_string(),
+            "--trace".to_string(),
+            "trace.json".to_string(),
+            "--checkpoint-interval".to_string(),
+            "zero?".to_string(),
+        ];
+        let error = parse_command(&bad_interval).expect_err("bad interval should fail");
+        assert!(error.contains("invalid --checkpoint-interval"));
+    }
+
+    #[test]
+    fn parse_replay_debug_help_topic() {
+        let flag_form = vec![
+            "replay".to_string(),
+            "debug".to_string(),
+            "--help".to_string(),
+        ];
+        let parsed = parse_command(&flag_form).expect("replay debug --help should parse");
+        assert_eq!(parsed, CommandSpec::HelpTopic(HelpTopic::ReplayDebug));
+
+        let topic_form = vec![
+            "help".to_string(),
+            "replay".to_string(),
+            "debug".to_string(),
+        ];
+        let parsed = parse_command(&topic_form).expect("help replay debug should parse");
+        assert_eq!(parsed, CommandSpec::HelpTopic(HelpTopic::ReplayDebug));
+
+        assert!(replay_debug_usage().contains("run_until_break"));
+    }
+
+    #[test]
+    fn execute_replay_debug_script_round_trip_is_deterministic() {
+        use frankenengine_engine::deterministic_replay::NondeterminismSource;
+
+        let temp_dir =
+            std::env::temp_dir().join(format!("frankenctl-replay-debug-{}", current_unix_ns()));
+        fs::create_dir_all(&temp_dir).expect("temp dir should be created");
+
+        let mut trace = NondeterminismTrace::new("replay-debug-cli-test");
+        for index in 0..6u64 {
+            trace.capture(
+                NondeterminismSource::TimerRead,
+                vec![index as u8],
+                index + 1,
+                "cli-test",
+            );
+        }
+        trace.finalise(6);
+        let trace_path = temp_dir.join("trace.json");
+        fs::write(
+            &trace_path,
+            serde_json::to_string(&trace).expect("trace should serialize"),
+        )
+        .expect("trace file should write");
+
+        let script_path = temp_dir.join("commands.jsonl");
+        fs::write(
+            &script_path,
+            concat!(
+                "# agent session\n",
+                "{\"cmd\":\"state\"}\n",
+                "{\"cmd\":\"goto\",\"tick\":4}\n",
+                "{\"cmd\":\"inspect\"}\n",
+                "{\"cmd\":\"back\"}\n",
+                "\n",
+                "{\"cmd\":\"goto\",\"tick\":99}\n",
+                "not json\n",
+            ),
+        )
+        .expect("script file should write");
+        let state_snapshot_path = temp_dir.join("state.json");
+        fs::write(
+            &state_snapshot_path,
+            concat!(
+                "[",
+                "{\"tick\":4,",
+                "\"registers\":[{\"register\":0,\"value\":{\"Int\":42},\"label\":\"Secret\"}],",
+                "\"heap\":[]}",
+                "]",
+            ),
+        )
+        .expect("state snapshot file should write");
+
+        let run = |out_name: &str| -> String {
+            let out_path = temp_dir.join(out_name);
+            let exit = execute_replay_debug(ReplayDebugArgs {
+                trace: trace_path.clone(),
+                script: Some(script_path.clone()),
+                events: None,
+                state_snapshots: Some(state_snapshot_path.clone()),
+                input: None,
+                input_goal: ParseGoal::Script,
+                checkpoint_interval: 2,
+                mode: ReplayMode::Strict,
+                out: Some(out_path.clone()),
+            })
+            .expect("replay debug should execute");
+            assert_eq!(exit, 0);
+            fs::read_to_string(&out_path).expect("transcript should be readable")
+        };
+
+        let first = run("transcript_a.jsonl");
+        let second = run("transcript_b.jsonl");
+        assert_eq!(first, second, "transcripts must be byte-identical");
+
+        let lines: Vec<&str> = first.lines().collect();
+        // 6 command lines (comment + blank skipped) -> 6 response lines.
+        assert_eq!(lines.len(), 6);
+        assert!(lines[0].contains("\"tick\":0"));
+        assert!(lines[1].contains("\"tick\":4"));
+        assert!(lines[2].contains("inspection"));
+        assert!(lines[2].contains("\"register\":0"));
+        assert!(lines[2].contains("Secret"));
+        assert!(lines[3].contains("\"tick\":3"));
+        assert!(lines[4].contains("\"ok\":false"));
+        assert!(lines[4].contains("out of range"));
+        assert!(lines[5].contains("\"ok\":false"));
+        assert!(lines[5].contains("bad request"));
+        for line in &lines {
+            assert!(
+                serde_json::from_str::<serde_json::Value>(line).is_ok(),
+                "every transcript line must be one JSON object: {line}"
+            );
+        }
     }
 
     #[test]
@@ -7645,7 +14086,7 @@ mod tests {
     }
 
     #[test]
-    fn execute_react_compile_returns_blocked_exit_code_for_unshipped_capability() {
+    fn execute_react_compile_emits_native_pipeline_output_for_shipped_capability() {
         let input = std::env::temp_dir().join(format!(
             "frankenctl-react-compile-{}.tsx",
             current_unix_ns()
@@ -7654,8 +14095,7 @@ mod tests {
             "frankenctl-react-compile-report-{}.json",
             current_unix_ns()
         ));
-        fs::write(&input, "export const App = () => <div>Hello</div>;\n")
-            .expect("react compile fixture should write");
+        fs::write(&input, "<div>Hello</div>\n").expect("react compile fixture should write");
 
         let exit_code = execute_react_compile(ReactCompileArgs {
             input: input.clone(),
@@ -7668,11 +14108,19 @@ mod tests {
         })
         .expect("react compile execution should succeed");
 
-        assert_eq!(exit_code, 25);
+        assert_eq!(exit_code, 0);
         let output: serde_json::Value =
             load_json_file(&out).expect("react compile output should parse");
-        assert_eq!(output["support_status"].as_str(), Some("deferred"));
-        assert_eq!(output["blocked"].as_bool(), Some(true));
+        assert_eq!(output["support_status"].as_str(), Some("shipped"));
+        assert_eq!(output["blocked"].as_bool(), Some(false));
+        assert_eq!(output["diagnostic"]["error_code"].as_str(), Some("OK"));
+        assert_eq!(output["compilation"]["language"].as_str(), Some("tsx"));
+        assert!(
+            output["compilation"]["generated_code"]
+                .as_str()
+                .expect("generated code should be present")
+                .contains("div")
+        );
 
         let _ = fs::remove_file(input);
         let _ = fs::remove_file(out);
@@ -8522,6 +14970,36 @@ mod tests {
     }
 
     #[test]
+    fn parse_gates_compounding_red_team_command_parses_advertised_flags() {
+        let args = vec![
+            "gates".to_string(),
+            "compounding-red-team".to_string(),
+            "--out-dir".to_string(),
+            "test/gates/compounding".to_string(),
+            "--config".to_string(),
+            "campaign.toml".to_string(),
+        ];
+        let result = parse_command(&args).expect("should parse valid compounding-red-team command");
+        if let CommandSpec::Gates(gates_args) = result {
+            if let GatesMode::CompoundingRedTeam { out_dir, config } = gates_args.mode {
+                assert_eq!(out_dir, PathBuf::from("test/gates/compounding"));
+                assert_eq!(config, Some(PathBuf::from("campaign.toml")));
+            } else {
+                panic!("expected CompoundingRedTeam mode");
+            }
+        } else {
+            panic!("expected Gates command");
+        }
+    }
+
+    #[test]
+    fn parse_gates_compounding_red_team_command_requires_out_dir() {
+        let args = vec!["gates".to_string(), "compounding-red-team".to_string()];
+        let error = parse_command(&args).expect_err("missing out-dir should fail");
+        assert_eq!(error, "gates compounding-red-team requires --out-dir <dir>");
+    }
+
+    #[test]
     fn placeholder_analysis_commands_fail_closed_without_writing_artifacts() {
         let temp_root = std::env::temp_dir().join(format!(
             "frankenctl-placeholder-fail-closed-{}",
@@ -8578,15 +15056,43 @@ mod tests {
         let args = vec![
             "reports".to_string(),
             "parser-oracle".to_string(),
-            "--config".to_string(),
-            "oracle.json".to_string(),
+            "--partition".to_string(),
+            "nightly".to_string(),
+            "--gate-mode".to_string(),
+            "fail_closed".to_string(),
+            "--seed".to_string(),
+            "42".to_string(),
+            "--fixture-catalog".to_string(),
+            "fixtures.json".to_string(),
+            "--trace-id".to_string(),
+            "trace-42".to_string(),
+            "--decision-id".to_string(),
+            "decision-42".to_string(),
+            "--policy-id".to_string(),
+            "policy-42".to_string(),
             "--out".to_string(),
             "report.json".to_string(),
         ];
         let result = parse_command(&args).expect("should parse valid reports command");
         if let CommandSpec::Reports(reports_args) = result {
-            if let ReportsMode::ParserOracle { config, out } = reports_args.mode {
-                assert_eq!(config, Some(PathBuf::from("oracle.json")));
+            if let ReportsMode::ParserOracle {
+                partition,
+                gate_mode,
+                seed,
+                fixture_catalog,
+                trace_id,
+                decision_id,
+                policy_id,
+                out,
+            } = reports_args.mode
+            {
+                assert_eq!(partition, OraclePartition::Nightly);
+                assert_eq!(gate_mode, OracleGateMode::FailClosed);
+                assert_eq!(seed, 42);
+                assert_eq!(fixture_catalog, PathBuf::from("fixtures.json"));
+                assert_eq!(trace_id.as_deref(), Some("trace-42"));
+                assert_eq!(decision_id.as_deref(), Some("decision-42"));
+                assert_eq!(policy_id.as_deref(), Some("policy-42"));
                 assert_eq!(out, Some(PathBuf::from("report.json")));
             } else {
                 panic!("expected ParserOracle mode");
@@ -8594,6 +15100,20 @@ mod tests {
         } else {
             panic!("expected Reports command");
         }
+    }
+
+    #[test]
+    fn parse_reports_parser_oracle_rejects_undefined_config_flag() {
+        let args = vec![
+            "reports".to_string(),
+            "parser-oracle".to_string(),
+            "--config".to_string(),
+            "oracle.json".to_string(),
+        ];
+
+        let error = parse_command(&args).expect_err("undefined config schema must not be accepted");
+
+        assert_eq!(error, "unknown parser-oracle flag `--config`");
     }
 
     #[test]
@@ -8716,5 +15236,389 @@ mod tests {
         assert!(result.is_err());
         let error = result.expect_err("operation should return an error");
         assert!(error.contains("runtime diagnostics requires --input <file>"));
+    }
+
+    #[test]
+    fn oracle_report_manifest_requires_content_addressed_report_and_lock() {
+        let valid = serde_json::json!({
+            "schema_version": ORACLE_RUN_BUNDLE_SCHEMA_VERSION,
+            "bundle_id": format!("sha256:{}", "a".repeat(64)),
+            "source_sha256": format!("sha256:{}", "d".repeat(64)),
+            "degraded": false,
+            "artifacts": {
+                "report": {"path": "report.json", "sha256": format!("sha256:{}", "b".repeat(64))},
+                "lock": {"path": "repro.lock", "sha256": format!("sha256:{}", "c".repeat(64))},
+            },
+        });
+        assert!(validate_oracle_bundle_manifest(valid.as_object().expect("object")).is_ok());
+
+        let mut missing_id = valid.clone();
+        missing_id
+            .as_object_mut()
+            .expect("object")
+            .remove("bundle_id");
+        assert!(validate_oracle_bundle_manifest(missing_id.as_object().expect("object")).is_err());
+
+        let mut missing_report = valid;
+        missing_report["artifacts"]
+            .as_object_mut()
+            .expect("artifacts object")
+            .remove("report");
+        assert!(
+            validate_oracle_bundle_manifest(missing_report.as_object().expect("object")).is_err()
+        );
+    }
+
+    #[test]
+    fn oracle_report_rejects_noncanonical_artifact_paths_and_hashes() {
+        let mut manifest = serde_json::json!({
+            "schema_version": ORACLE_RUN_BUNDLE_SCHEMA_VERSION,
+            "bundle_id": format!("sha256:{}", "a".repeat(64)),
+            "source_sha256": format!("sha256:{}", "d".repeat(64)),
+            "degraded": false,
+            "artifacts": {
+                "report": {"path": "../report.json", "sha256": format!("sha256:{}", "b".repeat(64))},
+                "lock": {"path": "repro.lock", "sha256": format!("sha256:{}", "c".repeat(64))},
+            },
+        });
+        assert!(validate_oracle_bundle_manifest(manifest.as_object().expect("object")).is_err());
+        manifest["artifacts"]["report"]["path"] =
+            serde_json::Value::String("report.json".to_string());
+        manifest["artifacts"]["report"]["sha256"] =
+            serde_json::Value::String(format!("sha256:{}", "B".repeat(64)));
+        assert!(validate_oracle_bundle_manifest(manifest.as_object().expect("object")).is_err());
+    }
+
+    fn oracle_semantic_test_report(degraded: bool) -> DifferentialOracleReport {
+        let selected_backends = if degraded {
+            [
+                DifferentialBackend::NodeLts,
+                DifferentialBackend::FrankenEngine,
+            ]
+        } else {
+            [
+                DifferentialBackend::FrankenEngine,
+                DifferentialBackend::FrankenCore,
+            ]
+        };
+        let mut input = DifferentialOracleInput::new("oracle-semantic-fixture", "1 + 1;")
+            .with_selected_backends(selected_backends);
+        if degraded {
+            input.node.program = "/nonexistent/frankenctl-oracle-semantic-node".to_string();
+        }
+        run_differential_oracle(&input)
+    }
+
+    fn oracle_semantic_test_manifest(report: &DifferentialOracleReport) -> serde_json::Value {
+        let degraded = oracle_degraded_receipt_value(report).is_some();
+        let mut artifacts = serde_json::json!({
+            "report": {
+                "path": "report.json",
+                "sha256": format!("sha256:{}", "a".repeat(64)),
+            },
+            "lock": {
+                "path": "repro.lock",
+                "sha256": format!("sha256:{}", "b".repeat(64)),
+            },
+        });
+        if degraded {
+            artifacts.as_object_mut().expect("artifacts object").insert(
+                "degraded_receipt".to_string(),
+                serde_json::json!({
+                    "path": "degraded_receipt.json",
+                    "sha256": format!("sha256:{}", "c".repeat(64)),
+                }),
+            );
+        }
+        serde_json::json!({
+            "schema_version": ORACLE_RUN_BUNDLE_SCHEMA_VERSION,
+            "bundle_id": format!("sha256:{}", "d".repeat(64)),
+            "case_id": report.case_id,
+            "source_sha256": format!("sha256:{}", report.source_sha256),
+            "semantic_verdict": oracle_verdict_label(report.canonicalization.semantic_verdict),
+            "divergence_count": report.divergence_taxonomy.findings.len(),
+            "degraded": degraded,
+            "selected_backends": report
+                .backends
+                .iter()
+                .map(|receipt| receipt.backend.to_string())
+                .collect::<Vec<_>>(),
+            "generated_unix_ns": report.generated_unix_ns,
+            "host": {
+                "os": report.host.os,
+                "arch": report.host.arch,
+                "franken_engine_version": report.host.franken_engine_version,
+            },
+            "artifacts": artifacts,
+            "validation": {
+                "command": "frankenctl oracle report <bundle-dir>",
+                "exit_codes": "0 consensus | 3 divergence | 4 insufficient-data/degraded",
+            },
+        })
+    }
+
+    #[test]
+    fn bd_drrka_oracle_human_escape_preserves_unicode_and_neutralizes_controls() {
+        let unsafe_text = concat!(
+            "readable café 雪 🙂 ",
+            "\u{001b}[31mred\u{001b}[0m ",
+            "\u{001b}]8;;https://example.invalid\u{0007}link\u{001b}]8;;\u{0007}",
+            "\n\r\t\u{009b}31m\u{009d}title\u{009c}",
+            "\u{2028}\u{2029}\u{061c}\u{200e}\u{200f}\u{202e}\u{2066}"
+        );
+
+        assert_eq!(
+            escape_oracle_human_text(unsafe_text),
+            concat!(
+                "readable café 雪 🙂 ",
+                "\\u{1b}[31mred\\u{1b}[0m ",
+                "\\u{1b}]8;;https://example.invalid\\u{7}link",
+                "\\u{1b}]8;;\\u{7}",
+                "\\n\\r\\t\\u{9b}31m\\u{9d}title\\u{9c}",
+                "\\u{2028}\\u{2029}\\u{61c}\\u{200e}\\u{200f}",
+                "\\u{202e}\\u{2066}"
+            )
+        );
+    }
+
+    #[test]
+    fn bd_drrka_oracle_human_renderer_is_safe_while_json_is_lossless() {
+        let mut report = oracle_semantic_test_report(false);
+        let unsafe_text = "readable café 雪 🙂\u{001b}[2J\u{001b}]0;forged\u{0007}\nnext\rline\u{202e}txt\u{2066}";
+        report.case_id = unsafe_text.to_string();
+        report.source_path = Some(unsafe_text.to_string());
+        report.backends[0].value = Some(unsafe_text.to_string());
+        report.backends[0].version = Some(unsafe_text.to_string());
+        let finding_index = report.divergence_taxonomy.findings.len();
+        report
+            .divergence_taxonomy
+            .findings
+            .push(DifferentialDivergenceFinding {
+                class: DifferentialDivergenceClass::Runtime,
+                comparison_mode: DifferentialComparisonMode::ExactStdout,
+                message: unsafe_text.to_string(),
+                affected_backends: vec![report.backends[0].backend],
+                reference_backends: Vec::new(),
+                evidence_group_hashes: Vec::new(),
+                remediation_hint: "fixture".to_string(),
+                waiver_id: None,
+            });
+        let bundle = OracleBundleSummary {
+            dir: PathBuf::from(unsafe_text),
+            bundle_id: unsafe_text.to_string(),
+            degraded: false,
+        };
+
+        let human = render_oracle_run_human(&report, Some(&bundle), false, 3);
+        let expected_line_count =
+            3 + 1 + report.backends.len() + 1 + report.divergence_taxonomy.findings.len() + 1;
+        assert_eq!(human.lines().count(), expected_line_count);
+        assert!(human.contains("readable café 雪 🙂"));
+        assert!(human.contains("\\u{1b}[2J"));
+        assert!(human.contains("\\u{1b}]0;forged\\u{7}"));
+        assert!(human.contains("\\nnext\\rline\\u{202e}txt\\u{2066}"));
+        assert!(human.chars().all(|character| {
+            character == '\n'
+                || (!character.is_control()
+                    && !matches!(character, '\u{2028}' | '\u{2029}')
+                    && !is_unicode_directional_control(character))
+        }));
+
+        let json = oracle_run_json_summary(&report, Some(&bundle), false, 3);
+        assert_eq!(json["case_id"].as_str(), Some(unsafe_text));
+        assert_eq!(json["source_path"].as_str(), Some(unsafe_text));
+        assert_eq!(json["backends"][0]["value"].as_str(), Some(unsafe_text));
+        assert_eq!(json["backends"][0]["version"].as_str(), Some(unsafe_text));
+        assert_eq!(
+            json["divergences"][finding_index]["message"].as_str(),
+            Some(unsafe_text)
+        );
+        assert_eq!(json["bundle"]["dir"].as_str(), Some(unsafe_text));
+        assert_eq!(json["bundle"]["bundle_id"].as_str(), Some(unsafe_text));
+    }
+
+    #[test]
+    fn oracle_report_binds_manifest_and_lock_to_literal_stored_verdict() {
+        let report = oracle_semantic_test_report(false);
+        let stored_report = serde_json::to_value(&report).expect("report should serialize");
+        let manifest = oracle_semantic_test_manifest(&report);
+        let lock = oracle_repro_lock_value(&report);
+        assert!(
+            validate_oracle_bundle_stored_verdict(
+                manifest.as_object().expect("manifest object"),
+                &lock,
+                &stored_report,
+            )
+            .is_ok()
+        );
+
+        // Model a fully re-addressed legacy bundle whose literal report still
+        // says consensus while both outer artifacts assert the migrated value.
+        // Content hashes alone cannot make that false JSON-pointer assertion
+        // true, so the raw stored-verdict check must reject it.
+        let mut reauthored_manifest = manifest;
+        reauthored_manifest["semantic_verdict"] =
+            serde_json::Value::String("insufficient_data".to_string());
+        let mut reauthored_lock = lock;
+        reauthored_lock["verification"]["expected_verdict"] =
+            serde_json::Value::String("insufficient_data".to_string());
+        reauthored_lock["expected_outputs"][0]["value"] =
+            serde_json::Value::String("insufficient_data".to_string());
+        assert!(
+            validate_oracle_bundle_stored_verdict(
+                reauthored_manifest.as_object().expect("manifest object"),
+                &reauthored_lock,
+                &stored_report,
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn oracle_report_semantics_reject_cross_file_and_stream_mismatches() {
+        let report = oracle_semantic_test_report(false);
+        let mut manifest = oracle_semantic_test_manifest(&report);
+        let lock = oracle_repro_lock_value(&report);
+        assert!(
+            validate_oracle_bundle_manifest(manifest.as_object().expect("manifest object")).is_ok()
+        );
+        assert!(
+            validate_oracle_bundle_semantics(
+                manifest.as_object().expect("manifest object"),
+                &lock,
+                None,
+                &report,
+            )
+            .is_ok()
+        );
+
+        manifest["case_id"] = serde_json::Value::String("forged-case".to_string());
+        assert!(
+            validate_oracle_bundle_semantics(
+                manifest.as_object().expect("manifest object"),
+                &lock,
+                None,
+                &report,
+            )
+            .is_err()
+        );
+
+        let mut forged_lock = lock.clone();
+        forged_lock["verification"]["expected_verdict"] =
+            serde_json::Value::String("forged-verdict".to_string());
+        let valid_manifest = oracle_semantic_test_manifest(&report);
+        assert!(
+            validate_oracle_bundle_semantics(
+                valid_manifest.as_object().expect("manifest object"),
+                &forged_lock,
+                None,
+                &report,
+            )
+            .is_err()
+        );
+
+        let mut validation_forgery = valid_manifest;
+        validation_forgery["validation"]["command"] =
+            serde_json::Value::String("attacker-controlled command".to_string());
+        assert!(
+            validate_oracle_bundle_semantics(
+                validation_forgery.as_object().expect("manifest object"),
+                &lock,
+                None,
+                &report,
+            )
+            .is_err()
+        );
+
+        let mut stream_forgery = report.clone();
+        stream_forgery.backends[0].stdout.push_str("forged");
+        let stream_manifest = oracle_semantic_test_manifest(&stream_forgery);
+        assert!(
+            validate_oracle_bundle_semantics(
+                stream_manifest.as_object().expect("manifest object"),
+                &oracle_repro_lock_value(&stream_forgery),
+                None,
+                &stream_forgery,
+            )
+            .is_err()
+        );
+
+        let mut duplicate_backend = report.clone();
+        let duplicate = duplicate_backend.backends[0].clone();
+        duplicate_backend.backends.push(duplicate);
+        let duplicate_manifest = oracle_semantic_test_manifest(&duplicate_backend);
+        assert!(
+            validate_oracle_bundle_semantics(
+                duplicate_manifest.as_object().expect("manifest object"),
+                &oracle_repro_lock_value(&duplicate_backend),
+                None,
+                &duplicate_backend,
+            )
+            .is_err()
+        );
+
+        let mut source_forgery = report;
+        source_forgery.source_sha256 = "garbage".to_string();
+        let source_manifest = oracle_semantic_test_manifest(&source_forgery);
+        assert!(
+            validate_oracle_bundle_semantics(
+                source_manifest.as_object().expect("manifest object"),
+                &oracle_repro_lock_value(&source_forgery),
+                None,
+                &source_forgery,
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn oracle_report_degraded_receipt_is_required_and_semantically_bound() {
+        let report = oracle_semantic_test_report(true);
+        let manifest = oracle_semantic_test_manifest(&report);
+        let lock = oracle_repro_lock_value(&report);
+        let receipt = oracle_degraded_receipt_value(&report).expect("degraded receipt");
+        assert!(
+            validate_oracle_bundle_manifest(manifest.as_object().expect("manifest object")).is_ok()
+        );
+        assert!(
+            validate_oracle_bundle_semantics(
+                manifest.as_object().expect("manifest object"),
+                &lock,
+                Some(&receipt),
+                &report,
+            )
+            .is_ok()
+        );
+        assert!(
+            validate_oracle_bundle_semantics(
+                manifest.as_object().expect("manifest object"),
+                &lock,
+                None,
+                &report,
+            )
+            .is_err()
+        );
+
+        let mut forged_receipt = receipt;
+        forged_receipt["case_id"] = serde_json::Value::String("forged-case".to_string());
+        assert!(
+            validate_oracle_bundle_semantics(
+                manifest.as_object().expect("manifest object"),
+                &lock,
+                Some(&forged_receipt),
+                &report,
+            )
+            .is_err()
+        );
+
+        let mut legacy_unindexed = manifest;
+        legacy_unindexed["artifacts"]
+            .as_object_mut()
+            .expect("artifacts object")
+            .remove("degraded_receipt");
+        assert!(
+            validate_oracle_bundle_manifest(legacy_unindexed.as_object().expect("manifest object"))
+                .is_err()
+        );
     }
 }

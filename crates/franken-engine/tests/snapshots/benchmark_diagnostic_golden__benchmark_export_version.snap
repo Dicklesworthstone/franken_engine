@@ -1,0 +1,11 @@
+---
+source: tests/benchmark_diagnostic_golden.rs
+expression: content
+---
+{
+  "exit_code": 0,
+  "stdout": "franken-benchmark-evidence-export 0.2.0\n",
+  "stderr": "",
+  "command": "franken-benchmark-evidence-export --version",
+  "category": "benchmark"
+}

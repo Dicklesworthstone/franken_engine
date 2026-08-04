@@ -56,6 +56,8 @@ tmp/
 # (bd-ub6x8.15).
 crates/franken-engine/tests/**/*.actual
 crates/franken-engine/tests/**/*.actual.*
+crates/franken-engine/tests/**/*.snap.new
+crates/franken-extension-host/tests/**/*.snap.new
 
 # Runtime SQLite databases
 storage.sqlite3
@@ -167,6 +169,9 @@ fix_convergence_test.py
 # Remote compilation helper local config
 .rch/
 
+# Lean proof build cache
+proofs/lean4/.lake/
+
 # Stray scratch files at root
 /tests_leak.rs
 /test_tla.rs
@@ -212,3 +217,40 @@ fix_convergence_test.py
 # Legacy root paths for files moved to scripts/ and crates/.../tests/fixtures/
 /update_beads.sh
 /test262_high_water_mark.toml
+
+# rch remote-compilation helper caches with hyphenated names (worker-local cargo
+# homes / target trees, e.g. .rch-cargo-home/, .rch-target/). The existing rch
+# patterns above use underscores (.rch_*/, .rch_cargo_home_*/), so the hyphenated
+# variants slipped through and were left untracked-but-visible; a `git add -A`
+# could stage gigabytes of cache — the failure class that needed two filter-repo
+# passes (d8efc6b5, 5294ed2d).
+.rch-*/
+
+# Agent patch/scratch buffers at root: .jh_<bead>.patch baseline/diff captures
+# and .sandymeadow_* persona scratch (commit-message / class-module drafts).
+# One-off per session, never canonical.
+/.jh_*
+/.sandymeadow_*
+
+# Agent scratch & temporary probe tests under crates/franken-engine/tests/:
+# compile-excluded staging buffers (leading underscore), one-off IR-dump
+# diagnostics (*_irdump.rs), and zzz_-prefixed behavior probes meant to be read
+# once then discarded. Kept on disk per AGENTS.md RULE 1 but never committed.
+# Scoped to the zzz_ convention (not *_probe_*) so it cannot shadow real tests
+# like observability_probe_design_integration.rs.
+crates/franken-engine/tests/_*.rs
+crates/franken-engine/tests/zzz_*.rs
+crates/franken-engine/tests/*_irdump.rs
+
+# Abandoned scratch modules: redundant with moonshot_weekly_report.rs and never
+# registered in lib.rs. Listed by exact path because "moonshot" is a real domain
+# prefix (moonshot_weekly_report, moonshot_disruption_track, ...).
+/crates/franken-engine/src/moonshot_ranking_report.rs
+/crates/franken-engine/tests/moonshot_ranking_report_integration.rs
+
+# Compiler probe artifacts. `rustc --emit=llvm-ir` output left behind by one-off
+# layout/size investigations (e.g. franken_sizecheck.ll, a 2026-07-15 probe of
+# Value/Label enum sizes). These are never build inputs and are referenced
+# nowhere in the tree. Ignored rather than deleted: AGENTS.md Rule 1 forbids
+# removing files without explicit written user permission.
+*.ll

@@ -1,0 +1,21 @@
+---
+source: tests/deterministic_serde_golden.rs
+expression: actual
+---
+{
+  "value": {
+    "Array": [
+      "Null",
+      {
+        "Bool": true
+      },
+      {
+        "I64": 42
+      },
+      {
+        "String": "x"
+      }
+    ]
+  },
+  "expected_sha256_hex": "09904038eb2bbb04148e32b7ba20a18760148da9297ce9fe7b4e621a8399ca41"
+}

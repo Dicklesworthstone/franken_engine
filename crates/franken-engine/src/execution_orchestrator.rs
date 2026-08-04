@@ -16,6 +16,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::sync::Arc;
 
+use rand::RngCore;
 use serde::{Deserialize, Serialize};
 
 use crate::ast::ParseGoal;
@@ -27,16 +28,19 @@ use crate::bayesian_posterior::{
     BayesianPosteriorUpdater, Evidence, Posterior, RiskState, UpdateResult,
 };
 use crate::capability::RuntimeCapability;
+use crate::checkpoint::CancellationToken;
 use crate::containment_executor::{
     ContainmentContext, ContainmentError, ContainmentExecutor, ContainmentReceipt, SandboxPolicy,
 };
 use crate::control_plane::{Budget, Cx, KernelContext, NoCaps, TraceId};
+use crate::data_contract::DataContractIfcIngress;
 use crate::entropy_evidence_compressor::{
     ArithmeticCoder, CompressionCertificate, EntropyError, EntropyEstimator,
 };
 use crate::evidence_ledger::{
-    CandidateAction, ChosenAction, DecisionType, EvidenceEmitter, EvidenceEntry,
-    EvidenceEntryBuilder, InMemoryLedger, LedgerError, Witness,
+    CandidateAction, ChosenAction, DecisionType, EvidenceChainArtifact, EvidenceChainReceipt,
+    EvidenceEntry, EvidenceEntryBuilder, EvidenceSigningAuthority, EvidenceVerificationIdentity,
+    InMemoryLedger, LabEvidenceAuthority, LedgerError, RuntimeEvidenceAuthority, Witness,
 };
 use crate::execution_cell::{CellError, CellEvent, CellKind, ExecutionCell};
 use crate::expected_loss_selector::{
@@ -48,11 +52,12 @@ use crate::guardplane_adapter::{
     GuardplaneExtensionContext, GuardplaneOperation,
 };
 use crate::hash_tiers::ContentHash;
-use crate::ifc_artifacts::{DeclassificationReceipt, Label};
+use crate::ifc_artifacts::{ClearanceClass, DeclassificationReceipt, Label};
+use crate::ifc_provenance_index::{FlowDecision, FlowEventRecord, IfcProvenanceIndex};
 use crate::ir_contract::{Ir0Module, Ir3Module};
 use crate::lowering_pipeline::{
-    Ir2FlowProofArtifact, LoweringContext, LoweringEvent, LoweringPipelineError,
-    LoweringPipelineOutput, PassWitness, lower_ir0_to_ir3,
+    AmbientAuthorityGrant, Ir2FlowProofArtifact, LoweringContext, LoweringEvent,
+    LoweringPipelineError, LoweringPipelineOutput, PassWitness, lower_ir0_to_ir3,
 };
 use crate::optimal_stopping::{
     EscalationPolicy, Observation as StoppingObservation, OptimalStoppingCertificate,
@@ -73,13 +78,20 @@ use crate::saga_orchestrator::{
 };
 use crate::security_epoch::SecurityEpoch;
 use crate::signature_preimage::VerificationKey;
+use crate::storage_adapter::{EventContext, InMemoryStorageAdapter};
 use crate::tropical_semiring::{
     InstructionCostGraph, InstructionNode, ScheduleOptimizer, TropicalError, TropicalWeight,
 };
 use crate::ts_normalization::{
     SourceIngestionSummary, TsNormalizationError, prepare_source_entry_for_public_entrypoints,
 };
-use crate::unified_authority_algebra::{AuthorityLattice, BudgetEnvelope, CapabilitySet};
+use frankenengine_extension_host::host_effect_journal::{
+    HostEffectJournalEntry, InMemoryHostEffectJournal,
+};
+use frankenengine_extension_host::host_io::{
+    HostIoOutcome, HostIoProvider, HostIoRecorder, HostIoRequest,
+};
+use frankenengine_extension_host::process_spawn::ProcessSpawnProvider;
 
 // Canonical baseline anchors for the orchestrator-tuning regression pin
 // (see `runtime_config_default_matches_orchestrator_constants` in this file's
@@ -113,6 +125,16 @@ const ORCHESTRATOR_CELL_CLOSE_BUDGET_MS: u64 = 10_000;
 /// the "default" tier threshold used by `concurrency_envelope_tier`.
 const DEFAULT_MAX_CONCURRENT_SAGAS: usize = 4;
 const SCALE_MILLION: i64 = 1_000_000;
+const EVIDENCE_COMPRESSION_SKETCH_SCHEMA: &str = "franken-engine.evidence-compression-sketch.v2";
+const EVIDENCE_COMPRESSION_SKETCH_MAX_BYTES: usize = 512;
+const ORCHESTRATOR_EVIDENCE_LEDGER_ID_DOMAIN: &str =
+    "franken-engine.execution-orchestrator.evidence-ledger-id.v2";
+const LAB_EVIDENCE_CHAIN_INSTANCE_ID: &str =
+    "franken-engine.execution-orchestrator.lab-chain-instance.v1";
+const RUNTIME_EVIDENCE_CHAIN_INSTANCE_DOMAIN: &str =
+    "franken-engine.execution-orchestrator.runtime-chain-instance.v1";
+pub const UNCOMMITTED_EVIDENCE_CHAIN_EVIDENCE_SCHEMA_VERSION: &str =
+    "franken-engine.uncommitted-evidence-chain-evidence.v1";
 
 // ---------------------------------------------------------------------------
 // LossMatrixPreset
@@ -209,6 +231,51 @@ pub struct ExtensionPackage {
 // OrchestratorResult
 // ---------------------------------------------------------------------------
 
+/// Stage at which an evidence-compression attempt failed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EvidenceCompressionFailureStage {
+    Coder,
+    Encode,
+    Kraft,
+}
+
+impl EvidenceCompressionFailureStage {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Coder => "coder",
+            Self::Encode => "encode",
+            Self::Kraft => "kraft",
+        }
+    }
+}
+
+/// Explicit result of compressing the integrity-bound evidence sketch.
+///
+/// A failed status is never accompanied by a certificate. The failure is
+/// committed to the primary evidence entry so callers can distinguish a
+/// degraded, audited run from an unexplained missing certificate.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum EvidenceCompressionStatus {
+    Certified,
+    NotApplicable,
+    Failed {
+        stage: EvidenceCompressionFailureStage,
+        detail: String,
+    },
+}
+
+impl EvidenceCompressionStatus {
+    fn as_str(&self) -> &'static str {
+        match self {
+            Self::Certified => "certified",
+            Self::NotApplicable => "not_applicable",
+            Self::Failed { .. } => "failed",
+        }
+    }
+}
+
 /// Complete result of an orchestrated execution pipeline.
 #[derive(Debug)]
 pub struct OrchestratorResult {
@@ -246,7 +313,16 @@ pub struct OrchestratorResult {
 
     // Evidence
     pub evidence_entries: Vec<EvidenceEntry>,
+    /// Signed sequence/predecessor receipt sealing the exact entries above.
+    pub evidence_chain_receipt: EvidenceChainReceipt,
+    /// Public trust coordinates for every evidence entry emitted by this run.
+    ///
+    /// This value is recorded for replay and audit correlation. A verifier
+    /// must still authenticate it through the product trust registry rather
+    /// than treating the result that carries it as its own trust anchor.
+    pub evidence_verification_identity: EvidenceVerificationIdentity,
     pub evidence_compression_certificate: Option<CompressionCertificate>,
+    pub evidence_compression_status: EvidenceCompressionStatus,
 
     // Containment
     pub containment_receipt: Option<ContainmentReceipt>,
@@ -256,8 +332,241 @@ pub struct OrchestratorResult {
     pub cell_events: Vec<CellEvent>,
     pub finalize_result: Option<FinalizeResult>,
 
+    // Host effects (bd-f5b04.2.7): the capability-metered transcript of host
+    // effects the run performed or was denied, harvested from the installed
+    // host-I/O recorder. Empty when no provider was installed or the program
+    // emitted no host effects. This is the source bd-5r99w.12 renders as a
+    // signed effect ledger in `franken-node run`.
+    pub host_effect_transcript: Vec<(HostIoRequest, HostIoOutcome)>,
+    /// Globally ordered filesystem/network/process effects. This is the
+    /// receipt-bearing source for executions that install process authority;
+    /// unlike independent family transcripts it preserves interleaving.
+    pub host_effect_journal: Vec<HostEffectJournalEntry>,
+
+    // Replay (bd-9mr8o): the finalised nondeterminism trace the interpreter
+    // recorded during this run. Surfaced so `frankenctl run --emit-trace`
+    // can hand operators the exact trace `frankenctl replay debug --input`
+    // needs for end-to-end interpreter-state inspection.
+    pub nondeterminism_trace: crate::deterministic_replay::NondeterminismTrace,
+
     // Epoch
     pub epoch: SecurityEpoch,
+}
+
+/// Inspectable evidence from the mandatory execution-cell close attempt.
+///
+/// This artifact is returned with every failure that occurs after cell
+/// creation. Exactly one of `finalize_result` and `close_error` is populated.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CellCleanupEvidence {
+    pub cell_id: String,
+    pub trace_id: String,
+    pub cancel_reason: CancelReason,
+    pub cell_events: Vec<CellEvent>,
+    pub finalize_result: Option<FinalizeResult>,
+    pub close_error: Option<CellError>,
+}
+
+impl CellCleanupEvidence {
+    #[must_use]
+    pub fn close_succeeded(&self) -> bool {
+        self.finalize_result.is_some() && self.close_error.is_none()
+    }
+}
+
+/// Serializable evidence that containment committed but its follow-up saga
+/// could not be created.
+///
+/// The receipt proves the security action completed. Returning this artifact
+/// inside the post-cell lifecycle failure prevents a later saga error from
+/// erasing that partial success.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ContainmentSagaFailureEvidence {
+    pub action: ContainmentAction,
+    pub receipt: ContainmentReceipt,
+    pub saga_id: String,
+    pub saga_type: SagaType,
+    pub saga_error: SagaError,
+}
+
+/// Commit state for a signed evidence batch returned from a failed lifecycle.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EvidenceChainCommitState {
+    /// The batch was signed and validated but never appended to the ledger.
+    Uncommitted,
+}
+
+/// Portable signed evidence retained when the surrounding lifecycle fails.
+///
+/// The exact batch is valid for the recorded ledger position, but
+/// `commit_state` makes clear that it is not a ledger head. The embedded
+/// verification identity is a lookup coordinate only; callers must authenticate
+/// it through an external trust registry before verifying `artifact`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct UncommittedEvidenceChainEvidence {
+    pub schema_version: String,
+    pub commit_state: EvidenceChainCommitState,
+    pub chain_instance_id: String,
+    pub artifact: EvidenceChainArtifact,
+    pub evidence_verification_identity: EvidenceVerificationIdentity,
+    pub containment_receipt: Option<ContainmentReceipt>,
+    pub saga_id: Option<String>,
+}
+
+impl UncommittedEvidenceChainEvidence {
+    /// Validate this failure artifact against composition-root-owned context.
+    ///
+    /// This authenticates the exact evidence batch and checks the unsigned
+    /// lifecycle wrapper for internal consistency. It does not turn the
+    /// wrapper into a signed ledger observation.
+    #[allow(clippy::too_many_arguments)]
+    pub fn verify_with_context(
+        &self,
+        trusted_identity: &EvidenceVerificationIdentity,
+        expected_chain_instance_id: &str,
+        expected_ledger_id: &str,
+        expected_run_id: &str,
+        expected_first_sequence: u64,
+        expected_previous_chain_hash: Option<&str>,
+    ) -> Result<(), LedgerError> {
+        if self.schema_version != UNCOMMITTED_EVIDENCE_CHAIN_EVIDENCE_SCHEMA_VERSION {
+            return Err(LedgerError::SchemaValidationFailed {
+                reason: format!(
+                    "uncommitted evidence schema must be {}, got {}",
+                    UNCOMMITTED_EVIDENCE_CHAIN_EVIDENCE_SCHEMA_VERSION, self.schema_version
+                ),
+            });
+        }
+        if self.chain_instance_id != expected_chain_instance_id {
+            return Err(LedgerError::SchemaValidationFailed {
+                reason: format!(
+                    "uncommitted evidence chain instance mismatch: expected {}, got {}",
+                    expected_chain_instance_id, self.chain_instance_id
+                ),
+            });
+        }
+        if &self.evidence_verification_identity != trusted_identity {
+            return Err(LedgerError::SchemaValidationFailed {
+                reason: "uncommitted evidence identity is not the trusted runtime identity"
+                    .to_string(),
+            });
+        }
+        let primary_entry =
+            self.artifact
+                .entries
+                .first()
+                .ok_or_else(|| LedgerError::SchemaValidationFailed {
+                    reason: "uncommitted evidence batch must contain a primary entry".to_string(),
+                })?;
+        if self
+            .saga_id
+            .as_deref()
+            .is_some_and(|saga_id| saga_id.trim().is_empty())
+        {
+            return Err(LedgerError::SchemaValidationFailed {
+                reason: "saga id must not be empty".to_string(),
+            });
+        }
+        if let Some(receipt) = self.containment_receipt.as_ref() {
+            if !receipt.success || !receipt.verify_integrity() {
+                return Err(LedgerError::SchemaValidationFailed {
+                    reason: "uncommitted evidence carries an invalid containment receipt"
+                        .to_string(),
+                });
+            }
+            if !receipt
+                .evidence_refs
+                .iter()
+                .any(|reference| reference == expected_run_id)
+            {
+                return Err(LedgerError::SchemaValidationFailed {
+                    reason:
+                        "containment receipt does not reference the uncommitted evidence run id"
+                            .to_string(),
+                });
+            }
+            if primary_entry
+                .metadata
+                .get("extension_id")
+                .map(String::as_str)
+                != Some(receipt.target_extension_id.as_str())
+            {
+                return Err(LedgerError::SchemaValidationFailed {
+                    reason: "containment receipt target does not match the signed primary entry"
+                        .to_string(),
+                });
+            }
+            if receipt.metadata.get("decision_id").map(String::as_str)
+                != Some(primary_entry.decision_id.as_str())
+            {
+                return Err(LedgerError::SchemaValidationFailed {
+                    reason: "containment receipt decision does not match the signed primary entry"
+                        .to_string(),
+                });
+            }
+            if primary_entry.chosen_action.action_name != receipt.action.to_string() {
+                return Err(LedgerError::SchemaValidationFailed {
+                    reason: "containment receipt action does not match the signed primary entry"
+                        .to_string(),
+                });
+            }
+            if primary_entry.epoch_id != receipt.epoch {
+                return Err(LedgerError::SchemaValidationFailed {
+                    reason: "containment receipt epoch does not match the signed primary entry"
+                        .to_string(),
+                });
+            }
+            let requires_saga = matches!(
+                receipt.action,
+                ContainmentAction::Suspend
+                    | ContainmentAction::Terminate
+                    | ContainmentAction::Quarantine
+            );
+            let expected_saga_id = format!("{expected_run_id}:saga");
+            if requires_saga && self.saga_id.as_deref() != Some(expected_saga_id.as_str()) {
+                return Err(LedgerError::SchemaValidationFailed {
+                    reason: "saga id does not match the signed evidence run".to_string(),
+                });
+            }
+            if !requires_saga && self.saga_id.is_some() {
+                return Err(LedgerError::SchemaValidationFailed {
+                    reason: "containment receipt action does not require a saga".to_string(),
+                });
+            }
+        } else if self.saga_id.is_some() {
+            return Err(LedgerError::SchemaValidationFailed {
+                reason: "saga id requires a successful containment receipt".to_string(),
+            });
+        }
+        self.artifact.verify_with_context(
+            trusted_identity,
+            expected_ledger_id,
+            expected_run_id,
+            expected_first_sequence,
+            expected_previous_chain_hash,
+        )
+    }
+}
+
+/// Ordered failure report for an orchestration attempt that reached cell
+/// creation.
+///
+/// `primary_error` is always the first phase failure. Later failures, including
+/// recorder finalization and cell close, are retained in occurrence order.
+/// When a signed evidence batch was staged but not appended,
+/// `uncommitted_evidence_chain` preserves the exact batch and any successful
+/// containment side effect without presenting it as the ledger head.
+/// When containment committed before saga creation failed,
+/// `containment_saga_failure` preserves the successful action receipt and the
+/// rejected saga request.
+#[derive(Debug)]
+pub struct PostCellFailure {
+    pub primary_error: Box<OrchestratorError>,
+    pub additional_errors: Vec<OrchestratorError>,
+    pub uncommitted_evidence_chain: Option<UncommittedEvidenceChainEvidence>,
+    pub containment_saga_failure: Option<ContainmentSagaFailureEvidence>,
+    pub cleanup: CellCleanupEvidence,
 }
 
 /// Preflighted runtime-flow guard context for the next execution attempt.
@@ -282,6 +591,28 @@ struct EvidenceRecordInput<'a> {
     adaptive_router_summary: Option<&'a RouterSummary>,
     optimal_stopping_certificate: Option<&'a OptimalStoppingCertificate>,
     guardplane_report: Option<&'a GuardplaneHookReport>,
+    capability_summary: EvidenceCapabilitySummary,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct EvidenceCapabilitySummary {
+    total: u64,
+    multiset_hash: ContentHash,
+}
+
+#[derive(Debug)]
+struct EvidenceCompressionSketch {
+    symbols: Vec<u32>,
+    content_hash: ContentHash,
+}
+
+#[derive(Debug)]
+struct EvidenceCompressionAttempt {
+    certificate: Option<CompressionCertificate>,
+    status: EvidenceCompressionStatus,
+    symbol_count: usize,
+    alphabet_size: usize,
+    sketch_hash: ContentHash,
 }
 
 #[derive(Debug, Clone)]
@@ -303,6 +634,51 @@ struct PreparedLoweringOutput {
     source_label: String,
     source_ingestion: SourceIngestionSummary,
     lowering_output: LoweringPipelineOutput,
+}
+
+#[derive(Debug)]
+struct PendingPostCellFailure {
+    primary_error: Box<OrchestratorError>,
+    additional_errors: Vec<OrchestratorError>,
+    uncommitted_evidence_chain: Option<Box<UncommittedEvidenceChainEvidence>>,
+    containment_saga_failure: Option<Box<ContainmentSagaFailureEvidence>>,
+}
+
+impl From<OrchestratorError> for PendingPostCellFailure {
+    fn from(primary_error: OrchestratorError) -> Self {
+        Self {
+            primary_error: Box::new(primary_error),
+            additional_errors: Vec::new(),
+            uncommitted_evidence_chain: None,
+            containment_saga_failure: None,
+        }
+    }
+}
+
+#[derive(Debug)]
+enum ContainmentPhaseError {
+    Pipeline(OrchestratorError),
+    SagaCreation(Box<ContainmentSagaFailureEvidence>),
+}
+
+impl From<ContainmentError> for ContainmentPhaseError {
+    fn from(error: ContainmentError) -> Self {
+        Self::Pipeline(OrchestratorError::Containment(error))
+    }
+}
+
+impl From<ContainmentPhaseError> for PendingPostCellFailure {
+    fn from(error: ContainmentPhaseError) -> Self {
+        match error {
+            ContainmentPhaseError::Pipeline(primary_error) => primary_error.into(),
+            ContainmentPhaseError::SagaCreation(evidence) => Self {
+                primary_error: Box::new(OrchestratorError::Saga(evidence.saga_error.clone())),
+                additional_errors: Vec::new(),
+                uncommitted_evidence_chain: None,
+                containment_saga_failure: Some(evidence),
+            },
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -349,6 +725,7 @@ pub enum OrchestratorError {
         reserved_extension_id: String,
         requested_extension_id: String,
     },
+    PostCellFailure(Box<PostCellFailure>),
 }
 
 impl fmt::Display for OrchestratorError {
@@ -397,11 +774,78 @@ impl fmt::Display for OrchestratorError {
                 f,
                 "prepared execution context is reserved for extension {reserved_extension_id}, not {requested_extension_id}"
             ),
+            Self::PostCellFailure(failure) => {
+                write!(f, "{}", failure.primary_error)?;
+                if let Some(evidence) = &failure.containment_saga_failure {
+                    write!(
+                        f,
+                        "; containment {} succeeded with receipt {} before {} saga {} creation failed",
+                        evidence.action,
+                        evidence.receipt.receipt_id,
+                        evidence.saga_type,
+                        evidence.saga_id
+                    )?;
+                }
+                if let Some(evidence) = &failure.uncommitted_evidence_chain {
+                    write!(
+                        f,
+                        "; signed evidence batch {} remains uncommitted",
+                        evidence.artifact.receipt.head_chain_hash
+                    )?;
+                }
+                for additional in &failure.additional_errors {
+                    write!(f, "; additional failure: {additional}")?;
+                }
+                if failure.cleanup.close_succeeded() {
+                    f.write_str("; execution cell close succeeded")
+                } else {
+                    f.write_str("; execution cell close failed")
+                }
+            }
         }
     }
 }
 
 impl std::error::Error for OrchestratorError {}
+
+impl OrchestratorError {
+    /// First error observed by the post-cell pipeline.
+    #[must_use]
+    pub fn primary_error(&self) -> &Self {
+        match self {
+            Self::PostCellFailure(failure) => failure.primary_error.primary_error(),
+            other => other,
+        }
+    }
+
+    /// Full lifecycle report when this attempt reached execution-cell creation.
+    #[must_use]
+    pub fn post_cell_failure(&self) -> Option<&PostCellFailure> {
+        match self {
+            Self::PostCellFailure(failure) => Some(failure),
+            _ => None,
+        }
+    }
+
+    /// Partial-success evidence when containment committed before saga
+    /// creation failed.
+    #[must_use]
+    pub fn containment_saga_failure(&self) -> Option<&ContainmentSagaFailureEvidence> {
+        match self {
+            Self::PostCellFailure(failure) => failure.containment_saga_failure.as_ref(),
+            _ => None,
+        }
+    }
+
+    /// Signed exact batch that was staged but not committed before failure.
+    #[must_use]
+    pub fn uncommitted_evidence_chain(&self) -> Option<&UncommittedEvidenceChainEvidence> {
+        match self {
+            Self::PostCellFailure(failure) => failure.uncommitted_evidence_chain.as_ref(),
+            _ => None,
+        }
+    }
+}
 
 impl From<ParseError> for OrchestratorError {
     fn from(e: ParseError) -> Self {
@@ -456,8 +900,23 @@ impl From<TsNormalizationError> for OrchestratorError {
 // ---------------------------------------------------------------------------
 
 /// Integration seam that wires together the full FrankenEngine pipeline.
+/// Ceiling label a sink clearance can receive, for provenance-edge recording
+/// (mirrors `ClearanceClass::max_receivable_label_level`).
+fn clearance_ceiling_label(clearance: &ClearanceClass) -> Label {
+    match clearance {
+        ClearanceClass::OpenSink => Label::TopSecret,
+        ClearanceClass::RestrictedSink => Label::Internal,
+        ClearanceClass::AuditedSink => Label::Confidential,
+        ClearanceClass::SealedSink => Label::Secret,
+        ClearanceClass::NeverSink => Label::Public,
+    }
+}
+
 pub struct ExecutionOrchestrator {
     config: OrchestratorConfig,
+    /// Explicit lowering-time ambient grant for the submitted top-level unit.
+    /// Defaults to deny-all; product policy must opt in deliberately.
+    ambient_authority_grant: AmbientAuthorityGrant,
     /// Centralized runtime configuration for all engine subsystems.
     runtime_config: RuntimeConfig,
     parser: CanonicalEs2020Parser,
@@ -467,6 +926,8 @@ pub struct ExecutionOrchestrator {
     posterior_updater: BayesianPosteriorUpdater,
     loss_selector: ExpectedLossSelector,
     ledger: InMemoryLedger,
+    evidence_chain_instance_id: String,
+    evidence_signing_authority: EvidenceSigningAuthority,
     saga_orchestrator: SagaOrchestrator,
     containment_executor: ContainmentExecutor,
     reserved_execution_context: Option<ReservedExecutionContext>,
@@ -474,21 +935,54 @@ pub struct ExecutionOrchestrator {
     trusted_declassification_authorizers: BTreeMap<String, BTreeSet<VerificationKey>>,
     attempt_counter: u64,
     execution_counter: u64,
+    /// Optional sandboxed host-I/O provider (+ recorder) installed into the
+    /// interpreter lane so authorized host effects perform and record real I/O
+    /// (bd-f5b04.2.7). `None` keeps the fail-closed baseline (no host effects).
+    host_io: Option<Arc<dyn HostIoProvider>>,
+    host_io_recorder: Option<Arc<dyn HostIoRecorder>>,
+    process_spawn: Option<Arc<dyn ProcessSpawnProvider>>,
+    host_effect_journal: Option<Arc<InMemoryHostEffectJournal>>,
+    last_failed_host_effect_journal: Vec<HostEffectJournalEntry>,
+    /// Trace of the most recent execution attempt that returned an error, bound
+    /// as soon as the attempt's identifiers exist. A product caller labelling
+    /// the retained failure journal must use the same trace the successful path
+    /// would have reported, never a locally minted substitute.
+    last_failed_trace_id: Option<String>,
+    /// Optional per-run cancellation signal supplied by the product supervisor.
+    cancellation_token: Option<CancellationToken>,
+    /// Optional data-contract IFC ingress binding (bd-fqlfw.8.2): the labeled
+    /// run input plus declared sinks/routes. When set, `execute` gates every
+    /// declared sink against the ingress label fail-closed and records flow
+    /// edges into the run's IFC provenance index.
+    data_contract_ingress: Option<DataContractIfcIngress>,
+    /// Flow edges recorded by the data-contract ingress guard for the most
+    /// recent `execute` (mirrors what was inserted into the provenance index).
+    data_contract_flow_events: Vec<FlowEventRecord>,
+    #[cfg(test)]
+    evidence_compression_status_override: Option<EvidenceCompressionStatus>,
+    #[cfg(test)]
+    guardplane_builder_failure_index_override: Option<usize>,
+    #[cfg(test)]
+    containment_action_override: Option<ContainmentAction>,
+    #[cfg(test)]
+    ledger_commit_failure_override: bool,
 }
 
 impl ExecutionOrchestrator {
-    /// Create a new orchestrator with the given configuration.
+    /// Create a test orchestrator with the deterministic fixture identity.
+    #[cfg(test)]
     pub fn new(config: OrchestratorConfig) -> Self {
-        Self::try_new(config).expect("orchestrator configuration must be valid")
+        Self::new_lab(config)
     }
 
-    /// Create a new orchestrator with the given configuration, returning a validation error
-    /// when the concurrency envelope is outside the supported range.
+    /// Fallible test constructor using the deterministic fixture identity.
+    #[cfg(test)]
     pub fn try_new(config: OrchestratorConfig) -> Result<Self, OrchestratorError> {
-        Self::try_new_with_runtime_config(config, RuntimeConfig::default())
+        Self::try_new_lab(config)
     }
 
-    /// Create a new orchestrator with both orchestrator and runtime configs.
+    /// Test constructor with both orchestrator and runtime configs.
+    #[cfg(test)]
     pub fn new_with_runtime_config(
         config: OrchestratorConfig,
         runtime_config: RuntimeConfig,
@@ -497,13 +991,195 @@ impl ExecutionOrchestrator {
             .expect("orchestrator configuration must be valid")
     }
 
-    /// Create a new orchestrator with both orchestrator and runtime configs, returning a
-    /// validation error when the concurrency envelope is outside the supported range.
+    /// Fallible test constructor with both runtime configs.
+    #[cfg(test)]
     pub fn try_new_with_runtime_config(
         config: OrchestratorConfig,
         runtime_config: RuntimeConfig,
     ) -> Result<Self, OrchestratorError> {
+        Self::try_new_with_runtime_config_and_ambient_authority_grant(
+            config,
+            runtime_config,
+            AmbientAuthorityGrant::DenyAll,
+        )
+    }
+
+    /// Test constructor with an explicit lowering-time ambient-authority
+    /// grant.
+    #[cfg(test)]
+    pub fn new_with_runtime_config_and_ambient_authority_grant(
+        config: OrchestratorConfig,
+        runtime_config: RuntimeConfig,
+        ambient_authority_grant: AmbientAuthorityGrant,
+    ) -> Self {
+        Self::try_new_with_runtime_config_and_ambient_authority_grant(
+            config,
+            runtime_config,
+            ambient_authority_grant,
+        )
+        .expect("orchestrator configuration must be valid")
+    }
+
+    /// Fallible test constructor with an explicit lowering-time ambient grant.
+    #[cfg(test)]
+    pub fn try_new_with_runtime_config_and_ambient_authority_grant(
+        config: OrchestratorConfig,
+        runtime_config: RuntimeConfig,
+        ambient_authority_grant: AmbientAuthorityGrant,
+    ) -> Result<Self, OrchestratorError> {
+        Self::try_new_lab_with_runtime_config_and_ambient_authority_grant(
+            config,
+            runtime_config,
+            ambient_authority_grant,
+        )
+    }
+
+    /// Construct with an explicit runtime evidence authority.
+    pub fn try_new_with_runtime_authority(
+        config: OrchestratorConfig,
+        evidence_authority: RuntimeEvidenceAuthority,
+    ) -> Result<Self, OrchestratorError> {
+        Self::try_new_with_runtime_config_and_authority(
+            config,
+            RuntimeConfig::default(),
+            AmbientAuthorityGrant::DenyAll,
+            evidence_authority,
+        )
+    }
+
+    /// Full production constructor. The product composition root owns the
+    /// runtime authority and must pass it explicitly.
+    pub fn try_new_with_runtime_config_and_authority(
+        config: OrchestratorConfig,
+        runtime_config: RuntimeConfig,
+        ambient_authority_grant: AmbientAuthorityGrant,
+        evidence_authority: RuntimeEvidenceAuthority,
+    ) -> Result<Self, OrchestratorError> {
+        let evidence_chain_instance_id = Self::fresh_runtime_evidence_chain_instance_id()?;
+        Self::try_new_with_resolved_evidence_authority(
+            config,
+            runtime_config,
+            ambient_authority_grant,
+            EvidenceSigningAuthority::Runtime(evidence_authority),
+            evidence_chain_instance_id,
+        )
+    }
+
+    /// Construct a deterministic, explicitly lab-scoped orchestrator.
+    pub fn new_lab(config: OrchestratorConfig) -> Self {
+        Self::try_new_lab(config).expect("lab orchestrator configuration must be valid")
+    }
+
+    /// Fallible deterministic lab constructor.
+    pub fn try_new_lab(config: OrchestratorConfig) -> Result<Self, OrchestratorError> {
+        Self::try_new_lab_with_runtime_config(config, RuntimeConfig::default())
+    }
+
+    /// Lab constructor with explicit runtime configuration.
+    pub fn new_lab_with_runtime_config(
+        config: OrchestratorConfig,
+        runtime_config: RuntimeConfig,
+    ) -> Self {
+        Self::try_new_lab_with_runtime_config(config, runtime_config)
+            .expect("lab orchestrator configuration must be valid")
+    }
+
+    /// Fallible lab constructor with explicit runtime configuration.
+    pub fn try_new_lab_with_runtime_config(
+        config: OrchestratorConfig,
+        runtime_config: RuntimeConfig,
+    ) -> Result<Self, OrchestratorError> {
+        Self::try_new_lab_with_runtime_config_and_ambient_authority_grant(
+            config,
+            runtime_config,
+            AmbientAuthorityGrant::DenyAll,
+        )
+    }
+
+    /// Lab constructor with an explicit lowering-time ambient grant.
+    pub fn new_lab_with_runtime_config_and_ambient_authority_grant(
+        config: OrchestratorConfig,
+        runtime_config: RuntimeConfig,
+        ambient_authority_grant: AmbientAuthorityGrant,
+    ) -> Self {
+        Self::try_new_lab_with_runtime_config_and_ambient_authority_grant(
+            config,
+            runtime_config,
+            ambient_authority_grant,
+        )
+        .expect("lab orchestrator configuration must be valid")
+    }
+
+    /// Fallible lab constructor with an explicit lowering-time ambient grant.
+    pub fn try_new_lab_with_runtime_config_and_ambient_authority_grant(
+        config: OrchestratorConfig,
+        runtime_config: RuntimeConfig,
+        ambient_authority_grant: AmbientAuthorityGrant,
+    ) -> Result<Self, OrchestratorError> {
+        let authority = LabEvidenceAuthority::deterministic_fixture(
+            "franken-engine.execution-orchestrator",
+            "public-lab-orchestrator-v2",
+            SecurityEpoch::GENESIS,
+        )?;
+        Self::try_new_lab_with_runtime_config_and_authority(
+            config,
+            runtime_config,
+            ambient_authority_grant,
+            authority,
+        )
+    }
+
+    /// Explicit lab constructor for deterministic, source-reproducible
+    /// evidence harnesses. The resulting entries are permanently marked as
+    /// lab authority and cannot be admitted to a production ledger.
+    pub fn try_new_lab_with_authority(
+        config: OrchestratorConfig,
+        evidence_authority: LabEvidenceAuthority,
+    ) -> Result<Self, OrchestratorError> {
+        Self::try_new_lab_with_runtime_config_and_authority(
+            config,
+            RuntimeConfig::default(),
+            AmbientAuthorityGrant::DenyAll,
+            evidence_authority,
+        )
+    }
+
+    /// Full lab constructor used by deterministic harnesses and tests.
+    pub fn try_new_lab_with_runtime_config_and_authority(
+        config: OrchestratorConfig,
+        runtime_config: RuntimeConfig,
+        ambient_authority_grant: AmbientAuthorityGrant,
+        evidence_authority: LabEvidenceAuthority,
+    ) -> Result<Self, OrchestratorError> {
+        Self::try_new_with_resolved_evidence_authority(
+            config,
+            runtime_config,
+            ambient_authority_grant,
+            EvidenceSigningAuthority::Lab(evidence_authority),
+            LAB_EVIDENCE_CHAIN_INSTANCE_ID.to_string(),
+        )
+    }
+
+    fn try_new_with_resolved_evidence_authority(
+        config: OrchestratorConfig,
+        runtime_config: RuntimeConfig,
+        ambient_authority_grant: AmbientAuthorityGrant,
+        evidence_signing_authority: EvidenceSigningAuthority,
+        evidence_chain_instance_id: String,
+    ) -> Result<Self, OrchestratorError> {
         Self::validate_concurrency_envelope(config.max_concurrent_sagas)?;
+        let verification_identity = evidence_signing_authority.verification_identity();
+        let evidence_ledger_id = Self::derive_evidence_ledger_id(
+            &config,
+            &verification_identity,
+            &evidence_chain_instance_id,
+        )?;
+        let mut ledger = if evidence_signing_authority.is_lab() {
+            InMemoryLedger::for_lab_verification_identity(config.epoch, &verification_identity)?
+        } else {
+            InMemoryLedger::for_verification_identity(config.epoch, &verification_identity)?
+        };
+        ledger.bind_evidence_chain(evidence_ledger_id)?;
         let loss_matrix = config.loss_matrix_preset.to_loss_matrix();
         let prior = Posterior::default_prior();
         let gamma = runtime_config.orchestrator.adaptive_router_gamma_millionths;
@@ -528,7 +1204,9 @@ impl ExecutionOrchestrator {
             last_cumulative_llr_by_extension: BTreeMap::new(),
             posterior_updater: BayesianPosteriorUpdater::new(prior, "orchestrator"),
             loss_selector: ExpectedLossSelector::new(loss_matrix),
-            ledger: InMemoryLedger::new(),
+            ledger,
+            evidence_chain_instance_id,
+            evidence_signing_authority,
             saga_orchestrator: SagaOrchestrator::new(config.epoch, config.max_concurrent_sagas),
             containment_executor: ContainmentExecutor::new(),
             reserved_execution_context: None,
@@ -536,19 +1214,169 @@ impl ExecutionOrchestrator {
             trusted_declassification_authorizers: BTreeMap::new(),
             attempt_counter: 0,
             execution_counter: 0,
+            host_io: None,
+            host_io_recorder: None,
+            process_spawn: None,
+            host_effect_journal: None,
+            last_failed_host_effect_journal: Vec::new(),
+            last_failed_trace_id: None,
+            cancellation_token: None,
+            data_contract_ingress: None,
+            data_contract_flow_events: Vec::new(),
+            #[cfg(test)]
+            evidence_compression_status_override: None,
+            #[cfg(test)]
+            guardplane_builder_failure_index_override: None,
+            #[cfg(test)]
+            containment_action_override: None,
+            #[cfg(test)]
+            ledger_commit_failure_override: false,
+            ambient_authority_grant,
             config,
             runtime_config,
         })
     }
 
-    /// Create an orchestrator with default configuration.
+    /// Install a data-contract IFC ingress binding (bd-fqlfw.8.2). The next
+    /// `execute` gates the contract's declared sinks against the run input's
+    /// ingress label fail-closed and records a flow edge per declared sink.
+    pub fn set_data_contract_ingress(&mut self, ingress: DataContractIfcIngress) {
+        self.data_contract_ingress = Some(ingress);
+    }
+
+    /// Flow edges recorded by the data-contract ingress guard during the most
+    /// recent `execute` (the same records inserted into the run's IFC
+    /// provenance index), for certificates and operator surfaces.
+    pub fn data_contract_flow_events(&self) -> &[FlowEventRecord] {
+        &self.data_contract_flow_events
+    }
+
+    /// Create a test orchestrator with default configuration.
+    #[cfg(test)]
     pub fn with_defaults() -> Self {
         Self::new(OrchestratorConfig::default())
+    }
+
+    /// Install a sandboxed host-I/O provider (+ optional replay recorder) so the
+    /// next `execute` threads it into the interpreter lane, making authorized
+    /// host effects perform and record real I/O (bd-f5b04.2.7). The recorder's
+    /// transcript is surfaced on [`OrchestratorResult::host_effect_transcript`].
+    /// With no provider installed the run stays fail-closed (no host effects).
+    /// A replaying recorder represents one execution and is never reset; callers
+    /// that reuse this orchestrator must install a fresh replay recorder before
+    /// each subsequent `execute`. Recording recorders may be reused: explicit
+    /// execution boundaries keep each result's transcript isolated.
+    pub fn set_host_io(
+        &mut self,
+        provider: Arc<dyn HostIoProvider>,
+        recorder: Option<Arc<dyn HostIoRecorder>>,
+    ) {
+        self.host_io = Some(provider);
+        self.host_io_recorder = recorder;
+    }
+
+    /// Install a signed product-authorized process provider together with the
+    /// globally ordered journal that records/replays every process and ordinary
+    /// host-I/O crossing. Process authority is never inferred from a profile.
+    pub fn set_process_spawn(
+        &mut self,
+        provider: Arc<dyn ProcessSpawnProvider>,
+        journal: Arc<InMemoryHostEffectJournal>,
+    ) {
+        self.process_spawn = Some(provider);
+        self.host_effect_journal = Some(journal);
+    }
+
+    /// Journal finalized from the most recent execution attempt that returned
+    /// an error. Product callers can still issue DENIED/FAILED receipts instead
+    /// of losing the evidence prefix when JavaScript execution aborts.
+    #[must_use]
+    pub fn last_failed_host_effect_journal(&self) -> &[HostEffectJournalEntry] {
+        &self.last_failed_host_effect_journal
+    }
+
+    /// Trace identifier of the most recent execution attempt that returned an
+    /// error, or `None` when the last attempt succeeded or never reached
+    /// identifier allocation.
+    ///
+    /// Pairs with [`Self::last_failed_host_effect_journal`]: a product caller
+    /// that mints failure receipts must bind them to this trace rather than to
+    /// a locally invented label, so the aborted attempt's evidence stays
+    /// correlatable with everything the successful path would have emitted.
+    #[must_use]
+    pub fn last_failed_trace_id(&self) -> Option<&str> {
+        self.last_failed_trace_id.as_deref()
+    }
+
+    /// Install a per-run cooperative cancellation signal for both interpreter
+    /// lanes. Reused orchestrators must receive a fresh token for each newly
+    /// supervised execution.
+    pub fn set_cancellation_token(&mut self, cancellation_token: CancellationToken) {
+        self.cancellation_token = Some(cancellation_token);
+    }
+
+    fn ensure_not_cancelled(&self) -> Result<(), OrchestratorError> {
+        if self
+            .cancellation_token
+            .as_ref()
+            .is_some_and(CancellationToken::is_cancelled)
+        {
+            Err(OrchestratorError::Interpreter(InterpreterError::Cancelled))
+        } else {
+            Ok(())
+        }
     }
 
     /// Access the runtime configuration.
     pub fn runtime_config(&self) -> &RuntimeConfig {
         &self.runtime_config
+    }
+
+    fn derive_evidence_ledger_id(
+        config: &OrchestratorConfig,
+        identity: &EvidenceVerificationIdentity,
+        chain_instance_id: &str,
+    ) -> Result<String, LedgerError> {
+        if chain_instance_id.trim().is_empty() {
+            return Err(LedgerError::SchemaValidationFailed {
+                reason: "orchestrator evidence chain instance id must not be empty".to_string(),
+            });
+        }
+        let payload = serde_json::to_vec(&(
+            ORCHESTRATOR_EVIDENCE_LEDGER_ID_DOMAIN,
+            &config.policy_id,
+            config.epoch.as_u64(),
+            &config.trace_id_prefix,
+            identity,
+            chain_instance_id,
+        ))
+        .map_err(|error| LedgerError::SchemaValidationFailed {
+            reason: format!("orchestrator evidence ledger id serialization failed: {error}"),
+        })?;
+        Ok(format!(
+            "evidence-ledger-{}",
+            ContentHash::compute(&payload).to_hex()
+        ))
+    }
+
+    fn fresh_runtime_evidence_chain_instance_id() -> Result<String, LedgerError> {
+        let mut nonce = [0u8; 32];
+        rand::rngs::OsRng
+            .try_fill_bytes(&mut nonce)
+            .map_err(|error| LedgerError::SchemaValidationFailed {
+                reason: format!(
+                    "operating-system CSPRNG unavailable for evidence chain instance: {error}"
+                ),
+            })?;
+        let mut payload =
+            Vec::with_capacity(RUNTIME_EVIDENCE_CHAIN_INSTANCE_DOMAIN.len() + nonce.len() + 8);
+        payload.extend_from_slice(RUNTIME_EVIDENCE_CHAIN_INSTANCE_DOMAIN.as_bytes());
+        payload.extend_from_slice(&(nonce.len() as u64).to_be_bytes());
+        payload.extend_from_slice(&nonce);
+        Ok(format!(
+            "evidence-chain-instance-{}",
+            ContentHash::compute(&payload).to_hex()
+        ))
     }
 
     fn validate_concurrency_envelope(max_concurrent_sagas: usize) -> Result<(), OrchestratorError> {
@@ -593,6 +1421,28 @@ impl ExecutionOrchestrator {
     /// Access the evidence ledger.
     pub fn ledger(&self) -> &InMemoryLedger {
         &self.ledger
+    }
+
+    /// Trusted public identity recorded or registered by verifiers of this
+    /// orchestrator's evidence.
+    pub fn evidence_verification_identity(&self) -> EvidenceVerificationIdentity {
+        self.evidence_signing_authority.verification_identity()
+    }
+
+    /// Stable identity of this orchestrator's authenticated evidence ledger.
+    pub fn evidence_ledger_id(&self) -> &str {
+        self.ledger
+            .evidence_chain_ledger_id()
+            .expect("execution orchestrator always binds its evidence chain")
+    }
+
+    /// Unique namespace for this in-memory chain instance.
+    ///
+    /// Production constructors generate this from the operating-system CSPRNG,
+    /// so two processes using the same runtime authority/configuration cannot
+    /// accidentally mint competing genesis receipts under one ledger ID.
+    pub fn evidence_chain_instance_id(&self) -> &str {
+        &self.evidence_chain_instance_id
     }
 
     /// Access the saga orchestrator.
@@ -664,13 +1514,32 @@ impl ExecutionOrchestrator {
         &mut self,
         package: &ExtensionPackage,
     ) -> Result<OrchestratorResult, OrchestratorError> {
+        // A signed process admission authorizes exactly one execution attempt.
+        // Consume it before validation so a malformed package cannot preserve
+        // the authority and reuse it for a later, unrelated package.
+        let process_spawn = self.process_spawn.take();
+        let host_effect_journal = self.host_effect_journal.take();
+        self.last_failed_host_effect_journal.clear();
+        self.last_failed_trace_id = None;
         // Step 0: Validate.
         Self::validate_package(package)?;
+        self.ensure_not_cancelled()?;
+        // Commit attacker-controlled capability metadata before any execution
+        // or host effect. The post-effect evidence phase consumes only this
+        // fixed-size summary, so containment cannot be delayed by re-hashing an
+        // unbounded manifest after effects have already occurred.
+        let evidence_capability_summary = Self::capability_multiset_summary(&package.capabilities);
 
         // Step 1: Generate identifiers.
         let (attempt_index, trace_id, decision_id) =
             self.take_or_allocate_execution_context(package)?;
+        // Bind the failure trace as soon as identifiers exist. Every abort from
+        // here on can then be reported against the exact trace a successful
+        // attempt would have carried, instead of forcing product callers to
+        // mint a substitute label for evidence they did not produce.
+        self.last_failed_trace_id = Some(trace_id.clone());
         let prepared = self.prepare_lowering_output(package, &trace_id, &decision_id)?;
+        self.ensure_not_cancelled()?;
         let PreparedLoweringOutput {
             source_label,
             source_ingestion,
@@ -686,51 +1555,185 @@ impl ExecutionOrchestrator {
             &self.config.policy_id,
         );
 
-        // Step 3: Register extension in containment executor.
-        self.containment_executor.register(&package.extension_id);
-        let lowering_events = lowering_output.events.clone();
-        let lowering_witnesses = lowering_output.witnesses.clone();
-        self.phase_enforce_runtime_flow_guards(&lowering_output.ir2_flow_proof_artifact)?;
-        let ir3_schedule_cost = Self::estimate_ir3_schedule_cost(&lowering_output.ir3)?;
+        let mut cell_cancel_reason = CancelReason::OperatorShutdown;
+        let pipeline_result = (|| -> Result<OrchestratorResult, PendingPostCellFailure> {
+            // Step 3: Register extension in containment executor.
+            self.containment_executor.register(&package.extension_id);
+            let lowering_events = lowering_output.events.clone();
+            let lowering_witnesses = lowering_output.witnesses.clone();
+            self.phase_enforce_runtime_flow_guards(&lowering_output.ir2_flow_proof_artifact)?;
+            self.phase_enforce_data_contract_ingress(&trace_id, &decision_id)?;
+            let ir3_schedule_cost = Self::estimate_ir3_schedule_cost(&lowering_output.ir3)?;
+            self.ensure_not_cancelled()?;
 
-        // Step 6: Execute IR3.
-        let (routed, guardplane_report) =
-            self.phase_execute(package, &lowering_output.ir3, &trace_id)?;
-        let lane = routed.lane;
-        let lane_reason = routed.reason;
-        let exec_result = routed.result;
-        let execution_value = format!("{}", exec_result.value);
-        let console_output = exec_result.console_output.clone();
-        let instructions_executed = exec_result.instructions_executed;
-        let adaptive_router_summary = self.update_adaptive_router(lane, &exec_result);
-
-        // Step 7: Assess risk.
-        let evidence = Self::build_evidence(package, &exec_result, self.config.epoch);
-        let update_result = self.posterior_updater.update(&evidence);
-        let posterior = update_result.posterior.clone();
-        let risk_state = posterior.map_estimate();
-
-        // Step 8: Decide action.
-        let action_decision = self.loss_selector.select(&posterior);
-        let expected_loss_millionths = action_decision.expected_loss_millionths;
-        let (stopping_decision, optimal_stopping_certificate) =
-            self.observe_optimal_stopping(&update_result, package, attempt_index);
-        let mut containment_action = action_decision.action;
-        if stopping_decision == StoppingDecision::Stop
-            && containment_action == ContainmentAction::Allow
-        {
-            containment_action = ContainmentAction::Sandbox;
-        }
-        if let Some(requested) = exec_result.requested_hook_action.as_ref() {
-            containment_action = more_severe_containment_action(
-                containment_action,
-                containment_action_for_hook(requested),
+            // Step 6: Execute IR3. Establish the recorder boundary before the
+            // interpreter can perform any live host effect. Unsupported recorders
+            // fail here, not after an irreversible provider call.
+            if let Some(journal) = host_effect_journal.as_deref() {
+                journal.begin_execution().map_err(|error| {
+                    OrchestratorError::Interpreter(InterpreterError::InternalError {
+                        details: format!("host-effect journal setup failed: {error}"),
+                    })
+                })?;
+            } else if let Some(recorder) = self.host_io_recorder.as_deref() {
+                recorder.begin_execution().map_err(|error| {
+                    OrchestratorError::Interpreter(InterpreterError::InternalError {
+                        details: format!("host I/O execution setup failed: {error}"),
+                    })
+                })?;
+            }
+            let execution = self.phase_execute(
+                package,
+                &lowering_output.ir3,
+                &trace_id,
+                process_spawn.clone(),
+                host_effect_journal.clone(),
             );
-        }
+            // Finalize after every interpreter attempt, including failures. Otherwise
+            // a valid prefix could be resumed by a later run and falsely certified as
+            // one exact replay.
+            let host_effect_journal_entries = if let Some(journal) = host_effect_journal.as_deref()
+            {
+                match journal.finish_execution() {
+                    Ok(entries) => entries,
+                    Err(error) => {
+                        self.last_failed_host_effect_journal = journal.attempt_entries();
+                        let finish_error =
+                            OrchestratorError::Interpreter(InterpreterError::InternalError {
+                                details: format!(
+                                    "host-effect journal finalization failed: {error}"
+                                ),
+                            });
+                        return Err(match execution {
+                            Ok(_) => finish_error.into(),
+                            Err(primary_error) => PendingPostCellFailure {
+                                primary_error: Box::new(primary_error),
+                                additional_errors: vec![finish_error],
+                                uncommitted_evidence_chain: None,
+                                containment_saga_failure: None,
+                            },
+                        });
+                    }
+                }
+            } else {
+                Vec::new()
+            };
+            let host_effect_transcript = if host_effect_journal.is_some() {
+                host_effect_journal_entries
+                    .iter()
+                    .filter_map(|entry| match entry {
+                        HostEffectJournalEntry::HostIo { request, outcome } => {
+                            Some((request.clone(), outcome.clone()))
+                        }
+                        HostEffectJournalEntry::ProcessSpawn { .. } => None,
+                    })
+                    .collect()
+            } else if let Some(recorder) = self.host_io_recorder.clone() {
+                match recorder.finish_execution() {
+                    Ok(entries) => entries,
+                    Err(error) => {
+                        // The recorder could not certify this attempt's exact
+                        // boundary, so which effects belong to it is unknown. Drop
+                        // the failure trace binding too: an empty retained journal
+                        // published under a real trace asserts "no host effect
+                        // occurred", a stronger claim than the runtime can make
+                        // here. Attributing the recorder's cumulative lifetime
+                        // history instead would be worse still, since it can carry
+                        // a prefix from before this execution began.
+                        self.last_failed_trace_id = None;
+                        let finish_error =
+                            OrchestratorError::Interpreter(InterpreterError::InternalError {
+                                details: format!("host I/O execution finalization failed: {error}"),
+                            });
+                        return Err(match execution {
+                            Ok(_) => finish_error.into(),
+                            Err(primary_error) => PendingPostCellFailure {
+                                primary_error: Box::new(primary_error),
+                                additional_errors: vec![finish_error],
+                                uncommitted_evidence_chain: None,
+                                containment_saga_failure: None,
+                            },
+                        });
+                    }
+                }
+            } else {
+                Vec::new()
+            };
+            // Retain the finalized prefix until the *entire* orchestration path
+            // succeeds. Any later cancellation, evidence, or containment failure
+            // must not erase already-performed effects from product receipts.
+            //
+            // Only process-authority runs own a journal; the ordinary run installs
+            // a recorder alone, and for it `host_effect_journal_entries` is empty
+            // by construction. Retaining that empty vec silently discarded every
+            // ordinary filesystem/network effect an aborted attempt had already
+            // performed or been denied, which is exactly the evidence a failure
+            // receipt needs. Retain whichever source actually finalized this
+            // attempt, preserving its global order.
+            self.last_failed_host_effect_journal = if host_effect_journal.is_some() {
+                host_effect_journal_entries.clone()
+            } else {
+                host_effect_transcript
+                    .iter()
+                    .map(|(request, outcome)| HostEffectJournalEntry::HostIo {
+                        request: request.clone(),
+                        outcome: outcome.clone(),
+                    })
+                    .collect()
+            };
+            let (routed, guardplane_report) = execution?;
+            self.ensure_not_cancelled()?;
+            let lane = routed.lane;
+            let lane_reason = routed.reason;
+            let exec_result = routed.result;
+            let execution_value = format!("{}", exec_result.value);
+            let console_output = exec_result.console_output.clone();
+            let instructions_executed = exec_result.instructions_executed;
+            let adaptive_router_summary = self.update_adaptive_router(lane, &exec_result);
 
-        // Step 9: Record evidence.
-        let (entries, evidence_compression_certificate) =
-            self.phase_record_evidence(EvidenceRecordInput {
+            // Step 7: Assess risk.
+            let evidence = Self::build_evidence(package, &exec_result, self.config.epoch);
+            let update_result = self.posterior_updater.update(&evidence);
+            let posterior = update_result.posterior.clone();
+            let risk_state = posterior.map_estimate();
+
+            // Step 8: Decide action.
+            let action_decision = self.loss_selector.select(&posterior);
+            let expected_loss_millionths = action_decision.expected_loss_millionths;
+            let (stopping_decision, optimal_stopping_certificate) =
+                self.observe_optimal_stopping(&update_result, package, attempt_index);
+            let mut containment_action = action_decision.action;
+            if stopping_decision == StoppingDecision::Stop
+                && containment_action == ContainmentAction::Allow
+            {
+                containment_action = ContainmentAction::Sandbox;
+            }
+            if let Some(requested) = exec_result.requested_hook_action.as_ref() {
+                containment_action = more_severe_containment_action(
+                    containment_action,
+                    containment_action_for_hook(requested),
+                );
+            }
+            #[cfg(test)]
+            if let Some(action) = self.containment_action_override.take() {
+                containment_action = action;
+            }
+            cell_cancel_reason = if containment_action.severity() >= 4 {
+                CancelReason::Quarantine
+            } else {
+                CancelReason::OperatorShutdown
+            };
+
+            // Step 9: Build and pre-validate the exact signed evidence batch.
+            // The ledger transition is committed only after containment and
+            // execution-cell close both succeed, so a later lifecycle failure
+            // cannot advance the chain while discarding its portable receipt.
+            let (
+                entries,
+                evidence_chain_receipt,
+                evidence_compression_certificate,
+                evidence_compression_status,
+            ) = self.phase_record_evidence(EvidenceRecordInput {
                 trace_id: &trace_id,
                 decision_id: &decision_id,
                 package,
@@ -742,67 +1745,220 @@ impl ExecutionOrchestrator {
                 adaptive_router_summary: adaptive_router_summary.as_ref(),
                 optimal_stopping_certificate: optimal_stopping_certificate.as_ref(),
                 guardplane_report: guardplane_report.as_ref(),
+                capability_summary: evidence_capability_summary,
             })?;
-        let evidence_entries = entries;
+            let evidence_entries = entries;
 
-        // Step 10: Execute any selected containment action and attach a saga
-        // only for the actions that require follow-up orchestration.
-        let (containment_receipt, saga_id) =
-            self.phase_execute_containment(containment_action, package, &trace_id, &decision_id)?;
+            // Step 10: Execute any selected containment action and attach a saga
+            // only for the actions that require follow-up orchestration.
+            let (containment_receipt, saga_id) = match self.phase_execute_containment(
+                containment_action,
+                package,
+                &trace_id,
+                &decision_id,
+            ) {
+                Ok(outcome) => outcome,
+                Err(error) => {
+                    let (containment_receipt, saga_id) = match &error {
+                        ContainmentPhaseError::SagaCreation(evidence) => (
+                            Some(evidence.receipt.clone()),
+                            Some(evidence.saga_id.clone()),
+                        ),
+                        ContainmentPhaseError::Pipeline(_) => (None, None),
+                    };
+                    let uncommitted_evidence_chain = self
+                        .build_uncommitted_evidence_chain_evidence(
+                            evidence_entries.clone(),
+                            evidence_chain_receipt.clone(),
+                            containment_receipt,
+                            saga_id,
+                        );
+                    let mut failure = PendingPostCellFailure::from(error);
+                    failure.uncommitted_evidence_chain = Some(Box::new(uncommitted_evidence_chain));
+                    return Err(failure);
+                }
+            };
 
-        // Step 11: Close execution cell.
-        let cancel_reason = if containment_action.severity() >= 4 {
-            CancelReason::Quarantine
-        } else {
-            CancelReason::OperatorShutdown
-        };
+            Ok(OrchestratorResult {
+                extension_id: package.extension_id.clone(),
+                trace_id: trace_id.clone(),
+                decision_id: decision_id.clone(),
+                source_label,
+                source_ingestion,
+                lowering_events,
+                lowering_witnesses,
+                lane,
+                lane_reason,
+                execution_value,
+                console_output,
+                instructions_executed,
+                adaptive_router_summary,
+                ir3_schedule_cost,
+                posterior,
+                risk_state,
+                containment_action,
+                expected_loss_millionths,
+                action_decision,
+                optimal_stopping_certificate,
+                evidence_entries,
+                evidence_chain_receipt,
+                evidence_verification_identity: self
+                    .evidence_signing_authority
+                    .verification_identity(),
+                evidence_compression_certificate,
+                evidence_compression_status,
+                containment_receipt,
+                saga_id,
+                cell_events: Vec::new(),
+                finalize_result: None,
+                host_effect_transcript,
+                host_effect_journal: host_effect_journal_entries,
+                nondeterminism_trace: exec_result.nondeterminism_trace.clone(),
+                epoch: self.config.epoch,
+            })
+        })();
+
+        // Step 11: Close the execution cell after every post-creation outcome.
         let deadline = DrainDeadline {
             max_ticks: self.config.drain_deadline_ticks,
         };
         let mut close_cx =
             Self::build_cell_close_context(&trace_id, self.config.cell_close_budget_ms);
-        let finalize_result = Some(
-            cell.close(&mut close_cx, cancel_reason, deadline)
-                .map_err(OrchestratorError::Cell)?,
-        );
-
-        // Step 12: Drain cell events and assemble result.
+        let cell_id = cell.cell_id().to_string();
+        let close_result = cell.close(&mut close_cx, cell_cancel_reason.clone(), deadline);
         let cell_events = cell.drain_events();
 
-        self.execution_counter = self.execution_counter.saturating_add(1);
-
-        Ok(OrchestratorResult {
-            extension_id: package.extension_id.clone(),
-            trace_id,
-            decision_id,
-            source_label,
-            source_ingestion,
-            lowering_events,
-            lowering_witnesses,
-            lane,
-            lane_reason,
-            execution_value,
-            console_output,
-            instructions_executed,
-            adaptive_router_summary,
-            ir3_schedule_cost,
-            posterior,
-            risk_state,
-            containment_action,
-            expected_loss_millionths,
-            action_decision,
-            optimal_stopping_certificate,
-            evidence_entries,
-            evidence_compression_certificate,
-            containment_receipt,
-            saga_id,
-            cell_events,
-            finalize_result,
-            epoch: self.config.epoch,
-        })
+        match (pipeline_result, close_result) {
+            (Ok(mut result), Ok(finalize_result)) => {
+                if let Err(ledger_error) = self.commit_evidence_chain_batch(
+                    result.evidence_entries.clone(),
+                    result.evidence_chain_receipt.clone(),
+                ) {
+                    let uncommitted_evidence_chain = self
+                        .build_uncommitted_evidence_chain_evidence(
+                            result.evidence_entries.clone(),
+                            result.evidence_chain_receipt.clone(),
+                            result.containment_receipt.clone(),
+                            result.saga_id.clone(),
+                        );
+                    let cleanup = CellCleanupEvidence {
+                        cell_id,
+                        trace_id,
+                        cancel_reason: cell_cancel_reason,
+                        cell_events,
+                        finalize_result: Some(finalize_result),
+                        close_error: None,
+                    };
+                    return Err(OrchestratorError::PostCellFailure(Box::new(
+                        PostCellFailure {
+                            primary_error: Box::new(OrchestratorError::Ledger(ledger_error)),
+                            additional_errors: Vec::new(),
+                            uncommitted_evidence_chain: Some(uncommitted_evidence_chain),
+                            containment_saga_failure: None,
+                            cleanup,
+                        },
+                    )));
+                }
+                result.cell_events = cell_events;
+                result.finalize_result = Some(finalize_result);
+                self.execution_counter = self.execution_counter.saturating_add(1);
+                self.last_failed_host_effect_journal.clear();
+                self.last_failed_trace_id = None;
+                Ok(result)
+            }
+            (Ok(result), Err(close_error)) => {
+                let uncommitted_evidence_chain = self.build_uncommitted_evidence_chain_evidence(
+                    result.evidence_entries,
+                    result.evidence_chain_receipt,
+                    result.containment_receipt,
+                    result.saga_id,
+                );
+                let cleanup = CellCleanupEvidence {
+                    cell_id,
+                    trace_id,
+                    cancel_reason: cell_cancel_reason,
+                    cell_events,
+                    finalize_result: None,
+                    close_error: Some(close_error.clone()),
+                };
+                Err(OrchestratorError::PostCellFailure(Box::new(
+                    PostCellFailure {
+                        primary_error: Box::new(OrchestratorError::Cell(close_error)),
+                        additional_errors: Vec::new(),
+                        uncommitted_evidence_chain: Some(uncommitted_evidence_chain),
+                        containment_saga_failure: None,
+                        cleanup,
+                    },
+                )))
+            }
+            (Err(mut failure), close_result) => {
+                let (finalize_result, close_error) = match close_result {
+                    Ok(finalize_result) => (Some(finalize_result), None),
+                    Err(close_error) => {
+                        failure
+                            .additional_errors
+                            .push(OrchestratorError::Cell(close_error.clone()));
+                        (None, Some(close_error))
+                    }
+                };
+                let cleanup = CellCleanupEvidence {
+                    cell_id,
+                    trace_id,
+                    cancel_reason: cell_cancel_reason,
+                    cell_events,
+                    finalize_result,
+                    close_error,
+                };
+                Err(OrchestratorError::PostCellFailure(Box::new(
+                    PostCellFailure {
+                        primary_error: failure.primary_error,
+                        additional_errors: failure.additional_errors,
+                        uncommitted_evidence_chain: failure
+                            .uncommitted_evidence_chain
+                            .map(|evidence| *evidence),
+                        containment_saga_failure: failure
+                            .containment_saga_failure
+                            .map(|evidence| *evidence),
+                        cleanup,
+                    },
+                )))
+            }
+        }
     }
 
     // -- Private helpers -----------------------------------------------------
+
+    fn commit_evidence_chain_batch(
+        &mut self,
+        entries: Vec<EvidenceEntry>,
+        receipt: EvidenceChainReceipt,
+    ) -> Result<(), LedgerError> {
+        #[cfg(test)]
+        if std::mem::take(&mut self.ledger_commit_failure_override) {
+            return Err(LedgerError::SchemaValidationFailed {
+                reason: "injected post-close evidence ledger commit failure".to_string(),
+            });
+        }
+        self.ledger.emit_chained_batch(entries, receipt)
+    }
+
+    fn build_uncommitted_evidence_chain_evidence(
+        &self,
+        entries: Vec<EvidenceEntry>,
+        receipt: EvidenceChainReceipt,
+        containment_receipt: Option<ContainmentReceipt>,
+        saga_id: Option<String>,
+    ) -> UncommittedEvidenceChainEvidence {
+        UncommittedEvidenceChainEvidence {
+            schema_version: UNCOMMITTED_EVIDENCE_CHAIN_EVIDENCE_SCHEMA_VERSION.to_string(),
+            commit_state: EvidenceChainCommitState::Uncommitted,
+            chain_instance_id: self.evidence_chain_instance_id.clone(),
+            artifact: EvidenceChainArtifact::new(entries, receipt),
+            evidence_verification_identity: self.evidence_signing_authority.verification_identity(),
+            containment_receipt,
+            saga_id,
+        }
+    }
 
     fn validate_package(package: &ExtensionPackage) -> Result<(), OrchestratorError> {
         if package.source.trim().is_empty() {
@@ -905,7 +2061,8 @@ impl ExecutionOrchestrator {
             &source_label
         };
         let ir0 = Ir0Module::from_syntax_tree(syntax_tree, ir0_source_label);
-        let lowering_ctx = LoweringContext::new(trace_id, decision_id, &self.config.policy_id);
+        let lowering_ctx = LoweringContext::new(trace_id, decision_id, &self.config.policy_id)
+            .with_ambient_authority_grant(self.ambient_authority_grant);
         let lowering_output = lower_ir0_to_ir3(&ir0, &lowering_ctx)?;
         Ok(PreparedLoweringOutput {
             source_label,
@@ -929,10 +2086,43 @@ impl ExecutionOrchestrator {
         TraceId::from_bytes(bytes)
     }
 
-    fn lane_router_for_execution(package: &ExtensionPackage) -> LaneRouter {
+    fn module_root_for_execution(
+        package: &ExtensionPackage,
+    ) -> Option<(String, Option<std::path::PathBuf>)> {
+        let parent = package
+            .source_file
+            .as_deref()
+            .and_then(|path| std::path::Path::new(path).parent())?;
+        let root = if parent.as_os_str().is_empty() {
+            std::path::Path::new(".")
+        } else {
+            parent
+        };
+        let root_string = root.display().to_string();
+
+        // Canonicalize once so both lanes enforce the same pinned containment
+        // boundary. A source_file can also be a diagnostic-only label whose
+        // parent does not exist; retaining the lexical root in that case
+        // preserves the existing behavior for programs without imports, while
+        // the interpreter still canonicalizes and fails closed if resolution
+        // is actually attempted.
+        let canonical_root = root.canonicalize().ok();
+        Some((root_string, canonical_root))
+    }
+
+    fn lane_router_for_execution(
+        package: &ExtensionPackage,
+        cancellation_token: Option<&CancellationToken>,
+    ) -> LaneRouter {
+        // Console is granted by default because orchestrated console output is
+        // capture-only: it lands in `OrchestratorResult::console_output` and the
+        // evidence stream, never an ambient host sink. Requiring packages to
+        // declare `console` would deny `console.log` in every CLI-shaped run
+        // (bd-lduxz); the raw interpreter without this grant still fails closed.
         let mut granted_capabilities = BTreeSet::from([
             RuntimeCapability::VmDispatch,
             RuntimeCapability::HeapAllocate,
+            RuntimeCapability::Console,
         ]);
         granted_capabilities.extend(
             package
@@ -941,23 +2131,25 @@ impl ExecutionOrchestrator {
                 .filter_map(|s| RuntimeCapability::from_tag_str(s)),
         );
 
+        let module_root = Self::module_root_for_execution(package);
+
         let mut quickjs_config = InterpreterConfig::quickjs_defaults();
         quickjs_config.granted_capabilities = granted_capabilities.clone();
         quickjs_config.extension_id = Some(package.extension_id.clone());
-        quickjs_config.module_root = package
-            .source_file
-            .as_deref()
-            .and_then(|path| std::path::Path::new(path).parent())
-            .map(|path| path.display().to_string());
+        quickjs_config.cancellation_token = cancellation_token.cloned();
+        if let Some((root, canonical_root)) = module_root.as_ref() {
+            quickjs_config.module_root = Some(root.clone());
+            quickjs_config.canonical_module_root = canonical_root.clone();
+        }
 
         let mut v8_config = InterpreterConfig::v8_defaults();
         v8_config.granted_capabilities = granted_capabilities;
         v8_config.extension_id = Some(package.extension_id.clone());
-        v8_config.module_root = package
-            .source_file
-            .as_deref()
-            .and_then(|path| std::path::Path::new(path).parent())
-            .map(|path| path.display().to_string());
+        v8_config.cancellation_token = cancellation_token.cloned();
+        if let Some((root, canonical_root)) = module_root {
+            v8_config.module_root = Some(root);
+            v8_config.canonical_module_root = canonical_root;
+        }
 
         LaneRouter::with_configs(quickjs_config, v8_config)
     }
@@ -967,6 +2159,8 @@ impl ExecutionOrchestrator {
         package: &ExtensionPackage,
         ir3: &Ir3Module,
         trace_id: &str,
+        process_spawn: Option<Arc<dyn ProcessSpawnProvider>>,
+        host_effect_journal: Option<Arc<InMemoryHostEffectJournal>>,
     ) -> Result<(RoutedResult, Option<GuardplaneHookReport>), OrchestratorError> {
         let guardplane_adapter = self.guardplane_adapter_for_package(package);
         let hook = guardplane_adapter.as_ref().map(|adapter| {
@@ -975,7 +2169,18 @@ impl ExecutionOrchestrator {
         });
         // Package capabilities remain user-scoped; the orchestrator adds only
         // the minimal VM capabilities needed to run the already-lowered module.
-        let routed = Self::lane_router_for_execution(package)
+        let mut lane_router =
+            Self::lane_router_for_execution(package, self.cancellation_token.as_ref());
+        // bd-f5b04.2.7: thread the installed sandboxed host-I/O provider (+ recorder)
+        // into whichever lane runs, so authorized `fs:` hostcalls perform and record
+        // real host effects through the algebraic-effects stack.
+        if let Some(provider) = self.host_io.clone() {
+            lane_router.set_host_io(provider, self.host_io_recorder.clone());
+        }
+        if let (Some(provider), Some(journal)) = (process_spawn, host_effect_journal) {
+            lane_router.set_process_spawn(provider, journal);
+        }
+        let routed = lane_router
             .execute_with_hook(ir3, trace_id, self.config.force_lane, hook)
             .map_err(OrchestratorError::Interpreter)?;
         let report = guardplane_adapter
@@ -1007,6 +2212,107 @@ impl ExecutionOrchestrator {
             &self.runtime_config,
             self.config.epoch,
         )))
+    }
+
+    /// Data-contract ingress guard (bd-fqlfw.8.2, E8.T2).
+    ///
+    /// The run input enters carrying the contract's IFC label + purpose. v1
+    /// explicit-flow posture is a conservative over-approximation: label
+    /// propagation through the program is not yet proven per-flow, so every
+    /// sink the contract declares is treated as a potential destination of
+    /// the ingress label. A sink that cannot lattice-legally receive the
+    /// label (clearance + contract allowed_labels) and has no verified
+    /// declassification receipt fails the run closed BEFORE execution —
+    /// and every checked flow is recorded as a flow edge in the run's IFC
+    /// provenance index (Blocked edges included; denial without evidence
+    /// would be indistinguishable from misconfiguration).
+    fn phase_enforce_data_contract_ingress(
+        &mut self,
+        trace_id: &str,
+        decision_id: &str,
+    ) -> Result<(), OrchestratorError> {
+        self.data_contract_flow_events.clear();
+        let Some(ingress) = self.data_contract_ingress.clone() else {
+            return Ok(());
+        };
+        let ctx = EventContext::new(trace_id, decision_id, self.config.policy_id.clone()).map_err(
+            |err| OrchestratorError::IfcRuntimeGuardBlocked {
+                detail: format!("data-contract ingress: invalid event context: {err}"),
+            },
+        )?;
+        let mut index = IfcProvenanceIndex::new(InMemoryStorageAdapter::new());
+        let mut blocked_details = Vec::new();
+
+        for sink in &ingress.sinks {
+            let receivable = sink.clearance.can_receive(&ingress.source_label)
+                && sink.allowed_labels.contains(&ingress.source_label);
+            let matching_route = ingress.declassification_routes.iter().find(|route| {
+                route.source_label == ingress.source_label
+                    && sink.clearance.can_receive(&route.target_clearance)
+                    && sink.allowed_labels.contains(&route.target_clearance)
+            });
+            let decision = if receivable {
+                FlowDecision::Allowed
+            } else {
+                // A matching declassification route exists only as an
+                // obligation; without a verified receipt the flow stays
+                // blocked (fail-closed). Receipt-resolved Declassified
+                // edges are E8.T3 certifier scope.
+                let reason = match matching_route {
+                    Some(route) => format!(
+                        "sink `{}` requires declassification route `{}` and no verified \
+                         receipt is staged",
+                        sink.sink_id, route.route_id
+                    ),
+                    None => format!(
+                        "sink `{}` (clearance {:?}) cannot receive label {:?} and no \
+                         declassification route covers the flow",
+                        sink.sink_id, sink.clearance, ingress.source_label
+                    ),
+                };
+                blocked_details.push(reason);
+                FlowDecision::Blocked
+            };
+
+            let record = FlowEventRecord {
+                event_id: format!(
+                    "dc-ingress-{}-{}-{}",
+                    ingress.contract_id, ingress.run_input_binding_id, sink.sink_id
+                ),
+                extension_id: ingress.extension_id.clone(),
+                source_label: ingress.source_label.clone(),
+                sink_clearance: clearance_ceiling_label(&sink.clearance),
+                flow_location: format!(
+                    "data_contract:{}:sink:{}:purpose:{}",
+                    ingress.contract_id, sink.sink_id, ingress.purpose
+                ),
+                decision,
+                receipt_ref: None,
+                timestamp_ms: self.config.epoch.as_u64(),
+            };
+            index.insert_flow_event(&record, &ctx).map_err(|err| {
+                OrchestratorError::IfcRuntimeGuardBlocked {
+                    detail: format!(
+                        "data-contract ingress: recording flow edge for sink `{}` failed: {err}",
+                        sink.sink_id
+                    ),
+                }
+            })?;
+            self.data_contract_flow_events.push(record);
+        }
+
+        if !blocked_details.is_empty() {
+            return Err(OrchestratorError::IfcRuntimeGuardBlocked {
+                detail: format!(
+                    "data-contract `{}` ingress label {:?} (purpose `{}`): {}",
+                    ingress.contract_id,
+                    ingress.source_label,
+                    ingress.purpose,
+                    blocked_details.join("; ")
+                ),
+            });
+        }
+        Ok(())
     }
 
     fn phase_enforce_runtime_flow_guards(
@@ -1209,7 +2515,26 @@ impl ExecutionOrchestrator {
     fn phase_record_evidence(
         &mut self,
         input: EvidenceRecordInput<'_>,
-    ) -> Result<(Vec<EvidenceEntry>, Option<CompressionCertificate>), OrchestratorError> {
+    ) -> Result<
+        (
+            Vec<EvidenceEntry>,
+            EvidenceChainReceipt,
+            Option<CompressionCertificate>,
+            EvidenceCompressionStatus,
+        ),
+        OrchestratorError,
+    > {
+        let compression_attempt = Self::build_evidence_compression_attempt_for_input(&input)?;
+        #[cfg(test)]
+        let compression_attempt = match self.evidence_compression_status_override.take() {
+            Some(status) => EvidenceCompressionAttempt {
+                certificate: None,
+                status,
+                ..compression_attempt
+            },
+            None => compression_attempt,
+        };
+
         let EvidenceRecordInput {
             trace_id,
             decision_id,
@@ -1222,14 +2547,16 @@ impl ExecutionOrchestrator {
             adaptive_router_summary,
             optimal_stopping_certificate,
             guardplane_report,
+            capability_summary: _,
         } = input;
         let guardplane_summary = guardplane_report.map(|report| &report.summary);
-        let mut builder = EvidenceEntryBuilder::new(
+        let mut builder = EvidenceEntryBuilder::new_with_authority(
             trace_id,
             decision_id,
             &self.config.policy_id,
             self.config.epoch,
             DecisionType::SecurityAction,
+            &self.evidence_signing_authority,
         );
 
         builder = builder.timestamp_ns(0);
@@ -1390,16 +2717,43 @@ impl ExecutionOrchestrator {
             );
         }
 
-        let compression_certificate = Self::build_evidence_compression_certificate(
-            package,
-            decision,
-            effective_action,
-            exec,
-            update,
-            adaptive_router_summary,
-            optimal_stopping_certificate,
-            ir3_schedule_cost,
-        )?;
+        let EvidenceCompressionAttempt {
+            certificate: compression_certificate,
+            status: compression_status,
+            symbol_count,
+            alphabet_size,
+            sketch_hash,
+        } = compression_attempt;
+        builder = builder.meta(
+            "evidence_compression_status".to_string(),
+            compression_status.as_str().to_string(),
+        );
+        builder = builder.meta(
+            "evidence_compression_sketch_schema".to_string(),
+            EVIDENCE_COMPRESSION_SKETCH_SCHEMA.to_string(),
+        );
+        builder = builder.meta(
+            "evidence_compression_sketch_hash".to_string(),
+            sketch_hash.to_hex(),
+        );
+        builder = builder.meta(
+            "evidence_compression_symbol_count".to_string(),
+            symbol_count.to_string(),
+        );
+        builder = builder.meta(
+            "evidence_compression_alphabet_size".to_string(),
+            alphabet_size.to_string(),
+        );
+        if let EvidenceCompressionStatus::Failed { stage, detail } = &compression_status {
+            builder = builder.meta(
+                "evidence_compression_failure_stage".to_string(),
+                stage.as_str().to_string(),
+            );
+            builder = builder.meta(
+                "evidence_compression_failure_detail".to_string(),
+                detail.clone(),
+            );
+        }
         if let Some(cert) = &compression_certificate {
             builder = builder.meta(
                 "evidence_entropy_millibits".to_string(),
@@ -1413,14 +2767,40 @@ impl ExecutionOrchestrator {
                 "evidence_overhead_ratio_millionths".to_string(),
                 cert.overhead_ratio_millionths.to_string(),
             );
+            builder = builder.meta(
+                "evidence_compression_certificate_schema".to_string(),
+                cert.schema.clone(),
+            );
+            builder = builder.meta(
+                "evidence_compression_certificate_hash".to_string(),
+                cert.certificate_hash.to_hex(),
+            );
+            builder = builder.meta(
+                "evidence_compressed_artifact_hash".to_string(),
+                cert.compressed_artifact_hash.to_hex(),
+            );
+            builder = builder.meta(
+                "evidence_compressed_content_hash".to_string(),
+                cert.content_hash.to_hex(),
+            );
+            builder = builder.meta(
+                "evidence_compression_model_hash".to_string(),
+                cert.model_hash.to_hex(),
+            );
         }
 
         let entry = builder.build()?;
-        self.ledger.emit(entry.clone())?;
-        let mut entries: Vec<EvidenceEntry> = vec![entry];
+        let mut entries: Vec<EvidenceEntry> =
+            Vec::with_capacity(1 + guardplane_report.map_or(0, |report| report.decisions.len()));
+        entries.push(entry);
 
         if let Some(report) = guardplane_report {
             for (index, decision) in report.decisions.iter().enumerate() {
+                #[cfg(test)]
+                if self.guardplane_builder_failure_index_override == Some(index) {
+                    self.guardplane_builder_failure_index_override = None;
+                    return Err(LedgerError::MissingChosenAction.into());
+                }
                 let guardplane_entry = Self::build_guardplane_decision_entry(
                     trace_id,
                     decision_id,
@@ -1428,13 +2808,29 @@ impl ExecutionOrchestrator {
                     index,
                     decision,
                     &self.config,
+                    &self.evidence_signing_authority,
                 )?;
-                self.ledger.emit(guardplane_entry.clone())?;
                 entries.push(guardplane_entry);
             }
         }
 
-        Ok((entries, compression_certificate))
+        let ledger_id = self.evidence_ledger_id().to_string();
+        let first_sequence = self.ledger.evidence_chain_next_sequence();
+        let previous_chain_hash = self.ledger.evidence_chain_head().map(str::to_string);
+        let receipt = EvidenceChainReceipt::issue_with_authority(
+            ledger_id,
+            first_sequence,
+            previous_chain_hash.as_deref(),
+            &entries,
+            &self.evidence_signing_authority,
+        )?;
+        self.ledger.validate_chained_batch(&entries, &receipt)?;
+        Ok((
+            entries,
+            receipt,
+            compression_certificate,
+            compression_status,
+        ))
     }
 
     fn build_guardplane_decision_entry(
@@ -1444,13 +2840,15 @@ impl ExecutionOrchestrator {
         index: usize,
         record: &GuardplaneDecisionRecord,
         config: &OrchestratorConfig,
+        signing_authority: &EvidenceSigningAuthority,
     ) -> Result<EvidenceEntry, OrchestratorError> {
-        let mut builder = EvidenceEntryBuilder::new(
+        let mut builder = EvidenceEntryBuilder::new_with_authority(
             trace_id,
             format!("{decision_id}:guardplane:{index}"),
             &config.policy_id,
             config.epoch,
             DecisionType::SecurityAction,
+            signing_authority,
         )
         .timestamp_ns(0);
 
@@ -1737,7 +3135,10 @@ impl ExecutionOrchestrator {
         }
     }
 
-    fn instruction_mnemonic(instr: &crate::ir_contract::Ir3Instruction) -> &'static str {
+    /// Canonical IR3 mnemonic, shared with the shadow-mode specialization
+    /// discovery lane (bd-fqlfw.9.1) so op-family attribution cannot drift
+    /// from the schedule-cost model.
+    pub(crate) fn instruction_mnemonic(instr: &crate::ir_contract::Ir3Instruction) -> &'static str {
         match instr {
             crate::ir_contract::Ir3Instruction::LoadInt { .. } => "load_int",
             crate::ir_contract::Ir3Instruction::LoadBigInt { .. } => "load_bigint",
@@ -1805,17 +3206,28 @@ impl ExecutionOrchestrator {
             crate::ir_contract::Ir3Instruction::EnterCatch { .. } => "enter_catch",
             crate::ir_contract::Ir3Instruction::EnterFinally => "enter_finally",
             crate::ir_contract::Ir3Instruction::EndFinally => "end_finally",
+            crate::ir_contract::Ir3Instruction::DiscardAbruptCompletion => {
+                "discard_abrupt_completion"
+            }
             crate::ir_contract::Ir3Instruction::CreateClosure { .. } => "create_closure",
             crate::ir_contract::Ir3Instruction::PushCapture { .. } => "push_capture",
             crate::ir_contract::Ir3Instruction::PushScope => "push_scope",
             crate::ir_contract::Ir3Instruction::PopScope => "pop_scope",
             crate::ir_contract::Ir3Instruction::DeclareBinding { .. } => "declare_binding",
             crate::ir_contract::Ir3Instruction::LoadScoped { .. } => "load_scoped",
+            crate::ir_contract::Ir3Instruction::LoadName { .. } => "load_name",
+            crate::ir_contract::Ir3Instruction::ResolveNameStatus { .. } => "resolve_name_status",
             crate::ir_contract::Ir3Instruction::StoreScoped { .. } => "store_scoped",
+            crate::ir_contract::Ir3Instruction::PutName { .. } => "put_name",
+            crate::ir_contract::Ir3Instruction::PutNameWithStatus { .. } => "put_name_with_status",
             crate::ir_contract::Ir3Instruction::InitBinding { .. } => "init_binding",
+            crate::ir_contract::Ir3Instruction::CreatePerIterationBinding { .. } => {
+                "create_per_iteration_binding"
+            }
             crate::ir_contract::Ir3Instruction::ImportModule { .. } => "import_module",
             crate::ir_contract::Ir3Instruction::ExportBinding { .. } => "export_binding",
             crate::ir_contract::Ir3Instruction::LoadThis { .. } => "load_this",
+            crate::ir_contract::Ir3Instruction::LoadNewTarget { .. } => "load_new_target",
             crate::ir_contract::Ir3Instruction::LoadSuper { .. } => "load_super",
             crate::ir_contract::Ir3Instruction::CallMethod { .. } => "call_method",
             &crate::ir_contract::Ir3Instruction::CreateGenerator { .. }
@@ -1824,6 +3236,7 @@ impl ExecutionOrchestrator {
                 "create_async_function"
             }
             &crate::ir_contract::Ir3Instruction::AwaitValue { .. } => "await_value",
+            &crate::ir_contract::Ir3Instruction::ModuleAwaitValue { .. } => "module_await_value",
             &crate::ir_contract::Ir3Instruction::AsyncReturn { .. } => "async_return",
             &crate::ir_contract::Ir3Instruction::AsyncThrow { .. } => "async_throw",
             &crate::ir_contract::Ir3Instruction::CreateAsyncGenerator { .. } => {
@@ -1832,7 +3245,9 @@ impl ExecutionOrchestrator {
         }
     }
 
-    fn instruction_cost(instr: &crate::ir_contract::Ir3Instruction) -> i64 {
+    /// Deterministic per-op cost weights behind `ir3_schedule_cost`, shared
+    /// with the shadow-mode specialization discovery lane (bd-fqlfw.9.1).
+    pub(crate) fn instruction_cost(instr: &crate::ir_contract::Ir3Instruction) -> i64 {
         match instr {
             crate::ir_contract::Ir3Instruction::HostCall { .. } => 4,
             crate::ir_contract::Ir3Instruction::Call { .. } => 3,
@@ -1908,28 +3323,79 @@ impl ExecutionOrchestrator {
         out
     }
 
-    #[allow(clippy::too_many_arguments)]
-    fn build_evidence_compression_certificate(
-        package: &ExtensionPackage,
-        decision: &ActionDecision,
-        effective_action: ContainmentAction,
-        exec: &ExecutionResult,
-        update: &UpdateResult,
-        adaptive_router_summary: Option<&RouterSummary>,
-        optimal_stopping_certificate: Option<&OptimalStoppingCertificate>,
-        ir3_schedule_cost: Option<TropicalWeight>,
-    ) -> Result<Option<CompressionCertificate>, OrchestratorError> {
-        let symbols = Self::build_evidence_symbols(
-            package,
-            decision,
-            effective_action,
-            exec,
-            update,
-            adaptive_router_summary,
-            optimal_stopping_certificate,
-            ir3_schedule_cost,
+    fn build_evidence_compression_attempt_for_input(
+        input: &EvidenceRecordInput<'_>,
+    ) -> Result<EvidenceCompressionAttempt, OrchestratorError> {
+        let sketch = Self::build_evidence_compression_sketch(
+            input.capability_summary,
+            input.decision,
+            input.effective_action,
+            input.exec,
+            input.update,
+            input.adaptive_router_summary,
+            input.optimal_stopping_certificate,
+            input.ir3_schedule_cost,
         );
-        Self::build_evidence_compression_certificate_from_symbols(symbols)
+        Self::build_evidence_compression_attempt(sketch)
+    }
+
+    fn build_evidence_compression_attempt(
+        sketch: EvidenceCompressionSketch,
+    ) -> Result<EvidenceCompressionAttempt, OrchestratorError> {
+        Self::build_evidence_compression_attempt_from_symbols(sketch.symbols, sketch.content_hash)
+    }
+
+    fn build_evidence_compression_attempt_from_symbols(
+        symbols: Vec<u32>,
+        sketch_hash: ContentHash,
+    ) -> Result<EvidenceCompressionAttempt, OrchestratorError> {
+        let symbol_count = symbols.len();
+        let alphabet_size = symbols.iter().copied().collect::<BTreeSet<_>>().len();
+        let compression_result = Self::build_evidence_compression_certificate_from_symbols(symbols);
+        let (certificate, status) = match compression_result {
+            Ok(Some(certificate)) => (Some(certificate), EvidenceCompressionStatus::Certified),
+            Ok(None) => (None, EvidenceCompressionStatus::NotApplicable),
+            Err(OrchestratorError::EvidenceCompressionCoder { detail }) => (
+                None,
+                EvidenceCompressionStatus::Failed {
+                    stage: EvidenceCompressionFailureStage::Coder,
+                    detail,
+                },
+            ),
+            Err(OrchestratorError::EvidenceCompressionEncode { detail }) => (
+                None,
+                EvidenceCompressionStatus::Failed {
+                    stage: EvidenceCompressionFailureStage::Encode,
+                    detail,
+                },
+            ),
+            Err(OrchestratorError::EvidenceCompressionKraft { detail }) => (
+                None,
+                EvidenceCompressionStatus::Failed {
+                    stage: EvidenceCompressionFailureStage::Kraft,
+                    detail,
+                },
+            ),
+            Err(other) => return Err(other),
+        };
+        Ok(EvidenceCompressionAttempt {
+            certificate,
+            status,
+            symbol_count,
+            alphabet_size,
+            sketch_hash,
+        })
+    }
+
+    #[cfg(test)]
+    fn force_next_evidence_compression_failure(&mut self, stage: EvidenceCompressionFailureStage) {
+        self.evidence_compression_status_override = Some(EvidenceCompressionStatus::Failed {
+            stage,
+            detail: format!(
+                "injected {} failure for bounded evidence sketch",
+                stage.as_str()
+            ),
+        });
     }
 
     fn build_evidence_compression_certificate_from_symbols(
@@ -1948,14 +3414,9 @@ impl ExecutionOrchestrator {
         let compressed = coder
             .encode(&symbols)
             .map_err(Self::evidence_compression_encode_error)?;
-        let kraft_sum = coder
-            .verify_kraft_inequality()
-            .map_err(Self::evidence_compression_kraft_error)?;
-        Ok(Some(CompressionCertificate::build(
-            &estimator,
-            &compressed,
-            kraft_sum,
-        )))
+        let certificate = CompressionCertificate::build_verified(&estimator, &coder, &compressed)
+            .map_err(Self::evidence_compression_certificate_error)?;
+        Ok(Some(certificate))
     }
 
     fn evidence_compression_coder_error(err: EntropyError) -> OrchestratorError {
@@ -1970,15 +3431,20 @@ impl ExecutionOrchestrator {
         }
     }
 
-    fn evidence_compression_kraft_error(err: EntropyError) -> OrchestratorError {
-        OrchestratorError::EvidenceCompressionKraft {
-            detail: err.to_string(),
+    fn evidence_compression_certificate_error(err: EntropyError) -> OrchestratorError {
+        match err {
+            kraft @ EntropyError::KraftViolation { .. } => {
+                OrchestratorError::EvidenceCompressionKraft {
+                    detail: kraft.to_string(),
+                }
+            }
+            other => Self::evidence_compression_encode_error(other),
         }
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn build_evidence_symbols(
-        package: &ExtensionPackage,
+    fn build_evidence_compression_sketch(
+        capability_summary: EvidenceCapabilitySummary,
         decision: &ActionDecision,
         effective_action: ContainmentAction,
         exec: &ExecutionResult,
@@ -1986,35 +3452,126 @@ impl ExecutionOrchestrator {
         adaptive_router_summary: Option<&RouterSummary>,
         optimal_stopping_certificate: Option<&OptimalStoppingCertificate>,
         ir3_schedule_cost: Option<TropicalWeight>,
-    ) -> Vec<u32> {
-        let mut symbols = vec![
-            10 + decision.action.severity(),
-            20 + effective_action.severity(),
-            30 + Self::risk_state_symbol(update.posterior.map_estimate()),
-            40 + (exec.instructions_executed.min(u32::MAX as u64) as u32 % 1000),
-            50 + (exec.hostcall_decisions.len() as u32 % 1000),
-        ];
+    ) -> EvidenceCompressionSketch {
+        let (allowed_hostcalls, denied_hostcalls, hostcall_hash) =
+            Self::hostcall_decision_summary(&exec.hostcall_decisions);
 
-        for capability in &package.capabilities {
-            symbols.push(1_000 + (Self::stable_symbol(capability) % 10_000));
+        let mut bytes = Vec::with_capacity(256);
+        Self::append_len_prefixed_bytes(&mut bytes, EVIDENCE_COMPRESSION_SKETCH_SCHEMA.as_bytes());
+        bytes.extend_from_slice(&decision.action.severity().to_be_bytes());
+        bytes.extend_from_slice(&effective_action.severity().to_be_bytes());
+        bytes.extend_from_slice(
+            &Self::risk_state_symbol(update.posterior.map_estimate()).to_be_bytes(),
+        );
+        bytes.extend_from_slice(&exec.instructions_executed.to_be_bytes());
+        bytes.extend_from_slice(&Self::usize_to_u64(exec.hostcall_decisions.len()).to_be_bytes());
+        bytes.extend_from_slice(&capability_summary.total.to_be_bytes());
+        bytes.extend_from_slice(capability_summary.multiset_hash.as_bytes());
+        bytes.extend_from_slice(&allowed_hostcalls.to_be_bytes());
+        bytes.extend_from_slice(&denied_hostcalls.to_be_bytes());
+        bytes.extend_from_slice(hostcall_hash.as_bytes());
+
+        match adaptive_router_summary {
+            Some(summary) => {
+                bytes.push(1);
+                bytes.extend_from_slice(&(summary.active_regime as u32).to_be_bytes());
+                bytes.extend_from_slice(&summary.realized_regret_millionths.to_be_bytes());
+                bytes.push(u8::from(summary.exact_regret_available));
+                bytes.extend_from_slice(&summary.theoretical_regret_bound_millionths.to_be_bytes());
+            }
+            None => bytes.push(0),
         }
-        for decision in &exec.hostcall_decisions {
-            symbols.push(20_000 + (Self::stable_symbol(&decision.capability.0) % 10_000));
+        match optimal_stopping_certificate {
+            Some(certificate) => {
+                bytes.push(1);
+                bytes.extend_from_slice(
+                    ContentHash::compute(certificate.algorithm.as_bytes()).as_bytes(),
+                );
+                bytes.extend_from_slice(&certificate.observations_before_stop.to_be_bytes());
+            }
+            None => bytes.push(0),
+        }
+        match ir3_schedule_cost {
+            Some(cost) => {
+                bytes.push(1);
+                bytes.extend_from_slice(&cost.0.to_be_bytes());
+            }
+            None => bytes.push(0),
         }
 
-        if let Some(summary) = adaptive_router_summary {
-            symbols.push(30_000 + summary.active_regime as u32);
-            symbols.push(31_000 + (summary.realized_regret_millionths.max(0) as u32 % 10_000));
+        let content_hash = ContentHash::compute(&bytes);
+        let symbols: Vec<u32> = bytes.into_iter().map(u32::from).collect();
+        debug_assert!(symbols.len() <= EVIDENCE_COMPRESSION_SKETCH_MAX_BYTES);
+        debug_assert!(symbols.iter().copied().collect::<BTreeSet<_>>().len() <= 256);
+        EvidenceCompressionSketch {
+            symbols,
+            content_hash,
         }
-        if let Some(cert) = optimal_stopping_certificate {
-            symbols.push(40_000 + (Self::stable_symbol(&cert.algorithm) % 10_000));
-            symbols.push(41_000 + (cert.observations_before_stop as u32 % 10_000));
-        }
-        if let Some(cost) = ir3_schedule_cost {
-            symbols.push(50_000 + (cost.0.max(0) as u32 % 10_000));
-        }
+    }
 
-        symbols
+    fn capability_multiset_summary(capabilities: &[String]) -> EvidenceCapabilitySummary {
+        let mut sorted: Vec<&str> = capabilities.iter().map(String::as_str).collect();
+        sorted.sort_unstable();
+        let leaves = sorted
+            .into_iter()
+            .map(|capability| ContentHash::compute(capability.as_bytes()));
+        let capability_count = Self::usize_to_u64(capabilities.len());
+        EvidenceCapabilitySummary {
+            total: capability_count,
+            multiset_hash: Self::fold_content_hashes(b"evidence-capability-multiset-v2", leaves),
+        }
+    }
+
+    fn hostcall_decision_summary(
+        decisions: &[crate::ir_contract::HostcallDecisionRecord],
+    ) -> (u64, u64, ContentHash) {
+        let mut allowed = 0u64;
+        let mut denied = 0u64;
+        let leaves = decisions.iter().map(|decision| {
+            if decision.allowed {
+                allowed = allowed.saturating_add(1);
+            } else {
+                denied = denied.saturating_add(1);
+            }
+            let capability_hash = ContentHash::compute(decision.capability.0.as_bytes());
+            let mut preimage = [0u8; 45];
+            preimage[..32].copy_from_slice(capability_hash.as_bytes());
+            preimage[32..40].copy_from_slice(&decision.seq.to_be_bytes());
+            preimage[40] = u8::from(decision.allowed);
+            preimage[41..45].copy_from_slice(&decision.instruction_index.to_be_bytes());
+            ContentHash::compute(&preimage)
+        });
+        let digest = Self::fold_content_hashes(b"evidence-hostcall-stream-v2", leaves);
+        (allowed, denied, digest)
+    }
+
+    fn fold_content_hashes<I>(domain: &[u8], leaves: I) -> ContentHash
+    where
+        I: IntoIterator<Item = ContentHash>,
+    {
+        let mut state = ContentHash::compute(domain);
+        let mut count = 0u64;
+        for leaf in leaves {
+            let mut preimage = [0u8; 72];
+            preimage[..32].copy_from_slice(state.as_bytes());
+            preimage[32..40].copy_from_slice(&count.to_be_bytes());
+            preimage[40..].copy_from_slice(leaf.as_bytes());
+            state = ContentHash::compute(&preimage);
+            count = count.saturating_add(1);
+        }
+        let mut final_preimage = [0u8; 40];
+        final_preimage[..32].copy_from_slice(state.as_bytes());
+        final_preimage[32..].copy_from_slice(&count.to_be_bytes());
+        ContentHash::compute(&final_preimage)
+    }
+
+    fn append_len_prefixed_bytes(output: &mut Vec<u8>, value: &[u8]) {
+        output.extend_from_slice(&Self::usize_to_u64(value.len()).to_be_bytes());
+        output.extend_from_slice(value);
+    }
+
+    fn usize_to_u64(value: usize) -> u64 {
+        u64::try_from(value).unwrap_or(u64::MAX)
     }
 
     fn risk_state_symbol(state: RiskState) -> u32 {
@@ -2026,6 +3583,7 @@ impl ExecutionOrchestrator {
         }
     }
 
+    #[cfg(test)]
     fn stable_symbol(value: &str) -> u32 {
         let mut hash: u32 = 0x811C9DC5;
         for b in value.bytes() {
@@ -2041,7 +3599,7 @@ impl ExecutionOrchestrator {
         package: &ExtensionPackage,
         trace_id: &str,
         decision_id: &str,
-    ) -> Result<(Option<ContainmentReceipt>, Option<String>), OrchestratorError> {
+    ) -> Result<(Option<ContainmentReceipt>, Option<String>), ContainmentPhaseError> {
         if action == ContainmentAction::Allow {
             return Ok((None, None));
         }
@@ -2063,20 +3621,45 @@ impl ExecutionOrchestrator {
 
         // Create saga if applicable.
         let saga_id = if let Some(saga_type) = Self::action_to_saga_type(action) {
+            let saga_id_str = format!("{trace_id}:saga");
             let steps = match saga_type {
                 SagaType::Quarantine => quarantine_saga_steps(&package.extension_id),
                 SagaType::Eviction => eviction_saga_steps(&package.extension_id),
                 SagaType::Revocation => revocation_saga_steps(&package.extension_id),
                 SagaType::Publish => {
-                    return Err(OrchestratorError::Saga(SagaError::InvalidSagaId {
-                        reason: "action_to_saga_type never returns Publish".to_string(),
-                    }));
+                    return Err(ContainmentPhaseError::SagaCreation(Box::new(
+                        ContainmentSagaFailureEvidence {
+                            action,
+                            receipt,
+                            saga_id: saga_id_str,
+                            saga_type,
+                            saga_error: SagaError::InvalidSagaId {
+                                reason: "action_to_saga_type never returns Publish".to_string(),
+                            },
+                        },
+                    )));
                 }
             };
-            let saga_id_str = format!("{trace_id}:saga");
-            let id =
-                self.saga_orchestrator
-                    .create_saga(&saga_id_str, saga_type, steps, trace_id, 0)?;
+            let id = match self.saga_orchestrator.create_saga(
+                &saga_id_str,
+                saga_type,
+                steps,
+                trace_id,
+                0,
+            ) {
+                Ok(id) => id,
+                Err(saga_error) => {
+                    return Err(ContainmentPhaseError::SagaCreation(Box::new(
+                        ContainmentSagaFailureEvidence {
+                            action,
+                            receipt,
+                            saga_id: saga_id_str,
+                            saga_type,
+                            saga_error,
+                        },
+                    )));
+                }
+            };
             Some(id.to_string())
         } else {
             None
@@ -2159,6 +3742,89 @@ fn format_guardplane_hook_action(action: &crate::baseline_interpreter::HookActio
     }
 }
 
+/// Deliberate opt-in for deterministic lab orchestrators in integration
+/// fixtures.
+///
+/// Production code must not import this trait; it must call a constructor that
+/// requires [`RuntimeEvidenceAuthority`]. Every constructor here delegates to
+/// an explicitly lab-scoped path whose evidence provenance is rejected by
+/// runtime ledgers.
+pub trait LabFixtureExecutionOrchestratorExt: Sized {
+    fn new(config: OrchestratorConfig) -> Self;
+    fn try_new(config: OrchestratorConfig) -> Result<ExecutionOrchestrator, OrchestratorError>;
+    fn with_defaults() -> ExecutionOrchestrator;
+    fn new_with_runtime_config(
+        config: OrchestratorConfig,
+        runtime_config: RuntimeConfig,
+    ) -> ExecutionOrchestrator;
+    fn try_new_with_runtime_config(
+        config: OrchestratorConfig,
+        runtime_config: RuntimeConfig,
+    ) -> Result<ExecutionOrchestrator, OrchestratorError>;
+    fn new_with_runtime_config_and_ambient_authority_grant(
+        config: OrchestratorConfig,
+        runtime_config: RuntimeConfig,
+        ambient_authority_grant: AmbientAuthorityGrant,
+    ) -> ExecutionOrchestrator;
+    fn try_new_with_runtime_config_and_ambient_authority_grant(
+        config: OrchestratorConfig,
+        runtime_config: RuntimeConfig,
+        ambient_authority_grant: AmbientAuthorityGrant,
+    ) -> Result<ExecutionOrchestrator, OrchestratorError>;
+}
+
+impl LabFixtureExecutionOrchestratorExt for ExecutionOrchestrator {
+    fn new(config: OrchestratorConfig) -> Self {
+        ExecutionOrchestrator::new_lab(config)
+    }
+
+    fn try_new(config: OrchestratorConfig) -> Result<ExecutionOrchestrator, OrchestratorError> {
+        ExecutionOrchestrator::try_new_lab(config)
+    }
+
+    fn with_defaults() -> ExecutionOrchestrator {
+        ExecutionOrchestrator::new_lab(OrchestratorConfig::default())
+    }
+
+    fn new_with_runtime_config(
+        config: OrchestratorConfig,
+        runtime_config: RuntimeConfig,
+    ) -> ExecutionOrchestrator {
+        ExecutionOrchestrator::new_lab_with_runtime_config(config, runtime_config)
+    }
+
+    fn try_new_with_runtime_config(
+        config: OrchestratorConfig,
+        runtime_config: RuntimeConfig,
+    ) -> Result<ExecutionOrchestrator, OrchestratorError> {
+        ExecutionOrchestrator::try_new_lab_with_runtime_config(config, runtime_config)
+    }
+
+    fn new_with_runtime_config_and_ambient_authority_grant(
+        config: OrchestratorConfig,
+        runtime_config: RuntimeConfig,
+        ambient_authority_grant: AmbientAuthorityGrant,
+    ) -> ExecutionOrchestrator {
+        ExecutionOrchestrator::new_lab_with_runtime_config_and_ambient_authority_grant(
+            config,
+            runtime_config,
+            ambient_authority_grant,
+        )
+    }
+
+    fn try_new_with_runtime_config_and_ambient_authority_grant(
+        config: OrchestratorConfig,
+        runtime_config: RuntimeConfig,
+        ambient_authority_grant: AmbientAuthorityGrant,
+    ) -> Result<ExecutionOrchestrator, OrchestratorError> {
+        ExecutionOrchestrator::try_new_lab_with_runtime_config_and_ambient_authority_grant(
+            config,
+            runtime_config,
+            ambient_authority_grant,
+        )
+    }
+}
+
 fn guardplane_operation_label(operation: &GuardplaneOperation) -> &'static str {
     match operation {
         GuardplaneOperation::PropertyAccess { .. } => "property_access",
@@ -2235,6 +3901,61 @@ mod tests {
         }
     }
 
+    fn assert_successful_post_cell_cleanup(error: &OrchestratorError) -> &PostCellFailure {
+        let failure = error
+            .post_cell_failure()
+            .expect("post-cell failures must carry cleanup evidence");
+        assert!(failure.cleanup.close_succeeded());
+        assert!(failure.cleanup.close_error.is_none());
+        assert_eq!(failure.cleanup.cell_id, failure.cleanup.trace_id);
+        assert!(
+            failure
+                .cleanup
+                .cell_events
+                .iter()
+                .any(|event| event.event == "finalize"),
+            "successful cleanup must retain the finalize event"
+        );
+        failure
+    }
+
+    #[test]
+    fn bd_61y6z_pre_cancelled_orchestrator_refuses_before_pipeline_work() {
+        let cancellation = CancellationToken::new();
+        cancellation.cancel();
+        let mut orchestrator = ExecutionOrchestrator::with_defaults();
+        orchestrator.set_cancellation_token(cancellation);
+
+        let error = orchestrator
+            .execute(&simple_package())
+            .expect_err("a pre-cancelled run must fail closed");
+        assert!(matches!(
+            error,
+            OrchestratorError::Interpreter(InterpreterError::Cancelled)
+        ));
+        assert_eq!(orchestrator.execution_count(), 0);
+    }
+
+    #[test]
+    fn bd_61y6z_cancellation_reaches_both_interpreter_lanes() {
+        use crate::ir_contract::Ir3Instruction;
+
+        let package = simple_package();
+        let mut module = Ir3Module::new(ContentHash::compute(b"bd-61y6z-loop"), "cancel-loop");
+        module.instructions.push(Ir3Instruction::Jump { target: 0 });
+
+        for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+            let cancellation = CancellationToken::new();
+            cancellation.cancel();
+            let router =
+                ExecutionOrchestrator::lane_router_for_execution(&package, Some(&cancellation));
+            let error = router
+                .execute(&module, "bd-61y6z-trace", Some(lane))
+                .expect_err("the cancelled jump loop must drain");
+            assert_eq!(error, InterpreterError::Cancelled, "lane {lane}");
+        }
+    }
+
     fn package_with_id(extension_id: &str) -> ExtensionPackage {
         ExtensionPackage {
             extension_id: extension_id.to_string(),
@@ -2260,6 +3981,19 @@ mod tests {
         }
     }
 
+    fn guardplane_package(extension_id: &str) -> ExtensionPackage {
+        package_with_metadata(
+            extension_id,
+            "const obj = { constructor: 1 }; obj.constructor;",
+            &[
+                ("guardplane.enable_instruction_hooks", "true"),
+                ("capability_witness.trust_level", "suspicious"),
+                ("capability_witness.confidence_millionths", "200000"),
+                ("capability_witness.denied_capabilities", "object.property"),
+            ],
+        )
+    }
+
     #[test]
     fn package_capabilities_are_explicit_not_synthesized_from_ir3_requirements() {
         let source = r#""hostcall<\"net.write\">";"#;
@@ -2269,7 +4003,7 @@ mod tests {
         let denied = ExecutionOrchestrator::with_defaults()
             .execute(&denied_package)
             .expect_err("IR3 requirements must not synthesize package hostcall grants");
-        match denied {
+        match denied.primary_error() {
             OrchestratorError::Interpreter(InterpreterError::CapabilityDenied { capability }) => {
                 assert_eq!(capability, "net.write")
             }
@@ -2289,6 +4023,243 @@ mod tests {
             source: source.to_string(),
             ..simple_package()
         }
+    }
+
+    #[test]
+    fn post_cell_interpreter_failure_returns_close_evidence_bd_9rhwp() {
+        let package = package_with_source(r#"throw "bd-9rhwp";"#);
+        let error = ExecutionOrchestrator::with_defaults()
+            .execute(&package)
+            .expect_err("an uncaught throw must fail in the interpreter");
+        let failure = assert_successful_post_cell_cleanup(&error);
+
+        assert!(failure.additional_errors.is_empty());
+        assert!(matches!(
+            failure.primary_error.as_ref(),
+            OrchestratorError::Interpreter(InterpreterError::UncaughtException { value })
+                if value.contains("bd-9rhwp")
+        ));
+    }
+
+    #[test]
+    fn post_cell_ledger_failure_returns_close_evidence_bd_9rhwp() {
+        let mut orchestrator = ExecutionOrchestrator::with_defaults();
+        orchestrator
+            .ledger
+            .authorize_policy("bd-9rhwp-unrelated-policy");
+
+        let error = orchestrator
+            .execute(&simple_package())
+            .expect_err("the ledger must reject the orchestrator policy");
+        let failure = assert_successful_post_cell_cleanup(&error);
+
+        assert!(failure.additional_errors.is_empty());
+        assert!(matches!(
+            failure.primary_error.as_ref(),
+            OrchestratorError::Ledger(LedgerError::SchemaValidationFailed { reason })
+                if reason.contains("unauthorized policy id")
+        ));
+    }
+
+    #[test]
+    fn guardplane_builder_failure_leaves_ledger_empty_bd_gjrlf() {
+        let package = guardplane_package("bd-gjrlf-builder-engine");
+        let mut orchestrator = ExecutionOrchestrator::with_defaults();
+        orchestrator.guardplane_builder_failure_index_override = Some(0);
+
+        let error = orchestrator
+            .execute(&package)
+            .expect_err("the injected guardplane builder failure must abort evidence");
+        let failure = assert_successful_post_cell_cleanup(&error);
+
+        assert!(matches!(
+            failure.primary_error.as_ref(),
+            OrchestratorError::Ledger(LedgerError::MissingChosenAction)
+        ));
+        assert!(
+            orchestrator.ledger().is_empty(),
+            "the primary entry must not be emitted before all guardplane entries build"
+        );
+    }
+
+    #[test]
+    fn guardplane_late_ledger_failure_rejects_whole_batch_bd_gjrlf() {
+        let package = guardplane_package("bd-gjrlf-ledger-engine");
+        let mut donor = ExecutionOrchestrator::with_defaults();
+        let donor_result = donor
+            .execute(&package)
+            .expect("the donor must produce deterministic guardplane evidence");
+        let duplicate_entry = donor_result
+            .evidence_entries
+            .iter()
+            .find(|entry| entry.metadata.contains_key("guardplane_decision_index"))
+            .expect("the fixture must produce a guardplane evidence entry")
+            .clone();
+        let duplicate_id = duplicate_entry.entry_id.clone();
+
+        let mut orchestrator = ExecutionOrchestrator::with_defaults();
+        let seed_receipt = EvidenceChainReceipt::issue_with_authority(
+            orchestrator.evidence_ledger_id().to_string(),
+            0,
+            None,
+            std::slice::from_ref(&duplicate_entry),
+            &orchestrator.evidence_signing_authority,
+        )
+        .expect("the seeded duplicate must receive a valid chain receipt");
+        orchestrator
+            .ledger
+            .emit_chained_batch(vec![duplicate_entry], seed_receipt)
+            .expect("the late-duplicate fixture must be admitted once");
+        let before_ids = orchestrator
+            .ledger()
+            .entries()
+            .iter()
+            .map(|entry| entry.entry_id.clone())
+            .collect::<Vec<_>>();
+
+        let error = orchestrator
+            .execute(&package)
+            .expect_err("the duplicate guardplane entry must reject the evidence batch");
+        let failure = assert_successful_post_cell_cleanup(&error);
+
+        assert!(matches!(
+            failure.primary_error.as_ref(),
+            OrchestratorError::Ledger(LedgerError::DuplicateEntryId { entry_id })
+                if entry_id == &duplicate_id
+        ));
+        assert_eq!(
+            orchestrator
+                .ledger()
+                .entries()
+                .iter()
+                .map(|entry| entry.entry_id.clone())
+                .collect::<Vec<_>>(),
+            before_ids,
+            "a later guardplane ledger error must not commit the primary prefix"
+        );
+    }
+
+    #[test]
+    fn evidence_batch_orders_primary_before_guardplane_entries_bd_gjrlf() {
+        let package = guardplane_package("bd-gjrlf-order-engine");
+        let mut orchestrator = ExecutionOrchestrator::with_defaults();
+        let result = orchestrator
+            .execute(&package)
+            .expect("valid guardplane evidence must commit atomically");
+
+        assert!(
+            !result.evidence_entries[0]
+                .metadata
+                .contains_key("guardplane_decision_index"),
+            "the primary security-action entry must remain first"
+        );
+        let guardplane_indices = result
+            .evidence_entries
+            .iter()
+            .skip(1)
+            .map(|entry| {
+                entry
+                    .metadata
+                    .get("guardplane_decision_index")
+                    .expect("every entry after the primary must be a guardplane decision")
+                    .parse::<usize>()
+                    .expect("guardplane decision index must be numeric")
+            })
+            .collect::<Vec<_>>();
+        assert!(!guardplane_indices.is_empty());
+        assert_eq!(
+            guardplane_indices,
+            (0..result.evidence_entries.len() - 1).collect::<Vec<_>>()
+        );
+        assert_eq!(
+            orchestrator
+                .ledger()
+                .entries()
+                .iter()
+                .map(|entry| entry.entry_id.as_str())
+                .collect::<Vec<_>>(),
+            result
+                .evidence_entries
+                .iter()
+                .map(|entry| entry.entry_id.as_str())
+                .collect::<Vec<_>>(),
+            "returned evidence and committed ledger order must match"
+        );
+    }
+
+    #[test]
+    fn post_cell_containment_failure_returns_close_evidence_bd_9rhwp() {
+        let package = package_with_metadata(
+            "bd-9rhwp-containment",
+            "const obj = { constructor: 1 }; obj.constructor;",
+            &[
+                ("guardplane.enable_instruction_hooks", "true"),
+                ("capability_witness.trust_level", "suspicious"),
+                ("capability_witness.confidence_millionths", "200000"),
+                ("capability_witness.denied_capabilities", "object.property"),
+            ],
+        );
+        let mut orchestrator = ExecutionOrchestrator::with_defaults();
+        orchestrator
+            .containment_executor
+            .register(&package.extension_id);
+        let preexisting_context = ContainmentContext {
+            decision_id: "bd-9rhwp-preexisting".to_string(),
+            epoch: orchestrator.config.epoch,
+            ..ContainmentContext::default()
+        };
+        orchestrator
+            .containment_executor
+            .execute(
+                ContainmentAction::Quarantine,
+                &package.extension_id,
+                &preexisting_context,
+            )
+            .expect("test precondition must put the extension in a dead state");
+
+        let error = orchestrator
+            .execute(&package)
+            .expect_err("the selected containment action must reject the dead state");
+        let failure = assert_successful_post_cell_cleanup(&error);
+
+        assert!(failure.additional_errors.is_empty());
+        assert!(matches!(
+            failure.primary_error.as_ref(),
+            OrchestratorError::Containment(ContainmentError::InvalidTransition {
+                from: crate::containment_executor::ContainmentState::Quarantined,
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn post_cell_primary_error_precedes_close_failure_bd_9rhwp() {
+        let config = OrchestratorConfig {
+            cell_close_budget_ms: 1,
+            ..OrchestratorConfig::default()
+        };
+        let package = package_with_source(r#"throw "bd-9rhwp";"#);
+        let error = ExecutionOrchestrator::new(config)
+            .execute(&package)
+            .expect_err("the interpreter and close must both fail");
+        let failure = error
+            .post_cell_failure()
+            .expect("both failures must be returned in one lifecycle report");
+
+        assert!(matches!(
+            failure.primary_error.as_ref(),
+            OrchestratorError::Interpreter(InterpreterError::UncaughtException { value })
+                if value.contains("bd-9rhwp")
+        ));
+        assert!(matches!(
+            failure.additional_errors.as_slice(),
+            [OrchestratorError::Cell(CellError::BudgetExhausted { .. })]
+        ));
+        assert!(!failure.cleanup.close_succeeded());
+        assert!(matches!(
+            failure.cleanup.close_error,
+            Some(CellError::BudgetExhausted { .. })
+        ));
     }
 
     fn empty_flow_artifact() -> Ir2FlowProofArtifact {
@@ -2517,7 +4488,7 @@ mod tests {
         let err = orch
             .execute(&pkg)
             .expect_err("unresolved runtime checkpoint must fail closed");
-        match err {
+        match err.primary_error() {
             OrchestratorError::IfcRuntimeGuardBlocked { detail } => {
                 assert!(detail.contains("runtime checkpoints=1"));
                 assert!(detail.contains("hostcall.invoke"));
@@ -2611,6 +4582,7 @@ mod tests {
             nondeterminism_trace: crate::deterministic_replay::NondeterminismTrace::new(
                 "orchestrator-test-stub",
             ),
+            generated_code_audit: Vec::new(),
         };
         let reward = ExecutionOrchestrator::execution_reward_millionths(&exec);
         assert_eq!(reward, 400_000);
@@ -2838,6 +4810,142 @@ mod tests {
     }
 
     #[test]
+    fn bd_90u6o_production_constructor_requires_concrete_runtime_authority() {
+        let constructor: fn(
+            OrchestratorConfig,
+            RuntimeEvidenceAuthority,
+        ) -> Result<ExecutionOrchestrator, OrchestratorError> =
+            ExecutionOrchestrator::try_new_with_runtime_authority;
+        let _ = constructor;
+    }
+
+    #[test]
+    fn bd_90u6o_explicit_identity_preserves_in_memory_replay_stability() {
+        let authority = RuntimeEvidenceAuthority::from_signing_key(
+            "runtime-recorded",
+            SigningKey::from_bytes([0x42; 32]).expect("non-zero recorded test key"),
+            SecurityEpoch::from_raw(1),
+            1,
+            None,
+        )
+        .expect("recorded identity");
+        let config = OrchestratorConfig::default();
+        let mut first = ExecutionOrchestrator::try_new_with_runtime_authority(
+            config.clone(),
+            authority.clone(),
+        )
+        .expect("first orchestrator");
+        let mut second = ExecutionOrchestrator::try_new_with_runtime_authority(config, authority)
+            .expect("second orchestrator");
+
+        let first_result = first.execute(&simple_package()).expect("first execution");
+        let second_result = second.execute(&simple_package()).expect("second execution");
+        assert_eq!(
+            first_result.evidence_entries, second_result.evidence_entries,
+            "an explicitly supplied key identity keeps matching in-memory runs byte-stable"
+        );
+    }
+
+    #[test]
+    fn bd_90u6o_runtime_authority_is_recorded_and_rejects_historical_public_key() {
+        let historical_public_key = SigningKey::from_bytes([0x7B; 32])
+            .expect("historical source-known key")
+            .verification_key();
+        let authority = RuntimeEvidenceAuthority::generate_runtime_owned(
+            "runtime-generated-test",
+            SecurityEpoch::from_raw(1),
+            1,
+            None,
+        )
+        .expect("runtime authority");
+        let expected_identity = authority.verification_identity();
+        let mut orchestrator = ExecutionOrchestrator::try_new_with_runtime_authority(
+            OrchestratorConfig::default(),
+            authority,
+        )
+        .expect("runtime orchestrator");
+        let result = orchestrator
+            .execute(&simple_package())
+            .expect("runtime execution");
+        assert_eq!(result.evidence_verification_identity, expected_identity);
+        assert!(
+            result
+                .evidence_entries
+                .iter()
+                .all(|entry| { entry.signed_envelope().verification_key != historical_public_key }),
+            "normal orchestrator evidence must never use the source-known historical key"
+        );
+    }
+
+    #[test]
+    fn process_shape_grant_is_explicit_static_only_and_deny_by_default() {
+        fn assert_ambient_denial(
+            result: Result<PreparedLoweringOutput, OrchestratorError>,
+            label: &str,
+        ) {
+            match result {
+                Err(OrchestratorError::Lowering(error))
+                    if matches!(
+                        error.as_ref(),
+                        LoweringPipelineError::AmbientAuthorityViolation { .. }
+                    ) => {}
+                Err(error) => panic!("{label} produced an unexpected error: {error:?}"),
+                Ok(_) => panic!("{label} unexpectedly passed ambient lowering"),
+            }
+        }
+
+        let static_shape = package_with_source("process.platform;\nprocess.pid;\n");
+        let orchestrator = ExecutionOrchestrator::with_defaults();
+
+        assert_ambient_denial(
+            orchestrator.prepare_lowering_output(&static_shape, "trace-deny", "decision-deny"),
+            "default orchestrator process-shape read",
+        );
+        orchestrator
+            .prepare_lowering_output(
+                &package_with_source(
+                    "const process = { platform: 'local', pid: 7 };\nprocess.platform;\nprocess.pid;\n",
+                ),
+                "trace-shadow",
+                "decision-shadow",
+            )
+            .expect("a lexical process binding is ordinary user data");
+
+        let trusted_orchestrator =
+            ExecutionOrchestrator::new_with_runtime_config_and_ambient_authority_grant(
+                OrchestratorConfig::default(),
+                RuntimeConfig::default(),
+                AmbientAuthorityGrant::TrustedProcessShape,
+            );
+        trusted_orchestrator
+            .prepare_lowering_output(&static_shape, "trace-allow", "decision-allow")
+            .expect("explicit grant permits statically allowlisted process shape reads");
+
+        for (label, source) in [
+            ("bare", "process;\n"),
+            ("computed", "process['platform'];\n"),
+            ("alias", "const p = process; p.platform;\n"),
+            (
+                "grant laundering",
+                "process.platform;\nprocess['env']['PATH'];\n",
+            ),
+            ("destructure", "const { platform } = process;\n"),
+            ("static env", "process.env.PATH;\n"),
+            ("computed env", "process['env']['PATH'];\n"),
+            ("computed exit", "process['exit'](0);\n"),
+        ] {
+            assert_ambient_denial(
+                trusted_orchestrator.prepare_lowering_output(
+                    &package_with_source(source),
+                    &format!("trace-{label}"),
+                    &format!("decision-{label}"),
+                ),
+                label,
+            );
+        }
+    }
+
+    #[test]
     fn runtime_config_default_matches_orchestrator_constants() {
         let orchestrator = RuntimeConfig::default().orchestrator;
         assert_eq!(
@@ -2882,6 +4990,889 @@ mod tests {
         let policy = orch.new_stopping_policy();
         assert_eq!(policy.cusum.threshold_millionths, 1_000_000);
         assert_eq!(policy.cusum.reference_millionths, 200_000);
+    }
+
+    /// bd-eou2o: entries recorded before an orchestrated execution belong to the
+    /// recorder's lifetime history, not to the new run's signed effect ledger.
+    /// The explicit begin/finish boundary must exclude that stale prefix.
+    #[test]
+    fn run_excludes_preexisting_recording_history_bd_eou2o() {
+        use frankenengine_extension_host::host_io::{
+            HostIoError, InMemoryHostIoTranscript, SandboxedHostIo,
+        };
+
+        let mut root = std::env::temp_dir();
+        root.push(format!("frankenengine_orch_hostio_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("scratch root");
+
+        let provider = Arc::new(SandboxedHostIo::with_root(&root).expect("sandboxed provider"));
+        let recorder = Arc::new(InMemoryHostIoTranscript::recording());
+        // A real (request, outcome) pair as produced at a host-effect site; a denied
+        // read is itself a ledger-worthy effect.
+        let request = HostIoRequest::FsRead {
+            path: "denied.txt".to_string(),
+        };
+        let outcome: HostIoOutcome = Err(HostIoError::Denied {
+            reason: "policy".to_string(),
+        });
+        recorder.record(&request, &outcome);
+
+        let mut orch = ExecutionOrchestrator::new(OrchestratorConfig::default());
+        let recorder_dyn: Arc<dyn HostIoRecorder> = recorder.clone();
+        orch.set_host_io(provider, Some(recorder_dyn));
+
+        let result = orch
+            .execute(&simple_package())
+            .expect("execute with host io installed");
+        assert!(
+            result.host_effect_transcript.is_empty(),
+            "a no-hostcall run must not attest the recorder's stale prefix"
+        );
+        assert_eq!(recorder.recorded_entries(), vec![(request, outcome)]);
+
+        let _ = std::fs::remove_dir_all(&root);
+
+        // No provider installed => empty transcript (fail-closed baseline).
+        let mut bare = ExecutionOrchestrator::new(OrchestratorConfig::default());
+        let bare_result = bare
+            .execute(&simple_package())
+            .expect("execute without host io");
+        assert!(
+            bare_result.host_effect_transcript.is_empty(),
+            "no provider installed => empty host-effect transcript"
+        );
+    }
+
+    #[test]
+    fn run_rejects_unused_host_io_replay_before_evidence_bd_eou2o() {
+        use frankenengine_extension_host::host_io::{
+            DenyAllHostIo, HostIoResponse, InMemoryHostIoTranscript,
+        };
+
+        let replay = Arc::new(InMemoryHostIoTranscript::replaying(vec![(
+            HostIoRequest::FsRead {
+                path: "unused.txt".to_string(),
+            },
+            Ok(HostIoResponse::FsRead {
+                bytes: b"recorded".to_vec(),
+            }),
+        )]));
+        let recorder: Arc<dyn HostIoRecorder> = replay;
+        let mut orchestrator = ExecutionOrchestrator::new(OrchestratorConfig::default());
+        orchestrator.set_host_io(Arc::new(DenyAllHostIo), Some(recorder));
+
+        let error = orchestrator
+            .execute(&simple_package())
+            .expect_err("an unused replay suffix must abort the run");
+        assert!(matches!(
+            error.primary_error(),
+            OrchestratorError::Interpreter(InterpreterError::InternalError { details })
+                if details.contains("host I/O execution finalization failed")
+                    && details.contains("1 unused transcript entries starting at index 0")
+        ));
+        assert_eq!(
+            orchestrator.execution_count(),
+            0,
+            "replay finalization must fail before evidence/result completion"
+        );
+    }
+
+    #[test]
+    fn exactly_finalized_replay_cannot_certify_a_second_run_bd_eou2o() {
+        use frankenengine_extension_host::host_io::{DenyAllHostIo, InMemoryHostIoTranscript};
+
+        let replay = Arc::new(InMemoryHostIoTranscript::replaying(Vec::new()));
+        let recorder: Arc<dyn HostIoRecorder> = replay;
+        let mut orchestrator = ExecutionOrchestrator::new(OrchestratorConfig::default());
+        orchestrator.set_host_io(Arc::new(DenyAllHostIo), Some(recorder));
+
+        let first = orchestrator
+            .execute(&simple_package())
+            .expect("empty replay exactly certifies one no-hostcall run");
+        assert!(first.host_effect_transcript.is_empty());
+        assert_eq!(orchestrator.execution_count(), 1);
+
+        let second = orchestrator
+            .execute(&simple_package())
+            .expect_err("a finalized replay transcript is single-use");
+        assert!(matches!(
+            second.primary_error(),
+            OrchestratorError::Interpreter(InterpreterError::InternalError { details })
+                if details.contains("host I/O execution setup failed")
+                    && details.contains("already finalized")
+        ));
+        assert_eq!(orchestrator.execution_count(), 1);
+    }
+
+    #[test]
+    fn phase_error_still_poisons_unused_replay_suffix_bd_eou2o() {
+        use frankenengine_extension_host::host_io::{
+            DenyAllHostIo, HostIoError, HostIoResponse, InMemoryHostIoTranscript,
+        };
+
+        let first_request = HostIoRequest::FsRead {
+            path: "input.txt".to_string(),
+        };
+        let replay = Arc::new(InMemoryHostIoTranscript::replaying(vec![
+            (
+                first_request,
+                Err(HostIoError::Io {
+                    detail: "recorded read failure".to_string(),
+                }),
+            ),
+            (
+                HostIoRequest::FsRead {
+                    path: "must-not-resume.txt".to_string(),
+                },
+                Ok(HostIoResponse::FsRead { bytes: vec![1] }),
+            ),
+        ]));
+        let recorder: Arc<dyn HostIoRecorder> = replay;
+        let mut orchestrator = ExecutionOrchestrator::new(OrchestratorConfig::default());
+        orchestrator.set_host_io(Arc::new(DenyAllHostIo), Some(recorder));
+        let package = ExtensionPackage {
+            extension_id: "host-error-finalization".to_string(),
+            source: "require('fs').readFileSync('input.txt');".to_string(),
+            source_file: None,
+            capabilities: vec![
+                "vm_dispatch".to_string(),
+                "heap_allocate".to_string(),
+                "fs_read".to_string(),
+            ],
+            version: "1.0.0".to_string(),
+            metadata: BTreeMap::new(),
+        };
+
+        let first = orchestrator
+            .execute(&package)
+            .expect_err("recorded host failure aborts and finalizes replay");
+        let first_failure = assert_successful_post_cell_cleanup(&first);
+        assert!(
+            first_failure
+                .primary_error
+                .to_string()
+                .contains("recorded read failure"),
+            "the earlier interpreter failure must remain primary"
+        );
+        assert_eq!(first_failure.additional_errors.len(), 1);
+        assert!(
+            first_failure.additional_errors[0]
+                .to_string()
+                .contains("host I/O execution finalization failed")
+        );
+        assert!(
+            first_failure.additional_errors[0]
+                .to_string()
+                .contains("1 unused transcript entries starting at index 1")
+        );
+        let second = orchestrator
+            .execute(&package)
+            .expect_err("poisoned replay cannot resume the suffix");
+        assert!(second.to_string().contains("unused transcript entries"));
+        assert_eq!(orchestrator.execution_count(), 0);
+    }
+
+    #[derive(Debug)]
+    struct RecorderWithoutExecutionBoundaries;
+
+    impl HostIoRecorder for RecorderWithoutExecutionBoundaries {
+        fn begin_execution(
+            &self,
+        ) -> Result<(), frankenengine_extension_host::host_io::HostIoError> {
+            Err(
+                frankenengine_extension_host::host_io::HostIoError::NotImplemented {
+                    what: "test recorder has no execution lifecycle".to_string(),
+                },
+            )
+        }
+
+        fn replay(&self, _request: &HostIoRequest) -> Option<HostIoOutcome> {
+            None
+        }
+
+        fn record(&self, _request: &HostIoRequest, _outcome: &HostIoOutcome) {}
+
+        fn finish_execution(
+            &self,
+        ) -> Result<
+            Vec<(HostIoRequest, HostIoOutcome)>,
+            frankenengine_extension_host::host_io::HostIoError,
+        > {
+            Err(
+                frankenengine_extension_host::host_io::HostIoError::NotImplemented {
+                    what: "test recorder has no execution lifecycle".to_string(),
+                },
+            )
+        }
+    }
+
+    #[test]
+    fn post_cell_recorder_setup_failure_returns_close_evidence_bd_9rhwp() {
+        use frankenengine_extension_host::host_io::DenyAllHostIo;
+
+        let recorder: Arc<dyn HostIoRecorder> = Arc::new(RecorderWithoutExecutionBoundaries);
+        let mut orchestrator = ExecutionOrchestrator::with_defaults();
+        orchestrator.set_host_io(Arc::new(DenyAllHostIo), Some(recorder));
+
+        let error = orchestrator
+            .execute(&simple_package())
+            .expect_err("unsupported recorder lifecycle must fail before interpretation");
+        let failure = assert_successful_post_cell_cleanup(&error);
+
+        assert!(failure.additional_errors.is_empty());
+        assert!(matches!(
+            failure.primary_error.as_ref(),
+            OrchestratorError::Interpreter(InterpreterError::InternalError { details })
+                if details.contains("host I/O execution setup failed")
+        ));
+    }
+
+    #[derive(Debug, Default)]
+    struct CountingHostIoProvider {
+        calls: std::sync::atomic::AtomicUsize,
+    }
+
+    impl HostIoProvider for CountingHostIoProvider {
+        fn name(&self) -> &str {
+            "counting-host-io"
+        }
+
+        fn perform(
+            &self,
+            _request: &HostIoRequest,
+            _granted: &[frankenengine_extension_host::host_io::HostIoCapability],
+        ) -> HostIoOutcome {
+            self.calls
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            Err(frankenengine_extension_host::host_io::HostIoError::Denied {
+                reason: "counting provider".to_string(),
+            })
+        }
+    }
+
+    #[test]
+    fn unsupported_recorder_fails_before_live_host_effect_bd_eou2o() {
+        let provider = Arc::new(CountingHostIoProvider::default());
+        let recorder: Arc<dyn HostIoRecorder> = Arc::new(RecorderWithoutExecutionBoundaries);
+        let mut orchestrator = ExecutionOrchestrator::new(OrchestratorConfig::default());
+        orchestrator.set_host_io(provider.clone(), Some(recorder));
+        let package = ExtensionPackage {
+            extension_id: "unsupported-recorder".to_string(),
+            source: "require('fs').writeFileSync('out.txt', 'must not run');".to_string(),
+            source_file: None,
+            capabilities: vec![
+                "vm_dispatch".to_string(),
+                "heap_allocate".to_string(),
+                "fs_write".to_string(),
+            ],
+            version: "1.0.0".to_string(),
+            metadata: BTreeMap::new(),
+        };
+
+        let error = orchestrator
+            .execute(&package)
+            .expect_err("unsupported recorder must fail before interpreter entry");
+        assert!(
+            error
+                .to_string()
+                .contains("host I/O execution setup failed")
+        );
+        assert_eq!(
+            provider.calls.load(std::sync::atomic::Ordering::Relaxed),
+            0,
+            "provider must not run before recorder lifecycle preflight"
+        );
+        assert_eq!(orchestrator.execution_count(), 0);
+    }
+
+    /// bd-1xl17 (end-to-end keystone): a REAL JS program — compiled+executed from
+    /// source through `ExecutionOrchestrator::execute`, no hand-built IR — that calls
+    /// `require('fs').writeFileSync`/`readFileSync` produces `fs:` HostCalls which
+    /// perform real sandboxed I/O and yield a NON-EMPTY host-effect transcript. This
+    /// closes the loop: idiomatic JS fs ops now lower to host effects the run ledger
+    /// can render (bd-5r99w.12). Mock-free: real parser/lowering, real SandboxedHostIo.
+    #[test]
+    fn real_js_fs_program_produces_host_effects_bd_1xl17() {
+        use frankenengine_extension_host::host_io::{InMemoryHostIoTranscript, SandboxedHostIo};
+
+        let mut root = std::env::temp_dir();
+        root.push(format!("frankenengine_e2e_fs_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("scratch root");
+
+        let provider = Arc::new(SandboxedHostIo::with_root(&root).expect("sandboxed provider"));
+        let recorder = Arc::new(InMemoryHostIoTranscript::recording());
+
+        let mut orch = ExecutionOrchestrator::new(OrchestratorConfig::default());
+        let recorder_dyn: Arc<dyn HostIoRecorder> = recorder.clone();
+        orch.set_host_io(provider, Some(recorder_dyn));
+
+        // Real idiomatic JS source (inline require form), granting the fs caps the
+        // capability gate requires (snake_case grant tags).
+        let pkg = ExtensionPackage {
+            extension_id: "fs-e2e".to_string(),
+            source: "require('fs').writeFileSync('out.txt', 'real effect bytes');\n\
+                     require('fs').readFileSync('out.txt');\n"
+                .to_string(),
+            source_file: None,
+            capabilities: vec![
+                "vm_dispatch".to_string(),
+                "heap_allocate".to_string(),
+                "fs_read".to_string(),
+                "fs_write".to_string(),
+            ],
+            version: "1.0.0".to_string(),
+            metadata: BTreeMap::new(),
+        };
+
+        let result = orch.execute(&pkg).expect("real fs JS program executes");
+
+        // The write hit the real sandbox filesystem.
+        assert_eq!(
+            std::fs::read(root.join("out.txt")).expect("written file on disk"),
+            b"real effect bytes",
+            "writeFileSync must have produced a real file in the sandbox"
+        );
+
+        // Both host effects were recorded and surfaced on the result — the ledger source.
+        let kinds: Vec<&str> = result
+            .host_effect_transcript
+            .iter()
+            .map(|(request, _)| request.kind())
+            .collect();
+        assert_eq!(
+            kinds,
+            vec!["fs_write", "fs_read"],
+            "real JS fs ops must surface fs_write then fs_read host effects, got {kinds:?}"
+        );
+
+        let second = orch
+            .execute(&pkg)
+            .expect("recording recorder may be reused with a fresh run boundary");
+        let second_kinds: Vec<&str> = second
+            .host_effect_transcript
+            .iter()
+            .map(|(request, _)| request.kind())
+            .collect();
+        assert_eq!(second_kinds, vec!["fs_write", "fs_read"]);
+        assert_eq!(
+            recorder.recorded_entries().len(),
+            4,
+            "lifetime history retains both runs while each result carries only its own two effects"
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// bd-201vt (async callback form): the idiomatic Node callback forms
+    /// `fs.readFile(path[, enc], cb)` / `fs.writeFile(path, data, cb)` lower to the
+    /// same `fs:` HostCalls as the sync forms, perform real sandboxed I/O recorded
+    /// in the transcript, and then invoke the callback err-first on the next
+    /// event-loop turn (off the current call stack). Mock-free end-to-end through
+    /// `ExecutionOrchestrator::execute` (real parser/lowering + SandboxedHostIo +
+    /// the deterministic event loop run to idle).
+    ///
+    /// The program writes a file, then `readFile`s it with `'utf8'` and — INSIDE
+    /// the callback — `writeFileSync`s the received `data` to a second file. The
+    /// callback's nested write proves the callback actually ran with the correctly
+    /// decoded string `data`: it uses the inline `require('fs')` form, which is
+    /// recognized syntactically (the fs-alias sentinel does not reach nested
+    /// function bodies, but the inline form needs no sentinel). The transcript
+    /// `[fs_write, fs_read, fs_write]` proves the read effect was recorded
+    /// synchronously and the callback's write was recorded on the deferred turn.
+    #[test]
+    fn async_callback_fs_program_produces_host_effects_bd_201vt() {
+        use frankenengine_extension_host::host_io::{InMemoryHostIoTranscript, SandboxedHostIo};
+
+        let mut root = std::env::temp_dir();
+        root.push(format!("frankenengine_e2e_fs_cb_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("scratch root");
+
+        let provider = Arc::new(SandboxedHostIo::with_root(&root).expect("sandboxed provider"));
+        let recorder = Arc::new(InMemoryHostIoTranscript::recording());
+
+        let mut orch = ExecutionOrchestrator::new(OrchestratorConfig::default());
+        let recorder_dyn: Arc<dyn HostIoRecorder> = recorder.clone();
+        orch.set_host_io(provider, Some(recorder_dyn));
+
+        // Real idiomatic async callback JS source. The readFile callback writes the
+        // decoded `data` back out via the inline require form, observable on disk.
+        let pkg = ExtensionPackage {
+            extension_id: "fs-e2e-callback".to_string(),
+            source: "require('fs').writeFileSync('out.txt', 'real effect bytes');\n\
+                     require('fs').readFile('out.txt', 'utf8', function (err, data) {\n\
+                       require('fs').writeFileSync('echo.txt', data);\n\
+                     });\n"
+                .to_string(),
+            source_file: None,
+            capabilities: vec![
+                "vm_dispatch".to_string(),
+                "heap_allocate".to_string(),
+                "fs_read".to_string(),
+                "fs_write".to_string(),
+            ],
+            version: "1.0.0".to_string(),
+            metadata: BTreeMap::new(),
+        };
+
+        let result = orch
+            .execute(&pkg)
+            .expect("real fs JS async-callback program executes");
+
+        // The synchronous write hit the real sandbox filesystem.
+        assert_eq!(
+            std::fs::read(root.join("out.txt")).expect("written file on disk"),
+            b"real effect bytes",
+            "writeFileSync must have produced a real file in the sandbox"
+        );
+
+        // The readFile callback fired with the correctly decoded 'utf8' string and
+        // wrote it back out — proving async-callback dispatch + deferred invocation.
+        assert_eq!(
+            std::fs::read(root.join("echo.txt")).expect("callback-written file on disk"),
+            b"real effect bytes",
+            "the readFile callback must have run with the decoded string data and \
+             written it to echo.txt"
+        );
+
+        // All three host effects were recorded and surfaced: the sync write, the
+        // read (recorded synchronously at dispatch), and the callback's write
+        // (recorded when the deferred IoCompletion macrotask fired).
+        let kinds: Vec<&str> = result
+            .host_effect_transcript
+            .iter()
+            .map(|(request, _)| request.kind())
+            .collect();
+        assert_eq!(
+            kinds,
+            vec!["fs_write", "fs_read", "fs_write"],
+            "async fs callback program must surface write, read, then the callback's \
+             write host effects, got {kinds:?}"
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// bd-201vt (named ESM callback form): `import { readFile, writeFileSync } from
+    /// 'node:fs'` with the async `readFile(path, cb)` direct-call form lowers to a
+    /// real, recorded fs:read effect (with the callback deferred) and executes
+    /// end-to-end (module parse goal) without faulting, surfacing `[fs_write,
+    /// fs_read]`. The callback-fires-with-decoded-data path is proven by
+    /// `async_callback_fs_program_produces_host_effects_bd_201vt` (the dispatch +
+    /// IoCompletion path is identical across import forms); here the callback is
+    /// empty and we assert the named-import direct-call lowering reaches the ledger.
+    #[test]
+    fn esm_named_import_callback_fs_program_produces_host_effects_bd_201vt() {
+        assert_esm_fs_source_lowers_to_host_effects(
+            "import { readFile, writeFileSync } from 'node:fs';\n\
+             writeFileSync('out.txt', 'real effect bytes');\n\
+             readFile('out.txt', function (err, data) {});\n",
+            "frankenengine_e2e_fs_esm_named_cb",
+        );
+    }
+
+    /// bd-rul7k item 3 (end-to-end): an explicit UNKNOWN `readFileSync` encoding
+    /// throws a JS-catchable `TypeError` synchronously, BEFORE the read runs —
+    /// matching Node. The program catches it (writing a marker file from the catch
+    /// block) and the host-effect transcript shows only the two writes (NO fs_read),
+    /// proving the bad-encoding read was rejected before any effect was performed.
+    #[test]
+    fn read_unknown_encoding_throws_catchable_type_error_bd_rul7k() {
+        use frankenengine_extension_host::host_io::{InMemoryHostIoTranscript, SandboxedHostIo};
+
+        let mut root = std::env::temp_dir();
+        root.push(format!(
+            "frankenengine_e2e_fs_badenc_{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("scratch root");
+
+        let provider = Arc::new(SandboxedHostIo::with_root(&root).expect("sandboxed provider"));
+        let recorder = Arc::new(InMemoryHostIoTranscript::recording());
+
+        let mut orch = ExecutionOrchestrator::new(OrchestratorConfig::default());
+        let recorder_dyn: Arc<dyn HostIoRecorder> = recorder.clone();
+        orch.set_host_io(provider, Some(recorder_dyn));
+
+        let pkg = ExtensionPackage {
+            extension_id: "fs-e2e-bad-encoding".to_string(),
+            source: "require('fs').writeFileSync('out.txt', 'real effect bytes');\n\
+                     try {\n\
+                       require('fs').readFileSync('out.txt', 'bogus-encoding');\n\
+                     } catch (e) {\n\
+                       require('fs').writeFileSync('caught.txt', 'caught');\n\
+                     }\n"
+            .to_string(),
+            source_file: None,
+            capabilities: vec![
+                "vm_dispatch".to_string(),
+                "heap_allocate".to_string(),
+                "fs_read".to_string(),
+                "fs_write".to_string(),
+            ],
+            version: "1.0.0".to_string(),
+            metadata: BTreeMap::new(),
+        };
+
+        let result = orch
+            .execute(&pkg)
+            .expect("program with a caught bad-encoding read executes to completion");
+
+        // The catch block ran — proving the unknown-encoding TypeError is a real,
+        // JS-catchable throw.
+        assert_eq!(
+            std::fs::read(root.join("caught.txt")).expect("catch-block marker on disk"),
+            b"caught",
+            "the unknown-encoding TypeError must be catchable by JS try/catch"
+        );
+
+        // Only the two writes were recorded — the bad-encoding read was rejected
+        // BEFORE any host effect was performed (no spurious fs_read).
+        let kinds: Vec<&str> = result
+            .host_effect_transcript
+            .iter()
+            .map(|(request, _)| request.kind())
+            .collect();
+        assert_eq!(
+            kinds,
+            vec!["fs_write", "fs_write"],
+            "an unknown encoding must throw before the read — no fs_read effect, got {kinds:?}"
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// bd-1xl17.a (binding form): the idiomatic `const fs = require('fs'); ...`
+    /// binding form — not only the inline `require('fs').readFileSync` form —
+    /// lowers to `fs:` HostCalls that perform real sandboxed I/O and surface a
+    /// non-empty host-effect transcript. Mock-free end-to-end through
+    /// `ExecutionOrchestrator::execute` (real parser/lowering + SandboxedHostIo),
+    /// proving the usage-gated fs-alias lowering reaches the host-effect ledger.
+    #[test]
+    fn binding_form_const_fs_require_produces_host_effects_bd_1xl17_a() {
+        use frankenengine_extension_host::host_io::{InMemoryHostIoTranscript, SandboxedHostIo};
+
+        let mut root = std::env::temp_dir();
+        root.push(format!(
+            "frankenengine_e2e_fs_binding_{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("scratch root");
+
+        let provider = Arc::new(SandboxedHostIo::with_root(&root).expect("sandboxed provider"));
+        let recorder = Arc::new(InMemoryHostIoTranscript::recording());
+
+        let mut orch = ExecutionOrchestrator::new(OrchestratorConfig::default());
+        let recorder_dyn: Arc<dyn HostIoRecorder> = recorder.clone();
+        orch.set_host_io(provider, Some(recorder_dyn));
+
+        // Idiomatic binding form: `const fs = require('fs')` then method calls on
+        // the alias (the most common real-world shape).
+        let pkg = ExtensionPackage {
+            extension_id: "fs-e2e-binding".to_string(),
+            source: "const fs = require('fs');\n\
+                     fs.writeFileSync('out.txt', 'real effect bytes');\n\
+                     fs.readFileSync('out.txt');\n"
+                .to_string(),
+            source_file: None,
+            capabilities: vec![
+                "vm_dispatch".to_string(),
+                "heap_allocate".to_string(),
+                "fs_read".to_string(),
+                "fs_write".to_string(),
+            ],
+            version: "1.0.0".to_string(),
+            metadata: BTreeMap::new(),
+        };
+
+        let result = orch
+            .execute(&pkg)
+            .expect("real fs JS binding-form program executes");
+
+        // The write hit the real sandbox filesystem.
+        assert_eq!(
+            std::fs::read(root.join("out.txt")).expect("written file on disk"),
+            b"real effect bytes",
+            "binding-form writeFileSync must have produced a real file in the sandbox"
+        );
+
+        // Both host effects were recorded and surfaced on the result.
+        let kinds: Vec<&str> = result
+            .host_effect_transcript
+            .iter()
+            .map(|(request, _)| request.kind())
+            .collect();
+        assert_eq!(
+            kinds,
+            vec!["fs_write", "fs_read"],
+            "binding-form fs ops must surface fs_write then fs_read host effects, got {kinds:?}"
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// bd-1xl17.d (return shapes, end-to-end): an idiomatic
+    /// `readFileSync(path, 'utf8')` call — arity 2, with an explicit encoding —
+    /// compiles, lowers (relaxed read arity), and EXECUTES through the real
+    /// pipeline + SandboxedHostIo without faulting, surfacing the same
+    /// [fs_write, fs_read] host-effect transcript as the no-encoding form. Before
+    /// the arity relaxation an arity-2 read fell through the fs recognizer and
+    /// faulted as an ordinary (unbound) call, so this is the e2e regression guard
+    /// for the encoding-arg path. (The exact JS return value — Buffer vs string —
+    /// is asserted at the dispatch layer in
+    /// `hostcall_fs_dispatch_performs_real_io_through_provider_bd_f5b04_2_7`.)
+    #[test]
+    fn read_with_encoding_executes_end_to_end_bd_1xl17_d() {
+        use frankenengine_extension_host::host_io::{InMemoryHostIoTranscript, SandboxedHostIo};
+
+        let mut root = std::env::temp_dir();
+        root.push(format!(
+            "frankenengine_e2e_fs_encoding_{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("scratch root");
+
+        let provider = Arc::new(SandboxedHostIo::with_root(&root).expect("sandboxed provider"));
+        let recorder = Arc::new(InMemoryHostIoTranscript::recording());
+
+        let mut orch = ExecutionOrchestrator::new(OrchestratorConfig::default());
+        let recorder_dyn: Arc<dyn HostIoRecorder> = recorder.clone();
+        orch.set_host_io(provider, Some(recorder_dyn));
+
+        // The read passes an explicit 'utf8' encoding (arity 2) — the form that
+        // previously faulted because the recognizer required an exact read arity
+        // of 1.
+        let pkg = ExtensionPackage {
+            extension_id: "fs-e2e-encoding".to_string(),
+            source: "const fs = require('fs');\n\
+                     fs.writeFileSync('out.txt', 'real effect bytes');\n\
+                     fs.readFileSync('out.txt', 'utf8');\n"
+                .to_string(),
+            source_file: None,
+            capabilities: vec![
+                "vm_dispatch".to_string(),
+                "heap_allocate".to_string(),
+                "fs_read".to_string(),
+                "fs_write".to_string(),
+            ],
+            version: "1.0.0".to_string(),
+            metadata: BTreeMap::new(),
+        };
+
+        let result = orch
+            .execute(&pkg)
+            .expect("arity-2 readFileSync(path, 'utf8') program executes without faulting");
+
+        // The write still hit the real sandbox filesystem.
+        assert_eq!(
+            std::fs::read(root.join("out.txt")).expect("written file on disk"),
+            b"real effect bytes",
+            "writeFileSync must have produced a real file in the sandbox"
+        );
+
+        // The encoding read lowers + executes and still surfaces both effects.
+        let kinds: Vec<&str> = result
+            .host_effect_transcript
+            .iter()
+            .map(|(request, _)| request.kind())
+            .collect();
+        assert_eq!(
+            kinds,
+            vec!["fs_write", "fs_read"],
+            "the encoding read must still surface fs_write then fs_read, got {kinds:?}"
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// Shared mock-free driver for the bd-1xl17.b ESM-import fs tests: compile +
+    /// execute `source` as a Module through `ExecutionOrchestrator::execute` with a
+    /// real `SandboxedHostIo`, then assert the bytes hit the sandbox disk and an
+    /// [fs_write, fs_read] host-effect transcript was surfaced — proving the ESM
+    /// import lowering reaches the host-effect ledger like the require forms.
+    fn assert_esm_fs_source_lowers_to_host_effects(source: &str, scratch_label: &str) {
+        use frankenengine_extension_host::host_io::{InMemoryHostIoTranscript, SandboxedHostIo};
+
+        let mut root = std::env::temp_dir();
+        root.push(format!("{scratch_label}_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("scratch root");
+
+        let provider = Arc::new(SandboxedHostIo::with_root(&root).expect("sandboxed provider"));
+        let recorder = Arc::new(InMemoryHostIoTranscript::recording());
+
+        // ESM imports require the module parse goal.
+        let cfg = OrchestratorConfig {
+            parse_goal: ParseGoal::Module,
+            ..OrchestratorConfig::default()
+        };
+        let mut orch = ExecutionOrchestrator::new(cfg);
+        let recorder_dyn: Arc<dyn HostIoRecorder> = recorder.clone();
+        orch.set_host_io(provider, Some(recorder_dyn));
+
+        let pkg = ExtensionPackage {
+            extension_id: scratch_label.to_string(),
+            source: source.to_string(),
+            source_file: None,
+            capabilities: vec![
+                "vm_dispatch".to_string(),
+                "heap_allocate".to_string(),
+                "fs_read".to_string(),
+                "fs_write".to_string(),
+            ],
+            version: "1.0.0".to_string(),
+            metadata: BTreeMap::new(),
+        };
+
+        let result = orch.execute(&pkg).expect("ESM fs program executes");
+
+        // The write hit the real sandbox filesystem.
+        assert_eq!(
+            std::fs::read(root.join("out.txt")).expect("written file on disk"),
+            b"real effect bytes",
+            "ESM-import writeFileSync must have produced a real file in the sandbox"
+        );
+
+        // Both host effects were recorded and surfaced — the ledger source.
+        let kinds: Vec<&str> = result
+            .host_effect_transcript
+            .iter()
+            .map(|(request, _)| request.kind())
+            .collect();
+        assert_eq!(
+            kinds,
+            vec!["fs_write", "fs_read"],
+            "ESM-import fs ops must surface fs_write then fs_read host effects, got {kinds:?}"
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// bd-1xl17.b (ESM named import): `import { writeFileSync, readFileSync } from
+    /// 'node:fs'` with direct calls lowers to `fs:` HostCalls that perform real
+    /// sandboxed I/O and surface a non-empty host-effect transcript. Mock-free
+    /// end-to-end through `ExecutionOrchestrator::execute`.
+    #[test]
+    fn esm_named_import_fs_program_produces_host_effects_bd_1xl17_b() {
+        assert_esm_fs_source_lowers_to_host_effects(
+            "import { writeFileSync, readFileSync } from 'node:fs';\n\
+             writeFileSync('out.txt', 'real effect bytes');\n\
+             readFileSync('out.txt');\n",
+            "frankenengine_e2e_fs_esm_named",
+        );
+    }
+
+    /// bd-1xl17.b (ESM namespace import): `import * as fs from 'node:fs'` with
+    /// `fs.writeFileSync/readFileSync` member calls lowers to `fs:` HostCalls.
+    /// Mock-free end-to-end.
+    #[test]
+    fn esm_namespace_import_fs_program_produces_host_effects_bd_1xl17_b() {
+        assert_esm_fs_source_lowers_to_host_effects(
+            "import * as fs from 'node:fs';\n\
+             fs.writeFileSync('out.txt', 'real effect bytes');\n\
+             fs.readFileSync('out.txt');\n",
+            "frankenengine_e2e_fs_esm_namespace",
+        );
+    }
+
+    /// bd-1xl17.b (ESM default import): `import fs from 'node:fs'` with
+    /// `fs.writeFileSync/readFileSync` member calls lowers to `fs:` HostCalls.
+    /// Mock-free end-to-end.
+    #[test]
+    fn esm_default_import_fs_program_produces_host_effects_bd_1xl17_b() {
+        assert_esm_fs_source_lowers_to_host_effects(
+            "import fs from 'node:fs';\n\
+             fs.writeFileSync('out.txt', 'real effect bytes');\n\
+             fs.readFileSync('out.txt');\n",
+            "frankenengine_e2e_fs_esm_default",
+        );
+    }
+
+    /// bd-1xl17.c (async, end-to-end): named imports from 'node:fs/promises'
+    /// (`writeFile`/`readFile`) compile, lower (to fs: HostCalls wrapped in
+    /// promise:resolve), and EXECUTE through the real pipeline + SandboxedHostIo —
+    /// the calls evaluate to Promises, the real fs effects still hit disk eagerly,
+    /// and the surfaced transcript is the same [fs_write, fs_read] as the sync
+    /// forms (the promise:resolve wrap is internal VM work, not a host effect).
+    /// Mock-free; proves the async-fs lowering reaches the host-effect ledger.
+    #[test]
+    fn esm_fs_promises_named_import_produces_host_effects_bd_1xl17_c() {
+        assert_esm_fs_source_lowers_to_host_effects(
+            "import { writeFile, readFile } from 'node:fs/promises';\n\
+             writeFile('out.txt', 'real effect bytes');\n\
+             readFile('out.txt');\n",
+            "frankenengine_e2e_fs_promises_named",
+        );
+    }
+
+    /// bd-1xl17.c (CJS binding, end-to-end): `const fsp = require('fs/promises')`
+    /// with `fsp.writeFile/readFile` member calls compiles, lowers (fs: HostCalls
+    /// wrapped in promise:resolve), and EXECUTES through the real pipeline +
+    /// SandboxedHostIo — real bytes on disk + a [fs_write, fs_read] transcript (the
+    /// promise:resolve wraps are internal VM work, not host effects). Mock-free.
+    #[test]
+    fn cjs_fs_promises_binding_produces_host_effects_bd_1xl17_c() {
+        use frankenengine_extension_host::host_io::{InMemoryHostIoTranscript, SandboxedHostIo};
+
+        let mut root = std::env::temp_dir();
+        root.push(format!(
+            "frankenengine_e2e_fs_promises_cjs_{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("scratch root");
+
+        let provider = Arc::new(SandboxedHostIo::with_root(&root).expect("sandboxed provider"));
+        let recorder = Arc::new(InMemoryHostIoTranscript::recording());
+
+        let mut orch = ExecutionOrchestrator::new(OrchestratorConfig::default());
+        let recorder_dyn: Arc<dyn HostIoRecorder> = recorder.clone();
+        orch.set_host_io(provider, Some(recorder_dyn));
+
+        let pkg = ExtensionPackage {
+            extension_id: "fs-e2e-promises-cjs".to_string(),
+            source: "const fsp = require('fs/promises');\n\
+                     fsp.writeFile('out.txt', 'real effect bytes');\n\
+                     fsp.readFile('out.txt');\n"
+                .to_string(),
+            source_file: None,
+            capabilities: vec![
+                "vm_dispatch".to_string(),
+                "heap_allocate".to_string(),
+                "fs_read".to_string(),
+                "fs_write".to_string(),
+            ],
+            version: "1.0.0".to_string(),
+            metadata: BTreeMap::new(),
+        };
+
+        let result = orch
+            .execute(&pkg)
+            .expect("fs/promises CJS binding program executes");
+
+        assert_eq!(
+            std::fs::read(root.join("out.txt")).expect("written file on disk"),
+            b"real effect bytes",
+            "fs/promises writeFile must have produced a real file in the sandbox"
+        );
+
+        let kinds: Vec<&str> = result
+            .host_effect_transcript
+            .iter()
+            .map(|(request, _)| request.kind())
+            .collect();
+        assert_eq!(
+            kinds,
+            vec!["fs_write", "fs_read"],
+            "fs/promises CJS ops must surface fs_write then fs_read, got {kinds:?}"
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
@@ -3234,6 +6225,90 @@ mod tests {
     }
 
     #[test]
+    fn residual_compression_failure_is_evidenced_before_containment_and_cell_close() {
+        let pkg = package_with_metadata(
+            "ext-compression-degraded-containment",
+            "const obj = { constructor: 1 }; obj.constructor;",
+            &[
+                ("guardplane.enable_instruction_hooks", "true"),
+                ("capability_witness.trust_level", "suspicious"),
+                ("capability_witness.confidence_millionths", "200000"),
+                ("capability_witness.denied_capabilities", "object.property"),
+            ],
+        );
+        let mut orch = ExecutionOrchestrator::with_defaults();
+        orch.force_next_evidence_compression_failure(EvidenceCompressionFailureStage::Coder);
+
+        let result = orch
+            .execute(&pkg)
+            .expect("compression degradation must not bypass post-effect cleanup");
+
+        assert!(matches!(
+            result.evidence_compression_status,
+            EvidenceCompressionStatus::Failed {
+                stage: EvidenceCompressionFailureStage::Coder,
+                ..
+            }
+        ));
+        assert!(result.evidence_compression_certificate.is_none());
+        assert_ne!(result.containment_action, ContainmentAction::Allow);
+        let receipt = result
+            .containment_receipt
+            .as_ref()
+            .expect("selected non-Allow containment must emit a receipt");
+        assert_eq!(receipt.action, result.containment_action);
+        assert!(receipt.verify_integrity());
+        assert!(
+            result
+                .finalize_result
+                .as_ref()
+                .is_some_and(|done| done.success)
+        );
+        assert!(!result.cell_events.is_empty());
+        assert_eq!(orch.execution_count(), 1);
+
+        let entry = &result.evidence_entries[0];
+        assert_eq!(
+            entry
+                .metadata
+                .get("evidence_compression_status")
+                .map(String::as_str),
+            Some("failed")
+        );
+        assert_eq!(
+            entry
+                .metadata
+                .get("evidence_compression_failure_stage")
+                .map(String::as_str),
+            Some("coder")
+        );
+        assert!(
+            entry.metadata["evidence_compression_failure_detail"]
+                .contains("bounded evidence sketch")
+        );
+        assert!(
+            entry
+                .metadata
+                .contains_key("evidence_compression_sketch_hash")
+        );
+        assert!(
+            entry.metadata["evidence_compression_alphabet_size"]
+                .parse::<usize>()
+                .is_ok_and(|size| size <= 256)
+        );
+        assert!(
+            !entry
+                .metadata
+                .contains_key("evidence_compression_certificate_hash")
+        );
+        assert!(!entry.signed_envelope().producer_id.is_empty());
+        assert_eq!(
+            orch.ledger().entries()[0].evidence_hash,
+            entry.evidence_hash
+        );
+    }
+
+    #[test]
     fn result_epoch_matches_config() {
         let cfg = OrchestratorConfig {
             epoch: SecurityEpoch::from_raw(42),
@@ -3549,28 +6624,168 @@ mod tests {
     }
 
     #[test]
-    fn execute_propagates_cell_close_budget_exhaustion() {
+    fn bd_8yhg4_close_failure_preserves_containment_and_uncommitted_chain() {
         let cfg = OrchestratorConfig {
             cell_close_budget_ms: 1,
             ..OrchestratorConfig::default()
         };
         let mut orch = ExecutionOrchestrator::new(cfg);
+        orch.containment_action_override = Some(ContainmentAction::Sandbox);
         let err = orch
             .execute(&simple_package())
             .expect_err("cell close should fail on insufficient canonical budget");
+        let failure = err
+            .post_cell_failure()
+            .expect("cell-close failures must retain cleanup evidence");
 
-        match err {
+        match failure.primary_error.as_ref() {
             OrchestratorError::Cell(CellError::BudgetExhausted {
                 requested_ms,
                 remaining_ms,
                 ..
             }) => {
-                assert_eq!(requested_ms, 2);
-                assert_eq!(remaining_ms, 1);
+                assert_eq!(*requested_ms, 2);
+                assert_eq!(*remaining_ms, 1);
             }
             // SAFETY: Test validates orchestrator error for cell budget exhaustion
             other => panic!("unexpected error: {other:?}"),
         }
+        assert!(failure.cleanup.finalize_result.is_none());
+        assert!(matches!(
+            failure.cleanup.close_error,
+            Some(CellError::BudgetExhausted { .. })
+        ));
+        let staged = err
+            .uncommitted_evidence_chain()
+            .expect("post-containment close failure must preserve the staged exact batch");
+        assert_eq!(staged.commit_state, EvidenceChainCommitState::Uncommitted);
+        assert_eq!(
+            staged
+                .containment_receipt
+                .as_ref()
+                .map(|receipt| receipt.action),
+            Some(ContainmentAction::Sandbox)
+        );
+        assert!(staged.saga_id.is_none());
+        staged
+            .artifact
+            .verify_genesis(
+                &orch.evidence_verification_identity(),
+                orch.evidence_ledger_id(),
+                &failure.cleanup.trace_id,
+            )
+            .expect("uncommitted evidence must remain independently verifiable");
+
+        let mut foreign_executor = ContainmentExecutor::new();
+        foreign_executor.register("bd-8yhg4-spliced-target");
+        let foreign_receipt = foreign_executor
+            .execute(
+                ContainmentAction::Sandbox,
+                "bd-8yhg4-spliced-target",
+                &ContainmentContext {
+                    decision_id: "bd-8yhg4-spliced-decision".to_string(),
+                    evidence_refs: vec![failure.cleanup.trace_id.clone()],
+                    epoch: staged.artifact.entries[0].epoch_id,
+                    ..ContainmentContext::default()
+                },
+            )
+            .expect("foreign containment receipt must be internally valid");
+        let mut spliced = staged.clone();
+        spliced.containment_receipt = Some(foreign_receipt);
+        assert!(
+            spliced
+                .verify_with_context(
+                    &orch.evidence_verification_identity(),
+                    orch.evidence_chain_instance_id(),
+                    orch.evidence_ledger_id(),
+                    &failure.cleanup.trace_id,
+                    0,
+                    None,
+                )
+                .is_err(),
+            "a valid containment receipt for another target must not splice into this batch"
+        );
+
+        let primary_entry = &staged.artifact.entries[0];
+        let target = primary_entry
+            .metadata
+            .get("extension_id")
+            .expect("primary evidence must bind the extension target");
+        let mut foreign_decision_executor = ContainmentExecutor::new();
+        foreign_decision_executor.register(target);
+        let foreign_decision_receipt = foreign_decision_executor
+            .execute(
+                ContainmentAction::Sandbox,
+                target,
+                &ContainmentContext {
+                    decision_id: "bd-8yhg4-spliced-decision".to_string(),
+                    evidence_refs: vec![failure.cleanup.trace_id.clone()],
+                    epoch: primary_entry.epoch_id,
+                    ..ContainmentContext::default()
+                },
+            )
+            .expect("foreign-decision containment receipt must be internally valid");
+        let mut decision_spliced = staged.clone();
+        decision_spliced.containment_receipt = Some(foreign_decision_receipt);
+        assert!(
+            decision_spliced
+                .verify_with_context(
+                    &orch.evidence_verification_identity(),
+                    orch.evidence_chain_instance_id(),
+                    orch.evidence_ledger_id(),
+                    &failure.cleanup.trace_id,
+                    0,
+                    None,
+                )
+                .is_err(),
+            "a valid containment receipt for another decision must not splice into this batch"
+        );
+        assert!(orch.ledger().is_empty());
+    }
+
+    #[test]
+    fn bd_8yhg4_post_close_commit_failure_is_atomic_and_returns_staged_chain() {
+        let mut orch = ExecutionOrchestrator::with_defaults();
+        orch.containment_action_override = Some(ContainmentAction::Sandbox);
+        orch.ledger_commit_failure_override = true;
+
+        let error = orch
+            .execute(&simple_package())
+            .expect_err("injected post-close ledger commit must fail");
+        let failure = error
+            .post_cell_failure()
+            .expect("ledger commit failure must retain lifecycle evidence");
+        assert!(failure.cleanup.close_succeeded());
+        assert!(matches!(
+            failure.primary_error.as_ref(),
+            OrchestratorError::Ledger(LedgerError::SchemaValidationFailed { reason })
+                if reason == "injected post-close evidence ledger commit failure"
+        ));
+
+        let staged = error
+            .uncommitted_evidence_chain()
+            .expect("ledger commit failure must return the staged signed batch");
+        staged
+            .verify_with_context(
+                &orch.evidence_verification_identity(),
+                orch.evidence_chain_instance_id(),
+                orch.evidence_ledger_id(),
+                &failure.cleanup.trace_id,
+                0,
+                None,
+            )
+            .expect("staged failure evidence must verify at the unchanged genesis position");
+        assert_eq!(
+            staged
+                .containment_receipt
+                .as_ref()
+                .map(|receipt| receipt.action),
+            Some(ContainmentAction::Sandbox)
+        );
+        assert!(orch.ledger().is_empty());
+        assert_eq!(orch.ledger().evidence_chain_next_sequence(), 0);
+        assert!(orch.ledger().evidence_chain_head().is_none());
+        assert_eq!(orch.execution_count(), 0);
     }
 
     // -- Enrichment: evidence entries have trace_id --
@@ -3630,6 +6845,7 @@ mod tests {
             nondeterminism_trace: crate::deterministic_replay::NondeterminismTrace::new(
                 "orchestrator-test-stub",
             ),
+            generated_code_audit: Vec::new(),
         };
         let reward = ExecutionOrchestrator::execution_reward_millionths(&exec);
         // Zero instructions should yield maximum reward (no cost).
@@ -3675,6 +6891,139 @@ mod tests {
     #[test]
     fn action_to_saga_type_challenge_returns_none() {
         assert!(ExecutionOrchestrator::action_to_saga_type(ContainmentAction::Challenge).is_none());
+    }
+
+    fn assert_containment_saga_failure_preserves_receipt_and_closes_cell(
+        action: ContainmentAction,
+        expected_saga_type: SagaType,
+        expected_state: crate::containment_executor::ContainmentState,
+    ) {
+        let mut orchestrator = ExecutionOrchestrator::with_defaults();
+        orchestrator
+            .saga_orchestrator
+            .create_saga(
+                "orch:0:saga",
+                SagaType::Publish,
+                quarantine_saga_steps("preexisting"),
+                "preexisting-trace",
+                0,
+            )
+            .expect("duplicate-saga test precondition must succeed");
+        orchestrator.containment_action_override = Some(action);
+        let package = package_with_id(&format!("bd-ov8qr-{action}"));
+
+        let error = orchestrator
+            .execute(&package)
+            .expect_err("duplicate saga creation must fail after containment");
+        let failure = assert_successful_post_cell_cleanup(&error);
+        assert!(failure.additional_errors.is_empty());
+        assert!(matches!(
+            failure.primary_error.as_ref(),
+            OrchestratorError::Saga(SagaError::SagaAlreadyExists { saga_id })
+                if saga_id == "orch:0:saga"
+        ));
+
+        let evidence = error
+            .containment_saga_failure()
+            .expect("partial success must preserve saga-failure evidence");
+        assert_eq!(failure.containment_saga_failure.as_ref(), Some(evidence));
+        assert_eq!(evidence.action, action);
+        assert_eq!(evidence.receipt.action, action);
+        assert_eq!(evidence.receipt.target_extension_id, package.extension_id);
+        assert!(evidence.receipt.success);
+        assert_eq!(evidence.saga_id, "orch:0:saga");
+        assert_eq!(evidence.saga_type, expected_saga_type);
+        assert!(matches!(
+            &evidence.saga_error,
+            SagaError::SagaAlreadyExists { saga_id } if saga_id == "orch:0:saga"
+        ));
+
+        let encoded =
+            serde_json::to_vec(evidence).expect("saga-failure evidence must be serializable");
+        let decoded: ContainmentSagaFailureEvidence =
+            serde_json::from_slice(&encoded).expect("saga-failure evidence must round-trip");
+        assert_eq!(&decoded, evidence);
+
+        let staged = error
+            .uncommitted_evidence_chain()
+            .expect("saga failure must retain the signed batch as uncommitted evidence");
+        assert_eq!(staged.commit_state, EvidenceChainCommitState::Uncommitted);
+        assert_eq!(staged.containment_receipt.as_ref(), Some(&evidence.receipt));
+        assert_eq!(staged.saga_id.as_deref(), Some(evidence.saga_id.as_str()));
+        staged
+            .artifact
+            .verify_genesis(
+                &orchestrator.evidence_verification_identity(),
+                orchestrator.evidence_ledger_id(),
+                &failure.cleanup.trace_id,
+            )
+            .expect("saga failure must retain a valid signed exact batch");
+        staged
+            .verify_with_context(
+                &orchestrator.evidence_verification_identity(),
+                orchestrator.evidence_chain_instance_id(),
+                orchestrator.evidence_ledger_id(),
+                &failure.cleanup.trace_id,
+                0,
+                None,
+            )
+            .expect("saga failure wrapper must bind its receipt and saga to the signed batch");
+        let mut saga_spliced = staged.clone();
+        saga_spliced.saga_id = Some(format!("{}:foreign-saga", failure.cleanup.trace_id));
+        assert!(
+            saga_spliced
+                .verify_with_context(
+                    &orchestrator.evidence_verification_identity(),
+                    orchestrator.evidence_chain_instance_id(),
+                    orchestrator.evidence_ledger_id(),
+                    &failure.cleanup.trace_id,
+                    0,
+                    None,
+                )
+                .is_err(),
+            "a foreign saga id must not splice into the uncommitted signed batch"
+        );
+        assert!(orchestrator.ledger().is_empty());
+        assert_eq!(
+            orchestrator
+                .containment_executor
+                .state(&package.extension_id),
+            Some(expected_state)
+        );
+        let receipts = orchestrator
+            .containment_executor
+            .receipts(&package.extension_id);
+        assert_eq!(receipts.len(), 1);
+        assert_eq!(receipts[0], &evidence.receipt);
+        assert_eq!(orchestrator.saga_orchestrator.total_count(), 1);
+        assert_eq!(orchestrator.execution_count(), 0);
+    }
+
+    #[test]
+    fn bd_8yhg4_containment_saga_failure_preserves_suspend_receipt_and_closes_cell_bd_ov8qr() {
+        assert_containment_saga_failure_preserves_receipt_and_closes_cell(
+            ContainmentAction::Suspend,
+            SagaType::Revocation,
+            crate::containment_executor::ContainmentState::Suspended,
+        );
+    }
+
+    #[test]
+    fn containment_saga_failure_preserves_terminate_receipt_and_closes_cell_bd_ov8qr() {
+        assert_containment_saga_failure_preserves_receipt_and_closes_cell(
+            ContainmentAction::Terminate,
+            SagaType::Eviction,
+            crate::containment_executor::ContainmentState::Terminated,
+        );
+    }
+
+    #[test]
+    fn containment_saga_failure_preserves_quarantine_receipt_and_closes_cell_bd_ov8qr() {
+        assert_containment_saga_failure_preserves_receipt_and_closes_cell(
+            ContainmentAction::Quarantine,
+            SagaType::Quarantine,
+            crate::containment_executor::ContainmentState::Quarantined,
+        );
     }
 
     #[test]
@@ -3777,70 +7126,10 @@ mod tests {
 
     #[test]
     fn evidence_compression_certificate_surfaces_coder_failures() {
-        let mut package = simple_package();
-        let mut seen_symbols = BTreeSet::new();
-        let mut capabilities = Vec::new();
-        for index in 0..20_000 {
-            let capability = format!("capability-{index}");
-            let symbol = 1_000 + (ExecutionOrchestrator::stable_symbol(&capability) % 10_000);
-            if seen_symbols.insert(symbol) {
-                capabilities.push(capability);
-                if seen_symbols.len() == 257 {
-                    break;
-                }
-            }
-        }
-        assert_eq!(seen_symbols.len(), 257);
-        package.capabilities = capabilities;
-
-        let posterior = Posterior::default_prior();
-        let decision = ActionDecision {
-            action: ContainmentAction::Allow,
-            expected_loss_millionths: 0,
-            runner_up_action: ContainmentAction::Challenge,
-            runner_up_loss_millionths: 1,
-            explanation: crate::expected_loss_selector::DecisionExplanation {
-                posterior_snapshot: posterior.clone(),
-                loss_matrix_id: "test-loss-matrix".to_string(),
-                all_expected_losses: BTreeMap::from([
-                    ("allow".to_string(), 0),
-                    ("challenge".to_string(), 1),
-                ]),
-                margin_millionths: 1,
-            },
-            epoch: SecurityEpoch::from_raw(1),
-        };
-        let exec = ExecutionResult {
-            value: crate::baseline_interpreter::Value::Null,
-            hostcall_decisions: Vec::new(),
-            instructions_executed: 1,
-            requested_hook_action: None,
-            witness_events: Vec::new(),
-            events: Vec::new(),
-            console_output: Vec::new(),
-            iteration_traces: Vec::new(),
-            nondeterminism_trace: crate::deterministic_replay::NondeterminismTrace::new(
-                "orchestrator-test-stub",
-            ),
-        };
-        let update = UpdateResult {
-            posterior,
-            likelihoods: [500_000, 500_000, 500_000, 500_000],
-            cumulative_llr_millionths: 0,
-            update_count: 1,
-        };
-
-        let err = ExecutionOrchestrator::build_evidence_compression_certificate(
-            &package,
-            &decision,
-            decision.action,
-            &exec,
-            &update,
-            None,
-            None,
-            None,
-        )
-        .expect_err("large evidence alphabet must surface coder construction failure");
+        let symbols: Vec<u32> = (0..=256).collect();
+        let err =
+            ExecutionOrchestrator::build_evidence_compression_certificate_from_symbols(symbols)
+                .expect_err("raw oversized alphabets must surface coder construction failure");
 
         assert!(
             matches!(err, OrchestratorError::EvidenceCompressionCoder { .. }),
@@ -3850,6 +7139,34 @@ mod tests {
     }
 
     // -- Enrichment: stable_symbol determinism --
+
+    #[test]
+    fn capability_multiset_summary_is_order_invariant_and_content_sensitive() {
+        let original = vec!["alpha".to_string(), "beta".to_string()];
+        let reordered = vec!["beta".to_string(), "alpha".to_string()];
+        let duplicated = vec!["alpha".to_string(), "beta".to_string(), "beta".to_string()];
+        let changed = vec!["alpha".to_string(), "gamma".to_string()];
+
+        let original_summary = ExecutionOrchestrator::capability_multiset_summary(&original);
+        let reordered_summary = ExecutionOrchestrator::capability_multiset_summary(&reordered);
+        let duplicated_summary = ExecutionOrchestrator::capability_multiset_summary(&duplicated);
+        let changed_summary = ExecutionOrchestrator::capability_multiset_summary(&changed);
+
+        assert_eq!(original_summary.total, 2);
+        assert_eq!(
+            original_summary.multiset_hash,
+            reordered_summary.multiset_hash
+        );
+        assert_ne!(original_summary.total, duplicated_summary.total);
+        assert_ne!(
+            original_summary.multiset_hash,
+            duplicated_summary.multiset_hash
+        );
+        assert_ne!(
+            original_summary.multiset_hash,
+            changed_summary.multiset_hash
+        );
+    }
 
     #[test]
     fn stable_symbol_deterministic_for_same_input() {
@@ -3911,6 +7228,7 @@ mod tests {
             nondeterminism_trace: crate::deterministic_replay::NondeterminismTrace::new(
                 "orchestrator-test-stub",
             ),
+            generated_code_audit: Vec::new(),
         };
         let ev = ExecutionOrchestrator::build_evidence(&pkg, &exec, SecurityEpoch::from_raw(1));
         assert_eq!(ev.extension_id, "test-ext-1");
@@ -3934,6 +7252,7 @@ mod tests {
             nondeterminism_trace: crate::deterministic_replay::NondeterminismTrace::new(
                 "orchestrator-test-stub",
             ),
+            generated_code_audit: Vec::new(),
         };
         let ev = ExecutionOrchestrator::build_evidence(&pkg, &exec, SecurityEpoch::from_raw(1));
         assert_eq!(ev.resource_score_millionths, 1_000_000);
@@ -3961,6 +7280,7 @@ mod tests {
             nondeterminism_trace: crate::deterministic_replay::NondeterminismTrace::new(
                 "orchestrator-test-stub",
             ),
+            generated_code_audit: Vec::new(),
         };
         let ev = ExecutionOrchestrator::build_evidence(&pkg, &exec, SecurityEpoch::from_raw(2));
         assert_eq!(ev.distinct_capabilities, 3);
@@ -4007,6 +7327,7 @@ mod tests {
             nondeterminism_trace: crate::deterministic_replay::NondeterminismTrace::new(
                 "orchestrator-test-stub",
             ),
+            generated_code_audit: Vec::new(),
         };
         let reward = ExecutionOrchestrator::execution_reward_millionths(&exec);
         assert!(reward > 0, "reward for 1 instruction should be positive");
@@ -4190,6 +7511,7 @@ mod tests {
             nondeterminism_trace: crate::deterministic_replay::NondeterminismTrace::new(
                 "orchestrator-test-stub",
             ),
+            generated_code_audit: Vec::new(),
         };
         let ev = ExecutionOrchestrator::build_evidence(&pkg, &exec, SecurityEpoch::from_raw(1));
         // Division by zero for hostcall_rate should be handled (returns 0).
@@ -4225,6 +7547,7 @@ mod tests {
             nondeterminism_trace: crate::deterministic_replay::NondeterminismTrace::new(
                 "orchestrator-test-stub",
             ),
+            generated_code_audit: Vec::new(),
         };
         let reward = ExecutionOrchestrator::execution_reward_millionths(&exec);
         // 2 hostcalls => penalty = 2 * 25_000 = 50_000. Reward = 1M - 0 - 50_000 = 950_000.
@@ -4254,6 +7577,7 @@ mod tests {
             nondeterminism_trace: crate::deterministic_replay::NondeterminismTrace::new(
                 "orchestrator-test-stub",
             ),
+            generated_code_audit: Vec::new(),
         };
         let reward = ExecutionOrchestrator::execution_reward_millionths(&exec);
         // 100 hostcalls => penalty = min(100*25_000, 300_000) = 300_000. Reward = 700_000.
@@ -4370,6 +7694,33 @@ mod tests {
         assert!(cert.shannon_lower_bound_bits >= 0);
         // Overhead ratio is in fixed-point millionths; should be non-negative.
         assert!(cert.overhead_ratio_millionths >= 0);
+        cert.verify_integrity()
+            .expect("issued certificate should remain internally valid");
+        let metadata = &result.evidence_entries[0].metadata;
+        let certificate_hash = cert.certificate_hash.to_hex();
+        let artifact_hash = cert.compressed_artifact_hash.to_hex();
+        let content_hash = cert.content_hash.to_hex();
+        let model_hash = cert.model_hash.to_hex();
+        assert_eq!(
+            metadata.get("evidence_compression_certificate_schema"),
+            Some(&cert.schema)
+        );
+        assert_eq!(
+            metadata.get("evidence_compression_certificate_hash"),
+            Some(&certificate_hash)
+        );
+        assert_eq!(
+            metadata.get("evidence_compressed_artifact_hash"),
+            Some(&artifact_hash)
+        );
+        assert_eq!(
+            metadata.get("evidence_compressed_content_hash"),
+            Some(&content_hash)
+        );
+        assert_eq!(
+            metadata.get("evidence_compression_model_hash"),
+            Some(&model_hash)
+        );
     }
 
     #[test]
@@ -4387,6 +7738,7 @@ mod tests {
             nondeterminism_trace: crate::deterministic_replay::NondeterminismTrace::new(
                 "orchestrator-test-stub",
             ),
+            generated_code_audit: Vec::new(),
         };
         for raw_epoch in [1u64, 100, u64::MAX] {
             let epoch = SecurityEpoch::from_raw(raw_epoch);

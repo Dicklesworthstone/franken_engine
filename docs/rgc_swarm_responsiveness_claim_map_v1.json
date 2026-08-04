@@ -39,7 +39,7 @@
         "replay_wrapper": null
       },
       "verification_commands": [
-        "rch exec -- env CARGO_TARGET_DIR=$PWD/target_rch_scheduler_lane_pressure_snapshot_verify cargo test -p frankenengine-engine --lib pressure_snapshot -- --nocapture"
+        "env -u CARGO_ENCODED_RUSTFLAGS rch exec -- env -u CARGO_ENCODED_RUSTFLAGS CARGO_TARGET_DIR=$PWD/target_rch_scheduler_lane_pressure_snapshot_verify cargo test -p frankenengine-engine --lib pressure_snapshot -- --nocapture"
       ],
       "implementation_commits": [],
       "blocking_beads": [],
@@ -63,7 +63,7 @@
         "replay_wrapper": null
       },
       "verification_commands": [
-        "rch exec -- env CARGO_TARGET_DIR=$PWD/target_rch_execution_orchestrator_gate_verify cargo test -p frankenengine-engine --lib execution_orchestrator -- --nocapture"
+        "env -u CARGO_ENCODED_RUSTFLAGS rch exec -- env -u CARGO_ENCODED_RUSTFLAGS CARGO_TARGET_DIR=$PWD/target_rch_execution_orchestrator_gate_verify cargo test -p frankenengine-engine --lib execution_orchestrator -- --nocapture"
       ],
       "implementation_commits": [
         "67709c58",
@@ -89,7 +89,7 @@
         "replay_wrapper": null
       },
       "verification_commands": [
-        "rch exec -- env CARGO_TARGET_DIR=$PWD/target_rch_scheduler_lane_replay_verify cargo test -p frankenengine-engine --lib scheduler_replay -- --nocapture"
+        "env -u CARGO_ENCODED_RUSTFLAGS rch exec -- env -u CARGO_ENCODED_RUSTFLAGS CARGO_TARGET_DIR=$PWD/target_rch_scheduler_lane_replay_verify cargo test -p frankenengine-engine --lib scheduler_replay -- --nocapture"
       ],
       "implementation_commits": [],
       "blocking_beads": [],
@@ -142,7 +142,7 @@
         "replay_wrapper": null
       },
       "verification_commands": [
-        "rch exec -- env CARGO_TARGET_DIR=$PWD/target_rch_runtime_comparison_drift_verify cargo test -p frankenengine-engine --test runtime_comparison_gate_integration workload_drift_gate -- --nocapture"
+        "env -u CARGO_ENCODED_RUSTFLAGS rch exec -- env -u CARGO_ENCODED_RUSTFLAGS CARGO_TARGET_DIR=$PWD/target_rch_runtime_comparison_drift_verify cargo test -p frankenengine-engine --test runtime_comparison_gate_integration workload_drift_gate -- --nocapture"
       ],
       "implementation_commits": [],
       "blocking_beads": [],
@@ -164,7 +164,7 @@
         "replay_wrapper": null
       },
       "verification_commands": [
-        "rch exec -- env CARGO_TARGET_DIR=$PWD/target_rch_scheduler_lane_fairness_verify CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 RUSTFLAGS='-C linker=cc' cargo +nightly-2026-04-22 test -p frankenengine-engine --lib extension_fairness -- --nocapture"
+        "env -u CARGO_ENCODED_RUSTFLAGS rch exec -- env -u CARGO_ENCODED_RUSTFLAGS CARGO_TARGET_DIR=$PWD/target_rch_scheduler_lane_fairness_verify CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 RUSTFLAGS='-C linker=cc -Clinker-features=-lld' cargo +nightly-2026-04-22 test -p frankenengine-engine --lib extension_fairness -- --nocapture"
       ],
       "implementation_commits": [
         "338f86dd"
@@ -188,7 +188,7 @@
         "replay_wrapper": null
       },
       "verification_commands": [
-        "rch exec -- env CARGO_TARGET_DIR=$PWD/target_rch_scheduler_lane_cancel_latency_verify CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 RUSTFLAGS='-C linker=cc' cargo +nightly-2026-04-22 test -p frankenengine-engine --lib cancel_lane_latency -- --nocapture"
+        "env -u CARGO_ENCODED_RUSTFLAGS rch exec -- env -u CARGO_ENCODED_RUSTFLAGS CARGO_TARGET_DIR=$PWD/target_rch_scheduler_lane_cancel_latency_verify CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 RUSTFLAGS='-C linker=cc -Clinker-features=-lld' cargo +nightly-2026-04-22 test -p frankenengine-engine --lib cancel_lane_latency -- --nocapture"
       ],
       "implementation_commits": [
         "c4243971"
@@ -227,7 +227,7 @@
       "verification_commands": [
         "./scripts/run_rgc_cold_start_compilation_lane.sh ci",
         "./scripts/e2e/rgc_cold_start_compilation_lane_replay.sh ci",
-        "rch exec -- env CARGO_TARGET_DIR=$PWD/target_rch_cold_start_memory_envelope_verify CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 RUSTFLAGS='-C linker=cc' cargo +nightly-2026-04-22 test -p frankenengine-engine --lib cold_start_compilation_lane::tests -- --nocapture"
+        "env -u CARGO_ENCODED_RUSTFLAGS rch exec -- env -u CARGO_ENCODED_RUSTFLAGS CARGO_TARGET_DIR=$PWD/target_rch_cold_start_memory_envelope_verify CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 RUSTFLAGS='-C linker=cc -Clinker-features=-lld' cargo +nightly-2026-04-22 test -p frankenengine-engine --lib cold_start_compilation_lane::tests -- --nocapture"
       ],
       "implementation_commits": [
         "339178ba",
@@ -268,8 +268,8 @@
       "verification_commands": [
         "./scripts/run_rgc_tail_latency_control_plane.sh ci",
         "./scripts/e2e/rgc_tail_latency_control_plane_replay.sh ci",
-        "RCH_VISIBILITY=verbose rch exec -- env CARGO_TARGET_DIR=$PWD/target_rch_admission_publication_bundle_verify CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 RUSTFLAGS='-C linker=cc' cargo +nightly-2026-04-22 test -p frankenengine-engine --lib admission_publication_bundle -- --nocapture",
-        "RCH_VISIBILITY=verbose rch exec -- env CARGO_TARGET_DIR=$PWD/target_rch_admission_publication_bundle_mix_verify CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 RUSTFLAGS='-C linker=cc' cargo +nightly-2026-04-22 test -p frankenengine-engine --lib synthetic_contention_publication_bundle_captures_queue_and_shed_mix -- --nocapture"
+        "env -u CARGO_ENCODED_RUSTFLAGS RCH_VISIBILITY=verbose rch exec -- env -u CARGO_ENCODED_RUSTFLAGS CARGO_TARGET_DIR=$PWD/target_rch_admission_publication_bundle_verify CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 RUSTFLAGS='-C linker=cc -Clinker-features=-lld' cargo +nightly-2026-04-22 test -p frankenengine-engine --lib admission_publication_bundle -- --nocapture",
+        "env -u CARGO_ENCODED_RUSTFLAGS RCH_VISIBILITY=verbose rch exec -- env -u CARGO_ENCODED_RUSTFLAGS CARGO_TARGET_DIR=$PWD/target_rch_admission_publication_bundle_mix_verify CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 RUSTFLAGS='-C linker=cc -Clinker-features=-lld' cargo +nightly-2026-04-22 test -p frankenengine-engine --lib synthetic_contention_publication_bundle_captures_queue_and_shed_mix -- --nocapture"
       ],
       "implementation_commits": [
         "b640e78c"
@@ -293,7 +293,7 @@
         "replay_wrapper": null
       },
       "verification_commands": [
-        "rch exec -- env CARGO_TARGET_DIR=$PWD/target_rch_swarm_fleet_health_verify CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 RUSTFLAGS='-C linker=cc' cargo +nightly-2026-04-22 test -p frankenengine-engine --lib swarm_fleet_health_overview -- --nocapture"
+        "env -u CARGO_ENCODED_RUSTFLAGS rch exec -- env -u CARGO_ENCODED_RUSTFLAGS CARGO_TARGET_DIR=$PWD/target_rch_swarm_fleet_health_verify CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 RUSTFLAGS='-C linker=cc -Clinker-features=-lld' cargo +nightly-2026-04-22 test -p frankenengine-engine --lib swarm_fleet_health_overview -- --nocapture"
       ],
       "implementation_commits": [
         "c52fdc81"
@@ -306,6 +306,6 @@
     "jq empty docs/rgc_swarm_responsiveness_claim_map_v1.json",
     "./scripts/e2e/rgc_swarm_responsiveness_claim_map_smoke.sh check",
     "./scripts/e2e/rgc_swarm_responsiveness_claim_map_smoke.sh selftest",
-    "rch exec -- env CARGO_TARGET_DIR=$PWD/target_rch_swarm_responsiveness_claim_map_verify bash ./scripts/e2e/rgc_swarm_responsiveness_claim_map_smoke.sh selftest"
+    "env -u CARGO_ENCODED_RUSTFLAGS rch exec -- env -u CARGO_ENCODED_RUSTFLAGS CARGO_TARGET_DIR=$PWD/target_rch_swarm_responsiveness_claim_map_verify bash ./scripts/e2e/rgc_swarm_responsiveness_claim_map_smoke.sh selftest"
   ]
 }

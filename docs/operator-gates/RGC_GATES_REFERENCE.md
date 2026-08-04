@@ -2995,6 +2995,104 @@ siblings root), and write the report and summary under
 (`component=sibling_repo_verification`) per pin-update with a `committed` /
 `held` outcome.
 
+### Sibling-isolation and standalone-release lanes (`bd-ndpm2`, `bd-gw4cg`)
+
+```bash
+./scripts/test_standalone_build.sh sibling-isolation   # also runs inside `ci`
+```
+
+The isolation lane asserts that **no `/dp` sibling dependency can affect a
+standalone build**:
+
+1. `crates/franken-engine/Cargo.toml` contains zero `/dp/*` path dependencies;
+   and
+2. `cargo tree -p frankenengine-engine --no-default-features -e normal,dev`
+   names zero `/dp/` paths.
+
+Assertion 1 still fires in a tree where cargo is unavailable and rejects even
+an optional path edge: Cargo resolves that dependency's manifest before feature
+selection, so an absent `/dp` checkout would fail. `-e normal,dev` is deliberate:
+the crate carries a self dev-dependency, and while that entry lacked
+`default-features = false` it re-enabled `default` for every test target — so
+`cargo test --no-default-features` quietly rebuilt sibling integrations. A
+normal-only assertion is blind to that whole class of regression.
+
+Unlike the other lanes this one keeps enforcing under
+`STANDALONE_BUILD_GATE_SKIP_REMOTE=1`. It is a manifest plus `cargo tree`
+assertion needing no rch worker, and letting the skip flag disable it would turn
+off the guarantee precisely when the heavy lanes are already skipped.
+
+**What this lane does NOT claim by itself.** A dependency-graph assertion is not
+a completed release build. The separate `standalone-release` lane runs
+`cargo build --release --no-default-features -p frankenengine-engine --bin
+frankenctl`; pull-request CI runs that command on a hosted runner only after
+asserting `/dp` is absent. The `ci` mode requires check, test, and release lanes
+for its standalone verdict and blocks on every recorded failed lane.
+
+The nine former sibling path dependencies moved to versioned registry entries
+under `bd-gw4cg`. A second historical cause, the workspace `[patch.crates-io]`
+block that required `/dp/frankensqlite`, was removed on 2026-07-25 under
+`bd-h5cl7` and is now guarded by its own lane — see below.
+
+### `patch-version-consistency` lane (`bd-h5cl7`)
+
+**What it asserts.** That no `[patch.*]` entry substitutes a crate whose version
+differs from what its consumers declare — and, separately, that the guard making
+that assertion is capable of failing.
+
+**Why exact equality, not semver compatibility.** The engine's workspace used to
+patch `fsqlite` at `/dp/frankensqlite`. `sqlmodel-frankensqlite` declares
+`fsqlite = "0.1.18"`; local frankensqlite was `0.1.19` and had shipped a breaking
+sync → async API under that patch-level bump. Cargo's 0.x rules make `^0.1.18`
+admit `0.1.19`, so the substitution applied silently: 33 sync call sites met
+Futures, the default build went red, and 7 of the 16 OBSERVED claims became
+unverifiable because their verification commands are default-feature builds. A
+semver-compatibility check would have passed. A crate patched from a development
+checkout can acquire unreleased breaking changes at any moment, which is exactly
+what a version requirement cannot express, so the lane requires the substituted
+version to be *exactly* what every consumer declares. A requirement that cannot
+reduce to a single version (a range such as `>=0.1, <0.3`) is itself the
+ambiguity being guarded against and fails closed.
+
+**Why it is not a `cargo test`.** The condition it detects makes the tree fail to
+compile, so a Rust test could not run in the state that most needs checking. The
+guard is standalone Python reading manifests with `tomllib`; it consults `cargo
+metadata` only when a patch entry actually exists, because metadata resolves
+without compiling and is the only source that sees consumers living outside this
+repository (the offending consumer was in `/dp/sqlmodel_rust`). With no patch
+entries the check is instant and needs no cargo at all.
+
+**Run it.**
+
+```bash
+./scripts/test_standalone_build.sh patch-version-consistency
+python3 scripts/check_patch_version_consistency.py --json /tmp/report.json
+./scripts/e2e/patch_version_consistency_drift.sh   # negative drill
+```
+
+**Triage.** On failure read
+`artifacts/standalone_build_gate/<ts>/patch_version_consistency_report.json`.
+Every finding carries a `code`, the `crate`, a `detail` naming both versions and
+the consumer, and a `remediation`. Codes: `FE-PATCH-VERSION-SKEW` (the substituted
+version is not what a consumer declares), `FE-PATCH-REQ-NOT-EXACT` (a consumer's
+requirement is a range, so the substitution is unverifiable), `FE-PATCH-UNUSED`
+(the patch names a crate absent from the resolved graph, so it is dead weight
+that will start applying silently if that dependency is ever added), and
+`FE-PATCH-MANIFEST-MISSING` (a manifest the guard is meant to cover has moved).
+
+**Coverage note.** The `sibling-isolation` lane reads only
+`crates/franken-engine/Cargo.toml` and so never saw the root patch block; this
+lane reads the root workspace manifest *and* `crates/franken-engine/fuzz/Cargo.toml`,
+which carried a byte-identical copy that had already drifted out of sight. Both
+are named explicitly rather than globbed, so a manifest that moves is reported
+rather than silently dropped from coverage.
+
+**Triage.** On failure read
+`artifacts/standalone_build_gate/<ts>/step_logs/sibling-isolation.log`: it prints
+each assertion and, for assertion 2, the offending `cargo tree` lines. The usual
+cause is a reintroduced `/dp` path dependency, or a dependent crate whose engine
+edge is missing `default-features = false`.
+
 ## Self-replacement lineage
 
 Track V (`bd-cixqu.22`) delivers verified self-replacement lineage: a slot is
@@ -3175,6 +3273,14 @@ because the matrix is consistent with the (absent) proof evidence. See
 `docs/operator-gates/FE_CLAIM_016_021_PROMOTION_DECISION.md` for the per-claim
 reality assessment and the path to promotion (G.13 / bd-cixqu.7.16).
 
+When these six claims do promote, the proof artifacts this gate (and G.9)
+recheck are the same artifacts that ship to downstream consumers inside the Y.1
+proof bundle. Operators and downstream consumers verify that bundle through the
+**Y.4 operator surface** — `runbooks/scripts/verify_proof_bundle.sh`, the
+*Proof Bundle Verification Operator Surface (Y.4)* section below, and the public
+guide `docs/PROOF_BUNDLE_VERIFICATION.md` — so a G.10/G.13 promotion is
+externally re-checkable without the FrankenEngine source tree.
+
 ## Proof Bundle Export (Y.1)
 
 `bd-cixqu.25.1` packages a **third-party-verifiable proof bundle** alongside the
@@ -3209,5 +3315,191 @@ post-export tamper of a proof body breaks the match (tamper-evident). The
 `selftest` proves export → complete, deterministic tar entries, digest
 reproducibility across re-exports, and tamper detection — without an engine
 build.
+
+## Proof Bundle Verification Operator Surface (Y.4)
+
+`bd-cixqu.25.4` is the friendly operator/consumer surface over the Y.1 bundle and
+the Y.2 clean-room checker. A downstream consumer verifies a release proof bundle
+with a single command — no FrankenEngine source tree required — and gets back a
+classification that tells them exactly what to do next:
+
+```bash
+# Auto: docker clean-room for a tar when the daemon is reachable, else local python3.
+runbooks/scripts/verify_proof_bundle.sh verify proof_bundle.tar.gz
+
+# Prove all four classifications without an engine build.
+runbooks/scripts/verify_proof_bundle.sh selftest
+
+# Composition gate: real round-trip + tamper + drift + anti-drift constants + docker.
+./scripts/run_y4_proof_bundle_operator_surface.sh ci
+
+# Replay a preserved gate bundle (re-verify valid + tampered tars; fails closed).
+./scripts/e2e/y4_proof_bundle_operator_surface_replay.sh
+```
+
+The wrapper re-checks via the **single source of truth** Y.2 checker
+(`docker/y2_proof_bundle_verifier/verify_proof_bundle.py`, run in the clean-room
+image or directly with `python3`) and layers a second, orthogonal dimension the
+checker does not: proof-assistant **version drift**. Because the recheck digest
+is a pure function of the proof bytes (version-independent), the two failure
+dimensions never collide, so the wrapper classifies cleanly:
+
+- `verified` (exit 0) — recheck digest matches the trust anchor; toolchain
+  aligned or simply absent. Safe to rely on.
+- `version_drift` (exit 0 advisory, exit 2 under `--strict-version`) — content is
+  intact, but the operator's Lean/Coq toolchain differs from the bundle pin.
+  **Update the toolchain**; the release itself is fine.
+- `proof_regression` (exit 1, fail-closed) — the recheck digest no longer
+  reproduces the trust anchor (tampered/non-proven proof, or incomplete bundle).
+  **Escalate to maintainers**; `failing_claims` names the offending proof(s).
+
+The classified verdict (`franken-engine.proof-bundle-operator-verdict.v1`) and a
+per-release history feed the operator-facing
+`ProofBundleStatusPanel`
+(`crates/franken-engine/src/proof_bundle_status_panel.rs`) for the frankentui
+console. Per bd-cixqu.45 every run writes a content-addressed bundle under
+`artifacts/proof_bundle_operator_verify/<ts>/` (events.jsonl, commands.txt,
+operator + raw verdicts, run_manifest.json). The Y.4 `ci` gate's PIN 4 asserts
+the wrapper's Y.2 image/gate constants agree with the Rust canonical constants
+(`PROOF_BUNDLE_VERIFIER_IMAGE` / `_GATE`) so the three tracks cannot drift. Full
+procedure: [`docs/PROOF_BUNDLE_VERIFICATION.md`](../PROOF_BUNDLE_VERIFICATION.md).
+
+## RGC Reproducibility-Universality Gate (bd-cixqu.14.3, Track N)
+
+Composes N.1 (the per-claim `env.json` + `manifest.json` + `repro.lock` emission
+under `docs/evidence/<CLAIM>/`) with N.2 (`scripts/third_party_repro_lock_verifier.sh`)
+and emits a single **reproducibility-universality verdict** bundle: it proves that
+*every* published claim-evidence `repro.lock` in the corpus is consumable by the
+independent third-party verifier — universality, not a single hand-picked fixture.
+
+```bash
+# Run the gate (enumerate docs/evidence/*/repro.lock, --plan-only verify each)
+./scripts/run_rgc_reproducibility_universality.sh ci
+
+# Replay a preserved bundle (auto-detects the latest complete bundle, or honours
+# RGC_REPRODUCIBILITY_UNIVERSALITY_REPLAY_RUN_DIR=<dir>); re-hashes each lock and
+# re-derives its plan, asserting byte-identical reproduction; fails closed.
+./scripts/e2e/rgc_reproducibility_universality_replay.sh bundle <run_dir>
+```
+
+The gate runs the verifier in `--plan-only` mode (validate the lock + derive the
+deterministic replay plan, no execution), so it needs neither cargo nor rch.
+Bundle shape: `artifacts/reproducibility_universality/<ts>/{run_manifest.json,
+events.jsonl, commands.txt, trace_ids, summary.txt, step_logs/, plans/}`. Fail-closed
+on any incomplete N.1 triple, any lock the verifier rejects, a corpus below the
+`RGC_REPRODUCIBILITY_UNIVERSALITY_MIN_LOCKS` floor (default 15), or a syntactically
+broken verifier.
+
+Scope (intentional): the perf/denominator-lineage locks (`franken-engine.repro-lock.v1`
+in `docs/perf/e2_denominator_bundle_v1` and `benchmarks/runtime_comparison`) lock the
+byte-identical correctness-verdict hash while allowing wall-clock timing to vary, which
+the strict third-party verifier deliberately rejects; they are covered by
+`scripts/run_e2_denominator_bundle_gate.sh` and are out of scope here.
+
+## Reproducibility verifier (third-party) (bd-cixqu.14.4, Track N N.4)
+
+The N.3 gate above proves the *corpus* is universally verifier-consumable. N.4 is
+the operator/auditor surface for verifying a *single* published bundle and
+diagnosing *why* a replay diverged. It composes two scripts over the N.2 single
+source of truth (`scripts/third_party_repro_lock_verifier.sh`):
+
+- `runbooks/scripts/run_third_party_verifier.sh` — re-checks one claim-evidence
+  bundle (the N.1 triple `env.json` + `manifest.json` + `repro.lock`) and emits a
+  typed verdict (`franken-engine.third-party-verifier-operator-verdict.v1`).
+- `runbooks/scripts/diagnose_env_drift.sh` — diffs a recorded `env.json` against
+  the replay host and classifies every difference as platform / toolchain /
+  dependency drift (`franken-engine.env-drift-diagnosis.v1`).
+
+The public auditor walkthrough is [`docs/THIRD_PARTY_VERIFICATION.md`](../THIRD_PARTY_VERIFICATION.md);
+the verifier toolkit reference is [`docs/THIRD_PARTY_VERIFIER_TOOLKIT.md`](../THIRD_PARTY_VERIFIER_TOOLKIT.md).
+
+### Running the verifier
+
+```bash
+# Verify a published bundle directory (auto-diagnoses env drift against this host).
+runbooks/scripts/run_third_party_verifier.sh verify docs/evidence/FE-CLAIM-001
+
+# Verify a bare repro.lock (no triple-completeness requirement).
+runbooks/scripts/run_third_party_verifier.sh verify path/to/repro.lock --no-diagnose
+
+# Actually re-run the locked replay commands (needs cargo/rch); default is plan-only.
+runbooks/scripts/run_third_party_verifier.sh verify docs/evidence/FE-CLAIM-001 --execute
+
+# Prove every classification without an engine build.
+runbooks/scripts/run_third_party_verifier.sh selftest
+```
+
+Reconciliation note: N.2 shipped as a *scripted* verifier environment, not a
+pre-built docker image (the only clean-room image in the repo is Y.2's). So the
+default path (`--via local`) runs the scripted verifier directly. For hermetic
+isolation an auditor can supply their own pinned base image:
+
+```bash
+runbooks/scripts/run_third_party_verifier.sh verify docs/evidence/FE-CLAIM-001 \
+  --via docker --image <pinned-image-with-bash+jq>
+```
+
+Both paths invoke the *identical* N.2 checker, so a verdict can never fork between
+them. The docker path is plan-only (a clean room has no cargo/rch).
+
+Classifications and exit codes:
+
+- `verified` (exit 0) — the lock validated (plan-only) or replayed to its expected
+  outcome (`--execute`); environment aligned or drift suppressed. Safe.
+- `env_drift` (exit 0 advisory, exit 2 under `--strict-drift`) — the lock still
+  validates, but the recorded `env.json` differs from the replay host. Reproduce
+  on a matching environment before concluding.
+- `verification_failed` (exit 1, fail-closed) — the verifier rejected the lock or
+  a replay command failed. The artifact is NOT verified; escalate to maintainers.
+- `bundle_incomplete` (exit 1) — the N.1 triple is missing a member. Re-export the
+  bundle. (`3` is CLI/environment error: missing target, docker requested without
+  an image, etc.)
+
+### Pinning a repro.lock from a published artifact
+
+A published bundle ships its own `repro.lock`; pin it by content hash so a later
+re-verify proves you re-checked the *same* lock the release published:
+
+```bash
+# Record the lock's content hash (length-prefixed canonical hashing is internal;
+# the file hash is the operator-facing pin).
+sha256sum docs/evidence/FE-CLAIM-001/repro.lock
+
+# The lock's own provenance: schema, source commit, and command sequence.
+jq '{schema_version, source_commit, replay}' docs/evidence/FE-CLAIM-001/repro.lock
+```
+
+The operator verdict echoes `lock_schema_version` and `source_commit` so the pin
+is captured in the run bundle (`artifacts/third_party_verifier_operator/<ts>/`).
+
+### Interpreting env.json drift (recorded vs replayed)
+
+When `run_third_party_verifier.sh` reports `env_drift`, run the diagnostician for
+the field-level breakdown:
+
+```bash
+# Diff the recorded env against the live host (add --lock for input-hash drift).
+runbooks/scripts/diagnose_env_drift.sh diagnose \
+  --recorded docs/evidence/FE-CLAIM-001/env.json \
+  --lock docs/evidence/FE-CLAIM-001/repro.lock
+
+# Compare two recorded snapshots (e.g. two published releases) — hermetic.
+runbooks/scripts/diagnose_env_drift.sh diagnose \
+  --recorded release-a/env.json --current release-b/env.json
+```
+
+The three drift classes, and what each means for a divergent replay:
+
+| Drift class | Fields compared | What a divergence means |
+|---|---|---|
+| **platform drift** | `host.architecture` (CPU), `host.kernel`, `host.os_version`, `host.platform` | The replay ran on a different machine class. Platform-sensitive outputs may legitimately differ; reproduce on a matching platform. |
+| **toolchain drift** | `toolchain.cargo_version`, `toolchain.rust_version`, `toolchain.rustc_target` | The Rust toolchain differs. Pin the recorded toolchain before concluding the artifact regressed. |
+| **dependency drift** | `project.commit`; with `--lock`, the locked `inputs.primary_artifact.hash` and the presence of every declared dependency file | The *inputs* differ. A divergent replay is expected, not a regression. |
+
+Only when all three class counts are zero (`verdict: aligned`) does a divergent
+verify implicate the artifact/claim itself rather than the environment. Per
+bd-cixqu.45 both scripts write content-addressed run bundles
+(`artifacts/{third_party_verifier_operator,env_drift_diagnosis}/<ts>/` with
+`events.jsonl`, `commands.txt`, the typed verdict, and `run_manifest.json`).
 
 ## Limitations

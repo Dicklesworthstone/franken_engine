@@ -33,6 +33,33 @@ use crate::security_epoch::SecurityEpoch;
 /// Schema version.
 pub const SCHEMA_VERSION: &str = "franken-engine.budgeted-synthesis-engine.v1";
 
+// ---------------------------------------------------------------------------
+// Content-hash preimage helpers
+// ---------------------------------------------------------------------------
+//
+// Content hashes must be *injective*: feeding adjacent free-form `String`s
+// (ids) into the hasher with no length marker, or appending an `Option` only
+// when `Some`, lets `("ab","c")` collide with `("a","bc")` and `Some("")`
+// alias `None`. These helpers append self-delimiting fields.
+
+/// Feed `bytes` with a fixed-width `u64` little-endian length prefix.
+fn update_len_prefixed(h: &mut Sha256, bytes: &[u8]) {
+    h.update((bytes.len() as u64).to_le_bytes());
+    h.update(bytes);
+}
+
+/// Feed an optional length-prefixed field with a presence tag so `Some("")`
+/// cannot alias `None`.
+fn update_opt_len_prefixed(h: &mut Sha256, value: Option<&[u8]>) {
+    match value {
+        Some(bytes) => {
+            h.update([1u8]);
+            update_len_prefixed(h, bytes);
+        }
+        None => h.update([0u8]),
+    }
+}
+
 /// Component name.
 pub const COMPONENT: &str = "budgeted_synthesis_engine";
 
@@ -318,11 +345,11 @@ impl SynthesisCandidate {
         let candidate_id = candidate_id.into();
         let original_schema_id = original_schema_id.into();
         let mut h = Sha256::new();
-        h.update(candidate_id.as_bytes());
-        h.update(original_schema_id.as_bytes());
-        h.update(origin.as_str().as_bytes());
+        update_len_prefixed(&mut h, candidate_id.as_bytes());
+        update_len_prefixed(&mut h, original_schema_id.as_bytes());
+        update_len_prefixed(&mut h, origin.as_str().as_bytes());
         h.update(op_count.to_le_bytes());
-        h.update(proof.status.as_str().as_bytes());
+        update_len_prefixed(&mut h, proof.status.as_str().as_bytes());
         h.update(speedup_millionths.to_le_bytes());
         let content_hash = ContentHash::compute(&h.finalize());
 
@@ -465,14 +492,12 @@ impl SynthesisReport {
             .map(|c| c.candidate_id.clone());
 
         let mut h = Sha256::new();
-        h.update(SCHEMA_VERSION.as_bytes());
+        update_len_prefixed(&mut h, SCHEMA_VERSION.as_bytes());
         h.update(epoch.as_u64().to_le_bytes());
-        h.update(target_schema_id.as_bytes());
+        update_len_prefixed(&mut h, target_schema_id.as_bytes());
         h.update((candidates.len() as u64).to_le_bytes());
         h.update((admissible_count as u64).to_le_bytes());
-        if let Some(ref best) = best_candidate_id {
-            h.update(best.as_bytes());
-        }
+        update_opt_len_prefixed(&mut h, best_candidate_id.as_deref().map(str::as_bytes));
         let content_hash = ContentHash::compute(&h.finalize());
 
         Self {
@@ -592,6 +617,36 @@ mod tests {
 
     fn epoch() -> SecurityEpoch {
         SecurityEpoch::from_raw(700)
+    }
+
+    #[test]
+    fn candidate_content_hash_injective_over_ids_bd_za74y() {
+        // Regression (bd-za74y): candidate_id + original_schema_id were
+        // concatenated into the preimage with no length prefix, so the pair
+        // ("ab","c") aliased ("a","bc").
+        let mk = |cid: &str, sid: &str| {
+            SynthesisCandidate::new(
+                cid,
+                sid,
+                CandidateOrigin::Enumerative,
+                3,
+                EquivalenceProof::verified(10, 100),
+                vec![],
+                vec![],
+                1_500_000,
+            )
+            .content_hash
+        };
+        assert_ne!(mk("ab", "c"), mk("a", "bc"));
+
+        // And the length-prefix helper itself is injective across the boundary.
+        let mut x = Sha256::new();
+        update_len_prefixed(&mut x, b"ab");
+        update_len_prefixed(&mut x, b"c");
+        let mut y = Sha256::new();
+        update_len_prefixed(&mut y, b"a");
+        update_len_prefixed(&mut y, b"bc");
+        assert_ne!(x.finalize(), y.finalize());
     }
 
     fn verified_candidate(id: &str, speedup: u64) -> SynthesisCandidate {

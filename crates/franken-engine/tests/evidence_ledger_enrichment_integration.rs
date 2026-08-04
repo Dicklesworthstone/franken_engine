@@ -25,7 +25,8 @@ use frankenengine_engine::evidence_ledger::{
     EVIDENCE_LEDGER_STITCHING_TRACE_IDS_SCHEMA_VERSION, EVIDENCE_QUERY_SURFACE_SCHEMA_VERSION,
     EvidenceEmitter, EvidenceEntry, EvidenceEntryBuilder, EvidenceGraphEdge, EvidenceGraphEdgeKind,
     EvidenceGraphNode, EvidenceGraphNodeKind, EvidenceLedgerGraph, EvidenceLedgerStitchingBundle,
-    EvidenceQueryRecord, EvidenceQuerySurfaceSnapshot, InMemoryLedger, LedgerError,
+    EvidenceQueryRecord, EvidenceQuerySurfaceSnapshot, InMemoryLedger,
+    LabFixtureEvidenceEntryBuilderExt as _, LabFixtureInMemoryLedgerExt as _, LedgerError,
     SchemaVersionExt, StitchingArtifactContext, StitchingStructuredLogEvent,
     StitchingTraceIdsArtifact, Witness, current_schema_version, render_stitching_summary,
 };

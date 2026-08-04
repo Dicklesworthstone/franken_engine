@@ -832,6 +832,9 @@ evaluate_target() {
         warning_delta_count=$((warning_delta_count + 1))
       fi
     fi
+    # Surface the per-target drift reason on stdout for operators (and the gate's
+    # own self-tests) instead of only burying it in the delta rows / summary json.
+    echo "cross-platform matrix target ${target_id}: ${reason}"
     if [[ "$explicitly_skipped" == "true" ]]; then
       append_delta_row \
         "$target_id" \
@@ -1010,7 +1013,12 @@ write_matrix_summary() {
 }
 
 run_mode() {
-  case "$mode" in
+  # Dispatch on the explicit argument when given (e.g. the `ci` case calls
+  # `run_mode check`/`run_mode test`/`run_mode clippy`), falling back to the
+  # global $mode for the top-level invocation. Without this, `run_mode check`
+  # re-read $mode=="ci" and re-entered the `ci` case, recursing until bash
+  # overflowed its stack (SIGSEGV / exit 139) — the gate's `ci` mode never ran.
+  case "${1:-$mode}" in
     check)
       run_step "jq empty ${contract_json_path}" jq empty "$contract_json_path" || return $?
       run_step "test -f ${contract_doc_path}" test -f "$contract_doc_path" || return $?
@@ -1032,10 +1040,20 @@ run_mode() {
       evaluate_matrix || return $?
       ;;
     matrix)
-      run_step \
-        "cargo test -p frankenengine-engine --test rgc_cross_platform_matrix -- --exact rgc_063_drift_classifier_assigns_expected_classes" \
-        cargo test -p frankenengine-engine --test rgc_cross_platform_matrix -- --exact rgc_063_drift_classifier_assigns_expected_classes \
-        || return $?
+      # Re-entrancy guard: rgc_063_gate_fails_on_silent_platform_absence and
+      # rgc_063_gate_succeeds_with_explicit_platform_skip spawn this gate in
+      # `matrix` mode from *inside* `cargo test`. Re-running cargo here would
+      # nest a second `cargo test` under the parent test run, cascading into a
+      # process explosion (observed as exit 139). Those tests only assert on the
+      # evaluate_matrix manifest-absence/skip output, so when invoked with
+      # RGC_CROSS_PLATFORM_SKIP_CARGO=1 we skip the cargo smoke and run only the
+      # matrix evaluation. Direct (non-test) `gate matrix` runs are unaffected.
+      if [[ "${RGC_CROSS_PLATFORM_SKIP_CARGO:-0}" != "1" ]]; then
+        run_step \
+          "cargo test -p frankenengine-engine --test rgc_cross_platform_matrix -- --exact rgc_063_drift_classifier_assigns_expected_classes" \
+          cargo test -p frankenengine-engine --test rgc_cross_platform_matrix -- --exact rgc_063_drift_classifier_assigns_expected_classes \
+          || return $?
+      fi
       evaluate_matrix || return $?
       ;;
     *)

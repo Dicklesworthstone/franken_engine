@@ -1388,7 +1388,8 @@ fn export_jsonlines_entries_are_json_objects() {
 }
 
 #[test]
-fn export_parquet_header_and_tab_delimited() {
+#[cfg(feature = "sibling-dataframes")]
+fn export_parquet_emits_real_parquet_container() {
     let entries = vec![make_evidence_entry("security_action", 30)];
     let req = AuditExportRequest {
         format: AuditExportFormat::Parquet,
@@ -1400,12 +1401,18 @@ fn export_parquet_header_and_tab_delimited() {
         correlation_id: None,
     };
     let result = export_audit_evidence(req, entries, ts(200)).unwrap();
-    let payload = String::from_utf8_lossy(&result.payload_bytes);
-    let lines: Vec<&str> = payload.lines().collect();
-    assert_eq!(lines[0], "FRANKEN_PARQUET_V1");
-    assert!(
-        lines[1].contains('\t'),
-        "parquet records should be tab-delimited"
+    // Renamed from `export_parquet_header_and_tab_delimited`, which asserted the
+    // `FRANKEN_PARQUET_V1` tab-delimited plaintext shape. That was the fake format
+    // removed when this lane moved to a real Parquet writer; the assertion had
+    // gone stale and contradicted `test_export_parquet_success` in the lib suite.
+    // A real Parquet file is framed by the PAR1 magic at both ends.
+    let payload = &result.payload_bytes;
+    assert!(payload.len() >= 8, "Parquet needs head and tail magic");
+    assert_eq!(&payload[0..4], b"PAR1", "expected leading Parquet magic");
+    assert_eq!(
+        &payload[payload.len() - 4..],
+        b"PAR1",
+        "expected trailing Parquet magic"
     );
 }
 

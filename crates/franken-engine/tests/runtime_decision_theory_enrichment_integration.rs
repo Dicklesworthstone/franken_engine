@@ -701,17 +701,18 @@ fn conformal_calibrator_coverage_exact_half() {
 }
 
 #[test]
-fn conformal_calibrator_is_calibrated_with_insufficient_data() {
+fn conformal_calibrator_fails_closed_with_insufficient_data() {
     let config = ConformalConfig {
         min_calibration_observations: 100,
         ..Default::default()
     };
     let mut c = ConformalCalibrator::new(config);
-    // Even with all misses, insufficient data returns calibrated=true
+    // bd-sde5e.5.1 (CEI-E.1): with only 10 of the required 100 observations the
+    // calibrator cannot measure coverage and must fail closed (not assume good).
     for i in 0..10 {
         c.record(SecurityEpoch::from_raw(i), false);
     }
-    assert!(c.is_calibrated());
+    assert!(!c.is_calibrated());
 }
 
 #[test]

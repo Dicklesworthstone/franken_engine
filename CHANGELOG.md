@@ -2,11 +2,268 @@
 
 This is a synthesized, agent-facing changelog for the full history of `franken_engine`.
 
-Scope window: project inception on 2026-02-18 through current `main` (`d51f2715`, 2026-05-15).
+Base synthesis window: project inception on 2026-02-18 through `d51f2715` (2026-05-15). Dated post-snapshot sections below record later changes.
 
-This document was rebuilt from git history (4,446 commits, no published releases), the checked-in beads tracker (`.beads/issues.jsonl`), the in-tree `docs/CLAIM_TO_PROOF_MATRIX_V1.md` claim ledger, and the contemporaneous workstream notes left in `docs/` and `runbooks/`.
+The base synthesis was rebuilt from git history (4,446 commits and no published releases at that snapshot), the checked-in beads tracker (`.beads/issues.jsonl`), the in-tree `docs/CLAIM_TO_PROOF_MATRIX_V1.md` claim ledger, and the contemporaneous workstream notes left in `docs/` and `runbooks/`; the dated sections below carry the later release history forward.
 
-The project ships a single `0.1.0` Cargo manifest across the workspace and has no GitHub Releases or version tags — only two backup tags (`backup/main-tip-1b2e6cf0`, `backup/worktree-tip-1f288b45`). All published evidence is artifact-bundle based; the "version" of any given decision/benchmark/replay claim is its artifact manifest and its bead, not a release number.
+The first conventional release, `v0.1.0`, was published on 2026-05-29. Current `main` also uses artifact-bundle versions for individual decision, benchmark, and replay claims; those schema versions remain independent of Cargo package semver.
+
+---
+
+## Post-Snapshot Update — Sibling Dependency Isolation and a Standalone-Claim Correction (2026-07-25)
+
+`bd-ndpm2` was filed as a P0 build blocker: `frankenengine-engine` did not compile
+in any feature configuration because a half-finished async migration in
+`/dp/frankensqlite` broke `fsqlite-btree`. Re-measuring at HEAD found the
+originally-named crate fixed upstream and the *same* migration breaking one layer
+further down — `/dp/sqlmodel_rust/crates/sqlmodel-frankensqlite`, 32 errors. Chasing
+a sibling's in-flight refactor crate-by-crate is not a fix, so the engine's own
+coupling was cut instead.
+
+**Nine sibling path dependencies are now feature-gated**, across three features that
+are all ON by default (a normal build in a full checkout is unchanged):
+
+- `sibling-persistence` — `sqlmodel`, `sqlmodel-core`, `sqlmodel-frankensqlite`,
+  and through the last of those `/dp/frankensqlite`. `cargo tree -e normal -i fsqlite`
+  proved that binding is the sole edge pulling fsqlite, so one cut drops two repos.
+- `sibling-service-api` — `fastapi-core` (gates `policy_controller::service_endpoint_template`).
+- `sibling-dataframes` — the five `fp-*` crates (gates the Parquet evidence-export lane).
+
+`typed_persistence_models.rs` looked atomic — six `#[sqlmodel(table = …)]` model
+structs consumed by seven other modules — but `TypedStoreRecord` and
+`TypedStorageAdapterExt` turned out to be pure serde traits with no ORM coupling.
+Only the `Model` derive and the `sqlmodel(…)` attributes needed `cfg_attr`, so **all
+six consumer modules were left untouched**. Where a runtime path would otherwise
+degrade, it fails closed: Parquet audit export returns a typed error naming the
+required feature rather than emitting another encoding under the Parquet name.
+
+**New gate lane**: `./scripts/test_standalone_build.sh sibling-isolation` (also inside
+`ci`) asserts every `/dp` path dep is `optional = true` and that
+`cargo tree --no-default-features -e normal,dev` names zero `/dp` paths. It keeps
+enforcing under `STANDALONE_BUILD_GATE_SKIP_REMOTE=1`, since it needs no rch worker
+and the skip flag would otherwise disable the guarantee exactly when the heavy lanes
+are already skipped.
+
+Two defects surfaced while gating. The self dev-dependency lacked
+`default-features = false`, so feature unification re-enabled `default` for every test
+target and `cargo test --no-default-features` silently rebuilt all nine siblings — the
+standalone-test lane had been proving nothing. The same leak existed on the three
+workspace crates that depend on the engine; fixing all four took the workspace sibling
+count from 119 to 0. Separately, two integration tests still asserted the removed fake
+`FRANKEN_PARQUET_V1` header, directly contradicting the lib test that asserts its
+absence; both now assert real `PAR1` framing.
+
+**README correction.** "Standalone Mode (no sibling repos required)" was false and
+cannot be made true from inside this repository. Three experiments established that
+cargo resolves an optional dependency's manifest whether or not a feature activates it
+— for path, git, and unmatched `[patch.crates-io]` sources alike — and that the only
+source kind genuinely skipped when disabled is a registry dependency. None of the nine
+siblings is published. The README now states that `--no-default-features` links no
+sibling crates but still requires the checkouts present, and registry publication is
+tracked on `bd-gw4cg`. Claim-matrix spans were re-anchored and
+`run_claim_to_proof_matrix_gate.sh ci` passes (28 claims, 0 failures).
+
+## Post-Snapshot Update — Authenticated Process-Spawn Foundation (2026-07-23)
+
+`bd-x85a7` adds the first host process-execution authority to the extension
+host, as a fail-closed request/provider seam rather than an ambient capability.
+`ProcessSpawn` becomes a typed `RuntimeCapability`; `ProcSpawnEffect` carries a
+structured `ProcessSpawnRequest` instead of an untyped string tuple; and the
+default provider is `DenyAllProcessSpawn`, so a runtime that does not explicitly
+install a provider cannot spawn at all.
+
+- `crates/franken-extension-host/src/process_spawn.rs` implements the typed
+  request/response/error protocol and a bounded native provider that re-verifies
+  the target executable by SHA-256 before every launch, clears ambient
+  environment and admits only an allowlist, jails the working directory to a
+  canonical path, refuses dangerous environment carriers (`LD_PRELOAD`,
+  `DYLD_*`, `BASH_ENV`), applies per-child resource limits, and returns opaque
+  scoped handles rather than PIDs. A detached reaper thread plus `Drop`-time
+  containment prevents orphaned children. The module keeps
+  `#![forbid(unsafe_code)]`.
+- `crates/franken-extension-host/src/host_effect_journal.rs` adds a globally
+  ordered record/replay journal spanning host I/O *and* process effects.
+  Reservation and completion preserve crossing order, because concatenating
+  per-family transcripts would forge the ordering of interleaved effects and
+  break replay identity.
+- The orchestrator gains `set_process_spawn(...)`, a `host_effect_journal`
+  result field, and `last_failed_host_effect_journal`; the capability stack
+  treats `ProcessSpawn` as extraordinary authority that is absent from the
+  ordinary `Full` profile, so it cannot be acquired by default composition.
+- Follow-up audit beads are tracked as `bd-x85a7.1`–`.4`: temporal containment
+  and per-effect expiry, journal completion-hole integrity, secret hygiene for
+  env/stdin/stdout/stderr in `Debug` and diagnostics, and platform process-tree
+  containment (cgroup or job object) beyond Unix process groups. This entry
+  records the foundation only; those four remain open.
+
+## Post-Snapshot Update — Generator Activation Boundary (2026-07-23)
+
+`bd-093id` makes synchronous generator invocation run its parameter
+initialization before publishing the iterator, while suspending ahead of the
+first body statement. Generator activations now retain their full isolated
+execution context across yields; `.next(value)` injects the value and label at
+the prior yield site, returns completion records with `done: true`, and
+validates the generator receiver through the exposed `next` builtin.
+
+- Core `IrSchemaVersion::CURRENT` advances from `0.9.0` to `0.10.0` because
+  serialized IR1, IR2 (through `Ir2Op::inner`), and IR3 gain the
+  semantics-bearing `GeneratorBodyStart` variant. Schema gates now reject
+  skipped peer-owned and future versions at lowering, verification, and
+  execution entry points. IR1-to-IR3 lowering preserves a supported legacy
+  header, so markerless `0.9.x` generator artifacts retain their historical
+  first-`.next()` start timing; current generator bodies must contain exactly
+  one boundary before yield/return. Older readers must reject `0.10.x` before
+  decoding.
+- The engine mirror remains independently versioned at `0.7.0`; this core-only
+  checkpoint does not change the cross-seam ownership posture.
+
+## Post-Snapshot Update — Captured Local Lexical IR Metadata (2026-07-22)
+
+`bd-uhf1m` preserves source `let`/`const` identity when a function-local
+binding is captured by a nested function and the parent body is detached for
+deferred IR3 lowering. Captured declarations now create correctly typed
+runtime cells, initialize them with `InitBinding`, and leave later assignments
+on the checked `StoreScoped` path. This restores const-assignment and temporal
+dead-zone behavior without changing synthetic, unresolved, inherited, or
+uncaptured bindings.
+
+- Core `IrSchemaVersion::CURRENT` advances from `0.8.0` to `0.9.0` because
+  `DeclareFunction` and `CreateFunction` gain semantics-bearing persisted IR1
+  metadata. The optional vector is boxed so absent metadata does not enlarge
+  the recursively lowered `Ir1Op` enum or consume an allocation; it is omitted
+  when empty, so historical function-operation JSON and canonical bytes remain
+  unchanged.
+- Core `0.9.0` readers accept historical core `0.8.x` artifacts, whose missing
+  metadata defaults to the legacy empty posture. Consumers must validate the
+  header before decoding; older readers must reject a `0.9.x` artifact rather
+  than ignore the new metadata and reinterpret captured lexicals as mutable.
+- Core minors `0.6.x` and `0.7.x` remain rejected because they identify the
+  incompatible engine-owned unresolved-name and follow-on `Continue` wires.
+  The compatibility engine remains independently versioned at `0.7.0`.
+
+## Post-Snapshot Update — Exact Module-Source Metadata (2026-07-17)
+
+`bd-lfq44` closes the remaining UTF-8 projection in parsed ECMAScript module
+sources. Imports and named re-exports now retain exact `JsString` code units
+through parser AST metadata, the engine parser arena, IR1, and IR3 constant
+pools. A source containing `\uD800` therefore remains distinct from one
+containing `\uDC00`; neither can silently alias through a replacement-character
+projection during module lookup.
+
+- The compatibility engine AST schema advances from v3 to v4 and its IR schema
+  from `0.2.0` to `0.3.0`. The native core AST advances from v4 to v5 and its IR
+  schema from `0.3.0` to `0.4.0`. Both Cargo packages remain on the unreleased
+  `0.2.0` compatibility-staging line.
+- `ImportDeclaration::source` and `Ir1Op::ImportModule::specifier` use
+  `JsString`. Ordinary well-formed values keep their historical plain-string
+  serde and canonical bytes; exact values use the established `$wtf16` unit
+  representation.
+- Named exports separate their canonical binding head from an optional exact
+  module source. Source-free and well-formed clauses retain the historical
+  scalar `NamedClause` payload. Only a non-well-formed source uses the
+  namespaced `$module_source` payload, and readers reject that tagged form for
+  well-formed content so the wire has one canonical encoding.
+- Runtime import dispatch carries the exact value to the existing filesystem
+  conversion seam. A non-well-formed value is rejected there before path or
+  cache lookup; the independent string-based resolver/ESM graph APIs are not
+  reinterpreted or widened by this parser-path checkpoint.
+- Current readers retain same-major historical AST/IR inputs. Existing
+  well-formed parser hashes and phase0 semantic artifacts remain unchanged;
+  only schema identifiers, compatibility vectors, and IR-header snapshots
+  advance.
+
+## Post-Snapshot Update — Parser EOF Coordinate Schema (2026-07-17)
+
+`bd-4tt6s` corrects the canonical `SyntaxTree` root span in both parser seams.
+The root `end_column` is now the one-based UTF-8 byte column immediately after
+the original source on its final physical line, rather than a hard-coded `1`.
+This covers single-line sources, non-empty multiline tails, trailing LF/CRLF,
+and exact byte widths for non-ASCII source text.
+
+- The compatibility engine AST schema advances from v2 to v3; the native core
+  AST schema advances independently from v3 to v4.
+- The AST contract, serde shape, SHA-256 algorithm, and hash prefix are
+  unchanged, so historical tree JSON remains readable. Historical v1/v2
+  engine version vectors and pre-correction hashes remain pinned explicitly.
+- Source-backed Parse Event IR materialization recognizes only the exact
+  historical root-column defect, authenticated by its old tree hash; any other
+  span or hash mismatch continues to fail closed.
+- Parser-generated canonical hashes intentionally change when the old root
+  column was wrong. The live phase0 fixture catalog and its content-addressed
+  artifact bundle are regenerated under the new schema checkpoint.
+
+## Post-Snapshot Update — `0.2.0` Compatibility Staging (2026-07-16)
+
+`bd-n8eta.4.6` moves only `frankenengine-core` and `frankenengine-engine` to an unreleased `0.2.0` line. This is a source-compatibility boundary, not a tag or publication: unrelated workspace packages stay at `0.1.0`, and GA/release actions remain separately gated.
+
+- Both public baseline-interpreter `Value` enums are now `#[non_exhaustive]`. Downstream matches must retain a fallback arm before the separately owned typed-Symbol runtime work appends a new variant.
+- The downstream audit found 57 cross-crate match expressions across 13 files; every match already had a wildcard, binding, or equivalent fallback. `/data/projects/franken_node` had no direct construction, import, or match on either baseline `Value` type.
+- Existing serde discriminants and payload bytes do not change. Focused historical-wire tests decode and re-encode all pre-migration variants byte-for-byte; the later Symbol children own any new wire values and execution-seed state.
+- `IrSchemaVersion::CURRENT` remains `0.1.0` because this migration adds no IR opcode or persisted IR shape. The separately tracked `bd-f1ixz` must version its IR schema when its `CopyDataProperties` variants land on the unreleased `0.2.0` package line.
+
+No `Value::Symbol`, typed executable property-key carrier, `symbol_state`, tag, or release is introduced here.
+
+### Core exact quoted-string schema slice (`bd-vltnh`)
+
+The subsequent core-first `bd-vltnh` slice advances
+`frankenengine-core::ir_contract::IrSchemaVersion::CURRENT` to `0.2.0` and
+the native core AST schema to `franken-engine.parser-ast.schema.v3`. Quoted
+source literals, IR1 string literals, and the core IR3 constant pool now carry
+exact `JsString` values, including lone UTF-16 surrogates. Historical
+well-formed strings keep their prior leaf serde/canonical shape; exact values
+use the tagged `$wtf16` unit representation. At that checkpoint the duplicated
+`frankenengine-engine` parser/IR mirror still remained at its prior schema;
+the engine section below records the subsequent mirror landing. Neither
+checkpoint is a release.
+
+### Engine exact quoted-string schema slice (`bd-vltnh`)
+
+The engine mirror now advances `IrSchemaVersion::CURRENT` to `0.2.0` and its
+live canonical AST schema to `franken-engine.parser-ast.schema.v2`. Quoted
+expression literals cook directly into exact `JsString` code units, and that
+carrier is preserved through the parser arena, AST serde/canonical values,
+IR1 literals, IR3 constant-pool deduplication, and baseline `LoadStr`
+execution. Ordinary well-formed strings retain their historical JSON and
+canonical leaf shape; lone units use the tagged `$wtf16` representation and
+remain distinct through an end-to-end source parse, lower, and execute cycle.
+
+The later `bd-lfq44` checkpoint above completes exact module-specifier metadata
+through the compiled parser/lowering path. Contextual legacy decimal escapes
+remain tracked by `bd-xcqzp`. Neither schema landing creates a tag or release.
+
+### Core `CopyDataProperties` IR schema slice (`bd-f1ixz`)
+
+The core object-rest lane advances
+`frankenengine-core::ir_contract::IrSchemaVersion::CURRENT` to `0.3.0` and
+adds `Ir1Op::CopyDataProperties { excluded_count }` plus
+`Ir3Instruction::CopyDataProperties { target, source, excluded, value_dst }`.
+The `frankenengine-core` Cargo package remains on the deliberately unreleased
+`0.2.0` compatibility-staging line; this is an IR wire revision, not a package
+release or tag.
+
+Existing IR variant names and payloads retain their prior serde and canonical
+representations. Core `0.3.0` readers accept historical `0.2.0` headers, while
+older readers reject the new externally tagged variants instead of silently
+reinterpreting them. The downstream source audit found only the engine
+differential oracle directly matching the core IR3 enum outside the core
+crate, and both matches already have fallback arms; `/data/projects/franken_node`
+has no direct imports, constructions, or matches of either core IR enum.
+
+---
+
+## Post-Snapshot Update — Claim-Evidence Integrity Capstone (2026-06-21)
+
+The CEI epic (`bd-sde5e`, *stated state must be provably ≤ commit*) reached its capstone. Tracks A, C, E, F were already closed; this update lands Tracks **B** and **G** and the Track-H reflexive claim:
+
+- **B.2 (`bd-sde5e.2.2`)** — every OBSERVED claim now carries a real `verification_result=passed` receipt from a live gate run (no backfill/pending). The last holdout, **FE-CLAIM-022** (cross-runtime lockstep oracle), is re-emitted from a live run against **real Node.js** (`/usr/bin/nodejs` v20.19.4) with zero divergences across node/bun/franken; the latent bench bug behind its old backfilled receipt (the FrankenEngine lane exhausting the containment instruction budget on the 10k/20k-iter workloads) is fixed by sizing the comparative workloads to `frankenctl run`'s real default budget. **FE-CLAIM-023** (cross-platform identical-hash reproducibility) is honestly downgraded `observed → target` — it is unprovable on a single host and its receipt was backfill/pending (precedent: FE-CLAIM-012). Result: the A.3 bidirectional audit is **27/27 sound (100%)**, `--blocking` exit 0.
+- **B.4 (`bd-sde5e.2.4`)** — fresh-clone committed-evidence verification (`scripts/e2e/fresh_clone_evidence_verification_smoke.sh`) is 16/16 offline against a clean `git worktree` checkout.
+- **G.1 (`bd-sde5e.7.1`)** — `scripts/run_claim_evidence_integrity_capstone.sh` composes the four CEI checks (claim-to-proof wording + A.1/A.3 bidirectional lattice, H.1 Merkle ledger, whole-document consistency, D.3 Test262 posture) into one fail-closed meta-gate, with an e2e replay wrapper and `docs/CLAIM_EVIDENCE_INTEGRITY_CAPSTONE_RUNBOOK.md`.
+- **G.3 (`bd-sde5e.7.3`)** — a no-mock acceptance drill (`scripts/e2e/claim_evidence_integrity_capstone_drift.sh`) injects an over-promotion of each class, asserts the capstone reddens the responsible sub-gate, and restores the tree byte-for-byte: the gate cannot be satisfied by fixtures.
+- **H.2 (`bd-sde5e.8.2`)** — **FE-CLAIM-025** reflexive soundness claim (the gate gates itself), backed by the A.5 adversarial corpus (4/4) and committed in the H.1 Merkle ledger alongside the claims it checks. The pre-existing unbacked target FE-CLAIM-TEST262 was also given a git-tracked evidence bundle so the blocking audit is clean.
+
+Honestly deferred (genuine environment blocks, not skipped work): **D.2** (`bd-sde5e.4.2`, full tc39/test262 corpus + denominator) and **H.4** (`bd-sde5e.8.4`, a *checked* Lean 4 theorem) remain open; D.2 needs the external corpus and H.4 needs a Lean toolchain absent on this host. Their parents (Tracks D, H) and the epic stay open accordingly. Relates to the honest GA-exit ledger (`bd-cixqu.47`).
+
+Commits: `619479f2`, `163c17472`.
 
 ---
 
@@ -24,7 +281,8 @@ The project ships a single `0.1.0` Cargo manifest across the workspace and has n
 
 | Version | Kind | Date | Summary |
 |---------|------|------|---------|
-| `0.1.0` (in-development) | Cargo workspace version | 2026-02-18 → present | Continuous `main`-only development; no tagged releases. Evidence ships per artifact bundle, not per version. |
+| `0.2.0` (unreleased) | `frankenengine-core` / `frankenengine-engine` Cargo versions | 2026-07-16 → present | Compatibility-staging line for public exhaustive-enum evolution; no tag or publication. |
+| [`v0.1.0`](https://github.com/Dicklesworthstone/franken_engine/releases/tag/v0.1.0) | Published release | 2026-05-29 | First conventional release and installed-binary baseline. |
 | [`backup/main-tip-1b2e6cf0`](https://github.com/Dicklesworthstone/franken_engine/tree/backup/main-tip-1b2e6cf0) | Backup tag (not a release) | 2026-04-16 | Mid-April main tip preserved during the Test262 / async-execution work. |
 | [`backup/worktree-tip-1f288b45`](https://github.com/Dicklesworthstone/franken_engine/tree/backup/worktree-tip-1f288b45) | Backup tag (not a release) | 2026-03-18 | Mid-March worktree tip preserved during the integration-test enrichment wave. |
 

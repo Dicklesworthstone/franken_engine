@@ -1,0 +1,53 @@
+{
+  "commands": {
+    "cleanup": "cargo clean",
+    "environment_setup": "export CARGO_INCREMENTAL=0",
+    "verification": "./scripts/run_containment_latency_metric_gate.sh ci"
+  },
+  "determinism": {
+    "environment_isolation": "containerized",
+    "mode": "strict",
+    "reproducible_builds": true,
+    "seed_control": "fixed"
+  },
+  "expected_outputs": {
+    "deterministic_trace": true,
+    "evidence_generated": true,
+    "exit_code": 0,
+    "verification_success": true
+  },
+  "generated_at_utc": "2026-05-21T19:32:39.579698+00:00",
+  "inputs": {
+    "dependencies": [
+      "Cargo.toml",
+      "Cargo.lock",
+      "crates/franken-engine/Cargo.toml"
+    ],
+    "primary_artifact": {
+      "hash": "9cd5a91fa5b79f5ce39576e8261c05fef7bb924a0c8ec2553bf51d83e2035f06",
+      "path": "scripts/run_containment_latency_metric_gate.sh",
+      "size_bytes": 15900
+    }
+  },
+  "lock_id": "lock-fe-claim-012-20260521193239",
+  "manifest_id": "manifest-fe-claim-012-20260521",
+  "replay": {
+    "command_sequence": [
+      "./scripts/run_containment_latency_metric_gate.sh ci"
+    ],
+    "environment_vars": {
+      "CARGO_INCREMENTAL": "0",
+      "RUSTFLAGS": "-C linker=cc"
+    },
+    "working_directory": "/data/projects/franken_engine"
+  },
+  "schema_hash": "sha256:9f0a1b2c3d4e5f6789abcdef0123456789abcdef0123456789abcdef01234567",
+  "schema_version": "frankenengine.reproducibility.lock.v1",
+  "source_commit": "379944dbcfeef8db14666525bb3f053c33843bd7",
+  "verification": {
+    "freshness_check": "required",
+    "hash_algorithm": "sha256",
+    "replay_validation": "automated",
+    "signature_required": false
+  }
+}

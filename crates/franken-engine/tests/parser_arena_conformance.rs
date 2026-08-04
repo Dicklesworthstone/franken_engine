@@ -71,7 +71,7 @@ fn module_import_default(source: &'static str, local: &str, module: &str) -> Sta
             local: local.to_string(),
         },
         binding: Some(local.to_string()),
-        source: module.to_string(),
+        source: module.into(),
         span: span_for(source),
     })
 }
@@ -80,7 +80,7 @@ fn module_import_side_effect(source: &'static str, module: &str) -> Statement {
     Statement::Import(ImportDeclaration {
         clause: ImportClause::SideEffect,
         binding: None,
-        source: module.to_string(),
+        source: module.into(),
         span: span_for(source),
     })
 }
@@ -94,7 +94,7 @@ fn module_export_default(source: &'static str, expression: Expression) -> Statem
 
 fn module_export_named(source: &'static str, clause: &str) -> Statement {
     Statement::Export(ExportDeclaration {
-        kind: ExportKind::NamedClause(clause.to_string()),
+        kind: ExportKind::NamedClause(clause.into()),
         span: span_for(source),
     })
 }
@@ -138,7 +138,7 @@ fn arena_conformance_cases() -> Vec<ArenaConformanceCase> {
             ParseGoal::Script,
             vec![expression_statement(
                 "'hello';",
-                Expression::StringLiteral("hello".to_string()),
+                Expression::StringLiteral("hello".to_string().into()),
             )],
             vec!["string hello".to_string()],
         ),
@@ -243,7 +243,7 @@ fn arena_conformance_cases() -> Vec<ArenaConformanceCase> {
                 vec![variable_declarator(
                     "const label = 'ok';",
                     "label",
-                    Some(Expression::StringLiteral("ok".to_string())),
+                    Some(Expression::StringLiteral("ok".to_string().into())),
                 )],
             )],
             vec![
@@ -280,7 +280,7 @@ fn arena_conformance_cases() -> Vec<ArenaConformanceCase> {
                     variable_declarator(
                         "let left = 1, right = 'r';",
                         "right",
-                        Some(Expression::StringLiteral("r".to_string())),
+                        Some(Expression::StringLiteral("r".to_string().into())),
                     ),
                 ],
             )],

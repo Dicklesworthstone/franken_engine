@@ -18,10 +18,10 @@
 //! and signature preimage contracts).
 
 use std::collections::BTreeMap;
-use std::fmt::{self, Write as _};
+use std::fmt;
 
 use ed25519_dalek::{
-    Signature as Ed25519Signature, Signer, SigningKey as Ed25519SigningKey, Verifier,
+    Signature as Ed25519Signature, Signer, SigningKey as Ed25519SigningKey,
     VerifyingKey as Ed25519VerifyingKey,
 };
 use rand::Rng;
@@ -71,14 +71,32 @@ pub const SIGNATURE_SENTINEL: [u8; SIGNATURE_LEN] = [0u8; SIGNATURE_LEN];
 // Key types
 // ---------------------------------------------------------------------------
 
+/// Constant-time all-zero check for secret key bytes.
+fn is_all_zero_secret(bytes: &[u8; SIGNING_KEY_LEN]) -> bool {
+    use subtle::ConstantTimeEq;
+    bytes.ct_eq(&[0u8; SIGNING_KEY_LEN]).into()
+}
+
 /// A signing key (Ed25519 private key).
 ///
 /// Debug output is redacted to prevent key material leakage in logs.
-#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct SigningKey {
     #[serde(with = "serde_bytes")]
     inner: [u8; SIGNING_KEY_LEN],
 }
+
+/// Equality on secret key material must be constant-time (project crypto
+/// discipline; the derived `PartialEq` short-circuits on the first differing
+/// byte, leaking match-prefix length through timing).
+impl PartialEq for SigningKey {
+    fn eq(&self, other: &Self) -> bool {
+        use subtle::ConstantTimeEq;
+        self.inner.ct_eq(&other.inner).into()
+    }
+}
+
+impl Eq for SigningKey {}
 
 impl std::fmt::Debug for SigningKey {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -87,17 +105,33 @@ impl std::fmt::Debug for SigningKey {
 }
 
 /// A verification key (Ed25519 public key).
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct VerificationKey {
     #[serde(with = "serde_bytes")]
     inner: [u8; VERIFICATION_KEY_LEN],
 }
 
+impl<'de> Deserialize<'de> for VerificationKey {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(rename = "VerificationKey")]
+        struct WireVerificationKey {
+            #[serde(with = "serde_bytes")]
+            inner: [u8; VERIFICATION_KEY_LEN],
+        }
+
+        let wire = WireVerificationKey::deserialize(deserializer)?;
+        Self::from_bytes(wire.inner).map_err(serde::de::Error::custom)
+    }
+}
+
 impl SigningKey {
     /// Create from raw bytes.
     pub fn from_bytes(bytes: [u8; SIGNING_KEY_LEN]) -> Result<Self, SignatureError> {
-        // Ed25519 keys of all zeros are invalid
-        if bytes == [0u8; SIGNING_KEY_LEN] {
+        // Ed25519 keys of all zeros are invalid. Constant-time comparison:
+        // a short-circuiting `==` on secret bytes leaks the leading-zero
+        // prefix length through timing.
+        if is_all_zero_secret(&bytes) {
             return Err(SignatureError::InvalidSigningKey);
         }
         // Ed25519SigningKey::from_bytes doesn't return a Result in ed25519-dalek 2.0
@@ -132,11 +166,15 @@ impl VerificationKey {
         if bytes == [0u8; VERIFICATION_KEY_LEN] {
             return Err(SignatureError::InvalidVerificationKey);
         }
-        // Validate that this is a valid Ed25519 public key
-        match Ed25519VerifyingKey::from_bytes(&bytes) {
-            Ok(_) => Ok(Self { inner: bytes }),
-            Err(_) => Err(SignatureError::InvalidVerificationKey),
+        // Decompression-valid low-order points are still unsafe: one weak
+        // public key can validate a signature for almost every message.
+        // Reject them at the authority boundary, not only at call sites.
+        let key = Ed25519VerifyingKey::from_bytes(&bytes)
+            .map_err(|_| SignatureError::InvalidVerificationKey)?;
+        if key.is_weak() {
+            return Err(SignatureError::InvalidVerificationKey);
         }
+        Ok(Self { inner: bytes })
     }
 
     /// Raw bytes.
@@ -152,8 +190,12 @@ impl VerificationKey {
 
     /// Create the internal Ed25519 verifying key.
     fn to_ed25519(&self) -> Result<Ed25519VerifyingKey, SignatureError> {
-        Ed25519VerifyingKey::from_bytes(&self.inner)
-            .map_err(|_| SignatureError::InvalidVerificationKey)
+        let key = Ed25519VerifyingKey::from_bytes(&self.inner)
+            .map_err(|_| SignatureError::InvalidVerificationKey)?;
+        if key.is_weak() {
+            return Err(SignatureError::InvalidVerificationKey);
+        }
+        Ok(key)
     }
 }
 
@@ -234,7 +276,7 @@ pub enum SignatureError {
     PreimageError { detail: String },
     /// Signing key is all zeros (invalid).
     InvalidSigningKey,
-    /// Verification key is all zeros (invalid).
+    /// Verification key is malformed, all zeros, or weak.
     InvalidVerificationKey,
 }
 
@@ -251,7 +293,7 @@ impl fmt::Display for SignatureError {
                 write!(f, "preimage error: {detail}")
             }
             Self::InvalidSigningKey => write!(f, "signing key is all zeros"),
-            Self::InvalidVerificationKey => write!(f, "verification key is all zeros"),
+            Self::InvalidVerificationKey => write!(f, "verification key is invalid or weak"),
         }
     }
 }
@@ -312,7 +354,7 @@ pub fn sign_preimage(
     signing_key: &SigningKey,
     preimage: &[u8],
 ) -> Result<Signature, SignatureError> {
-    if signing_key.inner == [0u8; SIGNING_KEY_LEN] {
+    if is_all_zero_secret(&signing_key.inner) {
         return Err(SignatureError::InvalidSigningKey);
     }
 
@@ -345,7 +387,7 @@ pub fn verify_signature(
     let ed25519_sig = Ed25519Signature::from_bytes(&sig_bytes);
 
     ed25519_vk
-        .verify(preimage, &ed25519_sig)
+        .verify_strict(preimage, &ed25519_sig)
         .map_err(|_| SignatureError::VerificationFailed {
             signer: verification_key.clone(),
             reason: "Ed25519 signature verification failed".to_string(),
@@ -360,6 +402,108 @@ pub fn verify_object<T: SignaturePreimage>(
 ) -> Result<(), SignatureError> {
     let preimage = object.preimage_bytes();
     verify_signature(verification_key, &preimage, signature)
+}
+
+// ---------------------------------------------------------------------------
+// Prepared keys — one-time Ed25519 expansion for hot sign/verify paths
+// ---------------------------------------------------------------------------
+
+/// A signing key whose Ed25519 expansion (seed hash, clamping, basepoint
+/// multiplication, public-key compression) is performed once at
+/// construction.
+///
+/// [`SigningKey`] stores raw seed bytes and re-expands on every
+/// [`sign_preimage`] / [`SigningKey::verification_key`] call; on hot
+/// evidence-emission paths that per-call expansion costs more than the
+/// signing itself. Signatures are byte-identical to the unprepared path
+/// because Ed25519 signing is deterministic in (key, message).
+pub struct PreparedSigningKey {
+    ed25519: Ed25519SigningKey,
+    verification_key: VerificationKey,
+}
+
+impl std::fmt::Debug for PreparedSigningKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("PreparedSigningKey")
+            .field(&"[REDACTED]")
+            .finish()
+    }
+}
+
+impl PreparedSigningKey {
+    /// Expand a signing key once. Rejects the all-zero key exactly like
+    /// [`sign_preimage`].
+    pub fn prepare(key: &SigningKey) -> Result<Self, SignatureError> {
+        if is_all_zero_secret(&key.inner) {
+            return Err(SignatureError::InvalidSigningKey);
+        }
+        let ed25519 = key.to_ed25519();
+        let verification_key = VerificationKey {
+            inner: ed25519.verifying_key().to_bytes(),
+        };
+        Ok(Self {
+            ed25519,
+            verification_key,
+        })
+    }
+
+    /// The cached verification key (no per-call basepoint multiplication).
+    pub fn verification_key(&self) -> VerificationKey {
+        self.verification_key.clone()
+    }
+
+    /// Sign a preimage; byte-identical to [`sign_preimage`] with the same key.
+    pub fn sign(&self, preimage: &[u8]) -> Signature {
+        Signature::from_bytes(self.ed25519.sign(preimage).to_bytes())
+    }
+}
+
+/// A verification key parsed to its Ed25519 point form once.
+///
+/// [`verify_signature`] re-parses (decompresses and validates) the public
+/// key on every call; verifiers that check many signatures against a fixed
+/// key registry can parse at registration time instead. Verification
+/// semantics — including rejection of all-zero and non-canonical keys —
+/// are identical to [`verify_signature`].
+#[derive(Debug, Clone)]
+pub struct PreparedVerificationKey {
+    raw: VerificationKey,
+    parsed: Option<Ed25519VerifyingKey>,
+}
+
+impl PreparedVerificationKey {
+    /// Parse a verification key once. An invalid key still constructs
+    /// (matching the lazy behavior of storing a raw [`VerificationKey`]);
+    /// verification then fails exactly like [`verify_signature`] would.
+    pub fn prepare(key: VerificationKey) -> Self {
+        let parsed = if key.inner == [0u8; VERIFICATION_KEY_LEN] {
+            None
+        } else {
+            key.to_ed25519().ok()
+        };
+        Self { raw: key, parsed }
+    }
+
+    /// The raw verification key.
+    pub fn raw(&self) -> &VerificationKey {
+        &self.raw
+    }
+
+    /// Verify a detached signature; semantics identical to
+    /// [`verify_signature`] with the same key.
+    pub fn verify(&self, preimage: &[u8], signature: &Signature) -> Result<(), SignatureError> {
+        let Some(parsed) = self.parsed.as_ref() else {
+            return Err(SignatureError::InvalidVerificationKey);
+        };
+        let sig_bytes = signature.to_bytes();
+        let ed25519_sig = Ed25519Signature::from_bytes(&sig_bytes);
+        parsed.verify_strict(preimage, &ed25519_sig).map_err(|_| {
+            SignatureError::VerificationFailed {
+                signer: self.raw.clone(),
+                reason: "Ed25519 signature verification failed".to_string(),
+            }
+        })
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -519,7 +663,7 @@ impl SignatureContext {
         // Check canonicality first.
         let unsigned = object.unsigned_view();
         if let Err(e) = check_canonical_for_signing(&unsigned) {
-            self.failure_count += 1;
+            self.failure_count = self.failure_count.saturating_add(1);
             self.events.push(SignatureEvent {
                 event_type: SignatureEventType::CanonicalityCheckFailed {
                     detail: e.to_string(),
@@ -533,7 +677,7 @@ impl SignatureContext {
         let vk = signing_key.verification_key();
         let signature = sign_object(object, signing_key)?;
 
-        self.sign_count += 1;
+        self.sign_count = self.sign_count.saturating_add(1);
         self.events.push(SignatureEvent {
             event_type: SignatureEventType::Signed { signer: vk },
             domain: object.signature_domain(),
@@ -577,7 +721,7 @@ impl SignatureContext {
 
         match &result {
             Ok(()) => {
-                self.verify_count += 1;
+                self.verify_count = self.verify_count.saturating_add(1);
                 self.events.push(SignatureEvent {
                     event_type: SignatureEventType::Verified {
                         signer: verification_key.clone(),
@@ -587,7 +731,7 @@ impl SignatureContext {
                 });
             }
             Err(SignatureError::VerificationFailed { reason, .. }) => {
-                self.failure_count += 1;
+                self.failure_count = self.failure_count.saturating_add(1);
                 self.events.push(SignatureEvent {
                     event_type: SignatureEventType::VerificationFailed {
                         signer: verification_key.clone(),
@@ -598,7 +742,7 @@ impl SignatureContext {
                 });
             }
             Err(_) => {
-                self.failure_count += 1;
+                self.failure_count = self.failure_count.saturating_add(1);
             }
         }
 
@@ -680,6 +824,26 @@ mod tests {
     use crate::deterministic_serde::SchemaHash;
     use crate::epoch_barrier::{BarrierConfig, EpochBarrier};
     use crate::security_epoch::{SecurityEpoch, TransitionReason};
+
+    // curve25519-dalek::constants::EIGHT_TORSION[4], also used by
+    // ed25519-dalek's strict-verification repudiation regression.
+    const WEAK_PUBLIC_KEY: [u8; VERIFICATION_KEY_LEN] = [
+        236, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+        255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 127,
+    ];
+
+    // C2SP CCTV ed25519vectors case 304: the public key is strong, but the
+    // signature has a low-order R. Permissive `verify` accepts this vector;
+    // `verify_strict` rejects it.
+    const CCTV_LOW_ORDER_R_PUBLIC_KEY: [u8; VERIFICATION_KEY_LEN] = [
+        239, 117, 178, 14, 117, 64, 227, 223, 247, 116, 4, 25, 54, 82, 186, 43, 209, 61, 249, 156,
+        21, 8, 238, 225, 81, 94, 39, 174, 37, 242, 128, 118,
+    ];
+    const CCTV_LOW_ORDER_R_SIGNATURE: [u8; SIGNATURE_LEN] = [
+        1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 51, 11, 48, 214, 193, 240, 117, 17, 226, 32, 141, 35, 59, 106, 52, 212, 237, 113, 9,
+        218, 45, 234, 97, 91, 205, 151, 218, 238, 58, 132, 39, 4,
+    ];
 
     // -- Test signable object --
 
@@ -772,6 +936,83 @@ mod tests {
         let p1 = obj.preimage_bytes();
         let p2 = obj.preimage_bytes();
         assert_eq!(p1, p2);
+    }
+
+    // -- Prepared-key equivalence: prepared paths must be byte/behavior
+    //    identical to the raw sign_preimage / verify_signature paths. --
+
+    #[test]
+    fn prepared_signing_key_signature_matches_sign_preimage() {
+        let key = SigningKey::from_bytes([0x42; SIGNING_KEY_LEN]).expect("non-zero key");
+        let prepared = PreparedSigningKey::prepare(&key).expect("non-zero key prepares");
+        let preimage = b"prepared-key-equivalence-preimage";
+        let raw_sig = sign_preimage(&key, preimage).expect("raw signing succeeds");
+        assert_eq!(
+            prepared.sign(preimage).to_bytes(),
+            raw_sig.to_bytes(),
+            "prepared signature must be byte-identical to sign_preimage"
+        );
+    }
+
+    #[test]
+    fn prepared_signing_key_verification_key_matches_unprepared() {
+        let key = SigningKey::from_bytes([0x42; SIGNING_KEY_LEN]).expect("non-zero key");
+        let prepared = PreparedSigningKey::prepare(&key).expect("non-zero key prepares");
+        assert_eq!(prepared.verification_key(), key.verification_key());
+    }
+
+    #[test]
+    fn prepared_signing_key_rejects_zero_key_like_sign_preimage() {
+        let zero = SigningKey {
+            inner: [0u8; SIGNING_KEY_LEN],
+        };
+        assert_eq!(
+            PreparedSigningKey::prepare(&zero).unwrap_err(),
+            SignatureError::InvalidSigningKey
+        );
+    }
+
+    #[test]
+    fn prepared_verification_key_verify_matches_verify_signature() {
+        let key = SigningKey::from_bytes([0x42; SIGNING_KEY_LEN]).expect("non-zero key");
+        let vk = key.verification_key();
+        let preimage = b"prepared-verify-equivalence-preimage";
+        let sig = sign_preimage(&key, preimage).expect("signing succeeds");
+
+        let prepared = PreparedVerificationKey::prepare(vk.clone());
+        assert_eq!(prepared.raw(), &vk);
+        assert!(prepared.verify(preimage, &sig).is_ok());
+        assert!(verify_signature(&vk, preimage, &sig).is_ok());
+
+        // Tampered preimage must fail through both paths.
+        assert!(prepared.verify(b"tampered", &sig).is_err());
+        assert!(verify_signature(&vk, b"tampered", &sig).is_err());
+
+        // Wrong key must fail through both paths.
+        let other = SigningKey::from_bytes([0x43; SIGNING_KEY_LEN]).expect("non-zero key");
+        let other_prepared = PreparedVerificationKey::prepare(other.verification_key());
+        assert!(other_prepared.verify(preimage, &sig).is_err());
+        assert!(verify_signature(&other.verification_key(), preimage, &sig).is_err());
+    }
+
+    #[test]
+    fn prepared_verification_key_rejects_zero_key_like_verify_signature() {
+        let zero = VerificationKey {
+            inner: [0u8; VERIFICATION_KEY_LEN],
+        };
+        let key = SigningKey::from_bytes([0x42; SIGNING_KEY_LEN]).expect("non-zero key");
+        let preimage = b"zero-key-check";
+        let sig = sign_preimage(&key, preimage).expect("signing succeeds");
+
+        let prepared = PreparedVerificationKey::prepare(zero.clone());
+        assert_eq!(
+            prepared.verify(preimage, &sig).unwrap_err(),
+            SignatureError::InvalidVerificationKey
+        );
+        assert_eq!(
+            verify_signature(&zero, preimage, &sig).unwrap_err(),
+            SignatureError::InvalidVerificationKey
+        );
     }
 
     #[test]
@@ -1194,6 +1435,56 @@ mod tests {
     fn zero_verification_key_rejected() {
         let err = VerificationKey::from_bytes([0u8; VERIFICATION_KEY_LEN]).unwrap_err();
         assert_eq!(err, SignatureError::InvalidVerificationKey);
+    }
+
+    #[test]
+    fn weak_verification_key_and_deserialization_are_rejected() {
+        assert_eq!(
+            VerificationKey::from_bytes(WEAK_PUBLIC_KEY),
+            Err(SignatureError::InvalidVerificationKey)
+        );
+
+        // Preserve the legacy wire shape while validating on restoration.
+        let serialized = serde_json::to_string(&VerificationKey {
+            inner: WEAK_PUBLIC_KEY,
+        })
+        .expect("serialize weak-key regression fixture");
+        assert!(serde_json::from_str::<VerificationKey>(&serialized).is_err());
+
+        // Defense in depth: even a key constructed inside this module cannot
+        // bypass validation at the verification call.
+        let weak = VerificationKey {
+            inner: WEAK_PUBLIC_KEY,
+        };
+        let signature = sign_preimage(&test_signing_key(), b"strict-message")
+            .expect("sign strict-verification regression message");
+        assert_eq!(
+            verify_signature(&weak, b"strict-message", &signature),
+            Err(SignatureError::InvalidVerificationKey)
+        );
+        let prepared = PreparedVerificationKey::prepare(weak);
+        assert_eq!(
+            prepared
+                .verify(b"strict-message", &signature)
+                .expect_err("prepared verifier must reject weak keys"),
+            SignatureError::InvalidVerificationKey
+        );
+    }
+
+    #[test]
+    fn strict_verification_rejects_cctv_low_order_r_vector() {
+        let key = VerificationKey::from_bytes(CCTV_LOW_ORDER_R_PUBLIC_KEY)
+            .expect("CCTV case 304 uses a strong public key");
+        let signature = Signature::from_bytes(CCTV_LOW_ORDER_R_SIGNATURE);
+        assert!(matches!(
+            verify_signature(&key, b"ed25519vectors 7", &signature),
+            Err(SignatureError::VerificationFailed { .. })
+        ));
+        let prepared = PreparedVerificationKey::prepare(key);
+        assert!(matches!(
+            prepared.verify(b"ed25519vectors 7", &signature),
+            Err(SignatureError::VerificationFailed { .. })
+        ));
     }
 
     // -- Signature sentinel --

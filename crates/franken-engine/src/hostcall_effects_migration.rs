@@ -15,9 +15,20 @@ use serde::{Deserialize, Serialize};
 
 use crate::algebraic_effects::{
     Effect, EffectCapabilities, EffectError, EffectPriority, EffectResult, ErasedEffect, Handler,
-    HandlerStack,
+    HandlerStack, ProcSpawnEffect,
 };
 use crate::capability::{CapabilityProfile, ProfileKind, RuntimeCapability};
+use frankenengine_extension_host::host_effect_journal::{
+    HostEffectJournalError, InMemoryHostEffectJournal,
+};
+use frankenengine_extension_host::host_io::{
+    FsOperation, HostIoCapability, HostIoError, HostIoProvider, HostIoRecorder, HostIoRequest,
+    HostIoResponse, SANDBOXED_HOST_IO_MAX_BYTES,
+};
+use frankenengine_extension_host::process_spawn::{
+    ProcessSpawnCapability, ProcessSpawnError, ProcessSpawnProvider, ProcessSpawnRecorder,
+    ProcessSpawnRequest, ProcessSpawnResponse, perform_recorded,
+};
 
 // ---------------------------------------------------------------------------
 // Hostcall Effect implementations
@@ -54,47 +65,50 @@ impl Effect for ConsoleHostcallEffect {
     }
 }
 
-/// Filesystem hostcall effect (read, write).
+/// Filesystem hostcall effect. The security capability remains the existing
+/// read/write class while `operation` records the concrete filesystem action.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FsHostcallEffect {
     pub operation: FsOperation,
     pub path: String,
-    pub content: Option<Vec<u8>>, // For write operations
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum FsOperation {
-    Read,
-    Write,
+    pub arguments: Vec<String>,
+    pub content: Option<Vec<u8>>,
 }
 
 impl Effect for FsHostcallEffect {
     type Output = ();
 
     fn effect_name(&self) -> &'static str {
-        match self.operation {
-            FsOperation::Read => "hostcall:fs:read",
-            FsOperation::Write => "hostcall:fs:write",
+        match self.operation.required_capability() {
+            HostIoCapability::FsRead => "hostcall:fs:read",
+            HostIoCapability::FsWrite => "hostcall:fs:write",
+            HostIoCapability::NetworkSend | HostIoCapability::NetworkRecv => {
+                unreachable!("filesystem operations cannot require a network capability")
+            }
         }
     }
 
     fn required_capabilities(&self) -> EffectCapabilities {
-        match self.operation {
-            FsOperation::Read => EffectCapabilities::runtime([RuntimeCapability::FsRead]),
-            FsOperation::Write => EffectCapabilities::runtime([RuntimeCapability::FsWrite]),
+        match self.operation.required_capability() {
+            HostIoCapability::FsRead => EffectCapabilities::runtime([RuntimeCapability::FsRead]),
+            HostIoCapability::FsWrite => EffectCapabilities::runtime([RuntimeCapability::FsWrite]),
+            HostIoCapability::NetworkSend | HostIoCapability::NetworkRecv => {
+                unreachable!("filesystem operations cannot require a network capability")
+            }
         }
     }
 
     fn parameters(&self) -> Box<dyn Any + Send + Sync> {
         Box::new((
-            self.operation.clone(),
+            self.operation,
             self.path.clone(),
+            self.arguments.clone(),
             self.content.clone(),
         ))
     }
 
     fn parameter_type_id(&self) -> TypeId {
-        TypeId::of::<(FsOperation, String, Option<Vec<u8>>)>()
+        TypeId::of::<(FsOperation, String, Vec<String>, Option<Vec<u8>>)>()
     }
 }
 
@@ -219,26 +233,242 @@ pub struct ModuleExports {
 // ---------------------------------------------------------------------------
 
 /// Handler implementing FullCaps capability profile.
-#[derive(Debug)]
-pub struct FullCapsHandler;
+///
+/// With no host I/O provider installed, filesystem and network hostcalls remain
+/// fail-closed and return `CapabilityDenied`, preserving the bd-6wc97 posture.
+/// When a sandboxed provider is deliberately installed, those requests are
+/// routed to the provider after capability mapping. The engine never performs
+/// host filesystem or network I/O directly.
+#[derive(Debug, Default)]
+pub struct FullCapsHandler {
+    host_io: Option<Arc<dyn HostIoProvider>>,
+    host_io_recorder: Option<Arc<dyn HostIoRecorder>>,
+    host_effect_journal: Option<Arc<InMemoryHostEffectJournal>>,
+}
 
 impl FullCapsHandler {
+    /// Construct a FullCaps handler with no host I/O provider.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Construct a FullCaps handler backed by a sandboxed host I/O provider.
+    #[must_use]
+    pub fn with_host_io(provider: Arc<dyn HostIoProvider>) -> Self {
+        Self {
+            host_io: Some(provider),
+            host_io_recorder: None,
+            host_effect_journal: None,
+        }
+    }
+
+    /// Construct a FullCaps handler with host I/O record/replay enabled.
+    #[must_use]
+    pub fn with_host_io_recorded(
+        provider: Arc<dyn HostIoProvider>,
+        recorder: Arc<dyn HostIoRecorder>,
+    ) -> Self {
+        Self {
+            host_io: Some(provider),
+            host_io_recorder: Some(recorder),
+            host_effect_journal: None,
+        }
+    }
+
+    /// Construct the ordinary host-I/O handler with an optional globally
+    /// ordered journal. Process execution remains a separate handler and trust
+    /// boundary.
+    #[must_use]
+    pub fn with_effect_providers(
+        host_io: Option<Arc<dyn HostIoProvider>>,
+        host_io_recorder: Option<Arc<dyn HostIoRecorder>>,
+        host_effect_journal: Option<Arc<InMemoryHostEffectJournal>>,
+    ) -> Self {
+        Self {
+            host_io,
+            host_io_recorder,
+            host_effect_journal,
+        }
+    }
+
     /// Whether this handler dispatches side-effecting hostcalls
     /// (`fs:read` / `fs:write` / `network`) to the engine's real hostcall
     /// implementations.
     ///
-    /// Returns `false` (bd-1lw7r.11, bd-6wc97): no real in-engine fs/network
-    /// executor exists. Rather than SIMULATE those effects (the prior behaviour
+    /// Returns `true` only when an extension-host provider has been installed.
+    /// With no provider, no real in-engine fs/network executor exists. Rather
+    /// than SIMULATE those effects (the prior behaviour
     /// — fake fs reads / discarded writes / hardcoded network responses, which
     /// handed callers fake data while claiming full capability),
     /// [`FullCapsHandler::handle`] now EXPLICITLY DENIES `fs:read`, `fs:write`
-    /// and `network` with `CapabilityDenied`. Real guest fs/network is deferred
-    /// to the `frankenengine-extension-host` epic; if that lands, route those
-    /// arms to the real `dispatch_*_hostcall` surface (honoring the capability
-    /// gate, deterministic-replay recording, and IFC labeling) and flip this to
-    /// `true`.
-    pub const fn dispatches_real_hostcalls() -> bool {
-        false
+    /// and `network` with `CapabilityDenied`.
+    #[must_use]
+    pub fn dispatches_real_hostcalls(&self) -> bool {
+        self.host_io.is_some()
+    }
+
+    fn route_host_io(
+        &self,
+        effect: &dyn ErasedEffect,
+    ) -> Result<Option<EffectResult>, EffectError> {
+        let Some(provider) = self.host_io.as_deref() else {
+            return Err(EffectError::CapabilityDenied {
+                required: effect.required_capabilities(),
+            });
+        };
+
+        let request = Self::host_io_request_from_effect(effect)?;
+        let granted = [request.required_capability()];
+        let outcome = if let Some(journal) = self.host_effect_journal.as_deref() {
+            match journal.replay_host_io(&request) {
+                Some(recorded) => recorded,
+                None => {
+                    let reservation = journal
+                        .reserve_host_io(&request)
+                        .map_err(|error| host_effect_journal_error("full_caps_handler", error))?;
+                    let live = provider.perform(&request, &granted);
+                    journal
+                        .complete_host_io(reservation, &request, &live)
+                        .map_err(|error| host_effect_journal_error("full_caps_handler", error))?;
+                    live
+                }
+            }
+        } else {
+            match self
+                .host_io_recorder
+                .as_deref()
+                .and_then(|recorder| recorder.replay(&request))
+            {
+                Some(recorded) => recorded,
+                None => {
+                    let live = provider.perform(&request, &granted);
+                    if let Some(recorder) = self.host_io_recorder.as_deref() {
+                        recorder.record(&request, &live);
+                    }
+                    live
+                }
+            }
+        };
+
+        match outcome {
+            Ok(response) => Ok(Some(Self::effect_result_from_host_io(&response))),
+            Err(HostIoError::Io { detail }) => Err(EffectError::HandlerError {
+                handler: "full_caps_handler".to_string(),
+                message: detail,
+                code: None,
+            }),
+            Err(HostIoError::Fs { code, detail }) => Err(EffectError::HandlerError {
+                handler: "full_caps_handler".to_string(),
+                message: detail,
+                code: Some(code),
+            }),
+            Err(_) => Err(EffectError::CapabilityDenied {
+                required: effect.required_capabilities(),
+            }),
+        }
+    }
+
+    fn host_io_request_from_effect(
+        effect: &dyn ErasedEffect,
+    ) -> Result<HostIoRequest, EffectError> {
+        match effect.effect_name() {
+            "hostcall:fs:read" | "hostcall:fs:write" => {
+                let params = effect
+                    .parameters()
+                    .downcast::<(FsOperation, String, Vec<String>, Option<Vec<u8>>)>()
+                    .map_err(|_| EffectError::InvalidParameters {
+                        effect_name: effect.effect_name().to_string(),
+                        reason: "Expected (FsOperation, String, Vec<String>, Option<Vec<u8>>) parameters".to_string(),
+                    })?;
+                let (operation, path, arguments, content) = *params;
+                Ok(match operation {
+                    FsOperation::Read => HostIoRequest::FsRead { path },
+                    FsOperation::Write => HostIoRequest::FsWrite {
+                        path,
+                        data: content.unwrap_or_default(),
+                    },
+                    _ => HostIoRequest::FsMeta {
+                        operation,
+                        path,
+                        arguments,
+                        data: content.unwrap_or_default(),
+                    },
+                })
+            }
+            "hostcall:network" => {
+                let params = effect
+                    .parameters()
+                    .downcast::<(String, String, Vec<(String, String)>, Option<Vec<u8>>)>()
+                    .map_err(|_| EffectError::InvalidParameters {
+                        effect_name: effect.effect_name().to_string(),
+                        reason: "Expected (url, method, headers, body) network parameters"
+                            .to_string(),
+                    })?;
+                let (url, method, headers, body) = *params;
+                // bd-656a2: turn the semantic http intent (url + method + headers
+                // + body) into the raw wire request the network mechanism sends.
+                // The url is split into a concrete `host:port` connect endpoint
+                // (so `SandboxedHostIo::connect`'s `to_socket_addrs` can resolve
+                // it) and an HTTP/1.1 request line + Host header + body payload.
+                let (endpoint, payload, use_tls) =
+                    http_request_to_wire(&url, &method, &headers, body.as_deref());
+                // bd-3894s slice (4): route the egress as a single-socket
+                // round trip so the guest can observe the real response. The
+                // response read is bounded by the same per-operation byte cap the
+                // provider enforces. (`NetworkSend` would only carry the egress and
+                // close the socket before any reply could be read.)
+                // bd-3894s slice (5): an https URL sets `use_tls` so the network
+                // mechanism performs the round trip inside a real TLS session.
+                Ok(HostIoRequest::NetworkRequest {
+                    endpoint,
+                    payload,
+                    max_len: SANDBOXED_HOST_IO_MAX_BYTES,
+                    use_tls,
+                })
+            }
+            other => Err(EffectError::InvalidParameters {
+                effect_name: other.to_string(),
+                reason: "not an fs/network hostcall".to_string(),
+            }),
+        }
+    }
+
+    fn effect_result_from_host_io(response: &HostIoResponse) -> EffectResult {
+        match response {
+            HostIoResponse::FsRead { bytes } => EffectResult::new(bytes.clone()),
+            HostIoResponse::FsWrite { bytes_written } => EffectResult::new(*bytes_written),
+            HostIoResponse::FsMeta { result } => EffectResult::new(result.clone()),
+            HostIoResponse::NetworkSend { bytes_sent } => EffectResult::new(*bytes_sent),
+            HostIoResponse::NetworkRecv { bytes } => EffectResult::new(bytes.clone()),
+            // bd-3894s slice (4): the raw response bytes flow back to the
+            // interpreter, which parses them into a JS response object.
+            HostIoResponse::NetworkRequest { response } => EffectResult::new(response.clone()),
+        }
+    }
+}
+
+const fn process_spawn_error_code(error: &ProcessSpawnError) -> &'static str {
+    match error {
+        ProcessSpawnError::Denied { .. } => "PROCESS_SPAWN_DENIED",
+        ProcessSpawnError::FlowPolicyBlocked => "PROCESS_SPAWN_FLOW_POLICY_BLOCKED",
+        ProcessSpawnError::CapabilityMissing { .. } => "PROCESS_SPAWN_CAPABILITY_MISSING",
+        ProcessSpawnError::PolicyViolation { .. } => "PROCESS_SPAWN_POLICY_VIOLATION",
+        ProcessSpawnError::LimitExceeded { .. } => "PROCESS_SPAWN_LIMIT_EXCEEDED",
+        ProcessSpawnError::UnknownHandle { .. } => "PROCESS_SPAWN_UNKNOWN_HANDLE",
+        ProcessSpawnError::InvalidState { .. } => "PROCESS_SPAWN_INVALID_STATE",
+        ProcessSpawnError::NotImplemented { .. } => "PROCESS_SPAWN_NOT_IMPLEMENTED",
+        ProcessSpawnError::TimedOut { .. } => "PROCESS_SPAWN_TIMED_OUT",
+        ProcessSpawnError::Io { .. } => "PROCESS_SPAWN_IO",
+        ProcessSpawnError::ReplayDivergence { .. } => "PROCESS_SPAWN_REPLAY_DIVERGENCE",
+    }
+}
+
+fn host_effect_journal_error(handler: &str, error: HostEffectJournalError) -> EffectError {
+    EffectError::HandlerError {
+        handler: handler.to_string(),
+        message: error.to_string(),
+        code: Some("HOST_EFFECT_JOURNAL".to_string()),
     }
 }
 
@@ -249,11 +479,9 @@ impl Handler for FullCapsHandler {
 
     fn handle(&self, effect: &dyn ErasedEffect) -> Result<Option<EffectResult>, EffectError> {
         // FullCaps is permitted to invoke all hostcalls, but `fs:read`,
-        // `fs:write` and `network` are EXPLICITLY DENIED (bd-6wc97): no real
-        // in-engine executor exists, so rather than hand back simulated/fake
-        // data they return `CapabilityDenied`. `console`, `timer` and `module`
-        // run their in-process paths. `dispatches_real_hostcalls()` stays
-        // `false`. Real guest fs/network is deferred to the extension-host epic.
+        // `fs:write`, and `network` are explicitly denied unless a sandboxed
+        // extension-host provider is installed. `console`, `timer`, and
+        // `module` keep their in-process migration paths.
         match effect.effect_name() {
             "hostcall:console" => {
                 if let Ok(params) = effect.parameters().downcast::<(String, Vec<String>)>() {
@@ -283,16 +511,15 @@ impl Handler for FullCapsHandler {
                 // bd-6wc97 / bd-6wc97.1 decision: EXPLICIT-DENY by design.
                 // There is no real in-engine fs/network executor (only
                 // `MockFsHandler`); routing to host `std::fs`/sockets would be a
-                // sandbox escape, and real guest I/O is deferred to the
-                // frankenengine-extension-host epic. These arms previously
+                // sandbox escape. If an extension-host provider is installed,
+                // route the request there; otherwise keep the explicit deny.
+                // These arms previously
                 // SIMULATED the effects — a canned fs read, a discarded write,
                 // a hardcoded network response — handing callers FAKE data while
                 // the Full profile claimed full capability. That is exactly the
                 // dishonesty `bd-1lw7r.11` guards against, so deny rather than
-                // fake. `dispatches_real_hostcalls()` stays `false`.
-                Err(EffectError::CapabilityDenied {
-                    required: effect.required_capabilities(),
-                })
+                // fake.
+                self.route_host_io(effect)
             }
             "hostcall:timer" => {
                 if let Ok(params) = effect
@@ -350,8 +577,15 @@ impl Handler for FullCapsHandler {
     }
 
     fn provided_capabilities(&self) -> EffectCapabilities {
-        // FullCaps provides all runtime capabilities
-        EffectCapabilities::runtime(RuntimeCapability::ALL.iter().copied())
+        // Extraordinary process authority is never provided by an ordinary
+        // profile handler. It appears only when a ProcessSpawnHandler backed by
+        // an explicitly installed provider joins the stack.
+        EffectCapabilities::runtime(
+            RuntimeCapability::ALL
+                .iter()
+                .copied()
+                .filter(|capability| *capability != RuntimeCapability::ProcessSpawn),
+        )
     }
 
     fn priority(&self) -> EffectPriority {
@@ -360,6 +594,130 @@ impl Handler for FullCapsHandler {
 
     fn handler_name(&self) -> &'static str {
         "full_caps_handler"
+    }
+}
+
+/// Extraordinary process authority is orthogonal to every ordinary profile.
+/// This handler exists only when the product installs a provider backed by a
+/// live signed admission; its presence is the handler-stack capability witness.
+#[derive(Debug)]
+pub struct ProcessSpawnHandler {
+    provider: Arc<dyn ProcessSpawnProvider>,
+    recorder: Option<Arc<dyn ProcessSpawnRecorder>>,
+    host_effect_journal: Option<Arc<InMemoryHostEffectJournal>>,
+}
+
+impl ProcessSpawnHandler {
+    #[must_use]
+    pub fn new(
+        provider: Arc<dyn ProcessSpawnProvider>,
+        recorder: Option<Arc<dyn ProcessSpawnRecorder>>,
+        host_effect_journal: Option<Arc<InMemoryHostEffectJournal>>,
+    ) -> Self {
+        Self {
+            provider,
+            recorder,
+            host_effect_journal,
+        }
+    }
+
+    #[must_use]
+    pub const fn dispatches_real_process_spawn(&self) -> bool {
+        true
+    }
+
+    fn journaled_outcome(
+        &self,
+        journal: &InMemoryHostEffectJournal,
+        request: &ProcessSpawnRequest,
+        granted: &[ProcessSpawnCapability],
+    ) -> Result<Result<ProcessSpawnResponse, ProcessSpawnError>, EffectError> {
+        let prepared = match self.provider.prepare_request(request) {
+            Ok(prepared) => prepared,
+            Err(error) => {
+                if let Some(recorded) = journal.replay_process_spawn(request) {
+                    return Ok(recorded);
+                }
+                let reservation = journal
+                    .reserve_process_spawn(request)
+                    .map_err(|error| host_effect_journal_error("process_spawn_handler", error))?;
+                let outcome = Err(error);
+                journal
+                    .complete_process_spawn(reservation, request, &outcome)
+                    .map_err(|error| host_effect_journal_error("process_spawn_handler", error))?;
+                return Ok(outcome);
+            }
+        };
+        if let Some(recorded) = journal.replay_process_spawn(&prepared) {
+            return Ok(recorded);
+        }
+        let reservation = journal
+            .reserve_process_spawn(&prepared)
+            .map_err(|error| host_effect_journal_error("process_spawn_handler", error))?;
+        let outcome = self.provider.perform(&prepared, granted);
+        journal
+            .complete_process_spawn(reservation, &prepared, &outcome)
+            .map_err(|error| host_effect_journal_error("process_spawn_handler", error))?;
+        Ok(outcome)
+    }
+
+    fn route(&self, effect: &dyn ErasedEffect) -> Result<Option<EffectResult>, EffectError> {
+        let request = effect
+            .parameters()
+            .downcast::<ProcessSpawnRequest>()
+            .map_err(|_| EffectError::InvalidParameters {
+                effect_name: effect.effect_name().to_string(),
+                reason: "expected a typed ProcessSpawnRequest".to_string(),
+            })?;
+        let granted = [ProcessSpawnCapability::Spawn];
+        let outcome = if let Some(journal) = self.host_effect_journal.as_deref() {
+            self.journaled_outcome(journal, request.as_ref(), &granted)?
+        } else {
+            perform_recorded(
+                self.provider.as_ref(),
+                self.recorder.as_deref(),
+                request.as_ref(),
+                &granted,
+            )
+        };
+        match outcome {
+            Ok(response) => Ok(Some(EffectResult::new(response))),
+            // Reaching this handler already proves that the typed
+            // `ProcessSpawn` capability was present in the stack. Preserve the
+            // provider's concrete denial/limit/I/O reason as a handler error so
+            // the interpreter can construct Node's catchable child-process
+            // error shape while the journal retains the exact denied outcome.
+            // Converting policy denials back into `CapabilityDenied` here would
+            // erase `executable_alias_denied`, timeout, and ENOENT-relevant
+            // evidence after the real capability gate had already succeeded.
+            Err(error) => Err(EffectError::HandlerError {
+                handler: "process_spawn_handler".to_string(),
+                message: error.to_string(),
+                code: Some(process_spawn_error_code(&error).to_string()),
+            }),
+        }
+    }
+}
+
+impl Handler for ProcessSpawnHandler {
+    fn can_handle(&self, effect_name: &str) -> bool {
+        effect_name == "proc:spawn"
+    }
+
+    fn handle(&self, effect: &dyn ErasedEffect) -> Result<Option<EffectResult>, EffectError> {
+        self.route(effect)
+    }
+
+    fn provided_capabilities(&self) -> EffectCapabilities {
+        EffectCapabilities::runtime([RuntimeCapability::ProcessSpawn])
+    }
+
+    fn priority(&self) -> EffectPriority {
+        EffectPriority::Critical
+    }
+
+    fn handler_name(&self) -> &'static str {
+        "process_spawn_handler"
     }
 }
 
@@ -571,7 +929,7 @@ pub fn create_handler_stack_from_profile(profile: &CapabilityProfile) -> Handler
 
     match profile.kind() {
         ProfileKind::Full => {
-            stack.add_handler(Arc::new(FullCapsHandler));
+            stack.add_handler(Arc::new(FullCapsHandler::new()));
         }
         ProfileKind::EngineCore => {
             stack.add_handler(Arc::new(EngineCoreHandler));
@@ -594,10 +952,172 @@ pub fn create_handler_stack_from_profile(profile: &CapabilityProfile) -> Handler
     stack
 }
 
+/// Like [`create_handler_stack_from_profile`], but for the `Full` profile installs
+/// a [`FullCapsHandler`] backed by a real sandboxed [`HostIoProvider`] (optionally
+/// wrapped in a [`HostIoRecorder`] for deterministic replay) so `fs` / `network`
+/// hostcalls dispatch to actual host I/O instead of the fail-closed deny default.
+///
+/// Non-`Full` profiles never perform host I/O, so they ignore `host_io` and build
+/// exactly as [`create_handler_stack_from_profile`]. This is the engine-side seam
+/// for the proof-carrying host-effect pipeline (bd-f5b04.2.6): the product layer
+/// constructs a sandboxed provider (plus a recorder for replay) and threads it
+/// here so a `run` actually produces and records real effects. Installing the
+/// provider is what makes [`FullCapsHandler::dispatches_real_hostcalls`] report
+/// `true`.
+pub fn create_handler_stack_from_profile_with_host_io(
+    profile: &CapabilityProfile,
+    host_io: Arc<dyn HostIoProvider>,
+    recorder: Option<Arc<dyn HostIoRecorder>>,
+) -> HandlerStack {
+    if profile.kind() != ProfileKind::Full {
+        // Only the Full profile performs fs/network host I/O; for every other
+        // profile the provider is irrelevant and the default stack is correct.
+        return create_handler_stack_from_profile(profile);
+    }
+    let mut stack = HandlerStack::new();
+    let handler = match recorder {
+        Some(recorder) => FullCapsHandler::with_host_io_recorded(host_io, recorder),
+        None => FullCapsHandler::with_host_io(host_io),
+    };
+    stack.add_handler(Arc::new(handler));
+    stack
+}
+
+/// Build a profile with filesystem/network and process providers as independent
+/// trust boundaries. Ordinary host I/O remains Full-only. An explicitly
+/// installed process provider is orthogonal to the base profile and supplies
+/// only `ProcessSpawn`, reflecting its separate signed per-run admission.
+pub fn create_handler_stack_from_profile_with_effect_providers(
+    profile: &CapabilityProfile,
+    host_io: Option<Arc<dyn HostIoProvider>>,
+    host_io_recorder: Option<Arc<dyn HostIoRecorder>>,
+    process_spawn: Option<Arc<dyn ProcessSpawnProvider>>,
+    process_spawn_recorder: Option<Arc<dyn ProcessSpawnRecorder>>,
+    host_effect_journal: Option<Arc<InMemoryHostEffectJournal>>,
+) -> HandlerStack {
+    let mut stack = if profile.kind() == ProfileKind::Full {
+        let mut stack = HandlerStack::new();
+        stack.add_handler(Arc::new(FullCapsHandler::with_effect_providers(
+            host_io,
+            host_io_recorder,
+            host_effect_journal.clone(),
+        )));
+        stack
+    } else {
+        create_handler_stack_from_profile(profile)
+    };
+    if let Some(provider) = process_spawn {
+        stack.add_handler(Arc::new(ProcessSpawnHandler::new(
+            provider,
+            process_spawn_recorder,
+            host_effect_journal,
+        )));
+    }
+    stack
+}
+
 /// Convert a legacy hostcall tag to an appropriate Effect.
 ///
 /// This function provides compatibility with the existing hostcall dispatch system
 /// by converting hostcall tags and parameters to the new Effect types.
+/// bd-656a2: serialize a semantic http request (`url` + `method` + `headers` +
+/// optional `body`) into the raw bytes the network mechanism writes to the
+/// socket, plus the concrete `host:port` endpoint to connect to.
+///
+/// This is deliberately a minimal, dependency-free HTTP/1.1 request builder
+/// (the engine has no http/url crate): it strips a leading `http://`/`https://`
+/// scheme, splits the remainder into an authority (`host[:port]`) and a request
+/// path (defaulting to `/`), defaults the port to 80 (http) or 443 (https) when
+/// the authority omits one, and emits
+/// `"<METHOD> <path> HTTP/1.1\r\nHost: <authority>\r\n"` followed by any
+/// caller-supplied headers, the blank-line terminator, and the body. The
+/// returned `use_tls` flag (bd-3894s slice 5) is true for an `https://` URL and
+/// tells the network mechanism to wrap the connection in a real TLS session
+/// before writing these bytes. The product layer (`franken_node`) owns SSRF
+/// policy and must authorize the endpoint BEFORE this effect is issued — this
+/// function performs no policy check, only framing.
+fn http_request_to_wire(
+    url: &str,
+    method: &str,
+    headers: &[(String, String)],
+    body: Option<&[u8]>,
+) -> (String, Vec<u8>, bool) {
+    let (rest, use_tls) = match url.strip_prefix("https://") {
+        Some(rest) => (rest, true),
+        None => (url.strip_prefix("http://").unwrap_or(url), false),
+    };
+    let (authority, path) = match rest.find('/') {
+        Some(idx) => (&rest[..idx], &rest[idx..]),
+        None => (rest, "/"),
+    };
+    let endpoint = if authority.contains(':') {
+        authority.to_string()
+    } else if use_tls {
+        format!("{authority}:443")
+    } else {
+        format!("{authority}:80")
+    };
+    let request_target = if path.is_empty() { "/" } else { path };
+    let mut request = format!("{method} {request_target} HTTP/1.1\r\nHost: {authority}\r\n");
+    for (name, value) in headers {
+        request.push_str(name);
+        request.push_str(": ");
+        request.push_str(value);
+        request.push_str("\r\n");
+    }
+    // bd-3894s slice (2): a request that carries a body needs an explicit framing
+    // length so the peer knows where the body ends. Node/undici synthesize a
+    // `Content-Length` header automatically when the caller did not supply an
+    // explicit framing header; mirror that so the egress is a well-formed
+    // HTTP/1.1 request AND the recorded host effect faithfully reflects the bytes
+    // actually sent. Only synthesized when a body is present and the caller set
+    // neither `Content-Length` nor `Transfer-Encoding` (case-insensitive).
+    if let Some(body) = body {
+        let has_framing_header = headers.iter().any(|(name, _)| {
+            name.eq_ignore_ascii_case("content-length")
+                || name.eq_ignore_ascii_case("transfer-encoding")
+        });
+        if !has_framing_header {
+            request.push_str("Content-Length: ");
+            request.push_str(&body.len().to_string());
+            request.push_str("\r\n");
+        }
+    }
+    // bd-3894s slice (4): the network mechanism does a single-socket round trip
+    // and reads the response to EOF. HTTP/1.1 defaults to keep-alive, so unless
+    // the peer is told to close, that read would block until the connect/read
+    // timeout. Synthesize `Connection: close` (unless the caller already framed a
+    // `Connection` header) so the peer closes after responding and the round trip
+    // terminates promptly — exactly what a minimal one-shot HTTP client does.
+    let has_connection_header = headers
+        .iter()
+        .any(|(name, _)| name.eq_ignore_ascii_case("connection"));
+    if !has_connection_header {
+        request.push_str("Connection: close\r\n");
+    }
+    request.push_str("\r\n");
+    let mut payload = request.into_bytes();
+    if let Some(body) = body {
+        payload.extend_from_slice(body);
+    }
+    (endpoint, payload, use_tls)
+}
+
+#[must_use]
+pub fn create_fs_effect(
+    operation: FsOperation,
+    path: String,
+    arguments: Vec<String>,
+    content: Option<Vec<u8>>,
+) -> Box<dyn ErasedEffect> {
+    Box::new(FsHostcallEffect {
+        operation,
+        path,
+        arguments,
+        content,
+    })
+}
+
 pub fn create_effect_from_hostcall_tag(
     tag: &str,
     args: &[String],
@@ -628,12 +1148,7 @@ pub fn create_effect_from_hostcall_tag(
             } else {
                 None
             };
-            let effect = FsHostcallEffect {
-                operation,
-                path,
-                content,
-            };
-            Ok(Box::new(effect))
+            Ok(create_fs_effect(operation, path, Vec::new(), content))
         }
         tag if tag.starts_with("timer:") => {
             let operation = match tag {
@@ -648,7 +1163,7 @@ pub fn create_effect_from_hostcall_tag(
                     });
                 }
             };
-            let duration_ms = args.get(0).and_then(|s| s.parse().ok());
+            let duration_ms = args.first().and_then(|s| s.parse().ok());
             let timer_id = args.get(1).and_then(|s| s.parse().ok());
             let effect = TimerHostcallEffect {
                 operation,
@@ -658,7 +1173,7 @@ pub fn create_effect_from_hostcall_tag(
             Ok(Box::new(effect))
         }
         tag if tag.starts_with("module:") => {
-            let module_path = args.get(0).unwrap_or(&String::new()).clone();
+            let module_path = args.first().cloned().unwrap_or_default();
             let import_type = if tag.contains("require") {
                 ModuleImportType::Require
             } else {
@@ -670,19 +1185,81 @@ pub fn create_effect_from_hostcall_tag(
             };
             Ok(Box::new(effect))
         }
+        // bd-656a2: the http leg. The JS `http.get(url)` / `http.request(url)`
+        // lowering (CJS require-binding/inline form, mirror of the fs lowering)
+        // emits a `net:request` HostCall carrying the URL as arg[0]. Slice 1 is
+        // the GET egress (`http.get` and the default `http.request` method are
+        // GET); request bodies, options objects, callbacks, the ClientRequest/
+        // response objects, `fetch`, and ESM `http` imports are follow-up slices.
+        // The URL is turned into a concrete `host:port` endpoint plus an HTTP/1.1
+        // request payload at the effect->HostIoRequest boundary
+        // (`host_io_request_from_effect`), keeping this builder a pure semantic
+        // intent carrier.
+        tag if tag.starts_with("net:") => {
+            let url = args.first().cloned().unwrap_or_default();
+            let effect = NetworkHostcallEffect {
+                url,
+                method: "GET".to_string(),
+                headers: Vec::new(),
+                body: None,
+            };
+            Ok(Box::new(effect))
+        }
         _ => Err(EffectError::Unhandled {
             effect_name: tag.to_string(),
         }),
     }
 }
 
+/// bd-3894s slice (2): build the network host effect from a fully-resolved
+/// request intent (`url` + `method` + `headers` + optional `body`).
+///
+/// The string-args `create_effect_from_hostcall_tag` builder above can only
+/// recover the URL (arg[0]) and always frames a bodyless `GET`, because the
+/// request `method`/`headers`/`body` live in the call's options/init object
+/// (`fetch(url, { method, headers, body })` / `http.request(url, { method,
+/// headers })`), a structured JS value that the interpreter — not the
+/// string-args boundary — must read off the heap. The interpreter resolves
+/// those fields (`resolve_net_request_options`) and calls this so the recorded,
+/// signed EffectReceipt AND the wire egress faithfully reflect the real request
+/// (a `POST` with a body must never be recorded — or sent — as a benign `GET`).
+/// Keeping the `Box<dyn ErasedEffect>` construction here avoids leaking the
+/// effect-trait machinery into the interpreter.
+pub fn create_network_effect(
+    url: String,
+    method: String,
+    headers: Vec<(String, String)>,
+    body: Option<Vec<u8>>,
+) -> Box<dyn ErasedEffect> {
+    Box::new(NetworkHostcallEffect {
+        url,
+        method,
+        headers,
+        body,
+    })
+}
+
+/// Preserve the complete typed process request when entering the algebraic
+/// effect stack. String-tag conversion is intentionally not supported for this
+/// extraordinary authority because it would discard argv/env/cwd/stdio/limit
+/// boundaries before policy and replay inspect them.
+pub fn create_process_spawn_effect(request: ProcessSpawnRequest) -> Box<dyn ErasedEffect> {
+    Box::new(ProcSpawnEffect { request })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use frankenengine_extension_host::host_effect_journal::HostEffectJournalEntry;
+    use frankenengine_extension_host::host_io::HostIoCapability;
+    use frankenengine_extension_host::process_spawn::{
+        ProcessExit, ProcessLaunch, ProcessSpawnOutcome, ProcessStdio,
+    };
+    use std::collections::BTreeMap;
 
     #[test]
     fn test_full_caps_handler_console() {
-        let handler = FullCapsHandler;
+        let handler = FullCapsHandler::new();
         let effect = ConsoleHostcallEffect {
             method: "log".to_string(),
             args: vec!["test".to_string(), "message".to_string()],
@@ -701,17 +1278,17 @@ mod tests {
         // data while claiming full capability). With no real in-engine executor,
         // it EXPLICITLY DENIES them with `CapabilityDenied`. `timer` keeps its
         // in-process path and the helper stays `false`.
+        let handler = FullCapsHandler::new();
         assert!(
-            !FullCapsHandler::dispatches_real_hostcalls(),
+            !handler.dispatches_real_hostcalls(),
             "no real fs/network executor exists, so this must stay false (bd-6wc97)"
         );
-
-        let handler = FullCapsHandler;
 
         // fs:read — denied, not a canned "simulated content of {path}" buffer.
         let fs_read = FsHostcallEffect {
             operation: FsOperation::Read,
             path: "/etc/hostname".to_string(),
+            arguments: Vec::new(),
             content: None,
         };
         assert!(
@@ -726,6 +1303,7 @@ mod tests {
         let fs_write = FsHostcallEffect {
             operation: FsOperation::Write,
             path: "/tmp/out".to_string(),
+            arguments: Vec::new(),
             content: Some(b"data".to_vec()),
         };
         assert!(
@@ -761,6 +1339,598 @@ mod tests {
             handler.handle(&timer_effect).is_ok(),
             "timer must remain handled (bd-6wc97 denies only fs/network)"
         );
+    }
+
+    #[derive(Debug, Default)]
+    struct RecordingHostIo {
+        seen: std::sync::Mutex<Vec<(HostIoRequest, Vec<HostIoCapability>)>>,
+    }
+
+    impl HostIoProvider for RecordingHostIo {
+        fn name(&self) -> &str {
+            "recording-test-host-io"
+        }
+
+        fn perform(
+            &self,
+            request: &HostIoRequest,
+            granted: &[HostIoCapability],
+        ) -> Result<HostIoResponse, HostIoError> {
+            self.seen
+                .lock()
+                .unwrap()
+                .push((request.clone(), granted.to_vec()));
+            Ok(match request {
+                HostIoRequest::FsRead { .. } => HostIoResponse::FsRead {
+                    bytes: b"real-bytes".to_vec(),
+                },
+                HostIoRequest::FsWrite { data, .. } => HostIoResponse::FsWrite {
+                    bytes_written: data.len() as u64,
+                },
+                HostIoRequest::FsMeta { .. } => HostIoResponse::FsMeta {
+                    result: frankenengine_extension_host::host_io::FsMetaResult::Unit,
+                },
+                HostIoRequest::NetworkSend { payload, .. } => HostIoResponse::NetworkSend {
+                    bytes_sent: payload.len() as u64,
+                },
+                HostIoRequest::NetworkRecv { max_len, .. } => HostIoResponse::NetworkRecv {
+                    bytes: vec![0; *max_len as usize],
+                },
+                HostIoRequest::NetworkRequest { .. } => HostIoResponse::NetworkRequest {
+                    response: b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n".to_vec(),
+                },
+            })
+        }
+    }
+
+    #[derive(Debug)]
+    struct NeverCalledHostIo;
+
+    impl HostIoProvider for NeverCalledHostIo {
+        fn name(&self) -> &str {
+            "never-called"
+        }
+
+        fn perform(
+            &self,
+            _request: &HostIoRequest,
+            _granted: &[HostIoCapability],
+        ) -> Result<HostIoResponse, HostIoError> {
+            panic!("provider must not be called in replay mode");
+        }
+    }
+
+    #[derive(Debug, Default)]
+    struct RecordingProcessSpawn {
+        seen: std::sync::Mutex<Vec<ProcessSpawnRequest>>,
+    }
+
+    impl ProcessSpawnProvider for RecordingProcessSpawn {
+        fn name(&self) -> &str {
+            "recording-test-process-spawn"
+        }
+
+        fn perform(
+            &self,
+            request: &ProcessSpawnRequest,
+            granted: &[ProcessSpawnCapability],
+        ) -> ProcessSpawnOutcome {
+            assert_eq!(granted, &[ProcessSpawnCapability::Spawn]);
+            self.seen.lock().unwrap().push(request.clone());
+            Ok(ProcessSpawnResponse::Run {
+                exit: ProcessExit {
+                    success: true,
+                    code: Some(0),
+                    signal: None,
+                },
+                stdout: b"typed-process-output".to_vec(),
+                stderr: Vec::new(),
+            })
+        }
+
+        fn cleanup_handle(&self, _handle: &str) {}
+    }
+
+    #[derive(Debug)]
+    struct DenyingProcessSpawn;
+
+    impl ProcessSpawnProvider for DenyingProcessSpawn {
+        fn name(&self) -> &str {
+            "denying-test-process-spawn"
+        }
+
+        fn perform(
+            &self,
+            _request: &ProcessSpawnRequest,
+            _granted: &[ProcessSpawnCapability],
+        ) -> ProcessSpawnOutcome {
+            Err(ProcessSpawnError::PolicyViolation {
+                code: "executable_alias_denied".to_string(),
+                detail: "bare executable alias missing is not signed into policy".to_string(),
+            })
+        }
+
+        fn cleanup_handle(&self, _handle: &str) {}
+    }
+
+    fn process_run_request() -> ProcessSpawnRequest {
+        ProcessSpawnRequest::Run {
+            launch: ProcessLaunch {
+                executable: "/usr/bin/true".to_string(),
+                argv: Vec::new(),
+                env: BTreeMap::new(),
+                cwd: Some("/".to_string()),
+                shell: false,
+                stdio: ProcessStdio::default(),
+            },
+            stdin: Vec::new(),
+            timeout_millis: Some(100),
+        }
+    }
+
+    #[test]
+    fn process_provider_is_an_orthogonal_explicit_capability_witness_bd_x85a7() {
+        let effect = create_process_spawn_effect(process_run_request());
+        let mut ordinary_full = create_handler_stack_from_profile(&CapabilityProfile::full());
+        assert!(!ordinary_full.can_handle("proc:spawn"));
+        assert!(matches!(
+            ordinary_full.handle_effect(effect.as_ref()),
+            Err(EffectError::CapabilityDenied { .. })
+        ));
+
+        let provider = Arc::new(RecordingProcessSpawn::default());
+        let journal = Arc::new(InMemoryHostEffectJournal::recording());
+        journal.begin_execution().unwrap();
+        let mut admitted = create_handler_stack_from_profile_with_effect_providers(
+            &CapabilityProfile::compute_only(),
+            None,
+            None,
+            Some(provider.clone()),
+            None,
+            Some(journal.clone()),
+        );
+        let result = admitted
+            .handle_effect(effect.as_ref())
+            .expect("signed process handler must dispatch independently of base profile")
+            .downcast::<ProcessSpawnResponse>()
+            .expect("typed process response");
+        assert!(matches!(result, ProcessSpawnResponse::Run { .. }));
+        assert_eq!(
+            provider.seen.lock().unwrap().as_slice(),
+            &[process_run_request()]
+        );
+        let entries = journal.finish_execution().unwrap();
+        assert!(matches!(
+            entries.as_slice(),
+            [HostEffectJournalEntry::ProcessSpawn { .. }]
+        ));
+    }
+
+    #[test]
+    fn process_journal_preflight_refuses_before_provider_invocation_bd_x85a7() {
+        let provider = Arc::new(RecordingProcessSpawn::default());
+        let journal = Arc::new(InMemoryHostEffectJournal::recording());
+        let mut stack = create_handler_stack_from_profile_with_effect_providers(
+            &CapabilityProfile::compute_only(),
+            None,
+            None,
+            Some(provider.clone()),
+            None,
+            Some(journal),
+        );
+        let error = stack
+            .handle_effect(create_process_spawn_effect(process_run_request()).as_ref())
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            EffectError::HandlerError { ref code, .. }
+                if code.as_deref() == Some("HOST_EFFECT_JOURNAL")
+        ));
+        assert!(provider.seen.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn admitted_provider_denial_preserves_guest_error_evidence_bd_x85a7() {
+        let journal = Arc::new(InMemoryHostEffectJournal::recording());
+        journal.begin_execution().unwrap();
+        let mut stack = create_handler_stack_from_profile_with_effect_providers(
+            &CapabilityProfile::compute_only(),
+            None,
+            None,
+            Some(Arc::new(DenyingProcessSpawn)),
+            None,
+            Some(journal.clone()),
+        );
+        let error = stack
+            .handle_effect(create_process_spawn_effect(process_run_request()).as_ref())
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            EffectError::HandlerError {
+                ref message,
+                ref code,
+                ..
+            } if code.as_deref() == Some("PROCESS_SPAWN_POLICY_VIOLATION")
+                && message.contains("executable_alias_denied")
+        ));
+        assert!(matches!(
+            journal.finish_execution().unwrap().as_slice(),
+            [HostEffectJournalEntry::ProcessSpawn {
+                outcome: Err(ProcessSpawnError::PolicyViolation { code, .. }),
+                ..
+            }] if code == "executable_alias_denied"
+        ));
+    }
+
+    /// bd-656a2 (http leg): the `net:request` hostcall tag (emitted by the JS
+    /// http.get/http.request lowering) builds a `hostcall:network` effect that
+    /// round-trips through `host_io_request_from_effect` to a concrete
+    /// `host:port` NetworkRequest carrying a framed HTTP/1.1 GET request.
+    /// bd-3894s slice (4): the request is a single-socket `NetworkRequest`
+    /// round trip (not a fire-and-forget `NetworkSend`) so the guest can observe
+    /// the response, and the framing carries `Connection: close`.
+    #[test]
+    fn create_effect_from_net_request_tag_builds_network_effect_bd_656a2() {
+        let effect =
+            create_effect_from_hostcall_tag("net:request", &["http://example.test/p".to_string()])
+                .expect("net:request tag must build a network effect");
+        assert_eq!(effect.effect_name(), "hostcall:network");
+        let request = FullCapsHandler::host_io_request_from_effect(effect.as_ref())
+            .expect("network effect must map to a HostIoRequest");
+        match request {
+            HostIoRequest::NetworkRequest {
+                endpoint, payload, ..
+            } => {
+                assert_eq!(
+                    endpoint, "example.test:80",
+                    "url with no port must default to :80 and strip the path"
+                );
+                let wire = String::from_utf8(payload).expect("ascii request line");
+                assert!(
+                    wire.starts_with("GET /p HTTP/1.1\r\n"),
+                    "request line must target the path: {wire:?}"
+                );
+                assert!(
+                    wire.contains("Host: example.test\r\n"),
+                    "Host header must carry the authority: {wire:?}"
+                );
+                assert!(
+                    wire.contains("Connection: close\r\n"),
+                    "round-trip framing must request connection close: {wire:?}"
+                );
+            }
+            other => panic!("expected NetworkRequest, got {other:?}"),
+        }
+    }
+
+    /// bd-3894s slice (2): `create_network_effect` carries the resolved request
+    /// `method` + `headers` + `body` (recovered by the interpreter from a
+    /// `fetch(url, init)` / `http.request(url, options)` options object) all the
+    /// way through to the framed HTTP/1.1 wire request, so a POST-with-body is
+    /// sent — and recorded — faithfully rather than collapsed to a bodyless GET.
+    #[test]
+    fn create_network_effect_frames_method_headers_and_body_bd_3894s() {
+        let effect = create_network_effect(
+            "http://example.test/submit".to_string(),
+            "POST".to_string(),
+            vec![("Content-Type".to_string(), "application/json".to_string())],
+            Some(b"{\"k\":1}".to_vec()),
+        );
+        assert_eq!(effect.effect_name(), "hostcall:network");
+        let request = FullCapsHandler::host_io_request_from_effect(effect.as_ref())
+            .expect("network effect must map to a HostIoRequest");
+        let HostIoRequest::NetworkRequest {
+            endpoint, payload, ..
+        } = request
+        else {
+            panic!("expected a NetworkRequest host io request");
+        };
+        assert_eq!(endpoint, "example.test:80");
+        let wire = String::from_utf8(payload).expect("ascii request line");
+        assert!(
+            wire.starts_with("POST /submit HTTP/1.1\r\n"),
+            "method + target framed: {wire:?}"
+        );
+        assert!(
+            wire.contains("Content-Type: application/json\r\n"),
+            "caller header framed: {wire:?}"
+        );
+        assert!(
+            wire.contains("Content-Length: 7\r\n"),
+            "synthesized framing length matches the body: {wire:?}"
+        );
+        assert!(
+            wire.ends_with("\r\n\r\n{\"k\":1}"),
+            "body follows the blank-line terminator: {wire:?}"
+        );
+    }
+
+    /// bd-656a2: unit coverage for the dependency-free HTTP/1.1 wire builder —
+    /// scheme stripping, default port/path, header emission, and body framing.
+    #[test]
+    fn http_request_to_wire_defaults_and_framing_bd_656a2() {
+        // explicit port + multi-segment path are preserved verbatim.
+        // bd-3894s slice (4): the round-trip framing now appends `Connection: close`
+        // (so the peer closes and the response read terminates) before the
+        // blank-line terminator.
+        let (endpoint, payload, use_tls) =
+            http_request_to_wire("http://127.0.0.1:8080/a/b", "GET", &[], None);
+        assert_eq!(endpoint, "127.0.0.1:8080");
+        assert!(!use_tls, "http scheme must not request TLS");
+        let wire = String::from_utf8(payload).unwrap();
+        assert_eq!(
+            wire, "GET /a/b HTTP/1.1\r\nHost: 127.0.0.1:8080\r\nConnection: close\r\n\r\n",
+            "round-trip GET frames Host + Connection: close: {wire:?}"
+        );
+
+        // bd-3894s slice (4): a caller-supplied `Connection` header is honored and
+        // not duplicated.
+        let (_endpoint, payload, _use_tls) = http_request_to_wire(
+            "http://h:1/",
+            "GET",
+            &[("Connection".to_string(), "keep-alive".to_string())],
+            None,
+        );
+        let wire = String::from_utf8(payload).unwrap();
+        assert_eq!(
+            wire.to_ascii_lowercase().matches("connection:").count(),
+            1,
+            "caller Connection header is honored and not duplicated: {wire:?}"
+        );
+        assert!(
+            wire.contains("Connection: keep-alive\r\n"),
+            "caller Connection value is preserved: {wire:?}"
+        );
+
+        // no scheme and no path -> default port 80 and default request target "/".
+        let (endpoint, payload, use_tls) = http_request_to_wire("example.test", "GET", &[], None);
+        assert_eq!(endpoint, "example.test:80");
+        assert!(!use_tls, "schemeless url must not request TLS");
+        let wire = String::from_utf8(payload).unwrap();
+        assert!(wire.starts_with("GET / HTTP/1.1\r\nHost: example.test\r\n"));
+
+        // caller headers are emitted and the body follows the blank-line terminator.
+        // bd-3894s slice (2): a body with no caller framing header gets an
+        // auto-synthesized Content-Length so the egress is a well-formed request.
+        let (_endpoint, payload, _use_tls) = http_request_to_wire(
+            "http://h:1/",
+            "POST",
+            &[("X-T".to_string(), "1".to_string())],
+            Some(b"hi"),
+        );
+        let wire = String::from_utf8(payload).unwrap();
+        assert!(
+            wire.starts_with("POST / HTTP/1.1\r\nHost: h:1\r\n"),
+            "method/target/host framed: {wire:?}"
+        );
+        assert!(
+            wire.contains("X-T: 1\r\n"),
+            "header must be framed: {wire:?}"
+        );
+        assert!(
+            wire.contains("Content-Length: 2\r\n"),
+            "a body with no caller framing header gets a synthesized Content-Length: {wire:?}"
+        );
+        assert!(
+            wire.ends_with("\r\n\r\nhi"),
+            "body follows terminator: {wire:?}"
+        );
+
+        // bd-3894s slice (2): a caller-supplied framing header (Content-Length or
+        // Transfer-Encoding, case-insensitive) is honored, not duplicated.
+        let (_endpoint, payload, _use_tls) = http_request_to_wire(
+            "http://h:1/",
+            "POST",
+            &[("content-length".to_string(), "5".to_string())],
+            Some(b"hello"),
+        );
+        let wire = String::from_utf8(payload).unwrap();
+        assert_eq!(
+            wire.to_ascii_lowercase().matches("content-length").count(),
+            1,
+            "caller Content-Length is honored and not duplicated: {wire:?}"
+        );
+        assert!(wire.ends_with("\r\n\r\nhello"), "body framed: {wire:?}");
+
+        // bd-3894s slice (2): a bodyless GET is unchanged — no synthesized framing.
+        let (_endpoint, payload, _use_tls) = http_request_to_wire("http://h:1/", "GET", &[], None);
+        let wire = String::from_utf8(payload).unwrap();
+        assert!(
+            !wire.to_ascii_lowercase().contains("content-length"),
+            "bodyless GET carries no synthesized Content-Length: {wire:?}"
+        );
+    }
+
+    /// bd-3894s slice (5): an `https://` URL sets the TLS marker and defaults the
+    /// connect port to 443 (an explicit port is preserved); the framed request
+    /// bytes are scheme-independent. The marker flows through
+    /// `host_io_request_from_effect` into `NetworkRequest::use_tls` so the
+    /// network mechanism performs the round trip inside a real TLS session.
+    #[test]
+    fn http_request_to_wire_https_sets_tls_and_port_443_bd_3894s() {
+        let (endpoint, payload, use_tls) =
+            http_request_to_wire("https://example.test/p", "GET", &[], None);
+        assert_eq!(endpoint, "example.test:443", "https defaults to port 443");
+        assert!(use_tls, "https scheme must request TLS");
+        let wire = String::from_utf8(payload).unwrap();
+        assert!(
+            wire.starts_with("GET /p HTTP/1.1\r\nHost: example.test\r\n"),
+            "framing is scheme-independent: {wire:?}"
+        );
+
+        let (endpoint, _payload, use_tls) =
+            http_request_to_wire("https://example.test:8443/p", "GET", &[], None);
+        assert_eq!(endpoint, "example.test:8443", "explicit port is preserved");
+        assert!(use_tls);
+
+        // End-to-end through the effect layer: the https marker lands on the
+        // HostIoRequest the provider receives.
+        let effect =
+            create_effect_from_hostcall_tag("net:request", &["https://example.test/p".to_string()])
+                .expect("net:request tag must build a network effect");
+        let request = FullCapsHandler::host_io_request_from_effect(effect.as_ref())
+            .expect("network effect must map to a HostIoRequest");
+        let HostIoRequest::NetworkRequest {
+            endpoint, use_tls, ..
+        } = request
+        else {
+            panic!("expected a NetworkRequest host io request");
+        };
+        assert_eq!(endpoint, "example.test:443");
+        assert!(use_tls, "https effect must carry the TLS marker");
+    }
+
+    #[test]
+    fn full_caps_with_provider_routes_fs_and_network_bd_lrbbz_7() {
+        let provider = Arc::new(RecordingHostIo::default());
+        let handler = FullCapsHandler::with_host_io(provider.clone());
+        assert!(handler.dispatches_real_hostcalls());
+
+        let fs_read = FsHostcallEffect {
+            operation: FsOperation::Read,
+            path: "/data/x".to_string(),
+            arguments: Vec::new(),
+            content: None,
+        };
+        assert!(handler.handle(&fs_read).expect("fs read routed").is_some());
+
+        let fs_write = FsHostcallEffect {
+            operation: FsOperation::Write,
+            path: "/data/y".to_string(),
+            arguments: Vec::new(),
+            content: Some(b"abc".to_vec()),
+        };
+        assert!(
+            handler
+                .handle(&fs_write)
+                .expect("fs write routed")
+                .is_some()
+        );
+
+        let network = NetworkHostcallEffect {
+            url: "https://host:443".to_string(),
+            method: "POST".to_string(),
+            headers: Vec::new(),
+            body: Some(b"hi".to_vec()),
+        };
+        assert!(handler.handle(&network).expect("network routed").is_some());
+
+        let seen = provider.seen.lock().unwrap();
+        assert_eq!(seen.len(), 3);
+        for (request, granted) in seen.iter() {
+            assert_eq!(granted.as_slice(), &[request.required_capability()]);
+        }
+    }
+
+    #[test]
+    fn full_caps_records_and_replays_host_io_bd_lrbbz_7() {
+        use frankenengine_extension_host::host_io::InMemoryHostIoTranscript;
+
+        let provider = Arc::new(RecordingHostIo::default());
+        let recorder = Arc::new(InMemoryHostIoTranscript::recording());
+        let record_handler = FullCapsHandler::with_host_io_recorded(provider, recorder.clone());
+        recorder.begin_execution().expect("begin recording");
+        let network = NetworkHostcallEffect {
+            url: "https://host:443".to_string(),
+            method: "POST".to_string(),
+            headers: Vec::new(),
+            body: Some(b"hi".to_vec()),
+        };
+        assert!(record_handler.handle(&network).is_ok());
+        let recorded = recorder.finish_execution().expect("finish recording");
+        assert_eq!(recorded.len(), 1);
+
+        let replay = Arc::new(InMemoryHostIoTranscript::replaying(recorded));
+        replay.begin_execution().expect("begin replay");
+        let replay_handler =
+            FullCapsHandler::with_host_io_recorded(Arc::new(NeverCalledHostIo), replay.clone());
+        assert!(replay_handler.handle(&network).is_ok());
+        replay.finish_execution().expect("finish replay");
+    }
+
+    #[test]
+    fn full_caps_stack_with_sandboxed_provider_performs_real_fs_bd_f5b04_2_6() {
+        use frankenengine_extension_host::host_io::{InMemoryHostIoTranscript, SandboxedHostIo};
+
+        // A real sandbox root in a unique temp dir.
+        let mut root = std::env::temp_dir();
+        root.push(format!(
+            "frankenengine_stack_sandbox_{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("scratch root");
+
+        let provider = Arc::new(SandboxedHostIo::with_root(&root).expect("sandboxed provider"));
+        let recorder = Arc::new(InMemoryHostIoTranscript::recording());
+        let mut stack = create_handler_stack_from_profile_with_host_io(
+            &CapabilityProfile::full(),
+            provider,
+            Some(recorder.clone()),
+        );
+
+        // A real write dispatched through the algebraic-effects stack lands real
+        // bytes on disk (proves the substrate executes effects, not just gates).
+        let write = FsHostcallEffect {
+            operation: FsOperation::Write,
+            path: "report.txt".to_string(),
+            arguments: Vec::new(),
+            content: Some(b"real effect bytes".to_vec()),
+        };
+        stack
+            .handle_effect(&write)
+            .expect("fs write dispatched through the Full stack");
+        assert_eq!(
+            std::fs::read(root.join("report.txt")).expect("written file on disk"),
+            b"real effect bytes",
+            "the dispatched effect must have produced a real file"
+        );
+
+        // A real read dispatched through the same stack succeeds (bytes off disk).
+        let read = FsHostcallEffect {
+            operation: FsOperation::Read,
+            path: "report.txt".to_string(),
+            arguments: Vec::new(),
+            content: None,
+        };
+        stack
+            .handle_effect(&read)
+            .expect("fs read dispatched through the Full stack");
+
+        // Both real effects were captured in the deterministic-replay transcript.
+        assert_eq!(
+            recorder.entries().len(),
+            2,
+            "both dispatched effects must be recorded for replay"
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn non_full_profile_ignores_host_io_provider_bd_f5b04_2_6() {
+        use frankenengine_extension_host::host_io::SandboxedHostIo;
+
+        let mut root = std::env::temp_dir();
+        root.push(format!(
+            "frankenengine_nonfull_sandbox_{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("scratch root");
+        let provider = Arc::new(SandboxedHostIo::with_root(&root).expect("sandboxed provider"));
+
+        // A ComputeOnly profile must build exactly the default stack regardless of
+        // any supplied provider (only Full performs host I/O).
+        let with_provider = create_handler_stack_from_profile_with_host_io(
+            &CapabilityProfile::compute_only(),
+            provider,
+            None,
+        );
+        let default = create_handler_stack_from_profile(&CapabilityProfile::compute_only());
+        assert_eq!(with_provider.handler_names(), default.handler_names());
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
@@ -898,7 +2068,7 @@ mod tests {
     fn test_handler_stack_composition() {
         let mut stack = HandlerStack::new();
         stack.add_handler(Arc::new(ComputeOnlyHandler)); // Higher priority, should block
-        stack.add_handler(Arc::new(FullCapsHandler)); // Lower priority due to ordering
+        stack.add_handler(Arc::new(FullCapsHandler::new())); // Lower priority due to ordering
 
         let effect = ConsoleHostcallEffect {
             method: "log".to_string(),

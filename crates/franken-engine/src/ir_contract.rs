@@ -10,14 +10,13 @@
 //! Every level provides canonical serialization via [`deterministic_serde::CanonicalValue`] and
 //! content-addressed hashing via [`hash_tiers::ContentHash`].
 
-use std::collections::BTreeMap;
-
 use serde::{Deserialize, Serialize};
 
 use crate::ast::{AssignmentOperator, BinaryOperator, SyntaxTree, UnaryOperator};
 use crate::deterministic_serde::{self, CanonicalValue};
 use crate::hash_tiers::ContentHash;
 use crate::ifc_artifacts::Label;
+use crate::js_string::{JsString, canonical_js_string_value};
 
 // ---------------------------------------------------------------------------
 // Schema versioning
@@ -32,9 +31,18 @@ pub struct IrSchemaVersion {
 }
 
 impl IrSchemaVersion {
+    /// `0.7.0` adds the boundary-crossing `Continue` reason to serialized IR1,
+    /// IR2, and IR3 `IteratorClose` operations. `0.6.0` added explicit
+    /// unresolved-name load/store operations. Engine minor `0.5.0` is intentionally skipped
+    /// because that numeric version already identifies the incompatible native
+    /// `franken-core` IR wire. `0.4.0` widened IR1 static property keys to exact UTF-16
+    /// [`JsString`], while `0.3.0` widened IR1 module specifiers after `0.2.0`
+    /// widened JavaScript literals and the IR3 constant pool. Historical
+    /// well-formed strings retain their plain-string JSON wire shape;
+    /// lone-surrogate values use `$wtf16`.
     pub const CURRENT: Self = Self {
         major: 0,
-        minor: 1,
+        minor: 7,
         patch: 0,
     };
 
@@ -215,6 +223,24 @@ impl ResolvedBinding {
     }
 }
 
+fn canonical_resolved_binding_array(bindings: &[ResolvedBinding]) -> CanonicalValue {
+    let mut bindings = bindings.to_vec();
+    bindings.sort_by(|left, right| {
+        left.binding_id
+            .cmp(&right.binding_id)
+            .then_with(|| left.name.cmp(&right.name))
+            .then_with(|| left.scope.depth.cmp(&right.scope.depth))
+            .then_with(|| left.scope.index.cmp(&right.scope.index))
+            .then_with(|| left.kind.as_str().cmp(right.kind.as_str()))
+    });
+    CanonicalValue::Array(
+        bindings
+            .iter()
+            .map(ResolvedBinding::canonical_value)
+            .collect(),
+    )
+}
+
 /// Classification of bindings in IR1.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum BindingKind {
@@ -310,11 +336,11 @@ impl ScopeKind {
     }
 }
 
-/// IR1 property-key operand. Static keys can be carried directly, while
-/// computed members preserve the key on the value stack.
+/// IR1 property-key operand. Static keys retain their exact UTF-16 code units,
+/// while computed members preserve the key on the value stack.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Ir1PropertyKey {
-    Static(String),
+    Static(JsString),
     Dynamic,
 }
 
@@ -323,7 +349,7 @@ impl Ir1PropertyKey {
         match self {
             Self::Static(key) => CanonicalValue::map_from_entries([
                 ("kind", CanonicalValue::str("static")),
-                ("value", CanonicalValue::str(key.clone())),
+                ("value", canonical_js_string_value(key)),
             ]),
             Self::Dynamic => {
                 CanonicalValue::map_from_entries([("kind", CanonicalValue::str("dynamic"))])
@@ -357,6 +383,8 @@ impl AccessorKind {
 pub enum IteratorCloseReason {
     /// Normal loop exit via `break`.
     Break,
+    /// A `continue` targeting an enclosing loop crossed this iterator.
+    Continue,
     /// Early return from the enclosing function.
     Return,
     /// Exception thrown inside the loop body.
@@ -367,6 +395,7 @@ impl IteratorCloseReason {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Break => "break",
+            Self::Continue => "continue",
             Self::Return => "return",
             Self::Throw => "throw",
         }
@@ -380,8 +409,39 @@ pub enum Ir1Op {
     LoadLiteral { value: Ir1Literal },
     /// Reference a resolved binding.
     LoadBinding { binding_id: BindingId },
+    /// Resolve a name dynamically through the runtime scope chain.
+    ///
+    /// `allow_missing` is reserved for the non-throwing `typeof identifier`
+    /// path. Every other unresolved name load raises `ReferenceError`.
+    LoadName { name: String, allow_missing: bool },
+    /// Record whether a dynamic identifier target is resolvable before its
+    /// right-hand side is evaluated.
+    ResolveNameStatus { name: String, status_id: u32 },
     /// Store to a resolved binding.
     StoreBinding { binding_id: BindingId },
+    /// Put a value through a dynamically resolved name reference.
+    ///
+    /// Missing names raise `ReferenceError` in strict code and create a
+    /// mutable realm-global binding in sloppy code.
+    PutName { name: String, strict: bool },
+    /// Put using pre-RHS dynamic-name resolution status.
+    PutNameWithStatus {
+        name: String,
+        status_id: u32,
+        strict: bool,
+    },
+    /// Initialize a resolved lexical binding, clearing its temporal dead zone.
+    InitializeBinding { binding_id: BindingId },
+    /// Create the lexical cell for the next loop iteration.
+    ///
+    /// Classic `for (let ...)` copies the current state into a detached cell;
+    /// `for-in` / `for-of` instead request a fresh uninitialized cell whose
+    /// following `StoreBinding` is lowered as initialization.
+    CreatePerIterationBinding {
+        binding_id: BindingId,
+        kind: BindingKind,
+        preserve_state: bool,
+    },
     /// Call a function value.
     Call { arg_count: u32 },
     /// Call a method on an object: the receiver (below callee on the value
@@ -390,7 +450,7 @@ pub enum Ir1Op {
     /// Return from current function.
     Return,
     /// Import a module by specifier.
-    ImportModule { specifier: String },
+    ImportModule { specifier: JsString },
     /// Export a binding from the module.
     ExportBinding { name: String, binding_id: BindingId },
     /// Await an expression (async context).
@@ -456,6 +516,8 @@ pub enum Ir1Op {
     Throw,
     /// Load `this` binding.
     LoadThis,
+    /// Load `new.target` binding.
+    LoadNewTarget,
     /// Load `super` binding for accessing parent class.
     LoadSuper,
     /// Declare a function and bind it.  When `body_ops` is non-empty the
@@ -465,9 +527,15 @@ pub enum Ir1Op {
         binding_id: BindingId,
         param_names: Vec<String>,
         body_ops: Vec<Ir1Op>,
-        /// Names of variables from enclosing scopes referenced inside
-        /// the function body (free variables / upvalues).  The IR3
-        /// lowering uses these to emit scope-chain capture instructions.
+        /// Deterministic runtime capture-cell names for variables from
+        /// enclosing scopes referenced inside the function body (free
+        /// variables / upvalues). Ordinary captures use an internal,
+        /// collision-proof name derived from the exact defining binding ID so
+        /// disjoint same-named lexical bindings remain distinct; the named
+        /// function-expression self binding retains its source name for the
+        /// closure self-bind seam. IR3 lowering uses these names to emit
+        /// scope-chain capture instructions. Because exact capture-cell
+        /// identity changes execution semantics, this vector is canonical.
         free_vars: Vec<String>,
         /// Body binding-ids of each free variable, aligned 1:1 with
         /// `free_vars`. Captured at emission time (where the body lookup is
@@ -478,6 +546,38 @@ pub enum Ir1Op {
         /// the function's own name — breaking recursion and captured-var
         /// write-back (bd-g0aok / bd-p89tp).
         free_var_ids: Vec<BindingId>,
+        /// Body binding-ids (paired with their source names) of bare references
+        /// to well-known runtime-injected globals (`Function`, `console`,
+        /// `process`, `performance`) that have no source-level binding. The
+        /// deferred IR3 body pass routes each to a `LoadScoped` so the load
+        /// resolves against the injected realm global frame instead of throwing
+        /// `ReferenceError` — the function-body counterpart of the top-level
+        /// `scoped_runtime_binding_ids` path. Kept separate from `free_vars`
+        /// (enclosing-scope captures) so the closure-capture machinery never
+        /// declares or shadows them (bd-ylpdp).
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        runtime_global_loads: Vec<(String, BindingId)>,
+        /// Body-local bindings (runtime capture-cell name + body binding-id)
+        /// that CHILD closures capture, computed at emission time where the
+        /// body lookup is still available. The deferred IR3 pass routes reads
+        /// and writes of exactly these bindings through the scope chain so
+        /// child and parent share one live cell. Replaces the former positional
+        /// `nth(binding_id - param_count)` heuristic, which could mirror an
+        /// internal temp (e.g. a method-call receiver) under a captured
+        /// variable's name — shadowing the real captured binding with
+        /// garbage (bd-suwvw). Excluded from the canonical encoding like
+        /// `free_var_ids`.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        child_captured_locals: Vec<(String, BindingId)>,
+        /// Exact body-local lexical binding metadata required by deferred IR3
+        /// lowering. Function bodies use their own binding-id namespace, so
+        /// the enclosing module scope tree cannot recover `let`/`const` kind
+        /// or distinguish same-spelled nested bindings after the body is
+        /// detached. This compact carrier contains only genuine local lexical
+        /// bindings; free variables and runtime globals remain in their
+        /// dedicated vectors above (bd-pimva).
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        local_lexical_bindings: Vec<ResolvedBinding>,
         /// True when the source function is a generator (`function*`).
         is_generator: bool,
         /// True when the source function is async (`async function`).
@@ -499,6 +599,17 @@ pub enum Ir1Op {
         /// Body binding-ids of each free variable, aligned 1:1 with `free_vars`
         /// (see DeclareFunction).
         free_var_ids: Vec<BindingId>,
+        /// Bare references to runtime-injected globals routed to `LoadScoped`
+        /// (see DeclareFunction; bd-ylpdp).
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        runtime_global_loads: Vec<(String, BindingId)>,
+        /// Body-local bindings that CHILD closures capture (see
+        /// DeclareFunction; bd-suwvw).
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        child_captured_locals: Vec<(String, BindingId)>,
+        /// Exact body-local `let`/`const` metadata (see DeclareFunction).
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        local_lexical_bindings: Vec<ResolvedBinding>,
         /// True when the source function is a generator (`function*`).
         is_generator: bool,
         /// True when the source function is async (`async function` or `async () =>`).
@@ -520,6 +631,9 @@ pub enum Ir1Op {
     EnterFinally,
     /// End a finally block.  Lowered to `Ir3Instruction::EndFinally`.
     EndFinally,
+    /// Discard the pending throw/return for a finally block whose own
+    /// break/continue completion overrides the in-flight completion.
+    DiscardAbruptCompletion,
     /// Pop/discard top-of-stack value. At module (top-level) scope this also
     /// records the discarded value as the script's expression-statement
     /// completion value (moved into register 0).
@@ -545,8 +659,11 @@ pub enum Ir1Op {
     /// {value, done} pair.  If done, pushes `undefined` value and jumps to
     /// `done_label`.
     ForOfNext { done_label: u32 },
-    /// Close an iterator (for..of abrupt completion path): pop iterator record,
-    /// call `.return()` if the method exists.  `reason` is a replay-visible tag.
+    /// Close an iterator on a for-of abrupt-completion path: pop the iterator
+    /// record and call `.return()` when present. Throw-handler lowering runs
+    /// inside a finally-style pending-completion region, so the original
+    /// exception remains outside the value stack for [`Ir1Op::EndFinally`] to
+    /// propagate. `reason` is a replay-visible tag.
     IteratorClose { reason: IteratorCloseReason },
     /// Construct (new): pop callee + N args, invoke as constructor, push result.
     Construct { arg_count: u32 },
@@ -569,9 +686,51 @@ impl Ir1Op {
                 ("op", CanonicalValue::str("load_binding")),
                 ("binding_id", CanonicalValue::U64(u64::from(*binding_id))),
             ]),
+            Self::LoadName {
+                name,
+                allow_missing,
+            } => CanonicalValue::map_from_entries([
+                ("op", CanonicalValue::str("load_name")),
+                ("name", CanonicalValue::str(name.clone())),
+                ("allow_missing", CanonicalValue::Bool(*allow_missing)),
+            ]),
+            Self::ResolveNameStatus { name, status_id } => CanonicalValue::map_from_entries([
+                ("op", CanonicalValue::str("resolve_name_status")),
+                ("name", CanonicalValue::str(name.clone())),
+                ("status_id", CanonicalValue::U64(u64::from(*status_id))),
+            ]),
             Self::StoreBinding { binding_id } => CanonicalValue::map_from_entries([
                 ("op", CanonicalValue::str("store_binding")),
                 ("binding_id", CanonicalValue::U64(u64::from(*binding_id))),
+            ]),
+            Self::PutName { name, strict } => CanonicalValue::map_from_entries([
+                ("op", CanonicalValue::str("put_name")),
+                ("name", CanonicalValue::str(name.clone())),
+                ("strict", CanonicalValue::Bool(*strict)),
+            ]),
+            Self::PutNameWithStatus {
+                name,
+                status_id,
+                strict,
+            } => CanonicalValue::map_from_entries([
+                ("op", CanonicalValue::str("put_name_with_status")),
+                ("name", CanonicalValue::str(name.clone())),
+                ("status_id", CanonicalValue::U64(u64::from(*status_id))),
+                ("strict", CanonicalValue::Bool(*strict)),
+            ]),
+            Self::InitializeBinding { binding_id } => CanonicalValue::map_from_entries([
+                ("op", CanonicalValue::str("initialize_binding")),
+                ("binding_id", CanonicalValue::U64(u64::from(*binding_id))),
+            ]),
+            Self::CreatePerIterationBinding {
+                binding_id,
+                kind,
+                preserve_state,
+            } => CanonicalValue::map_from_entries([
+                ("op", CanonicalValue::str("create_per_iteration_binding")),
+                ("binding_id", CanonicalValue::U64(u64::from(*binding_id))),
+                ("kind", CanonicalValue::str(kind.as_str())),
+                ("preserve_state", CanonicalValue::Bool(*preserve_state)),
             ]),
             Self::Call { arg_count } => CanonicalValue::map_from_entries([
                 ("op", CanonicalValue::str("call")),
@@ -586,7 +745,7 @@ impl Ir1Op {
             }
             Self::ImportModule { specifier } => CanonicalValue::map_from_entries([
                 ("op", CanonicalValue::str("import_module")),
-                ("specifier", CanonicalValue::str(specifier.clone())),
+                ("specifier", canonical_js_string_value(specifier)),
             ]),
             Self::ExportBinding { name, binding_id } => CanonicalValue::map_from_entries([
                 ("op", CanonicalValue::str("export_binding")),
@@ -681,6 +840,9 @@ impl Ir1Op {
             Self::LoadThis => {
                 CanonicalValue::map_from_entries([("op", CanonicalValue::str("load_this"))])
             }
+            Self::LoadNewTarget => {
+                CanonicalValue::map_from_entries([("op", CanonicalValue::str("load_new_target"))])
+            }
             Self::LoadSuper => {
                 CanonicalValue::map_from_entries([("op", CanonicalValue::str("load_super"))])
             }
@@ -691,79 +853,107 @@ impl Ir1Op {
                 body_ops,
                 free_vars,
                 free_var_ids: _,
+                runtime_global_loads: _,
+                child_captured_locals: _,
+                local_lexical_bindings,
                 is_generator,
                 is_async,
                 rest_param_index: _,
-            } => CanonicalValue::map_from_entries([
-                ("op", CanonicalValue::str("declare_function")),
-                ("name", CanonicalValue::str(name.clone())),
-                ("binding_id", CanonicalValue::U64(u64::from(*binding_id))),
-                (
-                    "param_names",
-                    CanonicalValue::Array(
-                        param_names
-                            .iter()
-                            .map(|s| CanonicalValue::str(s.clone()))
-                            .collect(),
+            } => {
+                let mut entries = vec![
+                    ("op", CanonicalValue::str("declare_function")),
+                    ("name", CanonicalValue::str(name.clone())),
+                    ("binding_id", CanonicalValue::U64(u64::from(*binding_id))),
+                    (
+                        "param_names",
+                        CanonicalValue::Array(
+                            param_names
+                                .iter()
+                                .map(|s| CanonicalValue::str(s.clone()))
+                                .collect(),
+                        ),
                     ),
-                ),
-                (
-                    "body_ops",
-                    CanonicalValue::Array(body_ops.iter().map(Ir1Op::canonical_value).collect()),
-                ),
-                (
-                    "free_vars",
-                    CanonicalValue::Array(
-                        free_vars
-                            .iter()
-                            .map(|s| CanonicalValue::str(s.clone()))
-                            .collect(),
+                    (
+                        "body_ops",
+                        CanonicalValue::Array(
+                            body_ops.iter().map(Ir1Op::canonical_value).collect(),
+                        ),
                     ),
-                ),
-                ("is_generator", CanonicalValue::Bool(*is_generator)),
-                ("is_async", CanonicalValue::Bool(*is_async)),
-            ]),
+                    (
+                        "free_vars",
+                        CanonicalValue::Array(
+                            free_vars
+                                .iter()
+                                .map(|s| CanonicalValue::str(s.clone()))
+                                .collect(),
+                        ),
+                    ),
+                    ("is_generator", CanonicalValue::Bool(*is_generator)),
+                    ("is_async", CanonicalValue::Bool(*is_async)),
+                ];
+                if !local_lexical_bindings.is_empty() {
+                    entries.push((
+                        "local_lexical_bindings",
+                        canonical_resolved_binding_array(local_lexical_bindings),
+                    ));
+                }
+                CanonicalValue::map_from_entries(entries)
+            }
             Self::CreateFunction {
                 name,
                 param_names,
                 body_ops,
                 free_vars,
                 free_var_ids: _,
+                runtime_global_loads: _,
+                child_captured_locals: _,
+                local_lexical_bindings,
                 is_generator,
                 is_async,
                 rest_param_index: _,
-            } => CanonicalValue::map_from_entries([
-                ("op", CanonicalValue::str("create_function")),
-                (
-                    "name",
-                    name.as_ref()
-                        .map_or(CanonicalValue::Null, |n| CanonicalValue::str(n.clone())),
-                ),
-                (
-                    "param_names",
-                    CanonicalValue::Array(
-                        param_names
-                            .iter()
-                            .map(|s| CanonicalValue::str(s.clone()))
-                            .collect(),
+            } => {
+                let mut entries = vec![
+                    ("op", CanonicalValue::str("create_function")),
+                    (
+                        "name",
+                        name.as_ref()
+                            .map_or(CanonicalValue::Null, |n| CanonicalValue::str(n.clone())),
                     ),
-                ),
-                (
-                    "body_ops",
-                    CanonicalValue::Array(body_ops.iter().map(Ir1Op::canonical_value).collect()),
-                ),
-                (
-                    "free_vars",
-                    CanonicalValue::Array(
-                        free_vars
-                            .iter()
-                            .map(|s| CanonicalValue::str(s.clone()))
-                            .collect(),
+                    (
+                        "param_names",
+                        CanonicalValue::Array(
+                            param_names
+                                .iter()
+                                .map(|s| CanonicalValue::str(s.clone()))
+                                .collect(),
+                        ),
                     ),
-                ),
-                ("is_generator", CanonicalValue::Bool(*is_generator)),
-                ("is_async", CanonicalValue::Bool(*is_async)),
-            ]),
+                    (
+                        "body_ops",
+                        CanonicalValue::Array(
+                            body_ops.iter().map(Ir1Op::canonical_value).collect(),
+                        ),
+                    ),
+                    (
+                        "free_vars",
+                        CanonicalValue::Array(
+                            free_vars
+                                .iter()
+                                .map(|s| CanonicalValue::str(s.clone()))
+                                .collect(),
+                        ),
+                    ),
+                    ("is_generator", CanonicalValue::Bool(*is_generator)),
+                    ("is_async", CanonicalValue::Bool(*is_async)),
+                ];
+                if !local_lexical_bindings.is_empty() {
+                    entries.push((
+                        "local_lexical_bindings",
+                        canonical_resolved_binding_array(local_lexical_bindings),
+                    ));
+                }
+                CanonicalValue::map_from_entries(entries)
+            }
             Self::BeginTry {
                 catch_label,
                 finally_label,
@@ -787,6 +977,10 @@ impl Ir1Op {
             Self::EndFinally => {
                 CanonicalValue::map_from_entries([("op", CanonicalValue::str("end_finally"))])
             }
+            Self::DiscardAbruptCompletion => CanonicalValue::map_from_entries([(
+                "op",
+                CanonicalValue::str("discard_abrupt_completion"),
+            )]),
             Self::Pop => CanonicalValue::map_from_entries([("op", CanonicalValue::str("pop"))]),
             Self::Discard => {
                 CanonicalValue::map_from_entries([("op", CanonicalValue::str("discard"))])
@@ -832,7 +1026,7 @@ impl Ir1Op {
 /// Literal values in IR1.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Ir1Literal {
-    String(String),
+    String(JsString),
     Integer(i64),
     BigInt(String),
     /// Floating-point literal stored as IEEE 754 bits for deterministic serde.
@@ -847,7 +1041,7 @@ impl Ir1Literal {
         match self {
             Self::String(value) => CanonicalValue::map_from_entries([
                 ("kind", CanonicalValue::str("string")),
-                ("value", CanonicalValue::str(value.clone())),
+                ("value", canonical_js_string_value(value)),
             ]),
             Self::Integer(value) => CanonicalValue::map_from_entries([
                 ("kind", CanonicalValue::str("integer")),
@@ -873,14 +1067,50 @@ impl Ir1Literal {
     }
 }
 
+/// Span side-table entry mapping a half-open range of IR1 op indices
+/// (`op_start..op_end`) to the source span of the expression whose lowering
+/// emitted them (bd-fqlfw.1.5).
+///
+/// Entries are recorded post-order during IR0 → IR1 expression lowering, so
+/// inner (narrower) expression ranges appear before the enclosing (wider)
+/// ones. Consumers that want per-op spans must apply narrowest-range-wins;
+/// `lower_ir1_to_ir2` does exactly that when stamping [`Ir2Op`] spans.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Ir1OpSpanEntry {
+    /// First IR1 op index covered by this expression (inclusive).
+    pub op_start: usize,
+    /// One past the last IR1 op index covered by this expression (exclusive).
+    pub op_end: usize,
+    /// Parse-time span of the originating expression (bd-fqlfw.1.1).
+    pub span: crate::ast::SourceSpan,
+}
+
 /// IR1 module: scope-resolved, position-independent spec-level representation.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Eq, Serialize, Deserialize)]
 pub struct Ir1Module {
     pub header: IrHeader,
     /// Scope tree capturing all bindings.
     pub scopes: Vec<ScopeNode>,
     /// Flattened operation sequence.
     pub ops: Vec<Ir1Op>,
+    /// In-memory span side-table for expression-derived ops (bd-fqlfw.1.5).
+    ///
+    /// Deliberately `#[serde(skip)]` and excluded from `canonical_value` /
+    /// `content_hash` / `PartialEq`: spans are diagnostic provenance, not
+    /// module identity, and serialized IR1 artifacts stay byte-identical to
+    /// the pre-span format. Populated by `lower_ir0_to_ir1`; consumed by
+    /// `lower_ir1_to_ir2` to stamp [`Ir2Op::span`]. Empty on any module that
+    /// was deserialized or hand-constructed.
+    #[serde(skip)]
+    pub op_spans: Vec<Ir1OpSpanEntry>,
+}
+
+/// `op_spans` is diagnostic provenance, not module identity — two modules
+/// that differ only in their span side-table compare equal (bd-fqlfw.1.5).
+impl PartialEq for Ir1Module {
+    fn eq(&self, other: &Self) -> bool {
+        self.header == other.header && self.scopes == other.scopes && self.ops == other.ops
+    }
 }
 
 impl Ir1Module {
@@ -904,6 +1134,7 @@ impl Ir1Module {
             },
             scopes: Vec::new(),
             ops: Vec::with_capacity(ops_capacity),
+            op_spans: Vec::new(),
         }
     }
 
@@ -1005,7 +1236,7 @@ impl FlowAnnotation {
 }
 
 /// IR2 operation — capability-annotated and flow-labeled.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Eq, Serialize, Deserialize)]
 pub struct Ir2Op {
     /// The underlying IR1 operation.
     pub inner: Ir1Op,
@@ -1015,6 +1246,28 @@ pub struct Ir2Op {
     pub required_capability: Option<CapabilityTag>,
     /// IFC flow annotation (if data flows through this operation).
     pub flow: Option<FlowAnnotation>,
+    /// Source span of the expression whose lowering emitted this op
+    /// (bd-fqlfw.1.5; narrowest enclosing spanned expression wins).
+    ///
+    /// Deliberately `#[serde(skip)]` and excluded from `canonical_value` /
+    /// `content_hash` / `PartialEq`: spans are diagnostic provenance, not
+    /// op identity, and serialized IR2 artifacts stay byte-identical to the
+    /// pre-span format. `None` for statement-emitted ops, for expressions the
+    /// parser did not span (bare identifiers, bd-fqlfw.1.1 scope), and on any
+    /// module that was deserialized rather than freshly lowered.
+    #[serde(skip)]
+    pub span: Option<crate::ast::SourceSpan>,
+}
+
+/// `span` is diagnostic provenance, not op identity — two ops that differ
+/// only in their span compare equal (bd-fqlfw.1.5).
+impl PartialEq for Ir2Op {
+    fn eq(&self, other: &Self) -> bool {
+        self.inner == other.inner
+            && self.effect == other.effect
+            && self.required_capability == other.required_capability
+            && self.flow == other.flow
+    }
 }
 
 impl Ir2Op {
@@ -1293,6 +1546,8 @@ pub enum Ir3Instruction {
     Halt,
     /// Load the current `this` binding into a register.
     LoadThis { dst: Reg },
+    /// Load the current `new.target` binding into a register.
+    LoadNewTarget { dst: Reg },
     /// Load the current `super` binding into a register.
     LoadSuper { dst: Reg },
 
@@ -1317,6 +1572,9 @@ pub enum Ir3Instruction {
     /// End a finally block.  If a pending exception exists, re-throw it;
     /// otherwise continue to the next instruction.
     EndFinally,
+    /// Discard pending exception/return state when a break/continue issued
+    /// from inside a finally body overrides the previous completion.
+    DiscardAbruptCompletion,
 
     // ── Closure / scope-chain instructions ────────────────────────────
     /// Create a closure from a function index and the current environment.
@@ -1341,10 +1599,40 @@ pub enum Ir3Instruction {
     DeclareBinding { name_pool_index: u32, kind: u8 },
     /// Load a variable from the scope chain by name (walking outward).
     LoadScoped { dst: Reg, name_pool_index: u32 },
+    /// Resolve a name dynamically, optionally returning undefined when absent.
+    LoadName {
+        dst: Reg,
+        name_pool_index: u32,
+        allow_missing: bool,
+    },
+    /// Record an opaque pre-RHS dynamic-name Reference token in a normal value register.
+    ResolveNameStatus { dst: Reg, name_pool_index: u32 },
     /// Store a value into a variable in the scope chain by name.
     StoreScoped { src: Reg, name_pool_index: u32 },
+    /// Put a value through a dynamically resolved name reference.
+    PutName {
+        src: Reg,
+        name_pool_index: u32,
+        strict: bool,
+    },
+    /// Put using the exact pre-RHS Reference token in `status`.
+    PutNameWithStatus {
+        src: Reg,
+        status: Reg,
+        name_pool_index: u32,
+        strict: bool,
+    },
     /// Initialize a let/const binding (move it out of TDZ).
     InitBinding { name_pool_index: u32, src: Reg },
+    /// Replace one resolved lexical binding with a fresh per-iteration cell.
+    /// When `preserve_state` is true the value and initialization state are
+    /// copied; otherwise the new cell starts uninitialized for iterator-head
+    /// binding initialization.
+    CreatePerIterationBinding {
+        name_pool_index: u32,
+        kind: u8,
+        preserve_state: bool,
+    },
     /// Load (and evaluate) an ES module; returns the namespace object.
     ImportModule { specifier: Reg, dst: Reg },
     /// Register an export binding for the current module.
@@ -1402,6 +1690,11 @@ pub enum Ir3Instruction {
         function_index: u32,
         capture_count: u32,
     },
+    /// Await a value while evaluating an ES module's top-level instruction
+    /// stream. This is distinct from `AwaitValue` so a script or hand-authored
+    /// IR program cannot acquire module-continuation semantics merely because
+    /// its call stack is empty.
+    ModuleAwaitValue { promise_reg: Reg },
 }
 
 impl Ir3Instruction {
@@ -1619,6 +1912,10 @@ impl Ir3Instruction {
                 ("op", CanonicalValue::str("load_this")),
                 ("dst", CanonicalValue::U64(u64::from(*dst))),
             ]),
+            Self::LoadNewTarget { dst } => CanonicalValue::map_from_entries([
+                ("op", CanonicalValue::str("load_new_target")),
+                ("dst", CanonicalValue::U64(u64::from(*dst))),
+            ]),
             Self::LoadSuper { dst } => CanonicalValue::map_from_entries([
                 ("op", CanonicalValue::str("load_super")),
                 ("dst", CanonicalValue::U64(u64::from(*dst))),
@@ -1657,6 +1954,10 @@ impl Ir3Instruction {
             Self::EndFinally => {
                 CanonicalValue::map_from_entries([("op", CanonicalValue::str("end_finally"))])
             }
+            Self::DiscardAbruptCompletion => CanonicalValue::map_from_entries([(
+                "op",
+                CanonicalValue::str("discard_abrupt_completion"),
+            )]),
             Self::Mod { dst, lhs, rhs } => CanonicalValue::map_from_entries([
                 ("op", CanonicalValue::str("mod")),
                 ("dst", CanonicalValue::U64(u64::from(*dst))),
@@ -1852,6 +2153,30 @@ impl Ir3Instruction {
                     CanonicalValue::U64(u64::from(*name_pool_index)),
                 ),
             ]),
+            Self::LoadName {
+                dst,
+                name_pool_index,
+                allow_missing,
+            } => CanonicalValue::map_from_entries([
+                ("op", CanonicalValue::str("load_name")),
+                ("dst", CanonicalValue::U64(u64::from(*dst))),
+                (
+                    "name_pool_index",
+                    CanonicalValue::U64(u64::from(*name_pool_index)),
+                ),
+                ("allow_missing", CanonicalValue::Bool(*allow_missing)),
+            ]),
+            Self::ResolveNameStatus {
+                dst,
+                name_pool_index,
+            } => CanonicalValue::map_from_entries([
+                ("op", CanonicalValue::str("resolve_name_status")),
+                ("dst", CanonicalValue::U64(u64::from(*dst))),
+                (
+                    "name_pool_index",
+                    CanonicalValue::U64(u64::from(*name_pool_index)),
+                ),
+            ]),
             Self::StoreScoped {
                 src,
                 name_pool_index,
@@ -1863,6 +2188,34 @@ impl Ir3Instruction {
                     CanonicalValue::U64(u64::from(*name_pool_index)),
                 ),
             ]),
+            Self::PutName {
+                src,
+                name_pool_index,
+                strict,
+            } => CanonicalValue::map_from_entries([
+                ("op", CanonicalValue::str("put_name")),
+                ("src", CanonicalValue::U64(u64::from(*src))),
+                (
+                    "name_pool_index",
+                    CanonicalValue::U64(u64::from(*name_pool_index)),
+                ),
+                ("strict", CanonicalValue::Bool(*strict)),
+            ]),
+            Self::PutNameWithStatus {
+                src,
+                status,
+                name_pool_index,
+                strict,
+            } => CanonicalValue::map_from_entries([
+                ("op", CanonicalValue::str("put_name_with_status")),
+                ("src", CanonicalValue::U64(u64::from(*src))),
+                ("status", CanonicalValue::U64(u64::from(*status))),
+                (
+                    "name_pool_index",
+                    CanonicalValue::U64(u64::from(*name_pool_index)),
+                ),
+                ("strict", CanonicalValue::Bool(*strict)),
+            ]),
             Self::InitBinding {
                 name_pool_index,
                 src,
@@ -1873,6 +2226,19 @@ impl Ir3Instruction {
                     CanonicalValue::U64(u64::from(*name_pool_index)),
                 ),
                 ("src", CanonicalValue::U64(u64::from(*src))),
+            ]),
+            Self::CreatePerIterationBinding {
+                name_pool_index,
+                kind,
+                preserve_state,
+            } => CanonicalValue::map_from_entries([
+                ("op", CanonicalValue::str("create_per_iteration_binding")),
+                (
+                    "name_pool_index",
+                    CanonicalValue::U64(u64::from(*name_pool_index)),
+                ),
+                ("kind", CanonicalValue::U64(u64::from(*kind))),
+                ("preserve_state", CanonicalValue::Bool(*preserve_state)),
             ]),
             Self::ImportModule { specifier, dst } => CanonicalValue::map_from_entries([
                 ("op", CanonicalValue::str("import_module")),
@@ -1959,6 +2325,10 @@ impl Ir3Instruction {
                     "capture_count",
                     CanonicalValue::U64(u64::from(*capture_count)),
                 ),
+            ]),
+            Self::ModuleAwaitValue { promise_reg } => CanonicalValue::map_from_entries([
+                ("op", CanonicalValue::str("module_await_value")),
+                ("promise_reg", CanonicalValue::U64(u64::from(*promise_reg))),
             ]),
         }
     }
@@ -2050,8 +2420,8 @@ pub struct Ir3Module {
     pub header: IrHeader,
     /// Flat instruction array.
     pub instructions: Vec<Ir3Instruction>,
-    /// String constant pool.
-    pub constant_pool: Vec<String>,
+    /// Exact ECMAScript string constant pool.
+    pub constant_pool: Vec<JsString>,
     /// Function table with entry points and frame layout.
     pub function_table: Vec<Ir3FunctionDesc>,
     /// Proof-to-specialization linkage (if specialized).
@@ -2084,7 +2454,7 @@ impl Ir3Module {
                 CanonicalValue::Array(
                     self.constant_pool
                         .iter()
-                        .map(|s| CanonicalValue::str(s.clone()))
+                        .map(canonical_js_string_value)
                         .collect(),
                 ),
             ),
@@ -2536,7 +2906,8 @@ pub fn verify_ir4_linkage(witness: &Ir4Module, ir3_hash: &ContentHash) -> Result
 ///
 /// This implements semantic versioning compatibility rules:
 /// - Major version must match exactly (breaking changes)
-/// - Minor version can be forward-compatible (current >= header)
+/// - Minor version can be forward-compatible (current >= header), except for
+///   explicitly skipped engine minors that identify an incompatible peer wire
 /// - Patch version is ignored for compatibility
 pub fn verify_schema_version(header: &IrHeader) -> Result<(), IrError> {
     let current = IrSchemaVersion::CURRENT;
@@ -2548,6 +2919,21 @@ pub fn verify_schema_version(header: &IrHeader) -> Result<(), IrError> {
             IrErrorCode::SchemaVersionMismatch,
             format!(
                 "incompatible major version: current {}, provided {}",
+                current, provided
+            ),
+            header.level,
+        ));
+    }
+
+    // Engine 0.5.0 never existed: that numeric version belongs to the
+    // incompatible native franken-core IR shape. Accepting it here would let a
+    // peer artifact pass the version gate whenever it happened to use only the
+    // overlapping enum variants.
+    if provided.major == 0 && provided.minor == 5 {
+        return Err(IrError::new(
+            IrErrorCode::SchemaVersionMismatch,
+            format!(
+                "unsupported skipped engine minor version: current {}, provided {}",
                 current, provided
             ),
             header.level,
@@ -2765,6 +3151,7 @@ impl Default for IrVerifier {
 mod tests {
     use super::*;
     use crate::ast::{ExpressionStatement, ParseGoal, SourceSpan, Statement, SyntaxTree};
+    use std::collections::BTreeMap;
 
     fn make_span() -> SourceSpan {
         SourceSpan::new(0, 10, 1, 1, 1, 11)
@@ -2786,7 +3173,7 @@ mod tests {
 
     #[test]
     fn schema_version_display() {
-        assert_eq!(IrSchemaVersion::CURRENT.to_string(), "0.1.0");
+        assert_eq!(IrSchemaVersion::CURRENT.to_string(), "0.7.0");
     }
 
     #[test]
@@ -2979,7 +3366,7 @@ mod tests {
     fn ir1_all_ops_canonical() {
         let ops = vec![
             Ir1Op::LoadLiteral {
-                value: Ir1Literal::String("hello".to_string()),
+                value: Ir1Literal::String("hello".into()),
             },
             Ir1Op::LoadLiteral {
                 value: Ir1Literal::Integer(42),
@@ -2994,11 +3381,34 @@ mod tests {
                 value: Ir1Literal::Undefined,
             },
             Ir1Op::LoadBinding { binding_id: 0 },
+            Ir1Op::LoadName {
+                name: "dynamic_read".to_string(),
+                allow_missing: false,
+            },
+            Ir1Op::ResolveNameStatus {
+                name: "dynamic_target".to_string(),
+                status_id: 7,
+            },
             Ir1Op::StoreBinding { binding_id: 1 },
+            Ir1Op::PutName {
+                name: "dynamic_write".to_string(),
+                strict: true,
+            },
+            Ir1Op::PutNameWithStatus {
+                name: "dynamic_target".to_string(),
+                status_id: 7,
+                strict: true,
+            },
+            Ir1Op::InitializeBinding { binding_id: 1 },
+            Ir1Op::CreatePerIterationBinding {
+                binding_id: 1,
+                kind: BindingKind::Let,
+                preserve_state: true,
+            },
             Ir1Op::Call { arg_count: 2 },
             Ir1Op::Return,
             Ir1Op::ImportModule {
-                specifier: "mod".to_string(),
+                specifier: "mod".into(),
             },
             Ir1Op::ExportBinding {
                 name: "x".to_string(),
@@ -3033,6 +3443,7 @@ mod tests {
             },
             effect: EffectBoundary::HostcallEffect,
             required_capability: Some(CapabilityTag("fs:read".to_string())),
+            span: None,
             flow: Some(FlowAnnotation {
                 data_label: Label::Internal,
                 sink_clearance: Label::Internal,
@@ -3058,6 +3469,7 @@ mod tests {
                 effect: EffectBoundary::Pure,
                 required_capability: None,
                 flow: None,
+                span: None,
             });
             ir2
         };
@@ -3073,6 +3485,7 @@ mod tests {
             effect: EffectBoundary::Pure,
             required_capability: None,
             flow: None,
+            span: None,
         });
         // SAFETY: Ir2Module derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&ir2).expect("serialize derived Serialize");
@@ -3163,6 +3576,26 @@ mod tests {
             },
             Ir3Instruction::LoadNull { dst: 0 },
             Ir3Instruction::LoadUndefined { dst: 0 },
+            Ir3Instruction::LoadName {
+                dst: 0,
+                name_pool_index: 0,
+                allow_missing: false,
+            },
+            Ir3Instruction::ResolveNameStatus {
+                dst: 1,
+                name_pool_index: 0,
+            },
+            Ir3Instruction::PutName {
+                src: 0,
+                name_pool_index: 0,
+                strict: true,
+            },
+            Ir3Instruction::PutNameWithStatus {
+                src: 0,
+                status: 1,
+                name_pool_index: 0,
+                strict: true,
+            },
             Ir3Instruction::Add {
                 dst: 0,
                 lhs: 1,
@@ -3263,6 +3696,7 @@ mod tests {
             Ir3Instruction::EnterCatch { dst: 0 },
             Ir3Instruction::EnterFinally,
             Ir3Instruction::EndFinally,
+            Ir3Instruction::DiscardAbruptCompletion,
         ];
         for instr in &instructions {
             let cv = instr.canonical_value();
@@ -3277,7 +3711,7 @@ mod tests {
         ir3.instructions
             .push(Ir3Instruction::LoadInt { dst: 0, value: 42 });
         ir3.instructions.push(Ir3Instruction::Halt);
-        ir3.constant_pool.push("hello".to_string());
+        ir3.constant_pool.push("hello".into());
         ir3.required_capabilities
             .push(CapabilityTag("fs:read".to_string()));
         // SAFETY: Ir3Module derives Serialize and has no non-serializable fields
@@ -3286,6 +3720,26 @@ mod tests {
         let restored: Ir3Module =
             serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(ir3, restored);
+    }
+
+    #[test]
+    fn ir3_exact_string_pool_roundtrips_and_hashes_exact_units_bd_vltnh() {
+        let source_hash = ContentHash::compute(b"bd-vltnh");
+        let mut high_d800 = Ir3Module::new(source_hash, "exact.js");
+        high_d800
+            .constant_pool
+            .push(JsString::from_code_units(&[0xD800]));
+        let mut high_d801 = Ir3Module::new(source_hash, "exact.js");
+        high_d801
+            .constant_pool
+            .push(JsString::from_code_units(&[0xD801]));
+
+        let json = serde_json::to_string(&high_d800).expect("serialize exact IR3 pool");
+        assert_eq!(
+            serde_json::from_str::<Ir3Module>(&json).expect("deserialize exact IR3 pool"),
+            high_d800
+        );
+        assert_ne!(high_d800.content_hash(), high_d801.content_hash());
     }
 
     // -- IR4 --
@@ -3519,7 +3973,7 @@ mod tests {
     fn ir_error_display() {
         let err = IrError::new(
             IrErrorCode::SchemaVersionMismatch,
-            "expected 0.1.0, got 0.2.0",
+            "expected 0.7.0, got 0.8.0",
             IrLevel::Ir1,
         );
         let display = err.to_string();
@@ -3590,6 +4044,7 @@ mod tests {
             effect: EffectBoundary::Pure,
             required_capability: None,
             flow: None,
+            span: None,
         });
         let ir2_hash = ir2.content_hash();
 
@@ -3877,7 +4332,8 @@ mod tests {
     #[test]
     fn ir1_literal_serde_roundtrip() {
         for lit in [
-            Ir1Literal::String("hello".to_string()),
+            Ir1Literal::String("hello".into()),
+            Ir1Literal::String(JsString::from_code_units(&[0xD800])),
             Ir1Literal::Integer(i64::MIN),
             Ir1Literal::Integer(0),
             Ir1Literal::BigInt("12345678901234567890".to_string()),
@@ -3891,6 +4347,56 @@ mod tests {
                 serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(lit, restored);
         }
+    }
+
+    #[test]
+    fn ir1_string_literal_json_preserves_ordinary_and_exact_shapes_bd_vltnh() {
+        let ordinary = Ir1Literal::String("hello".into());
+        let exact = Ir1Literal::String(JsString::from_code_units(&[0xD800]));
+
+        assert_eq!(
+            serde_json::to_vec(&ordinary).expect("serialize ordinary IR1 string"),
+            br#"{"String":"hello"}"#
+        );
+        assert_eq!(
+            serde_json::to_vec(&exact).expect("serialize exact IR1 string"),
+            br#"{"String":{"$wtf16":[55296]}}"#
+        );
+    }
+
+    #[test]
+    fn ir1_static_property_key_json_preserves_ordinary_and_exact_shapes_bd_b12xs_6() {
+        let ordinary = Ir1PropertyKey::Static("hello".into());
+        let exact = Ir1PropertyKey::Static(JsString::from_code_units(&[0xD800]));
+
+        assert_eq!(
+            serde_json::to_vec(&ordinary).expect("serialize ordinary IR1 property key"),
+            br#"{"Static":"hello"}"#
+        );
+        assert_eq!(
+            serde_json::to_vec(&exact).expect("serialize exact IR1 property key"),
+            br#"{"Static":{"$wtf16":[55296]}}"#
+        );
+        assert_eq!(
+            serde_json::from_slice::<Ir1PropertyKey>(br#"{"Static":"hello"}"#)
+                .expect("deserialize historical ordinary IR1 property-key wire"),
+            ordinary
+        );
+        assert_eq!(
+            serde_json::from_slice::<Ir1PropertyKey>(br#"{"Static":{"$wtf16":[55296]}}"#)
+                .expect("deserialize exact IR1 property-key wire"),
+            exact
+        );
+    }
+
+    #[test]
+    fn ir1_static_property_key_canonical_value_distinguishes_exact_units_bd_b12xs_6() {
+        let d800 = Ir1PropertyKey::Static(JsString::from_code_units(&[0xD800]));
+        let d801 = Ir1PropertyKey::Static(JsString::from_code_units(&[0xD801]));
+        let replacement = Ir1PropertyKey::Static("\u{FFFD}".into());
+
+        assert_ne!(d800.canonical_value(), d801.canonical_value());
+        assert_ne!(d800.canonical_value(), replacement.canonical_value());
     }
 
     // -----------------------------------------------------------------------
@@ -4172,6 +4678,7 @@ mod tests {
             },
             scopes: Vec::new(),
             ops: Vec::new(),
+            op_spans: Vec::new(),
         };
         let ir0_hash = ContentHash::compute(b"ir0");
         let err = verify_ir1_source(&ir1, &ir0_hash).unwrap_err();
@@ -4198,14 +4705,20 @@ mod tests {
     fn ir1_op_serde_all_variants() {
         let ops = vec![
             Ir1Op::LoadLiteral {
-                value: Ir1Literal::String("s".to_string()),
+                value: Ir1Literal::String("s".into()),
             },
             Ir1Op::LoadBinding { binding_id: 0 },
             Ir1Op::StoreBinding { binding_id: 1 },
+            Ir1Op::InitializeBinding { binding_id: 1 },
+            Ir1Op::CreatePerIterationBinding {
+                binding_id: 1,
+                kind: BindingKind::Let,
+                preserve_state: true,
+            },
             Ir1Op::Call { arg_count: 3 },
             Ir1Op::Return,
             Ir1Op::ImportModule {
-                specifier: "m".to_string(),
+                specifier: "m".into(),
             },
             Ir1Op::ExportBinding {
                 name: "x".to_string(),
@@ -4221,6 +4734,9 @@ mod tests {
                 reason: IteratorCloseReason::Break,
             },
             Ir1Op::IteratorClose {
+                reason: IteratorCloseReason::Continue,
+            },
+            Ir1Op::IteratorClose {
                 reason: IteratorCloseReason::Return,
             },
             Ir1Op::IteratorClose {
@@ -4233,6 +4749,51 @@ mod tests {
                 serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*op, restored);
         }
+    }
+
+    #[test]
+    fn ir1_import_module_preserves_historical_and_exact_wire_shapes_bd_lfq44() {
+        let ordinary = Ir1Op::ImportModule {
+            specifier: "pkg".into(),
+        };
+        assert_eq!(
+            serde_json::to_string(&ordinary).expect("serialize ordinary import op"),
+            r#"{"ImportModule":{"specifier":"pkg"}}"#
+        );
+        assert_eq!(
+            ordinary.canonical_value(),
+            CanonicalValue::map_from_entries([
+                ("op", CanonicalValue::str("import_module")),
+                ("specifier", CanonicalValue::str("pkg")),
+            ])
+        );
+
+        let d800 = Ir1Op::ImportModule {
+            specifier: JsString::from_code_units(&[0xD800]),
+        };
+        let dc00 = Ir1Op::ImportModule {
+            specifier: JsString::from_code_units(&[0xDC00]),
+        };
+        let d800_json = serde_json::to_string(&d800).expect("serialize exact import op");
+        let dc00_json = serde_json::to_string(&dc00).expect("serialize exact import op");
+        assert_eq!(
+            d800_json,
+            r#"{"ImportModule":{"specifier":{"$wtf16":[55296]}}}"#
+        );
+        assert_eq!(
+            dc00_json,
+            r#"{"ImportModule":{"specifier":{"$wtf16":[56320]}}}"#
+        );
+        assert_ne!(d800_json, dc00_json);
+        assert_ne!(d800.canonical_value(), dc00.canonical_value());
+        assert_eq!(
+            serde_json::from_str::<Ir1Op>(&d800_json).expect("round-trip exact import op"),
+            d800
+        );
+        assert_eq!(
+            serde_json::from_str::<Ir1Op>(&dc00_json).expect("round-trip exact import op"),
+            dc00
+        );
     }
 
     // -----------------------------------------------------------------------
@@ -4454,6 +5015,7 @@ mod tests {
             Ir3Instruction::EnterCatch { dst: 5 },
             Ir3Instruction::EnterFinally,
             Ir3Instruction::EndFinally,
+            Ir3Instruction::DiscardAbruptCompletion,
         ];
         for instr in &instrs {
             let json = serde_json::to_string(instr).expect("serialize derived Serialize");
@@ -4476,6 +5038,7 @@ mod tests {
             },
             effect: EffectBoundary::NetworkEffect,
             required_capability: Some(CapabilityTag("net:fetch".to_string())),
+            span: None,
             flow: Some(FlowAnnotation {
                 data_label: Label::Internal,
                 sink_clearance: Label::Public,
@@ -4674,7 +5237,7 @@ mod tests {
     fn schema_version_current_value() {
         let v = IrSchemaVersion::CURRENT;
         assert_eq!(v.major, 0);
-        assert_eq!(v.minor, 1);
+        assert_eq!(v.minor, 7);
         assert_eq!(v.patch, 0);
     }
 
@@ -4939,6 +5502,10 @@ mod tests {
                 "delete_property",
             ),
             (Ir3Instruction::Halt, "halt"),
+            (
+                Ir3Instruction::DiscardAbruptCompletion,
+                "discard_abrupt_completion",
+            ),
         ];
         for (instr, expected_op) in &cases {
             let cv = instr.canonical_value();
@@ -5119,7 +5686,7 @@ mod tests {
     #[test]
     fn ir1_literal_canonical_value_all_variants() {
         let cases: Vec<(Ir1Literal, &str)> = vec![
-            (Ir1Literal::String("hello".to_string()), "string"),
+            (Ir1Literal::String("hello".into()), "string"),
             (Ir1Literal::Integer(42), "integer"),
             (Ir1Literal::BigInt("42".to_string()), "bigint"),
             (Ir1Literal::Boolean(false), "boolean"),
@@ -5151,6 +5718,7 @@ mod tests {
             },
             effect: EffectBoundary::NetworkEffect,
             required_capability: Some(CapabilityTag("net:outbound".to_string())),
+            span: None,
             flow: Some(FlowAnnotation {
                 data_label: Label::Internal,
                 sink_clearance: Label::Internal,
@@ -5187,6 +5755,7 @@ mod tests {
             effect: EffectBoundary::Pure,
             required_capability: None,
             flow: None,
+            span: None,
         });
         assert_ne!(ir2a.content_hash(), ir2b.content_hash());
     }
@@ -5506,22 +6075,44 @@ mod tests {
     }
 
     #[test]
-    fn verify_schema_version_accepts_old_minor_version() {
-        let old_minor = IrSchemaVersion {
-            major: IrSchemaVersion::CURRENT.major,
-            minor: IrSchemaVersion::CURRENT.minor.saturating_sub(1),
-            patch: 0,
-        };
+    fn verify_schema_version_accepts_historical_minor_versions_bd_lfq44() {
+        for minor in [1, 2, 3, 4, 6] {
+            let header = IrHeader {
+                schema_version: IrSchemaVersion {
+                    major: IrSchemaVersion::CURRENT.major,
+                    minor,
+                    patch: u32::MAX,
+                },
+                level: IrLevel::Ir1,
+                source_hash: None,
+                source_label: "test".to_string(),
+            };
 
+            assert!(
+                verify_schema_version(&header).is_ok(),
+                "engine 0.7 readers retain compatibility with 0.{minor} artifacts"
+            );
+        }
+    }
+
+    #[test]
+    fn verify_schema_version_rejects_skipped_engine_minor_050_bd_0k19b() {
         let header = IrHeader {
-            schema_version: old_minor,
+            schema_version: IrSchemaVersion {
+                major: 0,
+                minor: 5,
+                patch: 0,
+            },
             level: IrLevel::Ir1,
             source_hash: None,
-            source_label: "test".to_string(),
+            source_label: "peer-core-wire".to_string(),
         };
 
-        // Should pass - forward compatibility allows old minor versions
-        assert!(verify_schema_version(&header).is_ok());
+        let error = verify_schema_version(&header)
+            .expect_err("engine readers must reject the skipped core-owned 0.5 wire");
+        assert_eq!(error.code, IrErrorCode::SchemaVersionMismatch);
+        assert!(error.message.contains("skipped engine minor"));
+        assert!(error.message.contains("0.5.0"));
     }
 
     #[test]
@@ -5587,7 +6178,7 @@ mod tests {
 
         // Verify error message contains specific version numbers
         assert!(err.message.contains("99.88.77"));
-        assert!(err.message.contains("0.1.0")); // current version
+        assert!(err.message.contains("0.7.0")); // current version
 
         // Verify error can be displayed and contains IR level
         let display = err.to_string();
@@ -5825,7 +6416,7 @@ mod tests {
         });
 
         module.ops.push(Ir1Op::LoadLiteral {
-            value: Ir1Literal::String("test".to_string()),
+            value: Ir1Literal::String("test".into()),
         });
         module.ops.push(Ir1Op::StoreBinding { binding_id: 100 });
         module.ops.push(Ir1Op::Return);

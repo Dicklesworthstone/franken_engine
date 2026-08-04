@@ -14,6 +14,7 @@ use crate::benchmark_denominator::{
 };
 use crate::causal_replay::CounterfactualConfig;
 use crate::engine_object_id::EngineObjectId;
+use crate::evidence_ledger::EvidenceTrustSnapshot;
 use crate::hash_tiers::ContentHash;
 use crate::incident_replay_bundle::{BundleVerifier, CheckOutcome, IncidentReplayBundle};
 use crate::quarantine_mesh_gate::GateValidationResult;
@@ -39,6 +40,7 @@ const CODE_BENCHMARK_BLOCKERS: &str = "FE-TPV-BENCH-0004";
 const CODE_BENCHMARK_FAIRNESS: &str = "FE-TPV-BENCH-0005";
 const CODE_REPLAY_PARSE: &str = "FE-TPV-REPLAY-0001";
 const CODE_REPLAY_VERIFY: &str = "FE-TPV-REPLAY-0002";
+const CODE_REPLAY_TRUST: &str = "FE-TPV-REPLAY-0003";
 const CODE_CONTAINMENT_COUNTS: &str = "FE-TPV-CONT-0001";
 const CODE_CONTAINMENT_CRITERIA: &str = "FE-TPV-CONT-0002";
 const CODE_CONTAINMENT_SLA: &str = "FE-TPV-CONT-0003";
@@ -336,11 +338,105 @@ pub fn verify_benchmark_claim(bundle: &BenchmarkClaimBundle) -> ThirdPartyVerifi
     build_report(bundle, "benchmark", verdict, checks, events)
 }
 
-pub fn verify_replay_claim(bundle: &ReplayClaimBundle) -> ThirdPartyVerificationReport {
+pub fn verify_replay_claim(
+    bundle: &ReplayClaimBundle,
+    trace_trust_snapshot: &EvidenceTrustSnapshot,
+    expected_trace_trust_snapshot_digest: &ContentHash,
+) -> ThirdPartyVerificationReport {
     let mut checks = Vec::new();
     let mut events = vec![event(bundle, "replay_verification_started", "pass", None)];
     let mut saw_skipped = false;
     let verifier = BundleVerifier::new();
+    match replay_verification_input_digest(
+        bundle,
+        trace_trust_snapshot,
+        expected_trace_trust_snapshot_digest,
+    ) {
+        Ok(digest) => pass_check(
+            &mut checks,
+            "replay_verification_input_bound",
+            format!(
+                "domain=franken-engine/replay-verification-input/v1 digest=sha256:{}",
+                digest.to_hex()
+            ),
+        ),
+        Err(error) => fail_check(
+            &mut checks,
+            "replay_verification_input_bound",
+            CODE_REPLAY_PARSE,
+            error,
+        ),
+    }
+    let trace_trust_registry = match trace_trust_snapshot.canonical_digest() {
+        Ok(digest) if digest.constant_time_eq(expected_trace_trust_snapshot_digest) => {
+            match trace_trust_snapshot.to_runtime_registry() {
+                Ok(registry) => {
+                    pass_check(
+                        &mut checks,
+                        "trace_trust_snapshot_bound",
+                        format!(
+                            "format_version={} expected_pin=sha256:{} digest=sha256:{} \
+                             pin_match=true current_epoch={} identities={} lineage=[{}]",
+                            trace_trust_snapshot.format_version,
+                            expected_trace_trust_snapshot_digest.to_hex(),
+                            digest.to_hex(),
+                            trace_trust_snapshot.current_epoch.as_u64(),
+                            trace_trust_snapshot.identities.len(),
+                            trace_trust_snapshot.lineage_coordinates().join(",")
+                        ),
+                    );
+                    Some(registry)
+                }
+                Err(error) => {
+                    fail_check(
+                        &mut checks,
+                        "trace_trust_snapshot_bound",
+                        CODE_REPLAY_TRUST,
+                        format!("invalid externally authenticated trace trust snapshot: {error}"),
+                    );
+                    None
+                }
+            }
+        }
+        Ok(digest) => {
+            fail_check(
+                &mut checks,
+                "trace_trust_snapshot_bound",
+                CODE_REPLAY_TRUST,
+                format!(
+                    "trace trust snapshot digest does not match the externally supplied pin: \
+                     expected sha256:{}, actual sha256:{}",
+                    expected_trace_trust_snapshot_digest.to_hex(),
+                    digest.to_hex()
+                ),
+            );
+            None
+        }
+        Err(error) => {
+            fail_check(
+                &mut checks,
+                "trace_trust_snapshot_bound",
+                CODE_REPLAY_TRUST,
+                format!("invalid externally authenticated trace trust snapshot: {error}"),
+            );
+            None
+        }
+    };
+    let replay_context_valid = match validate_replay_bundle_context(bundle) {
+        Ok(detail) => {
+            pass_check(&mut checks, "trace_bundle_context_bound", detail);
+            true
+        }
+        Err(detail) => {
+            fail_check(
+                &mut checks,
+                "trace_bundle_context_bound",
+                CODE_REPLAY_VERIFY,
+                detail,
+            );
+            false
+        }
+    };
 
     append_report_checks(
         "integrity",
@@ -348,12 +444,18 @@ pub fn verify_replay_claim(bundle: &ReplayClaimBundle) -> ThirdPartyVerification
         &mut checks,
         &mut saw_skipped,
     );
-    append_report_checks(
-        "fidelity",
-        &verifier.verify_replay(&bundle.bundle, bundle.verification_timestamp_ns),
-        &mut checks,
-        &mut saw_skipped,
-    );
+    if replay_context_valid && let Some(trace_trust_registry) = trace_trust_registry.as_ref() {
+        append_report_checks(
+            "fidelity",
+            &verifier.verify_replay(
+                &bundle.bundle,
+                trace_trust_registry,
+                bundle.verification_timestamp_ns,
+            ),
+            &mut checks,
+            &mut saw_skipped,
+        );
+    }
 
     if let Some(key_hex) = &bundle.signature_verification_key_hex {
         match parse_verification_key_hex(key_hex) {
@@ -384,12 +486,16 @@ pub fn verify_replay_claim(bundle: &ReplayClaimBundle) -> ThirdPartyVerification
         }
     }
 
-    if !bundle.counterfactual_configs.is_empty() {
+    if replay_context_valid
+        && !bundle.counterfactual_configs.is_empty()
+        && let Some(trace_trust_registry) = trace_trust_registry.as_ref()
+    {
         append_report_checks(
             "counterfactual",
             &verifier.verify_counterfactual(
                 &bundle.bundle,
                 &bundle.counterfactual_configs,
+                trace_trust_registry,
                 bundle.verification_timestamp_ns,
             ),
             &mut checks,
@@ -406,6 +512,100 @@ pub fn verify_replay_claim(bundle: &ReplayClaimBundle) -> ThirdPartyVerification
     append_failure_events(bundle, &checks, &mut events);
 
     build_report(bundle, "replay", verdict, checks, events)
+}
+
+fn replay_verification_input_digest(
+    bundle: &ReplayClaimBundle,
+    trace_trust_snapshot: &EvidenceTrustSnapshot,
+    expected_trace_trust_snapshot_digest: &ContentHash,
+) -> Result<ContentHash, String> {
+    const DOMAIN: &[u8] = b"franken-engine/replay-verification-input/v1\0";
+
+    #[derive(Serialize)]
+    struct ReplayVerificationInput<'a> {
+        bundle: &'a ReplayClaimBundle,
+        trace_trust_snapshot: &'a EvidenceTrustSnapshot,
+        expected_trace_trust_snapshot_digest: &'a ContentHash,
+    }
+
+    let encoded = serde_json::to_vec(&ReplayVerificationInput {
+        bundle,
+        trace_trust_snapshot,
+        expected_trace_trust_snapshot_digest,
+    })
+    .map_err(|error| format!("failed to encode replay verification input for digest: {error}"))?;
+    let mut preimage = Vec::with_capacity(DOMAIN.len() + encoded.len());
+    preimage.extend_from_slice(DOMAIN);
+    preimage.extend_from_slice(&encoded);
+    Ok(ContentHash::compute(&preimage))
+}
+
+fn validate_replay_bundle_context(bundle: &ReplayClaimBundle) -> Result<String, String> {
+    let claimed_trace = bundle.bundle.traces.get(&bundle.trace_id).ok_or_else(|| {
+        format!(
+            "claim trace {:?} is absent from the incident bundle",
+            bundle.trace_id
+        )
+    })?;
+    if claimed_trace.trace_id != bundle.trace_id {
+        return Err(format!(
+            "claim trace id {:?} does not match signed trace id {:?}",
+            bundle.trace_id, claimed_trace.trace_id
+        ));
+    }
+
+    let matching_decisions: Vec<_> = claimed_trace
+        .entries
+        .iter()
+        .filter(|entry| entry.decision.decision_id == bundle.decision_id)
+        .collect();
+    if matching_decisions.len() != 1 {
+        return Err(format!(
+            "claim decision {:?} must identify exactly one signed decision in trace {:?}, found {}",
+            bundle.decision_id,
+            bundle.trace_id,
+            matching_decisions.len()
+        ));
+    }
+    let claimed_decision = &matching_decisions[0].decision;
+    if claimed_decision.policy_id != bundle.policy_id {
+        return Err(format!(
+            "claim policy {:?} does not match signed decision policy {:?} for decision {:?}",
+            bundle.policy_id, claimed_decision.policy_id, bundle.decision_id
+        ));
+    }
+
+    let incident_id = bundle.bundle.manifest.incident_id.as_str();
+    for (trace_key, trace) in &bundle.bundle.traces {
+        if trace.trace_id != *trace_key {
+            return Err(format!(
+                "bundle trace key {trace_key:?} does not match signed trace id {:?}",
+                trace.trace_id
+            ));
+        }
+        if trace.incident_id.as_deref() != Some(incident_id) {
+            return Err(format!(
+                "signed trace {trace_key:?} incident {:?} does not match bundle incident \
+                 {incident_id:?}",
+                trace.incident_id
+            ));
+        }
+    }
+
+    Ok(format!(
+        "claim_trace={} claim_decision={} claim_policy={} incident={} authenticated_traces={} \
+         signed_decision_matches=1 bundle_id={} merkle_root=sha256:{} \
+         manifest_preimage_hash=sha256:{} trace_content_hash=sha256:{}",
+        bundle.trace_id,
+        bundle.decision_id,
+        bundle.policy_id,
+        incident_id,
+        bundle.bundle.traces.len(),
+        bundle.bundle.manifest.bundle_id,
+        bundle.bundle.manifest.merkle_root.to_hex(),
+        ContentHash::compute(&bundle.bundle.manifest.signing_bytes()).to_hex(),
+        claimed_trace.content_hash().to_hex()
+    ))
 }
 
 pub fn verify_containment_claim(bundle: &ContainmentClaimBundle) -> ThirdPartyVerificationReport {

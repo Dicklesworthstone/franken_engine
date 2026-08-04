@@ -1,0 +1,29 @@
+---
+source: crates/franken-engine/tests/golden_lowering.rs
+expression: actual
+---
+# franken-engine lowering IR3 golden
+# Update with:
+#   INSTA_UPDATE=always cargo test -p frankenengine-engine --test golden_lowering
+# Then review with `cargo insta review` and commit tests/snapshots/.
+case: try_catch
+goal: Script
+source:
+  try { throw 1; } catch (error) { error; }
+
+constant_pool:
+  <empty>
+
+instructions:
+  0000: {"BeginTry":{"catch_target":5,"finally_target":null}}
+  0001: {"LoadInt":{"dst":1,"value":1}}
+  0002: {"Throw":{"value":1}}
+  0003: "EndTry"
+  0004: {"Jump":{"target":10}}
+  0005: {"EnterCatch":{"dst":2}}
+  0006: {"Move":{"dst":3,"src":2}}
+  0007: {"Move":{"dst":0,"src":3}}
+  0008: {"Move":{"dst":4,"src":3}}
+  0009: {"Move":{"dst":0,"src":4}}
+  0010: {"Return":{"value":0}}
+  0011: "Halt"

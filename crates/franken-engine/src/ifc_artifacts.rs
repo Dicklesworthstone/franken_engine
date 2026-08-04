@@ -140,8 +140,13 @@ impl Label {
     }
 
     /// Join (least upper bound) of two labels.
+    ///
+    /// Compares via the full `Ord` (level, then the same-level tiebreak)
+    /// rather than raw levels: distinct labels can share a level (e.g.
+    /// `Secret` vs `Custom { level: 3 }`), and a raw-level comparison would
+    /// make the result depend on argument order, breaking commutativity.
     pub fn join(&self, other: &Self) -> Self {
-        if self.level() >= other.level() {
+        if self >= other {
             self.clone()
         } else {
             other.clone()
@@ -149,8 +154,10 @@ impl Label {
     }
 
     /// Meet (greatest lower bound) of two labels.
+    ///
+    /// Uses the full `Ord` for the same commutativity reason as [`Self::join`].
     pub fn meet(&self, other: &Self) -> Self {
-        if self.level() <= other.level() {
+        if self <= other {
             self.clone()
         } else {
             other.clone()
@@ -2687,6 +2694,61 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn lattice_join_meet_commute_for_same_level_mixed_labels() {
+        // Distinct labels can share a level (built-in vs Custom, or two
+        // Customs). join/meet must not depend on argument order there.
+        let custom_secret = Label::Custom {
+            name: "vendor-secret".to_string(),
+            level: 3,
+        };
+        assert_eq!(
+            Label::Secret.join(&custom_secret),
+            custom_secret.join(&Label::Secret),
+            "join must be commutative for same-level built-in vs custom"
+        );
+        assert_eq!(
+            Label::Secret.meet(&custom_secret),
+            custom_secret.meet(&Label::Secret),
+            "meet must be commutative for same-level built-in vs custom"
+        );
+        // The chosen representatives must still bound both inputs.
+        let joined = Label::Secret.join(&custom_secret);
+        assert!(Label::Secret.can_flow_to(&joined));
+        assert!(custom_secret.can_flow_to(&joined));
+        let met = Label::Secret.meet(&custom_secret);
+        assert!(met.can_flow_to(&Label::Secret));
+        assert!(met.can_flow_to(&custom_secret));
+
+        let alpha = Label::Custom {
+            name: "alpha".to_string(),
+            level: 2,
+        };
+        let beta = Label::Custom {
+            name: "beta".to_string(),
+            level: 2,
+        };
+        assert_eq!(alpha.join(&beta), beta.join(&alpha));
+        assert_eq!(alpha.meet(&beta), beta.meet(&alpha));
+        // Name tiebreak: beta > alpha under Ord, so join picks beta.
+        assert_eq!(alpha.join(&beta), beta);
+        assert_eq!(alpha.meet(&beta), alpha);
+    }
+
+    #[test]
+    fn lattice_join_all_order_independent_with_custom_labels() {
+        let custom = Label::Custom {
+            name: "tenant".to_string(),
+            level: 3,
+        };
+        let forward = Label::join_all([Label::Secret, custom.clone()]);
+        let reverse = Label::join_all([custom, Label::Secret]);
+        assert_eq!(
+            forward, reverse,
+            "join_all must be invariant to input order"
+        );
     }
 
     #[test]

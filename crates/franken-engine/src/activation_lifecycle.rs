@@ -192,9 +192,7 @@ impl EphemeralSecret {
 impl Drop for EphemeralSecret {
     fn drop(&mut self) {
         // Zero out the secret memory.
-        for byte in &mut self.value {
-            *byte = 0;
-        }
+        self.value.fill(0);
     }
 }
 

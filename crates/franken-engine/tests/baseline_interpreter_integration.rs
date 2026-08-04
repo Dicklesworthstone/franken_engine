@@ -2725,19 +2725,29 @@ fn imported_async_functions_use_the_exporting_module_for_direct_and_method_calls
 }
 
 #[test]
-fn imported_dynamic_function_artifacts_keep_owner_across_call_forms_bd_fw7zd_8() {
+fn imported_dynamic_function_artifacts_use_canonical_realm_across_call_forms_bd_fw7zd_8_3() {
     let root = temp_module_dir("module_import_generated_callable");
     fs::create_dir_all(&root).expect("create module root");
     fs::write(
         root.join("dep.mjs"),
-        "export function makeAdder() {\n\
-           return Function('value', 'return value + 35;');\n\
+        "const RealmFunction = Function;\n\
+         const ownerOnly = 777;\n\
+         function poisonOwnerGlobals() {\n\
+           console = 1; performance = 2; Function = 3; Math = 4;\n\
+         }\n\
+         export function makeAdder() {\n\
+           const generated = RealmFunction('value', \"return Math.max(value + 35, 0) + (typeof console === 'object' && typeof performance === 'object' && typeof Function === 'undefined' && typeof process === 'undefined' && typeof require === 'undefined' && typeof ownerOnly === 'undefined' && typeof callerOnly === 'undefined' ? 0 : 1000);\");\n\
+           poisonOwnerGlobals();\n\
+           return generated;\n\
          }\n\
          export function makeMethod() {\n\
-           return Function('value', 'return this.base + value;');\n\
+           const generated = RealmFunction('value', \"return this.base + value + (typeof console === 'object' && typeof performance === 'object' && typeof Function === 'undefined' && typeof process === 'undefined' && typeof require === 'undefined' && typeof ownerOnly === 'undefined' && typeof callerOnly === 'undefined' ? 0 : 1000);\");\n\
+           poisonOwnerGlobals();\n\
+           return generated;\n\
          }\n\
          export function makeDeferred() {\n\
-           const generated = Function('value', 'return value + 40;');\n\
+           const generated = RealmFunction('value', \"return value + 40 + (typeof console === 'object' && typeof performance === 'object' && typeof Function === 'undefined' && typeof process === 'undefined' && typeof require === 'undefined' && typeof ownerOnly === 'undefined' && typeof callerOnly === 'undefined' ? 0 : 1000);\");\n\
+           poisonOwnerGlobals();\n\
            return function later() { return generated(2); };\n\
          }",
     )
@@ -2771,6 +2781,39 @@ fn imported_dynamic_function_artifacts_keep_owner_across_call_forms_bd_fw7zd_8()
                 callee: 3,
                 args: RegRange { start: 4, count: 0 },
                 dst: 4,
+            },
+            Ir3Instruction::LoadInt { dst: 15, value: -1 },
+            Ir3Instruction::PutName {
+                src: 15,
+                name_pool_index: 8,
+                strict: true,
+            },
+            Ir3Instruction::PutName {
+                src: 15,
+                name_pool_index: 9,
+                strict: true,
+            },
+            Ir3Instruction::PutName {
+                src: 15,
+                name_pool_index: 10,
+                strict: true,
+            },
+            Ir3Instruction::PutName {
+                src: 15,
+                name_pool_index: 11,
+                strict: true,
+            },
+            Ir3Instruction::DeclareBinding {
+                name_pool_index: 12,
+                kind: 0,
+            },
+            Ir3Instruction::LoadInt {
+                dst: 15,
+                value: 999,
+            },
+            Ir3Instruction::InitBinding {
+                name_pool_index: 12,
+                src: 15,
             },
             Ir3Instruction::LoadInt { dst: 5, value: 7 },
             Ir3Instruction::Call {
@@ -2899,6 +2942,11 @@ fn imported_dynamic_function_artifacts_keep_owner_across_call_forms_bd_fw7zd_8()
             "makeDeferred".to_string(),
             "./other.mjs".to_string(),
             "makeOther".to_string(),
+            "console".to_string(),
+            "performance".to_string(),
+            "Function".to_string(),
+            "Math".to_string(),
+            "callerOnly".to_string(),
         ],
     );
     module.header.source_label = root.join("main.mjs").display().to_string();

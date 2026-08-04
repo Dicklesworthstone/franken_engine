@@ -5275,6 +5275,10 @@ struct ModuleRuntimeRecord {
 /// makes corruption and stale-handle checks fail closed at dispatch.
 #[derive(Debug, Clone)]
 struct GeneratedFunctionStore {
+    /// Top-level realm generation that owns this store. A store from an older
+    /// execution must never authenticate a handle after realm replacement,
+    /// even when the same module and generated source are recreated.
+    realm_generation: u64,
     owner_program_id: ContentHash,
     owner_specifier: String,
     owner_program: Arc<Ir3Module>,
@@ -8513,8 +8517,19 @@ pub struct InterpreterCore {
     /// This map is deliberately outside closure, generator, generated-code,
     /// and module execution snapshots: those mechanisms replace the active
     /// lexical scope structure, but they all share one realm global
-    /// environment for the duration of the interpreter core.
+    /// environment for the duration of one top-level realm. Realm rotation
+    /// clears the map before seed-backed heap ObjectIds can be reused.
     realm_dynamic_globals: BTreeMap<String, ScopeBinding>,
+    /// Engine-owned sanitized outer environment for `Function`-constructor
+    /// artifacts. Binding cells persist for one top-level realm, while every
+    /// invocation receives fresh frame structure that shares only these
+    /// canonical cells. Caller/owner module bindings remain disconnected.
+    generated_function_realm_globals: Option<BTreeMap<String, ScopeBinding>>,
+    /// Monotonic realm identity mixed into every generated-artifact id.
+    /// Module snapshots deliberately do not restore this process-lifetime
+    /// nonce; top-level realm replacement advances it and invalidates every
+    /// older generated handle fail closed.
+    generated_function_realm_generation: u64,
     /// Exact pre-RHS identifier References indexed by opaque integer tokens in
     /// internal status registers. Entries are identity-deduplicated, so loops
     /// do not grow this table once they keep resolving to the same cell.
@@ -8832,12 +8847,28 @@ impl InterpreterCore {
         self.scope_chain
             .resolve(name)
             .map(|(_, binding)| binding.clone())
-            .or_else(|| self.realm_dynamic_globals.get(name).cloned())
+            .or_else(|| {
+                if self.active_generated_function_artifact.is_some() {
+                    self.generated_function_realm_globals
+                        .as_ref()
+                        .and_then(|globals| globals.get(name))
+                        .cloned()
+                } else {
+                    self.realm_dynamic_globals.get(name).cloned()
+                }
+            })
     }
 
     fn capture_runtime_name_reference(&mut self, name: &str) -> Result<u32, InterpreterError> {
         let reference = if let Some((_, binding)) = self.scope_chain.resolve(name) {
             RuntimeNameReference::Resolved(binding.clone())
+        } else if self.active_generated_function_artifact.is_some() {
+            self.generated_function_realm_globals
+                .as_ref()
+                .and_then(|globals| globals.get(name))
+                .cloned()
+                .map(RuntimeNameReference::Resolved)
+                .unwrap_or(RuntimeNameReference::Unresolvable)
         } else if self.realm_dynamic_globals.contains_key(name) {
             // A global-object Reference retains the realm object and property
             // name, not the current property cell. If RHS code replaces that
@@ -8901,7 +8932,9 @@ impl InterpreterCore {
             return Ok(state.value.clone());
         }
 
-        if let Some(context) = self.active_cjs_context.as_ref() {
+        if self.active_generated_function_artifact.is_none()
+            && let Some(context) = self.active_cjs_context.as_ref()
+        {
             let (filename, dirname) = self.cjs_filename_dirname(Some(&context.module_specifier));
             match name {
                 "__filename" => return Ok(filename),
@@ -8929,6 +8962,8 @@ impl InterpreterCore {
         let previous_closure_bytes = self.closures_memory_bytes();
         let previous_call_stack_bytes = self.call_stack_memory_bytes();
         let previous_realm_global_bytes = self.realm_dynamic_globals_memory_bytes();
+        let previous_generated_realm_global_bytes =
+            self.generated_function_realm_globals_memory_bytes();
         let previous_state = binding.snapshot_state()?;
         if !previous_state.initialized {
             return Err(InterpreterError::UninitializedBinding {
@@ -8946,6 +8981,7 @@ impl InterpreterCore {
             previous_closure_bytes,
             previous_call_stack_bytes,
             previous_realm_global_bytes,
+            previous_generated_realm_global_bytes,
         ) {
             binding.restore_state(previous_state)?;
             return Err(error);
@@ -8965,6 +9001,104 @@ impl InterpreterCore {
             });
         }
 
+        if self.active_generated_function_artifact.is_some() {
+            if let Some(binding) = self
+                .scope_chain
+                .frames
+                .first()
+                .and_then(|frame| frame.get(name))
+                .cloned()
+            {
+                let canonical_binding = self
+                    .generated_function_realm_globals
+                    .as_ref()
+                    .and_then(|globals| globals.get(name))
+                    .ok_or_else(|| InterpreterError::InternalError {
+                        details: format!(
+                            "generated Function realm frame contains non-canonical global `{name}`"
+                        ),
+                    })?;
+                if !Rc::ptr_eq(&binding.state, &canonical_binding.state) {
+                    return Err(InterpreterError::InternalError {
+                        details: format!(
+                            "generated Function realm binding identity drifted for `{name}`"
+                        ),
+                    });
+                }
+                return self.put_resolved_runtime_name_binding(name, binding, value);
+            }
+            if self.scope_chain.frames.is_empty() {
+                return Err(InterpreterError::InternalError {
+                    details: "generated Function scope chain unexpectedly empty".to_string(),
+                });
+            }
+            let canonical_binding = self
+                .generated_function_realm_globals
+                .as_ref()
+                .ok_or_else(|| InterpreterError::InternalError {
+                    details: "generated Function realm globals are not initialized".to_string(),
+                })?
+                .get(name)
+                .cloned();
+            if let Some(canonical_binding) = canonical_binding {
+                // A closure can retain frame structure created before another
+                // generated call adds this realm-global name. The canonical
+                // environment record remains authoritative even when that
+                // older structural view has no map entry for it.
+                return self.put_resolved_runtime_name_binding(name, canonical_binding, value);
+            }
+            let previous_scope_bytes = self.scope_chain_memory_bytes();
+            let previous_closure_bytes = self.closures_memory_bytes();
+            let previous_call_stack_bytes = self.call_stack_memory_bytes();
+            let previous_realm_global_bytes = self.realm_dynamic_globals_memory_bytes();
+            let previous_generated_realm_global_bytes =
+                self.generated_function_realm_globals_memory_bytes();
+            let binding = ScopeBinding::with_state(BindingKind::Var, value, true);
+            let canonical_replaced = self
+                .generated_function_realm_globals
+                .as_mut()
+                .ok_or_else(|| InterpreterError::InternalError {
+                    details: "generated Function realm globals are not initialized".to_string(),
+                })?
+                .insert(name.to_string(), binding.clone());
+            let frame_replaced = self
+                .scope_chain
+                .frames
+                .first_mut()
+                .expect("generated Function frame existence was checked")
+                .bindings
+                .insert(name.to_string(), binding);
+            debug_assert!(
+                canonical_replaced.is_none(),
+                "canonical binding was unresolved"
+            );
+            debug_assert!(frame_replaced.is_none(), "active binding was unresolved");
+            if let Err(error) = self.apply_scope_closure_call_stack_realm_memory_delta(
+                previous_scope_bytes,
+                previous_closure_bytes,
+                previous_call_stack_bytes,
+                previous_realm_global_bytes,
+                previous_generated_realm_global_bytes,
+            ) {
+                if let Some(globals) = self.generated_function_realm_globals.as_mut() {
+                    if let Some(replaced) = canonical_replaced {
+                        globals.insert(name.to_string(), replaced);
+                    } else {
+                        globals.remove(name);
+                    }
+                }
+                if let Some(global_frame) = self.scope_chain.frames.first_mut() {
+                    if let Some(replaced) = frame_replaced {
+                        global_frame.bindings.insert(name.to_string(), replaced);
+                    } else {
+                        global_frame.bindings.remove(name);
+                    }
+                }
+                return Err(error);
+            }
+            return Ok(());
+        }
+
         self.put_realm_runtime_name(name, value)
     }
 
@@ -8981,6 +9115,8 @@ impl InterpreterCore {
         let previous_closure_bytes = self.closures_memory_bytes();
         let previous_call_stack_bytes = self.call_stack_memory_bytes();
         let previous_realm_global_bytes = self.realm_dynamic_globals_memory_bytes();
+        let previous_generated_realm_global_bytes =
+            self.generated_function_realm_globals_memory_bytes();
         let binding = ScopeBinding::with_state(BindingKind::Var, value, true);
         debug_assert!(!self.realm_dynamic_globals.contains_key(name));
         self.realm_dynamic_globals.insert(name.to_string(), binding);
@@ -8990,6 +9126,7 @@ impl InterpreterCore {
             previous_closure_bytes,
             previous_call_stack_bytes,
             previous_realm_global_bytes,
+            previous_generated_realm_global_bytes,
         ) {
             self.realm_dynamic_globals.remove(name);
             return Err(error);
@@ -9034,7 +9171,16 @@ impl InterpreterCore {
             RuntimeNameReference::Resolved(binding) => {
                 self.put_resolved_runtime_name_binding(name, binding, value)
             }
-            RuntimeNameReference::RealmGlobal => self.put_realm_runtime_name(name, value),
+            RuntimeNameReference::RealmGlobal => {
+                if self.active_generated_function_artifact.is_some() {
+                    return Err(InterpreterError::InternalError {
+                        details:
+                            "realm-global Reference crossed into a generated Function activation"
+                                .to_string(),
+                    });
+                }
+                self.put_realm_runtime_name(name, value)
+            }
             RuntimeNameReference::Unresolvable => {
                 self.put_unresolvable_runtime_name(name, value, strict)
             }
@@ -9097,6 +9243,8 @@ impl InterpreterCore {
             last_post_run_seed: None,
             scope_chain,
             realm_dynamic_globals: BTreeMap::new(),
+            generated_function_realm_globals: None,
+            generated_function_realm_generation: 0,
             runtime_name_references: Vec::new(),
             closures: Vec::new(),
             closure_module_origins: BTreeMap::new(),
@@ -25939,6 +26087,7 @@ impl InterpreterCore {
         self.last_pre_run_seed = Some(seed.clone());
         self.top_level_await_resumption_contexts.clear();
         self.clear_top_level_await_outcome();
+        self.rotate_generated_function_realm()?;
         let previous_seed_surface_bytes = self
             .registers_memory_bytes()
             .saturating_add(self.heap_memory_bytes())
@@ -26403,23 +26552,8 @@ impl InterpreterCore {
         Ok(())
     }
 
-    fn inject_runtime_globals(&mut self) -> Result<(), InterpreterError> {
-        let argv = Value::Object(self.alloc_array_from_values(&[])?);
-        let env = Value::Object(self.alloc_object_with_properties(&[])?);
-        // bd-qmy52/bd-y30zw: `platform` and `pid` are benign process-SHAPE
-        // descriptors readable only through a statically allowlisted member
-        // under the trusted `ProcessShapeRead` grant. Both are FIXED,
-        // engine-contained values: platform matches `os.platform()` and pid is
-        // a positive synthetic sentinel, never the nondeterministic host PID.
-        // No env VALUES are exposed (env stays empty and env reads stay denied
-        // at lowering).
-        let process = Value::Object(self.alloc_object_with_properties(&[
-            ("argv", argv),
-            ("env", env),
-            ("platform", Value::str(NODE_OS_PLATFORM)),
-            ("pid", Value::Int(1)),
-        ])?);
-        let console = Value::Object(self.alloc_object_with_properties(&[
+    fn alloc_console_global(&mut self) -> Result<Value, InterpreterError> {
+        Ok(Value::Object(self.alloc_object_with_properties(&[
             (
                 "log",
                 Value::BuiltinFunction(BuiltinFunction::console_log()),
@@ -26436,7 +26570,338 @@ impl InterpreterCore {
                 "info",
                 Value::BuiltinFunction(BuiltinFunction::console_info()),
             ),
+        ])?))
+    }
+
+    fn alloc_promise_global(&mut self) -> Result<Value, InterpreterError> {
+        Ok(Value::Object(self.alloc_object_with_properties(&[
+            (
+                "resolve",
+                Value::BuiltinFunction(BuiltinFunction::promise_resolve()),
+            ),
+            (
+                "reject",
+                Value::BuiltinFunction(BuiltinFunction::promise_reject()),
+            ),
+            (
+                "all",
+                Value::BuiltinFunction(BuiltinFunction::promise_all()),
+            ),
+            (
+                "race",
+                Value::BuiltinFunction(BuiltinFunction::promise_race()),
+            ),
+            (
+                "allSettled",
+                Value::BuiltinFunction(BuiltinFunction::promise_all_settled()),
+            ),
+            (
+                "any",
+                Value::BuiltinFunction(BuiltinFunction::promise_any()),
+            ),
+        ])?))
+    }
+
+    fn alloc_math_global(&mut self) -> Result<Value, InterpreterError> {
+        Ok(Value::Object(self.alloc_object_with_properties(&[
+            (
+                "abs",
+                Value::BuiltinFunction(BuiltinFunction::new_kind(BuiltinFunctionKind::MathAbs)),
+            ),
+            (
+                "ceil",
+                Value::BuiltinFunction(BuiltinFunction::new_kind(BuiltinFunctionKind::MathCeil)),
+            ),
+            (
+                "floor",
+                Value::BuiltinFunction(BuiltinFunction::new_kind(BuiltinFunctionKind::MathFloor)),
+            ),
+            (
+                "round",
+                Value::BuiltinFunction(BuiltinFunction::new_kind(BuiltinFunctionKind::MathRound)),
+            ),
+            (
+                "max",
+                Value::BuiltinFunction(BuiltinFunction::new_kind(BuiltinFunctionKind::MathMax)),
+            ),
+            (
+                "min",
+                Value::BuiltinFunction(BuiltinFunction::new_kind(BuiltinFunctionKind::MathMin)),
+            ),
+            (
+                "random",
+                Value::BuiltinFunction(BuiltinFunction::new_kind(BuiltinFunctionKind::MathRandom)),
+            ),
+            (
+                "pow",
+                Value::BuiltinFunction(BuiltinFunction::new_kind(BuiltinFunctionKind::MathPow)),
+            ),
+            (
+                "sqrt",
+                Value::BuiltinFunction(BuiltinFunction::new_kind(BuiltinFunctionKind::MathSqrt)),
+            ),
+            (
+                "sin",
+                Value::BuiltinFunction(BuiltinFunction::new_kind(BuiltinFunctionKind::MathSin)),
+            ),
+            (
+                "cos",
+                Value::BuiltinFunction(BuiltinFunction::new_kind(BuiltinFunctionKind::MathCos)),
+            ),
+            (
+                "log",
+                Value::BuiltinFunction(BuiltinFunction::new_kind(BuiltinFunctionKind::MathLog)),
+            ),
+            (
+                "exp",
+                Value::BuiltinFunction(BuiltinFunction::new_kind(BuiltinFunctionKind::MathExp)),
+            ),
+            (
+                "tan",
+                Value::BuiltinFunction(BuiltinFunction::new_kind(BuiltinFunctionKind::MathTan)),
+            ),
+            (
+                "trunc",
+                Value::BuiltinFunction(BuiltinFunction::new_kind(BuiltinFunctionKind::MathTrunc)),
+            ),
+            (
+                "sign",
+                Value::BuiltinFunction(BuiltinFunction::new_kind(BuiltinFunctionKind::MathSign)),
+            ),
+            (
+                "atan2",
+                Value::BuiltinFunction(BuiltinFunction::new_kind(BuiltinFunctionKind::MathAtan2)),
+            ),
+            (
+                "asin",
+                Value::BuiltinFunction(BuiltinFunction::new_kind(BuiltinFunctionKind::MathAsin)),
+            ),
+            (
+                "acos",
+                Value::BuiltinFunction(BuiltinFunction::new_kind(BuiltinFunctionKind::MathAcos)),
+            ),
+            (
+                "hypot",
+                Value::BuiltinFunction(BuiltinFunction::new_kind(BuiltinFunctionKind::MathHypot)),
+            ),
+            (
+                "imul",
+                Value::BuiltinFunction(BuiltinFunction::new_kind(BuiltinFunctionKind::MathImul)),
+            ),
+            (
+                "atan",
+                Value::BuiltinFunction(BuiltinFunction::new_kind(BuiltinFunctionKind::MathAtan)),
+            ),
+            (
+                "log10",
+                Value::BuiltinFunction(BuiltinFunction::new_kind(BuiltinFunctionKind::MathLog10)),
+            ),
+            (
+                "log2",
+                Value::BuiltinFunction(BuiltinFunction::new_kind(BuiltinFunctionKind::MathLog2)),
+            ),
+            (
+                "cbrt",
+                Value::BuiltinFunction(BuiltinFunction::new_kind(BuiltinFunctionKind::MathCbrt)),
+            ),
+            (
+                "clz32",
+                Value::BuiltinFunction(BuiltinFunction::new_kind(BuiltinFunctionKind::MathClz32)),
+            ),
+            (
+                "fround",
+                Value::BuiltinFunction(BuiltinFunction::new_kind(BuiltinFunctionKind::MathFround)),
+            ),
+            (
+                "acosh",
+                Value::BuiltinFunction(BuiltinFunction::new_kind(BuiltinFunctionKind::MathAcosh)),
+            ),
+            (
+                "asinh",
+                Value::BuiltinFunction(BuiltinFunction::new_kind(BuiltinFunctionKind::MathAsinh)),
+            ),
+            (
+                "atanh",
+                Value::BuiltinFunction(BuiltinFunction::new_kind(BuiltinFunctionKind::MathAtanh)),
+            ),
+            ("PI", Value::Float(Float64::new(std::f64::consts::PI))),
+        ])?))
+    }
+
+    fn alloc_date_global(&mut self) -> Result<Value, InterpreterError> {
+        let properties = self.alloc_object_with_properties(&[(
+            "now",
+            Value::BuiltinFunction(BuiltinFunction::new_kind(BuiltinFunctionKind::DateNow)),
+        )])?;
+        Ok(Value::BuiltinFunction(BuiltinFunction::date_constructor(
+            properties,
+        )))
+    }
+
+    fn alloc_performance_global(&mut self) -> Result<Value, InterpreterError> {
+        Ok(Value::Object(self.alloc_object_with_properties(&[(
+            "now",
+            Value::BuiltinFunction(BuiltinFunction::performance_now()),
+        )])?))
+    }
+
+    fn timer_global_kinds() -> [(&'static str, BuiltinFunctionKind); 7] {
+        [
+            ("setTimeout", BuiltinFunctionKind::SetTimeout),
+            ("clearTimeout", BuiltinFunctionKind::ClearTimeout),
+            ("setInterval", BuiltinFunctionKind::SetInterval),
+            ("clearInterval", BuiltinFunctionKind::ClearInterval),
+            ("setImmediate", BuiltinFunctionKind::SetImmediate),
+            ("clearImmediate", BuiltinFunctionKind::ClearImmediate),
+            ("queueMicrotask", BuiltinFunctionKind::QueueMicrotask),
+        ]
+    }
+
+    fn projected_generated_function_realm_registry_bytes() -> u64 {
+        let object_entries = ["console", "performance", "Promise", "Math"];
+        let object_bytes = Self::saturating_sum(object_entries.into_iter().map(|name| {
+            MEMORY_ESTIMATE_SCOPE_BINDING_BASE_BYTES
+                .saturating_add(Self::estimate_string_bytes(name))
+        }));
+        let empty_builtin_bytes = Self::estimate_string_bytes("");
+        let builtin_bytes = Self::saturating_sum(
+            std::iter::once("Date")
+                .chain(Self::timer_global_kinds().into_iter().map(|(name, _)| name))
+                .map(|name| {
+                    MEMORY_ESTIMATE_SCOPE_BINDING_BASE_BYTES
+                        .saturating_add(Self::estimate_string_bytes(name))
+                        .saturating_add(empty_builtin_bytes)
+                }),
+        );
+        object_bytes.saturating_add(builtin_bytes)
+    }
+
+    /// Materialize the engine-owned safe outer environment used by generated
+    /// functions. The transaction owns every heap append below: any object,
+    /// heap-count, or map-budget refusal restores both the heap and memory
+    /// accumulator to the exact pre-initialization state.
+    fn ensure_generated_function_realm_globals(&mut self) -> Result<(), InterpreterError> {
+        if self.generated_function_realm_globals.is_some() {
+            return Ok(());
+        }
+
+        let previous_heap_len = self.heap.len();
+        let previous_estimated_memory_bytes = self.estimated_memory_bytes;
+        let result = (|| -> Result<(), InterpreterError> {
+            let console = self.alloc_console_global()?;
+            let performance = self.alloc_performance_global()?;
+            let promise = self.alloc_promise_global()?;
+            let math = self.alloc_math_global()?;
+            let date = self.alloc_date_global()?;
+            let registry_bytes = Self::projected_generated_function_realm_registry_bytes();
+            // No map/key allocation occurs until its complete retained charge
+            // fits alongside every newly allocated canonical heap object.
+            self.check_temporary_memory_budget(registry_bytes)?;
+
+            let mut globals = BTreeMap::new();
+            for (name, value) in [
+                ("console", console),
+                ("performance", performance),
+                ("Promise", promise),
+                ("Math", math),
+                ("Date", date),
+            ] {
+                globals.insert(
+                    name.to_string(),
+                    ScopeBinding::with_state(BindingKind::Var, value, true),
+                );
+            }
+            for (name, kind) in Self::timer_global_kinds() {
+                globals.insert(
+                    name.to_string(),
+                    ScopeBinding::with_state(
+                        BindingKind::Var,
+                        Value::BuiltinFunction(BuiltinFunction::timer_global(kind)),
+                        true,
+                    ),
+                );
+            }
+
+            debug_assert_eq!(
+                registry_bytes,
+                Self::estimate_generated_function_realm_globals_bytes(&globals)
+            );
+            self.apply_memory_component_delta(0, registry_bytes)?;
+            self.generated_function_realm_globals = Some(globals);
+            Ok(())
+        })();
+
+        if let Err(error) = result {
+            self.generated_function_realm_globals = None;
+            self.rollback_heap_to_len(previous_heap_len);
+            self.estimated_memory_bytes = previous_estimated_memory_bytes;
+            return Err(error);
+        }
+
+        debug_assert_eq!(
+            self.estimated_memory_bytes,
+            self.recompute_estimated_memory_bytes()
+        );
+        Ok(())
+    }
+
+    fn generated_function_realm_scope_frame(&self) -> Result<ScopeFrame, InterpreterError> {
+        let globals = self
+            .generated_function_realm_globals
+            .as_ref()
+            .ok_or_else(|| InterpreterError::InternalError {
+                details: "generated Function realm globals are not initialized".to_string(),
+            })?;
+        Ok(ScopeFrame {
+            bindings: globals.clone(),
+        })
+    }
+
+    /// Replace the top-level dynamic-code realm. Old stores are released and
+    /// the monotonic generation changes before any new artifact can be
+    /// retained, so a serialized/stashed v1 handle cannot alias identically
+    /// sourced code recreated by the next execution.
+    fn rotate_generated_function_realm(&mut self) -> Result<(), InterpreterError> {
+        let next_generation = self
+            .generated_function_realm_generation
+            .checked_add(1)
+            .ok_or_else(|| InterpreterError::InternalError {
+                details: "generated Function realm generation exhausted u64".to_string(),
+            })?;
+        let released_bytes = self
+            .module_state
+            .retained_generated_function_bytes
+            .saturating_add(self.generated_function_realm_globals_memory_bytes())
+            .saturating_add(self.realm_dynamic_globals_memory_bytes());
+
+        self.module_state.generated_function_stores.clear();
+        self.module_state.retained_generated_function_bytes = 0;
+        self.generated_function_realm_globals = None;
+        // Heap-backed realm values are recreated after the authoritative seed
+        // reset. Keeping their binding cells here would retain stale ObjectIds.
+        self.realm_dynamic_globals.clear();
+        self.generated_function_realm_generation = next_generation;
+        self.estimated_memory_bytes = self.estimated_memory_bytes.saturating_sub(released_bytes);
+        Ok(())
+    }
+
+    fn inject_runtime_globals(&mut self) -> Result<(), InterpreterError> {
+        let argv = Value::Object(self.alloc_array_from_values(&[])?);
+        let env = Value::Object(self.alloc_object_with_properties(&[])?);
+        // bd-qmy52/bd-y30zw: `platform` and `pid` are benign process-SHAPE
+        // descriptors readable only through a statically allowlisted member
+        // under the trusted `ProcessShapeRead` grant. Both are FIXED,
+        // engine-contained values: platform matches `os.platform()` and pid is
+        // a positive synthetic sentinel, never the nondeterministic host PID.
+        // No env VALUES are exposed (env stays empty and env reads stay denied
+        // at lowering).
+        let process = Value::Object(self.alloc_object_with_properties(&[
+            ("argv", argv),
+            ("env", env),
+            ("platform", Value::str(NODE_OS_PLATFORM)),
+            ("pid", Value::Int(1)),
         ])?);
+        let console = self.alloc_console_global()?;
         // bd-1piai: these ordinary JavaScript globals live in the realm-owned
         // name map, not in the replaceable module scope. Seed each one exactly
         // once so assignments, aliases, and nested module execution all observe
@@ -26444,217 +26909,19 @@ impl InterpreterCore {
         let promise = if self.realm_dynamic_globals.contains_key("Promise") {
             None
         } else {
-            Some(Value::Object(self.alloc_object_with_properties(&[
-                (
-                    "resolve",
-                    Value::BuiltinFunction(BuiltinFunction::promise_resolve()),
-                ),
-                (
-                    "reject",
-                    Value::BuiltinFunction(BuiltinFunction::promise_reject()),
-                ),
-                (
-                    "all",
-                    Value::BuiltinFunction(BuiltinFunction::promise_all()),
-                ),
-                (
-                    "race",
-                    Value::BuiltinFunction(BuiltinFunction::promise_race()),
-                ),
-                (
-                    "allSettled",
-                    Value::BuiltinFunction(BuiltinFunction::promise_all_settled()),
-                ),
-                (
-                    "any",
-                    Value::BuiltinFunction(BuiltinFunction::promise_any()),
-                ),
-            ])?))
+            Some(self.alloc_promise_global()?)
         };
         let math = if self.realm_dynamic_globals.contains_key("Math") {
             None
         } else {
-            Some(Value::Object(self.alloc_object_with_properties(&[
-                (
-                    "abs",
-                    Value::BuiltinFunction(BuiltinFunction::new_kind(BuiltinFunctionKind::MathAbs)),
-                ),
-                (
-                    "ceil",
-                    Value::BuiltinFunction(BuiltinFunction::new_kind(
-                        BuiltinFunctionKind::MathCeil,
-                    )),
-                ),
-                (
-                    "floor",
-                    Value::BuiltinFunction(BuiltinFunction::new_kind(
-                        BuiltinFunctionKind::MathFloor,
-                    )),
-                ),
-                (
-                    "round",
-                    Value::BuiltinFunction(BuiltinFunction::new_kind(
-                        BuiltinFunctionKind::MathRound,
-                    )),
-                ),
-                (
-                    "max",
-                    Value::BuiltinFunction(BuiltinFunction::new_kind(BuiltinFunctionKind::MathMax)),
-                ),
-                (
-                    "min",
-                    Value::BuiltinFunction(BuiltinFunction::new_kind(BuiltinFunctionKind::MathMin)),
-                ),
-                (
-                    "random",
-                    Value::BuiltinFunction(BuiltinFunction::new_kind(
-                        BuiltinFunctionKind::MathRandom,
-                    )),
-                ),
-                (
-                    "pow",
-                    Value::BuiltinFunction(BuiltinFunction::new_kind(BuiltinFunctionKind::MathPow)),
-                ),
-                (
-                    "sqrt",
-                    Value::BuiltinFunction(BuiltinFunction::new_kind(
-                        BuiltinFunctionKind::MathSqrt,
-                    )),
-                ),
-                (
-                    "sin",
-                    Value::BuiltinFunction(BuiltinFunction::new_kind(BuiltinFunctionKind::MathSin)),
-                ),
-                (
-                    "cos",
-                    Value::BuiltinFunction(BuiltinFunction::new_kind(BuiltinFunctionKind::MathCos)),
-                ),
-                (
-                    "log",
-                    Value::BuiltinFunction(BuiltinFunction::new_kind(BuiltinFunctionKind::MathLog)),
-                ),
-                (
-                    "exp",
-                    Value::BuiltinFunction(BuiltinFunction::new_kind(BuiltinFunctionKind::MathExp)),
-                ),
-                (
-                    "tan",
-                    Value::BuiltinFunction(BuiltinFunction::new_kind(BuiltinFunctionKind::MathTan)),
-                ),
-                (
-                    "trunc",
-                    Value::BuiltinFunction(BuiltinFunction::new_kind(
-                        BuiltinFunctionKind::MathTrunc,
-                    )),
-                ),
-                (
-                    "sign",
-                    Value::BuiltinFunction(BuiltinFunction::new_kind(
-                        BuiltinFunctionKind::MathSign,
-                    )),
-                ),
-                (
-                    "atan2",
-                    Value::BuiltinFunction(BuiltinFunction::new_kind(
-                        BuiltinFunctionKind::MathAtan2,
-                    )),
-                ),
-                (
-                    "asin",
-                    Value::BuiltinFunction(BuiltinFunction::new_kind(
-                        BuiltinFunctionKind::MathAsin,
-                    )),
-                ),
-                (
-                    "acos",
-                    Value::BuiltinFunction(BuiltinFunction::new_kind(
-                        BuiltinFunctionKind::MathAcos,
-                    )),
-                ),
-                (
-                    "hypot",
-                    Value::BuiltinFunction(BuiltinFunction::new_kind(
-                        BuiltinFunctionKind::MathHypot,
-                    )),
-                ),
-                (
-                    "imul",
-                    Value::BuiltinFunction(BuiltinFunction::new_kind(
-                        BuiltinFunctionKind::MathImul,
-                    )),
-                ),
-                (
-                    "atan",
-                    Value::BuiltinFunction(BuiltinFunction::new_kind(
-                        BuiltinFunctionKind::MathAtan,
-                    )),
-                ),
-                (
-                    "log10",
-                    Value::BuiltinFunction(BuiltinFunction::new_kind(
-                        BuiltinFunctionKind::MathLog10,
-                    )),
-                ),
-                (
-                    "log2",
-                    Value::BuiltinFunction(BuiltinFunction::new_kind(
-                        BuiltinFunctionKind::MathLog2,
-                    )),
-                ),
-                (
-                    "cbrt",
-                    Value::BuiltinFunction(BuiltinFunction::new_kind(
-                        BuiltinFunctionKind::MathCbrt,
-                    )),
-                ),
-                (
-                    "clz32",
-                    Value::BuiltinFunction(BuiltinFunction::new_kind(
-                        BuiltinFunctionKind::MathClz32,
-                    )),
-                ),
-                (
-                    "fround",
-                    Value::BuiltinFunction(BuiltinFunction::new_kind(
-                        BuiltinFunctionKind::MathFround,
-                    )),
-                ),
-                (
-                    "acosh",
-                    Value::BuiltinFunction(BuiltinFunction::new_kind(
-                        BuiltinFunctionKind::MathAcosh,
-                    )),
-                ),
-                (
-                    "asinh",
-                    Value::BuiltinFunction(BuiltinFunction::new_kind(
-                        BuiltinFunctionKind::MathAsinh,
-                    )),
-                ),
-                (
-                    "atanh",
-                    Value::BuiltinFunction(BuiltinFunction::new_kind(
-                        BuiltinFunctionKind::MathAtanh,
-                    )),
-                ),
-                ("PI", Value::Float(Float64::new(std::f64::consts::PI))),
-            ])?))
+            Some(self.alloc_math_global()?)
         };
         let date = if self.realm_dynamic_globals.contains_key("Date") {
             None
         } else {
-            let properties = self.alloc_object_with_properties(&[(
-                "now",
-                Value::BuiltinFunction(BuiltinFunction::new_kind(BuiltinFunctionKind::DateNow)),
-            )])?;
-            Some(Value::BuiltinFunction(BuiltinFunction::date_constructor(
-                properties,
-            )))
+            Some(self.alloc_date_global()?)
         };
-        let performance = Value::Object(self.alloc_object_with_properties(&[(
-            "now",
-            Value::BuiltinFunction(BuiltinFunction::performance_now()),
-        )])?);
+        let performance = self.alloc_performance_global()?;
 
         self.inject_runtime_global_binding("process", process)?;
         self.inject_runtime_global_binding("console", console)?;
@@ -26678,15 +26945,7 @@ impl InterpreterCore {
         // setTimeout` is "function", a stored alias is callable, and
         // `require('timers').setTimeout === setTimeout` holds via structural
         // `BuiltinFunction` equality.
-        for (name, kind) in [
-            ("setTimeout", BuiltinFunctionKind::SetTimeout),
-            ("clearTimeout", BuiltinFunctionKind::ClearTimeout),
-            ("setInterval", BuiltinFunctionKind::SetInterval),
-            ("clearInterval", BuiltinFunctionKind::ClearInterval),
-            ("setImmediate", BuiltinFunctionKind::SetImmediate),
-            ("clearImmediate", BuiltinFunctionKind::ClearImmediate),
-            ("queueMicrotask", BuiltinFunctionKind::QueueMicrotask),
-        ] {
+        for (name, kind) in Self::timer_global_kinds() {
             self.inject_runtime_global_binding(
                 name,
                 Value::BuiltinFunction(BuiltinFunction::timer_global(kind)),
@@ -27472,6 +27731,7 @@ impl InterpreterCore {
     }
 
     fn derive_generated_function_artifact_id(
+        realm_generation: u64,
         owner_program_id: ContentHash,
         construction_ordinal: u64,
         provenance: &GeneratedFunctionProvenance,
@@ -27484,7 +27744,8 @@ impl InterpreterCore {
         }
 
         let mut preimage = Vec::new();
-        preimage.extend_from_slice(b"franken-engine.generated-function-artifact.v1\n");
+        preimage.extend_from_slice(b"franken-engine.generated-function-artifact.v2\n");
+        preimage.extend_from_slice(&realm_generation.to_le_bytes());
         preimage.extend_from_slice(owner_program_id.as_bytes());
         preimage.extend_from_slice(&construction_ordinal.to_le_bytes());
         preimage.extend_from_slice(compiled_program_id.as_bytes());
@@ -27506,6 +27767,7 @@ impl InterpreterCore {
         compiled_module: Ir3Module,
         function_index: u32,
     ) -> Result<BuiltinFunction, InterpreterError> {
+        self.ensure_generated_function_realm_globals()?;
         self.retain_generated_function_artifact_transaction(
             owner_program_id,
             owner_specifier,
@@ -27545,7 +27807,8 @@ impl InterpreterCore {
             .get(&owner_program_id)
         {
             Some(store) => {
-                if store.owner_program_id != owner_program_id
+                if store.realm_generation != self.generated_function_realm_generation
+                    || store.owner_program_id != owner_program_id
                     || store.owner_specifier != owner_specifier
                     || !Arc::ptr_eq(&store.owner_program, &owner_program)
                 {
@@ -27578,6 +27841,7 @@ impl InterpreterCore {
         }
         let compiled_program_id = compiled_module.content_hash();
         let artifact_id = Self::derive_generated_function_artifact_id(
+            self.generated_function_realm_generation,
             owner_program_id,
             construction_ordinal,
             &provenance,
@@ -27609,6 +27873,7 @@ impl InterpreterCore {
         let additional_bytes = Self::estimate_generated_function_artifact_entry_bytes(&artifact)
             .saturating_add(if create_store {
                 let empty_store = GeneratedFunctionStore {
+                    realm_generation: self.generated_function_realm_generation,
                     owner_program_id,
                     owner_specifier: owner_specifier.clone(),
                     owner_program: Arc::clone(&owner_program),
@@ -27650,6 +27915,7 @@ impl InterpreterCore {
             self.module_state.generated_function_stores.insert(
                 owner_program_id,
                 GeneratedFunctionStore {
+                    realm_generation: self.generated_function_realm_generation,
                     owner_program_id,
                     owner_specifier,
                     owner_program,
@@ -27802,6 +28068,7 @@ impl InterpreterCore {
         module: &Ir3Module,
         args: RegRange,
     ) -> Result<Value, InterpreterError> {
+        self.ensure_generated_function_realm_globals()?;
         let (owner_program_id, owner_specifier, owner_program) =
             self.generated_function_owner(module)?;
         // Reserve the complete source/parse/lowering workspace before cloning
@@ -28193,6 +28460,15 @@ impl InterpreterCore {
                 specifier: owner_program_id.to_hex(),
                 reason: "generated Function owner store is not retained".to_string(),
             })?;
+        if store.realm_generation != self.generated_function_realm_generation {
+            return Err(InterpreterError::ModuleEvaluationFailed {
+                specifier: store.owner_specifier.clone(),
+                reason: format!(
+                    "generated Function owner store belongs to stale realm generation {}; current generation is {}",
+                    store.realm_generation, self.generated_function_realm_generation
+                ),
+            });
+        }
         if store.owner_program_id != owner_program_id {
             return Err(InterpreterError::InternalError {
                 details: format!(
@@ -28274,11 +28550,10 @@ impl InterpreterCore {
     /// execution state, run, then restore the caller's state.
     ///
     /// Scope discipline (ES2020 §19.2.1.1.1 CreateDynamicFunction): a function
-    /// built by the `Function` constructor closes over the *global* environment
-    /// only — never the construction-site or call-site locals. We enforce this
-    /// by collapsing the scope chain to the single global frame for the duration
-    /// of the call, so the body can read globals but cannot see any caller
-    /// locals (which would be both nonstandard and a containment leak).
+    /// built by the `Function` constructor closes over the sanitized realm
+    /// environment only — never construction-site/call-site frames or the
+    /// writable ambient realm map. Each invocation receives fresh frame
+    /// structure sharing only the engine-owned canonical realm cells.
     fn call_generated_function_artifact(
         &mut self,
         builtin: &BuiltinFunction,
@@ -28324,20 +28599,14 @@ impl InterpreterCore {
         let generated_hidden_call_depth = caller_call_depth;
         let instructions_before = self.instructions_executed;
 
-        let global_scope_depth = self
-            .call_stack
-            .first()
-            .map(|frame| frame.saved_scope_depth)
-            .unwrap_or(self.scope_chain.frames.len())
-            .clamp(1, self.scope_chain.frames.len().max(1));
-        let projected_global_scope_clone_bytes = self
-            .scope_chain
-            .frames
-            .get(..global_scope_depth)
-            .map(Self::estimate_scope_chain_shallow_clone_bytes)
-            .unwrap_or_else(|| {
-                Self::estimate_scope_chain_shallow_clone_bytes(&self.scope_chain.frames)
-            });
+        let generated_realm_globals =
+            self.generated_function_realm_globals
+                .as_ref()
+                .ok_or_else(|| InterpreterError::InternalError {
+                    details: "generated Function realm globals are not initialized".to_string(),
+                })?;
+        let projected_generated_scope_bytes =
+            Self::estimate_generated_function_realm_scope_bytes(generated_realm_globals);
         let projected_argument_transport_bytes =
             u64::from(arg_count).saturating_mul(std::mem::size_of::<Value>() as u64);
         let projected_label_transport_bytes =
@@ -28347,9 +28616,10 @@ impl InterpreterCore {
                 .saturating_add(owner_specifier_bytes)
                 .saturating_add(projected_argument_transport_bytes)
                 .saturating_add(projected_label_transport_bytes)
-                .saturating_add(projected_global_scope_clone_bytes)
+                .saturating_add(projected_generated_scope_bytes)
                 .saturating_add(self.module_execution_snapshot_memory_bytes()),
         )?;
+        let generated_scope_frame = self.generated_function_realm_scope_frame()?;
 
         // Read call values and labels only after the complete wrapper +
         // transport + snapshot peak is known to fit. `RegRange` is relative to
@@ -28413,22 +28683,6 @@ impl InterpreterCore {
             .instructions
             .push(Ir3Instruction::Return { value: 0 });
 
-        // Capture the realm/global environment frames BEFORE any state reset.
-        // A `Function`-constructor function closes over the global environment
-        // only — i.e. every scope frame that existed before the first active
-        // user-function call. `call_stack[0].saved_scope_depth` records exactly
-        // that depth; when no user call is active (a top-level invocation) every
-        // current frame is part of the global environment. Keeping these bottom
-        // frames preserves globals (injected runtime globals + top-level
-        // declarations) while dropping all construction-site/call-site locals,
-        // which would be both nonstandard and a containment leak.
-        let global_scope_frames = self
-            .scope_chain
-            .frames
-            .get(..global_scope_depth)
-            .map(<[ScopeFrame]>::to_vec)
-            .unwrap_or_else(|| self.scope_chain.frames.clone());
-
         // Contained-codegen capability envelope: grant the generated function
         // exactly the capabilities its OWN compiled module statically declares,
         // filtered to the safe set (`Builtin` / `Console` / `Timer`). The
@@ -28476,7 +28730,10 @@ impl InterpreterCore {
             receiver: receiver_label,
             arguments: argument_labels,
         } = call_labels;
-        let saved_active_cjs_context = self.active_cjs_context.clone();
+        // The context is excluded from generated-code name resolution. Move it
+        // out and restore ownership after the isolated call instead of cloning
+        // its attacker-sized module specifier as an uncharged temporary.
+        let saved_active_cjs_context = self.active_cjs_context.take();
         let setup_previous_register_bytes = self.registers_memory_bytes();
         let setup_previous_register_context_label_bytes =
             self.register_context_labels_memory_bytes();
@@ -28500,9 +28757,10 @@ impl InterpreterCore {
             self.pending_finally_entry = None;
             self.current_module_specifier = Some(owner_specifier);
             self.active_generated_function_artifact = Some(artifact_handle);
-            // Global-only scope: keep just the realm global environment captured
-            // above so the body sees globals but no caller locals.
-            self.scope_chain.frames = global_scope_frames;
+            // The generated body sees one fresh sanitized realm frame. It has
+            // no structural or binding-cell edge to either caller or owner
+            // module frames.
+            self.scope_chain.frames = vec![generated_scope_frame];
             for capability in &generated_capabilities {
                 self.config.granted_capabilities.insert(*capability);
             }
@@ -64720,6 +64978,26 @@ impl InterpreterCore {
         Self::estimate_scope_bindings_bytes(&self.realm_dynamic_globals)
     }
 
+    fn estimate_generated_function_realm_globals_bytes(
+        globals: &BTreeMap<String, ScopeBinding>,
+    ) -> u64 {
+        Self::estimate_scope_bindings_bytes(globals)
+    }
+
+    fn generated_function_realm_globals_memory_bytes(&self) -> u64 {
+        self.generated_function_realm_globals
+            .as_ref()
+            .map(Self::estimate_generated_function_realm_globals_bytes)
+            .unwrap_or(0)
+    }
+
+    fn estimate_generated_function_realm_scope_bytes(
+        globals: &BTreeMap<String, ScopeBinding>,
+    ) -> u64 {
+        MEMORY_ESTIMATE_SCOPE_FRAME_BASE_BYTES
+            .saturating_add(Self::estimate_scope_bindings_bytes(globals))
+    }
+
     fn runtime_name_references_memory_bytes(&self) -> u64 {
         Self::saturating_sum(self.runtime_name_references.iter().map(|reference| {
             let retained_value_bytes = match reference {
@@ -65019,6 +65297,7 @@ impl InterpreterCore {
             .saturating_add(self.register_context_labels_memory_bytes())
             .saturating_add(Self::estimate_scope_chain_bytes(&self.scope_chain.frames))
             .saturating_add(self.realm_dynamic_globals_memory_bytes())
+            .saturating_add(self.generated_function_realm_globals_memory_bytes())
             .saturating_add(self.closures_memory_bytes())
             .saturating_add(self.call_stack_memory_bytes())
             .saturating_add(Self::saturating_sum(
@@ -65168,16 +65447,19 @@ impl InterpreterCore {
         previous_closure_bytes: u64,
         previous_call_stack_bytes: u64,
         previous_realm_global_bytes: u64,
+        previous_generated_realm_global_bytes: u64,
     ) -> Result<u64, InterpreterError> {
         self.apply_memory_component_delta(
             previous_scope_bytes
                 .saturating_add(previous_closure_bytes)
                 .saturating_add(previous_call_stack_bytes)
-                .saturating_add(previous_realm_global_bytes),
+                .saturating_add(previous_realm_global_bytes)
+                .saturating_add(previous_generated_realm_global_bytes),
             self.scope_chain_memory_bytes()
                 .saturating_add(self.closures_memory_bytes())
                 .saturating_add(self.call_stack_memory_bytes())
-                .saturating_add(self.realm_dynamic_globals_memory_bytes()),
+                .saturating_add(self.realm_dynamic_globals_memory_bytes())
+                .saturating_add(self.generated_function_realm_globals_memory_bytes()),
         )
     }
 
@@ -90268,6 +90550,361 @@ mod function_prototype_call_apply_tests_current {
     }
 
     #[test]
+    fn generated_function_realm_registry_is_sanitized_shared_and_budget_atomic_bd_fw7zd_8_3() {
+        let fixture = || {
+            let mut core = test_interpreter();
+            core.sync_estimated_memory_bytes()
+                .expect("generated realm fixture baseline");
+            core
+        };
+
+        let mut probe = fixture();
+        let probe_baseline = probe.estimated_memory_bytes();
+        let probe_heap_len = probe.heap.len();
+        probe
+            .ensure_generated_function_realm_globals()
+            .expect("initialize generated realm without a ceiling");
+        let retained_delta = probe
+            .estimated_memory_bytes()
+            .saturating_sub(probe_baseline);
+        let allocated_objects = probe.heap.len().saturating_sub(probe_heap_len);
+        assert!(retained_delta > 0);
+        assert!(allocated_objects > 0);
+
+        let globals = probe
+            .generated_function_realm_globals
+            .as_ref()
+            .expect("generated realm registry");
+        for safe_name in [
+            "Date",
+            "Math",
+            "Promise",
+            "clearImmediate",
+            "clearInterval",
+            "clearTimeout",
+            "console",
+            "performance",
+            "queueMicrotask",
+            "setImmediate",
+            "setInterval",
+            "setTimeout",
+        ] {
+            assert!(
+                globals.contains_key(safe_name),
+                "missing safe global {safe_name}"
+            );
+        }
+        for forbidden_name in ["Function", "process", "require"] {
+            assert!(
+                !globals.contains_key(forbidden_name),
+                "ambient or recursive authority leaked through {forbidden_name}"
+            );
+        }
+        assert_eq!(globals.len(), 12);
+
+        let first_scope = probe
+            .generated_function_realm_scope_frame()
+            .expect("first generated realm frame");
+        let second_scope = probe
+            .generated_function_realm_scope_frame()
+            .expect("second generated realm frame");
+        assert_eq!(
+            InterpreterCore::estimate_scope_frame_bytes(&first_scope),
+            InterpreterCore::estimate_generated_function_realm_scope_bytes(globals)
+        );
+        for name in globals.keys() {
+            let canonical = globals.get(name).expect("canonical safe binding");
+            let first = first_scope.get(name).expect("first safe binding");
+            let second = second_scope.get(name).expect("second safe binding");
+            assert!(
+                Rc::ptr_eq(&first.state, &canonical.state),
+                "first generated invocation detached the canonical {name} binding cell"
+            );
+            assert!(
+                Rc::ptr_eq(&second.state, &canonical.state),
+                "second generated invocation detached the canonical {name} binding cell"
+            );
+        }
+        first_scope
+            .get("console")
+            .expect("first console binding")
+            .set_state(Value::Int(99), true)
+            .expect("mutate first invocation binding");
+        assert_eq!(
+            second_scope
+                .get("console")
+                .expect("second console binding")
+                .value()
+                .expect("read second invocation binding"),
+            Value::Int(99)
+        );
+        assert_eq!(
+            globals
+                .get("console")
+                .expect("canonical console binding")
+                .value()
+                .expect("read canonical binding"),
+            Value::Int(99)
+        );
+        assert_eq!(
+            probe.estimated_memory_bytes(),
+            probe.recompute_estimated_memory_bytes()
+        );
+
+        let mut one_short = fixture();
+        let one_short_baseline = one_short.estimated_memory_bytes();
+        let one_short_heap_len = one_short.heap.len();
+        one_short.config.max_total_memory_bytes = one_short_baseline
+            .saturating_add(retained_delta)
+            .saturating_sub(1);
+        assert!(matches!(
+            one_short.ensure_generated_function_realm_globals(),
+            Err(InterpreterError::MemoryBudgetExceeded { .. })
+        ));
+        assert!(one_short.generated_function_realm_globals.is_none());
+        assert_eq!(one_short.heap.len(), one_short_heap_len);
+        assert_eq!(one_short.estimated_memory_bytes(), one_short_baseline);
+        assert_eq!(
+            one_short.estimated_memory_bytes(),
+            one_short.recompute_estimated_memory_bytes()
+        );
+
+        let mut exact = fixture();
+        let exact_baseline = exact.estimated_memory_bytes();
+        let exact_heap_len = exact.heap.len();
+        exact.config.max_total_memory_bytes = exact_baseline.saturating_add(retained_delta);
+        exact
+            .ensure_generated_function_realm_globals()
+            .expect("generated realm fits exact retained ceiling");
+        assert_eq!(
+            exact.heap.len().saturating_sub(exact_heap_len),
+            allocated_objects
+        );
+        assert_eq!(
+            exact.estimated_memory_bytes(),
+            exact_baseline.saturating_add(retained_delta)
+        );
+        assert_eq!(
+            exact.estimated_memory_bytes(),
+            exact.recompute_estimated_memory_bytes()
+        );
+    }
+
+    #[test]
+    fn generated_function_sloppy_globals_persist_and_roll_back_atomically_bd_fw7zd_8_3() {
+        let artifact_handle = GeneratedFunctionArtifactHandle {
+            owner_program_id: ContentHash::compute(b"generated-realm-owner"),
+            artifact_id: ContentHash::compute(b"generated-realm-artifact"),
+        };
+
+        let mut core = test_interpreter();
+        core.ensure_generated_function_realm_globals()
+            .expect("initialize persistent generated realm");
+        let first_frame = core
+            .generated_function_realm_scope_frame()
+            .expect("first generated realm frame");
+        let stale_frame = core
+            .generated_function_realm_scope_frame()
+            .expect("pre-insertion generated realm frame");
+        let previous_scope_bytes = core.scope_chain_memory_bytes();
+        core.scope_chain.frames = vec![first_frame];
+        core.apply_scope_chain_memory_delta(previous_scope_bytes)
+            .expect("activate first generated realm frame");
+        core.active_generated_function_artifact = Some(artifact_handle);
+
+        core.put_runtime_name("generatedOnly", Value::Int(17), false)
+            .expect("create generated-realm sloppy global");
+        let canonical = core
+            .generated_function_realm_globals
+            .as_ref()
+            .and_then(|globals| globals.get("generatedOnly"))
+            .cloned()
+            .expect("canonical generated sloppy global");
+        let active = core.scope_chain.frames[0]
+            .get("generatedOnly")
+            .expect("active generated sloppy global");
+        assert!(Rc::ptr_eq(&canonical.state, &active.state));
+
+        let previous_scope_bytes = core.scope_chain_memory_bytes();
+        core.scope_chain.frames = vec![stale_frame];
+        core.apply_scope_chain_memory_delta(previous_scope_bytes)
+            .expect("restore pre-insertion generated invocation frame");
+        assert!(
+            core.scope_chain.frames[0].get("generatedOnly").is_none(),
+            "the stale structural frame must exercise canonical fallback"
+        );
+        assert_eq!(
+            core.load_runtime_name("generatedOnly", false)
+                .expect("load persisted generated sloppy global"),
+            Value::Int(17)
+        );
+        let reference_token = core
+            .capture_runtime_name_reference("generatedOnly")
+            .expect("capture canonical generated global Reference");
+        core.put_runtime_name_with_status(
+            "generatedOnly",
+            Value::str("persisted"),
+            true,
+            reference_token,
+        )
+        .expect("replace persisted generated sloppy global through captured Reference");
+        assert_eq!(
+            canonical.value().expect("canonical replacement value"),
+            Value::str("persisted")
+        );
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+
+        let mut refused = test_interpreter();
+        refused
+            .ensure_generated_function_realm_globals()
+            .expect("initialize refusal generated realm");
+        let refusal_frame = refused
+            .generated_function_realm_scope_frame()
+            .expect("refusal generated realm frame");
+        let previous_scope_bytes = refused.scope_chain_memory_bytes();
+        refused.scope_chain.frames = vec![refusal_frame];
+        refused
+            .apply_scope_chain_memory_delta(previous_scope_bytes)
+            .expect("activate refusal generated realm frame");
+        refused.active_generated_function_artifact = Some(artifact_handle);
+        let refusal_baseline = refused.estimated_memory_bytes();
+        refused.config.max_total_memory_bytes = refusal_baseline;
+        assert!(matches!(
+            refused.put_runtime_name("refusedGeneratedOnly", Value::Int(1), false),
+            Err(InterpreterError::MemoryBudgetExceeded { .. })
+        ));
+        assert!(
+            !refused.scope_chain.frames[0]
+                .bindings
+                .contains_key("refusedGeneratedOnly")
+        );
+        assert!(
+            !refused
+                .generated_function_realm_globals
+                .as_ref()
+                .expect("refusal canonical realm")
+                .contains_key("refusedGeneratedOnly")
+        );
+        assert_eq!(refused.estimated_memory_bytes(), refusal_baseline);
+        assert_eq!(
+            refused.estimated_memory_bytes(),
+            refused.recompute_estimated_memory_bytes()
+        );
+    }
+
+    #[test]
+    fn generated_function_handles_do_not_alias_across_realm_rotation_bd_fw7zd_8_3() {
+        let mut owner = test_module_with_functions(Vec::new(), Vec::new());
+        owner.header.source_label = "generated-realm-rotation-owner.mjs".to_string();
+        let generated = test_module_with_functions(
+            vec![
+                Ir3Instruction::LoadInt { dst: 0, value: 7 },
+                Ir3Instruction::Return { value: 0 },
+            ],
+            vec![Ir3FunctionDesc {
+                entry: 0,
+                arity: 0,
+                frame_size: 1,
+                name: Some("generated_realm_rotation_body".to_string()),
+                is_generator: false,
+                rest_param_index: None,
+            }],
+        );
+        let provenance = InterpreterCore::derive_generated_function_provenance(
+            &owner.header.source_label,
+            "",
+            "return 7;",
+        );
+        let mut core = test_interpreter();
+        core.ensure_module_record(&owner, &owner.header.source_label)
+            .expect("retain generated realm-rotation owner");
+        let owner_program = Arc::clone(
+            core.module_state.modules[&owner.header.source_label]
+                .compiled_module
+                .as_ref()
+                .expect("generated realm-rotation owner program"),
+        );
+        let first = core
+            .retain_generated_function_artifact(
+                owner.content_hash(),
+                owner.header.source_label.clone(),
+                Arc::clone(&owner_program),
+                provenance.clone(),
+                generated.clone(),
+                0,
+            )
+            .expect("retain first-realm generated artifact");
+        let (owner_program_id, first_artifact_id) =
+            InterpreterCore::parse_generated_function_handle(&first)
+                .expect("parse first-realm handle");
+        let first_generation = core.generated_function_realm_generation;
+        assert_eq!(
+            core.module_state.generated_function_stores[&owner_program_id].realm_generation,
+            first_generation
+        );
+        core.put_realm_runtime_name("realmPoison", Value::Int(99))
+            .expect("seed replacement-bound realm global");
+
+        core.rotate_generated_function_realm()
+            .expect("rotate generated-function realm");
+        assert_eq!(
+            core.generated_function_realm_generation,
+            first_generation + 1
+        );
+        assert!(core.module_state.generated_function_stores.is_empty());
+        assert_eq!(core.module_state.retained_generated_function_bytes, 0);
+        assert!(core.generated_function_realm_globals.is_none());
+        assert!(core.realm_dynamic_globals.is_empty());
+        assert!(matches!(
+            core.resolve_generated_function_artifact(owner_program_id, first_artifact_id),
+            Err(InterpreterError::ModuleEvaluationFailed { ref reason, .. })
+                if reason.contains("owner store is not retained")
+        ));
+
+        let second = core
+            .retain_generated_function_artifact(
+                owner.content_hash(),
+                owner.header.source_label.clone(),
+                owner_program,
+                provenance,
+                generated,
+                0,
+            )
+            .expect("retain identical source in replacement realm");
+        let (_, second_artifact_id) = InterpreterCore::parse_generated_function_handle(&second)
+            .expect("parse replacement-realm handle");
+        assert_ne!(first_artifact_id, second_artifact_id);
+        assert!(matches!(
+            core.call_generated_function_artifact(
+                &first,
+                RegRange { start: 0, count: 0 },
+                None,
+                None,
+            ),
+            Err(InterpreterError::ModuleEvaluationFailed { ref reason, .. })
+                if reason.contains("is not retained by its owner")
+        ));
+        assert_eq!(
+            core.call_generated_function_artifact(
+                &second,
+                RegRange { start: 0, count: 0 },
+                None,
+                None,
+            )
+            .expect("replacement-realm artifact remains callable")
+            .0,
+            Value::Int(7)
+        );
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+    }
+
+    #[test]
     fn generated_function_compilation_scratch_preflights_and_releases_bd_fw7zd_8_2() {
         let mut owner = test_module_with_functions(Vec::new(), Vec::new());
         owner.header.source_label = "generated-compilation-owner.mjs".to_string();
@@ -90276,6 +90913,8 @@ mod function_prototype_call_apply_tests_current {
             let mut core = test_interpreter();
             core.ensure_module_record(&owner, &owner.header.source_label)
                 .expect("retain generated compilation owner");
+            core.ensure_generated_function_realm_globals()
+                .expect("initialize generated compilation realm");
             core.write_reg(0, Value::str(oversized_body.clone()))
                 .expect("seed generated compilation body");
             core.sync_estimated_memory_bytes()
@@ -90335,6 +90974,9 @@ mod function_prototype_call_apply_tests_current {
             .ensure_module_record(&owner, &owner.header.source_label)
             .expect("retain generated parse-failure owner");
         parse_failure
+            .ensure_generated_function_realm_globals()
+            .expect("initialize generated parse-failure realm");
+        parse_failure
             .write_reg(0, Value::str("const x;"))
             .expect("seed invalid generated source");
         parse_failure
@@ -90389,6 +91031,8 @@ mod function_prototype_call_apply_tests_current {
             let mut core = test_interpreter();
             core.ensure_module_record(&owner, &owner.header.source_label)
                 .expect("retain generated budget owner");
+            core.ensure_generated_function_realm_globals()
+                .expect("initialize generated budget realm");
             core.sync_estimated_memory_bytes()
                 .expect("generated budget fixture baseline");
             (core, owner, generated, provenance)

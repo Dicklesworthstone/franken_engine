@@ -17978,15 +17978,26 @@ impl InterpreterCore {
         {
             return Ok(());
         }
+        self.preflight_writable_tick(object_id)?;
         let sequence = self.next_writable_tick_sequence;
-        self.next_writable_tick_sequence =
-            sequence
+        self.next_writable_tick_sequence = sequence + 1;
+        if let Some(state) = self.writable_streams.get_mut(&object_id) {
+            state.tick_sequence = Some(sequence);
+        }
+        Ok(())
+    }
+
+    fn preflight_writable_tick(&self, object_id: ObjectId) -> Result<(), InterpreterError> {
+        if self
+            .writable_streams
+            .get(&object_id)
+            .is_some_and(|state| state.tick_sequence.is_none())
+        {
+            self.next_writable_tick_sequence
                 .checked_add(1)
                 .ok_or_else(|| InterpreterError::InternalError {
                     details: "Writable tick sequence space exhausted".to_string(),
                 })?;
-        if let Some(state) = self.writable_streams.get_mut(&object_id) {
-            state.tick_sequence = Some(sequence);
         }
         Ok(())
     }
@@ -18069,14 +18080,62 @@ impl InterpreterCore {
     }
 
     fn allocate_writable_completion_token(&mut self) -> Result<u32, InterpreterError> {
+        self.preflight_writable_completion_tokens(1)?;
         let token = self.next_writable_completion_token;
-        self.next_writable_completion_token =
-            token
-                .checked_add(1)
-                .ok_or_else(|| InterpreterError::InternalError {
-                    details: "Writable completion token space exhausted".to_string(),
-                })?;
+        self.next_writable_completion_token = token + 1;
         Ok(token)
+    }
+
+    /// Check that the current completion-token frontier can advance by every
+    /// token this public Writable transaction may publish before the caller
+    /// retains chunks, callbacks, or terminal state.
+    /// `u32::MAX` is deliberately never issued: advancing past it would reuse a
+    /// process-lifetime authentication nonce after wraparound.
+    fn preflight_writable_completion_tokens(&self, required: u32) -> Result<(), InterpreterError> {
+        self.next_writable_completion_token
+            .checked_add(required)
+            .ok_or_else(|| InterpreterError::InternalError {
+                details: "Writable completion token space exhausted".to_string(),
+            })?;
+        Ok(())
+    }
+
+    /// Admit a public transaction against every token already promised to a
+    /// queued write or final callback. Tokens are assigned only when the
+    /// callback becomes active, so a raw frontier check would let multiple
+    /// corked streams overbook the final nonce.
+    fn preflight_writable_completion_reservations(
+        &self,
+        additional: u32,
+    ) -> Result<(), InterpreterError> {
+        let reserved = self.writable_streams.values().fold(0u64, |total, state| {
+            let pending_writes = if state.write_callback.is_some() {
+                u64::try_from(
+                    state
+                        .writes
+                        .iter()
+                        .filter(|record| record.status == WritableWriteStatus::Pending)
+                        .count(),
+                )
+                .unwrap_or(u64::MAX)
+            } else {
+                0
+            };
+            let pending_final = u64::from(
+                state.end_requested && state.final_status == WritableFinalStatus::NotStarted,
+            );
+            total
+                .saturating_add(pending_writes)
+                .saturating_add(pending_final)
+        });
+        let required = reserved.saturating_add(u64::from(additional));
+        let available = u64::from(u32::MAX - self.next_writable_completion_token);
+        if required > available {
+            return Err(InterpreterError::InternalError {
+                details: "Writable completion token space exhausted".to_string(),
+            });
+        }
+        Ok(())
     }
 
     fn writable_chunk_units(
@@ -18489,6 +18548,17 @@ impl InterpreterCore {
             }
             return Ok(Value::Bool(false));
         }
+        // A live write with an implementation needs an authenticated
+        // completion when it enters `drive_writable`, immediately or after an
+        // earlier write/cork is released. Refuse before `writable_enqueue`
+        // retains the record when the process-lifetime nonce space is already
+        // exhausted. Preserve the historical missing-_write path, which
+        // deliberately retains a Pending record for deterministic retry.
+        if self.writable_streams.get(&object_id).is_some_and(|state| {
+            !state.end_requested && !state.destroy_requested && state.write_callback.is_some()
+        }) {
+            self.preflight_writable_completion_reservations(1)?;
+        }
         let below_high_water_mark = self.writable_enqueue(object_id, value, label, callback)?;
         self.drive_writable(object_id, module)?;
         Ok(Value::Bool(below_high_water_mark))
@@ -18548,6 +18618,16 @@ impl InterpreterCore {
             self.detach_readable_pipes_to_destination(object_id);
             return Ok(Value::Object(object_id));
         }
+        let required_completion_tokens = self
+            .writable_streams
+            .get(&object_id)
+            .filter(|state| !state.end_requested && !state.destroy_requested)
+            .map_or(0, |state| {
+                let write_token = u32::from(chunk.is_some() && state.write_callback.is_some());
+                let final_token = u32::from(state.final_status == WritableFinalStatus::NotStarted);
+                write_token.saturating_add(final_token)
+            });
+        self.preflight_writable_completion_reservations(required_completion_tokens)?;
         if let Some(value) = chunk {
             self.append_writable_write(object_id, value, args_label, None, callback, true)?;
         } else {
@@ -20087,21 +20167,17 @@ impl InterpreterCore {
                 details: "scheduled terminal Writable tick lost its tombstone".to_string(),
             });
         }
+        if self
+            .writable_terminal_states
+            .get(&object_id)
+            .is_some_and(|state| state.callbacks.len() > 1)
+        {
+            self.schedule_writable_terminal_tick(object_id)?;
+        }
         let Some((record, mut invocation_charge)) = self.take_writable_terminal_callback(object_id)
         else {
             return Ok(());
         };
-        if self
-            .writable_terminal_states
-            .get(&object_id)
-            .is_some_and(|state| !state.callbacks.is_empty())
-        {
-            if let Err(error) = self.schedule_writable_terminal_tick(object_id) {
-                let remaining_charge = invocation_charge;
-                self.release_writable_in_flight_charge(&mut invocation_charge, remaining_charge);
-                return Err(error);
-            }
-        }
         let prepared = (|| -> Result<(Value, Label, Label), InterpreterError> {
             let lifecycle_label = self.clone_charged_writable_terminal_lifecycle_label(
                 object_id,
@@ -20244,6 +20320,10 @@ impl InterpreterCore {
             };
             if phase == WritableTickPhase::Callbacks {
                 if completed_front {
+                    // Reserve the successor before removing the completed
+                    // record. Sequence exhaustion must leave the FIFO and its
+                    // accounting byte-for-byte retryable.
+                    self.schedule_writable_tick(object_id)?;
                     let (record, released) = {
                         let state = self
                             .writable_streams
@@ -20261,14 +20341,6 @@ impl InterpreterCore {
                         released,
                         MEMORY_ESTIMATE_WRITABLE_WRITE_NODE_BYTES,
                     );
-                    if let Err(error) = self.schedule_writable_tick(object_id) {
-                        let remaining_charge = invocation_charge;
-                        self.release_writable_in_flight_charge(
-                            &mut invocation_charge,
-                            remaining_charge,
-                        );
-                        return Err(error);
-                    }
                     let WritableWriteRecord {
                         value,
                         label,
@@ -20329,6 +20401,7 @@ impl InterpreterCore {
                     );
                 }
                 if writes_empty && need_drain && terminal_error_none {
+                    self.schedule_writable_tick(object_id)?;
                     let label = self
                         .writable_streams
                         .get(&object_id)
@@ -20340,7 +20413,6 @@ impl InterpreterCore {
                         .expect("Writable drain state survived label clone")
                         .need_drain = false;
                     self.mirror_writable_bool(object_id, "writableNeedDrain", false);
-                    self.schedule_writable_tick(object_id)?;
                     self.emit_event_listener_records(
                         module,
                         object_id,
@@ -20380,11 +20452,22 @@ impl InterpreterCore {
 
             if phase == WritableTickPhase::Finish {
                 if end_callback_batch_remaining > 0 {
+                    self.preflight_writable_tick(object_id)?;
                     let mut phase_snapshot_charge = 0;
-                    let phase_lifecycle_label = self.clone_charged_writable_lifecycle_label(
+                    let phase_lifecycle_label = match self.clone_charged_writable_lifecycle_label(
                         object_id,
                         &mut phase_snapshot_charge,
-                    )?;
+                    ) {
+                        Ok(label) => label,
+                        Err(error) => {
+                            self.release_all_writable_in_flight_charge(&mut phase_snapshot_charge);
+                            return Err(error);
+                        }
+                    };
+                    // The snapshot is fallible but non-mutating. Commit the
+                    // preflighted successor only once every prerequisite is
+                    // resident, immediately before consuming the callback FIFO.
+                    self.schedule_writable_tick(object_id)?;
                     let mut first_callback_error = None;
                     let mut first_callback_error_charge = 0;
                     while self
@@ -20459,14 +20542,6 @@ impl InterpreterCore {
                             WritableTickPhase::Close
                         };
                     }
-                    if let Err(error) = self.schedule_writable_tick(object_id) {
-                        self.take_first_writable_callback_error(
-                            &mut first_callback_error,
-                            &mut first_callback_error_charge,
-                        );
-                        self.release_all_writable_in_flight_charge(&mut phase_snapshot_charge);
-                        return Err(error);
-                    }
                     self.mirror_writable_bool(object_id, "writableFinished", true);
                     let mut event_charge = 0;
                     let lifecycle_label = match self
@@ -20500,6 +20575,7 @@ impl InterpreterCore {
                     }
                     return finish_result;
                 }
+                self.schedule_writable_tick(object_id)?;
                 if let Some(state) = self.writable_streams.get_mut(&object_id) {
                     state.tick_phase = if state.terminal_error_origin.is_some() {
                         WritableTickPhase::Error
@@ -20507,7 +20583,6 @@ impl InterpreterCore {
                         WritableTickPhase::Close
                     };
                 }
-                self.schedule_writable_tick(object_id)?;
                 self.mirror_writable_bool(object_id, "writableFinished", true);
                 let mut event_charge = 0;
                 let lifecycle_label =
@@ -20524,11 +20599,19 @@ impl InterpreterCore {
 
             if phase == WritableTickPhase::Error {
                 if finished_end_callback_batch_remaining > 0 {
+                    self.preflight_writable_tick(object_id)?;
                     let mut phase_snapshot_charge = 0;
-                    let phase_lifecycle_label = self.clone_charged_writable_lifecycle_label(
+                    let phase_lifecycle_label = match self.clone_charged_writable_lifecycle_label(
                         object_id,
                         &mut phase_snapshot_charge,
-                    )?;
+                    ) {
+                        Ok(label) => label,
+                        Err(error) => {
+                            self.release_all_writable_in_flight_charge(&mut phase_snapshot_charge);
+                            return Err(error);
+                        }
+                    };
+                    self.schedule_writable_tick(object_id)?;
                     let mut first_callback_error = None;
                     let mut first_callback_error_charge = 0;
                     while self
@@ -20606,14 +20689,6 @@ impl InterpreterCore {
                             return Err(memory_error);
                         }
                     }
-                    if let Err(error) = self.schedule_writable_tick(object_id) {
-                        self.take_first_writable_callback_error(
-                            &mut first_callback_error,
-                            &mut first_callback_error_charge,
-                        );
-                        self.release_all_writable_in_flight_charge(&mut phase_snapshot_charge);
-                        return Err(error);
-                    }
                     let result = match self.take_first_writable_callback_error(
                         &mut first_callback_error,
                         &mut first_callback_error_charge,
@@ -20630,6 +20705,7 @@ impl InterpreterCore {
                     Some(WritableErrorOrigin::Write | WritableErrorOrigin::Destroy)
                 ) && end_callback_batch_remaining > 0
                 {
+                    self.preflight_writable_tick(object_id)?;
                     let mut phase_snapshot_charge = 0;
                     let phase_snapshot = (|| {
                         let lifecycle_label = self.clone_charged_writable_lifecycle_label(
@@ -20649,6 +20725,7 @@ impl InterpreterCore {
                             return Err(error);
                         }
                     };
+                    self.schedule_writable_tick(object_id)?;
                     let mut first_callback_error = None;
                     let mut first_callback_error_charge = 0;
                     while self
@@ -20735,14 +20812,6 @@ impl InterpreterCore {
                             return Err(memory_error);
                         }
                     }
-                    if let Err(error) = self.schedule_writable_tick(object_id) {
-                        self.take_first_writable_callback_error(
-                            &mut first_callback_error,
-                            &mut first_callback_error_charge,
-                        );
-                        self.release_all_writable_in_flight_charge(&mut phase_snapshot_charge);
-                        return Err(error);
-                    }
                     let result = match self.take_first_writable_callback_error(
                         &mut first_callback_error,
                         &mut first_callback_error_charge,
@@ -20755,11 +20824,18 @@ impl InterpreterCore {
                     self.release_all_writable_in_flight_charge(&mut phase_snapshot_charge);
                     return result;
                 }
-                if let Some(state) = self.writable_streams.get_mut(&object_id) {
-                    state.tick_phase = WritableTickPhase::Close;
-                    state.terminal_error_emitted = true;
-                }
-                let error_result = if !terminal_error_emitted
+                self.preflight_writable_tick(object_id)?;
+                let error_has_handler = self
+                    .event_listeners
+                    .get(&object_id)
+                    .and_then(|by_event| by_event.get("error"))
+                    .is_some_and(|records| !records.is_empty())
+                    || self
+                        .event_promise_waiters
+                        .get(&object_id)
+                        .and_then(|by_event| by_event.get("error"))
+                        .is_some_and(|records| !records.is_empty());
+                let prepared_error_event = if !terminal_error_emitted
                     && self
                         .writable_streams
                         .get(&object_id)
@@ -20790,27 +20866,48 @@ impl InterpreterCore {
                             return Err(error);
                         }
                     };
-                    self.emit_charged_writable_event_listener_records(
-                        module,
-                        object_id,
-                        "error",
-                        vec![error],
-                        emission_label,
-                        event_charge,
-                    )
+                    Some((error, emission_label, event_charge))
                 } else {
-                    Ok(())
+                    None
                 };
-                error_result?;
-                // An unhandled `error` aborts the runtime checkpoint. Do not
-                // enqueue close or any later lifecycle side effect unless the
-                // error emission was actually handled.
+                // Reserve close before publishing the error phase. If the
+                // error is unhandled, cancel visibility of that reservation so
+                // a reused core cannot later emit close after the fatal edge.
                 self.schedule_writable_tick(object_id)?;
+                if let Some(state) = self.writable_streams.get_mut(&object_id) {
+                    state.tick_phase = WritableTickPhase::Close;
+                    state.terminal_error_emitted = true;
+                }
+                let error_result =
+                    if let Some((error, emission_label, event_charge)) = prepared_error_event {
+                        self.emit_charged_writable_event_listener_records(
+                            module,
+                            object_id,
+                            "error",
+                            vec![error],
+                            emission_label,
+                            event_charge,
+                        )
+                    } else {
+                        Ok(())
+                    };
+                // A genuinely unhandled `error` aborts the runtime checkpoint.
+                // A registered handler that throws is instead a new guest
+                // failure: keep the reserved close turn, matching every other
+                // lifecycle listener failure.
+                if error_result.is_err()
+                    && !error_has_handler
+                    && let Some(state) = self.writable_streams.get_mut(&object_id)
+                {
+                    state.tick_sequence = None;
+                }
+                error_result?;
                 return Ok(());
             }
 
             if phase == WritableTickPhase::Close {
                 if terminal_error_origin.is_none() && !end_callbacks_empty {
+                    self.schedule_writable_tick(object_id)?;
                     let Some((end_callback, mut invocation_charge)) =
                         self.take_writable_end_callback(object_id)
                     else {
@@ -20818,14 +20915,6 @@ impl InterpreterCore {
                             details: "Writable late callback FIFO became empty".to_string(),
                         });
                     };
-                    if let Err(error) = self.schedule_writable_tick(object_id) {
-                        let remaining_charge = invocation_charge;
-                        self.release_writable_in_flight_charge(
-                            &mut invocation_charge,
-                            remaining_charge,
-                        );
-                        return Err(error);
-                    }
                     let prepared = if self
                         .writable_streams
                         .get(&object_id)
@@ -20862,10 +20951,10 @@ impl InterpreterCore {
                         invocation_charge,
                     );
                 }
+                self.schedule_writable_tick(object_id)?;
                 if let Some(state) = self.writable_streams.get_mut(&object_id) {
                     state.tick_phase = WritableTickPhase::Release;
                 }
-                self.schedule_writable_tick(object_id)?;
                 if self.readable_from_streams.contains_key(&object_id) {
                     // The readable half performs the sole shared close after
                     // its EOF turn; keep compatibility mirrors open until it
@@ -20891,17 +20980,12 @@ impl InterpreterCore {
                 );
             }
 
+            if !end_callbacks_empty {
+                self.schedule_writable_tick(object_id)?;
+            }
             if let Some((end_callback, mut invocation_charge)) =
                 self.take_writable_end_callback(object_id)
             {
-                if let Err(error) = self.schedule_writable_tick(object_id) {
-                    let remaining_charge = invocation_charge;
-                    self.release_writable_in_flight_charge(
-                        &mut invocation_charge,
-                        remaining_charge,
-                    );
-                    return Err(error);
-                }
                 let prepared = match terminal_error_origin {
                     None => self.charged_writable_synthesized_error_inputs(
                         object_id,
@@ -21235,6 +21319,61 @@ impl InterpreterCore {
         }
         emission?;
         Ok(())
+    }
+
+    /// Release only the failed Readable's engine-owned lifecycle state before
+    /// an asynchronous listener exception escapes the evaluation boundary.
+    ///
+    /// `finish_readable_pump_after_emission` admits the successor before guest
+    /// code can fail. Returning that failure directly from the event-loop turn
+    /// used to strand the successor, queue, listener table, and pipe edges.
+    /// Continuing the ordinary event loop would be worse: unrelated callbacks
+    /// could run after an uncaught exception. Cancel just this Readable's
+    /// successor and terminalize it without invoking any more guest listeners.
+    /// The original exception remains the result of the failed turn (bd-tc2iu).
+    fn abort_readable_after_async_failure(&mut self, object_id: ObjectId) {
+        while let Some(registration) = self
+            .pending_readable_from_pumps
+            .iter()
+            .find_map(|(registration, pending)| (*pending == object_id).then_some(*registration))
+        {
+            self.pending_readable_from_pumps.remove(&registration);
+            let previous_promise_bytes = self.promise_runtime_memory_bytes();
+            let _ = self.event_loop.cancel_registration(registration);
+            let released_promise_bytes =
+                previous_promise_bytes.saturating_sub(self.promise_runtime_memory_bytes());
+            self.estimated_memory_bytes = self
+                .estimated_memory_bytes
+                .saturating_sub(released_promise_bytes);
+        }
+        self.release_readable_pump_reservation(object_id);
+
+        self.mirror_readable_bool(object_id, "destroyed", true);
+        self.mirror_readable_bool(object_id, "closed", true);
+        self.mirror_readable_bool(object_id, "readable", false);
+        self.detach_current_readable_pipe(object_id);
+        self.clear_event_listeners(object_id, None);
+        self.clear_event_promise_waiters_for_target(object_id);
+
+        let Some(mut state) = self.readable_from_streams.remove(&object_id) else {
+            return;
+        };
+        let state_bytes = Self::estimate_readable_from_state_bytes(&state);
+        let terminal = ReadableTerminalState {
+            lifecycle_label: std::mem::replace(&mut state.lifecycle_label, Label::Public),
+        };
+        let terminal_bytes = Self::estimate_readable_terminal_state_bytes(&terminal);
+        let previous = self.readable_terminal_states.insert(object_id, terminal);
+        debug_assert!(previous.is_none());
+        let previous_terminal_bytes = previous
+            .as_ref()
+            .map(Self::estimate_readable_terminal_state_bytes)
+            .unwrap_or(0);
+        self.estimated_memory_bytes = self
+            .estimated_memory_bytes
+            .saturating_sub(state_bytes)
+            .saturating_sub(previous_terminal_bytes)
+            .saturating_add(terminal_bytes);
     }
 
     /// A `data` observer puts a Readable into flowing mode; a `readable`
@@ -43939,7 +44078,26 @@ impl InterpreterCore {
             let turn_result = self.event_loop.turn();
             let transferred_bytes = self.begin_promise_task_transfer(previous_promise_bytes);
             let mut macrotask_error = None;
+            let mut failed_readable = None;
             if let Some(macrotask) = turn_result.macrotask {
+                let readable_listener_target = (macrotask.source
+                    == crate::promise_model::MacrotaskSource::IoCompletion)
+                    .then(|| {
+                        self.pending_readable_from_pumps
+                            .get(&macrotask.registration_seq)
+                            .copied()
+                    })
+                    .flatten()
+                    .filter(|object_id| {
+                        self.readable_from_streams
+                            .get(object_id)
+                            .is_some_and(|state| {
+                                matches!(
+                                    state.phase,
+                                    ReadableFromPumpPhase::Data | ReadableFromPumpPhase::End
+                                )
+                            })
+                    });
                 let best_effort_timer_like = match macrotask.source {
                     crate::promise_model::MacrotaskSource::Timer => true,
                     crate::promise_model::MacrotaskSource::Immediate => {
@@ -43967,6 +44125,7 @@ impl InterpreterCore {
                                 | InterpreterError::ContainmentActionRequested { .. }
                         )
                     {
+                        failed_readable = readable_listener_target;
                         macrotask_error = Some(err);
                     } else {
                         // Preserve only the historical best-effort timer and
@@ -43980,6 +44139,9 @@ impl InterpreterCore {
             }
             self.finish_promise_task_transfer(transferred_bytes);
             if let Some(error) = macrotask_error {
+                if let Some(object_id) = failed_readable {
+                    self.abort_readable_after_async_failure(object_id);
+                }
                 return Err(error);
             }
 
@@ -81347,12 +81509,19 @@ mod async_runtime_tests_current {
 
         let pending_digits = "8".repeat(256);
         let pending_label_name = "pending-overflow-label".repeat(16);
-        record_overflow_core.pending_exception =
-            Some(Value::BigInt(Arc::from(pending_digits.clone())));
-        record_overflow_core.pending_exception_label = Label::Custom {
-            name: pending_label_name.clone(),
-            level: 5,
-        };
+        record_overflow_core
+            .replace_pending_abrupt_slots(
+                Some((
+                    Value::BigInt(Arc::from(pending_digits.clone())),
+                    Label::Custom {
+                        name: pending_label_name.clone(),
+                        level: 5,
+                    },
+                )),
+                None,
+            )
+            .expect("accounted pending overflow exception");
+        let pending_overflow_bytes = record_overflow_core.estimated_memory_bytes();
         let (pending_error, pending_label, consumes_pending_exception) = record_overflow_core
             .writable_invocation_error_value(
                 &InterpreterError::UncaughtException {
@@ -81394,20 +81563,25 @@ mod async_runtime_tests_current {
         );
         assert_eq!(
             record_overflow_core.estimated_memory_bytes(),
-            record_overflow_bytes
+            pending_overflow_bytes
         );
 
-        for core in [
-            &write_core,
-            &final_core,
-            &refusal_core,
-            &final_refusal_core,
-            &overflow_core,
-            &record_overflow_core,
+        for (name, core) in [
+            ("write", &write_core),
+            ("final", &final_core),
+            ("refusal", &refusal_core),
+            ("final-refusal", &final_refusal_core),
+            ("overflow", &overflow_core),
+            ("record-overflow", &record_overflow_core),
         ] {
             assert_eq!(
                 core.estimated_memory_bytes(),
-                core.recompute_estimated_memory_bytes()
+                core.recompute_estimated_memory_bytes(),
+                "{name}: live={} terminal={} in_flight={} listeners={}",
+                core.writable_streams_memory_bytes(),
+                core.writable_terminal_states_memory_bytes(),
+                core.writable_in_flight_callback_bytes,
+                core.event_listeners_memory_bytes(),
             );
         }
     }
@@ -82949,6 +83123,10 @@ mod async_runtime_tests_current {
                 .map(|(_, label)| label),
             Some(&Label::TopSecret)
         );
+        assert!(
+            core.writable_streams[&writable].tick_sequence.is_some(),
+            "a registered error listener that throws must leave close reserved"
+        );
         assert_eq!(
             core.estimated_memory_bytes(),
             core.recompute_estimated_memory_bytes()
@@ -84279,6 +84457,517 @@ mod async_runtime_tests_current {
         assert_eq!(
             core.writable_streams[&writable].writes[0].status,
             WritableWriteStatus::Pending
+        );
+    }
+
+    #[test]
+    fn writable_public_token_exhaustion_refuses_before_state_mutation_bd_o2xvz() {
+        let module = test_module_with_functions(
+            vec![
+                Ir3Instruction::LoadUndefined { dst: 0 },
+                Ir3Instruction::Return { value: 0 },
+            ],
+            vec![Ir3FunctionDesc {
+                entry: 0,
+                arity: 3,
+                frame_size: 4,
+                name: Some("pending_write".to_string()),
+                is_generator: false,
+                rest_param_index: None,
+            }],
+        );
+        let mut write_core = test_interpreter();
+        let write_options = write_core
+            .alloc_object_with_properties(&[("write", Value::Function(0))])
+            .expect("Writable write options");
+        write_core
+            .write_reg(0, Value::Object(write_options))
+            .expect("Writable options register");
+        let Value::Object(write_stream) = write_core
+            .construct_stream_writable(RegRange { start: 0, count: 1 })
+            .expect("Writable with write implementation")
+        else {
+            panic!("Writable constructor must return an object");
+        };
+        write_core
+            .write_reg_with_label(1, Value::str("refused"), Label::Secret)
+            .expect("write chunk");
+        write_core.next_writable_completion_token = u32::MAX;
+        let write_state_before = format!("{:?}", write_core.writable_streams[&write_stream]);
+        let write_mirror_before =
+            write_core.fs_object_property(&Value::Object(write_stream), "writableLength");
+        let write_bytes_before = write_core.estimated_memory_bytes();
+
+        assert!(matches!(
+            write_core.writable_write(
+                &module,
+                Value::Object(write_stream),
+                RegRange { start: 1, count: 1 },
+            ),
+            Err(InterpreterError::InternalError { details })
+                if details == "Writable completion token space exhausted"
+        ));
+        assert_eq!(
+            format!("{:?}", write_core.writable_streams[&write_stream]),
+            write_state_before
+        );
+        assert_eq!(
+            write_core.fs_object_property(&Value::Object(write_stream), "writableLength"),
+            write_mirror_before
+        );
+        assert_eq!(write_core.next_writable_completion_token, u32::MAX);
+        assert_eq!(write_core.estimated_memory_bytes(), write_bytes_before);
+        assert_eq!(
+            write_core.estimated_memory_bytes(),
+            write_core.recompute_estimated_memory_bytes()
+        );
+
+        write_core
+            .writable_streams
+            .get_mut(&write_stream)
+            .expect("live Writable after token refusal")
+            .end_requested = true;
+        let ended_state_before = format!("{:?}", write_core.writable_streams[&write_stream]);
+        assert!(matches!(
+            write_core.writable_write(
+                &module,
+                Value::Object(write_stream),
+                RegRange { start: 1, count: 1 },
+            ),
+            Err(InterpreterError::TypeError { got, .. }) if got == "write after end"
+        ));
+        assert_eq!(
+            format!("{:?}", write_core.writable_streams[&write_stream]),
+            ended_state_before,
+            "semantic write-after-end refusal must precede token preflight"
+        );
+        assert_eq!(write_core.next_writable_completion_token, u32::MAX);
+        assert_eq!(
+            write_core.estimated_memory_bytes(),
+            write_core.recompute_estimated_memory_bytes()
+        );
+
+        let mut end_core = test_interpreter();
+        let final_options = end_core
+            .alloc_object_with_properties(&[("final", Value::Function(0))])
+            .expect("Writable final options");
+        end_core
+            .write_reg(0, Value::Object(final_options))
+            .expect("Writable options register");
+        let Value::Object(end_stream) = end_core
+            .construct_stream_writable(RegRange { start: 0, count: 1 })
+            .expect("Writable with final implementation")
+        else {
+            panic!("Writable constructor must return an object");
+        };
+        end_core.next_writable_completion_token = u32::MAX;
+        let end_state_before = format!("{:?}", end_core.writable_streams[&end_stream]);
+        let end_heap_before = serde_json::to_string(&end_core.heap[end_stream.0 as usize])
+            .expect("serialize Writable mirrors");
+        let end_bytes_before = end_core.estimated_memory_bytes();
+
+        assert!(matches!(
+            end_core.writable_end(
+                &module,
+                Value::Object(end_stream),
+                RegRange { start: 1, count: 0 },
+            ),
+            Err(InterpreterError::InternalError { details })
+                if details == "Writable completion token space exhausted"
+        ));
+        assert_eq!(
+            format!("{:?}", end_core.writable_streams[&end_stream]),
+            end_state_before
+        );
+        assert_eq!(
+            serde_json::to_string(&end_core.heap[end_stream.0 as usize])
+                .expect("serialize refused Writable mirrors"),
+            end_heap_before
+        );
+        assert_eq!(end_core.next_writable_completion_token, u32::MAX);
+        assert_eq!(end_core.estimated_memory_bytes(), end_bytes_before);
+        assert_eq!(
+            end_core.estimated_memory_bytes(),
+            end_core.recompute_estimated_memory_bytes()
+        );
+
+        // Pending callbacks reserve the remaining nonce capacity even while a
+        // cork prevents immediate activation. A second stream must not
+        // overbook the same final token and become permanently stranded.
+        let mut reservation_core = test_interpreter();
+        let reservation_options = reservation_core
+            .alloc_object_with_properties(&[("write", Value::Function(0))])
+            .expect("reservation Writable options");
+        reservation_core
+            .write_reg(0, Value::Object(reservation_options))
+            .expect("reservation options register");
+        let Value::Object(first_stream) = reservation_core
+            .construct_stream_writable(RegRange { start: 0, count: 1 })
+            .expect("first reservation Writable")
+        else {
+            panic!("Writable constructor must return an object");
+        };
+        let Value::Object(second_stream) = reservation_core
+            .construct_stream_writable(RegRange { start: 0, count: 1 })
+            .expect("second reservation Writable")
+        else {
+            panic!("Writable constructor must return an object");
+        };
+        for stream in [first_stream, second_stream] {
+            reservation_core
+                .writable_cork(Value::Object(stream), RegRange { start: 0, count: 0 })
+                .expect("cork reservation Writable");
+        }
+        reservation_core.next_writable_completion_token = u32::MAX - 1;
+        reservation_core
+            .write_reg(1, Value::str("reserved"))
+            .expect("first reserved chunk");
+        reservation_core
+            .writable_write(
+                &module,
+                Value::Object(first_stream),
+                RegRange { start: 1, count: 1 },
+            )
+            .expect("first corked write reserves the final token");
+        reservation_core
+            .write_reg(1, Value::str("refused"))
+            .expect("second refused chunk");
+        let second_state_before =
+            format!("{:?}", reservation_core.writable_streams[&second_stream]);
+        let reservation_bytes_before = reservation_core.estimated_memory_bytes();
+
+        assert!(matches!(
+            reservation_core.writable_write(
+                &module,
+                Value::Object(second_stream),
+                RegRange { start: 1, count: 1 },
+            ),
+            Err(InterpreterError::InternalError { details })
+                if details == "Writable completion token space exhausted"
+        ));
+        assert_eq!(
+            format!("{:?}", reservation_core.writable_streams[&second_stream]),
+            second_state_before
+        );
+        assert_eq!(
+            reservation_core.next_writable_completion_token,
+            u32::MAX - 1
+        );
+        assert_eq!(
+            reservation_core.estimated_memory_bytes(),
+            reservation_bytes_before
+        );
+
+        reservation_core
+            .writable_uncork(
+                &module,
+                Value::Object(first_stream),
+                RegRange { start: 0, count: 0 },
+            )
+            .expect("activate the reserved write");
+        assert_eq!(reservation_core.next_writable_completion_token, u32::MAX);
+        assert!(matches!(
+            reservation_core.writable_streams[&first_stream]
+                .writes
+                .front()
+                .map(|record| record.status),
+            Some(WritableWriteStatus::Active(token)) if token == u32::MAX - 1
+        ));
+        assert_eq!(
+            reservation_core.estimated_memory_bytes(),
+            reservation_core.recompute_estimated_memory_bytes()
+        );
+    }
+
+    #[test]
+    fn writable_live_tick_exhaustion_preserves_completed_fifo_bd_o2xvz() {
+        let module = test_module_with_functions(
+            vec![
+                Ir3Instruction::LoadUndefined { dst: 0 },
+                Ir3Instruction::Return { value: 0 },
+            ],
+            vec![Ir3FunctionDesc {
+                entry: 0,
+                arity: 1,
+                frame_size: 2,
+                name: Some("write_done".to_string()),
+                is_generator: false,
+                rest_param_index: None,
+            }],
+        );
+        let callback = |label| WritableCallbackRecord {
+            value: Value::Function(0),
+            label,
+            module_specifier: None,
+        };
+        let mut core = test_interpreter();
+        let Value::Object(writable) = core
+            .construct_stream_writable(RegRange { start: 0, count: 0 })
+            .expect("Writable")
+        else {
+            panic!("Writable constructor must return an object");
+        };
+        core.writable_enqueue(
+            writable,
+            Value::str("first"),
+            Label::Public,
+            Some(callback(Label::Public)),
+        )
+        .expect("first completed write");
+        core.writable_enqueue(
+            writable,
+            Value::str("second"),
+            Label::Secret,
+            Some(callback(Label::Secret)),
+        )
+        .expect("second completed write");
+        {
+            let state = core
+                .writable_streams
+                .get_mut(&writable)
+                .expect("Writable state");
+            for record in &mut state.writes {
+                record.status = WritableWriteStatus::Completed;
+            }
+            state.buffered_length = 0;
+            state.tick_sequence = None;
+        }
+        core.next_writable_tick_sequence = u64::MAX;
+        let state_before = format!("{:?}", core.writable_streams[&writable]);
+        let bytes_before = core.estimated_memory_bytes();
+
+        assert!(matches!(
+            core.drive_writable_tick(writable, Some(&module)),
+            Err(InterpreterError::InternalError { details })
+                if details == "Writable tick sequence space exhausted"
+        ));
+        assert_eq!(
+            format!("{:?}", core.writable_streams[&writable]),
+            state_before
+        );
+        assert_eq!(core.next_writable_tick_sequence, u64::MAX);
+        assert_eq!(core.estimated_memory_bytes(), bytes_before);
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+
+        core.next_writable_tick_sequence = 17;
+        core.drive_writable_tick(writable, Some(&module))
+            .expect("retry first completed callback");
+        let state = &core.writable_streams[&writable];
+        assert_eq!(state.writes.len(), 1);
+        assert_eq!(
+            state.writes.front().map(|record| &record.value),
+            Some(&Value::str("second"))
+        );
+        assert_eq!(state.tick_sequence, Some(17));
+        assert_eq!(core.next_writable_tick_sequence, 18);
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+    }
+
+    #[test]
+    fn writable_terminal_tick_exhaustion_preserves_callback_fifo_bd_o2xvz() {
+        let module = test_module_with_functions(
+            vec![
+                Ir3Instruction::LoadUndefined { dst: 0 },
+                Ir3Instruction::Return { value: 0 },
+            ],
+            vec![Ir3FunctionDesc {
+                entry: 0,
+                arity: 1,
+                frame_size: 2,
+                name: Some("terminal_callback".to_string()),
+                is_generator: false,
+                rest_param_index: None,
+            }],
+        );
+        let callback = WritableCallbackRecord {
+            value: Value::Function(0),
+            label: Label::Public,
+            module_specifier: None,
+        };
+        let mut core = test_interpreter();
+        let Value::Object(writable) = core
+            .construct_stream_writable(RegRange { start: 0, count: 0 })
+            .expect("Writable")
+        else {
+            panic!("Writable constructor must return an object");
+        };
+        core.terminalize_writable_state_storage(writable)
+            .expect("Writable tombstone");
+        core.append_writable_terminal_callback(
+            writable,
+            callback.clone(),
+            WritableTerminalCallbackError::EndAfterFinish,
+            Label::Public,
+        )
+        .expect("first terminal callback");
+        core.append_writable_terminal_callback(
+            writable,
+            callback,
+            WritableTerminalCallbackError::WriteAfterFinish,
+            Label::Public,
+        )
+        .expect("second terminal callback");
+        core.writable_terminal_states
+            .get_mut(&writable)
+            .expect("terminal state")
+            .tick_sequence = None;
+        core.pending_writable_terminal_ticks = 0;
+        core.next_writable_tick_sequence = u64::MAX;
+        let state_before = format!("{:?}", core.writable_terminal_states[&writable]);
+        let bytes_before = core.estimated_memory_bytes();
+
+        assert!(matches!(
+            core.drive_writable_terminal_tick(writable, Some(&module)),
+            Err(InterpreterError::InternalError { details })
+                if details == "Writable tick sequence space exhausted"
+        ));
+        assert_eq!(
+            format!("{:?}", core.writable_terminal_states[&writable]),
+            state_before
+        );
+        assert_eq!(core.pending_writable_terminal_ticks, 0);
+        assert_eq!(core.next_writable_tick_sequence, u64::MAX);
+        assert_eq!(core.estimated_memory_bytes(), bytes_before);
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+
+        core.next_writable_tick_sequence = 23;
+        core.drive_writable_terminal_tick(writable, Some(&module))
+            .expect("retry first terminal callback");
+        let state = &core.writable_terminal_states[&writable];
+        assert_eq!(state.callbacks.len(), 1);
+        assert_eq!(
+            state.callbacks.front().map(|record| record.error),
+            Some(WritableTerminalCallbackError::WriteAfterFinish)
+        );
+        assert_eq!(state.tick_sequence, Some(23));
+        assert_eq!(core.pending_writable_terminal_ticks, 1);
+        assert_eq!(core.next_writable_tick_sequence, 24);
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+    }
+
+    #[test]
+    fn writable_finish_tick_exhaustion_preserves_end_callback_fifo_bd_o2xvz() {
+        let module = test_module_with_functions(Vec::new(), Vec::new());
+        let mut core = test_interpreter();
+        let Value::Object(writable) = core
+            .construct_stream_writable(RegRange { start: 0, count: 0 })
+            .expect("Writable")
+        else {
+            panic!("Writable constructor must return an object");
+        };
+        {
+            let state = core
+                .writable_streams
+                .get_mut(&writable)
+                .expect("Writable finish state");
+            state.end_callbacks.push_back(WritableEndCallbackRecord {
+                callback: WritableCallbackRecord {
+                    value: Value::BuiltinFunction(BuiltinFunction::new_kind(
+                        BuiltinFunctionKind::ArrayIsArray,
+                    )),
+                    label: Label::Public,
+                    module_specifier: None,
+                },
+                registered_after_end: false,
+            });
+            state.end_callback_batch_remaining = 1;
+            state.end_requested = true;
+            state.final_status = WritableFinalStatus::Done;
+            state.tick_phase = WritableTickPhase::Finish;
+            state.tick_sequence = None;
+        }
+        core.sync_estimated_memory_bytes()
+            .expect("accounted finish callback state");
+        core.next_writable_tick_sequence = u64::MAX;
+        let state_before = format!("{:?}", core.writable_streams[&writable]);
+        let bytes_before = core.estimated_memory_bytes();
+
+        assert!(matches!(
+            core.drive_writable_tick(writable, Some(&module)),
+            Err(InterpreterError::InternalError { details })
+                if details == "Writable tick sequence space exhausted"
+        ));
+        assert_eq!(
+            format!("{:?}", core.writable_streams[&writable]),
+            state_before
+        );
+        assert_eq!(core.next_writable_tick_sequence, u64::MAX);
+        assert_eq!(core.estimated_memory_bytes(), bytes_before);
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+
+        core.next_writable_tick_sequence = 19;
+        core.drive_writable_tick(writable, Some(&module))
+            .expect("retry finish callback batch");
+        let state = &core.writable_streams[&writable];
+        assert!(state.end_callbacks.is_empty());
+        assert_eq!(state.end_callback_batch_remaining, 0);
+        assert_eq!(state.tick_phase, WritableTickPhase::Close);
+        assert_eq!(state.tick_sequence, Some(19));
+        assert_eq!(core.next_writable_tick_sequence, 20);
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+    }
+
+    #[test]
+    fn writable_prefinish_tick_exhaustion_remains_retryable_bd_o2xvz() {
+        let module = test_module_with_functions(Vec::new(), Vec::new());
+        let mut core = test_interpreter();
+        let Value::Object(writable) = core
+            .construct_stream_writable(RegRange { start: 0, count: 0 })
+            .expect("Writable")
+        else {
+            panic!("Writable constructor must return an object");
+        };
+        {
+            let state = core
+                .writable_streams
+                .get_mut(&writable)
+                .expect("Writable state");
+            state.end_requested = true;
+            state.final_status = WritableFinalStatus::Done;
+        }
+        core.next_writable_tick_sequence = u64::MAX;
+        let state_before = format!("{:?}", core.writable_streams[&writable]);
+        let bytes_before = core.estimated_memory_bytes();
+
+        assert!(matches!(
+            core.emit_writable_prefinish(writable, &module),
+            Err(InterpreterError::InternalError { details })
+                if details == "Writable tick sequence space exhausted"
+        ));
+        assert_eq!(
+            format!("{:?}", core.writable_streams[&writable]),
+            state_before
+        );
+        assert_eq!(core.estimated_memory_bytes(), bytes_before);
+
+        core.next_writable_tick_sequence = 31;
+        core.emit_writable_prefinish(writable, &module)
+            .expect("retry prefinish after sequence capacity returns");
+        let state = &core.writable_streams[&writable];
+        assert!(state.prefinish_emitted);
+        assert_eq!(state.tick_sequence, Some(31));
+        assert_eq!(core.next_writable_tick_sequence, 32);
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
         );
     }
 
@@ -86277,8 +86966,20 @@ mod async_runtime_tests_current {
             core.activate_readable_from_data_flow(readable_id, "data")
                 .expect("flow activation");
 
-            core.run_event_loop_until_idle_with_module(Some(&module))
-                .expect("throwing readable listener cleanup event loop");
+            let error = core
+                .run_event_loop_until_idle_with_module(Some(&module))
+                .expect_err("throwing readable listener must escape the event loop");
+            assert_eq!(
+                error,
+                InterpreterError::UncaughtException {
+                    value: if event == "data" {
+                        "chunk".to_string()
+                    } else {
+                        "undefined".to_string()
+                    }
+                },
+                "cleanup must not swallow the original {event} listener exception"
+            );
 
             assert!(
                 !core.readable_from_streams.contains_key(&readable_id),

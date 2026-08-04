@@ -11547,7 +11547,7 @@ impl InterpreterCore {
     fn schedule_loopback_task(
         &mut self,
         task: PendingLoopbackTask,
-    ) -> Result<(), InterpreterError> {
+    ) -> Result<u64, InterpreterError> {
         let retained_bytes = Self::estimate_pending_loopback_task_bytes(&task);
         self.apply_memory_component_delta(0, retained_bytes)?;
         let previous_promise_bytes = self.promise_runtime_memory_bytes();
@@ -11561,7 +11561,36 @@ impl InterpreterCore {
             return Err(error);
         }
         self.pending_loopback_tasks.insert(sequence, task);
-        Ok(())
+        Ok(sequence)
+    }
+
+    /// Undo a loopback task admitted by the current transaction before any
+    /// intervening schedule. Restoring the registration sequence is part of
+    /// failure atomicity: a refused `listen`/`write` must not perturb replay.
+    fn rollback_loopback_task_registration(&mut self, sequence: u64) {
+        let retained_bytes = self
+            .pending_loopback_tasks
+            .remove(&sequence)
+            .as_ref()
+            .map(Self::estimate_pending_loopback_task_bytes)
+            .unwrap_or(0);
+        let previous_promise_bytes = self.promise_runtime_memory_bytes();
+        let rolled_back = self.event_loop.rollback_last_scheduled(sequence);
+        debug_assert!(rolled_back.is_some());
+        let released_promise_bytes =
+            previous_promise_bytes.saturating_sub(self.promise_runtime_memory_bytes());
+        self.estimated_memory_bytes = self
+            .estimated_memory_bytes
+            .saturating_sub(retained_bytes)
+            .saturating_sub(released_promise_bytes);
+    }
+
+    fn projected_loopback_task_registration_bytes(&self, task: &PendingLoopbackTask) -> u64 {
+        Self::estimate_pending_loopback_task_bytes(task).saturating_add(
+            self.event_loop
+                .projected_io_completion_memory_bytes(&Label::Public)
+                .saturating_sub(self.event_loop.estimated_memory_bytes()),
+        )
     }
 
     fn add_loopback_listener(
@@ -11918,6 +11947,40 @@ impl InterpreterCore {
         u16::try_from(Self::value_as_integer(&candidate)).ok()
     }
 
+    /// Parse the port form accepted by hermetic `server.listen`. Missing ports
+    /// select the deterministic ephemeral allocator, but malformed values must
+    /// not silently acquire an unrelated ephemeral listener.
+    fn loopback_listen_port_from_value(&self, value: &Value) -> Result<u16, InterpreterError> {
+        let candidate = match value {
+            Value::Object(_) => self
+                .fs_object_property(value, "port")
+                .unwrap_or(Value::Undefined),
+            other => other.clone(),
+        };
+        let port = match &candidate {
+            Value::Undefined => return Ok(0),
+            Value::Int(port) => Some(*port),
+            Value::Float(port) if port.inner().is_finite() && port.inner().fract() == 0.0 => {
+                Some(port.inner() as i64)
+            }
+            Value::Str(port) => {
+                let trimmed = port.trim();
+                if trimmed.is_empty() {
+                    None
+                } else {
+                    trimmed.parse::<f64>().ok().and_then(|port| {
+                        (port.is_finite() && port.fract() == 0.0).then_some(port as i64)
+                    })
+                }
+            }
+            _ => None,
+        };
+        port.and_then(|port| u16::try_from(port).ok())
+            .ok_or_else(|| InterpreterError::RangeError {
+                message: "loopback listen port must be an integer between 0 and 65535".to_string(),
+            })
+    }
+
     fn loopback_host_from_connect_args(
         &self,
         first: &Value,
@@ -12176,6 +12239,74 @@ impl InterpreterCore {
         Ok(next_label)
     }
 
+    /// Validate and price one public mirror write without mutating the heap.
+    /// The returned previous value is a cheap/shared snapshot used only if a
+    /// later transaction stage must restore the mirror.
+    fn project_loopback_mirror_property(
+        &self,
+        object_id: ObjectId,
+        key: &str,
+        value: &Value,
+    ) -> Result<(Option<Value>, u64, u64), InterpreterError> {
+        let object = self
+            .heap
+            .get(object_id.0 as usize)
+            .ok_or(InterpreterError::ObjectNotFound { id: object_id.0 })?;
+        if object.is_frozen {
+            return Err(InterpreterError::TypeError {
+                expected: "mutable object".to_string(),
+                got: "frozen object".to_string(),
+            });
+        }
+        let previous = object.properties.get(key).cloned();
+        let exact_order_is_active = object.properties.exact_len() != object.properties.len();
+        let owned_key_copies =
+            if exact_order_is_active && Self::canonical_array_index_key(key).is_none() {
+                4
+            } else {
+                2
+            };
+        let entry_bytes = |entry: &Value| {
+            MEMORY_ESTIMATE_MAP_ENTRY_BYTES
+                .saturating_add(Self::estimate_string_bytes(key).saturating_mul(owned_key_copies))
+                .saturating_add(Self::estimate_value_bytes(entry))
+        };
+        Ok((
+            previous.clone(),
+            previous.as_ref().map_or(0, &entry_bytes),
+            entry_bytes(value),
+        ))
+    }
+
+    /// Restore a mirror after a later transaction stage refuses. Callers reset
+    /// the aggregate memory total after all owned rollback steps complete.
+    fn restore_loopback_mirror_property(
+        &mut self,
+        object_id: ObjectId,
+        key: &str,
+        previous: Option<Value>,
+    ) {
+        self.mutate_heap(|heap| {
+            let Some(object) = heap.get_mut(object_id.0 as usize) else {
+                return;
+            };
+            if let Some(previous) = previous {
+                object.properties.insert(key.to_string(), previous);
+            } else {
+                object.properties.remove(key);
+            }
+        });
+        self.gc_write_barrier(object_id);
+    }
+
+    fn preflight_loopback_transaction(&self, requested_bytes: u64) -> Result<(), InterpreterError> {
+        if Self::memory_request_exceeds_budget(requested_bytes, self.config.max_total_memory_bytes)
+        {
+            return Err(self.memory_budget_error(requested_bytes, self.heap_object_count_u32()));
+        }
+        Ok(())
+    }
+
     fn loopback_server_listen(
         &mut self,
         receiver: Value,
@@ -12183,26 +12314,32 @@ impl InterpreterCore {
     ) -> Result<Value, InterpreterError> {
         let server = Self::loopback_server_receiver(receiver)?;
         let invocation_label = self.writable_invocation_label(args)?;
-        let first = self.builtin_arg(args, 0)?.unwrap_or(Value::Int(0));
-        let requested_port = self.loopback_port_from_value(&first).unwrap_or(0);
+        let first = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
+        let requested_port = self.loopback_listen_port_from_value(&first)?;
         let requested_host = if matches!(first, Value::Object(_)) {
-            self.fs_object_property(&first, "host")
-                .map(|value| self.value_to_string(&value))
+            match self.fs_object_property(&first, "host") {
+                Some(value) => Some(self.bounded_loopback_host_string(&value)?),
+                None => None,
+            }
         } else if args.count >= 2 {
-            match self.read_reg(args.start + 1)? {
-                Value::Str(host) => Some(host.to_string()),
-                _ => None,
+            let candidate = self.read_reg(args.start + 1)?;
+            if matches!(&candidate, Value::Str(_)) {
+                Some(self.bounded_loopback_host_string(&candidate)?)
+            } else {
+                None
             }
         } else {
             None
         };
-        let address = requested_host.unwrap_or_else(|| "127.0.0.1".to_string());
-        if address != "127.0.0.1" && address != "localhost" {
-            return Err(InterpreterError::TypeError {
-                expected: "engine-owned loopback listener".to_string(),
-                got: address,
-            });
-        }
+        let address = match requested_host.as_deref() {
+            None | Some("127.0.0.1" | "localhost") => "127.0.0.1".to_string(),
+            Some(address) => {
+                return Err(InterpreterError::TypeError {
+                    expected: "engine-owned loopback listener".to_string(),
+                    got: address.to_string(),
+                });
+            }
+        };
         let port = if requested_port == 0 {
             let start = self.next_loopback_port.max(41_000);
             let mut candidate = start;
@@ -12226,49 +12363,111 @@ impl InterpreterCore {
             }
             requested_port
         };
-        let Some(state) = self.loopback_servers.get(&server) else {
-            return Err(InterpreterError::ObjectNotFound { id: server.0 });
-        };
-        if state.listening {
-            return Err(InterpreterError::TypeError {
-                expected: "non-listening loopback server".to_string(),
-                got: "server is already listening".to_string(),
-            });
-        }
         let generation = self.next_loopback_listener_generation;
         let callback = self.last_callable_arg(args)?;
-        self.check_temporary_memory_budget(
-            (64 * 1024_u64)
-                .saturating_add(MEMORY_ESTIMATE_LOOPBACK_PORT_BASE_BYTES)
-                .saturating_add(MEMORY_ESTIMATE_LOOPBACK_TASK_BASE_BYTES)
-                .saturating_add(callback.as_ref().map_or(0, |_| {
-                    MEMORY_ESTIMATE_EVENT_LISTENER_BASE_BYTES.saturating_add(64)
-                })),
-        )?;
-        self.join_loopback_server_label(server, &invocation_label)?;
-        if let Some(callback) = callback {
-            self.add_loopback_listener(server, "listening", callback, true)?;
+        let previous_servers_bytes = self.loopback_servers_memory_bytes();
+        let (next_label, next_servers_bytes) = {
+            let Some(state) = self.loopback_servers.get(&server) else {
+                return Err(InterpreterError::ObjectNotFound { id: server.0 });
+            };
+            if state.listening {
+                return Err(InterpreterError::TypeError {
+                    expected: "non-listening loopback server".to_string(),
+                    got: "server is already listening".to_string(),
+                });
+            }
+            let previous_state_bytes = Self::estimate_loopback_server_state_bytes(state);
+            let next_label = state.lifecycle_label.join(&invocation_label);
+            let next_state_bytes = previous_state_bytes
+                .saturating_sub(Self::estimate_string_bytes(&state.address))
+                .saturating_sub(Self::estimate_label_bytes(&state.lifecycle_label))
+                .saturating_add(Self::estimate_string_bytes(&address))
+                .saturating_add(Self::estimate_label_bytes(&next_label));
+            (
+                next_label,
+                previous_servers_bytes
+                    .saturating_sub(previous_state_bytes)
+                    .saturating_add(next_state_bytes),
+            )
+        };
+        let listening_value = Value::Bool(true);
+        let (previous_listening, previous_property_bytes, next_property_bytes) =
+            self.project_loopback_mirror_property(server, "listening", &listening_value)?;
+        let listener_bytes = callback.as_ref().map_or(0, |callback| {
+            Self::estimate_event_listener_record_bytes(
+                "listening",
+                &EventListenerRecord {
+                    listener: callback.clone(),
+                    once: true,
+                },
+            )
+        });
+        let task = PendingLoopbackTask::Listening { server, generation };
+        let task_bytes = self.projected_loopback_task_registration_bytes(&task);
+        let requested_bytes = self
+            .estimated_memory_bytes
+            .saturating_sub(previous_servers_bytes)
+            .saturating_sub(previous_property_bytes)
+            .saturating_add(next_servers_bytes)
+            .saturating_add(next_property_bytes)
+            .saturating_add(MEMORY_ESTIMATE_LOOPBACK_PORT_BASE_BYTES)
+            .saturating_add(listener_bytes)
+            .saturating_add(task_bytes);
+        self.preflight_loopback_transaction(requested_bytes)?;
+
+        let previous_total = self.estimated_memory_bytes;
+        let sequence = self.schedule_loopback_task(task)?;
+        let listener_added = if let Some(callback) = callback {
+            if let Err(error) = self.add_loopback_listener(server, "listening", callback, true) {
+                self.rollback_loopback_task_registration(sequence);
+                self.estimated_memory_bytes = previous_total;
+                return Err(error);
+            }
+            true
+        } else {
+            false
+        };
+        if let Err(error) =
+            self.set_object_property(server, "listening".to_string(), listening_value)
+        {
+            if listener_added {
+                self.rollback_inserted_event_listener(server, "listening", false);
+            }
+            self.rollback_loopback_task_registration(sequence);
+            self.estimated_memory_bytes = previous_total;
+            return Err(error);
         }
-        self.apply_memory_component_delta(0, MEMORY_ESTIMATE_LOOPBACK_PORT_BASE_BYTES)?;
+        if let Err(error) = self.apply_memory_component_delta(
+            previous_servers_bytes,
+            next_servers_bytes.saturating_add(MEMORY_ESTIMATE_LOOPBACK_PORT_BASE_BYTES),
+        ) {
+            self.restore_loopback_mirror_property(server, "listening", previous_listening);
+            if listener_added {
+                self.rollback_inserted_event_listener(server, "listening", false);
+            }
+            self.rollback_loopback_task_registration(sequence);
+            self.estimated_memory_bytes = previous_total;
+            return Err(error);
+        }
+
         self.loopback_ports
             .insert(port, LoopbackPortState::Live { server, generation });
         let state = self
             .loopback_servers
             .get_mut(&server)
             .expect("loopback server was validated before listener publication");
-        state.address = "127.0.0.1".to_string();
+        state.address = address;
         state.port = Some(port);
         state.generation = generation;
         state.listening = true;
         state.close_requested = false;
         state.close_scheduled = false;
+        state.lifecycle_label = next_label;
         self.next_loopback_listener_generation = self
             .next_loopback_listener_generation
             .wrapping_add(1)
             .max(1);
         self.next_loopback_port = port.checked_add(1).unwrap_or(41_000);
-        self.set_object_property(server, "listening".to_string(), Value::Bool(true))?;
-        self.schedule_loopback_task(PendingLoopbackTask::Listening { server, generation })?;
         Ok(Value::Object(server))
     }
 
@@ -12344,61 +12543,144 @@ impl InterpreterCore {
         let socket = Self::loopback_socket_receiver(receiver)?;
         let chunk = self.builtin_arg(args, 0)?.unwrap_or(Value::str(""));
         let bytes = self.fs_value_bytes(&chunk)?;
+        let byte_count = bytes.len() as u64;
         let binary_label = match &chunk {
             Value::Object(object_id) => self.binary_storage_label(*object_id),
             _ => Label::Public,
         };
         let invocation_label = self.writable_invocation_label(args)?.join(&binary_label);
-        let data_label = self.join_loopback_socket_label(socket, &invocation_label)?;
-        let (peer, refused) = {
-            let Some(state) = self.loopback_sockets.get_mut(&socket) else {
+        let previous_sockets_bytes = self.loopback_sockets_memory_bytes();
+        let (previous_state_bytes, previous_label, previous_bytes_written, peer, refused) = {
+            let Some(state) = self.loopback_sockets.get(&socket) else {
                 return Err(InterpreterError::ObjectNotFound { id: socket.0 });
             };
-            if state.local_ended || state.destroyed {
-                (None, true)
-            } else {
-                state.bytes_written = state.bytes_written.saturating_add(bytes.len() as u64);
-                (state.peer, false)
-            }
+            (
+                Self::estimate_loopback_socket_state_bytes(state),
+                state.lifecycle_label.clone(),
+                state.bytes_written,
+                state.peer,
+                state.local_ended || state.destroyed,
+            )
         };
-        if refused {
-            self.schedule_loopback_task(PendingLoopbackTask::Error {
-                target: socket,
-                code: "ERR_STREAM_WRITE_AFTER_END".to_string(),
-                label: data_label,
-                close_after: false,
-            })?;
-            return Ok(Value::Bool(false));
-        }
-        let bytes_written = self
-            .loopback_sockets
-            .get(&socket)
-            .map_or(0, |state| state.bytes_written);
-        self.set_object_property(
-            socket,
-            "bytesWritten".to_string(),
-            Value::Int(i64::try_from(bytes_written).unwrap_or(i64::MAX)),
-        )?;
-        if let Some(target) = peer {
-            self.schedule_loopback_task(PendingLoopbackTask::Data {
-                target,
-                bytes,
-                label: data_label,
-            })?;
+        let data_label = previous_label.join(&invocation_label);
+        let next_bytes_written = previous_bytes_written.saturating_add(byte_count);
+        let (task, buffered_record) = if refused {
+            drop(bytes);
+            (
+                Some(PendingLoopbackTask::Error {
+                    target: socket,
+                    code: "ERR_STREAM_WRITE_AFTER_END".to_string(),
+                    label: data_label.clone(),
+                    close_after: false,
+                }),
+                None,
+            )
+        } else if let Some(target) = peer {
+            (
+                Some(PendingLoopbackTask::Data {
+                    target,
+                    bytes,
+                    label: data_label.clone(),
+                }),
+                None,
+            )
         } else {
-            let record = LoopbackBufferedData {
-                bytes,
-                label: data_label,
-            };
-            let added_bytes = MEMORY_ESTIMATE_MAP_ENTRY_BYTES
+            (
+                None,
+                Some(LoopbackBufferedData {
+                    bytes,
+                    label: data_label.clone(),
+                }),
+            )
+        };
+        let buffered_bytes = buffered_record.as_ref().map_or(0, |record| {
+            MEMORY_ESTIMATE_MAP_ENTRY_BYTES
                 .saturating_add(record.bytes.len() as u64)
-                .saturating_add(Self::estimate_label_bytes(&record.label));
-            self.apply_memory_component_delta(0, added_bytes)?;
+                .saturating_add(Self::estimate_label_bytes(&record.label))
+        });
+        let next_state_bytes = previous_state_bytes
+            .saturating_sub(Self::estimate_label_bytes(&previous_label))
+            .saturating_add(Self::estimate_label_bytes(&data_label))
+            .saturating_add(buffered_bytes);
+        let next_sockets_bytes = previous_sockets_bytes
+            .saturating_sub(previous_state_bytes)
+            .saturating_add(next_state_bytes);
+        let mirror_update = if refused {
+            None
+        } else {
+            let value = Value::Int(i64::try_from(next_bytes_written).unwrap_or(i64::MAX));
+            let (previous, previous_bytes, next_bytes) =
+                self.project_loopback_mirror_property(socket, "bytesWritten", &value)?;
+            Some((previous, previous_bytes, next_bytes, value))
+        };
+        let previous_property_bytes = mirror_update
+            .as_ref()
+            .map_or(0, |(_, previous_bytes, _, _)| *previous_bytes);
+        let next_property_bytes = mirror_update
+            .as_ref()
+            .map_or(0, |(_, _, next_bytes, _)| *next_bytes);
+        let task_bytes = task.as_ref().map_or(0, |task| {
+            self.projected_loopback_task_registration_bytes(task)
+        });
+        let requested_bytes = self
+            .estimated_memory_bytes
+            .saturating_sub(previous_sockets_bytes)
+            .saturating_sub(previous_property_bytes)
+            .saturating_add(next_sockets_bytes)
+            .saturating_add(next_property_bytes)
+            .saturating_add(task_bytes);
+        self.preflight_loopback_transaction(requested_bytes)?;
+
+        if buffered_record.is_some() {
+            let allocation_error =
+                self.memory_budget_error(requested_bytes, self.heap_object_count_u32());
             self.loopback_sockets
                 .get_mut(&socket)
-                .expect("socket was validated before outbound buffering")
+                .expect("socket was validated before outbound queue reservation")
                 .pending_outbound
-                .push_back(record);
+                .try_reserve(1)
+                .map_err(|_| allocation_error)?;
+        }
+
+        let previous_total = self.estimated_memory_bytes;
+        let sequence = match task {
+            Some(task) => Some(self.schedule_loopback_task(task)?),
+            None => None,
+        };
+        if let Some((_, _, _, value)) = &mirror_update
+            && let Err(error) =
+                self.set_object_property(socket, "bytesWritten".to_string(), value.clone())
+        {
+            if let Some(sequence) = sequence {
+                self.rollback_loopback_task_registration(sequence);
+            }
+            self.estimated_memory_bytes = previous_total;
+            return Err(error);
+        }
+        if let Err(error) =
+            self.apply_memory_component_delta(previous_sockets_bytes, next_sockets_bytes)
+        {
+            if let Some((previous, _, _, _)) = mirror_update {
+                self.restore_loopback_mirror_property(socket, "bytesWritten", previous);
+            }
+            if let Some(sequence) = sequence {
+                self.rollback_loopback_task_registration(sequence);
+            }
+            self.estimated_memory_bytes = previous_total;
+            return Err(error);
+        }
+
+        let state = self
+            .loopback_sockets
+            .get_mut(&socket)
+            .expect("socket was validated before atomic write publication");
+        state.lifecycle_label = data_label;
+        if refused {
+            return Ok(Value::Bool(false));
+        }
+        state.bytes_written = next_bytes_written;
+        if let Some(record) = buffered_record {
+            state.pending_outbound.push_back(record);
         }
         Ok(Value::Bool(true))
     }
@@ -109879,6 +110161,579 @@ mod memory_accounting_tests {
             core.estimated_memory_bytes(),
             core.recompute_estimated_memory_bytes(),
             "loopback labels and queued bytes must be fully accounted"
+        );
+    }
+
+    fn loopback_write_atomicity_fixture(
+        linked_peer: bool,
+    ) -> (InterpreterCore, ObjectId, ObjectId, ObjectId) {
+        let mut core = InterpreterCore::new(test_quickjs_config(), "bd-0hpr0-write-atomicity");
+        let sender = core
+            .construct_loopback_socket(true, Some(41_000), Label::Public)
+            .expect("sender socket");
+        let receiver = core
+            .construct_loopback_socket(true, Some(41_000), Label::Public)
+            .expect("receiver socket");
+        if linked_peer {
+            core.loopback_sockets
+                .get_mut(&sender)
+                .expect("sender state")
+                .peer = Some(receiver);
+            core.loopback_sockets
+                .get_mut(&receiver)
+                .expect("receiver state")
+                .peer = Some(sender);
+        }
+        let chunk = core
+            .alloc_buffer_from_bytes(b"classified")
+            .expect("write Buffer");
+        core.join_binary_storage_label(chunk, &Label::Secret)
+            .expect("classified Buffer label");
+        core.write_reg(0, Value::Object(chunk))
+            .expect("write argument");
+        (core, sender, receiver, chunk)
+    }
+
+    fn activate_exact_loopback_mirror_carrier(core: &mut InterpreterCore, object: ObjectId) {
+        core.set_object_runtime_property(
+            object,
+            RuntimePropertyKey::String(JsString::from_code_units(&[0xD800])),
+            Value::str("rollback-peak".repeat(512)),
+        )
+        .expect("exact-property rollback carrier");
+        let properties = &core.heap[object.0 as usize].properties;
+        assert_ne!(properties.exact_len(), properties.len());
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+    }
+
+    #[test]
+    fn loopback_write_preflight_is_failure_atomic_at_exact_ceiling_bd_0hpr0() {
+        for linked_peer in [false, true] {
+            let (mut probe, probe_sender, _probe_receiver, _) =
+                loopback_write_atomicity_fixture(linked_peer);
+            probe.config.max_total_memory_bytes = u64::MAX;
+            assert_eq!(
+                probe
+                    .loopback_socket_write(
+                        Value::Object(probe_sender),
+                        RegRange { start: 0, count: 1 },
+                    )
+                    .expect("unbounded write probe"),
+                Value::Bool(true)
+            );
+            let exact_ceiling = probe.estimated_memory_bytes();
+            let probe_registration = probe.pending_loopback_tasks.keys().next().copied();
+            assert_eq!(
+                exact_ceiling,
+                probe.recompute_estimated_memory_bytes(),
+                "probe accounting must be exact"
+            );
+
+            let (mut core, sender, receiver, chunk) = loopback_write_atomicity_fixture(linked_peer);
+            let baseline = core.estimated_memory_bytes();
+            let baseline_receiver = core.loopback_sockets[&receiver].clone();
+            core.config.max_total_memory_bytes = exact_ceiling.saturating_sub(1);
+            let error = core
+                .loopback_socket_write(Value::Object(sender), RegRange { start: 0, count: 1 })
+                .expect_err("one byte below the projected write must refuse");
+            assert!(matches!(
+                error,
+                InterpreterError::MemoryBudgetExceeded {
+                    requested_bytes,
+                    ..
+                } if requested_bytes == exact_ceiling
+            ));
+            let sender_state = &core.loopback_sockets[&sender];
+            assert_eq!(sender_state.lifecycle_label, Label::Public);
+            assert_eq!(sender_state.bytes_written, 0);
+            assert!(sender_state.pending_outbound.is_empty());
+            assert_eq!(
+                core.loopback_sockets[&receiver].lifecycle_label,
+                baseline_receiver.lifecycle_label
+            );
+            assert_eq!(
+                core.loopback_sockets[&receiver].bytes_read,
+                baseline_receiver.bytes_read
+            );
+            assert!(core.pending_loopback_tasks.is_empty());
+            assert!(!core.event_loop.has_pending_work());
+            assert_eq!(
+                core.fs_object_property(&Value::Object(sender), "bytesWritten"),
+                Some(Value::Int(0))
+            );
+            assert_eq!(core.binary_storage_label(chunk), Label::Secret);
+            assert_eq!(core.estimated_memory_bytes(), baseline);
+            assert_eq!(baseline, core.recompute_estimated_memory_bytes());
+
+            core.config.max_total_memory_bytes = exact_ceiling;
+            assert_eq!(
+                core.loopback_socket_write(Value::Object(sender), RegRange { start: 0, count: 1 },)
+                    .expect("exact projected write ceiling"),
+                Value::Bool(true)
+            );
+            let sender_state = &core.loopback_sockets[&sender];
+            assert_eq!(sender_state.lifecycle_label, Label::Secret);
+            assert_eq!(sender_state.bytes_written, b"classified".len() as u64);
+            assert_eq!(
+                core.fs_object_property(&Value::Object(sender), "bytesWritten"),
+                Some(Value::Int(b"classified".len() as i64))
+            );
+            assert_eq!(
+                core.pending_loopback_tasks.keys().next().copied(),
+                probe_registration,
+                "a refused preflight must not consume a registration sequence"
+            );
+            if linked_peer {
+                assert!(sender_state.pending_outbound.is_empty());
+                assert!(matches!(
+                    core.pending_loopback_tasks.values().next(),
+                    Some(PendingLoopbackTask::Data {
+                        target,
+                        bytes,
+                        label: Label::Secret,
+                    }) if *target == receiver && bytes == b"classified"
+                ));
+            } else {
+                assert!(core.pending_loopback_tasks.is_empty());
+                assert!(matches!(
+                    sender_state.pending_outbound.front(),
+                    Some(LoopbackBufferedData {
+                        bytes,
+                        label: Label::Secret,
+                    }) if bytes == b"classified"
+                ));
+            }
+            assert_eq!(core.estimated_memory_bytes(), exact_ceiling);
+            assert_eq!(exact_ceiling, core.recompute_estimated_memory_bytes());
+        }
+    }
+
+    #[test]
+    fn loopback_write_after_end_preflight_is_failure_atomic_bd_0hpr0() {
+        let (mut probe, probe_sender, _probe_receiver, _) = loopback_write_atomicity_fixture(false);
+        probe
+            .loopback_sockets
+            .get_mut(&probe_sender)
+            .expect("probe sender state")
+            .local_ended = true;
+        probe.config.max_total_memory_bytes = u64::MAX;
+        assert_eq!(
+            probe
+                .loopback_socket_write(
+                    Value::Object(probe_sender),
+                    RegRange { start: 0, count: 1 },
+                )
+                .expect("unbounded write-after-end probe"),
+            Value::Bool(false)
+        );
+        let exact_ceiling = probe.estimated_memory_bytes();
+        let probe_registration = *probe
+            .pending_loopback_tasks
+            .keys()
+            .next()
+            .expect("write-after-end error registration");
+        assert!(matches!(
+            probe.pending_loopback_tasks.values().next(),
+            Some(PendingLoopbackTask::Error {
+                target,
+                code,
+                label: Label::Secret,
+                close_after: false,
+            }) if *target == probe_sender && code == "ERR_STREAM_WRITE_AFTER_END"
+        ));
+        assert_eq!(exact_ceiling, probe.recompute_estimated_memory_bytes());
+
+        let (mut core, sender, _receiver, chunk) = loopback_write_atomicity_fixture(false);
+        core.loopback_sockets
+            .get_mut(&sender)
+            .expect("sender state")
+            .local_ended = true;
+        let baseline = core.estimated_memory_bytes();
+        core.config.max_total_memory_bytes = exact_ceiling.saturating_sub(1);
+        let error = core
+            .loopback_socket_write(Value::Object(sender), RegRange { start: 0, count: 1 })
+            .expect_err("one byte below the error-task projection must refuse");
+        assert!(matches!(
+            error,
+            InterpreterError::MemoryBudgetExceeded {
+                requested_bytes,
+                ..
+            } if requested_bytes == exact_ceiling
+        ));
+        let state = &core.loopback_sockets[&sender];
+        assert_eq!(state.lifecycle_label, Label::Public);
+        assert_eq!(state.bytes_written, 0);
+        assert!(state.pending_outbound.is_empty());
+        assert!(core.pending_loopback_tasks.is_empty());
+        assert!(!core.event_loop.has_pending_work());
+        assert_eq!(
+            core.fs_object_property(&Value::Object(sender), "bytesWritten"),
+            Some(Value::Int(0))
+        );
+        assert_eq!(core.binary_storage_label(chunk), Label::Secret);
+        assert_eq!(core.estimated_memory_bytes(), baseline);
+        assert_eq!(baseline, core.recompute_estimated_memory_bytes());
+
+        core.config.max_total_memory_bytes = exact_ceiling;
+        assert_eq!(
+            core.loopback_socket_write(Value::Object(sender), RegRange { start: 0, count: 1 })
+                .expect("exact write-after-end task ceiling"),
+            Value::Bool(false)
+        );
+        assert_eq!(core.loopback_socket_label(sender), Label::Secret);
+        assert_eq!(core.loopback_sockets[&sender].bytes_written, 0);
+        assert_eq!(
+            core.pending_loopback_tasks.keys().next().copied(),
+            Some(probe_registration)
+        );
+        assert_eq!(core.estimated_memory_bytes(), exact_ceiling);
+        assert_eq!(exact_ceiling, core.recompute_estimated_memory_bytes());
+    }
+
+    #[test]
+    fn loopback_write_late_mirror_refusal_rolls_back_task_bd_0hpr0() {
+        let (mut probe, probe_sender, _probe_receiver, _) = loopback_write_atomicity_fixture(true);
+        activate_exact_loopback_mirror_carrier(&mut probe, probe_sender);
+        probe.config.max_total_memory_bytes = u64::MAX;
+        probe
+            .loopback_socket_write(Value::Object(probe_sender), RegRange { start: 0, count: 1 })
+            .expect("unbounded exact-carrier write probe");
+        let final_ceiling = probe.estimated_memory_bytes();
+        let probe_registration = *probe
+            .pending_loopback_tasks
+            .keys()
+            .next()
+            .expect("probe data registration");
+        assert_eq!(final_ceiling, probe.recompute_estimated_memory_bytes());
+
+        let (mut core, sender, receiver, _) = loopback_write_atomicity_fixture(true);
+        activate_exact_loopback_mirror_carrier(&mut core, sender);
+        let baseline = core.estimated_memory_bytes();
+        let heap_before = serde_json::to_string(&core.heap[sender.0 as usize])
+            .expect("serialize exact socket carrier");
+        core.config.max_total_memory_bytes = final_ceiling;
+        let error = core
+            .loopback_socket_write(Value::Object(sender), RegRange { start: 0, count: 1 })
+            .expect_err("heap-mirror clone peak must refuse after task admission");
+        assert!(matches!(
+            error,
+            InterpreterError::MemoryBudgetExceeded {
+                requested_bytes,
+                ..
+            } if requested_bytes > final_ceiling
+        ));
+        let state = &core.loopback_sockets[&sender];
+        assert_eq!(state.lifecycle_label, Label::Public);
+        assert_eq!(state.bytes_written, 0);
+        assert!(state.pending_outbound.is_empty());
+        assert!(core.pending_loopback_tasks.is_empty());
+        assert!(!core.event_loop.has_pending_work());
+        assert_eq!(
+            core.fs_object_property(&Value::Object(sender), "bytesWritten"),
+            Some(Value::Int(0))
+        );
+        assert_eq!(
+            serde_json::to_string(&core.heap[sender.0 as usize])
+                .expect("serialize rolled-back socket carrier"),
+            heap_before
+        );
+        assert_eq!(core.estimated_memory_bytes(), baseline);
+        assert_eq!(baseline, core.recompute_estimated_memory_bytes());
+
+        core.config.max_total_memory_bytes = u64::MAX;
+        core.loopback_socket_write(Value::Object(sender), RegRange { start: 0, count: 1 })
+            .expect("retry after exact-carrier refusal");
+        assert_eq!(
+            core.pending_loopback_tasks.keys().next().copied(),
+            Some(probe_registration),
+            "late rollback must restore the scheduler registration sequence"
+        );
+        assert!(matches!(
+            core.pending_loopback_tasks.values().next(),
+            Some(PendingLoopbackTask::Data {
+                target,
+                label: Label::Secret,
+                ..
+            }) if *target == receiver
+        ));
+        assert_eq!(core.estimated_memory_bytes(), final_ceiling);
+        assert_eq!(final_ceiling, core.recompute_estimated_memory_bytes());
+    }
+
+    fn loopback_listen_atomicity_fixture() -> (InterpreterCore, ObjectId) {
+        let mut core = InterpreterCore::new(test_quickjs_config(), "bd-0hpr0-listen-atomicity");
+        let Value::Object(server) = core
+            .construct_loopback_server(RegRange { start: 0, count: 0 })
+            .expect("loopback server")
+        else {
+            panic!("expected loopback server object")
+        };
+        core.write_reg(0, Value::Int(42_360)).expect("listen port");
+        core.write_reg_with_label(1, Value::Closure(7), Label::Secret)
+            .expect("classified listen callback");
+        (core, server)
+    }
+
+    #[test]
+    fn loopback_listen_preflight_is_failure_atomic_at_exact_ceiling_bd_0hpr0() {
+        let listen_args = RegRange { start: 0, count: 2 };
+        let (mut probe, probe_server) = loopback_listen_atomicity_fixture();
+        probe.config.max_total_memory_bytes = u64::MAX;
+        probe
+            .loopback_server_listen(Value::Object(probe_server), listen_args)
+            .expect("unbounded listen probe");
+        let exact_ceiling = probe.estimated_memory_bytes();
+        let probe_registration = *probe
+            .pending_loopback_tasks
+            .keys()
+            .next()
+            .expect("listening task registration");
+        assert_eq!(exact_ceiling, probe.recompute_estimated_memory_bytes());
+
+        let (mut core, server) = loopback_listen_atomicity_fixture();
+        let baseline = core.estimated_memory_bytes();
+        let baseline_port_cursor = core.next_loopback_port;
+        let baseline_generation = core.next_loopback_listener_generation;
+        core.config.max_total_memory_bytes = exact_ceiling.saturating_sub(1);
+        let error = core
+            .loopback_server_listen(Value::Object(server), listen_args)
+            .expect_err("one byte below the projected listen must refuse");
+        assert!(matches!(
+            error,
+            InterpreterError::MemoryBudgetExceeded {
+                requested_bytes,
+                ..
+            } if requested_bytes == exact_ceiling
+        ));
+        let state = &core.loopback_servers[&server];
+        assert!(!state.listening);
+        assert_eq!(state.port, None);
+        assert_eq!(state.generation, 0);
+        assert_eq!(state.lifecycle_label, Label::Public);
+        assert!(core.loopback_ports.is_empty());
+        assert!(core.pending_loopback_tasks.is_empty());
+        assert!(!core.event_loop.has_pending_work());
+        assert!(
+            core.event_listener_records_for(server, "listening")
+                .is_empty()
+        );
+        assert_eq!(
+            core.fs_object_property(&Value::Object(server), "listening"),
+            Some(Value::Bool(false))
+        );
+        assert_eq!(core.next_loopback_port, baseline_port_cursor);
+        assert_eq!(core.next_loopback_listener_generation, baseline_generation);
+        assert_eq!(core.estimated_memory_bytes(), baseline);
+        assert_eq!(baseline, core.recompute_estimated_memory_bytes());
+
+        core.config.max_total_memory_bytes = exact_ceiling;
+        assert_eq!(
+            core.loopback_server_listen(Value::Object(server), listen_args)
+                .expect("exact projected listen ceiling"),
+            Value::Object(server)
+        );
+        let state = &core.loopback_servers[&server];
+        assert!(state.listening);
+        assert_eq!(state.port, Some(42_360));
+        assert_eq!(state.generation, baseline_generation);
+        assert_eq!(state.lifecycle_label, Label::Secret);
+        assert_eq!(
+            core.loopback_ports.get(&42_360),
+            Some(&LoopbackPortState::Live {
+                server,
+                generation: baseline_generation,
+            })
+        );
+        assert_eq!(
+            core.pending_loopback_tasks.keys().next().copied(),
+            Some(probe_registration),
+            "a refused preflight must not consume a registration sequence"
+        );
+        assert_eq!(
+            core.event_listener_records_for(server, "listening").len(),
+            1
+        );
+        assert_eq!(
+            core.fs_object_property(&Value::Object(server), "listening"),
+            Some(Value::Bool(true))
+        );
+        assert_eq!(core.estimated_memory_bytes(), exact_ceiling);
+        assert_eq!(exact_ceiling, core.recompute_estimated_memory_bytes());
+    }
+
+    #[test]
+    fn loopback_listen_late_mirror_refusal_rolls_back_task_and_listener_bd_0hpr0() {
+        let listen_args = RegRange { start: 0, count: 2 };
+        let (mut probe, probe_server) = loopback_listen_atomicity_fixture();
+        activate_exact_loopback_mirror_carrier(&mut probe, probe_server);
+        probe.config.max_total_memory_bytes = u64::MAX;
+        probe
+            .loopback_server_listen(Value::Object(probe_server), listen_args)
+            .expect("unbounded exact-carrier listen probe");
+        let final_ceiling = probe.estimated_memory_bytes();
+        let probe_registration = *probe
+            .pending_loopback_tasks
+            .keys()
+            .next()
+            .expect("probe listening registration");
+        assert_eq!(final_ceiling, probe.recompute_estimated_memory_bytes());
+
+        let (mut core, server) = loopback_listen_atomicity_fixture();
+        activate_exact_loopback_mirror_carrier(&mut core, server);
+        let baseline = core.estimated_memory_bytes();
+        let baseline_port_cursor = core.next_loopback_port;
+        let baseline_generation = core.next_loopback_listener_generation;
+        let heap_before = serde_json::to_string(&core.heap[server.0 as usize])
+            .expect("serialize exact server carrier");
+        core.config.max_total_memory_bytes = final_ceiling;
+        let error = core
+            .loopback_server_listen(Value::Object(server), listen_args)
+            .expect_err("heap-mirror clone peak must refuse after listen admission");
+        assert!(matches!(
+            error,
+            InterpreterError::MemoryBudgetExceeded {
+                requested_bytes,
+                ..
+            } if requested_bytes > final_ceiling
+        ));
+        let state = &core.loopback_servers[&server];
+        assert!(!state.listening);
+        assert_eq!(state.port, None);
+        assert_eq!(state.generation, 0);
+        assert_eq!(state.lifecycle_label, Label::Public);
+        assert!(core.loopback_ports.is_empty());
+        assert!(core.pending_loopback_tasks.is_empty());
+        assert!(!core.event_loop.has_pending_work());
+        assert!(
+            core.event_listener_records_for(server, "listening")
+                .is_empty()
+        );
+        assert_eq!(
+            core.fs_object_property(&Value::Object(server), "listening"),
+            Some(Value::Bool(false))
+        );
+        assert_eq!(
+            serde_json::to_string(&core.heap[server.0 as usize])
+                .expect("serialize rolled-back server carrier"),
+            heap_before
+        );
+        assert_eq!(core.next_loopback_port, baseline_port_cursor);
+        assert_eq!(core.next_loopback_listener_generation, baseline_generation);
+        assert_eq!(core.estimated_memory_bytes(), baseline);
+        assert_eq!(baseline, core.recompute_estimated_memory_bytes());
+
+        core.config.max_total_memory_bytes = u64::MAX;
+        core.loopback_server_listen(Value::Object(server), listen_args)
+            .expect("retry after exact-carrier refusal");
+        assert_eq!(
+            core.pending_loopback_tasks.keys().next().copied(),
+            Some(probe_registration),
+            "late rollback must restore the scheduler registration sequence"
+        );
+        assert_eq!(
+            core.event_listener_records_for(server, "listening").len(),
+            1
+        );
+        assert_eq!(core.estimated_memory_bytes(), final_ceiling);
+        assert_eq!(final_ceiling, core.recompute_estimated_memory_bytes());
+    }
+
+    #[test]
+    fn loopback_listen_preserves_numeric_backlog_position_bd_0hpr0() {
+        let mut core = InterpreterCore::new(test_quickjs_config(), "bd-0hpr0-listen-backlog");
+        let Value::Object(server) = core
+            .construct_loopback_server(RegRange { start: 0, count: 0 })
+            .expect("loopback server")
+        else {
+            panic!("expected loopback server object")
+        };
+        core.write_reg(0, Value::Int(42_361)).expect("listen port");
+        core.write_reg(1, Value::Int(128)).expect("listen backlog");
+        core.write_reg_with_label(2, Value::Closure(7), Label::Secret)
+            .expect("classified listen callback");
+
+        assert_eq!(
+            core.loopback_server_listen(Value::Object(server), RegRange { start: 0, count: 3 },)
+                .expect("numeric backlog must not be parsed as a host"),
+            Value::Object(server)
+        );
+        let state = &core.loopback_servers[&server];
+        assert!(state.listening);
+        assert_eq!(state.address, "127.0.0.1");
+        assert_eq!(state.port, Some(42_361));
+        assert_eq!(state.lifecycle_label, Label::Secret);
+        assert_eq!(
+            core.event_listener_records_for(server, "listening").len(),
+            1
+        );
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+    }
+
+    #[test]
+    fn loopback_listen_rejects_invalid_ports_without_ephemeral_fallback_bd_0hpr0() {
+        let mut core = InterpreterCore::new(test_quickjs_config(), "bd-0hpr0-invalid-port");
+        let Value::Object(server) = core
+            .construct_loopback_server(RegRange { start: 0, count: 0 })
+            .expect("loopback server")
+        else {
+            panic!("expected loopback server object")
+        };
+        let invalid_options = core
+            .alloc_object_with_properties(&[("port", Value::Bool(false))])
+            .expect("invalid listen options");
+        let invalid_ports = [
+            Value::Int(-1),
+            Value::Int(65_536),
+            Value::Float(Float64::new(f64::NAN)),
+            Value::Float(Float64::new(f64::INFINITY)),
+            Value::Float(Float64::new(1.5)),
+            Value::str(""),
+            Value::str("not-a-port"),
+            Value::str("12.5"),
+            Value::Bool(false),
+            Value::Null,
+            Value::BigInt(Arc::from("42360")),
+            Value::Object(invalid_options),
+        ];
+
+        for candidate in invalid_ports {
+            core.write_reg(0, candidate).expect("invalid port argument");
+            let baseline = core.estimated_memory_bytes();
+            let baseline_port_cursor = core.next_loopback_port;
+            let baseline_generation = core.next_loopback_listener_generation;
+            let error = core
+                .loopback_server_listen(Value::Object(server), RegRange { start: 0, count: 1 })
+                .expect_err("invalid port must not select an ephemeral listener");
+            assert!(matches!(error, InterpreterError::RangeError { .. }));
+            let state = &core.loopback_servers[&server];
+            assert!(!state.listening);
+            assert_eq!(state.port, None);
+            assert_eq!(state.generation, 0);
+            assert_eq!(state.lifecycle_label, Label::Public);
+            assert!(core.loopback_ports.is_empty());
+            assert!(core.pending_loopback_tasks.is_empty());
+            assert!(
+                core.event_listener_records_for(server, "listening")
+                    .is_empty()
+            );
+            assert_eq!(core.next_loopback_port, baseline_port_cursor);
+            assert_eq!(core.next_loopback_listener_generation, baseline_generation);
+            assert_eq!(core.estimated_memory_bytes(), baseline);
+            assert_eq!(baseline, core.recompute_estimated_memory_bytes());
+        }
+        assert_eq!(
+            core.loopback_listen_port_from_value(&Value::Undefined),
+            Ok(0)
+        );
+        assert_eq!(
+            core.loopback_listen_port_from_value(&Value::str("65535")),
+            Ok(65_535)
         );
     }
 
